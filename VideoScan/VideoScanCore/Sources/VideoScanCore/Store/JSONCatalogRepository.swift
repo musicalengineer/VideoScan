@@ -51,6 +51,11 @@ public actor JSONCatalogRepository: CatalogRepository {
         .refused(reason: "\(Self.readOnlyReason); it is never written through the repository")
     }
 
+    public nonisolated func writeBlocking(as door: CatalogWriter,
+                                          _ body: (any CatalogTransaction) throws -> Void) -> CatalogWriteOutcome {
+        .refused(reason: "\(Self.readOnlyReason); it is never written through the repository")
+    }
+
     public func read<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
         guard catalogURL != nil else { throw CatalogRepositoryError.notOpen }
         return try body(JSONReader(generation: loadedGeneration))

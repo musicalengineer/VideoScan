@@ -57,6 +57,55 @@ struct CatalogCommitScaleTests {
         try await Self.oneRow(rows: 100_000, detectionBudget: Self.hundredThousandBudget, commitBudget: Self.hundredThousandBudget)
     }
 
+    // MARK: - B2.2: the committer's whole synchronous turn
+
+    /// The main actor is blocked for the whole commit (cutover B2.2):
+    /// snapshot → fingerprints → changed rows → ONE blocking write, archival
+    /// durability (the production fsync). 1 changed row < 150 ms; 1,000
+    /// changed rows < 1.5 s — 14k rows, Debug, load-aware.
+    static let syncOneRowBudget: Duration = .milliseconds(150)
+    static let syncThousandRowsBudget: Duration = .milliseconds(1_500)
+
+    @Test("B2.2: a synchronous commit of 1 changed row in a 14k-row catalog.sqlite (detection included) < 150 ms")
+    func syncCommitOneRow() async throws {
+        try await Self.syncCommit(rows: 14_000, changed: 1, budget: Self.syncOneRowBudget)
+    }
+
+    @Test("B2.2: a synchronous commit of 1,000 changed rows in a 14k-row catalog.sqlite (detection included) < 1.5 s")
+    func syncCommitThousandRows() async throws {
+        try await Self.syncCommit(rows: 14_000, changed: 1_000, budget: Self.syncThousandRowsBudget)
+    }
+
+    private static func syncCommit(rows: Int, changed: Int, budget: Duration) async throws {
+        let s = try await CommitScene.make(healthyRows: rows); defer { s.remove() }
+        let loaded = try await s.load()
+        let records = Array(loaded.records.values)
+        let baseline = Dictionary(uniqueKeysWithValues: zip(records.map(\.id),
+                                                            CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))))
+        let step = rows / changed
+        for index in 0..<changed {
+            let target = try #require(loaded.records[PoisonedCatalogFixture.bulkID(index * step)])
+            target.starRating = 2
+            target.userNotes = "sync \(index)"
+        }
+        let repository = GRDBCatalogRepository(host: "commit-scale", durability: .archival)
+        _ = await repository.open(at: s.scene.databaseURL)
+        let load = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
+        let start = clock.now
+        let snapshots = records.map(VideoRecordDTO.init)
+        let prints = CatalogChangeDetector.fingerprints(of: snapshots)
+        let dirty = CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline)
+        let items = dirty.map { CatalogCommit.Item(id: records[$0].id, snapshot: snapshots[$0], fingerprint: prints[$0]) }
+        let outcome = CatalogCommit.runBlocking(CatalogCommit.Plan(door: .save, items: items), on: repository)
+        let elapsed = clock.now - start
+        await repository.close()
+        print("[commit-scale] B2.2 sync commit, \(rows) rows, \(changed) changed: \(elapsed) (\(TimingBudget.loadDescription()))")
+        #expect(items.count == changed)
+        #expect(outcome.isCommitted)
+        expectWithinTimingBudget("\(rows)-row sync commit of \(changed)", measured: elapsed, budget: budget, loadBefore: load)
+    }
+
     private static func oneRow(rows: Int, detectionBudget: Duration, commitBudget: Duration) async throws {
         let s = try await CommitScene.make(healthyRows: rows); defer { s.remove() }
         let loaded = try await s.load()

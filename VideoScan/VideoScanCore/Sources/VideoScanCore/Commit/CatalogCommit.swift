@@ -3,7 +3,8 @@
 // catalog_cutover_f_prime_2026_10_17.md §3 and §10 "B2-lite"). The app's
 // committer decides WHICH records changed (CatalogChangeDetector) and takes
 // their Sendable snapshots on the main actor; this runs everything else in
-// ONE `repository.write(as: door)`:
+// ONE `repository.write(as: door)` — or, for the app's committer (B2.2),
+// ONE `repository.writeBlocking(as: door)` on the main actor:
 //
 //   first the PURGES (B2.1 gap 3): each id the app no longer holds gets the
 //     purge marker on its row (tombstone first, never a DELETE) or its
@@ -115,7 +116,7 @@ public enum CatalogCommit {
         /// Something of this row reached the store in this commit.
         public var landed: Bool {
             switch self {
-            case .written, .partial, .removed(.purged), .removed(.pendingDropped): return true
+            case .written, .partial, .removed(.purged), .removed(.pendingPurged): return true
             case .unchanged, .deferred, .refused, .removed: return false
             }
         }
@@ -156,6 +157,20 @@ public enum CatalogCommit {
         let outcome = await repository.write(as: plan.door) { tx in
             try CatalogCommitBody(plan: plan, tx: tx, ledger: ledger).run()
         }
+        return result(outcome, ledger)
+    }
+
+    /// The same, on the calling thread (cutover B2.2): the app's
+    /// CatalogCommitter runs its whole commit in one main-actor turn.
+    public static func runBlocking(_ plan: Plan, on repository: any CatalogRepository) -> Outcome {
+        let ledger = CatalogCommitLedger()
+        let outcome = repository.writeBlocking(as: plan.door) { tx in
+            try CatalogCommitBody(plan: plan, tx: tx, ledger: ledger).run()
+        }
+        return result(outcome, ledger)
+    }
+
+    private static func result(_ outcome: CatalogWriteOutcome, _ ledger: CatalogCommitLedger) -> Outcome {
         let rows = ledger.rows
         switch outcome {
         case .committed(let generation):

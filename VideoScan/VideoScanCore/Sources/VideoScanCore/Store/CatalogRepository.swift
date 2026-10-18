@@ -329,6 +329,16 @@ public protocol CatalogRepository: Sendable {
     func write(as door: CatalogWriter,
                _ body: @Sendable (any CatalogTransaction) throws -> Void) async -> CatalogWriteOutcome
 
+    /// The SAME transaction as `write`, run on the CALLING thread, which
+    /// waits for the store's writer (cutover B2.2). Only the app's
+    /// CatalogCommitter calls it, and only from the main actor: its commit is
+    /// one synchronous turn — snapshot, write, baseline — so no record can
+    /// change while a commit runs. Everything else uses `write`.
+    /// (For Rick: a blocking call into the writer thread, like a
+    /// `std::future::get()` right after the `async` — on purpose.)
+    func writeBlocking(as door: CatalogWriter,
+                       _ body: (any CatalogTransaction) throws -> Void) -> CatalogWriteOutcome
+
     /// One consistent snapshot. Throws `CatalogRepositoryError.notOpen`
     /// or whatever `body` throws.
     func read<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T

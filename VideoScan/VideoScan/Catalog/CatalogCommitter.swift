@@ -5,29 +5,53 @@
 // commits the records that changed since the last commit into catalog.sqlite
 // instead — same debounce, same synchronous save at quit.
 //
-// Shape. `@MainActor final class`, owned by the model's `catalogCutover`
-// state, holding the open repository and the baseline (CatalogCommitBaseline:
-// what the store holds, per record). Per commit:
-//   1. on the main actor: a `VideoRecordDTO` snapshot per record (≈ 2 µs
-//      each — the records live here), the ids that left the records (gap 3:
-//      purged, never deleted), the marker journal (gap 2) and a copy of the
-//      baseline;
-//   2. off it: the fingerprints (CatalogChangeDetector) → the changed rows →
-//      ONE write (CatalogCommit.run): purges, then per row insert / update /
-//      held / partial / refused, then the Master Archive designation;
-//   3. back here: the baseline moves (CatalogCommitBaseline.absorb), the
-//      COMMITTED curated values go onto the other copies of the same content
-//      that still hold their own baseline, rows with no whole-file hash get
-//      Fill In Full Hashes queued, and one line goes to the sink.
+// B2.2 — ONE SYNCHRONOUS TURN. Two codex rounds in a row (B2, B2.1 closing
+// pass) found loss in the off-main "flight" machinery, so the commit was
+// re-scoped (safety-critical rule 5): a commit runs ENTIRELY on the main
+// actor, snapshot to baseline, with no `await`, no Task and no semaphore in
+// between —
+//   1. a `VideoRecordDTO` snapshot per record and its fingerprint
+//      (CatalogChangeDetector: the hashing still spreads over the cores;
+//      the main thread waits for it);
+//   2. the changed rows → ONE plan → `CatalogCommit.runBlocking`
+//      (`repository.writeBlocking`: GRDB's writer; the main thread waits):
+//      purges, then per row insert / update / held / partial / refused,
+//      then the Master Archive designation;
+//   3. the baseline moves (CatalogCommitBaseline.absorb), the committed
+//      curated values go onto the other copies of the same content
+//      (`propagate`), held rows get Fill In Full Hashes, one line to the sink.
+// So no record can change while a commit runs: an edit "during" a commit, a
+// marker change during a first insert, a quit overlapping a commit — the
+// whole race class codex found — can no longer be written.
+// Cost (B2, M4, Debug, 14k rows): detection 45–83 ms + a one-row write
+// 25–33 ms, ≈ 0.1 s of blocked UI per save — about today's JSON save.
+// Pinned by CatalogCommitScaleTests.syncCommit* (1 row < 150 ms, 1,000 rows
+// < 1.5 s); CatalogCommitterSyncSensorTests fails if a hop comes back.
 //
-// ONE SERIAL PATH (B2.1, codex P1-3). At most one commit is in flight. Every
-// door — the 2 s timer, `commitAcknowledged`, `commitNow` (quit) — first
-// waits for the in-flight commit AND absorbs its result, and only then takes
-// its snapshot. So snapshot → write → baseline move never overlap, and a
-// quit during an in-flight commit commits what changed since. `commitNow`
-// waits on a semaphore (the quit path, where the main thread has nothing
-// else to do): the in-flight write runs off the main actor and needs nothing
-// from it (CatalogLaunchWait), and the quit absorbs that result itself.
+// Doors: the 2 s debounce (it only decides WHEN the synchronous commit
+// runs), `commitNow` (quit and every synchronous save), `commitAcknowledged`
+// (the same synchronous commit; returns its truth), `commitNow(ids:)` (the
+// removal markers).
+//
+// Removal markers (gap 2). catalog.sqlite wants every marker revision with
+// its own tombstone. The one marker writer tells the relay BEFORE a change
+// (`markerWillChange`): rows whose previous marker change is not committed
+// yet are committed NOW, synchronously — so the store holds revision n
+// before a record moves to n+1, by construction. After a change
+// (`markerDidChange`) the row is remembered and one commit is asked for at
+// once (zero delay), so Trash of 1,000 rows in one turn is ONE commit.
+//
+// Purges (gap 3). An id the app no longer holds is purged (tombstoned; a
+// held row's payload is KEPT, `pending_purges`) only when it was absent at
+// two full commits in a row, or at a synchronous save (`commitNow`: quit,
+// Delete All — the caller says "this is the catalog"). Two looks, not the
+// scan's completion signal: the scan merge swaps its records in ONE
+// main-actor turn (VideoScanModel+ScanMerge), so no commit sees half of it,
+// and the second look covers every other door that removes and re-adds a
+// record across turns — with no coupling to any one job.
+//
+// Held rows (gap 1): durable only at the fingerprint of the payload the
+// store holds — a failed pending update leaves the row dirty and NOT durable.
 //
 // Outcomes and what the person sees (the console, catalog.log and
 // videoscan.log through `sink`; `blockedReason` drives the Reopen item):
@@ -37,7 +61,7 @@
 //                                   is durable and counted in one line;
 //   held (MOPS-16)                → nothing written; re-checked every 2 s
 //                                   until the holder lets go (only the
-//                                   holder's OWN token passes — codex gap 4);
+//                                   holder's OWN token passes);
 //   refused / generation mismatch → nothing written, the records stay
 //                                   changed, the store's words are shown, and
 //                                   NO further commit is tried until the
@@ -45,12 +69,12 @@
 //                                   Catalog (never retried silently).
 //
 // Memory: CatalogCommitBaseline (≈ 150 B a record); a commit holds one
-// snapshot per record for the length of the detection (the snapshots share
-// their strings and arrays with the records).
+// snapshot per record for its length (the snapshots share their strings and
+// arrays with the records).
 //
-// (For Rick: a write-behind flusher — dirty bits computed by checksum, a
-// 2-second timer, and a single-slot queue so only one flush is ever in
-// flight; `await` on it ≈ joining the flusher thread before the next one.)
+// (For Rick: a write-behind flusher whose flush is now a plain blocking
+// call on the UI thread — dirty bits computed by checksum, a 2-second timer
+// deciding when to flush, and nothing else running while it does.)
 
 import Foundation
 import VideoScanCore
@@ -89,8 +113,10 @@ final class CatalogCommitter {
     /// The designation catalog_state holds as far as this session knows.
     private var storedDesignationJSON: String?
     private var debounceTask: Task<Void, Never>?
-    /// The one commit in flight (nil when none).
-    private var flight: Flight?
+    /// Rows whose removal marker changed since their last commit.
+    private var markerDirty: Set<UUID> = []
+    /// Reopen / Adopt is closing and opening the store: no commit runs.
+    private var reopening = false
     private var heldBy: String?
     private var lastRefusalNote: String?
     private(set) var blockedReason: String? {
@@ -99,17 +125,13 @@ final class CatalogCommitter {
     private(set) var lastOutcome: CatalogCommit.Outcome?
     /// Writes attempted (tests and the status line).
     private(set) var commitCount = 0
-    /// The last detection's cost (snapshot on the main actor + fingerprints).
+    /// The last commit's snapshot + fingerprint cost.
     private(set) var lastDetection: Duration = .zero
 
-    /// A commit is in flight or waiting on the timer (tests wait on this).
-    var isBusy: Bool { flight != nil || debounceTask != nil }
+    /// A commit is waiting on the timer (tests wait on this).
+    var isBusy: Bool { debounceTask != nil }
     /// Ids held in `pending_rows` (no whole-file hash yet).
-    var heldIDs: Set<UUID> { baseline.held }
-    // Test seams (nil in production): right after a commit's snapshot, and
-    // right before its result is absorbed.
-    var afterSnapshotForTesting: (@MainActor () -> Void)?
-    var beforeAbsorbForTesting: (@MainActor () async -> Void)?
+    var heldIDs: Set<UUID> { Set(baseline.held.keys) }
 
     init(repository: any CatalogRepository, storedDesignationJSON: String?,
          input: @escaping () -> Input, sink: @escaping (String) -> Void) {
@@ -126,6 +148,7 @@ final class CatalogCommitter {
     /// `held`: records that came from `pending_rows` (still no row).
     func adoptBaseline(_ records: [VideoRecord], held: Set<UUID> = []) {
         baseline.adopt(records, held: held)
+        markerDirty = []
     }
 
     /// Refuse every commit until a person reopens (a read-only open).
@@ -141,15 +164,25 @@ final class CatalogCommitter {
         return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).count
     }
 
-    /// One removal-marker change (the one marker writer calls this through
-    /// CatalogMarkerRelay — gap 2): the snapshot of THIS revision is kept
-    /// so it lands with its own tombstone, and a commit is asked for now.
-    func noteMarkerChange(id: UUID, instance: ObjectIdentifier, snapshot: VideoRecordDTO) {
-        guard baseline.noteMarker(id: id, instance: instance, snapshot: snapshot) else { return }
+    // MARK: - Removal markers (through CatalogMarkerRelay)
+
+    /// The marker of `id` is about to change. Rows whose previous marker
+    /// change is not committed yet are committed now, in one synchronous
+    /// commit, so the store holds revision n before any moves to n+1.
+    func markerWillChange(id: UUID) {
+        guard markerDirty.contains(id) else { return }
+        commitNow(ids: markerDirty)
+    }
+
+    /// The marker of `id` changed (its revision already bumped): commit it
+    /// as soon as this turn ends — one commit for a whole batch.
+    func markerDidChange(id: UUID) {
+        guard baseline.prints[id] != nil else { return }
+        markerDirty.insert(id)
         scheduleCommit(after: .zero)
     }
 
-    // MARK: - The three funnels
+    // MARK: - The doors
 
     /// `saveCatalogDebounced`: 2 s after the last call, one commit.
     func scheduleCommit(after delay: Duration = CatalogCommitter.debounce) {
@@ -157,47 +190,36 @@ final class CatalogCommitter {
         debounceTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            await self?.commitFromTimer()
+            self?.commitFromTimer()
         }
     }
 
-    /// `saveCatalogNow`: synchronous (quit). Waits for the in-flight commit,
-    /// then commits what changed since. True when every changed record is
-    /// now in catalog.sqlite (held rows count as durable).
+    /// `saveCatalogNow` (quit, Delete All, every synchronous save): one
+    /// synchronous commit. True when every changed record is now in
+    /// catalog.sqlite (held rows count as durable at their payload).
     @discardableResult
     func commitNow() -> Bool {
         cancelTimer()
-        while let current = flight {
-            let task = current.task
-            settle(current, CatalogLaunchWait.run { await task.value })
-        }
-        guard let request = prepare(door: .quit, owner: nil) else { return false }
-        let started = launch(request)
-        let task = started.task
-        settle(started, CatalogLaunchWait.run { await task.value })
-        return started.durable ?? false
+        return commit(.quit, owner: nil, scope: .everything(final: true))
     }
 
-    /// `saveCatalogAcknowledged`: awaited by the caller. `owner`: the
-    /// MOPS-16 token the caller presents — only the holder's own passes.
+    /// `saveCatalogAcknowledged`: the same synchronous commit; its truth is
+    /// returned. `owner`: the MOPS-16 token the caller presents — only the
+    /// holder's own passes.
     func commitAcknowledged(owner: CatalogWriteHoldOwner?) async -> Bool {
         cancelTimer()
-        await drain()
-        guard let request = prepare(door: .acknowledged, owner: owner) else { return false }
-        let started = launch(request)
-        afterSnapshotForTesting?()
-        let result = await started.task.value
-        await beforeAbsorbForTesting?()
-        settle(started, result)
-        return started.durable ?? false
+        return commit(.acknowledged, owner: owner, scope: .everything(final: false))
     }
 
-    private func commitFromTimer() async {
+    /// The removal-marker door: only these rows, now.
+    @discardableResult
+    func commitNow(ids: Set<UUID>) -> Bool {
+        commit(.save, owner: nil, scope: .only(ids))
+    }
+
+    private func commitFromTimer() {
         debounceTask = nil
-        await drain()
-        guard let request = prepare(door: .save, owner: nil) else { return }
-        let started = launch(request)
-        settle(started, await started.task.value)
+        commit(.save, owner: nil, scope: .everything(final: false))
     }
 
     private func cancelTimer() {
@@ -205,51 +227,17 @@ final class CatalogCommitter {
         debounceTask = nil
     }
 
-    // MARK: - The serial path
-
-    /// One commit in flight: its request, its off-main write, and — once
-    /// absorbed, by whichever door got there first — whether it was durable.
-    private final class Flight {
-        let request: Request
-        let task: Task<Result, Never>
-        var durable: Bool?
-
-        init(request: Request, task: Task<Result, Never>) {
-            self.request = request
-            self.task = task
-        }
-    }
-
-    /// Wait for every in-flight commit and absorb it.
-    private func drain() async {
-        while let current = flight {
-            settle(current, await current.task.value)
-        }
-    }
-
-    private func launch(_ request: Request) -> Flight {
-        let repository = repository
-        let task = Task.detached(priority: .userInitiated) { await Self.run(request, on: repository) }
-        let started = Flight(request: request, task: task)
-        flight = started
-        return started
-    }
-
-    /// Absorb a flight's result exactly once.
-    private func settle(_ done: Flight, _ result: Result) {
-        if flight === done { flight = nil }
-        guard done.durable == nil else { return }
-        done.durable = absorb(result, request: done.request)
-    }
-
     // MARK: - Reopen / adopt
 
     /// Catalog ▸ Reopen SQLite Catalog: close, open again, and — when the
     /// store is writable — commit what is still changed.
     func reopen(at url: URL) async {
-        await drain()
+        reopening = true
+        cancelTimer()
         await repository.close()
-        switch await repository.open(at: url) {
+        let opened = await repository.open(at: url)
+        reopening = false
+        switch opened {
         case .readWrite:
             sink("Catalog store: OUTCOME reopened catalog.sqlite — writes allowed again; committing what is still changed")
             becameWritable()
@@ -262,8 +250,10 @@ final class CatalogCommitter {
     /// Catalog ▸ Adopt This SQLite Catalog… (gap 5): the person accepted a
     /// restored catalog.sqlite below the high-water this Mac already wrote.
     func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome {
-        await drain()
+        reopening = true
+        cancelTimer()
         let outcome = await repository.adopt(toHighWater: highWater)
+        reopening = false
         switch outcome {
         case .adopted(let from, let to):
             sink("Catalog store: OUTCOME adopted catalog.sqlite at generation \(from) as generation \(to) — writes allowed again; "
@@ -283,33 +273,50 @@ final class CatalogCommitter {
         scheduleCommit()
     }
 
-    // MARK: - One commit
+    // MARK: - One commit (synchronous: snapshot → write → baseline, one turn)
 
-    /// Everything a commit needs, taken on the main actor. Sendable values only.
-    struct Request: Sendable {
-        let door: CatalogWriter
-        let snapshots: [VideoRecordDTO]
-        let ids: [UUID]
-        let prints: [UUID: CatalogChangeDetector.Fingerprint]
-        let waiting: [UUID: CatalogChangeDetector.Fingerprint]
-        let shared: [UUID: CatalogSharedCurated]
-        let journal: [UUID: [VideoRecordDTO]]
-        let purges: [UUID]
-        let designation: CatalogCommit.Designation
+    /// Which records a commit looks at.
+    private enum Scope {
+        /// Every record; purges due; `final` = a synchronous save.
+        case everything(final: Bool)
+        /// Only these rows (the marker door): no purges, no designation.
+        case only(Set<UUID>)
+    }
+
+    /// The changed records of one commit: what is sent, and what waits
+    /// (the store took nothing from it at this fingerprint).
+    private struct Detection {
+        var items: [CatalogCommit.Item] = []
+        var waiting: [(id: UUID, print: CatalogChangeDetector.Fingerprint)] = []
+    }
+
+    /// The plan, and the designation text it carries.
+    private struct Prepared {
+        let plan: CatalogCommit.Plan
         let designationJSON: String?
-        let snapshotCost: Duration
     }
 
-    /// What the off-main hop came back with.
-    enum Result: Sendable {
-        /// Nothing differs from what the store holds; `notDurable` ids wait.
-        case clean(notDurable: [UUID], detection: Duration)
-        /// `sent`: the items the plan carried, in order (purges come first in the rows).
-        case ran(CatalogCommit.Outcome, sent: [CatalogCommit.Item], notDurable: [UUID], detection: Duration)
+    /// One synchronous commit. True when every changed record is stored
+    /// (as a row, or held in `pending_rows` at its current state).
+    @discardableResult
+    private func commit(_ door: CatalogWriter, owner: CatalogWriteHoldOwner?, scope: Scope) -> Bool {
+        guard let now = admit(owner: owner) else { return false }
+        let clock = ContinuousClock()
+        let start = clock.now
+        let detected = detect(now.records, scope: scope)
+        lastDetection = clock.now - start
+        let durableWaiting = baseline.notDurable(detected.waiting) == 0
+        guard let prepared = prepare(door, detected, now: now, scope: scope) else { return durableWaiting }
+        let outcome = CatalogCommit.runBlocking(prepared.plan, on: repository)
+        commitCount += 1
+        lastOutcome = outcome
+        return absorb(outcome, prepared) && durableWaiting
     }
 
-    /// nil = nothing may be written now (blocked or held — said once).
-    private func prepare(door: CatalogWriter, owner: CatalogWriteHoldOwner?) -> Request? {
+    /// nil = nothing may be written now (reopening, blocked, or held —
+    /// said once). Otherwise the records, designation and hold as they are.
+    private func admit(owner: CatalogWriteHoldOwner?) -> Input? {
+        guard !reopening else { return nil }
         if let blockedReason {
             noteOnce("Catalog store: NOT SAVED — \(blockedReason) (Catalog ▸ Reopen SQLite Catalog)")
             return nil
@@ -322,132 +329,101 @@ final class CatalogCommitter {
             return nil
         }
         heldBy = nil
-        let clock = ContinuousClock()
-        let start = clock.now
-        let snapshots = now.records.map(VideoRecordDTO.init)
-        let ids = now.records.map(\.id)
-        let present = Self.byID(now.records)
-        let journal = baseline.takeJournal(present: present)
-        let purges = baseline.purges(present: Set(present.keys))
-        let cost = clock.now - start
+        return now
+    }
+
+    /// Snapshots, fingerprints, the changed rows.
+    private func detect(_ all: [VideoRecord], scope: Scope) -> Detection {
+        let records: [VideoRecord]
+        switch scope {
+        case .everything: records = all
+        case .only(let ids): records = all.filter { ids.contains($0.id) }
+        }
+        let snapshots = records.map(VideoRecordDTO.init)
+        let prints = CatalogChangeDetector.fingerprints(of: snapshots)
+        let ids = records.map(\.id)
+        var found = Detection()
+        for index in CatalogChangeDetector.changed(ids, fingerprints: prints, baseline: baseline.prints) {
+            let id = ids[index]
+            if baseline.waiting[id]?.print == prints[index] {
+                found.waiting.append((id, prints[index]))
+            } else {
+                found.items.append(CatalogCommit.Item(id: id, snapshot: snapshots[index], fingerprint: prints[index],
+                                                      sharedBaseline: baseline.shared[id]))
+            }
+        }
+        return found
+    }
+
+    /// The plan, or nil when there is nothing to write.
+    private func prepare(_ door: CatalogWriter, _ detected: Detection, now: Input, scope: Scope) -> Prepared? {
+        guard case .everything(let final) = scope else {
+            return detected.items.isEmpty ? nil : Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items), designationJSON: nil)
+        }
+        let purges = baseline.purges(present: Set(now.records.map(\.id)), final: final)
         let json = Self.json(now.designation)
         let designation: CatalogCommit.Designation = Self.sameJSON(json, storedDesignationJSON)
             ? .leave : .current(json: json, clearAuthorized: now.clearAuthorized)
-        return Request(door: door, snapshots: snapshots, ids: ids, prints: baseline.prints,
-                       waiting: baseline.waiting.mapValues(\.print), shared: baseline.shared, journal: journal,
-                       purges: purges, designation: designation, designationJSON: json, snapshotCost: cost)
+        guard !detected.items.isEmpty || designation != .leave || !purges.isEmpty else { return nil }
+        return Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items, designation: designation, purges: purges),
+                        designationJSON: json)
     }
 
-    /// Off the main actor: fingerprints, the changed rows, then ONE write.
-    nonisolated static func run(_ request: Request, on repository: any CatalogRepository) async -> Result {
-        let clock = ContinuousClock()
-        let start = clock.now
-        let prints = await Task.detached(priority: .userInitiated) {
-            CatalogChangeDetector.fingerprints(of: request.snapshots)
-        }.value
-        let changed = CatalogChangeDetector.changed(request.ids, fingerprints: prints, baseline: request.prints)
-        let fresh = changed.filter { request.waiting[request.ids[$0]] != prints[$0] }
-        let waitingIDs = changed.filter { request.waiting[request.ids[$0]] == prints[$0] }.map { request.ids[$0] }
-        let detection = request.snapshotCost + (clock.now - start)
-        let items = fresh.flatMap { items(for: $0, request, prints) }
-        guard !items.isEmpty || request.designation != .leave || !request.purges.isEmpty else {
-            return .clean(notDurable: waitingIDs, detection: detection)
-        }
-        let plan = CatalogCommit.Plan(door: request.door, items: items, designation: request.designation, purges: request.purges)
-        return .ran(await CatalogCommit.run(plan, on: repository), sent: items, notDurable: waitingIDs, detection: detection)
-    }
-
-    /// The items for one changed record: each journal snapshot of an
-    /// EARLIER marker revision, in order (gap 2), then the record itself.
-    nonisolated static func items(for index: Int, _ request: Request,
-                                  _ prints: [CatalogChangeDetector.Fingerprint]) -> [CatalogCommit.Item] {
-        let id = request.ids[index]
-        let snapshot = request.snapshots[index]
-        let shared = request.shared[id]
-        let finalRevision = snapshot.removalRevision ?? 0
-        var out = (request.journal[id] ?? []).filter { ($0.removalRevision ?? 0) < finalRevision }.map {
-            CatalogCommit.Item(id: id, snapshot: $0, fingerprint: CatalogChangeDetector.fingerprint($0), sharedBaseline: shared)
-        }
-        out.append(CatalogCommit.Item(id: id, snapshot: snapshot, fingerprint: prints[index], sharedBaseline: shared))
-        return out
-    }
-
-    /// Back on the main actor. True when every changed record is now stored
-    /// (as a row, or held in `pending_rows`).
-    private func absorb(_ result: Result, request: Request) -> Bool {
-        switch result {
-        case .clean(let notDurable, let detection):
-            lastDetection = detection
-            restoreJournal(request.journal)
-            return baseline.notDurable(notDurable) == 0
-        case .ran(let outcome, let sent, let notDurable, let detection):
-            lastDetection = detection
-            commitCount += 1
-            lastOutcome = outcome
-            return absorb(outcome, request: request, sent: sent) && baseline.notDurable(notDurable) == 0
-        }
-    }
-
-    private func absorb(_ outcome: CatalogCommit.Outcome, request: Request, sent: [CatalogCommit.Item]) -> Bool {
+    private func absorb(_ outcome: CatalogCommit.Outcome, _ prepared: Prepared) -> Bool {
+        let door = prepared.plan.door.rawValue
         switch outcome {
         case .committed(let generation, let rows):
-            if case .current = request.designation { storedDesignationJSON = request.designationJSON }
-            let durable = apply(rows, request: request, sent: sent)
-            sink("Catalog store: OUTCOME commit generation \(generation) via \(request.door.rawValue) — " + Self.counts(rows))
+            adoptDesignation(prepared)
+            let durable = apply(rows, prepared.plan)
+            sink("Catalog store: OUTCOME commit generation \(generation) via \(door) — " + Self.counts(rows))
             return durable
         case .nothingWritten(let rows):
             // The designation, if sent, already matched catalog_state.
-            if case .current = request.designation { storedDesignationJSON = request.designationJSON }
-            return apply(rows, request: request, sent: sent)
+            adoptDesignation(prepared)
+            return apply(rows, prepared.plan)
         case .refused(let words, _):
-            restoreJournal(request.journal)
             blockedReason = words
-            sink("Catalog store: REFUSED via \(request.door.rawValue) — \(words). Nothing was written; the changes stay in memory "
+            sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written; the changes stay in memory "
                  + "until Catalog ▸ Reopen SQLite Catalog.")
             return false
         case .generationMismatch(let expected, let found):
-            restoreJournal(request.journal)
             let words = "another writer committed generation \(found) (this session expected \(expected)) — reopen the catalog"
             blockedReason = words
-            sink("Catalog store: REFUSED via \(request.door.rawValue) — \(words). Nothing was written.")
+            sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written.")
             return false
         }
     }
 
+    private func adoptDesignation(_ prepared: Prepared) {
+        if case .current = prepared.plan.designation { storedDesignationJSON = prepared.designationJSON }
+    }
+
     /// The baseline moves for the rows the store now holds; then the
-    /// copies, the revisions, the hash job. True = every row durable.
-    private func apply(_ rows: [CatalogCommit.RowResult], request: Request, sent: [CatalogCommit.Item]) -> Bool {
-        let heldBefore = baseline.held
-        let report = baseline.absorb(purgeRows: rows.prefix(request.purges.count),
-                                     itemRows: rows.dropFirst(request.purges.count), sent: sent)
+    /// copies, the revisions, the hash job — all in this same turn.
+    /// True = every row durable.
+    private func apply(_ rows: [CatalogCommit.RowResult], _ plan: CatalogCommit.Plan) -> Bool {
+        let heldBefore = heldIDs
+        let report = baseline.absorb(purgeRows: rows.prefix(plan.purges.count),
+                                     itemRows: rows.dropFirst(plan.purges.count), sent: plan.items)
         for line in report.lines { sink(line) }
+        markerDirty.subtract(rows.filter { $0.landing.landed || $0.landing == .unchanged }.map(\.id))
+        markerDirty.subtract(plan.purges)
         let records = input().records
         if !report.revisions.isEmpty { adoptRevisions(report.revisions, records: records) }
         if !report.shared.isEmpty, baseline.propagate(report.shared, records: records) { onCopiesUpdated() }
-        if baseline.held != heldBefore { onHeldChanged(baseline.held) }
+        if heldIDs != heldBefore { onHeldChanged(heldIDs) }
         if !report.needDigest.isEmpty { onNeedDigest(report.needDigest) }
         if report.purged > 0 { sink("Catalog store: REMOVED \(report.purged) row(s) the catalog no longer holds (tombstoned, never deleted)") }
-        let landed = Set(rows.filter(\.landing.landed).map(\.id))
-        restoreJournal(request.journal.filter { !landed.contains($0.key) })
         return report.allStored
     }
 
     /// A purged row came back: the record carries the revision the store gave it.
     private func adoptRevisions(_ revisions: [(id: UUID, revision: Int)], records: [VideoRecord]) {
-        let byID = Self.byID(records)
+        let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for entry in revisions {
             guard let record = byID[entry.id] else { continue }
             VideoScanModel.adoptStoredRemovalRevision(record, entry.revision)   // the one marker writer's file
         }
-    }
-
-    private func restoreJournal(_ journal: [UUID: [VideoRecordDTO]]) {
-        guard !journal.isEmpty else { return }
-        baseline.restoreJournal(journal, present: Self.byID(input().records))
-    }
-
-    private static func byID(_ records: [VideoRecord]) -> [UUID: VideoRecord] {
-        Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private func noteOnce(_ line: String) {

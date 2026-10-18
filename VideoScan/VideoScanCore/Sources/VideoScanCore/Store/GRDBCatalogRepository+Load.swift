@@ -51,7 +51,7 @@ extension GRDBRecordHandle {
     }
 
     func storedRow(id: String) throws -> CatalogLoadedRow? {
-        guard let row = try Row.fetchOne(db, sql: LoadSQL.oneRow, arguments: [id]) else { return nil }
+        guard let row = try Row.fetchOne(db.cachedStatement(sql: LoadSQL.oneRow), arguments: [id]) else { return nil }
         var loaded = LoadSQL.loadedRow(row)
         try LoadRowMaps(db, only: id).fill(&loaded)
         if let digest = loaded.file.contentDigest {
@@ -92,6 +92,23 @@ extension GRDBRecordHandle {
             """)
         guard let row else { return CatalogLoadCounts() }
         return CatalogLoadCounts(quarantineOpen: row[0], conflicts: row[1], files: row[2])
+    }
+}
+
+// MARK: - Statements (cutover B2.2)
+
+extension Database {
+    /// A load reading's cursor. `oneRow`: the commit's read-back of ONE row
+    /// (`storedRow(id:)`), which runs the same SQL for every changed row —
+    /// so its statements are prepared once per connection (GRDB's statement
+    /// cache). Measured 2026-10-18 (M4, Debug, 14k rows): preparing the
+    /// one-row SELECT each time was 0.66 ms of a 0.71 ms read; since B2.2
+    /// that read runs on the main actor. The full load runs each statement
+    /// once and is not cached. (For Rick: a prepared-statement cache keyed
+    /// by SQL text, as with `sqlite3_prepare_v3` + `SQLITE_PREPARE_PERSISTENT`.)
+    func loadCursor(_ sql: String, arguments: StatementArguments, oneRow: Bool) throws -> RowCursor {
+        guard oneRow else { return try Row.fetchCursor(self, sql: sql, arguments: arguments) }
+        return try Row.fetchCursor(cachedStatement(sql: sql), arguments: arguments)
     }
 }
 
@@ -312,17 +329,17 @@ struct LoadRowMaps {
     /// `only`: one row's maps (a commit's read-back); nil = every row.
     init(_ db: Database, only fileID: String? = nil) throws {
         let one = fileID.map { StatementArguments([$0]) } ?? []
-        let b = try Row.fetchCursor(db, sql: """
+        let b = try db.loadCursor("""
             SELECT file_id, name, kind, recorded_at FROM backup_destinations \(fileID == nil ? "" : "WHERE file_id = ?")
              ORDER BY file_id, recorded_at, name
-            """, arguments: one)
+            """, arguments: one, oneRow: fileID != nil)
         while let r = try b.next() {
             backups[r[0], default: []].append(CatalogRecordDTO.BackupDestinationRow(name: r[1], kind: r[2], recordedAt: r[3]))
         }
-        let d = try Row.fetchCursor(db, sql: """
+        let d = try db.loadCursor("""
             SELECT row_id, other_row_id, verdict, decided_at FROM footage_decisions \(fileID == nil ? "" : "WHERE row_id = ?")
              ORDER BY row_id, decision_id
-            """, arguments: one)
+            """, arguments: one, oneRow: fileID != nil)
         while let r = try d.next() {
             decisions[r[0], default: []].append(CatalogRecordDTO.FootageDecisionRow(rowID: r[0], otherRowID: r[1], verdict: r[2], decidedAt: r[3]))
         }
@@ -333,13 +350,13 @@ struct LoadRowMaps {
     private static let rowFields = CatalogLoadedRow.rowKnowledgeFields.map { "'\($0.rawValue)'" }.joined(separator: ",")
 
     private mutating func readImportedKnowledge(_ db: Database, only fileID: String?) throws {
-        let k = try Row.fetchCursor(db, sql: """
+        let k = try db.loadCursor("""
             SELECT ii.landed_ref, k.field, k.value_json
               FROM import_items ii
               JOIN knowledge_sources k ON k.import_run = ii.import_run AND k.source_ordinal = ii.source_ordinal
              WHERE ii.source_file = 'catalog.json' AND ii.landed_table = 'files' AND k.field IN (\(Self.rowFields))
                    \(fileID == nil ? "" : "AND ii.landed_ref = ?")
-            """, arguments: fileID.map { [$0] } ?? [])
+            """, arguments: fileID.map { [$0] } ?? [], oneRow: fileID != nil)
         while let r = try k.next() {
             guard let field = CatalogDDL.KnowledgeField(rawValue: r[1]), let value = CatalogJSONValue.parse(r[2]) else { continue }
             knowledge[r[0], default: [:]][field] = value
@@ -347,11 +364,11 @@ struct LoadRowMaps {
     }
 
     private mutating func readWrittenKnowledge(_ db: Database, only fileID: String?) throws {
-        let w = try Row.fetchCursor(db, sql: """
+        let w = try db.loadCursor("""
             SELECT file_id, field, value_json FROM row_knowledge
              WHERE field IN (\(Self.rowFields), '\(CatalogLiveWritesSchema.pairField)') \(fileID == nil ? "" : "AND file_id = ?")
              ORDER BY write_id
-            """, arguments: fileID.map { [$0] } ?? [])
+            """, arguments: fileID.map { [$0] } ?? [], oneRow: fileID != nil)
         while let r = try w.next() {
             guard let value = CatalogJSONValue.parse(r[2]) else { continue }
             written[r[0], default: [:]][r[1]] = value
@@ -387,7 +404,7 @@ struct DigestRun<Element> {
     private var last: (digest: String, group: [Element])?
 
     init(_ db: Database, sql: String, arguments: StatementArguments = [], element: @escaping (Row) -> Element) throws {
-        cursor = try Row.fetchCursor(db, sql: sql, arguments: arguments)
+        cursor = try db.loadCursor(sql, arguments: arguments, oneRow: !arguments.isEmpty)
         self.element = element
     }
 
@@ -473,48 +490,58 @@ enum LoadBoundSQL {
         "CASE WHEN \(column) IS NULL THEN NULL ELSE strftime('%Y-%m-%dT%H:%M:%SZ', \(column), 'unixepoch') END"
     }
 
-    static let union = unionBody + "\nORDER BY 1"
+    static let union = arms.map(\.select).joined(separator: "\nUNION ALL\n") + "\nORDER BY 1"
 
-    /// The same rows for ONE digest (bound by `?`).
-    static let unionForOne = "SELECT * FROM (\(unionBody)) WHERE digest = ?"
+    /// The same rows for ONE digest (bound by `?1`). The digest test sits
+    /// INSIDE every arm (cutover B2.2): the window function in the people
+    /// arm stops SQLite pushing an outer WHERE into the compound, and every
+    /// arm was then a full table scan per commit read-back.
+    static let unionForOne = arms.map { $0.select + ($0.filtered ? " AND digest = ?1" : " WHERE digest = ?1") }
+        .joined(separator: "\nUNION ALL\n")
 
-    private static let unionBody = """
-        SELECT digest, kind, seq, json_object('timestamp', at_s, 'text', text), '{}' FROM captions
-        UNION ALL
+    /// Each arm, and whether it already ends in a WHERE clause.
+    private static let arms: [(select: String, filtered: Bool)] = [
+        ("SELECT digest, kind, seq, json_object('timestamp', at_s, 'text', text), '{}' FROM captions", false),
+        ("""
         SELECT digest, 'captionRun', 0, json_object('sceneCaptionModel', model, 'sceneCaptionDate', \(iso("made_at"))), '{}'
           FROM caption_runs
-        UNION ALL
+        """, false),
+        ("""
         SELECT digest, 'transcript', 0, json_quote(text),
                json_object('audioTranscriptModel', model, 'audioTranscriptDate', \(iso("made_at"))) FROM transcripts
-        UNION ALL
+        """, false),
+        ("""
         SELECT digest, 'dossier', 0, json_object('dossierProcessedAt', \(iso("processed_at")), 'dossierProcessedBy', processed_by), '{}'
           FROM dossiers
-        UNION ALL
+        """, false),
+        ("""
         SELECT digest, 'inferredDate', 0,
                json_object('inferredRecordDate', \(iso("date_at")), 'inferredDateConfidence', confidence,
                            'inferredDateSource', source, 'inferredDateReason', reason,
                            'inferredDateRange', json(CASE WHEN range_start IS NULL THEN NULL
                                                      ELSE json_object('startYear', range_start, 'endYear', range_end) END)),
                '{}' FROM inferred_dates
-        UNION ALL
+        """, false),
+        ("""
         SELECT digest, CASE kind WHEN 'audio' THEN 'audioCheck' ELSE 'videoCheck' END, 0,
                CASE kind WHEN 'audio'
                  THEN json_object('audioVerifyStatus', status, 'audioVerifyNote', note, 'audioVerifyDate', \(iso("checked_at")))
                  ELSE json_object('videoVerifyStatus', status, 'videoVerifyNote', note, 'videoVerifyDate', \(iso("checked_at"))) END,
                '{}' FROM media_checks WHERE kind IN ('audio','video')
-        UNION ALL
-        SELECT digest, 'reportCard', 0, card, '{}' FROM media_checks WHERE kind = 'reportCard'
-        UNION ALL
+        """, true),
+        ("SELECT digest, 'reportCard', 0, card, '{}' FROM media_checks WHERE kind = 'reportCard'", true),
+        ("""
         SELECT digest, 'perceptualPrint', 0,
                json_object('algorithmVersion', algorithm_version, 'hashesBase64', hashes_b64, 'durationSeconds', duration_s,
                            'computedAt', \(iso("computed_at"))), '{}' FROM perceptual_prints
-        UNION ALL
-        SELECT digest, 'footageMembership', 0, membership, '{}' FROM footage_membership
-        UNION ALL
+        """, false),
+        ("SELECT digest, 'footageMembership', 0, membership, '{}' FROM footage_membership", false),
+        ("""
         SELECT digest, CASE kind WHEN 'detected' THEN 'detectedPerson' ELSE 'suspectedPerson' END,
                row_number() OVER (PARTITION BY digest, kind ORDER BY name) - 1, json_quote(name), '{}'
           FROM people_tags WHERE kind IN ('detected','suspected')
-        """
+        """, true),
+    ]
 
     /// `(digest, kind, seq, value_json, stamp_json)` → the derived row; nil
     /// for a kind this build does not know (the DDL's CHECK makes that a

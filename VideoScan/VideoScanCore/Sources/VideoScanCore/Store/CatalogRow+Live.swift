@@ -73,8 +73,9 @@ extension CatalogRow {
     public enum PurgeLanding: Sendable, Equatable {
         /// No `files` row (nor pending row) has this id.
         case absent
-        /// The id was only a pending row; it was deleted.
-        case pendingDropped
+        /// The id was only a pending row: its payload is KEPT and
+        /// tombstoned in `pending_purges` (B2.2); the load skips it.
+        case pendingPurged
         /// The row already carries the purge marker.
         case alreadyPurged
         /// The purge marker was written at this revision (its tombstone first).

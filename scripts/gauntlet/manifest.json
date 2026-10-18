@@ -28951,7 +28951,9 @@
       "tests": [
         "fourteenThousand",
         "hundredThousand",
-        "richDetection"
+        "richDetection",
+        "syncCommitOneRow",
+        "syncCommitThousandRows"
       ]
     },
     {
@@ -28991,8 +28993,8 @@
         "pendingRowHeldThenStored",
         "pendingRowsAtLoad",
         "peopleConflictSurvivesUnrelatedEdit",
-        "purgeDropsPending",
         "purgeTombstonesAndLoadSkips",
+        "purgeTombstonesPending",
         "purgedRowComesBack",
         "refusedDerivedIsPartial",
         "staleSiblingKeepsEdit"
@@ -29027,9 +29029,47 @@
         "pendingEditIsFlushedFirst",
         "propagationKeepsLaterEdit",
         "purgedStaysGone",
-        "quitWaitsForInFlight",
+        "quitAfterAcknowledged",
         "trashEmptiedBumps",
         "trashThenUndo"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitSyncTests",
+        "CatalogCommitterSyncSensorTests"
+      ],
+      "tests": [
+        "absentTwicePurges",
+        "baselineIsSynchronous",
+        "batchIsOneCommit",
+        "commitSectionIsSynchronous",
+        "copiesAgreeWithStore",
+        "curatedReversionAcrossMarkers",
+        "failedPendingUpdateNotDurable",
+        "momentaryAbsenceKeepsPayload",
+        "noFlightMachinery",
+        "onlyTheCommitterBlocks",
+        "quitIsOneCall",
+        "synchronousSavePurgesAtOnce",
+        "trashUndoAfterFirstInsert"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogReadBackPlanTests"
+      ],
+      "tests": [
+        "boundDerivedForOneDigestIsIndexed",
+        "oneRowIsIndexed"
       ]
     }
   ],
@@ -32374,6 +32414,14 @@
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 32,

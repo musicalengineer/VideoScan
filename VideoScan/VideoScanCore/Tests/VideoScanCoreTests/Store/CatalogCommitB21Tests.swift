@@ -126,16 +126,26 @@ struct CatalogCommitB21Tests {
         #expect(twice.landing(healthyID) == .removed(.alreadyPurged))
     }
 
-    @Test("gap 3: a purge of a record that was only held drops its pending row")
-    func purgeDropsPending() async throws {
+    @Test("gap 3 + B2.2: a purge of a held record tombstones its payload and KEEPS it; the load skips it; it coming back clears the tombstone")
+    func purgeTombstonesPending() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let loaded = try await s.load()
         let fresh = try FreshRecord.copy(try #require(loaded.records[healthyID]), path: "/Volumes/Fixture/New/held3.mov")
         _ = try await s.commit([fresh])
         let outcome = try await s.commit([], purges: [fresh.id])
-        #expect(outcome.landing(fresh.id.uuidString) == .removed(.pendingDropped))
-        let pending: Int? = try s.scalar("SELECT count(*) FROM pending_rows")
-        #expect(pending == 0)
+        #expect(outcome.landing(fresh.id.uuidString) == .removed(.pendingPurged))
+        let kept: Int? = try s.scalar("SELECT count(*) FROM pending_rows WHERE id = ?", [fresh.id.uuidString])
+        #expect(kept == 1, "the payload is kept, never deleted")
+        let tombstoned: Int? = try s.scalar("SELECT count(*) FROM pending_purges WHERE id = ?", [fresh.id.uuidString])
+        #expect(tombstoned == 1)
+        #expect(try await s.snapshot().pending.isEmpty, "a tombstoned payload is not loaded")
+        let twice = try await s.commit([], purges: [fresh.id])
+        #expect(twice.landing(fresh.id.uuidString) == .removed(.alreadyPurged))
+        fresh.userNotes = "it came back"
+        _ = try await s.commit([fresh])
+        let cleared: Int? = try s.scalar("SELECT count(*) FROM pending_purges")
+        #expect(cleared == 0)
+        #expect(try await s.snapshot().pending.map(\.id) == [fresh.id.uuidString])
     }
 
     @Test("gap 3: a purged row whose record comes back moves on one revision with its own tombstone, and says which")
