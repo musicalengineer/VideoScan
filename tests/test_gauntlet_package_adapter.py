@@ -145,6 +145,8 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(len(builds), 1)
         self.assertIn('--build-tests', builds[0]['args'])
         self.assertEqual(builds[0]['args'][builds[0]['args'].index('-c') + 1], 'release')
+        # swift test enables testable imports itself; swift build -c release does not.
+        self.assertEqual(builds[0]['args'][builds[0]['args'].index('-Xswiftc') + 1], '-enable-testing')
         self.assertEqual(len(runs), 2)
         for call in runs:
             self.assertIn('--skip-build', call['args'])

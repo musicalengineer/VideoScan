@@ -237,7 +237,7 @@ struct GauntletRunner {
         print("Inventory: \(validationErrors.isEmpty ? "valid" : validationErrors.joined(separator: "; "))")
         print("Isolation: per-run home, App Support, catalog, preferences, caches, logs, archive, fixtures; canonical write allowlist")
         print("Build: ONE xcodebuild build-for-testing -scheme VideoScan -testPlan VideoScan-CI -configuration Release ENABLE_TESTABILITY=YES -derivedDataPath <run>/DerivedData")
-        print("Package: ONE swift build --build-tests -c release --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors")
+        print("Package: ONE swift build --build-tests -c release -Xswiftc -enable-testing --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors")
         for name in stageOrder {
             let entry = stageMap[name]!
             let selectors = entry["selectors"] as? [String] ?? []
@@ -327,7 +327,7 @@ struct GauntletRunner {
             only.contains(entry["name"] as? String ?? "") && !((entry["package_selectors"] as? [String] ?? []).isEmpty)
         }
         guard wanted, fatalReason == nil, !contaminated else { return }
-        let cmd = ["swift", "build", "--build-tests", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch]
+        let cmd = ["swift", "build", "--build-tests", "-c", "release", "-Xswiftc", "-enable-testing", "--package-path", packagePath.path, "--scratch-path", packageScratch]
         let build = try command(cmd, log: run.appendingPathComponent("package-build.log"), timeout: 3600, environment: environment)
         result["package_build_s"] = build.elapsed; result["package_build_exit_code"] = build.code
         if build.contaminated { contaminated = true }

@@ -81,7 +81,7 @@ blocked until component build/count adapters are available.
 
 **Package adapter (2026-10-18).** VideoScanCore package suites run too. When a
 selected stage lists `package_selectors`, the runner does ONE
-`swift build --build-tests -c release` of `VideoScan/VideoScanCore` into
+`swift build --build-tests -c release -Xswiftc -enable-testing` (the tests use `@testable import`; `swift test` adds it itself, `swift build` does not) of `VideoScan/VideoScanCore` into
 `<run>/PackageBuild` (isolated environment, `package-build.log`), then per
 stage one `swift test --skip-build -c release` with one `--filter
 VideoScanCoreTests\.<Suite>/` per selector (`<stage>-package.log`). `swift
