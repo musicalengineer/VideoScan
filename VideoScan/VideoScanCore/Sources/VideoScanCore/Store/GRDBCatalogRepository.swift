@@ -737,6 +737,20 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public func close() async {
         guard let pool else { return }
+        // Fold the write-ahead log into the database file BEFORE the pool
+        // closes (2026-10-17): GRDB closes the writer before its readers, so
+        // SQLite's own close-time checkpoint never runs, and every commit
+        // stays in catalog.sqlite-wal. A backup or off-site copy of
+        // catalog.sqlite alone would then hold no tables at all (pinned by
+        // CatalogCloseCheckpointTests). TRUNCATE leaves a zero-length -wal.
+        // A read-only session has nothing of its own to fold in.
+        if mode == .readWrite {
+            do {
+                try await pool.writeWithoutTransaction { try $0.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)") }
+            } catch {
+                storeLog.error("catalog store CLOSE checkpoint: \(Self.words(error), privacy: .public)")
+            }
+        }
         do {
             try pool.close()
         } catch {

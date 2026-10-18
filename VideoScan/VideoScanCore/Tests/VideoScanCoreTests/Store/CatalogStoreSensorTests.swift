@@ -101,7 +101,11 @@ struct CatalogStoreSensorTests {
 
     @Test func volatileDurabilityNeverLeavesTheTests() {
         let users = Self.swiftFiles()
-            .filter { !$0.path.contains("/Tests/") && $0.lastPathComponent != "GRDBCatalogRepository.swift" }
+            // Both test trees count as tests: the package's `Tests/` and the
+            // app target's `VideoScanTests/` (2026-10-17: the quit-path suite
+            // builds its sandbox stores with .volatileForTests).
+            .filter { !$0.path.contains("/Tests/") && !$0.path.contains("/VideoScanTests/") }
+            .filter { $0.lastPathComponent != "GRDBCatalogRepository.swift" }
             .filter { Self.read($0).contains("volatileForTests") }
         #expect(users.isEmpty, "production code chose .volatileForTests: \(users.map(\.lastPathComponent))")
     }

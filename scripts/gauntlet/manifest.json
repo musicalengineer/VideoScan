@@ -28427,6 +28427,19 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseCheckpointTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCloseCheckpointTests"
+      ],
+      "tests": [
+        "aLoneCopyIsComplete",
+        "closeCheckpointsTheLog"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
       "stage": "regression",
       "suites": [
@@ -32242,6 +32255,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseCheckpointTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
