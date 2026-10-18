@@ -69,8 +69,10 @@ enum CatalogReplacedRecord {
         let blank = CatalogSharedCurated(VideoRecord())
         let mine = CatalogSharedCurated(record)
         let groups = CatalogSharedCurated.Group.allCases.filter { !mine.same($0, as: blank) }
-        let words = groups.map { words(for: $0, of: record) }
-        return words.isEmpty ? "no curated values" : words.joined(separator: ", ")
+        // Not `let words = … words(for:…)`: CI's Xcode 26.3 resolves the
+        // call to the local being declared ("cannot call value of non-function type").
+        let phrases = groups.map { Self.words(for: $0, of: record) }
+        return phrases.isEmpty ? "no curated values" : phrases.joined(separator: ", ")
     }
 
     /// One group's value(s) on `r`, in the person's words.
