@@ -45,6 +45,13 @@
 // phase boundary — outcome `stopped`, never `imported`. Pause is NOT
 // offered (one hold, one transaction; the row's help says so).
 //
+// Quit (codex 2026-10-17 P1): the app's quit path Stops the job, awaits its
+// end (bounded, `ImportToSQLiteQuit.deadline`), then saves the held edits
+// durably before it lets the process go; past the bound the hold is
+// released by force and the edits are saved anyway (the import abandoned,
+// its transaction never committed). The hold itself is an atomic admission
+// boundary (`holdWrites` drains every save admitted before it, P2).
+//
 // Progress: phase 1 is 0–40 % of the bar (the audit's own fraction scaled
 // in), phase 2 40–50 %, phase 3 by the importer's phase lines.
 //
@@ -136,6 +143,8 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
     var configureVerifyForTesting: ((VerifyCatalogJob) -> Void)?
     var onPhaseForTesting: ((Phase) -> Void)?
     var onImporterLineForTesting: ((String) -> Void)?
+    /// After the pre-flight, before the hold (a save admitted in that window).
+    var onBeforeHoldForTesting: (() -> Void)?
 
     var title: String { Self.title(for: mode) }
     var subtitle: String { subtitleText }
@@ -177,6 +186,17 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
         subtitleText = "Stopping — nothing will be imported…"
     }
 
+    /// The quit path (ImportToSQLiteQuit): after Stop, wait — at most
+    /// `deadline` seconds — for the run to end. The row turns terminal only
+    /// after the hold is released, so true means the hold is gone.
+    func waitForEnd(deadline: TimeInterval) async -> Bool {
+        let until = Date().addingTimeInterval(deadline)
+        while state.isActive, Date() < until {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return !state.isActive
+    }
+
     // MARK: Run
 
     private func run() async {
@@ -195,8 +215,13 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
             finish(cancelled: "Stopped — before any work; nothing written")
             return
         }
-        model.catalogStore.holdWrites(reason: Self.holdReason, owner: holdOwner)
-        model.importToSQLiteNote("START — \(startClause(generation: preflight.catalogGeneration))")
+        onBeforeHoldForTesting?()
+        // An atomic admission boundary (codex 2026-10-17 P2): returns once
+        // every save admitted before it has landed; the generation the
+        // START line records is read after that drain.
+        await model.catalogStore.holdWrites(reason: Self.holdReason, owner: holdOwner)
+        let heldAt = await Self.fileGeneration(catalogURL)
+        model.importToSQLiteNote("START — \(startClause(generation: heldAt))")
         let ending = await runPhases(model: model, catalogURL: catalogURL)
         let heldSaves = model.catalogStore.releaseWriteHold()
         if heldSaves > 0 {
@@ -219,6 +244,13 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
         }.value
     }
 
+    /// catalog.json's own generation (its 4 KB header), off the main actor.
+    nonisolated static func fileGeneration(_ catalogURL: URL) async -> Int {
+        await Task.detached(priority: .userInitiated) {
+            CatalogSnapshot.headerProbe(at: catalogURL)?.generation ?? 0
+        }.value
+    }
+
     private func startClause(generation: Int) -> String {
         let what = mode == .dryRun
             ? "DRY RUN — Audit Catalog, Verify Catalog, then the same gate, rows, sidecars and comparator, rolled back; "
@@ -238,7 +270,9 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
         auditedGeneration = generation
         model.importToSQLiteNote("phase 1 of 3 done — the audit left the catalog at generation \(generation); "
             + "Verify Catalog and the importer must see the same")
-        if let end = await verifyPhase(model: model, auditFinishedAt: auditJob?.finishedAt ?? Date()) { return end }
+        if let end = await verifyPhase(model: model, generation: generation, auditFinishedAt: auditJob?.finishedAt ?? Date()) {
+            return end
+        }
         return await importPhase(model: model, catalogURL: catalogURL, generation: generation)
     }
 
@@ -253,12 +287,19 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
     }
 
     /// Phase 2: Verify Catalog, made only once the audit's finishing second
-    /// is past (its report's start must be a later second than the audit's end).
-    private func verifyPhase(model: VideoScanModel, auditFinishedAt: Date) async -> Ending? {
-        let wait = ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: auditFinishedAt, now: Date())
-        if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+    /// is past (its report's start must be a later second than the audit's
+    /// end; the clock is re-read after each wait). It checks catalog.json as
+    /// the audit saved it at `generation` — the file the importer reads —
+    /// never the in-memory rows (codex 2026-10-17 P2).
+    private func verifyPhase(model: VideoScanModel, generation: Int, auditFinishedAt: Date) async -> Ending? {
+        let ready = await ImportToSQLiteTiming.waitForVerifyStart(auditFinishedAt: auditFinishedAt, now: { Date() },
+                                                                  sleep: { try? await Task.sleep(for: .seconds($0)) })
         if stopFlag.isRaised { return .stopped(during: .verify) }
+        guard ready else {
+            return .refused("the wall clock kept stepping back — Verify Catalog could not start a whole second after the audit ended")
+        }
         let verify = VerifyCatalogJob(model: model)
+        verify.snapshotSource = .auditedFile(generation: generation)
         configureVerifyForTesting?(verify)
         verifyJob = verify
         let ended = await runPhase(verify, .verify, span: 0.4...0.5, model: model)
@@ -267,9 +308,7 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
 
     /// Phase 3: the file must still be at the audit's generation; then the importer.
     private func importPhase(model: VideoScanModel, catalogURL: URL, generation: Int) async -> Ending {
-        let onDisk = await Task.detached(priority: .userInitiated) {
-            CatalogSnapshot.headerProbe(at: catalogURL)?.generation ?? 0
-        }.value
+        let onDisk = await Self.fileGeneration(catalogURL)
         guard onDisk == generation else {
             return .refused("catalog.json is at generation \(onDisk) but the audit left it at \(generation) — "
                 + "something wrote it during the run")
@@ -532,6 +571,16 @@ extension MediaFileOperationsCenter {
                                                : "Audit Catalog, Verify Catalog, then import into catalog.sqlite beside the catalog; catalog saves held until the end; the JSON catalog is never deleted"))
         return job
     }
+
+    /// The Import to SQLite run still active, if any (the quit path settles it).
+    var activeImportToSQLite: ImportToSQLiteJob? {
+        jobs.first { $0.state.isActive && $0 is ImportToSQLiteJob } as? ImportToSQLiteJob
+    }
+
+    /// After `stopAllForQuit()`: a job whose end the quit must await before
+    /// it replies — Move to Trash settling its file, or Import to SQLite
+    /// letting go of the catalog's writes so the held edits can be saved.
+    var mustSettleBeforeQuit: Bool { hasActivePruneApply || activeImportToSQLite != nil }
 
     /// What the importer's gate asks the app: open Delete Duplicates plans
     /// and Archive Angel batches (both read from their small plan files,

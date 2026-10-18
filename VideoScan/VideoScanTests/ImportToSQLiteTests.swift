@@ -23,6 +23,16 @@
 //               the audit's save → Verify's snapshot → the importer's file;
 //               a dry run writes no catalog.sqlite; Stop in any phase imports
 //               nothing and releases the hold.
+// CODEX 2026-10-17 (docs/reviews/codex/codex-review-one-job-import-write-hold-2026-10-17.md),
+// each red first on main 572dba8a3:
+//   P1 — an edit made during a held run is in catalog.json after a quit
+//        (the job ended; and past the bound, the hold released by force);
+//        the quit wiring sensor.
+//   P2 — Verify inside the import certifies the audited FILE (an in-memory
+//        addition after the audit's save is not in the report).
+//   P2 — taking the hold drains a save already admitted (store and job); an
+//        acknowledged save in flight counts as unsaved.
+//   P3 — a backward clock step during the wait is waited out again (bounded).
 // SCALE: the importer's own 100k test (CatalogImporterScaleTests) and the
 // audit's (CatalogAuditJobTests) cover the work; nothing here iterates
 // records beyond the sandbox's few. MEDIA MATRIX: N/A — no media is opened
@@ -100,6 +110,37 @@ struct ImportToSQLitePreflightTests {
         #expect(ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: finished, now: Date(timeIntervalSince1970: 1_005)) == 0)
         let lateInSecond = Date(timeIntervalSince1970: 1_000.99)
         #expect(ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: lateInSecond, now: lateInSecond) < 0.52)
+    }
+
+    /// An injected wall clock: each read returns the next value (then the last, forever).
+    @MainActor
+    private final class SteppedClock {
+        var readings: [TimeInterval]
+        var sleeps: [TimeInterval] = []
+        init(_ readings: [TimeInterval]) { self.readings = readings }
+        func now() -> Date { Date(timeIntervalSince1970: readings.count > 1 ? readings.removeFirst() : readings[0]) }
+    }
+
+    @Test("P3 (codex 2026-10-17): the wall clock steps BACK 0.7 s during the wait — the job re-reads it after waking and waits again (0.7 s) until the audit's second + 1.5 s has truly passed")
+    @MainActor
+    func aBackwardClockStepWaitsAgain() async {
+        let clock = SteppedClock([100.9, 100.8, 101.6])        // audit ended 100.9; slept 0.6; woke at 100.8
+        let ready = await ImportToSQLiteTiming.waitForVerifyStart(auditFinishedAt: Date(timeIntervalSince1970: 100.9),
+                                                                  now: clock.now, sleep: { clock.sleeps.append($0) })
+        #expect(ready)
+        #expect(clock.sleeps.count == 2)
+        #expect(abs((clock.sleeps.first ?? 0) - 0.6) < 1e-6)
+        #expect(abs((clock.sleeps.last ?? 0) - 0.7) < 1e-6)
+    }
+
+    @Test("P3: a clock that keeps stepping back is waited out a bounded number of times, then the wait says no (the job refuses with words; the gate would refuse anyway)")
+    @MainActor
+    func aClockThatKeepsSteppingBackGivesUp() async {
+        let clock = SteppedClock([100.0])                      // never moves forward
+        let ready = await ImportToSQLiteTiming.waitForVerifyStart(auditFinishedAt: Date(timeIntervalSince1970: 100.0),
+                                                                  now: clock.now, sleep: { clock.sleeps.append($0) })
+        #expect(!ready)
+        #expect(clock.sleeps.count == ImportToSQLiteTiming.verifyWaitRounds)
     }
 }
 
@@ -190,7 +231,7 @@ struct ImportToSQLiteHoldTests {
         let sb = try ShowAgainSandbox.make("import_doors"); defer { sb.cleanup() }
         let store = sb.model.catalogStore
         let file = store.fileLocation
-        store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
+        await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
         #expect(store.saveNow(records: []) == false)
         #expect(await store.saveAcknowledged(records: []) == false)
         #expect(store.lastWriteError == .heldByJob("a test job"))
@@ -210,7 +251,7 @@ struct ImportToSQLiteHoldTests {
         #expect(store.saveNow(records: []))
         let before = store.currentGeneration
         let owner = CatalogWriteHoldOwner()
-        store.holdWrites(reason: "a test job", owner: owner)
+        await store.holdWrites(reason: "a test job", owner: owner)
         #expect(await store.saveAcknowledged(records: [], as: owner))
         #expect(store.currentGeneration == before + 1)
         #expect(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: store.fileLocation))?.generation == before + 1)
@@ -224,11 +265,42 @@ struct ImportToSQLiteHoldTests {
         let store = sb.model.catalogStore
         #expect(store.saveNow(records: []))
         let before = store.currentGeneration
-        store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
+        await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
         #expect(await store.saveAcknowledged(records: [], as: CatalogWriteHoldOwner()) == false)
         #expect(await store.saveAcknowledged(records: [], as: nil) == false)
         #expect(store.currentGeneration == before)
         #expect(store.releaseWriteHold() == 2)
+    }
+
+    @Test("P2 (codex 2026-10-17): taking the hold drains a save already admitted — it lands BEFORE holdWrites returns, so nothing but the owner writes while the hold is reported taken")
+    func theHoldDrainsAnAdmittedSave() async throws {
+        let sb = try ShowAgainSandbox.make("import_drain"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        #expect(store.saveNow(records: []))
+        let before = store.currentGeneration
+        store.testWriteDelay = 0.3
+        store.saveAsync(records: [])                                     // admitted: on the write queue, in flight
+        await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
+        #expect(!store.hasUnsavedChanges)
+        #expect(store.currentGeneration == before + 1)
+        #expect(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: store.fileLocation))?.generation == before + 1)
+        #expect(store.releaseWriteHold() == 0, "the admitted save was not refused — it landed")
+    }
+
+    @Test("P2: an acknowledged save in flight is an unsaved change (hasUnsavedChanges is truthful) until it lands")
+    func anAcknowledgedSaveInFlightIsUnsaved() async throws {
+        let sb = try ShowAgainSandbox.make("import_ackflight"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        store.testAfterWriteBeforeVerify = { _ in Thread.sleep(forTimeInterval: 0.3) }
+        let saving = Task { @MainActor in await store.saveAcknowledged(records: []) }
+        var sawInFlight = false
+        for _ in 0..<20 where !sawInFlight {
+            try await Task.sleep(for: .milliseconds(5))
+            sawInFlight = store.hasUnsavedChanges
+        }
+        #expect(sawInFlight)
+        #expect(await saving.value)
+        #expect(!store.hasUnsavedChanges)
     }
 }
 
@@ -537,6 +609,97 @@ struct ImportToSQLiteJobTests {
         #expect(scene.sandbox.model.catalogStore.writeHold == nil)
     }
 
+    /// Start `job`; at the start of Verify (after the audit's save, inside
+    /// the hold) make an edit as the app does (mark dirty, debounced save —
+    /// held) and quit with `deadline`. Returns what the quit's save said.
+    private func quitDuringVerify(_ scene: ImportScene, _ job: ImportToSQLiteJob, deadline: TimeInterval) async throws -> Bool {
+        let model = scene.sandbox.model
+        var quit: Task<Bool, Never>?
+        job.onPhaseForTesting = { [weak job] phase in
+            guard phase == .verify, quit == nil, let job else { return }
+            model.records.first?.userNotes = "edited while the import held the catalog"
+            model.saveCatalogDebounced()
+            quit = Task { @MainActor in await ImportToSQLiteQuit.settleAndSave(job: job, model: model, deadline: deadline) }
+        }
+        job.start()
+        for _ in 0..<1_000 where quit == nil { try await Task.sleep(for: .milliseconds(10)) }
+        return await (try #require(quit)).value
+    }
+
+    /// The notes catalog.json carries — read the way the next launch reads it.
+    private func notesOnDisk(_ scene: ImportScene) -> [String] {
+        CatalogStore(directory: scene.folder).load().map(\.userNotes)
+    }
+
+    @Test("P1 (codex 2026-10-17): quit while the import holds writes — Stop, await the job's end, release, then the durable save: the edit made during the held run is in catalog.json")
+    func quitDuringAHeldRunSavesTheHeldEdit() async throws {
+        let scene = try ImportScene.make("quit"); defer { scene.cleanup() }
+        let job = scene.job(.commit)
+        let saved = try await quitDuringVerify(scene, job, deadline: 30)
+        #expect(saved)
+        #expect(notesOnDisk(scene).contains("edited while the import held the catalog"))
+        #expect(scene.sandbox.model.catalogStore.writeHold == nil)
+        #expect(job.state == .cancelled)
+        #expect(!FileManager.default.fileExists(atPath: scene.databaseURL.path))
+        #expect(scene.log().contains("Import to SQLite: quit — the import ended (Stopped); its hold is released; saving the held catalog edits"))
+        #expect(scene.log().contains("Import to SQLite: quit — the held catalog edits are saved (durable)"))
+        await job.task?.value
+    }
+
+    @Test("P1: quit when the job does not end within the bound — the hold is released by force, the import abandoned (rolled back, never committed), the held edits are saved anyway, and the log says so")
+    func quitPastTheBoundStillSavesTheHeldEdit() async throws {
+        let scene = try ImportScene.make("quitlate"); defer { scene.cleanup() }
+        let job = scene.job(.commit)
+        let saved = try await quitDuringVerify(scene, job, deadline: 0)
+        #expect(saved)
+        #expect(notesOnDisk(scene).contains("edited while the import held the catalog"))
+        #expect(scene.sandbox.model.catalogStore.writeHold == nil)
+        #expect(scene.log().contains("Import to SQLite: quit — the import did not end within 0 s; its hold is released by force"))
+        await job.task?.value
+        #expect(job.state == .cancelled)
+        #expect(!FileManager.default.fileExists(atPath: scene.databaseURL.path))
+    }
+
+    @Test("P2 (codex 2026-10-17): inside the import, Verify certifies the FILE the audit saved — a row added in memory after the audit's save is not in the run's report")
+    func verifyReadsTheAuditedFileNotMemory() async throws {
+        let scene = try ImportScene.make("verifyfile"); defer { scene.cleanup() }
+        let job = await scene.run(.dryRun) { job in
+            job.onPhaseForTesting = { phase in
+                if phase == .verify { _ = try? scene.sandbox.live("added-after-the-audit.mov", bytes: 3_000) }
+            }
+        }
+        #expect(job.state == .finished(summary: job.subtitle), Comment(rawValue: job.subtitle))
+        let report = try #require(job.verifyJob?.report)
+        #expect(scene.sandbox.model.records.count == 4, "the edit is in memory")
+        #expect(report.rowsTotal == 3)
+        #expect(report.snapshotGeneration == job.auditedGeneration)
+        #expect(report.catalogHashCertified)
+    }
+
+    @Test("P2 (codex 2026-10-17): a save admitted between the pre-flight and the hold lands BEFORE the hold is taken — the audit starts at the drained generation and the START line names it")
+    func aSaveQueuedBeforeTheHoldLandsBeforeIt() async throws {
+        let scene = try ImportScene.make("drain"); defer { scene.cleanup() }
+        let model = scene.sandbox.model
+        let start = try #require(scene.fileGeneration())
+        var atAudit: Int?
+        var unsavedAtAudit: Bool?
+        let job = await scene.run(.dryRun) { job in
+            job.onBeforeHoldForTesting = {
+                model.catalogStore.testWriteDelay = 0.3
+                model.catalogStore.saveAsync(records: model.records)
+            }
+            job.onPhaseForTesting = { phase in
+                guard phase == .audit else { return }
+                atAudit = scene.fileGeneration()
+                unsavedAtAudit = model.catalogStore.hasUnsavedChanges
+            }
+        }
+        #expect(job.state == .finished(summary: job.subtitle), Comment(rawValue: job.subtitle))
+        #expect(atAudit == start + 1)
+        #expect(unsavedAtAudit == false)
+        #expect(scene.log().contains("catalog generation \(start + 1) at the start"), Comment(rawValue: scene.log()))
+    }
+
     @Test("while an import is active the standalone Audit Catalog and Verify Catalog refuse (it runs its own); with none active they start as before")
     func standaloneAuditAndVerifyWaitForTheImport() async throws {
         let sb = try ShowAgainSandbox.make("import_center"); defer { sb.cleanup() }
@@ -596,6 +759,23 @@ struct ImportToSQLiteSensorTests {
         #expect(hold.lowerBound < lock.lowerBound)
         #expect(store.components(separatedBy: "writePrecondition(as: owner)").count == 2, "only saveAcknowledged presents a token")
         #expect(store.components(separatedBy: "if writePrecondition() != nil").count == 3, "saveNow and saveAsync present none")
+    }
+
+    @Test("P1 (codex 2026-10-17): the quit path settles a running import and saves the held edits on BOTH terminateLater paths; willTerminate releases a hold still up before its save; the quit saves only after the job's end or a forced release")
+    func theQuitPathSettlesTheImport() throws {
+        let app = try SourceTree.appSource(named: "VideoScanApp.swift")
+        #expect(app.components(separatedBy: "await self?.finishQuit(importJob: importJob, model: model)").count == 3, "both terminateLater paths")
+        #expect(app.contains("await ImportToSQLiteQuit.settleForAppQuit(job: importJob, model: model)"))
+        #expect(app.contains("if suspending || center.mustSettleBeforeQuit {"))
+        let release = try #require(app.range(of: "ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0)"))
+        let save = try #require(app.range(of: "catalogModel?.saveCatalogNow()"))
+        #expect(release.lowerBound < save.lowerBound)
+        let quit = try Self.code("MediaOps/ImportToSQLiteQuit.swift")
+        let wait = try #require(quit.range(of: "await job.waitForEnd(deadline: deadline)"))
+        let force = try #require(quit.range(of: "releaseHoldIfStillHeld(model: model, deadline: deadline)"))
+        let saveNow = try #require(quit.range(of: "model.saveCatalogNow()"))
+        #expect(wait.lowerBound < force.lowerBound)
+        #expect(force.lowerBound < saveNow.lowerBound)
     }
 
     @Test("the menu passes the marker (no generation); the kind is registered; the sheet is wired")

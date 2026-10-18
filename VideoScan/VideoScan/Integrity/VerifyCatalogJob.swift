@@ -10,7 +10,10 @@
 // coverage snapshot), runs every tier OFF the main actor, and the only file
 // it writes is the report, through AtomicFilePublish. It never writes a row,
 // never saves the catalog, never opens a media file. Seconds, not minutes,
-// on 14k rows.
+// on 14k rows. Inside Import to SQLite (phase 2) the rows come instead from
+// catalog.json as the import's audit saved it, decoded read-only off the
+// main actor (`snapshotSource = .auditedFile(generation:)`, codex
+// 2026-10-17 P2) — the report then certifies the file the importer reads.
 //
 // Shape = CatalogAuditJob's (START / one line per tier / OUTCOME through one
 // sink; chip; detail view; Stop) without the lanes and without the marks:
@@ -53,6 +56,20 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
 
     /// TEST SEAM: the events the constraints check (nil = the app's store).
     var eventsForTesting: [IntegrityEventFact]?
+
+    /// Where the rows come from (codex 2026-10-17 P2).
+    enum SnapshotSource: Equatable {
+        /// The standalone Verify Catalog: the model's records, as always.
+        case liveRecords
+        /// Import to SQLite's phase 2: catalog.json exactly as its audit
+        /// saved it, decoded read-only, which must carry this generation —
+        /// so the report certifies the bytes the importer reads, never an
+        /// edit made in memory after the audit's save.
+        case auditedFile(generation: Int)
+    }
+
+    /// Set before `start()`; the standalone job never changes it.
+    var snapshotSource: SnapshotSource = .liveRecords
 
     @Published private(set) var tiers: [IntegrityTier] = []
     /// Findings grouped by tier, in tier order; each list is capped so the
@@ -145,7 +162,16 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
             finish(failed: "Refused — \(why). Nothing was checked.")
             return
         }
-        let snapshot = model.verifyCatalogSnapshot(events: eventsForTesting)
+        let snapshot: VerifyCatalogSnapshot
+        switch await takeSnapshot(model: model) {
+        case .success(let taken):
+            snapshot = taken
+        case .failure(let refusal):
+            wasRefused = true
+            model.verifyCatalogNote("refused — \(refusal.words). Nothing was checked.")
+            finish(failed: "Refused — \(refusal.words). Nothing was checked.")
+            return
+        }
         let catalogURL = snapshot.catalogURL
         model.verifyCatalogNote("START — \(startClause(snapshot))")
         let previous = await Task.detached(priority: .utility) { IntegrityReportStore.read(besideCatalogAt: catalogURL) }.value
@@ -173,6 +199,16 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
             return "the catalog in use is the shared one and this process is a test host"
         }
         return nil
+    }
+
+    /// The rows this run checks, from `snapshotSource`.
+    private func takeSnapshot(model: VideoScanModel) async -> Result<VerifyCatalogSnapshot, VerifyCatalogSnapshotRefusal> {
+        switch snapshotSource {
+        case .liveRecords:
+            return .success(model.verifyCatalogSnapshot(events: eventsForTesting))
+        case .auditedFile(let generation):
+            return await model.verifyCatalogSnapshot(auditedGeneration: generation, events: eventsForTesting)
+        }
     }
 
     private func startClause(_ s: VerifyCatalogSnapshot) -> String {
@@ -281,6 +317,11 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
     }
 }
 
+/// Why a snapshot of the audited file could not be taken, in words.
+struct VerifyCatalogSnapshotRefusal: Error, Equatable {
+    let words: String
+}
+
 // MARK: - Model half (the snapshot and the one sink)
 
 extension VideoScanModel {
@@ -303,6 +344,36 @@ extension VideoScanModel {
         return VerifyCatalogSnapshot(rows: rows, events: events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot()),
                                      catalogFile: catalogStore.fileLocation, catalogGeneration: catalogStore.currentGeneration,
                                      mountedVolumeRoots: Self.mountedVolumeRootsNow())
+    }
+
+    /// Import to SQLite's Verify phase (codex 2026-10-17 P2): the rows of
+    /// catalog.json AS THE AUDIT SAVED IT, decoded read-only off the main
+    /// actor with `load()`'s own decoder (`CatalogStore.decodeCatalogFile`)
+    /// — never `records`, which may already hold an edit made after that
+    /// save. Refused (with words) when the file will not decode or carries
+    /// another generation than the audit's. Memory: one decoded catalog
+    /// for the length of the read, then the rows (as the live snapshot).
+    func verifyCatalogSnapshot(auditedGeneration: Int,
+                               events: [IntegrityEventFact]?) async -> Result<VerifyCatalogSnapshot, VerifyCatalogSnapshotRefusal> {
+        let catalogFile = catalogStore.fileLocation
+        let eventFacts = events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot())
+        let read = await Task.detached(priority: .userInitiated) { Self.auditedFileRows(catalogFile: catalogFile) }.value
+        guard let read else {
+            return .failure(VerifyCatalogSnapshotRefusal(words: "catalog.json could not be read back as the audit saved it"))
+        }
+        guard read.generation == auditedGeneration else {
+            return .failure(VerifyCatalogSnapshotRefusal(
+                words: "catalog.json is at generation \(read.generation) but the audit saved \(auditedGeneration) — something wrote it"))
+        }
+        return .success(VerifyCatalogSnapshot(rows: read.rows, events: eventFacts, catalogFile: catalogFile,
+                                              catalogGeneration: read.generation, mountedVolumeRoots: Self.mountedVolumeRootsNow()))
+    }
+
+    /// The file's generation and its rows, projected where they were decoded.
+    nonisolated static func auditedFileRows(catalogFile: String) -> (generation: Int, rows: [IntegrityRow])? {
+        guard let (records, version, _, generation) = CatalogStore.decodeCatalogFile(at: URL(fileURLWithPath: catalogFile)),
+              version <= CatalogSnapshot.currentVersion else { return nil }
+        return (generation, records.map(IntegrityRow.init(record:)))
     }
 
     /// What tier 1 calls "connected": ONE readdir of /Volumes at snapshot
