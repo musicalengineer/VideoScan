@@ -202,6 +202,47 @@ struct CatalogFreshnessFactsTests {
 
     @Test @MainActor func markerFileNameMatchesTheReader() {
         #expect(CatalogFreshnessFactsReader.auditMarkerFileName == CatalogAuditRunMarker.fileName)
+        #expect(CatalogFreshnessFactsReader.cutoverLatchFileName == CatalogAuthority.latchFileName)
+    }
+
+    /// RED 2026-10-18, Rick's first afternoon on catalog.sqlite: the
+    /// import's Audit ran on catalog.json at 15:38:49, the switch landed at
+    /// 15:39:47, and the File Presence row read that run's 144 never-seen +
+    /// 1 changed rows — all quarantined, none a record — as 145 red "Fix
+    /// Links" decisions for hours. A marker from before the switch is not
+    /// this catalog's audit: yellow, "not checked since the switch", Run now.
+    @Test func anAuditFromBeforeTheSwitchIsNotThisCatalogs() throws {
+        let dir = try scratch()
+        let catalog = dir.appendingPathComponent("catalog.json").path
+        let switched = now.addingTimeInterval(-600)
+        try CatalogSwitch.latchData(CatalogRow.FinishedImport(runID: "R", finishedAt: 0, sourceSHA256: "ab", sourceGeneration: 4_900),
+                                    at: switched)
+            .write(to: dir.appendingPathComponent(CatalogFreshnessFactsReader.cutoverLatchFileName))
+        #expect(CatalogFreshnessFactsReader.read(catalogFile: catalog).switchedAt == switched)
+
+        var before = auditRecord(counts: ["present": 10_831, "neverSeenByAnAudit": 144, "changed": 1, "planned": 11_194])
+        before.startedAt = switched.addingTimeInterval(-58)
+        before.finishedAt = switched.addingTimeInterval(-54)
+        let presence = CatalogAuditPresenceFacts.from(before, switchedAt: switched)
+        #expect(presence.predatesSwitch)
+        #expect(presence.needsDecision == 0 && presence.checked == 0 && presence.outcome == .neverRan && presence.lastCompleted == nil)
+        #expect(CatalogAuditPresenceFacts.from(before).needsDecision == 145, "no latch: judged as before")
+
+        let report = compute([.init(fullPath: "/Volumes/LaCie/a.mov"), .init(fullPath: "/Volumes/LaCie/b.mov"),
+                              .init(fullPath: "/Volumes/LaCie/c.mov")])
+        let stale = row(.filePresence, in: rows(report, facts: .init(audit: before, switchedAt: switched)))
+        let verdict = FreshnessPolicy.judge(stale, now: now, wording: wording)
+        #expect(verdict.colour == .yellow, Comment(rawValue: verdict.words))
+        #expect(verdict.words == "3 files not checked since the switch to SQLite")
+        #expect(CatalogStatusDoor.door(for: verdict.reason, cycler: .filePresence) == .runNow, "Run now, not the unbuilt Fix Links")
+
+        // The first audit after the switch is this catalog's: its finds are red again.
+        var after = auditRecord(counts: ["present": 2, "gone": 1, "planned": 3])
+        after.startedAt = switched.addingTimeInterval(60)
+        after.finishedAt = switched.addingTimeInterval(64)
+        let red = row(.filePresence, in: rows(report, facts: .init(audit: after, switchedAt: switched)))
+        #expect(FreshnessPolicy.judge(red, now: now, wording: wording).colour == .red)
+        #expect(red.needsDecision == 1)
     }
 
     /// Round trip through the REAL marker (its encoder), then the reader.
@@ -341,7 +382,8 @@ struct CatalogStatusWordsTests {
         ])
         #expect(CatalogStatusWords.chipWords(red) == "needs a decision")
         #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — needs a decision…")
-        #expect(CatalogStatusWords.launchLine(red.summary).hasPrefix("Needs a decision: 3 files pointing at nothing"))
+        #expect(CatalogStatusWords.launchLine(red.summary).hasPrefix("Needs a decision: File Presence — File Presence: 3 files pointing at nothing"),
+                "the headline names the row once; the row's words follow once")
         #expect(CatalogStatusWords.launchLine(red.summary).hasSuffix("Catalog ▸ Catalog Status… lists the doors."))
     }
 

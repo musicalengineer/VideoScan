@@ -138,20 +138,28 @@ enum VerifyCatalogTiers {
 
     // MARK: Tier 0 — from the audit's marker
 
-    /// Reads `catalog-audit.json` beside the catalog (the one small read).
+    /// Reads `catalog-audit.json` beside the catalog (the one small read)
+    /// and `catalog.cutover`'s date (a run from before the switch to
+    /// SQLite is catalog.json's, not this catalog's).
     static func presence(_ input: TierInput) -> TierOutcome {
         let folder = input.snapshot.catalogURL.deletingLastPathComponent()
-        return presence(audit: CatalogFreshnessFactsReader.auditRecord(in: folder))
+        return presence(audit: CatalogFreshnessFactsReader.auditRecord(in: folder),
+                        switchedAt: CatalogFreshnessFactsReader.cutoverSwitchedAt(in: folder))
     }
 
-    static func presence(audit record: CatalogAuditRunRecord?) -> TierOutcome {
+    static func presence(audit record: CatalogAuditRunRecord?, switchedAt: Date? = nil) -> TierOutcome {
         var t = IntegrityTier(tier: 0, name: name(0), result: .notRun(""), summary: "")
         guard let record else {
             t.result = .notRun("Audit Catalog has not run — Catalog ▸ Audit Catalog… (the nightly runs it too)")
             t.summary = "Audit Catalog has not run"
             return TierOutcome(tier: t)
         }
-        let facts = CatalogAuditPresenceFacts.from(record)
+        let facts = CatalogAuditPresenceFacts.from(record, switchedAt: switchedAt)
+        if facts.predatesSwitch {
+            t.result = .notRun("the last audit ran on catalog.json, before the switch to SQLite — run Audit Catalog again")
+            t.summary = "the last audit ran before the switch to SQLite"
+            return TierOutcome(tier: t)
+        }
         t.verifiedAt = record.finishedAt
         t.checked = facts.checked
         t.couldNotCheck = record.counts[CatalogAuditResult.couldNotCheck.rawValue] ?? 0
@@ -234,13 +242,26 @@ enum VerifyCatalogTiers {
     /// is not evidence about this row either way: it is tier 4's finding,
     /// and here the row counts as having no current print (codex, slice 1,
     /// P1: an old audible print must never pass new content).
+    ///
+    /// A possible REFERENCE MOVIE whose print found no audio is not judged
+    /// either (2026-10-18: 25 of Rick's 131 were iMovie "Shared Movies"):
+    /// its own bytes hold pointers, not samples, so "no audio" says nothing
+    /// about the header and "Fingerprint Sound again" cannot help. Tier 5
+    /// names it and Verify Media decides; here it could not be checked. A
+    /// SILENT print of one still counts — ffmpeg followed the reference
+    /// and heard the media.
     static func sound(_ input: TierInput) -> TierOutcome {
         var findings: [IntegrityFinding] = []
         var stamped = 0
         var unstamped = 0
+        var referenced = 0
         for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
             guard let stamp = r.audioFingerprint, CatalogConstraints.staleStampReason(stamp, row: r) == nil else {
                 unstamped += 1
+                continue
+            }
+            if stamp.outcome == .noAudio, CatalogConstraints.isPossibleReferenceMovie(r) {
+                referenced += 1
                 continue
             }
             stamped += 1
@@ -249,19 +270,33 @@ enum VerifyCatalogTiers {
                                                  words: "the header says Video+Audio, \(why)", needsDecision: true))
             }
         }
+        let couldNotCheck = unstamped + referenced
         var t = IntegrityTier(tier: 3, name: name(3), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: stamped, passed: stamped - findings.count, needsDecision: findings.count,
-                              couldNotCheck: unstamped, summary: "")
+                              couldNotCheck: couldNotCheck, summary: "")
         if !findings.isEmpty {
             t.result = .needsDecision(findings.count)
             t.summary = "\(findings.count.formatted()) headers say sound the print never heard"
-        } else if unstamped > 0 {
-            t.result = .couldNotCheck(unstamped)
-            t.summary = "\(unstamped.formatted()) Video+Audio files have no current sound print yet — Fingerprint Sound"
+        } else if couldNotCheck > 0 {
+            t.result = .couldNotCheck(couldNotCheck)
+            t.summary = soundGapWords(unstamped: unstamped, referenced: referenced)
         } else {
             t.summary = "every Video+Audio file's print heard sound (\(stamped.formatted()))"
         }
         return TierOutcome(tier: t, findings: findings)
+    }
+
+    /// What tier 3 could not check, each with its door: no current print
+    /// (Fingerprint Sound), a reference movie (Verify Media decides).
+    static func soundGapWords(unstamped: Int, referenced: Int) -> String {
+        var parts: [String] = []
+        if unstamped > 0 {
+            parts.append("\(unstamped.formatted()) Video+Audio files have no current sound print yet — Fingerprint Sound")
+        }
+        if referenced > 0 {
+            parts.append("\(referenced.formatted()) possible reference movies — their sound lives in other files; Verify Media decides")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// Why a stamp contradicts a Video+Audio header; nil when it does not.
