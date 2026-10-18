@@ -3,7 +3,8 @@
 // catalog_cutover_f_prime_2026_10_17.md §3 "The door"). Raw SQL only
 // (CatalogStoreSensorTests). Where the import doors INSERT one occurrence,
 // these REPLACE what one row or one content owns with the record's current
-// state — delete-then-insert for the sets, UPDATE for the `files` row — and
+// state — delete-then-insert for a row's sets, UPDATE for the `files` row;
+// the content's shared sets go as each copy's delta (+LivePending, B2.4) — and
 // leave every refusal to the DDL: a digest change, a live-path collision, a
 // trashed archive copy, a marker change without its tombstone, a value a
 // CHECK will not hold. The thrown error carries the engine's words; the
@@ -202,7 +203,7 @@ extension GRDBTransaction {
             try replaceScalar("family_music", digest: digest, columns: "performer, title, marked_at",
                               values: curated.familyMusic.map { [$0.performer, $0.title, $0.markedAt] })
         case .tags, .confirmedByUserPeople, .rejectedPeople, .backupAttestations:
-            try writeDisplaySet(digest: digest, field: field, curated)
+            return   // sets: only as a copy's delta (B2.4, GRDBCatalogRepository+LivePending.swift)
         case .repairConfirmedDate, .footageDecisions, .setAsideReason, .archivedAt, .archiveFixity, .lineage,
              .supersededByID, .mediaReportCard:
             return   // row-scoped or column-backed: no display table
@@ -230,34 +231,5 @@ extension GRDBTransaction {
         let marks = Array(repeating: "?", count: values.count).joined(separator: ", ")
         try db.execute(sql: "INSERT INTO \(table) (digest, \(columns), conflict) VALUES (?, \(marks), 0)",
                        arguments: StatementArguments([digest] + values))
-    }
-
-    private func writeDisplaySet(digest: String, field: CatalogDDL.KnowledgeField, _ curated: CatalogRecordDTO.CuratedKnowledge) throws {
-        switch field {
-        case .tags:
-            try db.execute(sql: "DELETE FROM workflow_tags WHERE digest = ?", arguments: [digest])
-            for tag in curated.tags {
-                try db.execute(sql: "INSERT INTO workflow_tags (digest, tag) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                               arguments: [digest, tag])
-            }
-        case .backupAttestations:
-            try db.execute(sql: "DELETE FROM backup_attestations WHERE digest = ?", arguments: [digest])
-            for a in curated.backupAttestations {
-                try db.execute(sql: """
-                    INSERT INTO backup_attestations (digest, kind, answer, label, attested_at, by_whom, conflict)
-                    VALUES (?, ?, ?, ?, ?, ?, 0) ON CONFLICT DO NOTHING
-                    """, arguments: [digest, a.kind, a.answer, a.label, a.attestedAt, a.byWhom])
-            }
-        default:
-            // Confirmed and rejected people are written together: a name on
-            // both sides was a conflict pair, and the person's list resolves both.
-            try db.execute(sql: "DELETE FROM people_tags WHERE digest = ? AND kind IN ('confirmed','rejected')", arguments: [digest])
-            for p in curated.people {
-                try db.execute(sql: """
-                    INSERT INTO people_tags (digest, name, kind, confirmed_at, conflict) VALUES (?, ?, ?, ?, 0)
-                    ON CONFLICT DO NOTHING
-                    """, arguments: [digest, p.name, p.kind.rawValue, p.confirmedAt])
-            }
-        }
     }
 }

@@ -196,7 +196,7 @@ extension CatalogRecordDTO {
         public var markedAt: Int64
     }
 
-    public struct BackupAttestationRow: Codable, Sendable, Equatable {
+    public struct BackupAttestationRow: Codable, Sendable, Hashable {
         public var kind: String
         public var answer: String
         public var label: String?

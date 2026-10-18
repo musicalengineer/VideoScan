@@ -17,8 +17,9 @@
 //   * a later edit on ONE copy writes the display row again (conflict = 0)
 //     and the other copy follows, as any shared edit does.
 // Only the scalar groups can conflict (stars, notes, disposition, date,
-// place, family music): tags and backup attestations are sets (every copy's
-// value is kept) and people are written as each copy's own delta.
+// place, family music): tags, people and backup attestations are sets,
+// written as each copy's own delta (B2.4, CatalogSetDelta.swift) — every
+// copy's additions and removals are kept, so they never conflict.
 //
 // "Changed" is the record's own per-field baseline (CatalogSharedCurated
 // .edited(since:)), so a copy that merely still carries the older value is

@@ -61,6 +61,13 @@ public struct RemovalReason: RawRepresentable, Hashable, Codable, Sendable, Cust
     /// deleted, it gets this marker (state removedFromCatalog) with its
     /// tombstone, and the load skips it. Never set on a live record.
     public static let purged = RemovalReason(rawValue: "purged")
+    /// A job's output landed at this row's path (Balance Audio, Repair,
+    /// Promote, a derivative) and the bytes are NOT known to be the same
+    /// (cutover B2.4, codex B2.3 placeRecord finding): the row is kept,
+    /// removed from the catalog with its curated values, never purged.
+    /// (`files.removal_reason` is free text — no DDL CHECK lists reasons, so
+    /// no schema change.)
+    public static let replacedAtPath = RemovalReason(rawValue: "replacedAtPath")
     /// A `purgedAt` write that did not come through the engine (tests,
     /// and any writer the source sensor has not caught yet).
     public static let unspecified = RemovalReason(rawValue: "unspecified")

@@ -14,7 +14,10 @@
 //     record's payload is KEPT and tombstoned in `pending_purges` (B2.2,
 //     schema v1.9); the load skips it. Nothing is deleted;
 //   writePeopleDelta — only the names a person changed (codex B2 P1-6): an
-//     unrelated name's unresolved conflict is never rewritten as resolved.
+//     unrelated name's unresolved conflict is never rewritten as resolved;
+//   writeTagsDelta / writeAttestationsDelta — the same for the other two
+//     shared sets (B2.4, codex B2.3 F2): two copies edited differently in
+//     one commit both land, in either order.
 //
 // (For Rick: three small DAO methods; `ON CONFLICT … DO UPDATE` is SQLite's
 // upsert, which never deletes the row in the way.)
@@ -117,6 +120,36 @@ extension GRDBTransaction {
                 INSERT INTO people_tags (digest, name, kind, confirmed_at, conflict) VALUES (?, ?, ?, ?, 0)
                 ON CONFLICT (digest, name, kind) DO UPDATE SET confirmed_at = excluded.confirmed_at, conflict = 0
                 """, arguments: [digest, person.name, person.kind.rawValue, person.confirmedAt])
+        }
+    }
+
+    func writeTagsDelta(digest: String, added: [String], removed: [String]) throws {
+        let digest = digest.lowercased()
+        for tag in removed {
+            try db.execute(sql: "DELETE FROM workflow_tags WHERE digest = ? AND tag = ?", arguments: [digest, tag])
+        }
+        for tag in added {
+            try db.execute(sql: "INSERT INTO workflow_tags (digest, tag) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                           arguments: [digest, tag])
+        }
+    }
+
+    func writeAttestationsDelta(digest: String, added: [CatalogRecordDTO.BackupAttestationRow],
+                                removed: [CatalogRecordDTO.BackupAttestationRow]) throws {
+        let digest = digest.lowercased()
+        for a in removed {
+            try db.execute(sql: """
+                DELETE FROM backup_attestations
+                 WHERE digest = ? AND kind = ? AND attested_at = ? AND answer = ? AND by_whom = ?
+                """, arguments: [digest, a.kind, a.attestedAt, a.answer, a.byWhom])
+        }
+        for a in added {
+            // The person's word on this attestation settles it (conflict = 0).
+            try db.execute(sql: """
+                INSERT INTO backup_attestations (digest, kind, answer, label, attested_at, by_whom, conflict)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT (digest, kind, attested_at, answer, by_whom) DO UPDATE SET label = excluded.label, conflict = 0
+                """, arguments: [digest, a.kind, a.answer, a.label, a.attestedAt, a.byWhom])
         }
     }
 }

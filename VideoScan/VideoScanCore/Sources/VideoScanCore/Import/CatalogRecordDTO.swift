@@ -250,6 +250,20 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
         return nil
     }
 
+    /// One attestation as its `backup_attestations` row (the import's and
+    /// the live commit's one mapping).
+    static func attestationRow(_ a: VideoRecordJSON.BackupAttestationJSON) -> BackupAttestationRow {
+        BackupAttestationRow(kind: a.kind, answer: a.answer, label: a.label, attestedAt: a.attestedAt.unixSeconds, byWhom: a.by)
+    }
+
+    /// A record's attestations as rows, through the JSON text the catalog
+    /// holds them in — so a live commit's baseline maps exactly as the
+    /// stored rows did (cutover B2.4: a removal deletes by these keys).
+    static func attestationRows(_ list: [BackupAttestation]) throws -> [BackupAttestationRow] {
+        let json = try JSONDecoder().decode([VideoRecordJSON.BackupAttestationJSON].self, from: JSONEncoder().encode(list))
+        return json.map(attestationRow)
+    }
+
     private static func curatedKnowledge(_ r: VideoRecordJSON, id: String,
                                          archiveFixity af: ArchiveFixityEvidence?) -> CuratedKnowledge {
         var people: [PeopleTagRow] = (r.confirmedByUserPeople ?? []).map {
@@ -275,10 +289,7 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
             people: people,
             userDate: date,
             userPlace: place,
-            backupAttestations: (r.backupAttestations ?? []).map {
-                BackupAttestationRow(kind: $0.kind, answer: $0.answer, label: $0.label,
-                                     attestedAt: $0.attestedAt.unixSeconds, byWhom: $0.by)
-            },
+            backupAttestations: (r.backupAttestations ?? []).map(attestationRow),
             footageDecisions: (r.footageDecisions ?? []).map {
                 FootageDecisionRow(rowID: id, otherRowID: canonicalID($0.otherID), verdict: $0.verdict,
                                    decidedAt: $0.decidedAt.unixSeconds)
