@@ -170,6 +170,13 @@ struct OccurrenceWriter {
         for destination in dto.backupDestinations {
             try tx.insertBackupDestination(fileID: id, destination)
         }
+        // v1.7 (cutover B2): the A/V link `legacy_pair_ids` cannot hold —
+        // a confidence, or a Combine output's source pair — on the row.
+        if let link = dto.pairLink, link.needsLinkRow {
+            try tx.appendRowKnowledge(CatalogRow.RowKnowledge(fileID: id, digest: digest, field: CatalogLiveWritesSchema.pairField,
+                                                              value: link.linkValue, setAt: plan.startedAt,
+                                                              source: CatalogRow.importSource, importRun: plan.runID))
+        }
         return id
     }
 

@@ -42,6 +42,10 @@
 -- `unrepresentable` — a catalog.json row that a row-local CHECK of files/volumes/content/backup_destinations/
 -- sound_prints/footage_decisions would refuse is quarantined with the check's words (RowPreflight.swift)
 -- instead of aborting the whole import. Marked `-- fix 2026-10-17 (codex D′ #6)` in place.
+-- Revision 8 (v1.7, 2026-10-18, cutover B2 — the app's write side): §12 `row_knowledge`, the one
+-- table the live commits need that v1.6 has no room for (VideoScanCore/Store/CatalogLiveWritesSchema
+-- .swift, migration `v3_live_writes`, which also raises catalog_state.schema_version to 8). ADDITIVE:
+-- no v1.6 table, trigger or CHECK changes.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1548,3 +1552,43 @@ BEGIN SELECT RAISE(ABORT, 'the ledger is append-only (no replace)'); END;
 --     every witness is readable; with a witness missing or poisoned the person's number becomes
 --     the mark, never below a readable witness. Both files are written BEFORE the database jumps.
 -- ---------------------------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------------------------
+-- 12. LIVE WRITES (v1.7, cutover B2, migration `v3_live_writes`). What the app's commits write per
+--     `files` row, append-only. `knowledge_sources` keeps the import's evidence untouched: its key
+--     (import_run, source_ordinal, field) is NOT NULL by construction (WITHOUT ROWID), so an app row
+--     cannot live there without rebuilding that table. Here:
+--       * every curated field a commit wrote, source 'app:<door>', beside the display row it replaced;
+--       * the four row-scoped values a load reads per row (lineage, supersededByID,
+--         repairConfirmedDate, archivedAt) — the newest entry per (row, field) wins; 'null' = cleared;
+--       * 'pair': the A/V link {pairedWithID, pairGroupID, pairConfidence, combinedFromPairID} — by
+--         the importer (source 'catalog.json') for a row whose confidence or Combine link
+--         legacy_pair_ids cannot hold (its CHECK wants a pair id; a Combine output has only the
+--         link), and by the app whenever the link changes ('{}' = no link).
+--     The migration then runs: UPDATE catalog_state SET schema_version = 8; PRAGMA user_version = 8.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE row_knowledge (               -- v1.7: values written per files row (cutover B2)
+  write_id    INTEGER PRIMARY KEY,
+  file_id     TEXT    NOT NULL REFERENCES files(id) ON DELETE RESTRICT,
+  digest      TEXT    REFERENCES content(digest) ON DELETE RESTRICT,
+  field       TEXT    NOT NULL CHECK (field IN (
+                'userNotes','tags','mediaDisposition','starRating','confirmedByUserPeople',
+                'rejectedPeople','userDate','userDateConfidence','userPlace','userPlaceConfidence',
+                'backupAttestations','repairConfirmedDate','footageDecisions','familyMusic',
+                'setAsideReason','archivedAt','archiveFixity','lineage','supersededByID',
+                'mediaReportCard','pair')),
+  value_json  TEXT    NOT NULL CHECK (json_valid(value_json)),   -- 'null' = the value was cleared
+  set_at      INTEGER NOT NULL,
+  source      TEXT    NOT NULL CHECK (source = 'catalog.json' OR source GLOB 'app:*'),
+  import_run  TEXT    REFERENCES import_runs(run_id) ON DELETE RESTRICT,
+  generation  INTEGER NOT NULL,
+  CHECK ((source = 'catalog.json') = (import_run IS NOT NULL))
+) STRICT;
+CREATE INDEX row_knowledge_by_file ON row_knowledge(file_id, field, write_id);
+CREATE TRIGGER row_knowledge_no_update BEFORE UPDATE ON row_knowledge
+BEGIN SELECT RAISE(ABORT, 'row_knowledge is append-only evidence'); END;
+CREATE TRIGGER row_knowledge_no_delete BEFORE DELETE ON row_knowledge
+BEGIN SELECT RAISE(ABORT, 'row_knowledge is append-only evidence'); END;
+CREATE TRIGGER row_knowledge_no_replace BEFORE INSERT ON row_knowledge
+WHEN NEW.write_id IS NOT NULL AND EXISTS (SELECT 1 FROM row_knowledge WHERE write_id = NEW.write_id)
+BEGIN SELECT RAISE(ABORT, 'row_knowledge: a duplicate is a finding, never a replacement'); END;

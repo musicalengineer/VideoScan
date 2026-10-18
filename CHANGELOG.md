@@ -14,6 +14,12 @@ then what changed underneath. A version is bumped when it ships to Rick's daily 
   while it runs Audit Catalog, Verify Catalog and the import, then compares every row against
   the file again before it commits. Rows it cannot prove go to a quarantine table with their
   words; nothing is dropped.
+- Catalog ▸ Switch Catalog to SQLite… — moves the rehearsal database aside (never deletes
+  it), imports catalog.json once more, and only when that import finishes marks catalog.sqlite
+  as the catalog. From the next launch every save commits the rows that changed into
+  catalog.sqlite (2 s after the last edit, and at quit); a row the database cannot take yet is
+  named in the log and kept in memory; if the database refuses, saving stops with its words
+  until Catalog ▸ Reopen SQLite Catalog. The Master Archive designation moves into the database.
 - Verify Catalog: the first real report (10/17) was mostly the tools' own errors — fixed:
   Fill In Full Hashes now hashes archived rows; the sound print never says "no audio" for a
   decode failure; QuickTime reference movies are flagged, not called broken; duplicate

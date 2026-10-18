@@ -102,6 +102,18 @@ public enum CatalogWriter: String, Sendable {
     /// A one-time pass that derives stored values from stored evidence
     /// (cutover B1: the display tables filled from knowledge_sources).
     case migrate
+    // Cutover B2: the app's three save funnels, each its own door, so the
+    // history says which one committed (generation_history.writer, and
+    // `row_knowledge.source` = "app:<door>").
+    /// `saveCatalogDebounced` — the 2 s coalesced commit.
+    case save
+    /// `saveCatalogNow` — the synchronous commit (quit, Delete All).
+    case quit
+    /// `saveCatalogAcknowledged` — a commit the caller awaits.
+    case acknowledged
+    /// "Switch Catalog to SQLite…": the Master Archive designation moved
+    /// from catalog.json into `catalog_state`.
+    case cutover
 }
 
 // MARK: - What a body sees
@@ -169,8 +181,22 @@ public protocol CatalogLoadReading {
     func displaySources(_ visit: (DisplayValueDerivation.Source) throws -> Void) throws
 }
 
+/// What a live commit reads back before it writes (cutover B2): one `files`
+/// row exactly as a load would give it, the volume's case rule, and the
+/// catalog-level Master Archive designation.
+public protocol CatalogLiveReading {
+    /// The `files` row `id` with everything a record needs (nil when absent).
+    func storedRow(id: String) throws -> CatalogLoadedRow?
+    /// `volumes.case_sensitive` (false when the volume is not there yet).
+    func volumeCaseSensitive(_ volumeUUID: String) throws -> Bool
+    /// `catalog_state.master_archive`, verbatim JSON text; nil when none.
+    func masterArchiveJSON() throws -> String?
+    /// The newest finished, comparator-ok import (nil when none).
+    func lastFinishedImport() throws -> CatalogRow.FinishedImport?
+}
+
 /// The handle a `read` body receives.
-public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading {
+public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
@@ -179,7 +205,7 @@ public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading {
 /// row per call, plain INSERT (never REPLACE: a duplicate is a finding).
 /// The store's DDL — not the door — refuses a row that breaks a constraint;
 /// the thrown error carries the engine's words and the write rolls back.
-public protocol CatalogTransaction: CatalogRecordReading {
+public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     /// The generation this write advances TO (the committed one plus one).
     /// Rows written in this transaction are stamped with it.
     var generation: Int { get }
@@ -222,6 +248,41 @@ public protocol CatalogTransaction: CatalogRecordReading {
     // The display pass (cutover B1): re-checked and filled inside one write.
     func displayTablesEmpty() throws -> Bool
     func insertDisplayRows(_ rows: DisplayValueDerivation.Rows) throws
+
+    // Live writes (cutover B2, GRDBCatalogRepository+Live.swift). Unlike the
+    // import doors these REPLACE what one row (or one content) owns: a
+    // commit writes the record's current state. The DDL still refuses what
+    // must be refused (a digest change, a live-path collision, a marker
+    // change without its tombstone) with the engine's words.
+    /// Run `body` in a SAVEPOINT: a throw undoes only `body`'s writes and
+    /// is rethrown, so one refused row does not undo its neighbours.
+    func inSavepoint(_ body: () throws -> Void) throws
+    /// INSERT the volume, or refresh its names (never its case rule, F12).
+    func upsertVolume(_ volume: CatalogRecordDTO.VolumeRowDTO) throws
+    /// INSERT the content row unless the digest is already there.
+    func ensureContent(_ content: CatalogRecordDTO.ContentRow) throws
+    /// UPDATE every mutable column of an existing `files` row; the removal
+    /// marker only when `markerChanged` (its tombstone must already be in);
+    /// the audit stamp last, after the path trigger has run.
+    func updateFile(_ file: CatalogRecordDTO.FileRow, markerChanged: Bool) throws
+    /// The row's archive copy as `copy` says (nil = none).
+    func replaceArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow?) throws
+    func replaceBackupDestinations(fileID: String, _ rows: [CatalogRecordDTO.BackupDestinationRow]) throws
+    func replaceFootageDecisions(rowID: String, digest: String, _ rows: [CatalogRecordDTO.FootageDecisionRow]) throws
+    /// Duplicate analysis is rebuildable: a member the DDL cannot hold is
+    /// left out and named in the returned words.
+    func replaceDuplicateMember(fileID: String, _ member: CatalogRecordDTO.DuplicateMemberRow?) throws -> String?
+    func replaceSoundPrint(digest: String, _ print: CatalogRecordDTO.SoundPrintRow?) throws
+    /// The content's display row(s) for `field` from `curated`, `conflict = 0`
+    /// (a person's write resolves a conflict for that content).
+    func writeDisplayValue(digest: String, field: CatalogDDL.KnowledgeField,
+                           _ curated: CatalogRecordDTO.CuratedKnowledge, setAt: Int64) throws
+    func appendRowKnowledge(_ row: CatalogRow.RowKnowledge) throws
+    /// The content's BOUND rows of one derived kind replaced by `rows`
+    /// (empty = none bound). The unverified evidence is never touched.
+    func replaceDerived(digest: String, kind: CatalogDDL.DerivedKind, _ rows: [CatalogRecordDTO.DerivedValueRow]) throws
+    /// `catalog_state.master_archive` (JSON text, nil = none).
+    func setMasterArchive(json: String?) throws
 }
 
 // MARK: - The seam

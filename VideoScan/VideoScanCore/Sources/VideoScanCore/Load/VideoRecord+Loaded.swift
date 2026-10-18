@@ -15,8 +15,6 @@
 // What does NOT come back, by design (contract §a "drop" / not stored):
 //   size, duration, dateCreated, dateModified — display copies (the app
 //     recomputes them); junkScore, junkReasons — the analyzer recomputes;
-//   pairConfidence, combinedFromPairID — the importer keeps only the pair
-//     ids (`legacy_pair_ids`);
 //   a contentFixity that was not the digest's source, a `v1:` sound stamp,
 //     a contentHash that is not `v1:` — kept by the importer only as
 //     quarantine / raw evidence (§e, §f).
@@ -234,6 +232,8 @@ extension VideoRecord {
     private func applyRelations(_ row: CatalogLoadedRow) {
         pendingPairedWithID = row.pair?.pairedWithID.flatMap(UUID.init(uuidString:))
         pairGroupID = row.pair?.pairGroupID.flatMap(UUID.init(uuidString:))
+        pairConfidence = row.pair?.pairConfidence.flatMap(PairConfidence.init(rawValue:))
+        combinedFromPairID = row.pair?.combinedFromPairID.flatMap(UUID.init(uuidString:))
         if let d = row.duplicate {
             duplicateGroupID = UUID(uuidString: d.groupID)
             duplicateConfidence = d.confidence.flatMap(DuplicateConfidence.init(rawValue:))

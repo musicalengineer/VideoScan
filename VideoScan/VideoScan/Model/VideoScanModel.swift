@@ -1060,6 +1060,11 @@ final class VideoScanModel: ObservableObject {
         didSet { installDesignationAuditSink() }
     }
 
+    /// Cutover B2: set once catalog.sqlite is the authority — its committer
+    /// then takes every save funnel below (CatalogCommitter.swift); the
+    /// JSON store above is frozen. Also the Switch sheet's state.
+    let catalogCutover = CatalogCutoverState()
+
     /// Live-reload polling task — set by `startLiveDossierReload()` in
     /// VideoScanModel+LiveReload.swift, cancelled by
     /// `stopLiveDossierReload()`. nil when the live reload is not
@@ -1454,6 +1459,7 @@ final class VideoScanModel: ObservableObject {
     /// (e.g. mid-scan) collapse into one disk write.
     func saveCatalogDebounced() {
         noteCatalogMutated()
+        if let committer = catalogCutover.committer { return committer.scheduleCommit() }
         catalogStore.scheduleSave(records: records)
     }
 
@@ -1463,6 +1469,7 @@ final class VideoScanModel: ObservableObject {
     @discardableResult
     func saveCatalogNow() -> Bool {
         noteCatalogMutated()
+        if let committer = catalogCutover.committer { return committer.commitNow() }
         return catalogStore.saveNow(records: records)
     }
 

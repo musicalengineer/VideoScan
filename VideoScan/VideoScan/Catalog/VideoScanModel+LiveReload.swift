@@ -44,6 +44,13 @@ extension VideoScanModel {
     @MainActor
     func startLiveDossierReload(intervalSeconds: Double = 30) {
         guard liveReloadTask == nil else { return }
+        // Cutover B2: under catalog.sqlite the frozen catalog.json is not a
+        // source — merging a file someone else wrote into the records the
+        // committer then stores would be a second authority (design §8 risk 6).
+        guard !catalogCutover.isSQLiteAuthority else {
+            liveReloadLogger.info("Live dossier reload: off — catalog.sqlite is the catalog; catalog.json is frozen")
+            return
+        }
         let path = catalogStore.fileLocation
         liveReloadLogger.info("Live dossier reload: starting (\(intervalSeconds, privacy: .public)s interval, watching \(path, privacy: .public))")
         // Seed the high-water mark to the file's current mtime so the

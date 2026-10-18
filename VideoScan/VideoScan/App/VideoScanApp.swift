@@ -893,6 +893,10 @@ struct VideoScanApp: App {
                 // dry run passed on this build (the marker beside the catalog).
                 ImportToSQLiteMenuItems(model: catalogModel, center: fileOpsCenter, marker: catalogModel.importDryRunMarker,
                                         isReadOnly: catalogModel.isReadOnly)
+                // Cutover B2: the switch itself (re-import, then the latch),
+                // and Reopen when saving to catalog.sqlite was refused.
+                CatalogSwitchMenuItems(model: catalogModel, cutover: catalogModel.catalogCutover,
+                                       isReadOnly: catalogModel.isReadOnly)
                 Divider()
                 // Catalog Status (2026-10-16): opens Content Analysis with
                 // the summary band; the title carries the colour word.

@@ -68,21 +68,23 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
-        #expect(inventory.tables.count == 50)                  // 3 bookkeeping + 47 data
+        #expect(inventory.tables.count == 51)                  // 3 bookkeeping + 47 data + 1 live (v1.7 row_knowledge)
         #expect(inventory.virtualTables == ["content_text_fts"])
-        #expect(inventory.triggers.count == 70)                // 12 bookkeeping + 58 data (v1.5: +5, +8 for codex C′ #1/#2)
-        #expect(inventory.indexes.count == 33)                 // 8 UNIQUE + 25 plain, all named in the DDL
+        #expect(inventory.triggers.count == 73)                // 12 bookkeeping + 58 data (v1.5: +5, +8 for codex C′ #1/#2) + 3 live
+        #expect(inventory.indexes.count == 34)                 // 8 UNIQUE + 25 plain + 1 live, all named in the DDL
         #expect(inventory.views.sorted() == ["byte_copies", "duplicate_hash_groups_disagree"])
         #expect(inventory.shadowTables.count == 5)             // FTS5's _config _content _data _docsize _idx
         let migrations = try rawQueue(fixture).inDatabase { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid")
         }
-        #expect(migrations == [CatalogBookkeepingSchema.migrationID, CatalogDataSchema.migrationID])
+        #expect(migrations == [CatalogBookkeepingSchema.migrationID, CatalogDataSchema.migrationID, CatalogLiveWritesSchema.migrationID])
+        let version = try count(try rawQueue(fixture), "SELECT schema_version FROM catalog_state")
+        #expect(version == CatalogLiveWritesSchema.schemaVersion)
     }
 
     @Test func theSwiftSchemaIsSplitByTableInDocumentOrder() throws {
         let documented = try SchemaDocument.ddl().tableNames.filter { !["catalog_state", "generations", "generation_history"].contains($0) }
-        let swiftOrder = CatalogDataSchema.statements.compactMap { sql in
+        let swiftOrder = (CatalogDataSchema.statements + CatalogLiveWritesSchema.statements).compactMap { sql in
             sql.firstMatch(of: #/^CREATE (?:VIRTUAL )?TABLE (\w+)/#).map { String($0.1) }
         }
         #expect(swiftOrder == documented)
@@ -107,7 +109,7 @@ struct CatalogDataSchemaTests {
         #expect(outcome == .readWrite)
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
         #expect(inventory.tables.contains("files"))
-        #expect(inventory.tables.count == 50)
+        #expect(inventory.tables.count == 51)
         let generation = try count(try rawQueue(fixture), "SELECT generation FROM generations WHERE id = 1")
         #expect(generation == 0)
     }
@@ -157,7 +159,7 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let documented = try SchemaDocument.ddl().statements.filter { $0.hasPrefix("CREATE") }
-        #expect(documented.count == 156)                       // 51 tables + 70 triggers + 33 indexes + 2 views
+        #expect(documented.count == 161)                       // 52 tables + 73 triggers + 34 indexes + 2 views
         let created = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }.normalizedSQL
         let createdText = Set(created.values)
         for statement in documented {
