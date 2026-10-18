@@ -28,6 +28,8 @@ final class CatalogCutoverState: ObservableObject {
     /// Where the switch is (the sheet shows it).
     @Published var switchPhase: CatalogSwitchPhase = .confirming
 
+    @Published private(set) var awaitingDigest: Set<UUID> = []
+
     var isSQLiteAuthority: Bool { committer != nil }
 
     func install(_ committer: CatalogCommitter, databaseURL: URL) {

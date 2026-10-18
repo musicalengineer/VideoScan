@@ -86,6 +86,9 @@ final class CatalogCommitter {
     private(set) var commitCount = 0
     /// The last detection's cost (snapshot on the main actor + fingerprints).
     private(set) var lastDetection: Duration = .zero
+    var isBusy: Bool { inFlight }
+    var afterSnapshotForTesting: (@MainActor () -> Void)?
+    var beforeAbsorbForTesting: (@MainActor () async -> Void)?
 
     init(repository: any CatalogRepository, storedDesignationJSON: String?,
          input: @escaping () -> Input, sink: @escaping (String) -> Void) {
@@ -145,7 +148,9 @@ final class CatalogCommitter {
         debounceTask?.cancel()
         guard let request = prepare(door: .acknowledged, holder: holder) else { return false }
         inFlight = true
+        afterSnapshotForTesting?()
         let result = await Self.run(request, on: repository)
+        await beforeAbsorbForTesting?()
         inFlight = false
         let durable = absorb(result, request: request)
         startFollowUpIfMarked()
