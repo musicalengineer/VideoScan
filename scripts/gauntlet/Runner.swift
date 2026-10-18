@@ -123,6 +123,33 @@ func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
           verdict != "Failed" || failed > 0 else { return nil }
     return ["passed": passed, "failed": failed, "skipped": skipped, "known_issues": known]
 }
+// The package adapter's counts (2026-10-18): `swift test` prints no result
+// bundle, so its console is read with the nightly's per-test rules
+// (scripts/nightly_local_tests.sh parse_test_counts): one terminal line per
+// test — "✔/✘ Test … passed/failed after", "━ Test … passed after … known
+// issue(s)", "➜ Test … skipped", XCTest "Test Case '…' passed/failed/skipped"
+// — never an issue line or a run/suite summary. nil when the log holds no run
+// summary at all (the command never got as far as running tests).
+func countsFromTestLog(_ text: String) -> [String: Int]? {
+    var passed = 0, failed = 0, skipped = 0, known = 0
+    var sawSummary = false
+    let runSummary = try! NSRegularExpression(pattern: #"Test run with [0-9]+ test"#)
+    for raw in text.components(separatedBy: "\n") {
+        let line = raw.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\u{200B}")))
+        let range = NSRange(line.startIndex..., in: line)
+        if runSummary.firstMatch(in: line, range: range) != nil || line.hasPrefix("Executed ") { sawSummary = true; continue }
+        if line.contains(" recorded an issue ") || line.contains(" recorded a known issue ") { continue }
+        if line.hasPrefix("Test Case '") {
+            if line.contains("' passed (") { passed += 1 } else if line.contains("' failed (") { failed += 1 } else if line.contains("' skipped (") { skipped += 1 }
+            continue
+        }
+        if line.hasPrefix("✔ Test ") && line.contains(" passed after ") { passed += 1 }
+        else if line.hasPrefix("━ Test ") && line.contains(" passed after ") && line.contains(" known issue") { known += 1 }
+        else if line.hasPrefix("✘ Test ") && line.contains(" failed after ") { failed += 1 }
+        else if line.hasPrefix("➜ Test ") && line.contains(" skipped") { skipped += 1 }
+    }
+    return sawSummary ? ["passed": passed, "failed": failed, "skipped": skipped, "known_issues": known] : nil
+}
 func stageResult(_ name: String, _ status: String, _ reason: String?, floor: Int = 0) -> [String: Any] {
     ["name": name, "status": status, "reason": reason as Any? ?? NSNull(), "exit_code": NSNull(), "elapsed_s": 0.0, "expected": floor, "passed": NSNull(), "failed": NSNull(), "skipped": NSNull(), "incomplete": status == "passed" ? 0 : 1, "artifacts": []]
 }
@@ -153,6 +180,11 @@ struct GauntletRunner {
     var contaminated = false
     var fatalReason: String?
     var xctestrun: URL?
+    /// The package adapter's one build (nil = not needed / not attempted).
+    var packageBuildOK: Bool?
+    var packageBuildReason: String?
+    var packagePath: URL { repo.appendingPathComponent("VideoScan/VideoScanCore") }
+    var packageScratch: String { run.appendingPathComponent("PackageBuild").path }
 
     init(repo: URL, arguments: [String]) {
         self.repo = repo
@@ -205,11 +237,14 @@ struct GauntletRunner {
         print("Inventory: \(validationErrors.isEmpty ? "valid" : validationErrors.joined(separator: "; "))")
         print("Isolation: per-run home, App Support, catalog, preferences, caches, logs, archive, fixtures; canonical write allowlist")
         print("Build: ONE xcodebuild build-for-testing -scheme VideoScan -testPlan VideoScan-CI -configuration Release ENABLE_TESTABILITY=YES -derivedDataPath <run>/DerivedData")
+        print("Package: ONE swift build --build-tests -c release --package-path VideoScan/VideoScanCore --scratch-path <run>/PackageBuild, then swift test --skip-build per stage with package_selectors")
         for name in stageOrder {
             let entry = stageMap[name]!
             let selectors = entry["selectors"] as? [String] ?? []
             let blocked = entry["blocked"] as? [[String: Any]] ?? []
-            print("\(name): \(name == "ui" ? "UI not run (phase 2)" : !only.contains(name) ? "not_run (not selected)" : "test-without-building selectors=\(selectors.count) expected_floor=\(entry["expected_floor"] ?? 0) blocked=\(blocked.count)")")
+            let packageSelectors = entry["package_selectors"] as? [String] ?? []
+            let package = packageSelectors.isEmpty ? "" : " package_selectors=\(packageSelectors.count) package_expected_floor=\(entry["package_expected_floor"] ?? 0)"
+            print("\(name): \(name == "ui" ? "UI not run (phase 2)" : !only.contains(name) ? "not_run (not selected)" : "test-without-building selectors=\(selectors.count) expected_floor=\(entry["expected_floor"] ?? 0)\(package) blocked=\(blocked.count)")")
         }
         print("Results: \(resultsRoot.path)/<run-id>/result.json; history.jsonl; metrics publication queued on failure")
 
@@ -283,6 +318,51 @@ struct GauntletRunner {
         }
     }
 
+    /// The package adapter's ONE build (2026-10-18): the VideoScanCore
+    /// package's tests in Release, in the run's own scratch path and isolated
+    /// environment, only when a selected stage has package selectors. Like
+    /// the app build it is never repeated between stages.
+    mutating func buildPackage() throws {
+        let wanted = stages.contains { entry in
+            only.contains(entry["name"] as? String ?? "") && !((entry["package_selectors"] as? [String] ?? []).isEmpty)
+        }
+        guard wanted, fatalReason == nil, !contaminated else { return }
+        let cmd = ["swift", "build", "--build-tests", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch]
+        let build = try command(cmd, log: run.appendingPathComponent("package-build.log"), timeout: 3600, environment: environment)
+        result["package_build_s"] = build.elapsed; result["package_build_exit_code"] = build.code
+        if build.contaminated { contaminated = true }
+        packageBuildOK = build.code == 0
+        if build.code != 0 { packageBuildReason = build.timedOut ? "package build watchdog timeout" : "package build exit \(build.code)" }
+    }
+
+    /// One stage's package suites: `swift test --skip-build` on the build
+    /// above, one `--filter` per suite (`VideoScanCoreTests.<Suite>/`, the
+    /// slash so a suite never matches a longer name), counted from the log.
+    mutating func runPackageSuites(_ name: String, selectors: [String], floor: Int, timeout: Double) -> [String: Any] {
+        var output: [String: Any] = ["selectors": selectors.count, "expected": floor, "status": "failed", "reason": NSNull(), "exit_code": NSNull()]
+        guard packageBuildOK == true else {
+            output["status"] = "blocked"; output["reason"] = packageBuildReason ?? "package build did not run"
+            return output
+        }
+        let filters = selectors.flatMap { ["--filter", NSRegularExpression.escapedPattern(for: $0) + "/"] }
+        let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch] + filters
+        let log = run.appendingPathComponent("\(name)-package.log")
+        do {
+            let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
+            if execution.contaminated { contaminated = true }
+            output["exit_code"] = execution.code
+            output["elapsed_s"] = execution.elapsed
+            let counts = countsFromTestLog((try? String(contentsOf: log, encoding: .utf8)) ?? "")
+            let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
+            output["status"] = verdict.0
+            output["reason"] = verdict.1 as Any? ?? NSNull()
+            if let counts { for (key, value) in counts { output[key] = value } }
+            if execution.timedOut { output["status"] = "failed"; output["reason"] = "package watchdog timeout" }
+            if execution.contaminated { output["status"] = "failed"; output["reason"] = "unreaped process contamination" }
+        } catch { output["reason"] = String(describing: error) }
+        return output
+    }
+
     func patch(_ object: Any) -> Any {
         if let list = object as? [Any] { return list.map(patch) }
         guard var dict = object as? [String: Any] else { return object }
@@ -303,8 +383,30 @@ struct GauntletRunner {
         let blocked = entry["blocked"] as? [[String: Any]] ?? []
         let missingTools = (entry["requires_tools"] as? [String] ?? []).filter { !fm.isExecutableFile(atPath: $0) }
         if !missingTools.isEmpty { return stageResult(name, "blocked", "required fixture tools unavailable", floor: floor) }
-        if selectors.isEmpty { return stageResult(name, "blocked", blocked.isEmpty ? "no safe phase 1 adapter" : "unsafe or unadapted suites: \(blocked.count)", floor: floor) }
+        let packageSelectors = entry["package_selectors"] as? [String] ?? []
+        if selectors.isEmpty && packageSelectors.isEmpty { return stageResult(name, "blocked", blocked.isEmpty ? "no safe phase 1 adapter" : "unsafe or unadapted suites: \(blocked.count)", floor: floor) }
         return nil
+    }
+
+    /// Fold the package sub-run into the stage: counts add up, a package
+    /// failure (or a package-only stage's verdict) decides the status, and
+    /// both reasons are kept.
+    func mergePackage(_ package: [String: Any], into output: inout [String: Any], xcodeRan: Bool) {
+        output["package"] = package
+        for key in ["passed", "failed", "skipped", "known_issues"] {
+            if let value = package[key] as? Int { output[key] = (output[key] as? Int ?? 0) + value }
+        }
+        let packageStatus = package["status"] as? String ?? "failed"
+        let packageReason = (package["reason"] as? String).map { "package: \($0)" }
+        if !xcodeRan {
+            output["status"] = packageStatus
+            output["reason"] = packageReason as Any? ?? NSNull()
+            output["exit_code"] = package["exit_code"] ?? NSNull()
+        } else if packageStatus != "passed" {
+            let xcodeReason = output["reason"] as? String
+            output["status"] = (output["status"] as? String == "failed" || packageStatus == "failed") ? "failed" : packageStatus
+            output["reason"] = [xcodeReason, packageReason].compactMap { $0 }.joined(separator: "; ")
+        }
     }
 
     mutating func executeStage(_ name: String) -> [String: Any] {
@@ -312,27 +414,44 @@ struct GauntletRunner {
         let floor = entry["expected_floor"] as? Int ?? 1
         if let unavailable = unavailableStage(name, entry: entry, floor: floor) { return unavailable }
         let selectors = entry["selectors"] as? [String] ?? []
+        let packageSelectors = entry["package_selectors"] as? [String] ?? []
         let blocked = entry["blocked"] as? [[String: Any]] ?? []
+        let timeout = Double(entry["timeout_s"] as? Int ?? 1800)
         let bundle = run.appendingPathComponent("\(name).xcresult")
-        let cmd = ["xcodebuild", "test-without-building", "-xctestrun", xctestrun!.path, "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-resultBundlePath", bundle.path, "-skip-testing:VideoScanUITests"] + selectors.map { "-only-testing:\($0)" }
         var output = stageResult(name, "failed", nil, floor: floor)
         output["blocked_details"] = blocked
         if let modes = entry["modes"] { output["modes"] = modes }
         let start = monotonic()
-        do {
-            let execution = try command(cmd, log: run.appendingPathComponent("\(name).log"), timeout: Double(entry["timeout_s"] as? Int ?? 1800), environment: environment)
-            contaminated = execution.contaminated
-            output["exit_code"] = execution.code
-            let summary = run.appendingPathComponent("\(name)-summary.json")
-            let extraction = try command(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", bundle.path], log: summary, timeout: 60)
-            applyVerdict(execution, extraction: extraction, summary: summary, floor: floor, blocked: blocked, output: &output)
-        } catch { output["reason"] = String(describing: error) }
+        var artifacts: [String] = []
+        if !selectors.isEmpty {
+            let cmd = ["xcodebuild", "test-without-building", "-xctestrun", xctestrun!.path, "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-resultBundlePath", bundle.path, "-skip-testing:VideoScanUITests"] + selectors.map { "-only-testing:\($0)" }
+            do {
+                let execution = try command(cmd, log: run.appendingPathComponent("\(name).log"), timeout: timeout, environment: environment)
+                contaminated = execution.contaminated
+                output["exit_code"] = execution.code
+                let summary = run.appendingPathComponent("\(name)-summary.json")
+                let extraction = try command(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", bundle.path], log: summary, timeout: 60)
+                applyVerdict(execution, extraction: extraction, summary: summary, floor: floor, output: &output)
+            } catch { output["reason"] = String(describing: error) }
+            artifacts += [bundle.lastPathComponent, "\(name).log", "\(name)-summary.json"]
+        }
+        if !packageSelectors.isEmpty && !contaminated {
+            let package = runPackageSuites(name, selectors: packageSelectors,
+                                           floor: entry["package_expected_floor"] as? Int ?? 1, timeout: timeout)
+            mergePackage(package, into: &output, xcodeRan: !selectors.isEmpty)
+            artifacts += ["package-build.log", "\(name)-package.log"]
+        }
+        // Safe subset passed, but the stage still holds unadapted suites.
+        if output["status"] as? String == "passed" && !blocked.isEmpty {
+            output["status"] = "blocked"; output["reason"] = "safe subset passed; unsafe or unadapted suites: \(blocked.count)"
+        }
+        output["incomplete"] = output["status"] as? String == "passed" ? 0 : 1
         output["elapsed_s"] = monotonic() - start
-        output["artifacts"] = [bundle.lastPathComponent, "\(name).log", "\(name)-summary.json"]
+        output["artifacts"] = artifacts
         return output
     }
 
-    mutating func applyVerdict(_ execution: CommandResult, extraction: CommandResult, summary: URL, floor: Int, blocked: [[String: Any]], output: inout [String: Any]) {
+    mutating func applyVerdict(_ execution: CommandResult, extraction: CommandResult, summary: URL, floor: Int, output: inout [String: Any]) {
         let counts = extraction.code == 0 ? (try? readObject(summary)).flatMap(countsFromSummary) : nil
         let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
         output["status"] = verdict.0
@@ -340,8 +459,6 @@ struct GauntletRunner {
         if let counts { for (key, value) in counts { output[key] = value } }
         if execution.timedOut { output["reason"] = "stage watchdog timeout" }
         if execution.contaminated || extraction.contaminated { contaminated = true; output["status"] = "failed"; output["reason"] = "unreaped process contamination" }
-        if verdict.0 == "passed" && !blocked.isEmpty { output["status"] = "blocked"; output["reason"] = "safe subset passed; unsafe or unadapted suites: \(blocked.count)" }
-        output["incomplete"] = output["status"] as? String == "passed" ? 0 : 1
     }
 
     mutating func aggregateResults() {
@@ -386,6 +503,7 @@ struct GauntletRunner {
         fatalReason = validationErrors.isEmpty ? nil : "manifest inventory mismatch"
         do {
             try build()
+            try buildPackage()
             for name in stageOrder { outputs.append(executeStage(name)) }
         } catch { fatalReason = String(describing: error) }
         aggregateResults()

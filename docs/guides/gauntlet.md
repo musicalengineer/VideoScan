@@ -76,8 +76,26 @@ Hallie's safe source suites are distinct from the **strict replay** and
 **advisory live testbed** modes. Both modes are explicitly blocked pending a
 versioned isolated tree snapshot and log adapter; neither silently falls back
 to the live tree. Advisory results, when adapted, will be `clean` or `flagged`,
-never counted as verified passes. Standalone package and Python/shell suites
-remain assigned but blocked until component build/count adapters are available.
+never counted as verified passes. Python/shell suites remain assigned but
+blocked until component build/count adapters are available.
+
+**Package adapter (2026-10-18).** VideoScanCore package suites run too. When a
+selected stage lists `package_selectors`, the runner does ONE
+`swift build --build-tests -c release` of `VideoScan/VideoScanCore` into
+`<run>/PackageBuild` (isolated environment, `package-build.log`), then per
+stage one `swift test --skip-build -c release` with one `--filter
+VideoScanCoreTests\.<Suite>/` per selector (`<stage>-package.log`). `swift
+test` writes no result bundle, so counts come from the console with the
+nightly's per-test rules (one ✔/✘/━/➜ or XCTest `Test Case` line per test;
+issue lines and run summaries never count; no run summary at all = counts
+unavailable). The package part has its own `package_expected_floor`; its
+counts add to the stage's, its verdict is kept under `package`, and a package
+failure, known issue, skip, build failure or missing summary keeps the stage
+from passing. `inventory.swift --validate` requires `package_selectors` to
+equal `VideoScanCoreTests.<suite>` for exactly the stage's unblocked package
+assignments, refuses a suite split across a blocked file or another stage,
+and only accepts package files under `VideoScan/VideoScanCore/Tests/`.
+Sensors: `tests/test_gauntlet_package_adapter.py`.
 
 ## Isolation
 
@@ -123,7 +141,13 @@ pending" is unblocked once its source has been read against these points:
 in `regression` (CatalogCutover* B1–B2.7 + Regression, P0Truth*,
 AdvRescanEditDuringScan) and `unit` (CatalogPurge, CatalogStoreAsyncSave,
 CatalogStoreHardening, CatalogLockRobustness). The two real-backup sensors
-moved to `CatalogLockRealBackupTests` (blocked). `regression` now requires
+moved to `CatalogLockRealBackupTests` (blocked). The VideoScanCore catalog
+suites (Store/, Commit/, Import/, Load/, CatalogFreshness,
+FileBackedCatalogSource — 40 files) passed the same screen (per-test
+`StoreFixture` UUID folders, synthetic `/Volumes` paths, `#filePath` source
+sensors only) and run through the package adapter in `unit`, `regression`
+and `performance`; `CatalogDiskFullTests` attaches its own hdiutil image
+under the run's `TMPDIR`. `regression` now requires
 Homebrew ffmpeg/ffprobe (P0 truth's media matrix). `P0TruthRegressionTests`
 carries one tracked `withKnownIssue` (GH #327 case 5, a silent header read as
 sound); the runner reports known issues as failures by design, so the

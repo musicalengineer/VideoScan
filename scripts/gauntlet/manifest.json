@@ -258,7 +258,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogFreshnessTests.swift",
       "stage": "unit",
@@ -1125,7 +1124,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FileBackedCatalogSourceTests.swift",
       "stage": "unit",
@@ -1686,7 +1684,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogRecordDTOTests.swift",
       "stage": "unit",
@@ -1741,7 +1738,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportComparatorTests.swift",
       "stage": "unit",
@@ -1791,7 +1787,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportGateTests.swift",
       "stage": "unit",
@@ -1877,7 +1872,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/PoisonedCatalogFixtureTests.swift",
       "stage": "unit",
@@ -28319,7 +28313,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
       "stage": "unit",
@@ -28341,7 +28334,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
       "stage": "regression",
@@ -28381,7 +28373,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
       "stage": "regression",
@@ -28397,7 +28388,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
       "stage": "performance",
@@ -28411,7 +28401,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseCheckpointTests.swift",
       "stage": "regression",
@@ -28424,7 +28413,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
       "stage": "regression",
@@ -28445,7 +28433,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
       "stage": "regression",
@@ -28473,7 +28460,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
       "stage": "performance",
@@ -28486,7 +28472,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogTransactionDoorsTests.swift",
       "stage": "regression",
@@ -28505,7 +28490,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterTests.swift",
       "stage": "regression",
@@ -28554,7 +28538,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
       "stage": "regression",
@@ -28575,7 +28558,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterStagingTests.swift",
       "stage": "regression",
@@ -28592,7 +28574,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterSensorTests.swift",
       "stage": "regression",
@@ -28606,7 +28587,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
       "stage": "regression",
@@ -28632,7 +28612,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
       "stage": "performance",
@@ -28644,7 +28623,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/JSONDuplicateKeyScannerTests.swift",
       "stage": "unit",
@@ -28670,7 +28648,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/RowPreflightTests.swift",
       "stage": "unit",
@@ -28711,7 +28688,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
       "stage": "unit",
@@ -28729,7 +28705,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
       "stage": "unit",
@@ -28768,7 +28743,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogRecordDTORecordTests.swift",
       "stage": "unit",
@@ -28788,7 +28762,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
       "stage": "unit",
@@ -28810,7 +28783,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadRoundTripTests.swift",
       "stage": "regression",
@@ -28827,7 +28799,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
       "stage": "performance",
@@ -28839,7 +28810,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
       "stage": "regression",
@@ -28884,7 +28854,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
       "stage": "regression",
@@ -28911,7 +28880,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
       "stage": "unit",
@@ -28926,7 +28894,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogCommitScaleTests.swift",
       "stage": "performance",
@@ -28965,7 +28932,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
       "stage": "regression",
@@ -29073,7 +29039,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
       "stage": "regression",
@@ -29112,7 +29077,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB24Tests.swift",
       "stage": "regression",
@@ -29142,7 +29106,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB25Tests.swift",
       "stage": "regression",
@@ -29172,7 +29135,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
       "stage": "regression",
@@ -29272,7 +29234,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
       "stage": "regression",
@@ -29284,7 +29245,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDiskFullTests.swift",
       "stage": "regression",
@@ -29293,6 +29253,25 @@
       ],
       "tests": [
         "diskFullCommitRefusesAndRetries"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_gauntlet_package_adapter.py",
+      "stage": "regression",
+      "suites": [
+        "test_gauntlet_package_adapter.py"
+      ],
+      "tests": [
+        "test_below_package_floor_fails",
+        "test_mismatched_package_selectors_fail_preflight",
+        "test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env",
+        "test_package_build_failure_never_passes_and_skips_package_runs",
+        "test_package_failure_fails_a_stage_whose_xcode_part_passed",
+        "test_package_known_issue_and_missing_summary_are_not_passes",
+        "test_package_only_stage_runs",
+        "test_unblocked_package_suite_without_selectors_fails_preflight"
       ]
     }
   ],
@@ -29331,10 +29310,6 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceClassifierTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogFreshnessTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -29490,10 +29465,6 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FileBackedCatalogSourceTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FindTagIngestEngineTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -29591,22 +29562,6 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/HastingsParseProbeTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogRecordDTOTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportComparatorTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportGateTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/PoisonedCatalogFixtureTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -31866,10 +31821,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -31878,40 +31829,41 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/JSONDuplicateKeyScannerTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/RowPreflightTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogRecordDTORecordTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
       "expected_floor": 2497,
       "name": "unit",
+      "package_expected_floor": 294,
+      "package_selectors": [
+        "VideoScanCoreTests.CatalogFreshnessTests",
+        "VideoScanCoreTests.FileBackedCatalogSourceTests",
+        "VideoScanCoreTests.CatalogRecordDTOGoldenTests",
+        "VideoScanCoreTests.CatalogRecordDTOContractTests",
+        "VideoScanCoreTests.CatalogDDLVocabularyTests",
+        "VideoScanCoreTests.CatalogRecordDTOMappingTests",
+        "VideoScanCoreTests.CatalogRecordDTOScaleTests",
+        "VideoScanCoreTests.ImportComparatorTests",
+        "VideoScanCoreTests.ImportComparatorScaleTests",
+        "VideoScanCoreTests.ImportGateTableTests",
+        "VideoScanCoreTests.ImportGateWordsTests",
+        "VideoScanCoreTests.ImportGateSnapshotTests",
+        "VideoScanCoreTests.ImportGatePrecedenceTests",
+        "VideoScanCoreTests.ImportGateRunRefusalTests",
+        "VideoScanCoreTests.ImportGateFixtureTests",
+        "VideoScanCoreTests.PoisonedCatalogFixtureAppDecodeTests",
+        "VideoScanCoreTests.CatalogRepositoryContractTests",
+        "VideoScanCoreTests.JSONDuplicateKeyScannerTests",
+        "VideoScanCoreTests.JSONDuplicateKeyScannerScaleTests",
+        "VideoScanCoreTests.RowPreflightTests",
+        "VideoScanCoreTests.CatalogImporterAppMarkerTests",
+        "VideoScanCoreTests.AuditMarkerJSONTests",
+        "VideoScanCoreTests.CatalogJSONValueCoderTests",
+        "VideoScanCoreTests.CatalogRecordDTORecordTests",
+        "VideoScanCoreTests.DisplayValueDerivationTests",
+        "VideoScanCoreTests.CatalogChangeDetectorTests"
+      ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
         "VideoScanTests/AgeBucketTests",
@@ -32555,96 +32507,48 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseCheckpointTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogTransactionDoorsTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterSensorTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterStagingTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadRoundTripTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB24Tests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB25Tests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDiskFullTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+          "name": "tests/test_gauntlet_package_adapter.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 166,
       "name": "regression",
+      "package_expected_floor": 184,
+      "package_selectors": [
+        "VideoScanCoreTests.GRDBCatalogRepositoryTests",
+        "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
+        "VideoScanCoreTests.CatalogCloseCheckpointTests",
+        "VideoScanCoreTests.CatalogStoreSensorTests",
+        "VideoScanCoreTests.CatalogDataSchemaTests",
+        "VideoScanCoreTests.CatalogTransactionDoorsTests",
+        "VideoScanCoreTests.CatalogImporterTests",
+        "VideoScanCoreTests.CatalogImporterIdentityTests",
+        "VideoScanCoreTests.CatalogImporterDuplicateKeyTests",
+        "VideoScanCoreTests.CatalogImporterSidecarRereadTests",
+        "VideoScanCoreTests.CatalogImporterAuditWordsTests",
+        "VideoScanCoreTests.CatalogImporterLedgerTests",
+        "VideoScanCoreTests.CatalogImporterPreflightTests",
+        "VideoScanCoreTests.CatalogImporterEmptyTargetTests",
+        "VideoScanCoreTests.CatalogImporterDryRunTests",
+        "VideoScanCoreTests.CatalogImporterStagingTests",
+        "VideoScanCoreTests.CatalogImporterSensorTests",
+        "VideoScanCoreTests.ReconcileByDigestTests",
+        "VideoScanCoreTests.CatalogLoadRoundTripTests",
+        "VideoScanCoreTests.CatalogLoadReadingTests",
+        "VideoScanCoreTests.CatalogCommitRoundTripTests",
+        "VideoScanCoreTests.CatalogCommitIsolationTests",
+        "VideoScanCoreTests.CatalogCommitB21Tests",
+        "VideoScanCoreTests.CatalogReadBackPlanTests",
+        "VideoScanCoreTests.CatalogCommitB24Tests",
+        "VideoScanCoreTests.CatalogCommitB25Tests",
+        "VideoScanCoreTests.CatalogCommitB26Tests",
+        "VideoScanCoreTests.CatalogHardKillTests",
+        "VideoScanCoreTests.CatalogDiskFullTests"
+      ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
         "/opt/homebrew/bin/ffprobe"
@@ -32882,26 +32786,6 @@
         {
           "name": "VideoScan/VideoScanTests/SignatureConcurrencyScaleTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogCommitScaleTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "environment": {
@@ -32913,6 +32797,14 @@
       },
       "expected_floor": 68,
       "name": "performance",
+      "package_expected_floor": 12,
+      "package_selectors": [
+        "VideoScanCoreTests.CatalogRepositoryScaleTests",
+        "VideoScanCoreTests.CatalogDataSchemaScaleTests",
+        "VideoScanCoreTests.CatalogImporterScaleTests",
+        "VideoScanCoreTests.CatalogLoadScaleTests",
+        "VideoScanCoreTests.CatalogCommitScaleTests"
+      ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
         "/opt/homebrew/bin/ffprobe"
