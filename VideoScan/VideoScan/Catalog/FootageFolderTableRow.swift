@@ -33,14 +33,20 @@ struct FootageFolderTableRow: Identifiable {
     let folder: FootageFolderLevel.FolderRow?
     /// The sortable facts (a folder's: title, running time, size, date).
     let keys: FootageFolders.SortKeys
+    /// A top-level folder's members — the rows its disclosure triangle
+    /// reveals in place (Finder list view, Rick 2026-10-18); nil for a
+    /// record row and inside a scope. Built in the event handler from
+    /// FootageFolderLevel.Level.children, never in a body.
+    let children: [FootageFolderTableRow]?
 
     init(display: FootageFolders.DisplayRow, record: VideoRecord?, folder: FootageFolderLevel.FolderRow? = nil,
-         keys: FootageFolders.SortKeys) {
+         keys: FootageFolders.SortKeys, children: [FootageFolderTableRow]? = nil) {
         self.id = display.id
         self.display = display
         self.record = record
         self.folder = folder
         self.keys = keys
+        self.children = children
     }
 
     var isFolder: Bool { display.isFolder }

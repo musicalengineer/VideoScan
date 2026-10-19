@@ -13,7 +13,13 @@
 //                              no event — exactly as the flat view already
 //                              lays them out (a loose file's copies and
 //                              versions stay under it: "a family is not a
-//                              folder, it is the file").
+//                              folder, it is the file"). Since 2026-10-18
+//                              (Rick: "like Finder's list view") each
+//                              folder also carries its members as
+//                              `children`, for the disclosure triangle —
+//                              the table composes the top with every
+//                              folder open, and this step lifts each
+//                              folder's member rows out from under it.
 //   inside(_:index:display:)   INSIDE one folder (or one file's family):
 //                              its members with their glyph rows, which is
 //                              the flat view's event scope minus the
@@ -60,18 +66,38 @@ enum FootageFolderLevel {
         }
     }
 
-    /// One level, ready for the table: the rows in display order and the
-    /// folder rows among them by event id.
+    /// One level, ready for the table: the rows in display order, the
+    /// folder rows among them by event id, and each folder's members (the
+    /// rows its disclosure triangle reveals in place; top level only).
     struct Level: Sendable, Equatable {
         var scope: FootageFolders.Scope?
+        /// The level's own rows: folders and loose rows (with a loose
+        /// file's copies under it). Never a folder's member.
         var rows: [FootageFolders.DisplayRow] = []
         var folders: [UUID: FolderRow] = [:]
+        /// Event id → its member rows in the join's family order
+        /// (recording · ↳ · = · ⊂ · ≈). Empty inside a scope.
+        var children: [UUID: [FootageFolders.DisplayRow]] = [:]
 
         static let empty = Level()
 
-        /// The record ids on screen — THE displayed set every row action
-        /// intersects with. A folder row is not a record and is never here.
-        var recordIDs: Set<UUID> { Set(rows.compactMap(\.recordID)) }
+        /// The record ids on screen with every folder collapsed.
+        var recordIDs: Set<UUID> { recordIDs(expanded: []) }
+
+        /// The record ids on screen when the `expanded` folders are
+        /// twisted open — THE displayed set every row action intersects
+        /// with. A collapsed folder's members are off screen and never
+        /// here; a folder row is not a record and is never here either.
+        /// O(rows + the expanded folders' members).
+        func recordIDs(expanded: Set<UUID>) -> Set<UUID> {
+            var ids = Set(rows.compactMap(\.recordID))
+            for id in expanded {
+                guard let members = children[id] else { continue }
+                ids.formUnion(members.compactMap(\.recordID))
+            }
+            return ids
+        }
+
         var folderIDs: Set<UUID> { Set(folders.keys) }
         var isTop: Bool { scope == nil }
     }
@@ -86,17 +112,29 @@ enum FootageFolderLevel {
 
     /// The top: folders (date, then name) first, then the loose rows in
     /// the display's (the table's) order. `display` is the join's compose
-    /// with NO folder open and no scope.
+    /// with no scope; a folder composed OPEN has its member rows right
+    /// after it, and they become that folder's `children` (a collapsed
+    /// folder simply has none). A loose file's copies are `.member` rows
+    /// too, but they follow a `.loose` row, never a folder row — that is
+    /// the whole rule.
     static func top(index: FootageFolders.Index, display: FootageFolders.Display) -> Level {
         var level = Level(scope: nil)
         var folderRows: [FolderRow] = []
         var loose: [FootageFolders.DisplayRow] = []
         loose.reserveCapacity(display.rows.count)
+        // Which folder the member rows now belong to: .none = not under a
+        // folder (loose); .some(nil) = under a folder the join no longer
+        // has (dropped with it). (Swift's `UUID??` ≈ C++ optional<optional<UUID>>.)
+        var owner: UUID?? = .none
         for row in display.rows {
             if let eventID = row.eventID {
-                guard let folder = index.folders[eventID] else { continue }   // a folder the join no longer has
+                guard let folder = index.folders[eventID] else { owner = .some(nil); continue }   // a folder the join no longer has
                 folderRows.append(folderRow(folder))
+                owner = .some(eventID)
+            } else if case .member = row.kind, case .some(let folderID) = owner {
+                if let folderID { level.children[folderID, default: []].append(row) }
             } else {
+                owner = .none
                 loose.append(row)
             }
         }

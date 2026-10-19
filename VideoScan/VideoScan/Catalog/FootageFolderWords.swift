@@ -17,8 +17,8 @@ enum FootageFolderWords {
 
     /// Show ▸ "Events & Copies as Folders".
     static let showOptionTitle = "Events & Copies as Folders"
-    static let showOptionHelpOn = "Confirmed events are folders, like the Finder: double-click one to see its footage with the copies and versions under each recording. Click to go back to the plain list."
-    static let showOptionHelpOff = "Click to see each confirmed event as a folder (Finder-style); double-click a folder to see its footage with the copies and versions under each recording."
+    static let showOptionHelpOn = "Confirmed events are folders, like the Finder's list view: click a folder's triangle to see its footage in place, or double-click it to open it, with the copies and versions under each recording. Click to go back to the plain list."
+    static let showOptionHelpOff = "Click to see each confirmed event as a folder (Finder list view): a folder's triangle shows its footage in place; double-click opens it, with the copies and versions under each recording."
     /// The pill in the Showing box while the option is on.
     static let showingPill = "As folders"
     /// The UserDefaults key the option is remembered under.
@@ -120,12 +120,12 @@ enum FootageFolderWords {
     static let backHelp = "Back to the whole catalog (\u{2318}\u{2191}, \u{2190} or Esc — the Finder's Enclosing Folder)."
     static let backHelpAtTop = "You are at the top of the catalog."
     static func folderRowHelp(_ title: String) -> String {
-        "\(title) — double-click, Return, \u{2318}\u{2193} or \u{2192} to open it."
+        "\(title) — the triangle or \u{2192} shows it here (\u{2325}-click: every folder); double-click, Return or \u{2318}\u{2193} opens it."
     }
     static func copiesScopeTitle(_ filename: String) -> String { "Copies & related: \(filename)" }
 
     static let legend = "\(madeFromGlyph) made from it\u{2003}\(copyGlyph) copy\u{2003}\(clipGlyph) clip of it\u{2003}\(sameEventGlyph) same event"
-    static let legendHelp = "How a row relates to the recording above it. Double-click a folder (or \u{2318}\u{2193}) to open it; \u{2318}\u{2191}, Back or Esc returns to the catalog."
+    static let legendHelp = "How a row relates to the recording above it. A folder's triangle (or \u{2192} / \u{2190}) shows or hides its footage in place, \u{2325}-click for every folder; double-click a folder (or \u{2318}\u{2193}) to open it; \u{2318}\u{2191}, Back or Esc returns to the catalog."
 
     // MARK: Right-click
 
@@ -164,7 +164,17 @@ enum FootageFolderWords {
     static let legendFont = Font.system(size: 11)
     static let glyphFont = Font.system(size: 12, design: .monospaced)
     static let crumbFont = Font.system(size: 12, weight: .medium)
-    /// Rows with a relation glyph indent this much under their recording.
-    static let memberIndent: CGFloat = 22
+    /// A copy, version or clip indents this much under its recording —
+    /// one outline step, the same as the system's own child indent, so the
+    /// triangle-and-indent hierarchy reads like the Finder's (2026-10-18;
+    /// was 22). A ≈ row is a recording in its own right: no indent, the
+    /// glyph is only its marker.
+    static let memberIndent: CGFloat = 16
     static let glyphWidth: CGFloat = 12
+
+    /// How far a member row's glyph sits in from its own outline level.
+    static func indent(for relation: FootageFolders.Relation) -> CGFloat {
+        if case .sameEvent = relation { return 0 }
+        return relation.glyph == nil ? 0 : memberIndent
+    }
 }

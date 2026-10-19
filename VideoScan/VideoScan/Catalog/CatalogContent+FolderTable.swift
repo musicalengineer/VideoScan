@@ -8,19 +8,29 @@
 // option is on; the linear table is untouched when it is off.
 //
 //   ‹ Back   Catalog                                   (the breadcrumb bar)
-//   📁 Marks Birthday 1984        12 items · 3 copies   1:12:30  12.4 GB  Apr 7, 1984 – Apr 8, 1984   3 archived
-//   📁 Cape 1990                   4 items              0:41:02   6.1 GB  Jul 1990
-//   loose_file.mov                LaCie     V+A  0:08:11 …
-//     = loose_file.mov            SanDisk   V+A  0:08:11 …   copy · byte for byte, SanDisk   (grey)
+//   ▾ 📁 Marks Birthday 1984        12 items · 3 copies   1:12:30  12.4 GB  Apr 7, 1984 – Apr 8, 1984   3 archived
+//        Birthday_1984.dv          LaCie     V+A  0:41:02 …        (the triangle / → reveals in place)
+//          ↳ Birthday_1984.mkv     LaCie     V+A  0:41:02 …   made from it · preservation master
+//          = Birthday_1984.dv      SanDisk   V+A  0:41:02 …   copy · byte for byte, SanDisk   (grey)
+//        ≈ Cake.mov                LaCie     V+A  0:08:11 …   same event · different footage
+//   ▸ 📁 Cape 1990                   4 items              0:41:02   6.1 GB  Jul 1990
+//     loose_file.mov                LaCie     V+A  0:08:11 …
+//       = loose_file.mov            SanDisk   V+A  0:08:11 …   copy · byte for byte, SanDisk   (grey)
 //
-//   ‹ Back   Catalog ▸ Marks Birthday 1984              (double-click / Return / ⌘↓ / →)
+//   ‹ Back   Catalog ▸ Marks Birthday 1984              (double-click / Return / ⌘↓)
 //   Birthday_1984.dv              LaCie     V+A  0:41:02 …                       Ready
 //     ↳ Birthday_1984.mkv         LaCie     V+A  0:41:02 …   made from it · preservation master
 //     = Birthday_1984.dv          SanDisk   V+A  0:41:02 …   copy · byte for byte, SanDisk   (grey)
-//     ≈ Cake.mov                  LaCie     V+A  0:08:11 …   same event · different footage
+//   ≈ Cake.mov                    LaCie     V+A  0:08:11 …   same event · different footage
 //
-// Back, ⌘↑, ← and Esc return to the top with the folder selected (the
-// Finder's Enclosing Folder). Rows observe ONLY the model's
+// The top level is the Finder's LIST view (Rick 2026-10-18): each folder
+// is a `DisclosureTableRow` whose members are its children; the system
+// triangle and indent carry the hierarchy, → / ← twist (the outline
+// view's own keys), ⌥-click twists every folder. Which folders are open
+// is view state (`expandedFolderIDs`), so the displayed set counts only
+// the members on screen. Double-click still drills in; Back, ⌘↑, ←
+// (inside a folder) and Esc return to the top with the folder selected
+// (the Finder's Enclosing Folder). Rows observe ONLY the model's
 // FootageFoldersSnapshot (the display lands through `onReceive`, turned
 // into the level and its table rows in that event handler); no
 // O(records) work in any body. The level itself is pure
@@ -39,7 +49,26 @@ extension CatalogContent {
     // MARK: - The Table
 
     var footageFolderTable: some View {
-        Table(folderRows, selection: $selectedIDs, sortOrder: folderSortBinding) {
+        Table(of: FootageFolderTableRow.self, selection: $selectedIDs, sortOrder: folderSortBinding) {
+            folderColumns
+        } rows: {
+            // A folder with members twists open in place; every other row
+            // is a plain row. (A result-builder `if` ≈ a compile-time
+            // variant: each branch is its own row type.)
+            ForEach(folderRows) { row in
+                if let members = row.children {
+                    DisclosureTableRow(row, isExpanded: folderExpansion(row.id)) {
+                        ForEach(members) { TableRow($0) }
+                    }
+                } else {
+                    TableRow(row)
+                }
+            }
+        }
+    }
+
+    @TableColumnBuilder<FootageFolderTableRow, KeyPathComparator<FootageFolderTableRow>>
+    private var folderColumns: some TableColumnContent<FootageFolderTableRow, KeyPathComparator<FootageFolderTableRow>> {
             TableColumn("Filename", value: \.filename) { row in
                 folderNameCell(row)
             }
@@ -108,7 +137,27 @@ extension CatalogContent {
                 }
                 .width(min: 80, ideal: 95)
             }
-        }
+    }
+
+    /// One folder's triangle. ⌥ held (⌥-click, ⌥→ / ⌥←) twists every
+    /// folder at once — the Finder's "expand all", which for one level of
+    /// folders means every folder.
+    private func folderExpansion(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { tableState.expandedFolderIDs.contains(id) },
+                set: { setFolderExpanded(id, $0, everyFolder: NSEvent.modifierFlags.contains(.option)) })
+    }
+
+    /// Twist, then recount what is on screen: a collapsed folder's members
+    /// leave the displayed set (and the selection), so ⌘⌫ / Promote can
+    /// never reach a row Rick cannot see. Event handler, never body.
+    func setFolderExpanded(_ id: UUID, _ open: Bool, everyFolder: Bool = false) {
+        let ids: Set<UUID> = everyFolder ? tableState.folderIDs : [id]
+        var expanded = tableState.expandedFolderIDs
+        if open { expanded.formUnion(ids) } else { expanded.subtract(ids) }
+        guard expanded != tableState.expandedFolderIDs else { return }
+        tableState.expandedFolderIDs = expanded
+        tableState.folderRecordIDs = tableState.folderLevel.recordIDs(expanded: expanded)
+        pruneSelectionToDisplay()
     }
 
     /// The shared sort order, seen through the folder table's own row
@@ -125,19 +174,21 @@ extension CatalogContent {
 
     /// The name cell: folder glyph + title for a folder; indent + relation
     /// glyph + the real filename cell + muted words for a copy or a
-    /// version; the plain filename cell for a recording or a loose file.
+    /// version (≈ gets the glyph without the indent — it is a recording);
+    /// the plain filename cell for a recording or a loose file. The
+    /// outline's own indent sits outside this cell.
     @ViewBuilder
     func folderNameCell(_ row: FootageFolderTableRow) -> some View {
         if let eventID = row.eventID {
             folderTitleCell(title: row.title, selected: selectedIDs.contains(eventID))
         } else if let rec = row.record {
             HStack(spacing: 4) {
-                if let glyph = row.relation?.glyph {
-                    Spacer().frame(width: FootageFolderWords.memberIndent)
+                if let relation = row.relation, let glyph = relation.glyph {
                     Text(glyph)
                         .font(FootageFolderWords.glyphFont)
                         .foregroundColor(FootageFolderWords.relationColor)
                         .frame(width: FootageFolderWords.glyphWidth)
+                        .padding(.leading, FootageFolderWords.indent(for: relation))
                 }
                 recordFilenameCell(rec, dimmed: row.relation?.isCopy ?? false)
                 if let words = row.relation?.words {
@@ -325,8 +376,10 @@ extension CatalogContent {
     /// Hand the snapshot what the table shows now. Called from
     /// `refreshRows` (rows changed), the sort change, and every level
     /// change; a repeat request is free. Nothing while the option is off.
-    /// No folder is ever twisted open: the top shows folder rows, and a
-    /// scope shows one folder's members (the join's event scope).
+    /// The top is composed with EVERY folder open, so each folder row
+    /// arrives with its members for the triangle (which ones show is the
+    /// table's `expandedFolderIDs`); a scope shows one folder's members
+    /// (the join's event scope, where `open` is not read).
     func refreshFolderDisplay() {
         // The mirror, not `showFootageFolders`: the key monitor's closure
         // holds a copy of this view struct from install time, and only
@@ -334,8 +387,22 @@ extension CatalogContent {
         guard tableState.folderKeyMirror.isOn else { return }
         model.footageFolders.compose(visible: tableData.map(\.id),
                                      sort: FootageFolderSort.sort(from: sortOrder),
-                                     open: [],
+                                     open: folderComposeOpenSet,
                                      scope: tableState.folderScope)
+    }
+
+    /// Every folder the join knows, at the top; nothing inside a scope.
+    /// O(folders).
+    private var folderComposeOpenSet: Set<UUID> {
+        tableState.folderScope == nil ? Set(model.footageFolders.index.folders.keys) : []
+    }
+
+    /// A new join recomposes under the LAST request, whose open set may
+    /// predate the join's folders (the first index of all, a newly
+    /// confirmed event): ask again so every folder carries its members.
+    private var folderRequestIsStale: Bool {
+        guard let request = model.footageFolders.request else { return false }
+        return request.open != folderComposeOpenSet
     }
 
     /// The display landed: the level is derived (pure, O(rows)) and one
@@ -350,10 +417,12 @@ extension CatalogContent {
             setFolderScope(nil)   // nothing to re-select; the top level's compose is on its way
             return
         }
+        if tableState.folderKeyMirror.isOn, folderRequestIsStale { refreshFolderDisplay() }   // its display follows
         let level = FootageFolderLevel.level(scope: tableState.folderScope, index: index, display: display)
+        tableState.folderLevel = level
         tableState.folderRows = folderTableRows(level, index: index)
         tableState.folderIDs = level.folderIDs
-        tableState.folderRecordIDs = level.recordIDs
+        tableState.folderRecordIDs = level.recordIDs(expanded: tableState.expandedFolderIDs)
         // The empty display is also what `stop()` and a fresh subscription
         // deliver (the pane re-appearing with the option on): nothing is
         // shown yet, so nothing is pruned yet — every action intersects
@@ -368,16 +437,23 @@ extension CatalogContent {
         rows.reserveCapacity(level.rows.count)
         for d in level.rows {
             if let e = d.eventID {
+                let members = (level.children[e] ?? []).compactMap { recordTableRow($0, index: index) }
                 rows.append(FootageFolderTableRow(display: d, record: nil, folder: level.folders[e],
-                                                  keys: index.folders[e]?.keys ?? FootageFolders.SortKeys()))
-            } else if let id = d.recordID, let rec = model.record(forID: id) {
-                // A row the index has not seen yet (a derivative that just
-                // landed) still needs its sort facts: one projection.
-                rows.append(FootageFolderTableRow(display: d, record: rec,
-                                                  keys: index.keysOf[id] ?? model.footageFolderRow(rec).keys))
+                                                  keys: index.folders[e]?.keys ?? FootageFolders.SortKeys(),
+                                                  children: members.isEmpty ? nil : members))
+            } else if let row = recordTableRow(d, index: index) {
+                rows.append(row)
             }
         }
         return rows
+    }
+
+    /// A record's row; nil when the record has left the catalog.
+    private func recordTableRow(_ d: FootageFolders.DisplayRow, index: FootageFolders.Index) -> FootageFolderTableRow? {
+        guard let id = d.recordID, let rec = model.record(forID: id) else { return nil }
+        // A row the index has not seen yet (a derivative that just
+        // landed) still needs its sort facts: one projection.
+        return FootageFolderTableRow(display: d, record: rec, keys: index.keysOf[id] ?? model.footageFolderRow(rec).keys)
     }
 
     /// The option flipped (or the pane appeared / left): tell the model
@@ -392,17 +468,21 @@ extension CatalogContent {
             tableState.pendingReveal = nil
             tableState.folderRows = []
             tableState.folderIDs = []
+            tableState.folderLevel = .empty
+            tableState.expandedFolderIDs = []
             tableState.folderRecordIDs = []
         }
     }
 
-    // MARK: - Keyboard (→ / ← / Esc, ⌘↓ / ⌘↑) — through the pane's NSEvent monitor
+    // MARK: - Keyboard (← / Esc, ⌘↓ / ⌘↑) — through the pane's NSEvent monitor
 
     /// True when the key was ours. Only while the option is on and the
-    /// FILES table has the keyboard (the Space rule). Bare → / ← / Esc and
-    /// the Finder's ⌘↓ (open) / ⌘↑ (enclosing folder); anything else keeps
-    /// its owner. ↑↓ alone are never touched — the Table's native row walk
-    /// (Rick 2026-10-05).
+    /// FILES table has the keyboard (the Space rule). Bare ← / Esc inside
+    /// a folder and the Finder's ⌘↓ (open) / ⌘↑ (enclosing folder);
+    /// anything else keeps its owner. At the top, bare → / ← are the
+    /// outline's own (twist open / closed; ← on a member goes to its
+    /// folder — Finder list view, 2026-10-18). ↑↓ alone are never touched
+    /// — the Table's native row walk (Rick 2026-10-05).
     func handleFolderKey(_ event: NSEvent) -> Bool {
         guard tableState.folderKeyMirror.isOn, spaceShouldToggleLivePreview() else { return false }
         guard let key = FootageFolderKey(event) else { return false }
@@ -416,7 +496,7 @@ extension CatalogContent {
         selectedIDs.count == 1 ? selectedIDs.first : nil
     }
 
-    /// → or ⌘↓ on a folder row opens it.
+    /// ⌘↓ on a folder row opens it.
     private func enterSelectedFolder() -> Bool {
         guard let id = singleSelection, tableState.folderIDs.contains(id) else { return false }
         enterFolder(id)
@@ -504,10 +584,11 @@ struct FootageFoldersShowToggle: View {
     }
 }
 
-/// The folder keys: `open` = into the selected folder (bare →, or ⌘↓ —
-/// the Finder's Open), `close` = up to the enclosing level (bare ←, or
-/// ⌘↑ — the Finder's Enclosing Folder), `escape` = up as well. By virtual
-/// key code (kVK_RightArrow 124, kVK_LeftArrow 123, kVK_DownArrow 125,
+/// The folder keys: `open` = into the selected folder (⌘↓ — the
+/// Finder's Open), `close` = up to the enclosing level (bare ←, or ⌘↑ —
+/// the Finder's Enclosing Folder), `escape` = up as well. Bare → is NOT
+/// ours: it is the outline's twist-open (Finder list view, 2026-10-18).
+/// By virtual key code (kVK_LeftArrow 123, kVK_DownArrow 125,
 /// kVK_UpArrow 126, kVK_Escape 53). (≈ a C++ enum class with explicit
 /// converting constructors.)
 enum FootageFolderKey: Equatable {
@@ -516,7 +597,6 @@ enum FootageFolderKey: Equatable {
     /// A BARE key (no modifier beyond fn / the numeric pad).
     init?(keyCode: UInt16) {
         switch keyCode {
-        case 124: self = .open
         case 123: self = .close
         case 53: self = .escape
         default: return nil
