@@ -163,7 +163,7 @@ enum FootageFolderWords {
     /// The Finder's folder blue, a lighter blue than the accent so it
     /// reads on the dark theme (the accent blue sank into the row stripes).
     static let folderTint = Color(red: 0.36, green: 0.68, blue: 0.96)
-    static let folderSymbolFont = Font.system(size: 15)
+    static let folderSymbolFont = Font.system(size: 16.5)
     static let folderTitleFont = Font.system(.body).weight(.semibold)
     static let relationFont = Font.system(size: 11)
     static let summaryFont = Font.system(size: 11, design: .monospaced)
