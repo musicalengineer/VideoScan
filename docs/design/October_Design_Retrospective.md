@@ -75,6 +75,13 @@ In code (`App/ContentView.swift`): **People · Catalog · Storage · Triage · A
   - **Freshness.** Every cycler and integrity row carries "last completed pass"; the band is green/yellow/red with one button per item.
   - Derived values imported from JSON are marked unverified until a cycler regenerates them.
 - **Testability:** Core `Store/Commit/Import` is the purest, best-tested code in the app (fixtures, crash injection, 100k-row scale, poisoned catalogs). The app side (views, inspector, 28 model extensions) needs the model.
+- **Design decision (Rick, 2026-10-19): Finder's handling, Photos albums' meaning.** The Catalog is a list of files, flat (the default, and always one toggle away) or grouped in folders that Rick makes himself: "I know how I want to organize." It uses Finder list-view gestures: select, ⌘⌫, chevron to open in place, double-click to go in, New Folder with Selection, rename in place, drag onto a folder, kind colours. The machine's suggestions (Triage ▸ Events, Steward) feed folders but are never the only way to make one. Five rules:
+  1. **A folder is a label, not a place.** Grouping never moves a file on disk, and the folder row looks different from a disk folder (summary words, kind colour, help text).
+  2. **⌘⌫ on a folder ungroups.** The files stay, and the wording says so ("Remove folder — the 28 files stay"). ⌘⌫ on a file keeps today's meaning.
+  3. **Renaming a folder changes a label; renaming a file changes the disk.** A file rename goes through the ledger and refuses on archived files.
+  4. **A file may be in several folders** (an event and a person). Today's confirmed events are exclusive; person folders need that relaxed.
+  5. **Copies fold under their recording**, which Finder does not do. This is the one deliberate difference from Finder.
+  - Folder kinds and colours: event = blue (built), person = green, other = grey (to build). One door for every way of making a folder: `makeFolder(name:recordIDs:)`. Next to build, in order: drag files onto a folder, rename a folder, remove a folder (ungroup), person folders.
 - **Strays:**
   - The three old save wrappers (`saveCatalogDebounced/Now/Acknowledged`) are still called from ~150 sites and forward to the committer, so the model does not know *which* row changed and finds out by hashing every row.
   - `Catalog/` holds ~6,200 lines of Triage (TriageView, Cleanup/Events/Excess panes, ShowAgain).
@@ -180,7 +187,8 @@ In code (`App/ContentView.swift`): **People · Catalog · Storage · Triage · A
 7. **Hallie's shape.** Detach as planned, or stay in-process and shed voice/web/shell until the family viewer is real?
 8. **The Archive Angel.** Keep as recommender, shrink to "Ready for archive" badges, or cut?
 9. **People engines.** Keep both matchers and the Python helper, or freeze at Vision + native Find & Tag?
-10. **Splitting the model: which store first?** My suggestion: the scan/merge pipeline, the biggest writer with a pure core already.
+10. **Folders: one grouping engine or two?** For Thanksgiving 1984, the Events plan grouped 2 recordings while the Catalog's focus banner showed 28 files. Also: a folder's kind (event / person / other), and whether events may overlap (§3.2 rule 4).
+11. **Splitting the model: which store first?** My suggestion: the scan/merge pipeline, the biggest writer with a pure core already.
 
 ## 6. Size by tab
 
