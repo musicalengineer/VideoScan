@@ -49,9 +49,27 @@ def bug_lines():
     return ["Top bugs (most recently active):"] + [f"   • #{b['number']} {b['title'][:80]}" for b in bugs[:3]]
 
 
+def priority_lines(today=None):
+    """The weekly rule (Rick 2026-10-19): no P0 open by end of Friday;
+    every Monday the P1s are triaged — fixed this week or scheduled."""
+    today = today or datetime.date.today()
+    lines = []
+    for label in ("P0", "P1"):
+        issues = gh("issue", "list", "-R", REPO, "--label", label, "--state", "open",
+                    "--json", "number,title", "--limit", "100")
+        nag = ""
+        if label == "P0" and issues and today.weekday() == 4:
+            nag = " — 🔴 FRIDAY: the rule is zero P0 by end of day"
+        if label == "P1" and issues and today.weekday() == 0:
+            nag = " — MONDAY: triage each one (fix this week or schedule it)"
+        lines.append(f"{label}: {len(issues)} open{nag}")
+        lines += [f"   • #{i['number']} {i['title'][:80]}" for i in issues]
+    return lines
+
+
 def main():
     try:
-        out = sprint_lines() + bug_lines()
+        out = priority_lines() + sprint_lines() + bug_lines()
     except Exception as exc:  # network, auth, schema: never break the digest
         out = [f"(sprint digest unavailable: {exc})"[:200]]
     print("\n── Sprint ──")
