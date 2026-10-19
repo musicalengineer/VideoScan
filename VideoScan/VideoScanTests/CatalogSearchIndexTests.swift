@@ -165,12 +165,12 @@ struct CatalogSearchIndexTests {
         let idx = CatalogSearchIndex()
         idx.rebuild(records: [r])
         #expect(idx.filter(records: [r], query: "original").count == 1)
-        #expect(idx.filter(records: [r], query: "amended").count == 0)
+        #expect(idx.filter(records: [r], query: "amended").isEmpty)
         // Mutate the underlying record and tell the index to refresh.
         r.audioTranscript = "amended text"
         idx.update(r)
         #expect(idx.filter(records: [r], query: "amended").count == 1)
-        #expect(idx.filter(records: [r], query: "original").count == 0)
+        #expect(idx.filter(records: [r], query: "original").isEmpty)
     }
 
     @Test func clearEmptiesTheIndex() {
