@@ -8,14 +8,15 @@ A macOS app that finds every family media file on every drive, says truthfully w
 
 **Guiding principles**, in priority order:
 
-- **Data integrity first, then a UI that tells the truth.** A shown fact comes from evidence (a verified file, a stored hash), not a field that was once written.
-- **Trash before delete; prove the surviving copy at the moment of deletion; refuse rather than guess; never auto-delete; log every file.**
+- **Data integrity first.** A shown fact comes from evidence (a verified file, a stored hash), not a field that was once written.
+- **A clean UI that tells the truth and gets the work done.** It shows the real status of the media and supports a workflow Rick can finish reliably and trust.
+- **Never lose media.** Trash before delete; prove the surviving copy at the moment of deletion; refuse rather than guess; never auto-delete; log every file.
 - **The archive is read-only.** Only Rick changes an archived name or date, through one door (Update…). Background jobs add metadata, never remove or rename.
-- **One engine per action.** A verb may have buttons in several tabs, but one code path, one proof, one log line (`docs/design/tab_charters.md`).
-- **macOS-native, local-first, private.** Vision/AVFoundation first; everything on Rick's drives; cloud models only where much better, never with pixels or audio of living immediate family.
-- **Long operations are MFO jobs** with progress, Pause/Stop and an outcome; nothing runs silently.
+- **Always responsive.** The UI never blocks; long work runs in the background and shows its progress.
+- **Proven by automated tests.** Code is proven by unit tests; every bug fix lands with a regression test that went red, then green (`.claude/skills/safety-critical`); stress tests (the gauntlet) run on the hardware fleet. Automate, automate, automate.
+- **Private and local-first.** Family media stays on Rick's drives; cloud models only where much better, never with pixels or audio of living immediate family.
 
-**Quality goals:** integrity > reliability at scale (tens of thousands of rows, 8 TB) > responsiveness. **Constraints:** macOS 15+; CI on Xcode 26, fleet on 27; ffmpeg/ffprobe from Homebrew as a hard dependency; one developer plus agents.
+**Quality goals:** integrity > reliability at scale (tens of thousands of rows, 8 TB) > responsiveness. **Constraints:** macOS 15+, macOS-native frameworks first (Vision, AVFoundation); CI on Xcode 26, fleet on 27; ffmpeg/ffprobe from Homebrew as a hard dependency; one developer plus agents.
 
 **Where the catalog lives.** The catalog is `catalog.sqlite` (since 2026-10-18), written by one committer. The old `catalog.json` is a frozen read-only copy, kept only as history. How the switch was made: `docs/design/catalog_sqlite_migration_2026_10_16.md` §10.
 
@@ -156,6 +157,10 @@ In code (`App/ContentView.swift`): **People · Catalog · Storage · Triage · A
 ## 4. Cross-cutting
 
 **The central model.** `VideoScanModel` is one `@MainActor ObservableObject` (main-thread-only observable class) with ~90 published properties, the `records` array, and a `didSet` fanning out to seven subsystems. 133 files extend it: MediaOps 37, Catalog 28, Archive 20, Volumes 14, Media 11, People 6, others a few each. In C++ terms: one partial class across 133 translation units sharing one mutable member set, with separate Bool flags where one state enum belongs. Every feature became "one more extension"; nothing can be understood alone; tests need the whole object. The cure is named in the reading guide: per-feature stores injected through the environment, one activity enum, a change stream instead of `didSet`. The committer is the first such seam; the rest is the deferred refactor.
+
+**Design rules** (how the principles are carried out):
+- **One engine per action.** A verb may have buttons in several tabs, but one code path, one proof, one log line (`docs/design/tab_charters.md`).
+- **Long operations are MFO jobs** with progress, Pause/Stop and an outcome; nothing runs silently.
 
 **Safety rules for anything that deletes, moves or writes media** (all in force, with sensors or review closure; `.claude/skills/safety-critical`):
 - Prove the surviving copy at the moment of deletion (full byte compare; fixity-verified archive copy for prune), never a stored hash alone.
