@@ -52,6 +52,20 @@ struct EventsFolderMembers: Sendable, Equatable {
         }
     }
 
+    /// THE id entry every folder door uses — the focus banner (its file
+    /// set), the row menu's "New Folder with Selection" and a drag onto a
+    /// folder (the rows on screen): ids → records (an id no longer in the
+    /// catalog is dropped) → members. The records are ordered by path, then
+    /// id, so the same files give the same members whichever door they came
+    /// through (a `Set` has no order). `record` is the model's O(1) id
+    /// lookup. O(n log n), n = ids.
+    init(recordIDs: Set<UUID>, record: (UUID) -> VideoRecord?) {
+        let recs = recordIDs.compactMap(record).sorted {
+            $0.fullPath != $1.fullPath ? $0.fullPath < $1.fullPath : $0.id.uuidString < $1.id.uuidString
+        }
+        self.init(records: recs)
+    }
+
     /// The Events key, or nil when the file cannot be a durable member.
     nonisolated static func contentKey(_ r: VideoRecord) -> String? {
         guard VideoScanModel.isInEventsScope(r) else { return nil }
@@ -81,17 +95,10 @@ struct EventsFolderDraft: Sendable, Equatable {
         self.init(name: name, members: EventsFolderMembers(records: records))
     }
 
-    /// THE entry both doors use — the focus banner (its file set) and the
-    /// row menu's "New Folder with Selection" (the rows on screen): ids →
-    /// records (an id no longer in the catalog is dropped) → members. The
-    /// records are ordered by path, then id, so the same files give the
-    /// same members whichever door they came through (a `Set` has no
-    /// order). `record` is the model's O(1) id lookup. O(n log n), n = ids.
+    /// Both doors' entry (the banner and the row menu): see
+    /// `EventsFolderMembers.init(recordIDs:record:)`.
     init(name: String, recordIDs: Set<UUID>, record: (UUID) -> VideoRecord?) {
-        let recs = recordIDs.compactMap(record).sorted {
-            $0.fullPath != $1.fullPath ? $0.fullPath < $1.fullPath : $0.id.uuidString < $1.id.uuidString
-        }
-        self.init(name: name, records: recs)
+        self.init(name: name, members: EventsFolderMembers(recordIDs: recordIDs, record: record))
     }
 
     var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }

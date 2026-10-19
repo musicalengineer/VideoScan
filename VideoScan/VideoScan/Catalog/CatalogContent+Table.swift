@@ -281,8 +281,11 @@ extension CatalogContent {
         }
     }
 
+    /// The rows builder (rather than `Table(tableData, …)`) only so each
+    /// row is a drag source for "drag onto a folder": a record id as a
+    /// string, never a file URL (CatalogContent+FolderDrop.swift).
     private var catalogTableBase: some View {
-        Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
+        Table(of: VideoRecord.self, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
                 filenameCell(rec)
             }
@@ -383,6 +386,10 @@ extension CatalogContent {
                     duplicateCell(rec)
                 }
                 .width(min: 80, ideal: 95)
+            }
+        } rows: {
+            ForEach(tableData) { rec in
+                TableRow(rec).draggable(CatalogRecordDrag.payload(rec.id))
             }
         }
     }

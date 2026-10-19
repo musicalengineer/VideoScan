@@ -101,6 +101,10 @@ struct CatalogTableState: DynamicProperty {
     /// (the join is asynchronous). Cleared when it is revealed or the
     /// option goes off.
     @State var pendingFolderReveal: UUID?
+    /// Files just dropped on a folder, to be selected inside it as soon as
+    /// the join shows them (CatalogContent+FolderDrop.swift). Cleared when
+    /// selected, when Rick moves between levels, or when the option goes off.
+    @State var pendingDropSelection: FolderDropLanding?
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
 }
