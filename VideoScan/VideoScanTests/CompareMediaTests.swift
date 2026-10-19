@@ -38,16 +38,16 @@ struct CompareMediaTests {
 
     @Test("names said: transcript words that are a person's first name on either side, whole words, any case")
     func namesSaid() {
-        let known: Set<String> = ["Timmy Breen", "Donna", "Mark"]
-        #expect(VideoScanModel.namesSaid(in: "Happy birthday TIMMY! Donna, get the cake.", known: known) == ["Timmy Breen", "Donna"])
+        let known: Set<String> = ["Alex Tester", "Sam", "Mark"]
+        #expect(VideoScanModel.namesSaid(in: "Happy birthday ALEX! Sam, get the cake.", known: known) == ["Alex Tester", "Sam"])
         #expect(VideoScanModel.namesSaid(in: "the markers are on the table", known: known).isEmpty, "'markers' is not Mark")
         #expect(VideoScanModel.namesSaid(in: nil, known: known).isEmpty)
     }
 
     @Test("folder label: the parent folder, unless it is one every drive has")
     func folderLabel() {
-        #expect(VideoScanModel.folderLabel(forPath: "/Volumes/MediaExpansion/Timmy 10th Bday Restored/VIDEO_TS/VTS_01_1.VOB") == nil, "VIDEO_TS is generic")
-        #expect(VideoScanModel.folderLabel(forPath: "/Volumes/LaCie/Timmy 10th Bday/Part-1.mov") == "timmy 10th bday")
+        #expect(VideoScanModel.folderLabel(forPath: "/Volumes/MediaExpansion/Test Event 10th Bday Restored/VIDEO_TS/VTS_01_1.VOB") == nil, "VIDEO_TS is generic")
+        #expect(VideoScanModel.folderLabel(forPath: "/Volumes/LaCie/Test Event 10th Bday/Part-1.mov") == "test event 10th bday")
         #expect(VideoScanModel.folderLabel(forPath: "/Users/rickb/Movies/clip.mov") == nil)
         #expect(VideoScanModel.folderLabel(forPath: "/Volumes/X/Avid MediaFiles/MXF/1/a.mxf") == nil)
     }
@@ -55,23 +55,23 @@ struct CompareMediaTests {
     @Test("a side from a record: your date is reliable, a file date is not; a no-sound stamp is 0 audible seconds; the archive flags ride along")
     @MainActor func sideFromRecord() {
         let r = VideoRecord()
-        r.fullPath = "/Volumes/LaCie/Timmy 10th Bday/Part-1.mov"; r.filename = "Part-1.mov"; r.directory = "/Volumes/LaCie/Timmy 10th Bday"
+        r.fullPath = "/Volumes/LaCie/Test Event 10th Bday/Part-1.mov"; r.filename = "Part-1.mov"; r.directory = "/Volumes/LaCie/Test Event 10th Bday"
         r.durationSeconds = 78; r.sizeBytes = 92_000_000; r.videoCodec = "h264"; r.audioCodec = "aac"; r.resolution = "640x480"; r.totalBitrate = "9 Mb/s"
-        r.userDate = "1996-04-22"
+        r.userDate = "1996-03-15"
         r.audioFingerprint = AudioFingerprintStamp(computedAt: Date(), engineVersion: 2, contentDigest: "sha256:abc", sizeBytes: 92_000_000,
                                                    outcome: .noAudio, analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
         let s = VideoScanModel.relatedSide(r, isArchiveFile: false, isArchived: true, now: Date())
-        #expect(s.day == EventDay(year: 1996, month: 4, day: 22) && s.dayIsReliable)
+        #expect(s.day == EventDay(year: 1996, month: 3, day: 15) && s.dayIsReliable)
         #expect(s.audibleSeconds == 0 && s.isSilent)
         #expect(s.codec == .delivery && s.frameHeight == 480 && s.bitRate == 9_000_000)
-        #expect(s.folderLabel == "timmy 10th bday" && !s.isArchiveFile && s.isArchived)
+        #expect(s.folderLabel == "test event 10th bday" && !s.isArchiveFile && s.isArchived)
         #expect(s.digest == nil, "no stored full hash → not checked")
         // A date read from the file NAME is a day, never a reliable one (the
         // resolver's own ranking: you › camera › inferred › file name).
         let named = VideoRecord()
-        named.fullPath = "/Volumes/X/1996-04-22 party.mov"; named.filename = "1996-04-22 party.mov"
+        named.fullPath = "/Volumes/X/1996-03-15 party.mov"; named.filename = "1996-03-15 party.mov"
         let t = VideoScanModel.relatedSide(named, isArchiveFile: false, isArchived: false, now: Date())
-        #expect(t.day == EventDay(year: 1996, month: 4, day: 22) && !t.dayIsReliable, "\(String(describing: t.day)) \(t.dayIsReliable)")
+        #expect(t.day == EventDay(year: 1996, month: 3, day: 15) && !t.dayIsReliable, "\(String(describing: t.day)) \(t.dayIsReliable)")
     }
 
     @Test("the band's duration words")
@@ -125,16 +125,16 @@ struct CompareMediaTests {
     @MainActor func factRows() {
         let r = VideoRecord(); r.videoCodec = "h264"; r.audioCodec = "aac"; r.resolution = "640x480"
         let side = RelatedEvidence.Side(digest: "a7c3" + String(repeating: "0", count: 60), sizeBytes: 92_000_000, durationSeconds: 78, audibleSeconds: 76,
-                                        day: EventDay(year: 1996, month: 4, day: 22), dayIsReliable: false, people: ["Timmy"], codec: .delivery, frameHeight: 480)
+                                        day: EventDay(year: 1996, month: 3, day: 15), dayIsReliable: false, people: ["Alex"], codec: .delivery, frameHeight: 480)
         let other = RelatedEvidence.Side(digest: "4f1d" + String(repeating: "0", count: 60), sizeBytes: 4_300_000_000, durationSeconds: 2280, audibleSeconds: 2150,
-                                         day: EventDay(year: 1996, month: 4, day: 22), dayIsReliable: true, people: ["Timmy"], isArchiveFile: true, isArchived: true, codec: .original, frameHeight: 480)
+                                         day: EventDay(year: 1996, month: 3, day: 15), dayIsReliable: true, people: ["Alex"], isArchiveFile: true, isArchived: true, codec: .original, frameHeight: 480)
         let facts = CompareMediaWords.facts(r, side: side, other: other)
         let byName = Dictionary(uniqueKeysWithValues: facts.map { ($0.name, $0) })
         #expect(byName["length"]?.value == "1:18" && byName["length"]?.differs == true)
         #expect(byName["codecs"]?.value == "h264 · aac" && byName["codecs"]?.differs == true)
         #expect(byName["frame"]?.differs == false)
         #expect(byName["SHA-256"]?.value == "a7c3…0000" && byName["SHA-256"]?.differs == true)
-        #expect(byName["date"]?.value == "1996-04-22 (file date)" && byName["date"]?.differs == true)
+        #expect(byName["date"]?.value == "1996-03-15 (file date)" && byName["date"]?.differs == true)
         #expect(byName["people"]?.differs == false)
         #expect(byName["archive"]?.value == "not archived" && byName["archive"]?.differs == true)
         #expect(byName["sound"]?.value == "1:16 audible")
