@@ -17,7 +17,7 @@ A macOS app that finds every family media file on every drive, says truthfully w
 
 **Quality goals:** integrity > reliability at scale (tens of thousands of rows, 8 TB) > responsiveness. **Constraints:** macOS 15+; CI on Xcode 26, fleet on 27; ffmpeg/ffprobe from Homebrew as a hard dependency; one developer plus agents.
 
-**The integrity scare.** On 2026-10-16 one spot test found five surfaces stating unverified facts, and the 74 MB `catalog.json` (13,793 rows, ~130 fields, serialised whole on every save) could not prove itself. Rick ruled "verify once, import the verified rows, rescan by SHA-256, cut over"; on 2026-10-18 the app runs on `catalog.sqlite` (11,683 rows), JSON frozen as backup. See `docs/design/catalog_sqlite_migration_2026_10_16.md` §10 and `catalog_cutover_f_prime_2026_10_17.md`. The process retrospective is a separate pending task.
+**Where the catalog lives.** The catalog is `catalog.sqlite` (since 2026-10-18), written by one committer. The old `catalog.json` is a frozen read-only copy, kept only as history. How the switch was made: `docs/design/catalog_sqlite_migration_2026_10_16.md` §10.
 
 ## 2. The big picture
 
