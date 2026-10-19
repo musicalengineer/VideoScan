@@ -74,7 +74,8 @@ protocol CaptionRunner: Sendable {
     /// a tight per-frame batch sharing one model load.
     ///
     /// See `docs/design/family-tagging-and-search-roadmap.md` (item #4) and
-    /// `scripts/dossier_batch.py` (the original Python prototype) for
+    /// `scripts/dossier_batch.py` (the original Python prototype, retired
+    /// 2026-10-19 — read it in the version history) for
     /// the prompt wording and parse semantics this is parity with.
     func dossier(
         videoPath: String,
@@ -394,7 +395,7 @@ private func extractFramesViaFFmpeg(
 private let kCaptionPrompt = "Describe this video frame in one sentence: setting, activity, count of people, any visible text."
 
 /// Three targeted prompts for the dossier pass. Lifted verbatim from
-/// `scripts/dossier_batch.py`'s PROMPTS dict so the Swift and Python
+/// `scripts/dossier_batch.py`'s PROMPTS dict (script retired 2026-10-19) so the Swift and Python
 /// pipelines produce comparable output across the schema fields:
 ///
 ///   - `.date`  → `ocrDateCandidates` (after parsing via pfParseOcrDate)

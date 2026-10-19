@@ -3,6 +3,21 @@
 **Status:** living document. Update when you change a write contract, add a
 new file to the database surface, or change the backup bundle.
 
+> **Superseded in part (2026-10-19).** The catalog moved to `catalog.sqlite`
+> on 2026-10-18 (GRDB; schema in `VideoScan/VideoScanCore/Sources/VideoScanCore/Store/`,
+> design in `docs/design/catalog_cutover_f_prime_2026_10_17.md`), and
+> `catalog.json` is frozen. The external writers this guide describes are
+> retired: `scripts/dossier_batch.py`, the merger `scripts/merge_dossier_jsonl.py`
+> and its JSONL-delta producers (`propagate_dossier_by_md5.py`,
+> `extract_bundle_metadata.py`, `tag_imovie_stock_as_junk.py`,
+> `folder_date_interp.py`), and the one-off catalog.json repair / purge scripts
+> (cutover acceptance audit gap 3, `docs/reviews/cutover_acceptance_audit_2026_10_19.md`).
+> They are in the version history. Scripts now READ the catalog through
+> `scripts/catalog_db.py` only (SQLite `?mode=ro`; refuses a catalog without
+> `catalog.cutover`), and `tests/test_no_script_writes_catalog.py` keeps it that
+> way. The sections below on the JSON catalog, the merger and the deltas are
+> history until this guide is rewritten for the SQLite store.
+
 ## TL;DR
 
 VideoScan's "database" is **four JSON files plus one folder tree of photos**.

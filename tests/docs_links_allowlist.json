@@ -383,10 +383,5 @@
   },
   "tools/engineering-room/test/evidence/control-plane-acceptance-2026-07-17.md": {
     "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
-  },
-  "tools/person-eval/build_holdout_queue_skeleton.py": {
-    "docs/poi-holdout": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
-    "docs/poi-holdout/": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
-    "docs/team-channel/2026-07-23-1213-codex-poi-c4-c6-execution-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   }
 }
