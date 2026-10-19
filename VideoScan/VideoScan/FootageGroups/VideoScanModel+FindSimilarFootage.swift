@@ -76,6 +76,8 @@ struct FootageRunSummary: Sendable, Equatable {
     var refusedByPerson = 0
     var refusedByDate = 0
     var sampledConflicts = 0
+    /// Copy-check pairs with different bytes AND a different length — not linked.
+    var copyCheckDifferentLength = 0
     /// Stored digests checked / still current (F1).
     var digestsChecked = 0
     var digestsCurrent = 0
@@ -95,6 +97,9 @@ struct FootageRunSummary: Sendable, Equatable {
             s += "; refused: cap \(refusedByCap), possible-chain \(refusedPossibleChain), "
                 + "your answers \(refusedByPerson), sampled-hash conflicts \(sampledConflicts), "
                 + "different dates \(refusedByDate)"
+        }
+        if copyCheckDifferentLength > 0 {
+            s += "; \(copyCheckDifferentLength) duplicate-check pair\(copyCheckDifferentLength == 1 ? "" : "s") of a different length not linked"
         }
         if digestsChecked > 0 { s += "; whole-file digests current \(digestsCurrent) of \(digestsChecked)" }
         return s + String(format: "; %.1f s", elapsed)
@@ -118,6 +123,7 @@ extension FootageInput {
                   mediaIdentifier: r.proAppsMediaIdentifier, originMake: r.originMake,
                   originModel: r.originModel, originEncoder: r.originEncoder, videoCodec: r.videoCodec,
                   embeddedCreationDate: r.embeddedCreationDate, decisions: r.footageDecisions,
+                  likeness: DuplicateLikeness.Facts(record: r, deferStem: true),   // stems: off-main
                   isHidden: r.isPurged || r.isSetAside || r.isSuperseded, existing: r.footage)
     }
 }

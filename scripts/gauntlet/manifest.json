@@ -7718,6 +7718,56 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SameFootageAcrossCodecsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SameFootageLikenessRuleTests",
+        "SameFootageDetectorTests",
+        "SameFootageGroupingTests",
+        "SameFootageSplitPlanTests",
+        "SameFootageHeldDoorTests",
+        "SameFootageInspectorTests",
+        "SameFootageDeleteIsolationTests",
+        "SameFootageSensorTests",
+        "SameFootageScaleTests",
+        "SameFootageMediaMatrixTests",
+        "SameFootageTruthTests",
+        "SameFootageRealCopyEvidence"
+      ],
+      "tests": [
+        "collision",
+        "collisionNotLinked",
+        "copiesAndUnknown",
+        "copiesStillGroup",
+        "defaultTimecodeIsPossible",
+        "deletePathsNeverReadFootage",
+        "detectorAt100k",
+        "endToEnd",
+        "evidence",
+        "footageAt100k",
+        "footageIsNotDeletable",
+        "heldAtTheDoor",
+        "heldWhenWeak",
+        "idempotent",
+        "idempotent",
+        "line",
+        "matrix",
+        "mixed",
+        "oneRule",
+        "personSplits",
+        "planAt100k",
+        "splitKeepsIt",
+        "splitWhenLinkedOrDifferent",
+        "trioIsNotCopies",
+        "trioLeavesAsSameFootage",
+        "trioLinks",
+        "trioOneGroup",
+        "verifyIgnoresFootage",
+        "words"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogShowingSummaryTests.swift",
@@ -31903,7 +31953,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2687,
+      "expected_floor": 2716,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32326,7 +32376,19 @@
         "VideoScanTests/DuplicateDigestSplitDoorTests",
         "VideoScanTests/DuplicateDigestSplitScaleTests",
         "VideoScanTests/CatalogSettleFindingsSensorTests",
-        "VideoScanTests/CatalogSettleRealCopyEvidence"
+        "VideoScanTests/CatalogSettleRealCopyEvidence",
+        "VideoScanTests/SameFootageLikenessRuleTests",
+        "VideoScanTests/SameFootageDetectorTests",
+        "VideoScanTests/SameFootageGroupingTests",
+        "VideoScanTests/SameFootageSplitPlanTests",
+        "VideoScanTests/SameFootageHeldDoorTests",
+        "VideoScanTests/SameFootageInspectorTests",
+        "VideoScanTests/SameFootageDeleteIsolationTests",
+        "VideoScanTests/SameFootageSensorTests",
+        "VideoScanTests/SameFootageScaleTests",
+        "VideoScanTests/SameFootageMediaMatrixTests",
+        "VideoScanTests/SameFootageTruthTests",
+        "VideoScanTests/SameFootageRealCopyEvidence"
       ]
     },
     {

@@ -329,6 +329,12 @@ struct DuplicateDigestSplitDoorTests {
         let g = UUID()
         let members = try (0..<3).map { try scene.bulk($0) }
         for (i, r) in members.enumerated() {
+            // A sampled-hash collision: one head+tail hash and size, three
+            // lengths (2026-10-19: a group whose files are alike and would
+            // be cut apart is HELD — only evidence of "not the same" lets
+            // the split separate unlinked files; SameFootageAcrossCodecsTests).
+            r.partialMD5 = "same-head-and-tail"
+            r.durationSeconds = Double(100 * (i + 1))
             r.duplicateGroupID = g
             r.duplicateConfidence = .high
             r.duplicateDisposition = i == 0 ? .keep : .extraCopy
@@ -358,6 +364,7 @@ struct DuplicateDigestSplitDoorTests {
         let log = scene.sandbox.catalogLogText()
         for line in ["Split duplicate groups: START — 1 of 1", "Split duplicate groups: safety copy: ",
                      "Split duplicate groups: 1 of 1 — group ", "Split duplicate groups: OUTCOME — 1 group(s) split",
+                     "a different length from", "3 file(s) are a different length",
                      "Split duplicate groups: OUTCOME — nothing to split"] {
             #expect(log.contains(line), "missing: \(line)")
         }
@@ -371,6 +378,13 @@ struct DuplicateDigestSplitDoorTests {
         let rs = try digests.enumerated().map { i, d -> VideoRecord in
             let r = try sb.record("m\(i).mov", bytes: 100, stage: .none)
             r.contentFixity = ContentFixity(digest: d, byteCount: 100, stamp: fixityStamp, computedAt: settleNow)
+            // 2026-10-19: the two copy pairs are the same footage (one sampled
+            // hash, one length) so they stay linked; the lone file is a
+            // different length (evidence: not the same). Without likeness the
+            // split would HOLD the group (SameFootageAcrossCodecsTests).
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            r.partialMD5 = "same-head-and-tail"
+            r.durationSeconds = i == 4 ? 200 : 60
             r.duplicateGroupID = g
             r.duplicateConfidence = .high
             r.duplicateDisposition = i == 0 ? .keep : .extraCopy

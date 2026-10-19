@@ -140,6 +140,38 @@ enum InspectorPanelRules {
         "Duplicate Group (\(otherMembers + 1) total)"
     }
 
+    // MARK: Same footage, different file (2026-10-19)
+
+    /// The members of `rec`'s footage group that are NOT byte copies of it
+    /// (their whole-file digests differ, or one is unknown) — a re-encode,
+    /// a rewrap, another codec or container. Byte copies are the duplicate
+    /// group's business. Pure: the caller hands in the group's members
+    /// (memoized, never computed in a view body).
+    static func sameFootageOthers(of rec: VideoRecord, groupMembers: [VideoRecord]) -> [VideoRecord] {
+        guard let g = rec.footage?.groupID else { return [] }
+        let mine = VideoScanModel.storedFullDigest(rec)
+        return groupMembers.filter { other in
+            guard other.id != rec.id, other.footage?.groupID == g else { return false }
+            guard let mine, let theirs = VideoScanModel.storedFullDigest(other) else { return true }
+            return mine != theirs
+        }
+    }
+
+    /// "Christmas 1990.mov (DV, MOV)" — the other file, its codec and its
+    /// container, in the catalog's own words.
+    static func sameFootageLine(_ other: VideoRecord) -> String {
+        let codec = DuplicateLikeness.codecWords(other.videoCodec.isEmpty ? other.audioCodec : other.videoCodec)
+        let container = (other.filename as NSString).pathExtension.uppercased()
+        let facts = [codec, container].filter { !$0.isEmpty }.joined(separator: ", ")
+        return facts.isEmpty ? other.filename : "\(other.filename) (\(facts))"
+    }
+
+    /// The Duplicates section shows for a flagged copy OR for a file with
+    /// same-footage partners (so the relationship is never hidden).
+    static func showsDuplicatesOrSameFootage(_ rec: VideoRecord, sameFootage: [VideoRecord]) -> Bool {
+        showsDuplicates(rec) || !sameFootage.isEmpty
+    }
+
     /// Avid Project ▸ Edit Rate; empty (row hidden) when unknown.
     static func editRateText(_ rate: Double) -> String {
         rate > 0 ? String(format: "%.2f fps", rate) : ""
