@@ -953,7 +953,7 @@ extension CatalogView {
             if notice.driftDetected {
                 Button(ScanVerb.rescan) { model.rescanAfterVolumeRename(notice) }
             }
-            Button("Undo") { model.undoVolumeRenameMigration(notice) }
+            Button("Undo") { Task { await model.undoVolumeRenameMigration(notice) } }
         case .ask:
             Button("Update") {
                 Task { await model.acceptVolumeRenameAsk(notice) }

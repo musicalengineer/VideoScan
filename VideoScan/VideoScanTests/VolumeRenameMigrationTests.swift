@@ -431,7 +431,7 @@ struct VolumeRenameMigrationTests {
         let notice = try #require(model.pendingVolumeRenameNotice)
         #expect(model.records.contains { $0.fullPath.hasPrefix(newRoot + "/") })
 
-        let undone = model.undoVolumeRenameMigration(notice)
+        let undone = await model.undoVolumeRenameMigration(notice)
         #expect(undone)
         let after = try encoder.encode(model.records.map(VideoRecordDTO.init))
         #expect(after == before,

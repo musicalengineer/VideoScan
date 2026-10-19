@@ -159,39 +159,54 @@ extension VideoScanModel {
     }
 
     /// Restore the most recently purged batch. Returns true if at least
-    /// one record was un-purged. Drops the banner on success or when the
-    /// batch has nothing left to restore (all records already deleted /
-    /// already restored manually).
+    /// one record was un-purged. Drops the banner when every row still in
+    /// the batch went live, or when the batch has nothing left to restore
+    /// (all records already deleted / already restored manually).
+    ///
+    /// A row the catalog REFUSES to restore (cutover B2.3: catalog.sqlite
+    /// held by a job, read-only, being reopened) stays in the batch and the
+    /// banner stays up with the refusal's words in `lastPurgeUndoError`, so
+    /// Undo can be pressed again when the catalog can save (adversarial
+    /// review 2026-10-18 #10: the banner used to vanish with nothing
+    /// restored and no word on screen).
     @discardableResult
     func undoLastPurge() -> Bool {
         guard let snap = lastPurgedBatch else { return false }
-        var restored = 0
         var restoredRecs: [VideoRecord] = []
+        var refusedIDs: [UUID] = []
+        var firstRefusal: String?
         // The id index, not a linear search per id: undoing a 10k-row
         // Remove over a 100k catalog was O(n·m) — ~25 s on the M4 (GH #143
         // scale test). (≈ a hash-map lookup instead of std::find per key.)
         for id in snap.ids {
-            if let rec = record(forID: id),
-               rec.purgedAt != nil,
-               returnToLive(rec) {
-                restored += 1
+            guard let rec = record(forID: id), rec.purgedAt != nil else { continue }   // gone / already restored
+            if let why = clearRemoval(rec) {
+                refusedIDs.append(id)
+                if firstRefusal == nil { firstRefusal = why }
+            } else {
                 restoredRecs.append(rec)
             }
         }
-        if restored == 0 {
-            // Everything in the batch is gone (e.g. user deleted the
-            // catalog or restored records manually). Drop the banner —
-            // nothing to undo.
+        if let firstRefusal {
+            log("Undo Remove from Catalog: \(refusedIDs.count) row(s) left removed — \(firstRefusal)")
+        }
+        if !restoredRecs.isEmpty {
+            CorrelationScorer.revalidateExistingPairs(in: records)
+            saveCatalogDebounced()
+            ledgerRestored(restoredRecs, by: .rick)
+        }
+        if let firstRefusal {
+            // Keep the banner armed on exactly the rows still removed.
+            lastPurgedBatch = LastPurgedBatch(ids: refusedIDs, timestamp: snap.timestamp)
+            lastPurgeUndoError = refusedIDs.count == 1
+                ? "Undo didn't finish: \(firstRefusal)"
+                : "Undo didn't finish for \(refusedIDs.count) items: \(firstRefusal)"
+        } else {
+            // Everything restored, or nothing left in the batch to restore.
             lastPurgedBatch = nil
             lastPurgeUndoError = nil
-            return false
         }
-        CorrelationScorer.revalidateExistingPairs(in: records)
-        saveCatalogDebounced()
-        lastPurgedBatch = nil
-        lastPurgeUndoError = nil
-        ledgerRestored(restoredRecs, by: .rick)
-        return true
+        return !restoredRecs.isEmpty
     }
 
     /// Dismiss the undo banner without restoring. The purged records

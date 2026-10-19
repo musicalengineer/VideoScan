@@ -386,11 +386,7 @@ extension VideoScanModel {
         // summary we drive the counts off `reconcile.*.count` instead.
         var safelyRedundantBytes: Int64 = 0
         if !options.dryRun {
-            for r in reconcile.manuallyDeleted {
-                markSourceNotFound(r)
-                dashboard.relocateManuallyDeleted += 1
-                dashboard.relocateCompleted += 1
-            }
+            markBucketBSourcesNotFound(reconcile.manuallyDeleted)
             for (r, dest) in reconcile.adopted {
                 if r.originalFullPath == nil { r.originalFullPath = r.fullPath }
                 if r.originVolume == nil { r.originVolume = r.volumeName }
@@ -970,16 +966,43 @@ extension VideoScanModel {
     /// "disposed" rule reads it; retiring the label waits on Rick's sign-off
     /// for the 959 classification. Plus the audit note and the relocate log
     /// line, as before.
-    private func markSourceNotFound(_ r: VideoRecord) {
+    /// Returns nil when the row was marked; else the catalog's refusal
+    /// words (B2.3: held / read-only catalog.sqlite) and NOTHING was written
+    /// — the next Reconcile asks again.
+    private func markSourceNotFound(_ r: VideoRecord) -> String? {
         if r.removal == nil,
            let why = Self.stampRemoval(r, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingAtMigrate)) {
-            // B2.3: the catalog refused — nothing is written; the next Reconcile asks again.
-            log("  Reconcile: \(why)")
-            return
+            return why
         }
         r.archiveStage = .manuallyDeleted
         r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
         relocateLog.write(ReconcileLogLines.manuallyDeletedLine(path: r.fullPath))
+        return nil
+    }
+
+    /// Bucket B for a real run: mark each row whose source was not found.
+    /// `relocateManuallyDeleted` counts only the rows actually marked; a row
+    /// the catalog refused still moves the progress bar (`relocateCompleted`)
+    /// but is said ONCE, as a count with the first reason, on the console
+    /// and in relocate.log — never one line per row (adversarial review
+    /// 2026-10-18 #9: the sheet said N rows were "marked" when none were,
+    /// and a held catalog wrote one console line per refused file).
+    func markBucketBSourcesNotFound(_ rows: [VideoRecord]) {
+        var refused = 0
+        var firstRefusal: String?
+        for r in rows {
+            if let why = markSourceNotFound(r) {
+                refused += 1
+                if firstRefusal == nil { firstRefusal = why }
+            } else {
+                dashboard.relocateManuallyDeleted += 1
+            }
+            dashboard.relocateCompleted += 1
+        }
+        guard let firstRefusal else { return }
+        let line = "Reconcile: \(refused) row(s) whose source was not found were NOT marked Missing — \(firstRefusal). The next Reconcile asks again."
+        log("  " + line)
+        relocateLog.write(line)
     }
 
     private func appendNote(_ existing: String, _ msg: String) -> String {

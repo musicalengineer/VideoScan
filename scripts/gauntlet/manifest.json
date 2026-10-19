@@ -29217,6 +29217,56 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvSQLiteSafetyCopyTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvSQLiteSafetyCopyTests"
+      ],
+      "tests": [
+        "asyncSafetyCopyCarriesTheEdit",
+        "heldCatalogRefusesTheCopy",
+        "removedRowsLatestEditIsRecoverable",
+        "safetyCopyCarriesAnEditNotYetCommitted"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvVolumeRenameUndoSQLiteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvVolumeRenameUndoSQLiteTests"
+      ],
+      "tests": [
+        "jsonAuthorityUndo",
+        "revertScale",
+        "undoKeepsWhatChangedSince",
+        "undoLeavesARecordChangedSinceAlone",
+        "undoReadsTheSafetyCopyItWasGiven"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvHeldCatalogDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvUndoPurgeWhileHeldTests",
+        "AdvRelocateBucketBHeldTests",
+        "AdvJunkDeleteHeldTests"
+      ],
+      "tests": [
+        "blockedRefusesBeforeDiskWork",
+        "diskFactNotRecordedIsSaid",
+        "freeBucketBMarks",
+        "freeMovesAndMarks",
+        "heldBucketBIsNotCountedAsMarked",
+        "heldRefusesBeforeDiskWork",
+        "manyRefusedRowsOneLine",
+        "undoNotHeldUnchanged",
+        "undoWhileHeldKeepsTheBanner"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
@@ -32517,7 +32567,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 166,
+      "expected_floor": 184,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [
@@ -32603,7 +32653,12 @@
         "VideoScanTests/CutoverManyEditsTests",
         "VideoScanTests/P0TruthFixtureTests",
         "VideoScanTests/P0TruthRegressionTests",
-        "VideoScanTests/AdvRescanEditDuringScanTests"
+        "VideoScanTests/AdvRescanEditDuringScanTests",
+        "VideoScanTests/AdvSQLiteSafetyCopyTests",
+        "VideoScanTests/AdvVolumeRenameUndoSQLiteTests",
+        "VideoScanTests/AdvUndoPurgeWhileHeldTests",
+        "VideoScanTests/AdvRelocateBucketBHeldTests",
+        "VideoScanTests/AdvJunkDeleteHeldTests"
       ]
     },
     {
