@@ -128,7 +128,10 @@ enum HallieShellCLI {
     }
 
     struct Dependencies {
-        var loadCatalog: (URL) -> [VideoRecord]?
+        /// catalog.sqlite → records, read-only (async: the store's read
+        /// runs off this task). nil = not readable; the production loader
+        /// has already said why on stderr.
+        var loadCatalog: (URL) async -> [VideoRecord]?
         /// Publish the read-only archive authority before GEDCOM/cards load.
         /// Injected as a no-op so unit tests never inspect the real catalog
         /// designation or mutate the process-wide presentation snapshot.
@@ -199,7 +202,7 @@ enum HallieShellCLI {
         var loadAppOwner: (() -> HallieTurnExecutor.Speakers)? = nil
 
         init(
-            loadCatalog: @escaping (URL) -> [VideoRecord]?,
+            loadCatalog: @escaping (URL) async -> [VideoRecord]?,
             configureFamilyAssets: @escaping (Options) -> Void = { _ in },
             loadProfiles: @escaping () -> ProfileLoadResult,
             loadGraph: @escaping (URL?) -> GedcomFamilyGraph?,
@@ -299,9 +302,14 @@ enum HallieShellCLI {
         /// purpose — `--hallie-shell` is Rick's tool, not a test host. Never
         /// a test default; tests inject their own Dependencies.
         static var production: Dependencies {
+            // The one catalog read carries the Master Archive designation
+            // too; `run` loads the catalog before it configures assets.
+            let catalogRead = CatalogRead()
             var production = Dependencies(
-                loadCatalog: { FileBackedCatalogSource.loadRecords(from: $0) },
-                configureFamilyAssets: { configureFamilyAssetsReadOnly(options: $0) },
+                loadCatalog: { await catalogRead.records(at: $0) },
+                configureFamilyAssets: {
+                    configureFamilyAssetsReadOnly(options: $0, designationJSON: catalogRead.designationJSON)
+                },
                 loadProfiles: { loadProfilesReadOnly() },
                 loadGraph: { requested in
                     let fm = FileManager.default
@@ -469,12 +477,39 @@ enum HallieShellCLI {
         func set(_ value: String) { lock.withLock { storage = value } }
     }
 
+    /// The production catalog read: catalog.sqlite, read-only, through
+    /// Core's one reader door. No `catalog.cutover` ⇒ refused with words
+    /// (never the frozen catalog.json — 2026-10-19, audit gap 3).
+    static func loadCatalogReadOnly(_ url: URL) async -> SQLiteCatalogReader.Loaded? {
+        switch await SQLiteCatalogReader.load(databaseURL: url) {
+        case .success(let loaded):
+            return loaded
+        case .failure(let failure):
+            FileHandle.standardError.write(Data("hallie: \(failure.words)\n".utf8))
+            return nil
+        }
+    }
+
+    /// The shell's one catalog read: the records, and the Master Archive
+    /// designation the same read found, kept for `configureFamilyAssets`
+    /// (`run` loads the catalog first). A class so both production closures
+    /// share ONE object (≈ a shared_ptr each closure holds).
+    final class CatalogRead {
+        private(set) var designationJSON: String?
+
+        func records(at url: URL) async -> [VideoRecord]? {
+            guard let loaded = await HallieShellCLI.loadCatalogReadOnly(url) else { return nil }
+            designationJSON = loaded.masterArchiveJSON
+            return loaded.records
+        }
+    }
+
     /// Give the standalone shell the same immutable, read-only asset
     /// authority as the app without constructing `VideoScanModel`.
     /// Explicit GEDCOM paths inside the deployed archive layout win;
-    /// otherwise the catalog's small deterministic header supplies the
-    /// persisted Master Archive designation.
-    static func configureFamilyAssetsReadOnly(options: Options) {
+    /// otherwise catalog.sqlite's `catalog_state.master_archive` (read with
+    /// the records) supplies the persisted Master Archive designation.
+    static func configureFamilyAssetsReadOnly(options: Options, designationJSON: String?) {
         if let explicitRoot = masterArchiveRoot(containingGEDCOM: options.gedcomURL) {
             FamilyAssetConfigurationCenter.shared.publish(
                 masterArchiveRoot: explicitRoot,
@@ -484,8 +519,7 @@ enum HallieShellCLI {
             return
         }
 
-        guard let designation = masterArchiveDesignation(
-            catalogURL: options.catalogURL) else {
+        guard let designation = CatalogCommitter.designation(fromJSON: designationJSON) else {
             FamilyAssetConfigurationCenter.shared.publish(
                 masterArchiveRoot: nil,
                 masterIsSafelyAvailable: true,
@@ -523,30 +557,6 @@ enum HallieShellCLI {
         guard familyTree.lastPathComponent == "40_Family_Tree" else { return nil }
         let master = familyTree.deletingLastPathComponent()
         return master.pathComponents.count > 1 ? master : nil
-    }
-
-    /// Current catalog writers put metadata before the large records array.
-    /// Decode only that bounded header instead of allocating a second copy
-    /// of thousands of `VideoRecord`s during shell startup.
-    static func masterArchiveDesignation(
-        catalogURL: URL,
-        probeBytes: Int = CatalogSnapshot.probeWindowBytes
-    ) -> MasterArchiveDesignation? {
-        guard probeBytes > 0,
-              let handle = try? FileHandle(forReadingFrom: catalogURL) else {
-            return nil
-        }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: probeBytes),
-              let marker = data.range(of: Data(",\"records\":".utf8)) else {
-            return nil
-        }
-        var header = data[..<marker.lowerBound]
-        header.append(0x7D) // `}` closes the bounded top-level header.
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(CatalogSnapshot.self, from: Data(header)))?
-            .masterArchive
     }
 
     static let usage = """
@@ -685,7 +695,7 @@ enum HallieShellCLI {
         if options.diagnostics {
             output("opening catalog read-only: \(options.catalogURL.path)")
         }
-        guard let records = dependencies.loadCatalog(options.catalogURL) else {
+        guard let records = await dependencies.loadCatalog(options.catalogURL) else {
             output("error: cannot read catalog at \(options.catalogURL.path)")
             return ExitCode.catalogUnavailable.rawValue
         }
@@ -2018,7 +2028,7 @@ enum HallieShellCLI {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory())
-        return base.appendingPathComponent("VideoScan/catalog.json")
+        return base.appendingPathComponent("VideoScan/\(SQLiteCatalogReader.databaseFileName)")
     }
 
     /// True for a POI/ entry that is never a person: the family-groups

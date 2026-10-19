@@ -15797,7 +15797,6 @@
         "cancelAbandonsPendingClarificationWithoutContinuation",
         "cancellationReachesInjectedTurnSeamAndPerformsNoMediaAction",
         "cancellingDuringSpeechDoesNotReadAnotherQuestion",
-        "catalogHeaderProbeReadsMasterWithoutDecodingRecords",
         "catalogPeopleRosterIsLocalBoundedAndSourceScoped",
         "citationsAreBoundedAndRetainPlaybackCoordinates",
         "clarificationNumberAndExactNameDoNotRetranslate",
@@ -15842,6 +15841,7 @@
         "selectionDateQuestionsUseTheEmbeddedDateAtDayPrecision",
         "selectionDateQuestionsWithoutASelectionStillTranslate",
         "selectionQuestionsWithNothingSelectedAskForASelectionOrAName",
+        "shellReadsCatalogSQLiteReadOnlyWithDesignation",
         "showMoreAfterTheTreeChangedIsRefusedThroughTheShell",
         "speechIsOptInAndParsesWithOnce",
         "speechReadsOnlyRecordedAnswersAndFinishesBeforeNextInput",
@@ -28844,6 +28844,25 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/SQLiteCatalogReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SQLiteCatalogReaderTests"
+      ],
+      "tests": [
+        "freshnessIsTheHighWater",
+        "jsonPathRefused",
+        "missingDatabaseRefused",
+        "openForReadingMissingFile",
+        "openForReadingRefusesWrites",
+        "previewSourcePlansFromSQLite",
+        "previewSourceWithoutLatch",
+        "readsTheAppsRecordsReadOnly",
+        "refusedWithoutLatch"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
       "stage": "regression",
       "suites": [
@@ -31902,7 +31921,7 @@
       ],
       "expected_floor": 2667,
       "name": "unit",
-      "package_expected_floor": 294,
+      "package_expected_floor": 303,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -31929,7 +31948,8 @@
         "VideoScanCoreTests.CatalogJSONValueCoderTests",
         "VideoScanCoreTests.CatalogRecordDTORecordTests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
-        "VideoScanCoreTests.CatalogChangeDetectorTests"
+        "VideoScanCoreTests.CatalogChangeDetectorTests",
+        "VideoScanCoreTests.SQLiteCatalogReaderTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

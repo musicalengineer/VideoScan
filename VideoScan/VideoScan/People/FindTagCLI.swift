@@ -7,8 +7,8 @@
 // scan must survive rapid-dev rebuild/relaunch cycles.
 //
 // Data-flow contract (the difference from the preview helper, whose
-// product is cache files): this daemon NEVER writes catalog.json. It
-// reads the catalog (READ-ONLY, single-writer is the app), scores each
+// product is cache files): this daemon NEVER writes the catalog. It
+// reads catalog.sqlite (READ-ONLY, single-writer is the app), scores each
 // video-bearing record with the SAME NativeRecipeScorer configuration
 // the in-app job uses, and appends verdicts to a per-run journal
 // (FindTagJournal.swift — the codex-pinned wire contract). The app
@@ -118,6 +118,18 @@ enum FindTagCLI {
 
     // MARK: - Entry
 
+    /// The catalog's records, read-only through Core's one reader door;
+    /// nil after saying why on stderr.
+    private static func planRecords(_ url: URL) async -> [VideoRecord]? {
+        switch await SQLiteCatalogReader.load(databaseURL: url) {
+        case .success(let loaded):
+            return loaded.records
+        case .failure(let failure):
+            err("findtagd: cannot read catalog at \(url.path) — \(failure.words)")
+            return nil
+        }
+    }
+
     // swiftlint:disable:next function_body_length
     static func run(arguments: [String]) async -> Int32 {
         let options: Options
@@ -150,11 +162,9 @@ enum FindTagCLI {
         termSource.resume()
         intSource.resume()
 
-        // Work plan from the persisted catalog (READ-ONLY).
-        guard let records = FileBackedCatalogSource.loadRecords(from: options.catalogURL) else {
-            err("findtagd: cannot read catalog at \(options.catalogURL.path)")
-            return 2
-        }
+        // Work plan from catalog.sqlite (READ-ONLY; no catalog.cutover ⇒
+        // refused — never the frozen catalog.json, 2026-10-19 audit gap 3).
+        guard let records = await planRecords(options.catalogURL) else { return 2 }
         // Eligibility = FindPersonJob.skipReason — the SAME pure spec
         // the in-app job uses (≥10s, no junk/bundle-internals/purged,
         // real video streams), so the two planners cannot drift

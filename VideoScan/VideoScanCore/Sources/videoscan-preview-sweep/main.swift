@@ -42,6 +42,12 @@ case .failure(let error):
     }
 
 case .success(let options):
+    // catalog.sqlite or nothing: no catalog.cutover ⇒ say so and stop (never
+    // fall back to the frozen catalog.json — 2026-10-19, audit gap 3).
+    if let failure = SQLiteCatalogReader.preflight(databaseURL: options.catalogURL) {
+        writeStderr("preview sweep helper: \(failure.words)\n")
+        exit(5)
+    }
     // Single-instance lock: two helpers must never both run (they'd race the
     // same cache dir). The OS releases the advisory lock automatically if
     // this process dies, so a crash can't strand it.
