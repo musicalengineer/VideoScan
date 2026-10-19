@@ -164,7 +164,7 @@ struct DuplicateDetectorDigestTests {
         rs[4].isPlayable = "No"
         let summary = DuplicateDetector.analyze(records: rs)
         #expect(summary.groups == 2)
-        let groups = Dictionary(grouping: rs.filter { $0.duplicateGroupID != nil }, by: { $0.duplicateGroupID! })
+        let groups = Dictionary(grouping: rs.compactMap { r in r.duplicateGroupID.map { ($0, r) } }, by: \.0).mapValues { $0.map(\.1) }
         #expect(groups.count == 2)
         for (_, members) in groups {
             #expect(Set(members.compactMap { VideoScanModel.storedFullDigest($0) }).count == 1, "one digest per group")
