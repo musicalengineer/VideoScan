@@ -133,7 +133,7 @@ struct CatalogPaneFocusSensorTests {
     /// row trigger goes through refreshRows; only onAppear recomputes alone.
     @Test func filterTriggersPruneTheSelection() throws {
         let table = try code("CatalogContent+Table.swift")
-        #expect(occurrences(of: "refreshRows()", in: table) == 16)
+        #expect(occurrences(of: "refreshRows()", in: table) == 17)
         #expect(occurrences(of: "tableData = computeFiltered()", in: table) == 1, "only onAppear")
         #expect(try code("CatalogTableState.swift").contains("CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)"))
     }

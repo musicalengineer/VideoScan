@@ -89,6 +89,8 @@ struct OneEngineSensorTests {
         "App/BundleExporter.swift": "export bundle it is about to rewrite",
         "App/BundleImporter.swift": "import temp",
         "Catalog/CatalogStore.swift": "catalog backup rotation",
+        "Catalog/CatalogBackupSeal.swift": "its own sealed-copy temp file (renamed on success)",
+        "Catalog/CatalogViewerSnapshot.swift": "its own snapshot temp file (renamed on success)",
         "Catalog/CatalogSync.swift": "sync staging dirs",
         "Catalog/CatalogWriteError.swift": "rotated error log",
         "FamilyTree/CouplePortrait.swift": "portrait cache",
