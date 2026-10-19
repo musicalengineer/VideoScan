@@ -140,7 +140,7 @@ pending" is unblocked once its source has been read against these points:
 2026-10-18: the catalog cutover and SQLite suites passed this audit and run
 in `regression` (CatalogCutover* B1–B2.7 + Regression, P0Truth*,
 AdvRescanEditDuringScan) and `unit` (CatalogPurge, CatalogStoreAsyncSave,
-CatalogStoreHardening, CatalogLockRobustness). The two real-backup sensors
+CatalogStoreHardening, CatalogLockRobustness, and since the second pass ImportToSQLite, ImportToSQLiteQuit, VerifyCatalog, CatalogStatusFreshness). The two real-backup sensors
 moved to `CatalogLockRealBackupTests` (blocked). The VideoScanCore catalog
 suites (Store/, Commit/, Import/, Load/, CatalogFreshness,
 FileBackedCatalogSource — 40 files) passed the same screen (per-test

@@ -27919,7 +27919,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogStatusFreshnessTests.swift",
       "stage": "unit",
@@ -28114,7 +28113,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
       "stage": "unit",
@@ -28192,7 +28190,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
       "stage": "unit",
@@ -28253,7 +28250,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ImportToSQLiteQuitTests.swift",
       "stage": "unit",
@@ -31809,23 +31805,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanTests/CatalogStatusFreshnessTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/ImportToSQLiteQuitTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -31833,7 +31813,7 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2497,
+      "expected_floor": 2650,
       "name": "unit",
       "package_expected_floor": 294,
       "package_selectors": [
@@ -32221,7 +32201,29 @@
         "VideoScanTests/CatalogStoreAsyncSaveTests",
         "VideoScanTests/CatalogStoreHardeningTests",
         "VideoScanTests/CatalogPathMatchingContractTests",
-        "VideoScanTests/CatalogSnapshotVersionTests"
+        "VideoScanTests/CatalogSnapshotVersionTests",
+        "VideoScanTests/CatalogFreshnessRowsTests",
+        "VideoScanTests/CatalogFreshnessFactsTests",
+        "VideoScanTests/CatalogStatusWordsTests",
+        "VideoScanTests/CatalogFreshnessScaleTests",
+        "VideoScanTests/CatalogFreshnessSnapshotTests",
+        "VideoScanTests/CatalogStatusUpdateQueueTests",
+        "VideoScanTests/CatalogStatusSensorTests",
+        "VideoScanTests/CatalogStatusStructureTests",
+        "VideoScanTests/VerifyCatalogConstraintTests",
+        "VideoScanTests/VerifyCatalogTierTests",
+        "VideoScanTests/VerifyCatalogReportTests",
+        "VideoScanTests/VerifyCatalogScaleTests",
+        "VideoScanTests/VerifyCatalogJobTests",
+        "VideoScanTests/VerifyCatalogStatusTests",
+        "VideoScanTests/VerifyCatalogSensorTests",
+        "VideoScanTests/ImportToSQLitePreflightTests",
+        "VideoScanTests/ImportDryRunMarkerTests",
+        "VideoScanTests/ImportToSQLiteHoldTests",
+        "VideoScanTests/ImportToSQLiteJobTests",
+        "VideoScanTests/ImportToSQLiteSensorTests",
+        "VideoScanTests/ImportToSQLiteQuitPathTests",
+        "VideoScanTests/ImportToSQLiteQuitSensorTests"
       ]
     },
     {
