@@ -65,6 +65,7 @@ extension CatalogContent {
                 }
             }
         }
+        .background(FolderChevronStyle(revision: tableState.folderRows.count &+ tableState.expandedFolderIDs.count))
     }
 
     @TableColumnBuilder<FootageFolderTableRow, KeyPathComparator<FootageFolderTableRow>>

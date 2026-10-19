@@ -163,13 +163,14 @@ enum FootageFolderWords {
     /// The Finder's folder blue, a lighter blue than the accent so it
     /// reads on the dark theme (the accent blue sank into the row stripes).
     static let folderTint = Color(red: 0.36, green: 0.68, blue: 0.96)
-    static let folderSymbolFont = Font.system(size: 16.5)
+    static let folderSymbolFont = Font.system(size: 17.3)
     static let folderTitleFont = Font.system(.body).weight(.semibold)
     static let relationFont = Font.system(size: 11)
     static let summaryFont = Font.system(size: 11, design: .monospaced)
     static let legendFont = Font.system(size: 11)
     static let glyphFont = Font.system(size: 12, design: .monospaced)
-    static let crumbFont = Font.system(size: 12, weight: .medium)
+    /// Back and the path: big and bold enough to find on the dark theme (Rick 2026-10-19).
+    static let crumbFont = Font.system(size: 14, weight: .bold)
     /// A copy, version or clip indents this much under its recording —
     /// one outline step, the same as the system's own child indent, so the
     /// triangle-and-indent hierarchy reads like the Finder's (2026-10-18;
