@@ -960,6 +960,136 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
+# Test 14 (2026-10-18): the VideoScanCore package lane. A fake `swift` on
+# PATH prints a fixture log and exits with a chosen rc, so the REAL
+# run_core_package_tests (watchdog, parse_test_counts, classification, row
+# builder) runs end to end without compiling anything. Pins: the Release
+# flags reach swift test; counts use the app lane's rules; a failure, a
+# silent crash (rc only) and a build error (zero tests) each publish red; the
+# Core verdict turns a green app row red and never rewrites a red one; only
+# core_* keys merge into the row; the lane runs BEFORE the app build.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 14: VideoScanCore package lane =="
+CORE_LIB="$SANDBOX/core_lib.sh"
+cat "$WATCHDOG_LIB" > "$CORE_LIB"
+awk '/^with_person_metrics\(\)/,/^log "=== Nightly local test run starting/' \
+    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' >> "$CORE_LIB"
+CORE_BIN="$SANDBOX/core-bin"
+mkdir -p "$CORE_BIN"
+printf '%s\n' \
+    '#!/bin/sh' \
+    'printf "%s\n" "$*" > "$CORE_FAKE_ARGS"' \
+    'cat "$CORE_FAKE_LOG"' \
+    'exit "$CORE_FAKE_RC"' > "$CORE_BIN/swift"
+chmod +x "$CORE_BIN/swift"
+ZW=$(printf '\342\200\213')   # U+200B, the indent Swift Testing really prints
+cat > "$SANDBOX/core-green.log" <<CGL
+Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testOpenCreatesSchema]' passed (0.010 seconds).
+Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testCommitIsAtomic]' passed (0.020 seconds).
+Test Suite 'All tests' passed at 2026-10-18 02:10:00.000.
+${ZW}✔ Test importRoundTrip() passed after 0.010 seconds.
+✔ Test commitHighWater() passed after 0.020 seconds.
+━ Test loadQuarantine() passed after 0.030 seconds with 1 known issue.
+✔ Test run with 3 tests in 1 suite passed after 0.100 seconds.
+CGL
+cat > "$SANDBOX/core-red.log" <<CRL
+Test Case '-[VideoScanCoreTests.GRDBCatalogRepositoryTests testOpenCreatesSchema]' passed (0.010 seconds).
+✔ Test importRoundTrip() passed after 0.010 seconds.
+✘ Test commitHighWater() recorded an issue at CatalogCommitTests.swift:9:5: Expectation failed: x failed after y
+✘ Test commitHighWater() failed after 0.020 seconds with 1 issue.
+✘ Test run with 2 tests in 1 suite failed after 0.100 seconds with 1 issue.
+CRL
+cat > "$SANDBOX/core-build-error.log" <<CBL
+error: emit-module command failed with exit code 1 (use -v to see invocation)
+CBL
+run_core_case() {   # log rc app_status app_reason → status|reason|core_*… line
+    (
+        # shellcheck disable=SC1090
+        source "$CORE_LIB"
+        log() { :; }
+        export PATH="$CORE_BIN:$PATH"
+        export CORE_FAKE_LOG="$1" CORE_FAKE_RC="$2" CORE_FAKE_ARGS="$SANDBOX/core-args.txt"
+        NIGHTLY_CONFIGURATION="Release"
+        NIGHTLY_CORE_LOG="$SANDBOX/core-run.log"
+        PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
+        # The lane copies swift's log into the nightly log (stdout); not here.
+        run_core_package_tests "/pkg/VideoScanCore" "/caches/core-build" > /dev/null
+        STATUS="$3"; REASON="$4"
+        apply_core_package_verdict
+        row=$(with_person_metrics "{\"status\":\"$STATUS\",\"reason\":\"$REASON\",\"passed\":7,\"total\":7}")
+        printf '%s' "$row" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+keys = ["status", "reason", "passed", "total", "core_status", "core_reason", "core_passed",
+        "core_failed", "core_skipped", "core_total", "core_known_issue_tests", "core_rc",
+        "core_configuration", "core_failed_names"]
+print("|".join(json.dumps(r.get(k)) if isinstance(r.get(k), list) else str(r.get(k)) for k in keys))'
+    )
+}
+if ! grep -q '^run_core_package_tests()' "$CORE_LIB"; then
+    fail "run_core_package_tests could not be extracted from nightly_local_tests.sh"
+else
+    got=$(run_core_case "$SANDBOX/core-green.log" 0 ok "")
+    want='ok||7|7|ok||5|0|0|5|1|0|release|[]'
+    [ "$got" = "$want" ] && pass "green Core lane: 2 XCTest + 3 Swift Testing (1 known issue) counted, row stays green" \
+        || fail "green Core lane: got '$got' want '$want'"
+    args=$(cat "$SANDBOX/core-args.txt" 2>/dev/null)
+    [ "$args" = "test --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build --no-parallel" ] \
+        && pass "swift test gets the package path, -c release, the private scratch path and --no-parallel" \
+        || fail "swift test arguments changed: '$args'"
+    got=$(run_core_case "$SANDBOX/core-red.log" 1 ok "")
+    want='failed|core-failed-tests:1|7|7|failed|failed-tests:1|2|1|0|3|0|1|release|["commitHighWater()"]'
+    [ "$got" = "$want" ] && pass "a Core failure turns a green app row red (core-failed-tests:1) and names the test" \
+        || fail "red Core lane: got '$got' want '$want'"
+    got=$(run_core_case "$SANDBOX/core-green.log" 134 ok "")
+    case "$got" in
+        "failed|core-test-rc:134|"*"|ok"*) fail "crashed Core lane published core ok: '$got'" ;;
+        "failed|core-test-rc:134|7|7|failed|test-rc:134|5|0|0|5|"*) pass "a Core run that dies without a failure line (rc 134) fails closed" ;;
+        *) fail "crashed Core lane: got '$got'" ;;
+    esac
+    got=$(run_core_case "$SANDBOX/core-build-error.log" 1 ok "")
+    case "$got" in
+        "failed|core-zero-tests-ran:test-rc=1|7|7|failed|zero-tests-ran:test-rc=1|0|0|0|0|"*) pass "a Core build error (zero tests) fails closed" ;;
+        *) fail "Core build error: got '$got'" ;;
+    esac
+    got=$(run_core_case "$SANDBOX/core-red.log" 1 failed "failed-tests:2")
+    case "$got" in
+        "failed|failed-tests:2|"*) pass "an already-red app verdict keeps its own reason; core_* still say what Core did" ;;
+        *) fail "app reason was rewritten by the Core lane: '$got'" ;;
+    esac
+    notrun=$(
+        # shellcheck disable=SC1090
+        source "$CORE_LIB"
+        STATUS="ok"; REASON=""
+        apply_core_package_verdict
+        printf '%s|%s' "$STATUS" "$REASON"
+    )
+    [ "$notrun" = "failed|core-lane-not-reached" ] && pass "a Core lane that never ran cannot leave the row green" \
+        || fail "not-run Core lane: got '$notrun'"
+    tampered=$(
+        # shellcheck disable=SC1090
+        source "$CORE_LIB"
+        PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
+        CORE_TEST_JSON='{"core_status":"ok","status":"ok","reason":"tampered","failed":0}'
+        with_person_metrics '{"status":"failed","reason":"failed-tests:2","failed":2}' \
+            | python3 "$SANDBOX/row_fields.py" status reason failed core_status
+    )
+    [ "$tampered" = "failed|failed-tests:2|2|ok" ] && pass "only core_* keys merge; the lane cannot overwrite status/reason/counts" \
+        || fail "Core merge broke the row contract: '$tampered'"
+fi
+CORE_CALL_LINE=$(grep -n '^run_core_package_tests "\$REPO/VideoScan/VideoScanCore"' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
+BUILD_CALL_LINE=$(grep -n '^run_nightly_build$' "$SCRIPT_DIR/nightly_local_tests.sh" | head -1 | cut -d: -f1)
+VERDICT_LINE=$(grep -n '^apply_core_package_verdict$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
+CLASSIFY_LINE=$(grep -n '^classify_nightly_test_result \\$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
+if [ -n "$CORE_CALL_LINE" ] && [ -n "$BUILD_CALL_LINE" ] && [ "$CORE_CALL_LINE" -lt "$BUILD_CALL_LINE" ] &&
+   [ -n "$VERDICT_LINE" ] && [ -n "$CLASSIFY_LINE" ] && [ "$VERDICT_LINE" -gt "$CLASSIFY_LINE" ]; then
+    pass "the Core lane runs before the app build and its verdict folds in after classification"
+else
+    fail "Core lane wiring moved (core=$CORE_CALL_LINE build=$BUILD_CALL_LINE classify=$CLASSIFY_LINE verdict=$VERDICT_LINE)"
+fi
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo

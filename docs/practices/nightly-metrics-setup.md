@@ -18,6 +18,7 @@ a metric with no data says "no data yet", never zero.
 | `metrics/history.jsonl` | `.github/workflows/ci.yml` running `scripts/collect_metrics.sh` | every push to main |
 | `metrics/static_analysis.jsonl`, `metrics/nightly_findings_latest.json` | `.github/workflows/nightly-analysis.yml` (aggregate job) | GitHub nightly |
 | `metrics/testdriver.jsonl` | `scripts/nightly_local_tests.sh` (launchd `com.videoscan.nightly-tests`), TestDriver's Publish, the gauntlet | 2 AM nightly; ad hoc |
+| (same rows, additive `core_*` fields, 2026-10-18) | the nightly's VideoScanCore lane: `swift test -c release` on the package before the app build — `core_status`, `core_reason`, `core_passed/failed/skipped/total`, `core_known_issue_tests`, `core_elapsed_s`, `core_rc`, `core_failed_names`; a red Core lane turns the row red with reason `core-<why>` | 2 AM nightly |
 | `metrics/coverage.jsonl` | `tools/publish_metrics.py`, called by `tools/nightly_coverage.py` | after the 4 AM coverage run |
 | `metrics/adversarial.jsonl` | `tools/publish_metrics.py`, called by `tools/adversarial_nightly.py confirm` | after the 05:30 confirm |
 | `metrics/codex_reviews.jsonl` | `tools/publish_metrics.py` (parses `docs/reviews/codex/*.md` headers) | with either of the two above |

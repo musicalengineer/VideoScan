@@ -82,10 +82,18 @@
 #       products path derives from it and every published row carries it as
 #       an additive `configuration` field (the gauntlet rows use the same key).
 #     - Build watchdog 3,600 s -> 5,400 s (see the note at the value).
+#
+#   2026-10-18 (core-lane-r1):
+#     - The VideoScanCore package's own tests (`swift test`, Release) run every
+#       night before the app build: the SQLite catalog's store/commit/import/
+#       load suites were proven only in GitHub CI and by hand. Additive core_*
+#       row fields; a red/timed-out/not-run Core lane turns a green row red
+#       with reason core-<why>. parse_test_counts/parse_crashed_tests moved up
+#       (unchanged) so the Core lane can use them before the app build.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-10-02-timing-strict-r2"
+NIGHTLY_SCRIPT_VERSION="2026-10-18-core-lane-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -229,7 +237,7 @@ refresh_person_metrics() {
 # Merge additive person fields into any normal/failure nightly JSON row. Python
 # owns JSON escaping so private dataset names cannot corrupt the public JSONL.
 with_person_metrics() {
-    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" VOICE_ROW="${HALLIE_VOICE_JSON:-}" python3 -c '
+    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" VOICE_ROW="${HALLIE_VOICE_JSON:-}" CORE_ROW="${CORE_TEST_JSON:-}" python3 -c '
 import json, os
 base = json.loads(os.environ["BASE_ROW"])
 base.update(json.loads(os.environ["PERSON_ROW"]))
@@ -245,8 +253,110 @@ base.update(hallie)
 # The Hallie VOICE lane (2026-09-29): only its own hallie_voice_* keys.
 voice = json.loads(os.environ.get("VOICE_ROW") or "{}")
 base.update({k: v for k, v in voice.items() if k.startswith("hallie_voice_")})
+# The VideoScanCore package lane (2026-10-18): only its own core_* keys. Its
+# verdict reaches status/reason through apply_core_package_verdict, never here.
+core = json.loads(os.environ.get("CORE_ROW") or "{}")
+base.update({k: v for k, v in core.items() if k.startswith("core_")})
 print(json.dumps(base, separators=(",", ":")))
 '
+}
+
+# ── VideoScanCore package lane (2026-10-18) ─────────────────────────
+# The app scheme does not build the package's test target, so the catalog's
+# SQLite store, commit, import and load suites (Store/, Commit/, Import/,
+# Load/ — the cutover's proof) ran only in GitHub CI and by hand. This lane
+# runs `swift test` on the package in the nightly's configuration (Release:
+# `swift test -c release`; SwiftPM keeps @testable imports on by default) with
+# its own scratch path under ~/Library/Caches (not /tmp, same reason as the
+# app's DerivedData), behind the same process-group watchdog. It runs BEFORE
+# the app build, so a night whose app build fails still proves the package.
+#
+# Counts come from parse_test_counts (the same per-test terminal-line rules as
+# the app lane) and the verdict from classify_nightly_test_result (timeout >
+# zero tests > failures > crash > unexplained rc). Row fields are ADDITIVE
+# core_* keys; the top-level passed/failed/total stay the app suite's, so the
+# dashboard's series do not step. A Core failure, timeout or not-run turns a
+# green app verdict red via apply_core_package_verdict (reason "core-<why>").
+# Strict timing (GH #208): `swift test` reads VIDEOSCAN_TIMING_STRICT, which
+# the top of this script exports. Strict means "a quiet machine", so the lane
+# runs `--no-parallel` (Swift Testing honours it): with suites in parallel in
+# one process, a scale test's wall time and resident-size growth include its
+# neighbours' (first real run, 2026-10-18: AudioFingerprintEngineTests saw
+# 2.4 GB "growth" while the 100k import ran beside it, and a 10 ms freshness
+# budget read 12.9 ms). GitHub CI keeps parallel + non-strict.
+NIGHTLY_CORE_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_TIMEOUT_SECONDS:-3600}"
+NIGHTLY_CORE_LOG="${VIDEOSCAN_NIGHTLY_CORE_LOG:-/tmp/nightly-core-test-output.log}"
+CORE_STATUS="not-run"
+CORE_REASON="lane-not-reached"
+CORE_TEST_JSON='{"core_status":"not-run","core_reason":"lane-not-reached"}'
+
+# Args: package_path scratch_path. Sets CORE_STATUS, CORE_REASON and
+# CORE_TEST_JSON. Leaves the app lane's globals (PASSED, STATUS, …) to be
+# recomputed by the app parse; it never publishes on its own.
+run_core_package_tests() {
+    local package_path="$1"
+    local scratch_path="$2"
+    local swift_configuration rc timed_out start end elapsed total
+    swift_configuration=$(printf '%s' "${NIGHTLY_CONFIGURATION:-Release}" | tr '[:upper:]' '[:lower:]')
+    log "Core package tests: swift test -c $swift_configuration --package-path $package_path (watchdog ${NIGHTLY_CORE_TIMEOUT_SECONDS}s)"
+    start=$(date +%s)
+    run_with_process_group_watchdog \
+        "$NIGHTLY_CORE_TIMEOUT_SECONDS" \
+        "${NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS:-10}" \
+        "$NIGHTLY_CORE_LOG" \
+        swift test \
+        --package-path "$package_path" \
+        -c "$swift_configuration" \
+        --scratch-path "$scratch_path" \
+        --no-parallel
+    rc=$?
+    timed_out=$NIGHTLY_WATCHDOG_DID_TIMEOUT
+    end=$(date +%s)
+    elapsed=$((end - start))
+    cat "$NIGHTLY_CORE_LOG" 2>/dev/null || true
+    parse_test_counts "$NIGHTLY_CORE_LOG"
+    total=$((PASSED + FAILED + SKIPPED))
+    classify_nightly_test_result "$timed_out" "$NIGHTLY_CORE_TIMEOUT_SECONDS" \
+        "$total" "$FAILED" false "$rc" "${CRASHED:-0}"
+    CORE_STATUS="$STATUS"
+    CORE_REASON="$REASON"
+    CORE_TEST_JSON=$(CORE_STATUS="$CORE_STATUS" CORE_REASON="$CORE_REASON" \
+        CORE_PASSED="$PASSED" CORE_FAILED="$FAILED" CORE_SKIPPED="$SKIPPED" \
+        CORE_TOTAL="$total" CORE_KNOWN="$KNOWN_ISSUE_TESTS" CORE_ELAPSED="$elapsed" \
+        CORE_RC="$rc" CORE_NAMES="$FAILED_NAMES_JSON" CORE_CFG="$swift_configuration" python3 -c '
+import json, os
+e = os.environ
+try:
+    names = json.loads(e["CORE_NAMES"])
+except Exception:
+    names = []
+print(json.dumps({
+    "core_status": e["CORE_STATUS"], "core_reason": e["CORE_REASON"],
+    "core_passed": int(e["CORE_PASSED"]), "core_failed": int(e["CORE_FAILED"]),
+    "core_skipped": int(e["CORE_SKIPPED"]), "core_total": int(e["CORE_TOTAL"]),
+    "core_known_issue_tests": int(e["CORE_KNOWN"]), "core_elapsed_s": int(e["CORE_ELAPSED"]),
+    "core_rc": int(e["CORE_RC"]), "core_configuration": e["CORE_CFG"],
+    "core_failed_names": names,
+}, separators=(",", ":")))
+' 2>/dev/null)
+    if [ -z "$CORE_TEST_JSON" ]; then
+        CORE_STATUS="failed"
+        CORE_REASON="core-row-builder-failed"
+        CORE_TEST_JSON='{"core_status":"failed","core_reason":"core-row-builder-failed"}'
+    fi
+    log "Core results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${total} total; ${KNOWN_ISSUE_TESTS} passed with known issues) in ${elapsed}s rc=$rc → ${CORE_STATUS}${CORE_REASON:+ ($CORE_REASON)}"
+    [ "$FAILED" -gt 0 ] && log "Core failed tests: $FAILED_NAMES_JSON"
+    return 0
+}
+
+# Fold the Core lane into the published verdict. A green app run with a red,
+# timed-out or never-run Core lane is NOT green; an already-red app verdict
+# keeps its own reason (the core_* fields still say what Core did).
+apply_core_package_verdict() {
+    if [ "$STATUS" = "ok" ] && [ "${CORE_STATUS:-not-run}" != "ok" ]; then
+        STATUS="failed"
+        REASON="core-${CORE_REASON:-not-run}"
+    fi
 }
 
 # Build and publish the current parsed test result. COV_LOGIC="null" omits the
@@ -419,6 +529,150 @@ orchestrate_post_test_result() {
     collect_optional_post_test_metrics
     return 0
 }
+
+# ── Test-output parsers (used by the Core lane and the app lane) ─────
+# Swift Testing + XCTest markers. Extracted into a function so
+# scripts/test_nightly_failure_modes.sh can source and fixture-test it.
+#
+# 2026-06-14 (still applies): never use `grep -cE ... || echo 0` — when
+# grep matched nothing it emitted "0" AND returned 1, the `|| echo 0`
+# also fired, and "0\n0" crashed the $(( )) arithmetic BEFORE a row was
+# published (dashboard stuck for 5 days from 2026-06-09). grep -c always
+# emits exactly one integer, even on empty input, so no fallback needed.
+#
+# 2026-07-09 (r1): count only REAL per-test terminal lines.
+#   FAILED  old pattern matched 3 lines per Swift Testing failure:
+#           the issue line   "✘ Test x() recorded an issue …: Expectation failed: …"
+#           the test line    "✘ Test x() failed after 1.786 seconds with 1 issue."
+#           the run summary  "✘ Test run with 2472 tests … failed after …"
+#           → one failure published failed:3. Now: only " failed after "
+#           per-test lines, excluding the "Test run with" summary.
+#   PASSED  same +1 from "✔ Test run with … passed after …" on green runs.
+#   SKIPPED the old '^◇ Test .*skipped' matched STARTED lines whose
+#           display names contain the word "skipped" (9 such tests) and
+#           missed the actual skip lines, which use "➜ Test … skipped:"
+#           (with leading zero-width indent chars — hence no ^ anchor).
+# Patterns are deliberately unanchored on the symbol markers: swift-testing
+# indents nested lines with U+200B zero-width spaces, so ^-anchored ✔/➜
+# patterns silently miss some per-test lines.
+#
+# 2026-07-09 (r2) hardenings:
+#   * Issue lines are excluded by their own shape (' recorded an issue ')
+#     — an expectation MESSAGE containing " failed after " (near-miss in
+#     the wild: MediaFileOperationsTests.swift:556 asserts a job reached
+#     .failed after the stall watchdog) must not double-count a failure
+#     or inject message text into failed_names.
+#   * The run-summary exclusion is pinned to the summary's real shape
+#     ('Test run with <N> test…') so a test whose display name merely
+#     contains the words "Test run with" still counts.
+#
+# 2026-10-02 (GH #208): a Swift Testing test that passed with known issues
+# prints "━ Test x() passed after N seconds with K known issue(s)." — no ✔,
+# so it used to vanish from PASSED and from the total. It now counts as
+# PASSED, and KNOWN_ISSUE_TESTS (row field known_issue_tests) says how many
+# of those passes carried a known issue. The "━ Suite …" and "━ Test run
+# with …" summaries are excluded like their ✔ counterparts.
+parse_test_counts() {
+    local out="$1"
+    local plain_passed
+    plain_passed=$(grep -E '(✔ Test .* passed after |^Test Case .* passed)' "$out" 2>/dev/null \
+        | grep -v ' recorded an issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
+    KNOWN_ISSUE_TESTS=$(grep -E '━ Test .* passed after .* known issues?\.?$' "$out" 2>/dev/null \
+        | grep -v ' recorded a known issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
+    PASSED=$(( ${plain_passed:-0} + ${KNOWN_ISSUE_TESTS:-0} ))
+    FAILED=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
+        | grep -v ' recorded an issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
+    SKIPPED=$(grep -E '(➜ Test .* skipped|^Test Case .* skipped)' "$out" 2>/dev/null \
+        | grep -v ' recorded an issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
+    PASSED=${PASSED:-0}
+    FAILED=${FAILED:-0}
+    SKIPPED=${SKIPPED:-0}
+    KNOWN_ISSUE_TESTS=${KNOWN_ISSUE_TESTS:-0}
+    # failed_names: JSON array of failing test names ([] on green runs).
+    # python3 does the JSON escaping; on any hiccup fall back to [] so the
+    # published row stays valid JSON.
+    FAILED_NAMES_JSON=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
+        | grep -v ' recorded an issue ' \
+        | grep -Ev 'Test run with [0-9]+ test' \
+        | sed -E -e 's/.*✘ Test (.+) failed after .*/\1/' \
+                 -e "s/^Test Case '(.+)' failed.*/\1/" \
+        | sort -u \
+        | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()]))' \
+        2>/dev/null)
+    FAILED_NAMES_JSON=${FAILED_NAMES_JSON:-[]}
+    parse_crashed_tests "$out"
+}
+
+# Tests that DIED rather than failed. A trap takes the host down before any
+# per-test terminal line is printed, so the only place these names ever appear
+# is xcodebuild's own trailing block:
+#
+#     Failing tests:
+#     	HallieAppositionVitalsTests.theAsideSpeaksTheCorrectedYear()
+#
+#     ** TEST EXECUTE FAILED **
+#
+# That block also lists ordinary failures, which parse_test_counts has already
+# counted — double-counting them would inflate the row. Entries are matched
+# against the counted names by their bare method token, because the block is
+# suite-qualified ("Suite.method()") while a Swift Testing failure line is not
+# ("method()"). Sets CRASHED and CRASHED_NAMES_JSON; both are empty on a run
+# where every failure announced itself normally.
+parse_crashed_tests() {
+    local out="$1"
+    local parsed
+    parsed=$(NIGHTLY_LOG="$out" COUNTED_NAMES="$FAILED_NAMES_JSON" python3 -c '
+import json, os, sys
+
+def token(name):
+    """Reduce a test name to its bare method token for cross-shape matching."""
+    n = name.strip().rstrip(".")
+    if n.startswith("-[") or n.startswith("+["):
+        n = n[2:].rstrip("]").split()[-1]        # -[Suite method] -> method
+    elif "." in n:
+        n = n.rsplit(".", 1)[-1]                  # Suite.method() -> method()
+    return n.rstrip("()")
+
+try:
+    counted = {token(n) for n in json.loads(os.environ["COUNTED_NAMES"])}
+except Exception:
+    counted = set()
+
+crashed, in_block = [], False
+try:
+    with open(os.environ["NIGHTLY_LOG"], errors="replace") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped == "Failing tests:":
+                in_block = True
+                continue
+            if not in_block:
+                continue
+            # The block ends at the first line that is not an indented entry.
+            if not stripped or not line[:1].isspace() or stripped.startswith("**"):
+                in_block = False
+                continue
+            if token(stripped) not in counted:
+                crashed.append(stripped)
+except OSError:
+    pass
+
+names = sorted(set(crashed))
+print(len(names))
+print(json.dumps(names))
+' 2>/dev/null)
+    CRASHED=$(printf '%s\n' "$parsed" | sed -n '1p')
+    CRASHED_NAMES_JSON=$(printf '%s\n' "$parsed" | sed -n '2p')
+    case "$CRASHED" in
+        ''|*[!0-9]*) CRASHED=0; CRASHED_NAMES_JSON='[]' ;;
+    esac
+    CRASHED_NAMES_JSON=${CRASHED_NAMES_JSON:-[]}
+}
+
 
 log "=== Nightly local test run starting (script v$NIGHTLY_SCRIPT_VERSION) ==="
 log "Host: $(scutil --get ComputerName 2>/dev/null || hostname -s)"
@@ -650,6 +904,10 @@ log "Commit: $COMMIT ($COMMIT_DATE)"
 # failure publishes the desired red 0 when no quality benchmark is configured.
 refresh_person_metrics
 
+# ── VideoScanCore package tests (before the app build; see the lane note) ──
+run_core_package_tests "$REPO/VideoScan/VideoScanCore" \
+    "$HOME/Library/Caches/videoscan-nightly-core-build"
+
 # ── Build ───────────────────────────────────────────────────────────
 # DerivedData lives under ~/Library/Caches, NOT /tmp. macOS garbage-collects
 # /tmp and can leave a half-populated explicit-modules cache, which surfaces
@@ -761,148 +1019,8 @@ else
 fi
 
 # ── Parse results ───────────────────────────────────────────────────
-# Swift Testing + XCTest markers. Extracted into a function so
-# scripts/test_nightly_failure_modes.sh can source and fixture-test it.
-#
-# 2026-06-14 (still applies): never use `grep -cE ... || echo 0` — when
-# grep matched nothing it emitted "0" AND returned 1, the `|| echo 0`
-# also fired, and "0\n0" crashed the $(( )) arithmetic BEFORE a row was
-# published (dashboard stuck for 5 days from 2026-06-09). grep -c always
-# emits exactly one integer, even on empty input, so no fallback needed.
-#
-# 2026-07-09 (r1): count only REAL per-test terminal lines.
-#   FAILED  old pattern matched 3 lines per Swift Testing failure:
-#           the issue line   "✘ Test x() recorded an issue …: Expectation failed: …"
-#           the test line    "✘ Test x() failed after 1.786 seconds with 1 issue."
-#           the run summary  "✘ Test run with 2472 tests … failed after …"
-#           → one failure published failed:3. Now: only " failed after "
-#           per-test lines, excluding the "Test run with" summary.
-#   PASSED  same +1 from "✔ Test run with … passed after …" on green runs.
-#   SKIPPED the old '^◇ Test .*skipped' matched STARTED lines whose
-#           display names contain the word "skipped" (9 such tests) and
-#           missed the actual skip lines, which use "➜ Test … skipped:"
-#           (with leading zero-width indent chars — hence no ^ anchor).
-# Patterns are deliberately unanchored on the symbol markers: swift-testing
-# indents nested lines with U+200B zero-width spaces, so ^-anchored ✔/➜
-# patterns silently miss some per-test lines.
-#
-# 2026-07-09 (r2) hardenings:
-#   * Issue lines are excluded by their own shape (' recorded an issue ')
-#     — an expectation MESSAGE containing " failed after " (near-miss in
-#     the wild: MediaFileOperationsTests.swift:556 asserts a job reached
-#     .failed after the stall watchdog) must not double-count a failure
-#     or inject message text into failed_names.
-#   * The run-summary exclusion is pinned to the summary's real shape
-#     ('Test run with <N> test…') so a test whose display name merely
-#     contains the words "Test run with" still counts.
-#
-# 2026-10-02 (GH #208): a Swift Testing test that passed with known issues
-# prints "━ Test x() passed after N seconds with K known issue(s)." — no ✔,
-# so it used to vanish from PASSED and from the total. It now counts as
-# PASSED, and KNOWN_ISSUE_TESTS (row field known_issue_tests) says how many
-# of those passes carried a known issue. The "━ Suite …" and "━ Test run
-# with …" summaries are excluded like their ✔ counterparts.
-parse_test_counts() {
-    local out="$1"
-    local plain_passed
-    plain_passed=$(grep -E '(✔ Test .* passed after |^Test Case .* passed)' "$out" 2>/dev/null \
-        | grep -v ' recorded an issue ' \
-        | grep -Ecv 'Test run with [0-9]+ test')
-    KNOWN_ISSUE_TESTS=$(grep -E '━ Test .* passed after .* known issues?\.?$' "$out" 2>/dev/null \
-        | grep -v ' recorded a known issue ' \
-        | grep -Ecv 'Test run with [0-9]+ test')
-    PASSED=$(( ${plain_passed:-0} + ${KNOWN_ISSUE_TESTS:-0} ))
-    FAILED=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
-        | grep -v ' recorded an issue ' \
-        | grep -Ecv 'Test run with [0-9]+ test')
-    SKIPPED=$(grep -E '(➜ Test .* skipped|^Test Case .* skipped)' "$out" 2>/dev/null \
-        | grep -v ' recorded an issue ' \
-        | grep -Ecv 'Test run with [0-9]+ test')
-    PASSED=${PASSED:-0}
-    FAILED=${FAILED:-0}
-    SKIPPED=${SKIPPED:-0}
-    KNOWN_ISSUE_TESTS=${KNOWN_ISSUE_TESTS:-0}
-    # failed_names: JSON array of failing test names ([] on green runs).
-    # python3 does the JSON escaping; on any hiccup fall back to [] so the
-    # published row stays valid JSON.
-    FAILED_NAMES_JSON=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
-        | grep -v ' recorded an issue ' \
-        | grep -Ev 'Test run with [0-9]+ test' \
-        | sed -E -e 's/.*✘ Test (.+) failed after .*/\1/' \
-                 -e "s/^Test Case '(.+)' failed.*/\1/" \
-        | sort -u \
-        | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()]))' \
-        2>/dev/null)
-    FAILED_NAMES_JSON=${FAILED_NAMES_JSON:-[]}
-    parse_crashed_tests "$out"
-}
-
-# Tests that DIED rather than failed. A trap takes the host down before any
-# per-test terminal line is printed, so the only place these names ever appear
-# is xcodebuild's own trailing block:
-#
-#     Failing tests:
-#     	HallieAppositionVitalsTests.theAsideSpeaksTheCorrectedYear()
-#
-#     ** TEST EXECUTE FAILED **
-#
-# That block also lists ordinary failures, which parse_test_counts has already
-# counted — double-counting them would inflate the row. Entries are matched
-# against the counted names by their bare method token, because the block is
-# suite-qualified ("Suite.method()") while a Swift Testing failure line is not
-# ("method()"). Sets CRASHED and CRASHED_NAMES_JSON; both are empty on a run
-# where every failure announced itself normally.
-parse_crashed_tests() {
-    local out="$1"
-    local parsed
-    parsed=$(NIGHTLY_LOG="$out" COUNTED_NAMES="$FAILED_NAMES_JSON" python3 -c '
-import json, os, sys
-
-def token(name):
-    """Reduce a test name to its bare method token for cross-shape matching."""
-    n = name.strip().rstrip(".")
-    if n.startswith("-[") or n.startswith("+["):
-        n = n[2:].rstrip("]").split()[-1]        # -[Suite method] -> method
-    elif "." in n:
-        n = n.rsplit(".", 1)[-1]                  # Suite.method() -> method()
-    return n.rstrip("()")
-
-try:
-    counted = {token(n) for n in json.loads(os.environ["COUNTED_NAMES"])}
-except Exception:
-    counted = set()
-
-crashed, in_block = [], False
-try:
-    with open(os.environ["NIGHTLY_LOG"], errors="replace") as fh:
-        for line in fh:
-            stripped = line.strip()
-            if stripped == "Failing tests:":
-                in_block = True
-                continue
-            if not in_block:
-                continue
-            # The block ends at the first line that is not an indented entry.
-            if not stripped or not line[:1].isspace() or stripped.startswith("**"):
-                in_block = False
-                continue
-            if token(stripped) not in counted:
-                crashed.append(stripped)
-except OSError:
-    pass
-
-names = sorted(set(crashed))
-print(len(names))
-print(json.dumps(names))
-' 2>/dev/null)
-    CRASHED=$(printf '%s\n' "$parsed" | sed -n '1p')
-    CRASHED_NAMES_JSON=$(printf '%s\n' "$parsed" | sed -n '2p')
-    case "$CRASHED" in
-        ''|*[!0-9]*) CRASHED=0; CRASHED_NAMES_JSON='[]' ;;
-    esac
-    CRASHED_NAMES_JSON=${CRASHED_NAMES_JSON:-[]}
-}
-
+# parse_test_counts / parse_crashed_tests are defined above the run (the
+# VideoScanCore lane needs them before the app build; 2026-10-18).
 parse_test_counts /tmp/nightly-test-output.log
 TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total; ${KNOWN_ISSUE_TESTS} passed with known issues)"
@@ -921,6 +1039,7 @@ fi
 classify_nightly_test_result \
     "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC" "${CRASHED:-0}"
+apply_core_package_verdict
 
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?

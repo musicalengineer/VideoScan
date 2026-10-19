@@ -5,6 +5,9 @@ import Darwin
 // Source inventory only: never launches the application or compiles its targets.
 // Explicit checked-in assignments make a newly added file/test a preflight failure.
 let stages = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"]
+// The one package the package adapter runs (Runner.swift `swift test`).
+let packageTestRoot = "VideoScan/VideoScanCore/Tests/"
+let packageModule = "VideoScanCoreTests"
 func matches(_ pattern: String, _ text: String, group: Int = 0) -> [String] {
     guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = text as NSString
@@ -133,8 +136,25 @@ do {
             if expectedBlocked.count != blockedAssignments.count || expectedBlocked.sorted() != actualBlocked.sorted() {
                 errors.append("blocked/assignment mismatch: \(name)")
             }
-            if assignments.contains(where: { $0["stage"] as? String == name && $0["kind"] as? String != "xcode" && $0["blocked_reason"] == nil }) {
+            // xcode suites run from the .xctestrun; VideoScanCore package
+            // suites through the package adapter (2026-10-18). Every other
+            // kind (python, shell, ui) has no adapter yet.
+            if assignments.contains(where: { $0["stage"] as? String == name && !["xcode", "package"].contains($0["kind"] as? String ?? "") && $0["blocked_reason"] == nil }) {
                 errors.append("unadapted component must be blocked: \(name)")
+            }
+            let packageRunnable = assignments.filter { $0["stage"] as? String == name && $0["blocked_reason"] == nil && $0["kind"] as? String == "package" }
+            if packageRunnable.contains(where: { !($0["path"] as? String ?? "").hasPrefix(packageTestRoot) }) {
+                errors.append("package adapter only runs \(packageTestRoot): \(name)")
+            }
+            let expectedPackageSelectors = Set(packageRunnable.flatMap { ($0["suites"] as? [String] ?? []).map { packageModule + "." + $0 } })
+            let packageSelectors = stage["package_selectors"] as? [String] ?? []
+            if Set(packageSelectors) != expectedPackageSelectors || Set(packageSelectors).count != packageSelectors.count { errors.append("package selector/assignment mismatch: \(name)") }
+            let packageDeclarations = packageRunnable.reduce(0) { $0 + ($1["tests"] as? [String] ?? []).count }
+            if !packageRunnable.isEmpty && (stage["package_expected_floor"] as? Int ?? 0) < max(1, packageDeclarations) { errors.append("package_expected_floor below declaration count: \(name)") }
+            for selector in packageSelectors {
+                let suite = String(selector.dropFirst(packageModule.count + 1))
+                let fragments = assignments.filter { $0["kind"] as? String == "package" && ($0["suites"] as? [String] ?? []).contains(suite) }
+                if fragments.contains(where: { $0["blocked_reason"] != nil || $0["stage"] as? String != name }) { errors.append("package selector crosses blocked/stage boundary: \(selector)") }
             }
             let runnable = assignments.filter { $0["stage"] as? String == name && $0["blocked_reason"] == nil && $0["kind"] as? String == "xcode" }
             let expectedSelectors = Set(runnable.flatMap { ($0["suites"] as? [String] ?? []).map { "VideoScanTests/" + $0 } })
