@@ -18,6 +18,10 @@ struct InspectorPanel: View {
     /// `model.saveCatalogDebounced`. Defaulted for previews.
     var onRecordEdited: () -> Void = {}
     let duplicateGroupMembers: [VideoRecord]
+    /// Same footage, different file (2026-10-19): the members of this
+    /// record's footage group whose bytes differ — resolved and memoized by
+    /// the CALLER (InspectorPanelRules.sameFootageOthers), never in a body.
+    var sameFootageMembers: [VideoRecord] = []
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
     var onSelectRecord: ((UUID) -> Void)?
@@ -278,8 +282,12 @@ struct InspectorPanel: View {
         add: (String, String) -> Void, section: (String) -> Void,
         appendLine: (String) -> Void
     ) {
-        guard rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty else { return }
+        guard InspectorPanelRules.showsDuplicatesOrSameFootage(rec, sameFootage: sameFootageMembers) else { return }
         section("Duplicates")
+        for other in sameFootageMembers {
+            add("Same footage as", InspectorPanelRules.sameFootageLine(other))
+        }
+        guard InspectorPanelRules.showsDuplicates(rec) else { return }
         if rec.duplicateDisposition != .none {
             add("Status", InspectorPanelRules.duplicateStatusText(rec))
         }

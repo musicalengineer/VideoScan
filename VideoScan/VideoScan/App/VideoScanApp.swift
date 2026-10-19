@@ -920,9 +920,14 @@ struct VideoScanApp: App {
                 // Split Duplicate Groups by Full Hash (2026-10-19): settles
                 // Verify's duplicateGroupDigestsAgree findings — the machine
                 // has the digests. Safety copy first; one commit; logged.
-                Button(VideoScanModel.duplicateDigestSplitTitle) { catalogModel.splitDuplicateGroupsByFullDigest() }
+                // A file that leaves the copies but is the same footage (a
+                // re-encode, a rewrap) stays linked as the same footage:
+                // Find Similar Footage runs right after to record the links.
+                Button(VideoScanModel.duplicateDigestSplitTitle) {
+                    fileOpsCenter.splitDuplicateGroupsKeepingSameFootage(model: catalogModel)
+                }
                     .disabled(catalogModel.isReadOnly)
-                    .help("Every duplicate group whose files carry different whole-file SHA-256s is split into groups of true copies; a file whose bytes match no other member leaves its group. Only the duplicate-group fields change — no file is touched. A safety copy of the catalog is made first.")
+                    .help("Every duplicate group whose files carry different whole-file SHA-256s is split into groups of true copies; a file whose bytes match no other member leaves its group. A file that is the same footage in another codec or container stays linked as SAME FOOTAGE (Find Similar Footage runs next to record it) — never as a copy to delete. Only the duplicate-group fields change — no file is touched. A safety copy of the catalog is made first.")
                 Divider()
                 // Import to SQLite (2026-10-17, catalog_sqlite_migration
                 // §10c; one action verb): audit + verify + import in one

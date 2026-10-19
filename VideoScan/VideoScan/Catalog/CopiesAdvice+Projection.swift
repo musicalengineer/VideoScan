@@ -83,7 +83,10 @@ extension CopiesAdviceInput {
     @MainActor
     static func footageMember(_ r: VideoRecord) -> CopiesAdviceFootageMember {
         let f = r.footage
-        let facts = [r.videoCodec.uppercased(), durationText(r.durationSeconds), f?.confidence.label ?? ""]
+        // "FFV1 MKV · 1:12:04 · Likely" — codec AND container, so a re-encode
+        // or rewrap reads as one at a glance (2026-10-19).
+        let format = DuplicateLikeness.formatWords(videoCodec: r.videoCodec, audioCodec: r.audioCodec, filename: r.filename)
+        let facts = [format, durationText(r.durationSeconds), f?.confidence.label ?? ""]
             .filter { !$0.isEmpty }.joined(separator: " · ")
         let evidence = f?.evidence.first.map { " — \($0)" } ?? ""
         return CopiesAdviceFootageMember(id: r.id, filename: r.filename, fullPath: r.fullPath,

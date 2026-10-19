@@ -212,6 +212,8 @@ extension VideoScanModel {
           \(summary.groups) groups
           \(summary.highConfidenceGroups) high, \(summary.mediumConfidenceGroups) medium, \(summary.lowConfidenceGroups) low confidence
           \(summary.extraCopies) extra copy candidates, \(summary.reviewItems) review items
+          \(summary.sameFootageLinks) pair(s) alike but not copies (different bytes, same length) — the same footage in a different file; Find Similar Footage keeps them as same footage
+          \(summary.differentLength) pair(s) matched only by the sampled hash with a different length — not the same
         """)
 
         // One mutation notification (debounced save + cache invalidation +

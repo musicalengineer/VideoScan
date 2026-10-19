@@ -39,6 +39,19 @@
 //                no longer describes its file (rewritten, offline, a pre-
 //                ctime stamp, an archive digest with no stamp) — likewise a
 //                nomination
+//              the duplicate check's LIKENESS between two files whose whole-
+//                file SHA-256s are known and DIFFER, lengths agreeing (Rick
+//                2026-10-19: "same event, different codec" — FFV1 MKV and its
+//                H.264 MOV re-encode). DuplicateLikeness.sameFootageLinks: the
+//                detector's own scored pairs, its reasons kept verbatim in the
+//                edge ("filename+duration+resolution") with both formats. Likely
+//                when anchored by the sampled hash, a specific name or a non-
+//                default timecode (every scored pair); Possible when the only
+//                anchor is a camera-counter name or a default timecode
+//                (00:00:00:00) — and then only along the detector's star edges,
+//                so weak likeness cannot fan out. Lengths that
+//                disagree (only the sampled hash matched) are the collision
+//                class: no edge. Never "copy", never delete-eligible.
 //   Possible   a camera-counter name (Clip 03, MVI_1234 — generic stems
 //                are reused by every camera) + the same length
 //              the same name except one trailing counter ("-3", "_7")
@@ -117,6 +130,9 @@ struct FootageInput: Sendable, Equatable {
     var videoCodec: String
     var embeddedCreationDate: Date?
     var decisions: [FootageDecision]
+    /// The duplicate check's likeness facts (DuplicateLikeness) — nil = not
+    /// offered (pure tests that do not exercise the copy-check rule).
+    var likeness: DuplicateLikeness.Facts?
     /// Purged / set aside / superseded — hidden from the catalog, so not
     /// grouped unless `Options.includeHidden`.
     var isHidden: Bool
@@ -132,7 +148,7 @@ struct FootageInput: Sendable, Equatable {
          streamTypeRaw: String = StreamType.videoAndAudio.rawValue, mediaIdentifier: String? = nil,
          originMake: String? = nil, originModel: String? = nil, originEncoder: String? = nil,
          videoCodec: String = "", embeddedCreationDate: Date? = nil, decisions: [FootageDecision] = [],
-         isHidden: Bool = false, existing: FootageMembership? = nil) {
+         likeness: DuplicateLikeness.Facts? = nil, isHidden: Bool = false, existing: FootageMembership? = nil) {
         self.id = id; self.filename = filename
         self.fullPath = fullPath.isEmpty ? "/Volumes/T/" + filename : fullPath
         self.durationSeconds = durationSeconds; self.frameRate = frameRate; self.sizeBytes = sizeBytes
@@ -144,7 +160,7 @@ struct FootageInput: Sendable, Equatable {
         self.streamTypeRaw = streamTypeRaw; self.mediaIdentifier = mediaIdentifier
         self.originMake = originMake; self.originModel = originModel; self.originEncoder = originEncoder
         self.videoCodec = videoCodec; self.embeddedCreationDate = embeddedCreationDate
-        self.decisions = decisions; self.isHidden = isHidden; self.existing = existing
+        self.decisions = decisions; self.likeness = likeness; self.isHidden = isHidden; self.existing = existing
     }
 
     /// Any whole-file digest on record (current or not) — for CONFLICTS:
@@ -195,7 +211,8 @@ enum FootageGrouping {
 
     /// Bump when a rule changes: every record's answer is then rewritten.
     /// 2 = codex #1674 (sampled ≠ Identical, component dates, bounded window).
-    static let algorithmVersion = 2
+    /// 3 = the duplicate check's likeness across different digests (2026-10-19).
+    static let algorithmVersion = 3
     static let defaultCap = 64
     /// Reasons kept per member (the sheet shows them as chips).
     static let maxReasons = 6
@@ -232,9 +249,14 @@ enum FootageGrouping {
         case nameAndDuration
         case sampledSignature
         case recordedDigest
+        /// The duplicate check matched them; their bytes differ (Likely).
+        case copyCheckLikeness
         case genericNameAndDuration
         case counterNameAndDuration
         case avPairWeak
+        /// The same, anchored only by a camera-counter name or a default
+        /// timecode (Possible).
+        case copyCheckLikenessWeak
 
         var confidence: FootageConfidence {
             switch self {
@@ -242,9 +264,9 @@ enum FootageGrouping {
             case .sameFixity: return .identical
             case .lineage, .combinedFromPair, .avPairHigh, .materialPackage, .fcpMediaIdentifier,
                  .fcpOriginalTranscoded, .promoteCollision, .nameAndDuration, .sampledSignature,
-                 .recordedDigest:
+                 .recordedDigest, .copyCheckLikeness:
                 return .likely
-            case .genericNameAndDuration, .counterNameAndDuration, .avPairWeak: return .possible
+            case .genericNameAndDuration, .counterNameAndDuration, .avPairWeak, .copyCheckLikenessWeak: return .possible
             }
         }
 
@@ -271,7 +293,22 @@ enum FootageGrouping {
         var reason: Reason
         /// "balanceAudio", "Δ1 frame", "High"… (shown in the reason text).
         var detail: String = ""
+        /// Copy-check likeness only: the two files' formats, `a`'s then
+        /// `b`'s ("FFV1 MKV", "H.264 MOV").
+        var formats: [String] = []
         var confidence: FootageConfidence { reason.confidence }
+        /// " (balanceAudio)" / " (Δ1 frame)" — the detail as a reason line
+        /// shows it; empty when there is none.
+        var detailSuffix: String { detail.isEmpty ? "" : " (\(detail))" }
+        /// The format of end `i` (0 = `a`, 1 = `b`); "" when not recorded.
+        func format(at i: Int) -> String { formats.indices.contains(i) ? formats[i] : "" }
+        /// Rule 4 applies to name links — and to a copy-check likeness the
+        /// duplicate check matched by NAME ("filename" in its reasons).
+        var isNameBased: Bool {
+            if reason.isNameBased { return true }
+            guard reason == .copyCheckLikeness || reason == .copyCheckLikenessWeak else { return false }
+            return detail.split(separator: "+").contains("filename")
+        }
     }
 
     struct Stats: Sendable, Equatable {
@@ -281,6 +318,9 @@ enum FootageGrouping {
         var acceptedByReason: [Reason: Int] = [:]
         /// Sampled-signature buckets whose full hashes disagreed.
         var sampledConflicts = 0
+        /// Copy-check pairs whose digests differ AND lengths disagree
+        /// (the sampled-hash collision class) — not linked.
+        var copyCheckDifferentLength = 0
         /// Content-hash buckets whose whole-file digests disagreed.
         var fullHashConflicts = 0
         var refusedByCap = 0
@@ -383,9 +423,11 @@ enum FootageGrouping {
         b.promoteCollisions()
         b.nameAndDuration()
         b.trailingCounters()
+        b.copyCheckLikeness()
         b.personSaidSame()
         for (r, n) in b.counts { stats.edgesByReason[r, default: 0] += n }
         stats.sampledConflicts += b.sampledConflicts
+        stats.copyCheckDifferentLength += b.copyCheckDifferentLength
         stats.fullHashConflicts += b.fullHashConflicts
         stats.windowExamined += b.windowExamined
         if b.cancelled { stats.cancelled = true }
@@ -403,6 +445,7 @@ enum FootageGrouping {
         var counts: [Reason: Int] = [:]
         var sampledConflicts = 0
         var fullHashConflicts = 0
+        var copyCheckDifferentLength = 0
         var windowExamined = 0
         /// Set when Task.isCancelled was seen: the window rules stop early.
         var cancelled = false
@@ -558,6 +601,36 @@ enum FootageGrouping {
             return g
         }
 
+        /// The duplicate check's likeness between files whose bytes differ
+        /// (DuplicateLikeness.sameFootageLinks — the detector's own scoring
+        /// and reasons). Anchored (sampled hash, a specific timecode or name,
+        /// + length) → Likely, every scored pair; unanchored → Possible, and
+        /// only along the detector's star edges.
+        mutating func copyCheckLikeness() {
+            let xs = self.xs
+            let sub = idx.filter { xs[$0].likeness != nil }
+            guard sub.count > 1 else { return }
+            if cancelCheck() { cancelled = true; return }
+            let facts = sub.compactMap { xs[$0].likeness }
+            let run = DuplicateLikeness.sameFootageLinks(facts)
+            copyCheckDifferentLength += run.differentLength
+            for link in run.links {
+                let i = sub[link.a], j = sub[link.b]
+                let reasons = link.score.reasons
+                let a = facts[link.a], b = facts[link.b]
+                let anchored = DuplicateLikeness.isAnchored(reasons, timecode: a.timecode, isGenericName: { isGeneric(i) })
+                // Weak likeness only along the detector's own star edges —
+                // its anti-chaining topology (and Possible never chains).
+                guard anchored || link.inStar else { continue }
+                let reason: Reason = anchored ? .copyCheckLikeness : .copyCheckLikenessWeak
+                out.append(Edge(a: i, b: j, reason: reason, detail: reasons.joined(separator: "+"), formats: [
+                    DuplicateLikeness.formatWords(videoCodec: a.videoCodec, audioCodec: a.audioCodec, filename: a.filename),
+                    DuplicateLikeness.formatWords(videoCodec: b.videoCodec, audioCodec: b.audioCodec, filename: b.filename),
+                ]))
+                counts[reason, default: 0] += 1
+            }
+        }
+
         /// The person's "same footage" (read from both sides; deduped).
         mutating func personSaidSame() {
             var seen = Set<[Int]>()
@@ -650,7 +723,7 @@ enum FootageGrouping {
             }
             // Rule 4 — a name link must agree with every date in BOTH groups
             // (codex #1674 F2: no undated bridge between 1990 and 1994).
-            if e.reason.isNameBased, !datesAgree(ra, rb) {
+            if e.isNameBased, !datesAgree(ra, rb) {
                 stats.refusedByDate += 1
                 return
             }
@@ -830,11 +903,21 @@ enum FootageGrouping {
         }
     }
 
-    enum Side { case derived, source }
+    enum Side {
+        case derived, source
+
+        /// This end's position in an edge (`a` = derived = 0, `b` = source = 1).
+        var index: Int {
+            switch self {
+            case .derived: return 0
+            case .source: return 1
+            }
+        }
+    }
 
     /// The reason line as `side`'s record would read it.
     static func text(_ e: Edge, side: Side, other: String) -> String {
-        let detail = e.detail.isEmpty ? "" : " (\(e.detail))"
+        let detail = e.detailSuffix
         switch e.reason {
         case .personSaidSame: return "you said: same footage as \(other)"
         case .sameFixity: return "same bytes (whole-file SHA-256, checked current) as \(other)"
@@ -855,6 +938,9 @@ enum FootageGrouping {
         case .nameAndDuration: return "same name + length as \(other)\(detail)"
         case .genericNameAndDuration: return "same camera-counter name + length as \(other)\(detail)"
         case .counterNameAndDuration: return "same name but a trailing number, same length as \(other)\(detail)"
+        case .copyCheckLikeness, .copyCheckLikenessWeak:
+            return DuplicateLikeness.sameFootageWords(other: other, mine: e.format(at: side.index),
+                                                      theirs: e.format(at: 1 - side.index), reasons: e.detail)
         }
     }
 

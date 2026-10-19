@@ -7,20 +7,32 @@ struct DuplicateAnalysisSummary {
     let lowConfidenceGroups: Int
     let extraCopies: Int
     let reviewItems: Int
+    /// Star pairs that are alike but NOT copies — whole-file digests known
+    /// and different, lengths agreeing (DuplicateLikeness.Relationship
+    /// .sameFootage). Never grouped as copies; Find Similar Footage records
+    /// them as "same footage, different file" (2026-10-19).
+    var sameFootageLinks: Int = 0
+    /// Star pairs whose digests differ AND whose lengths disagree — the
+    /// sampled-hash collision class. Neither copies nor the same footage.
+    var differentLength: Int = 0
 }
 
+// DuplicateDetector — groups of COPIES.
+//
+// Since 2026-10-19 the likeness rule itself (scoring table, bucket keys,
+// stars, hub election) lives in DuplicateLikeness.swift, shared with Find
+// Similar Footage; this file stamps the duplicate-group fields. A group is
+// a set of copies (Rick 2026-10-19): each star is partitioned by whole-file
+// SHA-256 (DuplicateGroupDigestSplit.partition) before it is stamped. The
+// star pairs whose digests differ are not dropped knowledge: they are
+// counted here (`sameFootageLinks`) and recorded by Find Similar Footage as
+// footage links with the same reasons (FootageGrouping `copyCheckLikeness`).
+//
+// (For Rick: the detector now works on value snapshots by INDEX —
+// `facts[i]` mirrors `candidates[i]`, like parallel arrays in C — so a pair
+// lookup is a hash probe, not the old linear `records.first(where:)` scan
+// per pair.)
 enum DuplicateDetector {
-    private static let durationToleranceExact = 0.25
-    private static let durationToleranceLoose = 1.0
-    private static let creationTolerance: TimeInterval = 5 * 60
-
-    struct Candidate {
-        let left: VideoRecord
-        let right: VideoRecord
-        let score: Int
-        let confidence: DuplicateConfidence
-        let reasons: [String]
-    }
 
     /// - Parameter keeperPolicy: volume precedence + human-metadata rules
     ///   for the keeper election (2026-08-18). Grouping is unaffected by
@@ -35,61 +47,27 @@ enum DuplicateDetector {
         let records = pfActiveRecords(inputRecords)
         clear(records: records)
 
-        let candidates = records.filter(isDuplicateCandidate)
-        guard candidates.count > 1 else {
-            return emptySummary
+        let allFacts = records.map { DuplicateLikeness.Facts(record: $0) }
+        var candidates: [VideoRecord] = []
+        var facts: [DuplicateLikeness.Facts] = []
+        for (r, f) in zip(records, allFacts) where DuplicateLikeness.isCandidate(f) {
+            candidates.append(r)
+            facts.append(f)
         }
+        guard candidates.count > 1 else { return emptySummary }
 
-        let pairs = buildCandidatePairs(from: candidates)
-        guard !pairs.isEmpty else {
-            return emptySummary
-        }
+        let scored = DuplicateLikeness.pairs(facts)
+        guard !scored.isEmpty else { return emptySummary }
 
-        var pairByIDs: [PairKey: Candidate] = [:]
-        for pair in pairs {
-            pairByIDs[PairKey(pair.left.id, pair.right.id)] = pair
-        }
-
-        // Star-topology grouping: pick a HUB first, then only include
-        // records that score against the hub directly.  This prevents
-        // transitive contamination where A↔B↔C chains inflate groups with
-        // unrelated files.
-        //
-        // Codex review C (2026-08-18): membership is decoupled from keeper
-        // preference. The hub is the best-CONNECTED member (most direct
-        // matches, then technical merit, then path); the keeper is then
-        // elected AMONG the star members by DuplicateKeeperPolicy. Before
-        // this the policy keeper was also the hub, so a high-precedence
-        // copy sitting at the edge of an A–B–C chain shrank the group to
-        // its own neighbours and dropped the rest unclassified.
-        let recordsByID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
-        var assigned = Set<UUID>()
-        var groups = 0
-        var highGroups = 0
-        var mediumGroups = 0
-        var lowGroups = 0
-        var extraCopies = 0
-        var reviewItems = 0
-
-        // Build adjacency for initial keeper election
-        var adjacency: [UUID: Set<UUID>] = [:]
-        for pair in pairs {
-            adjacency[pair.left.id, default: []].insert(pair.right.id)
-            adjacency[pair.right.id, default: []].insert(pair.left.id)
-        }
-
-        var visited = Set<UUID>()
-        for record in candidates where !visited.contains(record.id) {
-            guard adjacency[record.id] != nil else { continue }
-
-            let componentIDs = walkComponent(from: record.id, adjacency: adjacency, visited: &visited)
-            guard componentIDs.count > 1 else { continue }
-            let component = componentIDs.compactMap { recordsByID[$0] }
-            guard let hub = electHub(from: component, adjacency: adjacency) else { continue }
-
-            let starMembers = buildStarMembers(keeper: hub, component: component, pairByIDs: pairByIDs)
-            guard starMembers.count > 1 else { continue }
-            let keeper = electKeeper(from: starMembers, policy: keeperPolicy) ?? hub
+        // Star-topology grouping (codex review C, 2026-08-18): the HUB is
+        // the best-CONNECTED member; only records that score against the
+        // hub directly join, so A↔B↔C chains cannot inflate a group. The
+        // keeper is then elected AMONG the star members by the policy.
+        var tally = Tally()
+        for star in DuplicateLikeness.stars(facts, pairs: scored) {
+            let starRecords = star.members.map { candidates[$0] }
+            let keeperRecord = electKeeper(from: starRecords, policy: keeperPolicy) ?? candidates[star.hub]
+            let keeperIndex = star.members.first { candidates[$0] === keeperRecord }
 
             // A group is a set of COPIES (Rick 2026-10-19): members whose
             // stored whole-file SHA-256s are known and differ are never
@@ -97,89 +75,78 @@ enum DuplicateDetector {
             // keeper's copies stay its group; other copies form their own;
             // a file with no copy here stays ungrouped.
             let copies = DuplicateGroupDigestSplit.partition(
-                starMembers, keeper: starMembers.firstIndex { $0 === keeper },
-                digest: VideoScanModel.storedFullDigest)
+                star.members, keeper: keeperIndex.flatMap { k in star.members.firstIndex(of: k) },
+                digest: { facts[$0].digest })
             for members in copies {
-                let groupKeeper = members.contains { $0 === keeper }
-                    ? keeper : (electKeeper(from: members, policy: keeperPolicy) ?? members[0])
-                let result = classifyGroup(
-                    starMembers: members, keeper: groupKeeper,
-                    pairByIDs: pairByIDs, assigned: &assigned
-                )
-
-                groups += 1
-                switch result.confidence {
-                case .high: highGroups += 1
-                case .medium: mediumGroups += 1
-                case .low: lowGroups += 1
+                let groupKeeper = keeperIndex.flatMap { k in members.contains(k) ? k : nil }
+                    ?? electKeeper(from: members.map { candidates[$0] }, policy: keeperPolicy)
+                        .flatMap { elected in members.first { candidates[$0] === elected } }
+                    ?? members[0]
+                let result = classifyGroup(members, keeper: groupKeeper, candidates: candidates, scored: scored)
+                tally.add(result)
+            }
+            // The likeness that is not "copy" — counted, never stamped.
+            for m in star.members.dropFirst() {
+                guard let s = scored[DuplicateLikeness.PairKey(star.hub, m)] else { continue }
+                switch DuplicateLikeness.relationship(facts[m], facts[star.hub], reasons: s.reasons) {
+                case .sameFootage: tally.sameFootage += 1
+                case .differentLength: tally.differentLength += 1
+                case .copies, .unknown: break
                 }
-                extraCopies += result.extraCopies
-                reviewItems += result.reviewItems
             }
         }
-
-        return DuplicateAnalysisSummary(
-            groups: groups,
-            highConfidenceGroups: highGroups,
-            mediumConfidenceGroups: mediumGroups,
-            lowConfidenceGroups: lowGroups,
-            extraCopies: extraCopies,
-            reviewItems: reviewItems
-        )
+        return tally.summary
     }
 
-    private static func walkComponent(from startID: UUID, adjacency: [UUID: Set<UUID>], visited: inout Set<UUID>) -> [UUID] {
-        var stack = [startID]
-        var componentIDs: [UUID] = []
-        while let id = stack.popLast() {
-            guard visited.insert(id).inserted else { continue }
-            componentIDs.append(id)
-            for next in adjacency[id] ?? [] where !visited.contains(next) {
-                stack.append(next)
+    private struct Tally {
+        var groups = 0, high = 0, medium = 0, low = 0, extras = 0, reviews = 0
+        var sameFootage = 0, differentLength = 0
+
+        mutating func add(_ r: (confidence: DuplicateConfidence, extraCopies: Int, reviewItems: Int)) {
+            groups += 1
+            switch r.confidence {
+            case .high: high += 1
+            case .medium: medium += 1
+            case .low: low += 1
             }
+            extras += r.extraCopies
+            reviews += r.reviewItems
         }
-        return componentIDs
+
+        var summary: DuplicateAnalysisSummary {
+            DuplicateAnalysisSummary(groups: groups, highConfidenceGroups: high, mediumConfidenceGroups: medium,
+                                     lowConfidenceGroups: low, extraCopies: extras, reviewItems: reviews,
+                                     sameFootageLinks: sameFootage, differentLength: differentLength)
+        }
     }
 
-    private static func buildStarMembers(keeper: VideoRecord, component: [VideoRecord], pairByIDs: [PairKey: Candidate]) -> [VideoRecord] {
-        var members = [keeper]
-        for item in component where item !== keeper {
-            let key = PairKey(keeper.id, item.id)
-            if let pair = pairByIDs[key], pair.score >= scoreThreshold {
-                members.append(item)
-            }
-        }
-        return members
-    }
-
+    /// Stamp one group of copies. `members` and `keeper` are indices into
+    /// `candidates` (and the scored pairs).
     private static func classifyGroup(
-        starMembers: [VideoRecord], keeper: VideoRecord,
-        pairByIDs: [PairKey: Candidate], assigned: inout Set<UUID>
+        _ members: [Int], keeper: Int, candidates: [VideoRecord], scored: [DuplicateLikeness.PairKey: DuplicateLikeness.Score]
     ) -> (confidence: DuplicateConfidence, extraCopies: Int, reviewItems: Int) {
         let groupID = UUID()
-        let memberIDs = starMembers.map(\.id)
-        let groupConfidence = starMembers
-            .compactMap { bestConfidence(for: $0, in: memberIDs, pairByIDs: pairByIDs) }
+        let groupConfidence = members.compactMap { bestPair(for: $0, in: members, scored: scored)?.score.confidence }
             .max() ?? .low
-
         var extras = 0
         var reviews = 0
-
-        for item in starMembers {
-            assigned.insert(item.id)
+        for i in members {
+            let item = candidates[i]
+            let best = bestPair(for: i, in: members, scored: scored)
             item.duplicateGroupID = groupID
-            item.duplicateGroupCount = starMembers.count
-            item.duplicateConfidence = bestConfidence(for: item, in: memberIDs, pairByIDs: pairByIDs) ?? groupConfidence
-            let reasons = bestReasons(for: item, in: memberIDs, pairByIDs: pairByIDs)
+            item.duplicateGroupCount = members.count
+            item.duplicateConfidence = members.compactMap { j -> DuplicateConfidence? in
+                j == i ? nil : scored[DuplicateLikeness.PairKey(i, j)]?.confidence
+            }.max() ?? groupConfidence
+            let reasons = best?.score.reasons ?? []
             item.duplicateReasons = reasons.isEmpty
-                ? starMembers.flatMap { bestReasons(for: $0, in: memberIDs, pairByIDs: pairByIDs) }
+                ? members.flatMap { bestPair(for: $0, in: members, scored: scored)?.score.reasons ?? [] }
                     .uniqued().joined(separator: "+")
                 : reasons.joined(separator: "+")
-            item.duplicateBestMatchFilename = keeper === item
-                ? strongestMatchFilename(for: item, in: starMembers, pairByIDs: pairByIDs)
-                : keeper.filename
-
-            if item === keeper {
+            item.duplicateBestMatchFilename = i == keeper
+                ? best.map { candidates[$0.other].filename } ?? ""
+                : candidates[keeper].filename
+            if i == keeper {
                 item.duplicateDisposition = .keep
             } else if item.duplicateConfidence == .high {
                 item.duplicateDisposition = .extraCopy
@@ -189,8 +156,21 @@ enum DuplicateDetector {
                 reviews += 1
             }
         }
-
         return (groupConfidence, extras, reviews)
+    }
+
+    /// The highest-scoring pair `i` has with another member (the first one
+    /// in member order on a tie — the old `max(by:)` behavior).
+    private static func bestPair(for i: Int, in members: [Int],
+                                 scored: [DuplicateLikeness.PairKey: DuplicateLikeness.Score])
+        -> (other: Int, score: DuplicateLikeness.Score)? {
+        var best: (other: Int, score: DuplicateLikeness.Score)?
+        for j in members where j != i {
+            guard let s = scored[DuplicateLikeness.PairKey(i, j)] else { continue }
+            if let b = best, s.points <= b.score.points { continue }
+            best = (j, s)
+        }
+        return best
     }
 
     private static let emptySummary = DuplicateAnalysisSummary(
@@ -209,54 +189,12 @@ enum DuplicateDetector {
         }
     }
 
-    private static func buildCandidatePairs(from records: [VideoRecord]) -> [Candidate] {
-        var bucketPairs = Set<PairKey>()
-        let indices = buildIndices(records: records)
-
-        for bucket in indices where bucket.count > 1 {
-            for i in 0..<(bucket.count - 1) {
-                for j in (i + 1)..<bucket.count {
-                    bucketPairs.insert(PairKey(bucket[i].id, bucket[j].id))
-                }
-            }
-        }
-
-        return bucketPairs.compactMap { key in
-            guard
-                let left = records.first(where: { $0.id == key.first }),
-                let right = records.first(where: { $0.id == key.second })
-            else { return nil }
-            return score(left: left, right: right)
-        }
-    }
-
     /// The three bucket keys a record can pair under — hash, timecode,
     /// and normalized-stem, each namespaced so families never collide.
-    /// Shared by `buildIndices` (grouping) and `affectedSubset` (the
-    /// analysis-ledger delta expansion) so they can never drift.
+    /// Shared by grouping (DuplicateLikeness.pairs) and `affectedSubset`
+    /// (the analysis-ledger delta expansion) so they can never drift.
     static func bucketKeys(_ record: VideoRecord) -> [String] {
-        var keys: [String] = []
-        if !record.partialMD5.isEmpty && record.sizeBytes > 0 {
-            keys.append("h|\(record.streamTypeRaw)|\(record.sizeBytes)|\(record.partialMD5)")
-        }
-        if !record.timecode.isEmpty {
-            keys.append("t|\(record.streamTypeRaw)|\(record.timecode)|\(durationBucket(record.durationSeconds))")
-        }
-        let stem = normalizedStem(record.filename)
-        if !stem.isEmpty {
-            keys.append("s|\(record.streamTypeRaw)|\(stem)|\(durationBucket(record.durationSeconds))")
-        }
-        return keys
-    }
-
-    private static func buildIndices(records: [VideoRecord]) -> [[VideoRecord]] {
-        var buckets: [String: [VideoRecord]] = [:]
-        for record in records {
-            for key in bucketKeys(record) {
-                buckets[key, default: []].append(record)
-            }
-        }
-        return Array(buckets.values)
+        DuplicateLikeness.bucketKeys(DuplicateLikeness.Facts(record: record))
     }
 
     // MARK: - Analysis-ledger support (2026-07-05)
@@ -368,15 +306,16 @@ enum DuplicateDetector {
             // STRONGEST-scoring other member — the same rule
             // classifyGroup applies — not simply the old keeper. Groups
             // are small, so re-scoring the members' pairs here is cheap.
-            var pairByIDs: [PairKey: Candidate] = [:]
+            let facts = members.map { DuplicateLikeness.Facts(record: $0) }
+            var scored: [DuplicateLikeness.PairKey: DuplicateLikeness.Score] = [:]
             for i in 0..<(members.count - 1) {
                 for j in (i + 1)..<members.count {
-                    if let pair = score(left: members[i], right: members[j]) {
-                        pairByIDs[PairKey(members[i].id, members[j].id)] = pair
-                    }
+                    if let s = DuplicateLikeness.score(facts[i], facts[j]) { scored[DuplicateLikeness.PairKey(i, j)] = s }
                 }
             }
-            let strongest = strongestMatchFilename(for: keeper, in: members, pairByIDs: pairByIDs)
+            let keeperIndex = members.firstIndex { $0 === keeper } ?? 0
+            let strongest = bestPair(for: keeperIndex, in: Array(members.indices), scored: scored)
+                .map { members[$0.other].filename } ?? ""
             for m in members {
                 if m === keeper {
                     m.duplicateDisposition = .keep
@@ -398,29 +337,6 @@ enum DuplicateDetector {
             }
         }
         return (clones, changed)
-    }
-
-    // MARK: - Hub selection (2026-08-18, codex review C)
-
-    /// The star's centre: the member with the most direct matches inside
-    /// the component, then the technically best, then the smallest path.
-    /// Purely structural — the policy plays no part here.
-    static func electHub(from component: [VideoRecord],
-                         adjacency: [UUID: Set<UUID>]) -> VideoRecord? {
-        var best: VideoRecord?
-        var bestKey: (Int, Int, String)?
-        for record in component {
-            let key = (adjacency[record.id]?.count ?? 0, keeperScore(record), record.fullPath)
-            if let current = bestKey {
-                let better = key.0 != current.0 ? key.0 > current.0
-                    : key.1 != current.1 ? key.1 > current.1
-                    : key.2 < current.2
-                if !better { continue }
-            }
-            best = record
-            bestKey = key
-        }
-        return best
     }
 
     // MARK: - Keeper election (2026-08-18)
@@ -447,223 +363,17 @@ enum DuplicateDetector {
         return bestRecord
     }
 
-    // MARK: - Scoring rules
-    //
-    // Each rule inspects a pair of records and returns either the points
-    // earned or nil when the rule does not apply. `score(left:right:)` runs
-    // every rule, sums the points, and collects the reason tags for UI.
-    // Rules are independent — reordering or adding a rule does not affect
-    // any other rule. To tune duplicate detection, edit the rule table or
-    // the confidence thresholds below.
-
-    private struct ScoringRule {
-        let reason: String
-        let evaluate: (VideoRecord, VideoRecord) -> Int?
-    }
-
-    private static let scoreThreshold = 7
-    private static let mediumConfidenceScore = 9
-    private static let highConfidenceScore = 12
-
-    // Static immutable table of pure functions — safe to read concurrently
-    // even though ScoringRule isn't Sendable (closure parameter type
-    // VideoRecord is a class). The table is built once at type-init and
-    // never mutated thereafter.
-    private static let scoringRules: [ScoringRule] = [
-        // Strongest available SIGNAL — but not proof, and the comment
-        // here used to claim "byte-identical content", which is false
-        // and was load-bearing in the wrong direction (codex #333).
-        // partialMD5 hashes the first and last 64 KB only: two files
-        // sharing a container header and padded to the same length match
-        // here while differing everywhere in between. Enough to PROPOSE
-        // a duplicate; never enough to delete one. See
-        // SignatureVerification, which every destructive path must call.
-        // Grouping no longer trusts it alone either: members whose stored
-        // whole-file SHA-256s differ are split apart before a group is
-        // stamped (DuplicateGroupDigestSplit.partition, in `analyze`).
-        ScoringRule(reason: "hash") { l, r in
-            guard !l.partialMD5.isEmpty,
-                  l.partialMD5 == r.partialMD5,
-                  l.sizeBytes == r.sizeBytes else { return nil }
-            return 8
-        },
-        // Same embedded timecode → almost certainly same source capture.
-        ScoringRule(reason: "timecode") { l, r in
-            (!l.timecode.isEmpty && l.timecode == r.timecode) ? 4 : nil
-        },
-        // Filename stems match after stripping "copy", numeric suffixes, etc.
-        ScoringRule(reason: "filename") { l, r in
-            Self.normalizedStem(l.filename) == Self.normalizedStem(r.filename) ? 3 : nil
-        },
-        // Duration — tiered: very close is worth more than merely close.
-        ScoringRule(reason: "duration") { l, r in
-            guard l.durationSeconds > 0, r.durationSeconds > 0 else { return nil }
-            let delta = abs(l.durationSeconds - r.durationSeconds)
-            if delta <= Self.durationToleranceExact { return 3 }
-            if delta <= Self.durationToleranceLoose { return 2 }
-            return nil
-        },
-        ScoringRule(reason: "resolution") { l, r in
-            (!l.resolution.isEmpty && l.resolution == r.resolution) ? 2 : nil
-        },
-        ScoringRule(reason: "vcodec") { l, r in
-            (!l.videoCodec.isEmpty && l.videoCodec == r.videoCodec) ? 2 : nil
-        },
-        ScoringRule(reason: "audio") { l, r in
-            Self.audioSignature(l) == Self.audioSignature(r) ? 2 : nil
-        },
-        ScoringRule(reason: "tape") { l, r in
-            (!l.tapeName.isEmpty && l.tapeName == r.tapeName) ? 1 : nil
-        },
-        // Capture timestamps within a few minutes → likely the same event.
-        ScoringRule(reason: "created") { l, r in
-            guard let lDate = l.dateCreatedRaw, let rDate = r.dateCreatedRaw,
-                  abs(lDate.timeIntervalSince(rDate)) <= Self.creationTolerance else { return nil }
-            return 1
-        }
-    ]
-
-    private static func score(left: VideoRecord, right: VideoRecord) -> Candidate? {
-        guard left.streamType == right.streamType else { return nil }
-
-        var total = 0
-        var reasons: [String] = []
-        for rule in scoringRules {
-            if let points = rule.evaluate(left, right) {
-                total += points
-                reasons.append(rule.reason)
-            }
-        }
-
-        guard total >= scoreThreshold else { return nil }
-
-        let confidence: DuplicateConfidence
-        switch total {
-        case highConfidenceScore...:   confidence = .high
-        case mediumConfidenceScore...: confidence = .medium
-        default:                       confidence = .low
-        }
-
-        return Candidate(left: left, right: right, score: total, confidence: confidence, reasons: reasons)
-    }
-
-    private static func bestConfidence(for record: VideoRecord, in componentIDs: [UUID], pairByIDs: [PairKey: Candidate]) -> DuplicateConfidence? {
-        componentIDs
-            .filter { $0 != record.id }
-            .compactMap { pairByIDs[PairKey(record.id, $0)]?.confidence }
-            .max()
-    }
-
-    private static func bestReasons(for record: VideoRecord, in componentIDs: [UUID], pairByIDs: [PairKey: Candidate]) -> [String] {
-        let pair = componentIDs
-            .filter { $0 != record.id }
-            .compactMap { pairByIDs[PairKey(record.id, $0)] }
-            .max(by: { $0.score < $1.score })
-        return pair?.reasons ?? []
-    }
-
-    private static func strongestMatchFilename(for record: VideoRecord, in component: [VideoRecord], pairByIDs: [PairKey: Candidate]) -> String {
-        component
-            .filter { $0.id != record.id }
-            .compactMap { other in
-                pairByIDs[PairKey(record.id, other.id)].map { (other.filename, $0.score) }
-            }
-            .max(by: { $0.1 < $1.1 })?.0 ?? ""
-    }
-
     /// TECHNICAL keeper merit — playability, streams, codecs, size,
     /// resolution, date. Since 2026-08-18 this is the THIRD key of the
     /// election (after volume precedence and human metadata), no longer
     /// the whole vote. Internal-visible so DuplicateKeeperPolicy tests
-    /// can build expected keys.
+    /// can build expected keys. The rule is DuplicateLikeness's (shared
+    /// with the hub election).
     static func keeperScore(_ record: VideoRecord) -> Int {
-        var score = 0
-        if record.isPlayable == "Yes" { score += 40 }
-
-        switch record.streamType {
-        case .videoAndAudio: score += 30
-        case .videoOnly: score += 20
-        case .audioOnly: score += 10
-        case .noStreams: score -= 20
-        case .ffprobeFailed: score -= 40
-        }
-
-        if !record.audioCodec.isEmpty { score += 8 }
-        if !record.videoCodec.isEmpty { score += 6 }
-        score += min(20, Int(record.sizeBytes / 50_000_000))
-
-        if let pixels = pixelCount(record.resolution) {
-            score += min(12, pixels / 500_000)
-        }
-
-        if let date = record.dateCreatedRaw {
-            score += max(0, 5 - Int(date.timeIntervalSince1970 / 86_400_000))
-        }
-
-        return score
-    }
-
-    private static func pixelCount(_ resolution: String) -> Int? {
-        let parts = resolution.split(separator: "x")
-        guard parts.count == 2, let width = Int(parts[0]), let height = Int(parts[1]) else { return nil }
-        return width * height
-    }
-
-    private static func audioSignature(_ record: VideoRecord) -> String {
-        "\(record.audioCodec)|\(record.audioChannels)|\(record.audioSampleRate)"
-    }
-
-    private static func normalizedStem(_ filename: String) -> String {
-        var stem = (filename as NSString).deletingPathExtension.lowercased()
-        let patterns = [
-            #"\s*\(\d+\)$"#,
-            #"\s+copy(?:\s+\d+)?$"#,
-            #"[-_ ]copy(?:[-_ ]\d+)?$"#,
-            #"[-_ ]duplicate(?:[-_ ]\d+)?$"#
-        ]
-        for pattern in patterns {
-            stem = stem.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-        }
-        return stem.replacingOccurrences(of: #"[^a-z0-9]+"#, with: "", options: .regularExpression)
-    }
-
-    private static func durationBucket(_ duration: Double) -> Int {
-        Int((duration * 2).rounded())
-    }
-
-    private static func isDuplicateCandidate(_ record: VideoRecord) -> Bool {
-        switch record.streamType {
-        case .ffprobeFailed, .noStreams:
-            return false
-        default:
-            break
-        }
-        if isStockMedia(record) { return false }
-        return true
-    }
-
-    private static let stockPathPatterns: [String] = [
-        "/iMovie",
-        "/Final Cut",
-        "/FxPlug",
-        "/Motion",
-        "/Compressor",
-        "/Pro Video Formats",
-        "/Avid/AVX",
-        "/Media Composer",
-        "/Transitions/",
-        "/Titles/",
-        "/Generators/",
-        "/Effects/",
-        ".app/Contents/"
-    ]
-
-    private static func isStockMedia(_ record: VideoRecord) -> Bool {
-        let path = record.fullPath
-        for pattern in stockPathPatterns {
-            if path.contains(pattern) { return true }
-        }
-        return false
+        DuplicateLikeness.technicalScore(isPlayable: record.isPlayable, streamType: record.streamType,
+                                         audioCodec: record.audioCodec, videoCodec: record.videoCodec,
+                                         sizeBytes: record.sizeBytes, resolution: record.resolution,
+                                         dateCreatedRaw: record.dateCreatedRaw)
     }
 }
 
@@ -671,20 +381,5 @@ private extension Array where Element: Hashable {
     func uniqued() -> [Element] {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
-    }
-}
-
-private struct PairKey: Hashable {
-    let first: UUID
-    let second: UUID
-
-    init(_ a: UUID, _ b: UUID) {
-        if a.uuidString < b.uuidString {
-            first = a
-            second = b
-        } else {
-            first = b
-            second = a
-        }
     }
 }

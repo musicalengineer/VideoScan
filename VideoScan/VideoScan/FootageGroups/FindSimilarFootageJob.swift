@@ -232,6 +232,7 @@ final class FindSimilarFootageJob: @MainActor MediaFileOperationJob {
         s.refusedByPerson = r.stats.refusedByPerson
         s.refusedByDate = r.stats.refusedByDate
         s.sampledConflicts = r.stats.sampledConflicts
+        s.copyCheckDifferentLength = r.stats.copyCheckDifferentLength
         return s
     }
 

@@ -427,8 +427,13 @@ extension InspectorPanel {
 
     @ViewBuilder
     func duplicatesSection(_ rec: VideoRecord) -> some View {
-        if InspectorPanelRules.showsDuplicates(rec) {
+        if InspectorPanelRules.showsDuplicatesOrSameFootage(rec, sameFootage: sameFootageMembers) {
             inspectorSection("Duplicates", systemImage: "doc.on.doc") {
+                // Same footage, different file (2026-10-19): a re-encode or
+                // rewrap of this recording — linked, never a copy to delete.
+                ForEach(sameFootageMembers, id: \.id) { other in
+                    inspectorRow("Same footage", InspectorPanelRules.sameFootageLine(other))
+                }
                 if rec.duplicateDisposition != .none {
                     HStack(spacing: 6) {
                         Text("Status")
@@ -444,7 +449,9 @@ extension InspectorPanel {
                         Spacer()
                     }
                 }
-                inspectorRow("Reasons", rec.duplicateReasons)
+                if InspectorPanelRules.showsDuplicates(rec) {
+                    inspectorRow("Reasons", rec.duplicateReasons)
+                }
                 if let conf = rec.duplicateConfidence {
                     HStack(spacing: 6) {
                         Text("Confidence")

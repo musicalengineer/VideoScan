@@ -221,6 +221,8 @@ struct CatalogContent: View {
     /// time memo needs. See CatalogPerfMemo.swift.
     @State private var duplicateGroupMemo = RenderMemo<DuplicateGroupMemoKey, [VideoRecord]>()
     @State private var trimDerivativesMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
+    /// Same footage, different file (2026-10-19) — same memo discipline.
+    @State private var sameFootageMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
     /// Music-triage candidates (GH #124 layer 2). The O(n) detection pass
     /// runs once per catalog change / purge / tidy event — NEVER in body
     /// (the no-O(records)-in-body rule) and, since 2026-10-04 (perf: 0.28 s
@@ -431,6 +433,18 @@ struct CatalogContent: View {
         )
         return duplicateGroupMemo.value(for: key) {
             records.filter { $0.duplicateGroupID == groupID && $0.id != rec.id }
+        }
+    }
+
+    /// The selected record's footage-group members whose bytes differ (a
+    /// re-encode, a rewrap, another codec): the inspector's "Same footage"
+    /// lines. Memoized on (selected id, records version) — the O(n) pass
+    /// runs once per selection/catalog change, never per body re-eval.
+    private var sameFootageMembers: [VideoRecord] {
+        guard let rec = selectedRecord, let groupID = rec.footage?.groupID else { return [] }
+        let key = TrimDerivativesMemoKey(selectedID: rec.id, version: recordsVersion)
+        return sameFootageMemo.value(for: key) {
+            InspectorPanelRules.sameFootageOthers(of: rec, groupMembers: records.filter { $0.footage?.groupID == groupID })
         }
     }
 
@@ -718,6 +732,7 @@ struct CatalogContent: View {
             folderKey: selectedRecord.flatMap(EventsFolderMembers.contentKey),
             onRecordEdited: { model.saveCatalogDebounced() },
             duplicateGroupMembers: duplicateGroupMembers,
+            sameFootageMembers: sameFootageMembers,
             previewImage: previewImage,
             previewOfflineVolumeName: previewOfflineVolumeName,
             onSelectRecord: { id in

@@ -23,6 +23,25 @@
 // Milliseconds on 15k rows (one pass + a dictionary), so not an MFO job
 // (CLAUDE.md "Long operations" starts at about a minute).
 //
+// SAME FOOTAGE IS KEPT (Rick 2026-10-19: "I don't want to lose the 'same
+// event different codec' feature"). A file that leaves the copies because
+// its bytes differ is described by the duplicate check's own likeness rule
+// (DuplicateLikeness): "same footage as X, different codec: FFV1 MKV · H.264
+// MOV (the duplicate check matched filename+duration)". The link itself is
+// Find Similar Footage's to record (FootageGrouping `copyCheckLikeness`
+// derives it from the files' metadata, not from these group fields), so the
+// split destroys nothing; the menu item starts a Find Similar Footage run
+// right after a split so the links show at once. Footage links are never
+// delete-eligible.
+//
+// HELD GROUPS. Before planning, a simulated Find Similar Footage pass
+// (`duplicateDigestSplitFootageGroups`) says which files will stay linked as
+// the same footage. A group whose members would be cut apart — alike only
+// weakly (a default timecode, a camera-counter name, format and length),
+// which a footage group cannot hold without demoting byte copies — is HELD
+// exactly as it is and said so, one line per group. Verify keeps listing it
+// until there is a place to keep weak likeness (Rick's schema decision).
+//
 // (For Rick: `@discardableResult` lets a caller ignore the returned
 // outcome, like a C++ function whose return value may be dropped without a
 // warning.)
@@ -59,9 +78,32 @@ extension VideoScanModel {
             guard let g = r.duplicateGroupID else { continue }
             facts.append(.init(id: r.id, groupID: g, filename: r.filename, digest: Self.storedFullDigest(r),
                                disposition: r.duplicateDisposition, confidence: r.duplicateConfidence,
-                               bestMatch: r.duplicateBestMatchFilename))
+                               bestMatch: r.duplicateBestMatchFilename, likeness: DuplicateLikeness.Facts(record: r)))
         }
         return facts
+    }
+
+    /// Record id → footage group after a SIMULATED Find Similar Footage pass
+    /// over the whole catalog (pure; no stat, no write): every stored whole-
+    /// file digest is taken as current, because only CONNECTIVITY matters
+    /// here — would the files stay linked once their old group is gone?
+    /// One main-actor snapshot pass plus the grouping (≈1 s on 11k rows in
+    /// Debug; the split is a one-off repair, not a cycler).
+    ///
+    /// A group whose confidence is only POSSIBLE is left out: a Possible
+    /// link attaches a lone file as a leaf, and WHICH leaf it takes depends
+    /// on the order links are offered — the real run (which stats the files)
+    /// may take another (2026-10-19 evidence: one such pair). Only links the
+    /// real run is sure to make count as "kept".
+    func duplicateDigestSplitFootageGroups() -> [UUID: UUID] {
+        let inputs = footageInputs().map { x -> FootageInput in
+            var y = x
+            if y.storedDigest != nil { y.fixityFresh = true }
+            return y
+        }
+        return FootageGrouping.run(inputs, options: .init(), now: Date()).memberships
+            .filter { $0.value.confidence != .possible }
+            .mapValues(\.groupID)
     }
 
     /// Plan, safety copy, apply, save, say so. See the file header.
@@ -77,17 +119,26 @@ extension VideoScanModel {
         let policy = duplicateKeeperPolicy()
         let plan = DuplicateGroupDigestSplit.plan(facts, elect: { ids in
             DuplicateDetector.electKeeper(from: ids.compactMap { byID[$0] }, policy: policy)?.id
-        })
+        }, footageGroupOf: duplicateDigestSplitFootageGroups())
         let groupCount = Set(facts.map(\.groupID)).count
+        let held = plan.heldGroups
+        let heldTally = "\(held.count.formatted()) group(s) held as they are — splitting would lose likeness that nothing "
+            + "else can hold yet (a default timecode, a camera-counter name, or format and length alone); they wait for a "
+            + "place to keep weak likeness"
         guard !plan.isEmpty else {
-            duplicateDigestSplitNote("OUTCOME — nothing to split: every one of \(groupCount.formatted()) duplicate group(s) "
-                                     + "holds at most one whole-file SHA-256. Nothing was changed.")
+            for (i, g) in held.enumerated() { duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)") }
+            duplicateDigestSplitNote("OUTCOME — nothing to split: "
+                                     + (held.isEmpty ? "every one of \(groupCount.formatted()) duplicate group(s) holds at most one whole-file SHA-256"
+                                                     : heldTally)
+                                     + ". Nothing was changed.")
             return .nothingToSplit
         }
-        duplicateDigestSplitNote("START — \(plan.groups.count.formatted()) of \(groupCount.formatted()) duplicate group(s) hold "
-                                 + "files with different whole-file SHA-256s; each is split into groups of true copies. "
+        let split = plan.splitGroups
+        duplicateDigestSplitNote("START — \(split.count.formatted()) of \(groupCount.formatted()) duplicate group(s) hold "
+                                 + "files with different whole-file SHA-256s; each is split into groups of true copies, "
+                                 + "and a file that is the same footage in another file stays linked as SAME FOOTAGE. "
                                  + "Only the duplicate-group fields of \(plan.changes.count.formatted()) row(s) change — "
-                                 + "no file is touched.")
+                                 + "no file is touched." + (held.isEmpty ? "" : " " + heldTally + "."))
         guard let copy = snapshotCatalog(prefix: "pre-dup-split") else {
             let why = "no safety copy of the catalog could be made — nothing was changed"
             duplicateDigestSplitNote("REFUSED — \(why)")
@@ -95,20 +146,27 @@ extension VideoScanModel {
         }
         duplicateDigestSplitNote("safety copy: \(copy)")
         applyDuplicateDigestSplit(plan, byID: byID)
-        for (i, g) in plan.groups.enumerated() {
-            duplicateDigestSplitNote("\(i + 1) of \(plan.groups.count) — \(g.words)")
+        for (i, g) in split.enumerated() {
+            duplicateDigestSplitNote("\(i + 1) of \(split.count) — \(g.words)")
+        }
+        for (i, g) in held.enumerated() {
+            duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)")
         }
         let saved = saveCatalogNow()
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
-        let tally = "\(plan.groups.count.formatted()) group(s) split · \(plan.newGroupCount.formatted()) new group(s) of copies · "
-            + "\(plan.recordsLeaving.formatted()) file(s) left their group (unique bytes)"
+        let tally = "\(split.count.formatted()) group(s) split · \(plan.newGroupCount.formatted()) new group(s) of copies · "
+            + "\(plan.recordsLeaving.formatted()) file(s) left their group (unique bytes) · "
+            + "\(plan.sameFootageFiles.formatted()) file(s) are the same footage in a different file — kept as same footage "
+            + "(Find Similar Footage records the links; never delete-eligible) · "
+            + "\(plan.differentLengthFiles.formatted()) file(s) are a different length (only the sampled hash matched) — not the same footage"
+            + (held.isEmpty ? "" : " · " + heldTally)
         if saved {
             duplicateDigestSplitNote("OUTCOME — \(tally) · saved to the catalog")
         } else {
             duplicateDigestSplitNote("OUTCOME — \(tally) · NOT SAVED YET — the catalog store would not take the change now; "
                                      + "it stays in memory and the catalog store's own line says why")
         }
-        return .split(groups: plan.groups.count, newGroups: plan.newGroupCount, left: plan.recordsLeaving,
+        return .split(groups: split.count, newGroups: plan.newGroupCount, left: plan.recordsLeaving,
                       saved: saved, safetyCopy: copy)
     }
 
@@ -130,5 +188,20 @@ extension VideoScanModel {
             r.duplicateGroupCount = change.groupCount
             r.duplicateBestMatchFilename = change.bestMatch
         }
+    }
+}
+
+// MARK: - The menu verb
+
+extension MediaFileOperationsCenter {
+    /// "Split Duplicate Groups by Full Hash" as the menu runs it: the split,
+    /// then — when anything was split — a whole-catalog Find Similar Footage
+    /// run, so the files that left the copies as the same footage show their
+    /// links at once (the run is an MFO job; it queues behind one in flight).
+    @discardableResult
+    func splitDuplicateGroupsKeepingSameFootage(model: VideoScanModel) -> DuplicateDigestSplitOutcome {
+        let outcome = model.splitDuplicateGroupsByFullDigest()
+        if case .split = outcome { startFindSimilarFootage(scope: .catalog, model: model) }
+        return outcome
     }
 }

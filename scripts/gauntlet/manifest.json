@@ -29430,6 +29430,56 @@
         "rowSelectionMapsBothWays",
         "versionFollowsEveryLeadingFolder"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SameFootageAcrossCodecsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SameFootageLikenessRuleTests",
+        "SameFootageDetectorTests",
+        "SameFootageGroupingTests",
+        "SameFootageSplitPlanTests",
+        "SameFootageHeldDoorTests",
+        "SameFootageInspectorTests",
+        "SameFootageDeleteIsolationTests",
+        "SameFootageSensorTests",
+        "SameFootageScaleTests",
+        "SameFootageMediaMatrixTests",
+        "SameFootageTruthTests",
+        "SameFootageRealCopyEvidence"
+      ],
+      "tests": [
+        "collision",
+        "collisionNotLinked",
+        "copiesAndUnknown",
+        "copiesStillGroup",
+        "defaultTimecodeIsPossible",
+        "deletePathsNeverReadFootage",
+        "detectorAt100k",
+        "endToEnd",
+        "evidence",
+        "footageAt100k",
+        "footageIsNotDeletable",
+        "heldAtTheDoor",
+        "heldWhenWeak",
+        "idempotent",
+        "idempotent",
+        "line",
+        "matrix",
+        "mixed",
+        "oneRule",
+        "personSplits",
+        "planAt100k",
+        "splitKeepsIt",
+        "splitWhenLinkedOrDifferent",
+        "trioIsNotCopies",
+        "trioLeavesAsSameFootage",
+        "trioLinks",
+        "trioOneGroup",
+        "verifyIgnoresFootage",
+        "words"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -31962,7 +32012,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2708,
+      "expected_floor": 2737,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32389,7 +32439,19 @@
         "VideoScanTests/EventsCatalogBackingTests",
         "VideoScanTests/FolderLabelsLogicTests",
         "VideoScanTests/FolderLabelsScaleTests",
-        "VideoScanTests/FolderLabelsSensorTests"
+        "VideoScanTests/FolderLabelsSensorTests",
+        "VideoScanTests/SameFootageLikenessRuleTests",
+        "VideoScanTests/SameFootageDetectorTests",
+        "VideoScanTests/SameFootageGroupingTests",
+        "VideoScanTests/SameFootageSplitPlanTests",
+        "VideoScanTests/SameFootageHeldDoorTests",
+        "VideoScanTests/SameFootageInspectorTests",
+        "VideoScanTests/SameFootageDeleteIsolationTests",
+        "VideoScanTests/SameFootageSensorTests",
+        "VideoScanTests/SameFootageScaleTests",
+        "VideoScanTests/SameFootageMediaMatrixTests",
+        "VideoScanTests/SameFootageTruthTests",
+        "VideoScanTests/SameFootageRealCopyEvidence"
       ]
     },
     {
