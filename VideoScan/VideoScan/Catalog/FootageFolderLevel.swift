@@ -43,6 +43,8 @@ enum FootageFolderLevel {
         /// The event id.
         let id: UUID
         let name: String
+        /// Event / person / other — the folder glyph's colour.
+        var kind: FolderKind = .event
         /// Files counted in the folder (copies included; hidden rows not).
         let items: Int
         let copies: Int
@@ -175,7 +177,7 @@ enum FootageFolderLevel {
 
     static func folderRow(_ folder: FootageFolders.Folder) -> FolderRow {
         let s = folder.summary
-        return FolderRow(id: folder.id, name: folder.title, items: s.files, copies: s.copies, archived: s.archivedCount,
+        return FolderRow(id: folder.id, name: folder.title, kind: folder.kind, items: s.files, copies: s.copies, archived: s.archivedCount,
                          totalSeconds: s.totalSeconds, totalBytes: s.totalBytes, date: s.date ?? .distantPast,
                          dateWords: dateWords(summary: s))
     }

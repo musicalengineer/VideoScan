@@ -9,13 +9,15 @@
 //                         each other (the stored whole-file SHA-256 + size,
 //                         else the duplicate group — never a sampled `v1:`
 //                         hash), which were made from which (`derivedFrom`),
-//                         which confirmed event each content belongs to.
+//                         which confirmed events (folders) each content
+//                         belongs to — one content may be in several
+//                         (2026-10-19: "a file in many folders").
 //                         The union of copies and lineage is a FAMILY; the
 //                         family's recording is its keeper (the archived
 //                         file, else the better transfer by
 //                         RelatedLadder.betterTransfer's order, else the
 //                         longest). A copy or a version outside any event
-//                         follows its original into the folder. Per folder:
+//                         follows its original into its folder(s). Per folder:
 //                         the summary (files · copies · running time ·
 //                         archived · date).
 //   compose(index:…)      The FLAT display for what the table shows right
@@ -24,7 +26,11 @@
 //                         the scope. Folders and loose files merge in sort
 //                         order; inside a folder the family order wins
 //                         (recording · ↳ made from it · = copies · ⊂ clips),
-//                         then the sort. O(visible + folders present).
+//                         then the sort. A file shown under two folders gets
+//                         ONE row per folder: its first row keeps the record
+//                         id, every later one an alias id
+//                         (`FootageFolderRowID`) — Table identity must be
+//                         unique. O(visible + folders present).
 //
 // Memory: the index keeps one SortKeys per record (~200 B) plus the
 // families — ~30 MB at 100k rows; the display is one small row per visible
@@ -183,12 +189,15 @@ enum FootageFolders {
         /// folder dates itself from its members.
         var dateWords: String?
         var contentKeys: [String]
+        /// Event / person / other — the folder's colour (2026-10-19).
+        var kind: FolderKind
 
-        init(id: UUID = UUID(), title: String, dateWords: String? = nil, contentKeys: [String]) {
+        init(id: UUID = UUID(), title: String, dateWords: String? = nil, contentKeys: [String], kind: FolderKind = .event) {
             self.id = id
             self.title = title
             self.dateWords = dateWords
             self.contentKeys = contentKeys
+            self.kind = kind
         }
 
         init(_ e: ConfirmedEvent) {
@@ -201,7 +210,8 @@ enum FootageFolders {
         static func events(in decisions: EventsDecisionSnapshot) -> [Event] {
             decisions.liveEvents
                 // The stored name may carry a legacy date source: shown without it.
-                .map { Event(id: $0.id, title: EventsNaming.folderTitle($0.name), contentKeys: decisions.members(of: $0.id).map(\.contentKey).sorted()) }
+                .map { Event(id: $0.id, title: EventsNaming.folderTitle($0.name),
+                             contentKeys: decisions.members(of: $0.id).map(\.contentKey).sorted(), kind: $0.kind) }
                 .sorted { $0.title != $1.title ? $0.title < $1.title : $0.id.uuidString < $1.id.uuidString }
         }
     }
@@ -285,6 +295,7 @@ enum FootageFolders {
     struct Folder: Sendable, Equatable {
         let id: UUID
         let title: String
+        var kind: FolderKind = .event
         var summary = Summary()
         var keys = SortKeys()
         /// Indices into `Index.families`.
@@ -295,15 +306,23 @@ enum FootageFolders {
 
     struct Index: Sendable, Equatable {
         var families: [Family] = []
+        /// The record's first family (a record in two folders is in one
+        /// family per folder; they hold the same members).
         var familyOf: [UUID: Int] = [:]
-        var folderOf: [UUID: UUID] = [:]
+        /// Record → every folder it shows under, primary first.
+        var foldersOf: [UUID: [UUID]] = [:]
         var folders: [UUID: Folder] = [:]
         var keysOf: [UUID: SortKeys] = [:]
 
         static let empty = Index()
 
         func family(of recordID: UUID) -> Family? { familyOf[recordID].map { families[$0] } }
-        func folder(containing recordID: UUID) -> Folder? { folderOf[recordID].flatMap { folders[$0] } }
+        /// The folders a record shows under (empty: a loose file).
+        func folders(of recordID: UUID) -> [UUID] { foldersOf[recordID] ?? [] }
+        /// Its primary folder — "Show in its event", a derivative's reveal.
+        func firstFolder(of recordID: UUID) -> UUID? { foldersOf[recordID]?.first }
+        func folder(containing recordID: UUID) -> Folder? { firstFolder(of: recordID).flatMap { folders[$0] } }
+        func isIn(_ recordID: UUID, folder: UUID) -> Bool { foldersOf[recordID]?.contains(folder) ?? false }
     }
 
     static func index(rows: [Row], events: [Event]) -> Index {
@@ -319,8 +338,8 @@ enum FootageFolders {
                 index.families.append(fam)
                 let fi = index.families.count - 1
                 for m in fam.members {
-                    index.familyOf[m.id] = fi
-                    if let e = eventID { index.folderOf[m.id] = e }
+                    if index.familyOf[m.id] == nil { index.familyOf[m.id] = fi }
+                    if let e = eventID { index.foldersOf[m.id, default: []].append(e) }
                 }
                 if let e = eventID { folderFamilies[e, default: []].append(fi) }
             }
@@ -333,14 +352,15 @@ enum FootageFolders {
         return index
     }
 
-    /// Record → the confirmed event its content was accepted into (the
-    /// first event to claim a key wins; v1 guarantees no overlap).
-    static func ownEvents(rows: [Row], events: [Event]) -> [UUID: UUID] {
-        var byKey: [String: UUID] = [:]
-        for e in events { for k in e.contentKeys where byKey[k] == nil { byKey[k] = e.id } }
+    /// Record → every confirmed event its content was accepted into, in
+    /// the events' order (one content may be in several folders,
+    /// 2026-10-19).
+    static func ownEvents(rows: [Row], events: [Event]) -> [UUID: [UUID]] {
+        var byKey: [String: [UUID]] = [:]
+        for e in events { for k in Set(e.contentKeys) { byKey[k, default: []].append(e.id) } }
         guard !byKey.isEmpty else { return [:] }
-        var out: [UUID: UUID] = [:]
-        for r in rows { if let e = byKey[r.contentKey] { out[r.id] = e } }
+        var out: [UUID: [UUID]] = [:]
+        for r in rows { if let es = byKey[r.contentKey] { out[r.id] = es } }
         return out
     }
 
@@ -369,29 +389,40 @@ enum FootageFolders {
         return groups.keys.sorted().map { groups[$0] ?? [] }
     }
 
-    /// A component becomes one family in the event its members share;
-    /// members accepted into a DIFFERENT event keep their own (v1 says
-    /// confirmed ranges never overlap, so this is defensive). A member with
-    /// no event of its own follows ITS OWN copy group's accepted member
-    /// first — a copy is the same content (codex 2026-10-16 P2); only a
-    /// member whose copy group has none falls back to the family's vote.
-    static func split(_ component: [Row], ownEvent: [UUID: UUID]) -> [(UUID?, [Row])] {
+    /// A component becomes one family per folder its members are in. A
+    /// member accepted into folders keeps exactly those (a content may be
+    /// in several). A member with no folder of its own follows ITS OWN copy
+    /// group's folders first — a copy is the same content (codex 2026-10-16
+    /// P2); only a member whose copy group has none follows the family's
+    /// leading folders (every folder tied for the most votes — so a version
+    /// of a recording that is in two folders shows in both, and a 2 : 1
+    /// family still sends it to the majority only).
+    static func split(_ component: [Row], ownEvent: [UUID: [UUID]]) -> [(UUID?, [Row])] {
         let group = copyGroups(component)
         var familyVotes: [UUID: Int] = [:]
         var groupVotes: [String: [UUID: Int]] = [:]
         for r in component {
-            guard let e = ownEvent[r.id] else { continue }
-            familyVotes[e, default: 0] += 1
-            groupVotes[group[r.id] ?? "", default: [:]][e, default: 0] += 1
+            for e in ownEvent[r.id] ?? [] {
+                familyVotes[e, default: 0] += 1
+                groupVotes[group[r.id] ?? "", default: [:]][e, default: 0] += 1
+            }
         }
         guard let primary = winner(familyVotes) else { return [(nil, component)] }
+        let leading = leaders(familyVotes)
         var buckets: [UUID: [Row]] = [:]
         for r in component {
-            let e = ownEvent[r.id] ?? groupVotes[group[r.id] ?? ""].flatMap(winner) ?? primary
-            buckets[e, default: []].append(r)
+            let own = ownEvent[r.id] ?? []
+            let es = !own.isEmpty ? own : (groupVotes[group[r.id] ?? ""].map(leaders) ?? leading)
+            for e in es { buckets[e, default: []].append(r) }
         }
         let others = buckets.keys.filter { $0 != primary }.sorted { $0.uuidString < $1.uuidString }
         return [(primary, buckets[primary] ?? [])] + others.map { ($0, buckets[$0] ?? []) }
+    }
+
+    /// Every event tied for the most votes, by id.
+    static func leaders(_ votes: [UUID: Int]) -> [UUID] {
+        guard let top = votes.values.max() else { return [] }
+        return votes.filter { $0.value == top }.map(\.key).sorted { $0.uuidString < $1.uuidString }
     }
 
     /// Most votes; a tie goes to the smaller id (stable, never the luck of
@@ -532,7 +563,7 @@ enum FootageFolders {
     // MARK: The folder and its summary
 
     static func folder(_ e: Event, families: [Int], in index: Index, byID: [UUID: Row]) -> Folder {
-        var f = Folder(id: e.id, title: e.title, families: families)
+        var f = Folder(id: e.id, title: e.title, kind: e.kind, families: families)
         var s = Summary()
         var earliest: Date?
         var latest: Date?
@@ -631,8 +662,30 @@ enum FootageFolders {
             return Display(rows: [.folder(f)] + members(of: f, index: index, visibleSet: visibleSet, sort: sort),
                            summaries: [f.id: f.summary])
         case nil:
-            return folderDisplay(index: index, visible: visible, visibleSet: visibleSet, sort: sort, open: open)
+            var d = folderDisplay(index: index, visible: visible, visibleSet: visibleSet, sort: sort, open: open)
+            d.rows = uniqueRowIDs(d.rows)
+            return d
         }
+    }
+
+    /// A file in two open folders appears twice: its first row keeps the
+    /// record id, each later row takes `FootageFolderRowID.alias(folder:
+    /// record:)` for the folder above it, so every row id is unique (a
+    /// Table's identity). The record id rides in the row's kind either way.
+    static func uniqueRowIDs(_ rows: [DisplayRow]) -> [DisplayRow] {
+        var seen = Set<UUID>()
+        var folder: UUID?
+        var out: [DisplayRow] = []
+        out.reserveCapacity(rows.count)
+        for row in rows {
+            if let e = row.eventID { folder = e }
+            if row.isFolder || seen.insert(row.id).inserted {
+                out.append(row)
+            } else {
+                out.append(DisplayRow(id: FootageFolderRowID.alias(folder: folder ?? row.id, record: row.id), kind: row.kind))
+            }
+        }
+        return out
     }
 
     /// One call for tests: index + compose with every row visible and
@@ -655,8 +708,8 @@ enum FootageFolders {
         var seenFolders = Set<UUID>()
         var seenFamilies = Set<Int>()
         for id in visible {
-            if let e = index.folderOf[id] {
-                if seenFolders.insert(e).inserted { present.append(e) }
+            if let es = index.foldersOf[id], !es.isEmpty {
+                for e in es where seenFolders.insert(e).inserted { present.append(e) }
             } else if let fi = index.familyOf[id] {
                 if seenFamilies.insert(fi).inserted {
                     loose.append(familyRows(index.families[fi], index: index, visibleSet: visibleSet, sort: sort))
@@ -737,5 +790,18 @@ extension FootageFolderWords {
         let how = byteForByte ? copyByteForByte : copySameGroup
         let place = volume.isEmpty ? "" : ", \(volume)"
         return "\(copyWords)\(separator)\(how) with \(name)\(place)"
+    }
+}
+
+/// The id of a file's SECOND (third, …) row in the folder view — the same
+/// file shown under another folder. Deterministic, so a selection survives a
+/// refresh: the folder's id XOR the record's id, byte by byte. (For Rick:
+/// the classic hash-combine of two keys; two random 128-bit ids XOR onto an
+/// existing id only by astronomical chance.)
+enum FootageFolderRowID {
+    static func alias(folder: UUID, record: UUID) -> UUID {
+        let f = folder.uuid, r = record.uuid
+        return UUID(uuid: (f.0 ^ r.0, f.1 ^ r.1, f.2 ^ r.2, f.3 ^ r.3, f.4 ^ r.4, f.5 ^ r.5, f.6 ^ r.6, f.7 ^ r.7,
+                           f.8 ^ r.8, f.9 ^ r.9, f.10 ^ r.10, f.11 ^ r.11, f.12 ^ r.12, f.13 ^ r.13, f.14 ^ r.14, f.15 ^ r.15))
     }
 }

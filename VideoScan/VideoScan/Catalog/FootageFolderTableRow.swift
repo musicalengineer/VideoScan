@@ -38,16 +38,24 @@ struct FootageFolderTableRow: Identifiable {
     /// record row and inside a scope. Built in the event handler from
     /// FootageFolderLevel.Level.children, never in a body.
     let children: [FootageFolderTableRow]?
+    /// The folder a member row is shown under (its own triangle's, or the
+    /// scope's); nil for a folder row and a loose file. A drag out of it is
+    /// a move; its menu offers Move to Folder and Remove from it.
+    let inFolder: UUID?
 
     init(display: FootageFolders.DisplayRow, record: VideoRecord?, folder: FootageFolderLevel.FolderRow? = nil,
-         keys: FootageFolders.SortKeys, children: [FootageFolderTableRow]? = nil) {
+         keys: FootageFolders.SortKeys, children: [FootageFolderTableRow]? = nil, inFolder: UUID? = nil) {
         self.id = display.id
         self.display = display
         self.record = record
         self.folder = folder
         self.keys = keys
         self.children = children
+        self.inFolder = inFolder
     }
+
+    /// What the row id stands for (CatalogContent's selection reads records).
+    var ref: FolderRowRef { FolderRowRef(record: record?.id ?? id, folder: inFolder) }
 
     var isFolder: Bool { display.isFolder }
     var eventID: UUID? { display.eventID }
@@ -69,6 +77,44 @@ struct FootageFolderTableRow: Identifiable {
     var date: Date { keys.date }
     var place: String { keys.place }
     var people: String { keys.people }
+}
+
+// MARK: - Row ids ⇄ records (a file shown under two folders, 2026-10-19)
+
+/// A folder-table row id → the record it shows and the folder it is shown
+/// under. A folder row's ref is its own id with no folder.
+struct FolderRowRef: Sendable, Hashable {
+    let record: UUID
+    let folder: UUID?
+}
+
+/// The folder Table selects ROWS; the rest of the Catalog selects RECORDS
+/// (the inspector, ⌘⌫, ⌘O, Promote, the row menu). A file under two open
+/// folders has two rows — the second with an alias id
+/// (`FootageFolderRowID`). This is the translation, pure:
+///   rows → records: each row's record (a folder id stays itself);
+///   records → rows: the rows Rick clicked when they still mean the same
+///   records (so the highlight stays on the row he chose), else each
+///   record's own id (its first row).
+/// (For Rick: a two-way map between view indices and model keys — the
+/// selection model of an NSOutlineView over a multimap.)
+enum FolderRowSelection {
+
+    static func recordIDs(of rows: Set<UUID>, refs: [UUID: FolderRowRef]) -> Set<UUID> {
+        Set(rows.map { refs[$0]?.record ?? $0 })
+    }
+
+    static func rows(for records: Set<UUID>, remembered: Set<UUID>, refs: [UUID: FolderRowRef]) -> Set<UUID> {
+        guard !remembered.isEmpty, Self.recordIDs(of: remembered, refs: refs) == records else { return records }
+        return remembered
+    }
+
+    /// The folder the rows are all shown under, nil when none or mixed.
+    static func commonFolder(of rows: Set<UUID>, refs: [UUID: FolderRowRef]) -> UUID? {
+        let folders = Set(rows.compactMap { refs[$0] }.map(\.folder))
+        guard folders.count == 1, let only = folders.first else { return nil }
+        return only
+    }
 }
 
 // MARK: - Sort mapping (linear table ⇄ folder table ⇄ the join's Sort)
@@ -199,8 +245,8 @@ enum DerivativeReveal: Equatable {
         guard foldersOn, let scope else { return .select }
         switch scope {
         case .event(let eventID):
-            if index.folderOf[landing.id] == eventID { return .select }
-            return index.folderOf[landing.sourceID] == eventID ? .openScopeAndSelect : .outsideScope
+            if index.isIn(landing.id, folder: eventID) { return .select }
+            return index.isIn(landing.sourceID, folder: eventID) ? .openScopeAndSelect : .outsideScope
         case .family(let memberID):
             let family = index.familyOf[memberID]
             if let family, index.familyOf[landing.id] == family { return .select }

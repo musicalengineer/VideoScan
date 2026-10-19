@@ -121,6 +121,9 @@ struct JSONReader: CatalogReader {
     func lastFinishedImport() throws -> CatalogRow.FinishedImport? { throw unsupported }
     func pendingRows(_ visit: (CatalogRow.PendingRow) throws -> Void) throws { throw unsupported }
     func tombstoneRevisions(fileID: String) throws -> [Int] { throw unsupported }
+    func folderRows(_ visit: (CatalogRow.Folder) throws -> Void) throws { throw unsupported }
+    func folderDecisions(_ visit: (CatalogRow.FolderDecision) throws -> Void) throws { throw unsupported }
+    func folderCounts() throws -> CatalogRow.FolderCounts { throw unsupported }
 }
 
 // MARK: - Header probe

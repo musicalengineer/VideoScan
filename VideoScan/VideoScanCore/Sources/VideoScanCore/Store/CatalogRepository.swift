@@ -201,7 +201,7 @@ public protocol CatalogLiveReading {
 }
 
 /// The handle a `read` body receives.
-public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading {
+public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading, CatalogFolderReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
@@ -210,7 +210,9 @@ public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, Catalog
 /// row per call, plain INSERT (never REPLACE: a duplicate is a finding).
 /// The store's DDL — not the door — refuses a row that breaks a constraint;
 /// the thrown error carries the engine's words and the write rolls back.
-public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
+/// Catalog folders (v1.10, CatalogFolderRows.swift): the folder store's
+/// readings and doors ride on the same transaction.
+public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, CatalogFolderWriting {
     /// The generation this write advances TO (the committed one plus one).
     /// Rows written in this transaction are stamped with it.
     var generation: Int { get }

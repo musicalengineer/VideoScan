@@ -700,9 +700,22 @@ struct CatalogContent: View {
         .padding(40)
     }
 
+    /// A selected folder shows its own facts (FolderInspectorView); a file
+    /// shows the file inspector, with the folders it is in.
+    @ViewBuilder
     private var inspectorPanelView: some View {
+        if let facts = tableState.folderInspector, selectedIDs == [facts.id] {
+            FolderInspectorView(facts: facts)
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
+        } else {
+            fileInspectorPanelView
+        }
+    }
+
+    private var fileInspectorPanelView: some View {
         InspectorPanel(
             record: selectedRecord,
+            folderKey: selectedRecord.flatMap(EventsFolderMembers.contentKey),
             onRecordEdited: { model.saveCatalogDebounced() },
             duplicateGroupMembers: duplicateGroupMembers,
             previewImage: previewImage,
@@ -807,6 +820,9 @@ struct CatalogContent: View {
             // for the same path is then kept, not cancelled.
             let action = livePreviewMode.selectionChanged(candidatePath: livePreviewCandidatePath())
             applyLivePreview(action)
+            // A selected folder fills the inspector (2026-10-19): its facts,
+            // once per selection (CatalogContent+FolderLabels.swift).
+            refreshFolderInspector()
         }
         // Space-toggle monitor lives for the catalog pane's on-screen
         // lifetime — installed here, torn down (and the mode reset) on
@@ -905,7 +921,7 @@ struct CatalogContent: View {
         }
         // Make Folder… / New Folder with Selection (CatalogContent+MakeFolder.swift).
         .sheet(item: $makeFolderRequest) { request in
-            MakeFolderSheet(request: request, onMake: commitMakeFolder)
+            MakeFolderSheet(request: request, onMake: { commitMakeFolder($0, recordIDs: request.recordIDs) })
         }
         // "Clean Up Video" recipe confirmation. Same .sheet(item:) shape
         // as the transcode sheet above (never chained isPresented).

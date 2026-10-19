@@ -253,6 +253,15 @@ extension VideoScanModel {
         }
         catalogCutover.install(committer, databaseURL: url, readOnlyReason: readOnlyReason)
         catalogCutover.requestDigests(held)
+        // Catalog folders live in catalog.sqlite (2026-10-19): the one store
+        // writes through this committer from now on; its first load imports
+        // events-decisions.json once. Not under a test host — a sandbox
+        // model must never re-point the app's shared store.
+        if !Self.isRunningTests {
+            EventsDecisionStore.shared.note = { [weak self] line in self?.eventsNote(line) }
+            EventsDecisionStore.shared.attachCatalog(EventsCatalogBacking(committer: committer))
+            Task { await EventsDecisionStore.shared.load() }
+        }
     }
 
     /// What the committer reads at the moment of a commit.

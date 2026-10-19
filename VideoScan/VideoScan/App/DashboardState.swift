@@ -51,7 +51,14 @@ final class DashboardState: ObservableObject {
     let catalogLog: PersistentLog
 
     func log(_ msg: String) {
-        catalogLog.write(msg)
+        log(console: msg, catalogLog: msg)
+    }
+
+    /// One event, two lengths: catalog.log gets the whole line (every
+    /// filename of a folder change); the console a capped one ("… and 41
+    /// more"). Same sink, same order (Catalog folders, 2026-10-19).
+    func log(console msg: String, catalogLog fileLine: String) {
+        catalogLog.write(fileLine)
         let newLines = msg.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         pendingLines.append(contentsOf: newLines)
 

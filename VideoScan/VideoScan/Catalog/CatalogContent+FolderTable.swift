@@ -49,29 +49,57 @@ extension CatalogContent {
     // MARK: - The Table
 
     var footageFolderTable: some View {
-        Table(of: FootageFolderTableRow.self, selection: $selectedIDs, sortOrder: folderSortBinding) {
+        Table(of: FootageFolderTableRow.self, selection: folderSelectionBinding, sortOrder: folderSortBinding) {
             folderColumns
         } rows: {
             // A folder with members twists open in place; every other row
             // is a plain row. (A result-builder `if` ≈ a compile-time
             // variant: each branch is its own row type.) A folder row is a
             // drop target, a record row a drag source — a record id as a
-            // string, never a file URL (CatalogContent+FolderDrop.swift).
+            // string (with the folder it is shown under), never a file URL
+            // (CatalogContent+FolderDrop.swift).
             ForEach(folderRows) { row in
                 if let members = row.children {
                     DisclosureTableRow(row, isExpanded: folderExpansion(row.id)) {
-                        ForEach(members) { TableRow($0).draggable(CatalogRecordDrag.payload($0.id)) }
+                        ForEach(members) { TableRow($0).draggable(Self.dragPayload($0)) }
                     }
                     .dropDestination(for: String.self) { dropOnFolder(row.id, items: $0) }
                 } else if row.isFolder {
                     TableRow(row)
                         .dropDestination(for: String.self) { dropOnFolder(row.id, items: $0) }
                 } else {
-                    TableRow(row).draggable(CatalogRecordDrag.payload(row.id))
+                    TableRow(row).draggable(Self.dragPayload(row))
                 }
             }
         }
         .background(FolderChevronStyle(revision: tableState.folderRows.count &+ tableState.expandedFolderIDs.count))
+        .modifier(FolderLabelPresentations(rename: tableState.$folderRenameRequest, delete: tableState.$folderDeleteRequest,
+                                           onRename: { renameFolder($0, to: $1) }, onDelete: { deleteFolder($0) }))
+    }
+
+    /// A record row's drag payload: its record, and the folder it is shown
+    /// under (a drag out of a folder is a move).
+    static func dragPayload(_ row: FootageFolderTableRow) -> String {
+        CatalogRecordDrag.payload(row.ref.record, from: row.inFolder)
+    }
+
+    /// The folder Table selects rows; the rest of the Catalog selects
+    /// files by id. A file shown under two folders has two rows
+    /// (FolderRowSelection).
+    private var folderSelectionBinding: Binding<Set<UUID>> {
+        Binding(
+            get: { FolderRowSelection.rows(for: selectedIDs, remembered: tableState.folderRowSelection, refs: tableState.folderRowRefs) },
+            set: { rows in
+                tableState.folderRowSelection = rows
+                let fileIDs = FolderRowSelection.recordIDs(of: rows, refs: tableState.folderRowRefs)
+                if fileIDs != selectedIDs { selectedIDs = fileIDs }
+            })
+    }
+
+    /// Is THIS row highlighted (not merely the same file's other row)?
+    private func isRowSelected(_ id: UUID) -> Bool {
+        FolderRowSelection.rows(for: selectedIDs, remembered: tableState.folderRowSelection, refs: tableState.folderRowRefs)
+            .contains(id)
     }
 
     @TableColumnBuilder<FootageFolderTableRow, KeyPathComparator<FootageFolderTableRow>>
@@ -187,7 +215,7 @@ extension CatalogContent {
     @ViewBuilder
     func folderNameCell(_ row: FootageFolderTableRow) -> some View {
         if let eventID = row.eventID {
-            folderTitleCell(title: row.title, selected: selectedIDs.contains(eventID))
+            folderTitleCell(title: row.title, kind: row.folder?.kind ?? .event, selected: selectedIDs.contains(eventID))
         } else if let rec = row.record {
             HStack(spacing: 4) {
                 if let relation = row.relation, let glyph = relation.glyph {
@@ -197,7 +225,7 @@ extension CatalogContent {
                         .frame(width: FootageFolderWords.glyphWidth)
                         .padding(.leading, FootageFolderWords.indent(for: relation))
                 }
-                recordFilenameCell(rec, dimmed: row.relation?.isCopy ?? false)
+                recordFilenameCell(rec, selected: isRowSelected(row.id), dimmed: row.relation?.isCopy ?? false)
                 if let words = row.relation?.words {
                     Text(words)
                         .font(FootageFolderWords.relationFont)
@@ -209,11 +237,11 @@ extension CatalogContent {
         }
     }
 
-    private func folderTitleCell(title: String, selected: Bool) -> some View {
+    private func folderTitleCell(title: String, kind: FolderKind, selected: Bool) -> some View {
         HStack(spacing: 6) {
             Image(systemName: FootageFolderWords.folderSymbol)
                 .font(FootageFolderWords.folderSymbolFont)
-                .foregroundColor(selected ? .primary : FootageFolderWords.folderTint)
+                .foregroundColor(selected ? .primary : FootageFolderWords.folderTint(for: kind))
             Text(title)
                 .font(FootageFolderWords.folderTitleFont)
                 .lineLimit(1)
@@ -225,10 +253,10 @@ extension CatalogContent {
 
     /// A record's filename cell with the folder view's one extra: a copy
     /// reads in grey (the dimmed flag), everything else as in the linear table.
-    private func recordFilenameCell(_ rec: VideoRecord, dimmed: Bool) -> some View {
+    private func recordFilenameCell(_ rec: VideoRecord, selected: Bool, dimmed: Bool) -> some View {
         let offline = !VolumeReachability.isReachable(path: rec.fullPath)
         return CatalogFilenameCell(record: rec,
-                                   isSelected: selectedIDs.contains(rec.id),
+                                   isSelected: selected,
                                    isOffline: offline,
                                    pairTint: showPairsOnly && rec.pairedWith != nil,
                                    tooltip: filenameTooltip(for: rec, offline: offline, purged: rec.isPurged),
@@ -313,15 +341,29 @@ extension CatalogContent {
 
     // MARK: - Menus and the double-click
 
-    /// A right-click on a folder row gets the folder's menu; anything
-    /// else gets the row menu as always.
+    /// A right-click on a folder row gets the folder's menu (Open,
+    /// Rename…, Folder Kind ▸, Delete Folder…); anything else gets the row
+    /// menu as always, then the folder items (Add to / Move to Folder ▸,
+    /// Remove from <Folder>). The table hands over ROW ids: they become
+    /// file ids here, and the folder they are seen inside.
     @ViewBuilder
     func tableContextMenu(ids: Set<UUID>) -> some View {
         if showFootageFolders, let folderID = ids.first(where: { tableState.folderIDs.contains($0) }) {
-            Button(FootageFolderWords.openFolder) { enterFolder(folderID) }
+            folderRowMenu(folderID)
         } else {
-            rowContextMenu(ids: ids)
+            let fileIDs = showFootageFolders ? FolderRowSelection.recordIDs(of: ids, refs: tableState.folderRowRefs) : ids
+            rowContextMenu(ids: fileIDs)
+            folderMembershipItems(recordIDs: displayedIDs(among: fileIDs), inFolder: rowsFolder(ids))
         }
+    }
+
+    /// The folder the clicked rows are seen inside: inside a folder, that
+    /// folder; at the top, the one folder all of them are under. nil for
+    /// loose files, a mix, or the plain list.
+    private func rowsFolder(_ ids: Set<UUID>) -> UUID? {
+        guard showFootageFolders else { return nil }
+        if case .event(let id)? = tableState.folderScope { return id }
+        return FolderRowSelection.commonFolder(of: ids, refs: tableState.folderRowRefs)
     }
 
     /// Double-click / Return: a folder opens (the Finder); rows open as
@@ -331,7 +373,8 @@ extension CatalogContent {
             enterFolder(folderID)
             return
         }
-        openRows(ids: displayedIDs(among: ids), gesture: "double-click")
+        let fileIDs = showFootageFolders ? FolderRowSelection.recordIDs(of: ids, refs: tableState.folderRowRefs) : ids
+        openRows(ids: displayedIDs(among: fileIDs), gesture: "double-click")
     }
 
     /// The row menu's two folder items (the `find` group), only while the
@@ -341,7 +384,7 @@ extension CatalogContent {
     func footageFolderItems(rec: VideoRecord) -> some View {
         if showFootageFolders {
             let index = model.footageFolders.index
-            if let eventID = index.folderOf[rec.id] {
+            if let eventID = index.firstFolder(of: rec.id) {
                 Button(FootageFolderWords.showInItsEvent) {
                     setFolderScope(.event(eventID))
                     selectedIDs = [rec.id]
@@ -430,7 +473,9 @@ extension CatalogContent {
         let level = FootageFolderLevel.level(scope: tableState.folderScope, index: index, display: display)
         tableState.folderLevel = level
         tableState.folderRows = folderTableRows(level, index: index)
+        tableState.folderRowRefs = Self.rowRefs(tableState.folderRows)
         tableState.folderIDs = level.folderIDs
+        refreshFolderInspector()
         let revealedFolder = takePendingFolderReveal(in: level)   // opens its triangle before the count below
         tableState.folderRecordIDs = level.recordIDs(expanded: tableState.expandedFolderIDs)
         // The empty display is also what `stop()` and a fresh subscription
@@ -447,13 +492,16 @@ extension CatalogContent {
     private func folderTableRows(_ level: FootageFolderLevel.Level, index: FootageFolders.Index) -> [FootageFolderTableRow] {
         var rows: [FootageFolderTableRow] = []
         rows.reserveCapacity(level.rows.count)
+        // Inside a folder, every row is seen inside it.
+        var scopeFolder: UUID?
+        if case .event(let id)? = level.scope { scopeFolder = id }
         for d in level.rows {
             if let e = d.eventID {
-                let members = (level.children[e] ?? []).compactMap { recordTableRow($0, index: index) }
+                let members = (level.children[e] ?? []).compactMap { recordTableRow($0, index: index, inFolder: e) }
                 rows.append(FootageFolderTableRow(display: d, record: nil, folder: level.folders[e],
                                                   keys: index.folders[e]?.keys ?? FootageFolders.SortKeys(),
                                                   children: members.isEmpty ? nil : members))
-            } else if let row = recordTableRow(d, index: index) {
+            } else if let row = recordTableRow(d, index: index, inFolder: scopeFolder) {
                 rows.append(row)
             }
         }
@@ -461,11 +509,23 @@ extension CatalogContent {
     }
 
     /// A record's row; nil when the record has left the catalog.
-    private func recordTableRow(_ d: FootageFolders.DisplayRow, index: FootageFolders.Index) -> FootageFolderTableRow? {
+    private func recordTableRow(_ d: FootageFolders.DisplayRow, index: FootageFolders.Index, inFolder: UUID?) -> FootageFolderTableRow? {
         guard let id = d.recordID, let rec = model.record(forID: id) else { return nil }
         // A row the index has not seen yet (a derivative that just
         // landed) still needs its sort facts: one projection.
-        return FootageFolderTableRow(display: d, record: rec, keys: index.keysOf[id] ?? model.footageFolderRow(rec).keys)
+        return FootageFolderTableRow(display: d, record: rec, keys: index.keysOf[id] ?? model.footageFolderRow(rec).keys,
+                                     inFolder: inFolder)
+    }
+
+    /// Every row id (members included) → its file id and folder. O(rows).
+    static func rowRefs(_ rows: [FootageFolderTableRow]) -> [UUID: FolderRowRef] {
+        var refs: [UUID: FolderRowRef] = [:]
+        refs.reserveCapacity(rows.count)
+        for row in rows {
+            refs[row.id] = row.ref
+            for child in row.children ?? [] { refs[child.id] = child.ref }
+        }
+        return refs
     }
 
     /// The option flipped (or the pane appeared / left): tell the model
@@ -482,6 +542,9 @@ extension CatalogContent {
             tableState.pendingFolderReveal = nil
             tableState.pendingDropSelection = nil
             tableState.folderRows = []
+            tableState.folderRowRefs = [:]
+            tableState.folderRowSelection = []
+            tableState.folderInspector = nil
             tableState.folderIDs = []
             tableState.folderLevel = .empty
             tableState.expandedFolderIDs = []
@@ -566,7 +629,7 @@ extension CatalogContent {
     /// Returns the folder's title when one was entered or kept.
     private func selectDerivative(_ landing: DerivativeLanding) -> String? {
         var folder: String?
-        if showFootageFolders, let eventID = model.footageFolders.index.folderOf[landing.sourceID] {
+        if showFootageFolders, let eventID = model.footageFolders.index.firstFolder(of: landing.sourceID) {
             if tableState.folderScope == nil { enterFolder(eventID) }
             if tableState.folderScope == .event(eventID) { folder = model.footageFolders.index.folders[eventID]?.title }
         }

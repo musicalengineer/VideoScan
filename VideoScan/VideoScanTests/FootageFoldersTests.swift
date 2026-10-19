@@ -208,14 +208,15 @@ struct FootageFoldersLogicTests {
         let e1 = event("One", [a], id: try #require(UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")))
         let e2 = event("Two", [b], id: try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000002")))
         let index = FootageFolders.index(rows: [a, b, c], events: [e1, e2])
-        #expect(index.folderOf[a.id] == e1.id && index.folderOf[b.id] == e2.id, "own events are kept")
-        #expect(index.folderOf[c.id] == e1.id, "C follows its copy group (A's) into E1, never the tie-break")
+        #expect(index.folders(of: a.id) == [e1.id], "own events are kept")
+        #expect(index.folders(of: b.id) == [e2.id], "own events are kept")
+        #expect(index.folders(of: c.id) == [e1.id], "C follows its copy group (A's) into E1, never the tie-break")
         #expect(index.family(of: c.id)?.keeper == a.id)
         // A member whose copy group has NO assigned member still follows the family's vote.
         let d = row("a.vs.edit.mov", digest: "d", from: a.id, kind: "editing")
         let a2 = row("a2.mov", digest: "a2", from: a.id, kind: "trim")
         let majority = FootageFolders.index(rows: [a, b, c, d, a2], events: [event("One", [a, a2], id: e1.id), e2])
-        #expect(majority.folderOf[d.id] == e1.id, "no copy-group mate with an event: the family's majority (E1, 2 : 1)")
+        #expect(majority.folders(of: d.id) == [e1.id], "no copy-group mate with an event: the family's majority (E1, 2 : 1)")
     }
 
     @Test func supersededRowStaysWithItsFamilyWhenShown() {
@@ -489,7 +490,9 @@ struct FootageFoldersSensorTests {
         #expect(table.contains("if showFootageFolders {\n            footageFolderTable\n        } else {\n            catalogTableBase\n        }"),
                 "off = the linear table, nothing else")
         let folder = try code("CatalogContent+FolderTable.swift")
-        #expect(folder.contains("Table(of: FootageFolderTableRow.self, selection: $selectedIDs, sortOrder: folderSortBinding)"))
+        // 2026-10-19 (a file in many folders): the folder Table binds ROW ids through folderSelectionBinding,
+        // which maps them onto the same selectedIDs (FolderLabelsTests pins the map).
+        #expect(folder.contains("Table(of: FootageFolderTableRow.self, selection: folderSelectionBinding, sortOrder: folderSortBinding)"))
         #expect(folder.contains("ForEach(folderRows) { row in"), "the rows are the event handler's folderRows")
         #expect(folder.contains("DisclosureTableRow(row, isExpanded: folderExpansion(row.id))"),
                 "a folder twists open in place through the table's own expansion state")
@@ -620,7 +623,8 @@ struct FootageFoldersSelectionTests {
         let menu = try code("CatalogRowContextMenu.swift")
         #expect(menu.contains("let shown = displayedIDs(among: ids)"), "the row menu (Transcode, Verify, Analyze, Move to Trash…) sees only rows on screen")
         let folder = try code("CatalogContent+FolderTable.swift")
-        #expect(folder.contains("openRows(ids: displayedIDs(among: ids)"), "Return / double-click opens only rows on screen")
+        // 2026-10-19: the row ids become file ids first (FolderRowSelection), then the displayed rule.
+        #expect(folder.contains("openRows(ids: displayedIDs(among: fileIDs)"), "Return / double-click opens only rows on screen")
     }
 
     /// The reveal asks the display before it selects; a row the filter or

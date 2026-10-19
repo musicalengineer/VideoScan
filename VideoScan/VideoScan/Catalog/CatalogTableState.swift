@@ -107,6 +107,23 @@ struct CatalogTableState: DynamicProperty {
     @State var pendingDropSelection: FolderDropLanding?
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
+
+    // MARK: Folders as labels (2026-10-19: a file in many folders)
+
+    /// Every folder-table row id → its record and the folder it is shown
+    /// under (a file in two open folders has two rows). Built with
+    /// `folderRows`, in the event handler.
+    @State var folderRowRefs: [UUID: FolderRowRef] = [:]
+    /// The rows Rick clicked, so the highlight stays on the row he chose
+    /// when the same file is shown twice (FolderRowSelection).
+    @State var folderRowSelection: Set<UUID> = []
+    /// Rename… on a folder (the sheet's payload).
+    @State var folderRenameRequest: FolderRenameRequest?
+    /// Delete Folder… on a folder (the confirmation's payload).
+    @State var folderDeleteRequest: FolderDeleteRequest?
+    /// The selected folder's inspector facts — computed once per selection
+    /// and per folder or catalog revision, never in a body.
+    @State var folderInspector: FolderInspectorFacts?
 }
 
 extension CatalogContent {

@@ -9,6 +9,10 @@ import SwiftUI
 
 struct InspectorPanel: View {
     let record: VideoRecord?
+    /// The record's folder identity (the Events content key), resolved by
+    /// the CALLER; nil = it cannot be in a folder. Drives "In folders: …"
+    /// (2026-10-19), which observes the folder store itself.
+    var folderKey: String?
     /// Persistence hook for edits made INSIDE the inspector (star rating):
     /// the panel has no model access by design; the host passes
     /// `model.saveCatalogDebounced`. Defaulted for previews.
@@ -49,6 +53,8 @@ struct InspectorPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     headerSection(rec)
+
+                    InspectorFoldersLine(contentKey: folderKey)   // nothing when in no folder
 
                     Divider().padding(.horizontal, 16)
 
