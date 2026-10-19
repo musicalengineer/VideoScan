@@ -312,7 +312,6 @@ extension VideoScanModel {
     /// The switch with the real import job, the real freeze and the one sink.
     func catalogSwitchEnvironment(center: MediaFileOperationsCenter) -> CatalogSwitchEnvironment {
         let catalogURL = URL(fileURLWithPath: catalogStore.fileLocation)
-        let wasReadOnly = (store: catalogStore.isReadOnly, model: isReadOnly)
         return CatalogSwitchEnvironment(
             folder: catalogURL.deletingLastPathComponent(), catalogURL: catalogURL,
             runImport: { [weak self] in
@@ -320,9 +319,8 @@ extension VideoScanModel {
                 return await Self.runImportJob(center.startedByUser { $0.startImportToSQLite(model: self, mode: .commit) })
             },
             freezeJSON: { [weak self] freeze in
-                guard let self else { return }
-                self.catalogStore.isReadOnly = freeze || wasReadOnly.store
-                self.isReadOnly = freeze || wasReadOnly.model
+                // The Switch's own fact: undoing the freeze never clears the launch's or the role's.
+                self?.updateReadOnlyFacts { $0.switchFreeze = freeze }
             },
             flushJSON: { [weak self] in
                 guard let self else { return false }

@@ -191,7 +191,7 @@ extension VideoScanModel {
     /// Fill In Full Hashes is queued for them.
     private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord], held: Set<UUID>) {
         _ = catalogStore.load()
-        catalogStore.isReadOnly = true
+        updateReadOnlyFacts { $0.jsonFrozenByLaunch = true }
         if let stored = CatalogCommitter.designation(fromJSON: launch.designationJSON) {
             catalogStore.masterArchive = stored
         }
@@ -204,18 +204,19 @@ extension VideoScanModel {
         // B2.3: the marker veto answers only for this session's live records.
         committer.owns = { [weak self] record in self?.record(forID: record.id) === record }
         committer.onWritableAgain = { [weak self] in
-            self?.isReadOnly = false
+            // Adopt lifts the launch's session fact only; a viewer stays a viewer.
+            self?.updateReadOnlyFacts { $0.sessionReadOnlyByLaunch = false }
             self?.catalogCutover.noteWritable()
         }
         var readOnlyReason: String?
         if case .readOnly(let reason) = launch.opened {
             readOnlyReason = reason
             committer.block("read-only: \(reason)")
-            isReadOnly = true
+            updateReadOnlyFacts { $0.sessionReadOnlyByLaunch = true }
             catalogAuthorityNote("catalog.sqlite opened READ-ONLY — \(reason). Nothing will be saved this session"
                                  + (reason.hasPrefix("restoredBelowHighWater") ? " unless you choose Catalog ▸ Adopt This SQLite Catalog…." : "."))
         } else {
-            isReadOnly = false
+            updateReadOnlyFacts { $0.sessionReadOnlyByLaunch = false }
             committer.scheduleCommit()
             catalogAuthorityNote("catalog.json is frozen (read-only); every save now commits to \(url.lastPathComponent)")
         }
@@ -232,8 +233,10 @@ extension VideoScanModel {
 
     private func loadJSONReadOnly(_ why: String) -> [VideoRecord] {
         let records = catalogStore.load()
-        catalogStore.isReadOnly = true
-        isReadOnly = true
+        updateReadOnlyFacts {
+            $0.jsonFrozenByLaunch = true
+            $0.sessionReadOnlyByLaunch = true
+        }
         catalogAuthorityNote("OUTCOME " + CatalogAuthority.readOnlyWords(why))
         return records
     }
