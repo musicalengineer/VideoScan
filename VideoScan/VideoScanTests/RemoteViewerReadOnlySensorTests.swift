@@ -497,7 +497,7 @@ struct RemoteViewerReadOnlySensorTests {
 
         let n = await model.discardWorkbench([rec], trash: trashed.operation)
 
-        #expect(trashed.count == 0, "nothing may be trashed on a viewer")
+        #expect(trashed.urls.isEmpty, "nothing may be trashed on a viewer")
         #expect(n == 0)
         #expect(rec.purgedAt == nil)
         #expect(rec.lifecycleStage == .workbench)
@@ -536,6 +536,9 @@ struct RemoteViewerReadOnlySensorTests {
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift": (1, nil, nil),
         "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": (2, nil, nil),
         "Catalog/CatalogStore.swift": (1, nil, nil), "Catalog/CatalogSync.swift": (3, nil, nil),
+        // The master's own VACUUM INTO temp (.catalog.sqlite.<uuid>.vspublish.tmp)
+        // when a viewer-snapshot publish fails before its rename (phase 2, 2026-10-19).
+        "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),
         "Catalog/CatalogWriteError.swift": (1, nil, nil),
         "FamilyTree/CouplePortrait.swift": (2, nil, nil), "FamilyTree/FamilyAssetStore.swift": (1, nil, nil),
         "FamilyTree/FamilySearchPullCoordinator.swift": (6, nil, nil),

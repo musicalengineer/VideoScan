@@ -161,6 +161,12 @@ struct CatalogSyncBanner: View {
                 masterDisplayName: ViewerModeCenter.shortName(sync.masterHostname),
                 syncedAt: at, syncing: false, media: media.label)
         case .failed:
+            // Phase 2: the master answered but what it sent was refused —
+            // not "offline"; the last good set is what is on screen.
+            if sync.state.refusal != nil {
+                return "SYNC REFUSED — kept the last good catalog"
+                    + (sync.state.lastSuccessfulSync.map { " from \(relative($0))" } ?? "")
+            }
             if let last = sync.state.lastSuccessfulSync {
                 return "MASTER OFFLINE — showing snapshot from \(relative(last))"
             }
@@ -168,11 +174,13 @@ struct CatalogSyncBanner: View {
         }
     }
 
+    /// The failure (if any), then what catalog is on screen — the "older
+    /// catalog" label always shows while only the frozen catalog.json is here.
     private var subText: String? {
-        switch sync.state.phase {
-        case .failed(let reason): return reason
-        default: return nil
-        }
+        var lines: [String] = []
+        if case .failed(let reason) = sync.state.phase { lines.append(reason) }
+        if let catalog = sync.state.viewerCatalog.words { lines.append(catalog) }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     private func relative(_ date: Date) -> String {

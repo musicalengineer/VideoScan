@@ -41,4 +41,14 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
 
     /// VideoScanModel.isReadOnly — may the session edit (the UI half)?
     var modelReadOnly: Bool { sessionReadOnlyByLaunch || viewerRole || switchFreeze }
+
+    /// Why the session may not write, in the person's words — nil when it
+    /// may. The SQLite committer refuses every commit while this is non-nil
+    /// (codex cycle #112: the facts must reach the committer, not only the UI).
+    var readOnlyWords: String? {
+        if viewerRole { return "this Mac is a viewer — only the master writes the catalog" }
+        if sessionReadOnlyByLaunch { return "the catalog opened read-only at launch" }
+        if switchFreeze { return "Switch Catalog to SQLite… is deciding" }
+        return nil
+    }
 }
