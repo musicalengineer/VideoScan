@@ -96,6 +96,11 @@ struct CatalogTableState: DynamicProperty {
     /// placing the row). Cleared when it is selected, when Rick moves
     /// between levels, or when the option goes off.
     @State var pendingReveal: DerivativeLanding?
+    /// A folder just made (Make Folder… / New Folder with Selection) that
+    /// is to be selected and twisted open as soon as the level shows it
+    /// (the join is asynchronous). Cleared when it is revealed or the
+    /// option goes off.
+    @State var pendingFolderReveal: UUID?
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
 }

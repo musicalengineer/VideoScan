@@ -97,6 +97,10 @@ struct CatalogContent: View {
     /// Default preserves the historical wording; "Find Online Version"
     /// passes "Online copies" so the banner doesn't claim a pair focus.
     var focusLabel: String = "A/V Pair focus"
+    /// The banner shows a NAMED set (Triage / Steward / an audit handed
+    /// it over with a label) — not a pair, one file's copies or a single
+    /// navigation. Gates the banner's Make Folder….
+    var focusIsNamedSet: Bool = false
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
@@ -123,6 +127,9 @@ struct CatalogContent: View {
     /// "Show Repaired Copy in Catalog" on a superseded original (GH #132)
     /// — parent focuses the catalog on the repair record and selects it.
     var onShowRepairedCopy: ((_ repairID: UUID) -> Void)?
+    /// A folder was just made: the parent clears the focus and turns
+    /// Show ▸ As folders on (the table then reveals the folder).
+    var onMadeFolder: (() -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -183,6 +190,8 @@ struct CatalogContent: View {
 
     // (`tableData` and `angelBadgeRevision` live in CatalogTableState.swift.)
 
+    /// Make Folder… / New Folder with Selection — .sheet(item:).
+    @State var makeFolderRequest: MakeFolderRequest?
     /// Non-nil presents format + destination choices before a transcode.
     @State var transcodeRequest: TranscodeRequest?
     /// Non-nil presents the "Clean Up Video" recipe confirmation sheet.
@@ -880,6 +889,10 @@ struct CatalogContent: View {
         .sheet(item: $transcodeRequest) { request in
             TranscodeSheet(request: request)
         }
+        // Make Folder… / New Folder with Selection (CatalogContent+MakeFolder.swift).
+        .sheet(item: $makeFolderRequest) { request in
+            MakeFolderSheet(request: request, onMake: commitMakeFolder)
+        }
         // "Clean Up Video" recipe confirmation. Same .sheet(item:) shape
         // as the transcode sheet above (never chained isPresented).
         .sheet(item: $cleanupRequest) { request in
@@ -1029,6 +1042,8 @@ struct CatalogContent: View {
                 .buttonStyle(.bordered)
                 .font(.system(size: 11))
             }
+
+            makeFolderBannerButton
 
             Button("Show All") {
                 onClearFilter?()

@@ -192,14 +192,16 @@ enum FootageFolders {
         }
 
         init(_ e: ConfirmedEvent) {
-            self.init(id: e.id, title: e.name, dateWords: e.dateWords, contentKeys: e.members.map(\.range.contentKey))
+            self.init(id: e.id, title: EventsNaming.folderTitle(e.name), dateWords: e.dateWords,
+                      contentKeys: e.members.map(\.range.contentKey))
         }
 
         /// The live confirmed events straight from Rick's decisions — no
         /// planner needed (§3: a join, not an analyzer).
         static func events(in decisions: EventsDecisionSnapshot) -> [Event] {
             decisions.liveEvents
-                .map { Event(id: $0.id, title: $0.name, contentKeys: decisions.members(of: $0.id).map(\.contentKey).sorted()) }
+                // The stored name may carry a legacy date source: shown without it.
+                .map { Event(id: $0.id, title: EventsNaming.folderTitle($0.name), contentKeys: decisions.members(of: $0.id).map(\.contentKey).sorted()) }
                 .sorted { $0.title != $1.title ? $0.title < $1.title : $0.id.uuidString < $1.id.uuidString }
         }
     }

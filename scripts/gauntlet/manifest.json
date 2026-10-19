@@ -10947,6 +10947,23 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsFolderDraftTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsFolderDraftTests"
+      ],
+      "tests": [
+        "bannerAndMenuGiveTheSameMembers",
+        "legacyNameCleanedOnDisplayOnly",
+        "namePassesThroughToTheConfirmedEvent",
+        "recordsBecomeMembers",
+        "refusals",
+        "suggestionNameHasNoProvenance",
+        "writesOnlyIntoTheTestDirectory"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EventsIsolationTests.swift",
       "stage": "unit",
       "suites": [
@@ -31867,7 +31884,7 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2654,
+      "expected_floor": 2661,
       "name": "unit",
       "package_expected_floor": 294,
       "package_selectors": [
@@ -32038,6 +32055,7 @@
         "VideoScanTests/EmbeddedDatePlacementTests",
         "VideoScanTests/EvalPresenceRuleTests",
         "VideoScanTests/EventsDecisionStoreTests",
+        "VideoScanTests/EventsFolderDraftTests",
         "VideoScanTests/EventsIsolationTests",
         "VideoScanTests/EventsPlanTests",
         "VideoScanTests/EventsReviewRedTests",

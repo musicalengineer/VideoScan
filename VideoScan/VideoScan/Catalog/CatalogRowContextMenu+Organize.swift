@@ -35,6 +35,10 @@ extension CatalogContent {
             showNotesSheet = true
         }
 
+        // Finder's "New Folder with Selection" (Rick 2026-10-19): the rows
+        // on screen become one folder (CatalogContent+MakeFolder.swift).
+        newFolderWithSelectionItem(selection: selection)
+
         // ("Mark as Family Music…" retired 2026-10-07 — Rick: "this app
         // is not going to track Rick's Music". Existing marks stay on the
         // records, inert; the Archive tab's Music shelf still lists them.)

@@ -172,6 +172,16 @@ final class EventsStore: ObservableObject {
         reapply()
     }
 
+    /// An event was confirmed outside this page (Catalog ▸ Make Folder…,
+    /// through the same `decisions.confirm`). Its members may not be in
+    /// this plan's member index — a reapply would list them as "not in
+    /// the catalog now" — so a plan already built is REBUILT (off-main);
+    /// a page never opened builds on its first refresh as always.
+    func eventConfirmedElsewhere(model: VideoScanModel) {
+        guard plan != nil else { return }
+        refresh(model: model)
+    }
+
     func dismiss(_ s: EventSuggestion) {
         guard decisions.record(.suggestionDismissed(key: s.key, facts: s.facts)) else { return }
         reapply()
