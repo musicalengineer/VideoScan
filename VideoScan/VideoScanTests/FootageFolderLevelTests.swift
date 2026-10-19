@@ -13,9 +13,11 @@
 //               inside a budget (TimingBudget-judged).
 //   Isolation — N/A (pure values; the Show setting is pinned in
 //               FootageFoldersTests).
-//   Sensor    — a folder row is never in `selection ∩ displayed`; the
-//               table passes NO open set (nothing twists; the level is
-//               the scope); the state has no open set left.
+//   Sensor    — a folder row is never in `selection ∩ displayed`, nor is
+//               a COLLAPSED folder's member; the top composes every
+//               folder open (members ride as children for the Finder
+//               list-view triangle, 2026-10-18) and which are open is the
+//               table's view state.
 // Media matrix: N/A — catalog metadata only; no file is opened.
 //
 // Suite (filter by SUITE — method-level -only-testing runs zero tests):
@@ -87,6 +89,11 @@ private struct Fixture {
 
     func top() -> FootageFolderLevel.Level {
         FootageFolderLevel.level(scope: nil, index: index, display: display(scope: nil))
+    }
+
+    /// The top as the table composes it since 2026-10-18: every folder open.
+    var openTopDisplay: FootageFolders.Display {
+        FootageFolders.compose(index: index, visible: visible, sort: .byName, open: Set(index.folders.keys), scope: nil)
     }
 }
 
@@ -188,7 +195,54 @@ struct FootageFolderLevelTests {
         #expect(FootageFolderKey(keyCode: 126, modifiers: [.command]) == .close)
         #expect(FootageFolderKey(keyCode: 126, modifiers: [.command, .function]) == .close, "fn rides along on an arrow key")
         #expect(FootageFolderKey(keyCode: 125, modifiers: [.command, .shift]) == nil, "⇧⌘↓ is not ours")
-        #expect(FootageFolderKey(keyCode: 124, modifiers: [.numericPad, .function]) == .open, "bare → as the hardware reports it")
+        #expect(FootageFolderKey(keyCode: 124, modifiers: [.numericPad, .function]) == nil,
+                "bare → (as the hardware reports it) is the outline's twist-open, not a drill-in")
+        #expect(FootageFolderKey(keyCode: 123, modifiers: [.numericPad, .function]) == .close, "bare ← still leaves a folder")
+    }
+
+    // MARK: Logic — the disclosure triangle's children (Finder list view, 2026-10-18)
+
+    @Test func anOpenFolderCarriesItsMembersAsChildrenAndTheTopRowsDoNotMove() {
+        let f = Fixture()
+        let top = FootageFolderLevel.top(index: f.index, display: f.openTopDisplay)
+        #expect(top.rows == f.top().rows, "the level's own rows are the same with every folder open")
+        #expect(top.children[f.marks.id]?.map(\.id) == [f.b1.id, f.bCopy.id, f.b2.id],
+                "recording · = its copy · ≈ the other recording, in the join's family order")
+        #expect(top.children[f.marks.id]?[1].relation?.isCopy == true)
+        #expect(top.children[f.marks.id]?[2].relation == .sameEvent)
+        #expect(top.children[f.cape.id]?.map(\.id) == [f.a1.id])
+        #expect(top.children.count == 2, "a loose file's copy is never a folder's child")
+        #expect(top.rows.map(\.id).contains(f.xCopy.id), "the loose file's copy stays under it in the rows")
+    }
+
+    @Test func onlyAnExpandedFoldersMembersAreOnScreen() {
+        let f = Fixture()
+        let top = FootageFolderLevel.top(index: f.index, display: f.openTopDisplay)
+        let loose: Set<UUID> = [f.x.id, f.xCopy.id, f.y.id]
+        #expect(top.recordIDs == loose, "every folder collapsed: the loose files only")
+        #expect(top.recordIDs(expanded: [f.marks.id]) == loose.union([f.b1.id, f.bCopy.id, f.b2.id]))
+        #expect(top.recordIDs(expanded: [f.marks.id, f.cape.id, UUID()]) == loose.union([f.b1.id, f.bCopy.id, f.b2.id, f.a1.id]),
+                "a folder that has gone matches nothing")
+        let shown = CatalogSelectionPrune.displayed([f.b1.id, f.recX.id], foldersOn: true,
+                                                    folderRecordIDs: top.recordIDs(expanded: []), rows: [f.recX])
+        #expect(shown == [f.recX.id], "a collapsed folder's member never reaches ⌘⌫ or Promote")
+    }
+
+    @Test func aGoneFoldersMembersAreDroppedWithIt() {
+        let f = Fixture()
+        let gone = FootageFolders.Folder(id: UUID(), title: "Gone")
+        let stale = FootageFolders.Display(rows: [.folder(gone), .member(f.b1.id, .recording)] + f.openTopDisplay.rows)
+        let top = FootageFolderLevel.top(index: f.index, display: stale)
+        #expect(top.children[gone.id] == nil)
+        #expect(top.rows.map(\.id) == [f.marks.id, f.cape.id, f.x.id, f.xCopy.id, f.y.id],
+                "neither the gone folder nor its member becomes a row")
+    }
+
+    @Test func aCopyIndentsUnderItsRecordingAndASameEventRowDoesNot() {
+        #expect(FootageFolderWords.indent(for: .copy("copy")) == FootageFolderWords.memberIndent)
+        #expect(FootageFolderWords.indent(for: .madeFrom("made from it")) == FootageFolderWords.memberIndent)
+        #expect(FootageFolderWords.indent(for: .sameEvent) == 0, "≈ is a recording: the glyph is only its marker")
+        #expect(FootageFolderWords.indent(for: .recording) == 0)
     }
 
     // MARK: Sensors
@@ -209,16 +263,23 @@ struct FootageFolderLevelTests {
                 "inside Marks, the loose file is off screen and the folder id is still no record")
     }
 
-    /// Nothing twists any more: the table composes with no open set and
-    /// the level is the scope; the state has no open set left.
-    @Test func theTableComposesWithNoOpenSet() throws {
+    /// The triangle (2026-10-18): the top composes every folder open so
+    /// each folder row carries its members; which folders SHOW them is the
+    /// table's view state, and the displayed set follows it — on a
+    /// landing display and on every twist.
+    @Test func theTopComposesEveryFolderOpenAndTheTriangleIsViewState() throws {
         let table = try code("CatalogContent+FolderTable.swift")
-        #expect(table.contains("open: [],"), "the compose request never opens a folder inline")
+        #expect(table.contains("open: folderComposeOpenSet,"), "the compose request opens every folder at the top")
+        #expect(table.contains("tableState.folderScope == nil ? Set(model.footageFolders.index.folders.keys) : []"))
         #expect(table.contains("FootageFolderLevel.level(scope: tableState.folderScope, index: index, display: display)"))
         #expect(table.contains("case .close, .escape: return leaveFolderByKey()"), "←, ⌘↑ and Esc go up one level")
-        #expect(table.contains("tableState.folderRecordIDs = level.recordIDs"), "the displayed set is the level's records")
+        #expect(table.contains("tableState.folderRecordIDs = level.recordIDs(expanded: tableState.expandedFolderIDs)"),
+                "the displayed set is the level's records with the expanded folders' members")
+        #expect(table.contains("tableState.folderRecordIDs = tableState.folderLevel.recordIDs(expanded: expanded)"),
+                "a twist recounts the displayed set")
         let state = try code("CatalogTableState.swift")
         #expect(!state.contains("openFolderIDs"))
+        #expect(state.contains("@State var expandedFolderIDs: Set<UUID> = []"))
         let words = try code("FootageFolderWords.swift")
         #expect(!words.contains("chevron.right"), "no twisty glyph is left in the words")
     }
@@ -247,7 +308,7 @@ struct FootageFolderLevelTests {
         let events = eventKeys.enumerated().map { FootageFolders.Event(title: "Event \($0.offset)", contentKeys: $0.element) }
         let index = FootageFolders.index(rows: rows, events: events)
         let visible = rows.map(\.id)
-        let topDisplay = FootageFolders.compose(index: index, visible: visible, sort: .byName, open: [], scope: nil)
+        let topDisplay = FootageFolders.compose(index: index, visible: visible, sort: .byName, open: Set(index.folders.keys), scope: nil)
         let first = try #require(events.first?.id)
         let insideDisplay = FootageFolders.compose(index: index, visible: visible, sort: .byName, open: [], scope: .event(first))
 
@@ -263,6 +324,8 @@ struct FootageFolderLevelTests {
         #expect(top.rows.prefix(eventCount).allSatisfy { $0.isFolder }, "every folder before every loose file")
         #expect(top.rows.dropFirst(eventCount).allSatisfy { !$0.isFolder })
         #expect(top.rows.count == eventCount + 40_000, "2k folders and the 40k loose files")
+        #expect(top.children.count == eventCount)
+        #expect(top.children.values.reduce(0) { $0 + $1.count } == 60_000, "40k recordings and 20k copies, all as children")
         #expect(inside.rows.count == 30, "20 recordings and their 10 copies")
         expectWithinTimingBudget("FootageFolderLevel.top 100k rows / 2k events",
                                  measured: topTime, budget: PerformanceLane.debugCeiling(.milliseconds(500)), loadBefore: load)

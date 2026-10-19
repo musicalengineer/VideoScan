@@ -3,8 +3,10 @@
 // GH #281): the rows snapshot it draws, the badge revision its cells
 // read — plus `CatalogPane`, the name of each keyboard-focus target in
 // the Catalog's two panes (2026-10-06) — and, since the Footage folders
-// view (2026-10-16; a two-level Finder since 2026-10-17), the folder the
-// table is inside, the folder rows and a derivative waiting to be shown.
+// view (2026-10-16; a two-level Finder since 2026-10-17, with Finder
+// list-view triangles since 2026-10-18), the folder the table is inside,
+// the folder rows, the folders twisted open and a derivative waiting to
+// be shown.
 // The keyboard focus itself is ONE FocusState (`focusedPane`) in
 // CatalogView; the table's selection and sort order are @Bindings owned
 // there too.
@@ -73,10 +75,21 @@ struct CatalogTableState: DynamicProperty {
     @State var folderRows: [FootageFolderTableRow] = []
     /// The event ids among `folderRows` (O(1) "is this id a folder?").
     @State var folderIDs: Set<UUID> = []
-    /// The record ids among `folderRows` — members and loose files under
-    /// the filter, sort AND scope. With the option on this is THE
-    /// displayed set every row action and prune reads (codex 2026-10-16
-    /// P1); off, the linear rows are. A folder row is never in it.
+    /// The level `folderRows` was built from — kept so a twist of a
+    /// disclosure triangle can recompute the displayed set without a
+    /// compose round trip.
+    @State var folderLevel = FootageFolderLevel.Level.empty
+    /// The folders twisted open in place (Finder list view, Rick
+    /// 2026-10-18). View state only: it survives refreshes and drilling in
+    /// and out; a folder that has gone simply matches nothing. Cleared when
+    /// the option goes off.
+    @State var expandedFolderIDs: Set<UUID> = []
+    /// The record ids on screen — loose files, plus the members of the
+    /// EXPANDED folders at the top; the members inside a scope — under the
+    /// filter, sort AND scope. With the option on this is THE displayed
+    /// set every row action and prune reads (codex 2026-10-16 P1); off,
+    /// the linear rows are. A folder row is never in it; neither is a
+    /// collapsed folder's member.
     @State var folderRecordIDs: Set<UUID> = []
     /// A derivative that just landed and is to be selected as soon as the
     /// level shows it (its folder was entered; the join may still be

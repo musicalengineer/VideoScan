@@ -489,7 +489,10 @@ struct FootageFoldersSensorTests {
         #expect(table.contains("if showFootageFolders {\n            footageFolderTable\n        } else {\n            catalogTableBase\n        }"),
                 "off = the linear table, nothing else")
         let folder = try code("CatalogContent+FolderTable.swift")
-        #expect(folder.contains("Table(folderRows, selection: $selectedIDs, sortOrder: folderSortBinding)"))
+        #expect(folder.contains("Table(of: FootageFolderTableRow.self, selection: $selectedIDs, sortOrder: folderSortBinding)"))
+        #expect(folder.contains("ForEach(folderRows) { row in"), "the rows are the event handler's folderRows")
+        #expect(folder.contains("DisclosureTableRow(row, isExpanded: folderExpansion(row.id))"),
+                "a folder twists open in place through the table's own expansion state")
         #expect(!folder.contains("@ObservedObject") && !folder.contains("@EnvironmentObject"),
                 "no second observation path into the folder table")
     }
@@ -533,7 +536,7 @@ struct FootageFoldersSensorTests {
         #expect(folder.contains("spaceShouldToggleLivePreview()"), "same focus rule as Space")
         let helpers = try code("CatalogHelpers.swift")
         #expect(helpers.contains("if handleFolderKey(event) { return nil }"))
-        #expect(FootageFolderKey(keyCode: 124) == .open)
+        #expect(FootageFolderKey(keyCode: 124) == nil, "bare → is the outline's twist-open (2026-10-18)")
         #expect(FootageFolderKey(keyCode: 123) == .close)
         #expect(FootageFolderKey(keyCode: 53) == .escape)
         #expect(FootageFolderKey(keyCode: 126) == nil, "↑ is never ours")
