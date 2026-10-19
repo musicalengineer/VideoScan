@@ -70,6 +70,28 @@ extension CatalogContent {
         return true
     }
 
+    /// Triage ▸ Events' "Show in Catalog" (`model.pendingCatalogFolderReveal`)
+    /// joins the same reveal as Make Folder: the id becomes this table's
+    /// `pendingFolderReveal`, from the top level. Waits (leaves the request
+    /// on the model) while the folder view is off — turning it on calls
+    /// this again (`footageFoldersOptionChanged`). A folder the top level
+    /// already shows is revealed now: a repeat compose publishes nothing.
+    func takeFolderRevealRequest() {
+        guard tableState.folderKeyMirror.isOn, let id = model.pendingCatalogFolderReveal else { return }
+        model.pendingCatalogFolderReveal = nil
+        tableState.pendingFolderReveal = id
+        if tableState.folderScope != nil {
+            setFolderScope(nil)   // the top level's display lands and completes the reveal
+            return
+        }
+        guard takePendingFolderReveal(in: tableState.folderLevel) else {
+            refreshFolderDisplay()
+            return
+        }
+        tableState.folderRecordIDs = tableState.folderLevel.recordIDs(expanded: tableState.expandedFolderIDs)
+        CatalogTableReveal.scrollSelectionIntoView()
+    }
+
     // MARK: - The doors
 
     /// The banner's door: its file set, under its label.

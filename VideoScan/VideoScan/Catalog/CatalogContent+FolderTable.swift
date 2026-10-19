@@ -467,6 +467,7 @@ extension CatalogContent {
         model.setFootageFoldersWanted(on)
         if on {
             refreshFolderDisplay()
+            takeFolderRevealRequest()   // a Show in Catalog that was waiting for the folder view
         } else {
             tableState.folderScope = nil
             tableState.pendingReveal = nil

@@ -844,11 +844,7 @@ struct CatalogView: View {
             onMadeFolder: {
                 // Make Folder…: the focus is done; the new folder shows in
                 // Show ▸ As folders (the table selects and opens it).
-                filterByIDs = []
-                focusMatchScore = nil
-                namedFocusLabel = nil
-                model.focusedMediaIDs = []
-                showFootageFolders = true
+                showFoldersWithoutFocus()
             }
         )
     }
@@ -875,6 +871,7 @@ struct CatalogView: View {
             .onAppear {
                 loadPersistedViewFiltersIfNeeded()
                 handlePendingCatalogNavigation()
+                handlePendingFolderReveal()
                 restoreFocusedMedia()
                 model.hallieCurrentSelectionID = selectedIDs.count == 1
                     ? selectedIDs.first
@@ -921,6 +918,7 @@ struct CatalogView: View {
                 model.archivistSearchRequest = nil
             }
             .onChange(of: model.pendingCatalogSelection) { handlePendingCatalogNavigation() }
+            .onChange(of: model.pendingCatalogFolderReveal) { handlePendingFolderReveal() }
             // Clear the ID filter and focus when user types in search or selects a volume
             .onChange(of: searchText) {
                 if !searchText.isEmpty { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
@@ -1407,6 +1405,30 @@ struct CatalogView: View {
             concurrency: bound,
             model: model
         )
+    }
+
+    /// The folder view, nothing focusing it: Make Folder's after-make and
+    /// Events' Show in Catalog both land here.
+    private func showFoldersWithoutFocus() {
+        filterByIDs = []
+        focusMatchScore = nil
+        namedFocusLabel = nil
+        model.focusedMediaIDs = []
+        showFootageFolders = true
+    }
+
+    /// Triage ▸ Events → "Show in Catalog" on a folder: clear what would
+    /// hide it (focus, search, volume and pairs filters) and turn the
+    /// folder view on. The request itself stays on the model for the
+    /// table (`CatalogContent.takeFolderRevealRequest`), which selects
+    /// the folder and opens its triangle through the after-make reveal.
+    private func handlePendingFolderReveal() {
+        guard model.pendingCatalogFolderReveal != nil else { return }
+        selectedVolumeIDs = []
+        searchText = ""
+        debouncedSearchText = ""
+        showPairsOnly = false
+        showFoldersWithoutFocus()
     }
 
     private func restoreFocusedMedia() {

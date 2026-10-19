@@ -73,8 +73,9 @@ struct EventDetailSheet: View {
             if renaming {
                 nameField { confirmNamed(s) }
                 Button(EventsWords.confirm) { confirmNamed(s) }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .help(EventsWords.confirmHelp)
             } else {
-                Button(EventsWords.confirm) { store.confirm(s) }
+                Button(EventsWords.confirm) { store.confirm(s) }.help(EventsWords.confirmHelp)
                 Button(EventsWords.rename) { beginRename(s.name) }
             }
             Button(EventsWords.dismiss) { store.dismiss(s) }
