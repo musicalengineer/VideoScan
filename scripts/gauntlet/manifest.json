@@ -7909,6 +7909,28 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSyncSQLiteSnapshotTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSyncSQLiteSnapshotPublishTests",
+        "CatalogSyncSQLiteSnapshotViewerTests",
+        "CatalogSyncSQLiteSnapshotLegacyTests"
+      ],
+      "tests": [
+        "jsonOnlyFolderShowsTheLegacyLabel",
+        "manifestMismatchKeepsTheOldSnapshot",
+        "olderMasterIsRefusedWithWords",
+        "productionScopeCarriesTheSnapshotNotTheJSON",
+        "publishSealsAVerifiableSnapshot",
+        "publishWithoutLatchRefuses",
+        "publisherCommitsFirstAndThrottlesOnGeneration",
+        "sealedOpenRefusesAWALDatabase",
+        "unchangedSnapshotIsNotReloaded",
+        "viewerOpenNeverModifiesTheSnapshot"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTableStateTests.swift",
       "stage": "unit",
       "suites": [
@@ -32611,7 +32633,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 189,
+      "expected_floor": 199,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [
@@ -32702,7 +32724,10 @@
         "VideoScanTests/AdvVolumeRenameUndoSQLiteTests",
         "VideoScanTests/AdvUndoPurgeWhileHeldTests",
         "VideoScanTests/AdvRelocateBucketBHeldTests",
-        "VideoScanTests/AdvJunkDeleteHeldTests"
+        "VideoScanTests/AdvJunkDeleteHeldTests",
+        "VideoScanTests/CatalogSyncSQLiteSnapshotPublishTests",
+        "VideoScanTests/CatalogSyncSQLiteSnapshotViewerTests",
+        "VideoScanTests/CatalogSyncSQLiteSnapshotLegacyTests"
       ]
     },
     {

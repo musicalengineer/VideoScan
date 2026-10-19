@@ -59,6 +59,17 @@
 // synced generation's manifest (FamilyGraphCompiledStore
 // .trustsManifestSources) and shows "compiled on <master> — sync again"
 // when the master's generation is one this build cannot read.
+//
+// Phase 2 (2026-10-19, cutover audit gap 3): the master moved to
+// catalog.sqlite on 10/18 and catalog.json is frozen, so the catalog entry
+// of the scope is now a sealed `VACUUM INTO` copy plus the latch, under
+// viewer-catalog/ (`CatalogSyncScope.sqliteCatalog`, CatalogViewerSnapshot,
+// published by CatalogSnapshotPublisher). catalog.json is no longer
+// published. A viewer opens the snapshot READ-ONLY and swaps its records
+// in (`viewerCatalogLoader`); a viewer that has only the old catalog.json
+// keeps showing it, read-only, labelled "older catalog". A master whose
+// manifest does not name the snapshot (an older build) is refused with
+// those words and the viewer keeps what it had.
 
 import Foundation
 import Combine
@@ -144,6 +155,28 @@ struct CatalogSyncScope: Equatable, Sendable {
         .tree("Hallie"),
         .file(CatalogSyncScope.externalSourcesFileName),
     ])
+
+    /// Phase 2 (2026-10-19), production: phase 1 with the catalog entry
+    /// changed from the frozen catalog.json (+ .prev) to the master's sealed
+    /// catalog.sqlite and its latch (CatalogViewerSnapshot). Two `.file`
+    /// entries, not a tree, so a publish temp in viewer-catalog/ is never
+    /// mirrored.
+    static let sqliteCatalog = CatalogSyncScope(entries: [
+        .file(CatalogViewerSnapshot.databaseRelativePath),
+        .file(CatalogViewerSnapshot.latchRelativePath),
+        .tree("POI"),
+        .compiledStore("family-tree/compiled"),
+        .tree("family-tree/originals"),
+        .tree("family-tree/assets/People"),
+        .file("cyberbrain/cyberbrain.json"),
+        .tree("Hallie"),
+        .file(CatalogSyncScope.externalSourcesFileName),
+    ])
+
+    /// True when this scope carries the sealed catalog.sqlite.
+    var carriesSQLiteSnapshot: Bool {
+        entries.contains(.file(CatalogViewerSnapshot.databaseRelativePath))
+    }
 
     /// Relative paths the atomic swap rotates (each entry once), plus the
     /// manifest itself.
@@ -280,6 +313,12 @@ struct CatalogSyncState: Equatable {
     }
 
     var phase: Phase = .idle
+    /// Phase 2: what the viewer's catalog is showing (the banner's line).
+    var viewerCatalog: ViewerCatalogStatus = .unknown
+    /// Set when the master WAS reached but what it sent was refused (a
+    /// manifest mismatch, a master on an older build); the live folder is
+    /// the last good set. nil after a good sync and on a transport failure.
+    var refusal: String?
     /// Timestamp of the most recent successful sync that this app saw at any
     /// point — survives an offline launch because it's persisted to last_sync.txt.
     /// nil if there's never been a successful sync (first run on a brand-new viewer).
@@ -360,7 +399,7 @@ final class CatalogSync: ObservableObject {
             masterHostname: masterHost,
             remoteUser: NSUserName(),
             isInert: TestEnvironment.isTestHost,
-            scope: .phase1,
+            scope: .sqliteCatalog,
             externalSources: { Self.productionExternalSources(liveDir: paths.liveDir) },
             log: { line in
                 NSLog("VideoScan: %@", line)
@@ -819,6 +858,7 @@ final class CatalogSync: ObservableObject {
             return
         }
         state.phase = .syncing
+        state.refusal = nil
         log("CatalogSync: starting rsync from \(masterHostname)")
 
         // 1. rsync into staging.
@@ -853,12 +893,11 @@ final class CatalogSync: ObservableObject {
         //    one (e.g. running an old build), refuse the swap — better to
         //    keep the user on their last-good snapshot than copy in
         //    something unverifiable.
-        do {
-            try verifyManifest(in: paths.stagingDir)
-        } catch {
-            let reason = "manifest verify failed: \(error.localizedDescription)"
-            log("CatalogSync: \(reason)")
+        if let reason = stagedRefusal(in: paths.stagingDir) {
+            log("CatalogSync: \(reason) — kept the last good set")
             state.phase = .failed(reason: reason)
+            state.refusal = reason
+            await refreshViewerCatalog()
             return
         }
 
@@ -877,6 +916,70 @@ final class CatalogSync: ObservableObject {
         state.lastSuccessfulSync = now
         Self.writeLastSyncTimestamp(now, to: paths.lastSyncFile)
         log("CatalogSync: sync complete at \(now)")
+        await refreshViewerCatalog()
+    }
+
+    /// Why the staged set must not be swapped in, or nil when it verified.
+    /// Phase 2: a manifest that does not name the sealed catalog.sqlite came
+    /// from a master on an older build (catalog.json only) — refused with
+    /// words that say so, before the hash walk.
+    func stagedRefusal(in dir: URL) -> String? {
+        if scope.carriesSQLiteSnapshot,
+           let text = try? String(contentsOf: dir.appendingPathComponent("manifest.sha256"), encoding: .utf8),
+           !CatalogViewerSnapshot.manifestNamesSnapshot(text) {
+            return "manifest verify failed: the master publishes no catalog.sqlite (an older VideoScan there) — update the master"
+        }
+        do {
+            try verifyManifest(in: dir)
+            return nil
+        } catch {
+            return "manifest verify failed: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Viewer catalog (phase 2)
+
+    /// Opens what the synced folder holds and swaps the records in; set by
+    /// VideoScanApp on a viewer (VideoScanModel.showViewerCatalog). nil on
+    /// the master and in tests that only exercise the transport.
+    var viewerCatalogLoader: ((CatalogViewerSnapshot.Source) async -> ViewerCatalogStatus)?
+
+    /// The manifest hash of the snapshot the viewer is showing, so an
+    /// unchanged snapshot is not reloaded every 90 s.
+    private var shownSnapshotHash: String?
+
+    /// Show what the live folder holds now: at launch (the last good
+    /// snapshot, before the master answers) and after every sync attempt.
+    /// A snapshot whose manifest hash is the one already shown is skipped.
+    func refreshViewerCatalog() async {
+        if isInert { return }
+        guard mode == .viewer, let loader = viewerCatalogLoader else { return }
+        let source = CatalogViewerSnapshot.source(in: paths.liveDir)
+        let manifest = (try? String(contentsOf: paths.liveDir.appendingPathComponent("manifest.sha256"), encoding: .utf8)) ?? ""
+        let hash = CatalogViewerSnapshot.snapshotHash(inManifest: manifest)
+        if case .snapshot = source, let hash, hash == shownSnapshotHash { return }
+        let status = await loader(source)
+        state.viewerCatalog = status
+        if case .snapshot = status { shownSnapshotHash = hash }
+        log("CatalogSync: viewer catalog — \(status.words ?? "nothing synced yet")")
+    }
+
+    // MARK: - Snapshot publishing (master side, phase 2)
+
+    /// The master's publisher; nil on a viewer and until started.
+    private(set) var snapshotPublisher: CatalogSnapshotPublisher?
+
+    /// Start keeping viewer-catalog/catalog.sqlite current for the viewers
+    /// (CatalogSnapshotPublisher). Each publish refreshes the manifest. No-op
+    /// on a viewer and on an inert (test-host) instance. Idempotent.
+    func startSnapshotPublishing(_ source: CatalogSnapshotPublisher.Source) {
+        if isInert { return }
+        guard mode == .master, snapshotPublisher == nil else { return }
+        let publisher = CatalogSnapshotPublisher(
+            liveDir: paths.liveDir, source: source, log: log,
+            onPublished: { [weak self] in self?.scheduleManifestRefresh() })
+        snapshotPublisher = publisher
+        publisher.start()
     }
 
     // MARK: - Verify

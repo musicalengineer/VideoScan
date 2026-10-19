@@ -696,12 +696,26 @@ struct VideoScanApp: App {
                             // to verify against. Off-main: a cold hash of
                             // a large catalog must not stall first paint.
                             catalogSync.scheduleManifestRefresh()
+                            // Phase 2 (2026-10-19): keep the sealed
+                            // catalog.sqlite the viewers read current —
+                            // commit first, VACUUM INTO, publish, manifest.
+                            catalogSync.startSnapshotPublishing(catalogModel.viewerSnapshotSource())
                         } else {
+                            // Phase 2: the viewer shows the master's
+                            // catalog.sqlite read-only (or the frozen
+                            // catalog.json, labelled) — first the last
+                            // good copy on disk, then after each sync.
+                            catalogSync.viewerCatalogLoader = { [weak catalogModel] source in
+                                await catalogModel?.showViewerCatalog(source) ?? .unknown
+                            }
                             // Initial sync at launch — pulls the
                             // latest catalog from M4 if the master is
                             // reachable. Auto-refresh below keeps it
                             // current after that.
-                            Task { await catalogSync.syncFromMaster() }
+                            Task {
+                                await catalogSync.refreshViewerCatalog()
+                                await catalogSync.syncFromMaster()
+                            }
                             catalogSync.startViewerAutoRefresh()
                         }
                         // Live dossier reload — picks up new dossier
