@@ -11047,6 +11047,7 @@
         "EventsSensorTests"
       ],
       "tests": [
+        "makeFolderTraceCarriesTheEventIntoTheCatalogReveal",
         "paneBodyReadsOnlyTheStore",
         "sidebarCountMatchesPlanNumbers",
         "statsObjectHasExactlyTheMetricsKeys",
@@ -31899,7 +31900,7 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2666,
+      "expected_floor": 2667,
       "name": "unit",
       "package_expected_floor": 294,
       "package_selectors": [
