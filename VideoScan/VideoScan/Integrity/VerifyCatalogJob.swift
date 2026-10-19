@@ -59,7 +59,11 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
 
     /// Where the rows come from (codex 2026-10-17 P2).
     enum SnapshotSource: Equatable {
-        /// The standalone Verify Catalog: the model's records, as always.
+        /// The standalone Verify Catalog: the catalog in use. Under the
+        /// SQLite authority (catalog.cutover) that is catalog.sqlite, read
+        /// through the database's own read path in ONE transaction — rows
+        /// and generation together (GH #342); never memory, never
+        /// catalog.json. Before the switch: the model's records, as always.
         case liveRecords
         /// Import to SQLite's phase 2: catalog.json exactly as its audit
         /// saved it, decoded read-only, which must carry this generation —
@@ -95,6 +99,9 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
     private var keptFindings = 0
     /// Tier 5's hash of catalog.json (hashed once; the report carries it).
     private var catalogHash: CatalogFileHash?
+    /// Under catalog.sqlite: the store's generation when tier 5 ran (the
+    /// report's `catalogGeneration`; a WAL database is not byte-hashed).
+    private var sqliteGenerationAtTier5: Int?
 
     var title: String { Self.title }
     var subtitle: String { subtitleText }
@@ -181,6 +188,10 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
             guard await waitOutPause() else { break }
             subtitleText = "Tier \(tier) — \(VerifyCatalogTiers.name(tier))…"
             input.now = Date()
+            if tier == 5, snapshot.store == .sqlite {
+                input.databaseGeneration = await databaseGenerationNow(model: model)
+                if case .read(let g) = input.databaseGeneration { sqliteGenerationAtTier5 = g }
+            }
             let outcome = await Task.detached(priority: .userInitiated) { [input] in
                 VerifyCatalogTiers.evaluate(tier, input: input)
             }.value
@@ -205,14 +216,30 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
     private func takeSnapshot(model: VideoScanModel) async -> Result<VerifyCatalogSnapshot, VerifyCatalogSnapshotRefusal> {
         switch snapshotSource {
         case .liveRecords:
+            if let repository = model.catalogCutover.committer?.repository, let database = model.catalogCutover.databaseURL {
+                return await model.verifyCatalogSnapshot(database: database, repository: repository, events: eventsForTesting)
+            }
             return .success(model.verifyCatalogSnapshot(events: eventsForTesting))
         case .auditedFile(let generation):
             return await model.verifyCatalogSnapshot(auditedGeneration: generation, events: eventsForTesting)
         }
     }
 
+    /// catalog.sqlite's generation now, for tier 5 (one small read).
+    private func databaseGenerationNow(model: VideoScanModel) async -> VerifyCatalogTiers.DatabaseGenerationRead {
+        guard let repository = model.catalogCutover.committer?.repository else {
+            return .unreadable("the catalog store is no longer open")
+        }
+        do {
+            return .read(try await repository.read { $0.generation })
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+    }
+
     private func startClause(_ s: VerifyCatalogSnapshot) -> String {
-        "\(s.rows.count.formatted()) row(s) (\(s.liveCount.formatted()) live), \(s.events.count.formatted()) confirmed event(s); "
+        "\(s.store.fileName) at generation \(s.catalogGeneration): "
+            + "\(s.rows.count.formatted()) row(s) (\(s.liveCount.formatted()) live), \(s.events.count.formatted()) confirmed event(s); "
             + "tiers 0–6 from the catalog's own stamps and relations. Read-only: nothing on media is opened, "
             + "no row is changed; the only file written is \(IntegrityReportStore.latestFileName) beside the catalog."
     }
@@ -278,7 +305,7 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
     private func buildReport(snapshot: VerifyCatalogSnapshot, outcome: IntegrityReport.Outcome) -> IntegrityReport {
         let now = Date()
         let hash = catalogHash
-        let fileGeneration = hash?.generation
+        let fileGeneration = snapshot.store == .sqlite ? sqliteGenerationAtTier5 : hash?.generation
         let changed = VerifyCatalogTiers.generationMismatch(snapshot: snapshot.catalogGeneration, file: fileGeneration) != nil
         return IntegrityReport(runID: id, startedAt: startedAt, verifiedAt: outcome == .completed ? now : nil,
                                outcome: outcome, catalogFile: snapshot.catalogFile,
@@ -367,6 +394,50 @@ extension VideoScanModel {
         }
         return .success(VerifyCatalogSnapshot(rows: read.rows, events: eventFacts, catalogFile: catalogFile,
                                               catalogGeneration: read.generation, mountedVolumeRoots: Self.mountedVolumeRootsNow()))
+    }
+
+    /// Verify Catalog under the SQLite authority (GH #342): the rows of
+    /// catalog.sqlite and its generation, read in ONE transaction through
+    /// `CatalogLoad.rows` (the loader's own reader — the same purge rule,
+    /// the same held rows; no display-pass write), projected off the main
+    /// actor. An edit still inside the 2 s save debounce is not in the
+    /// database yet, so it is not verified — the report describes the file.
+    /// Refused (with words) when the store cannot be read.
+    func verifyCatalogSnapshot(database: URL, repository: any CatalogRepository,
+                               events: [IntegrityEventFact]?) async -> Result<VerifyCatalogSnapshot, VerifyCatalogSnapshotRefusal> {
+        let eventFacts = events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot())
+        let read: Result<(generation: Int, rows: [IntegrityRow]), Error> = await Task.detached(priority: .userInitiated) {
+            do { return .success(try await Self.databaseRows(repository)) } catch { return .failure(error) }
+        }.value
+        switch read {
+        case .failure(let error):
+            return .failure(VerifyCatalogSnapshotRefusal(words: "catalog.sqlite could not be read (\(error))"))
+        case .success(let got):
+            return .success(VerifyCatalogSnapshot(rows: got.rows, events: eventFacts, catalogFile: database.path,
+                                                  catalogGeneration: got.generation, mountedVolumeRoots: Self.mountedVolumeRootsNow(),
+                                                  store: .sqlite))
+        }
+    }
+
+    /// catalog.sqlite's rows (and its held `pending_rows`) as IntegrityRows,
+    /// with the generation they were read at. A held payload that does not
+    /// decode is a refusal, never skipped in silence.
+    nonisolated static func databaseRows(_ repository: any CatalogRepository) async throws -> (generation: Int, rows: [IntegrityRow]) {
+        let snapshot = try await CatalogLoad.rows(repository)
+        let formatter = VideoRecord.makeRowDateFormatter()
+        var rows: [IntegrityRow] = []
+        rows.reserveCapacity(snapshot.rows.count + snapshot.pending.count)
+        var seen = Set<UUID>()
+        for loaded in snapshot.rows {
+            let row = IntegrityRow(record: try VideoRecord(row: loaded, dateFormatter: formatter))
+            seen.insert(row.id)
+            rows.append(row)
+        }
+        for held in snapshot.pending {
+            let row = IntegrityRow(record: try CatalogPendingRecord.record(held.json))
+            if seen.insert(row.id).inserted { rows.append(row) }
+        }
+        return (snapshot.generation, rows)
     }
 
     /// The file's generation and its rows, projected where they were decoded.

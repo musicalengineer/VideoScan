@@ -31,7 +31,7 @@ struct WorkflowTagsLogicTests {
 
     @Test func quickPickVocabularyIsStable() {
         #expect(WorkflowTags.quickPicks ==
-                ["Follow Up", "Investigate", "Interesting", "Gold", "Fix Audio"])
+                ["Follow Up", "Investigate", "Interesting", "Gold", "Fix Audio", "Silent — checked"])
     }
 
     @Test func canonicalizeSnapsQuickPickSpelling() {

@@ -26,16 +26,33 @@
 import Foundation
 import VideoScanCore
 
-/// Everything the tiers read, taken on the main actor in one pass.
+/// Which store the rows were read from (GH #342).
+enum VerifyCatalogStore: String, Sendable, Equatable {
+    /// catalog.json (before the switch, or Import's audited file).
+    case json
+    /// catalog.sqlite — the authority named by catalog.cutover; the rows
+    /// came through the database's own read path, never memory, never JSON.
+    case sqlite
+
+    var fileName: String { self == .sqlite ? CatalogAuthority.databaseFileName : "catalog.json" }
+}
+
+/// Everything the tiers read, taken on the main actor in one pass (JSON)
+/// or in one read transaction of catalog.sqlite (the authority).
 struct VerifyCatalogSnapshot: Sendable {
     var rows: [IntegrityRow]
     var events: [IntegrityEventFact]
-    /// The catalog.json path (the marker and the report live beside it).
+    /// The catalog file the rows came from — catalog.sqlite under the
+    /// SQLite authority, else catalog.json (the marker and the report live
+    /// beside it; both are in the same folder).
     var catalogFile: String
-    /// The generation the rows derive from (`CatalogStore.currentGeneration`:
-    /// the last one loaded or durably written). The findings describe THIS
-    /// generation; tier 5 checks the file on disk still carries it.
+    /// The generation the rows derive from: catalog.sqlite's own generation
+    /// (read in the same transaction as the rows), or for catalog.json
+    /// `CatalogStore.currentGeneration`. The findings describe THIS
+    /// generation; tier 5 checks the store still carries it.
     var catalogGeneration: Int
+    /// Which store `catalogFile` is.
+    var store: VerifyCatalogStore = .json
     /// The volume roots connected when the snapshot was taken ("/" and
     /// each "/Volumes/<name>" — the job's ONE readdir of /Volumes; tests
     /// inject it). Tier 1 splits its words by it: a sampled-only file on
@@ -45,11 +62,12 @@ struct VerifyCatalogSnapshot: Sendable {
     var liveCount: Int
 
     init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String, catalogGeneration: Int = 0,
-         mountedVolumeRoots: Set<String> = ["/"]) {
+         mountedVolumeRoots: Set<String> = ["/"], store: VerifyCatalogStore = .json) {
         self.rows = rows
         self.events = events
         self.catalogFile = catalogFile
         self.catalogGeneration = catalogGeneration
+        self.store = store
         self.mountedVolumeRoots = mountedVolumeRoots
         liveCount = rows.reduce(0) { $0 + ($1.isLive ? 1 : 0) }
     }
@@ -89,6 +107,16 @@ enum VerifyCatalogTiers {
         var constraintFindings: [CatalogConstraints.Finding]?
         var runID: UUID
         var now: Date
+        /// catalog.sqlite only: the store's generation as read just before
+        /// tier 5 (the job asks the repository); nil = not read yet.
+        var databaseGeneration: DatabaseGenerationRead?
+    }
+
+    /// What the job learned about catalog.sqlite's generation for tier 5.
+    enum DatabaseGenerationRead: Sendable, Equatable {
+        case read(Int)
+        /// The store could not be asked — the words why.
+        case unreadable(String)
     }
 
     /// What one tier evaluation returns.
@@ -250,40 +278,107 @@ enum VerifyCatalogTiers {
     /// names it and Verify Media decides; here it could not be checked. A
     /// SILENT print of one still counts — ffmpeg followed the reference
     /// and heard the media.
+    ///
+    /// EXPECTED SILENCE (Rick 2026-10-19 — "let the machine settle what the
+    /// machine can settle"): a silent print is PASSED, with words, when
+    ///   * the row is a Live Photo's motion clip (`isLivePhotoMotionClip`):
+    ///     the 2-second video beside a still, which iOS records with a
+    ///     silent or near-silent track by design; or
+    ///   * a person looked and said so — the workflow tag "Silent — checked"
+    ///     on the content (`IntegrityRow.silenceCheckedByPerson`), stored in
+    ///     catalog.sqlite's workflow_tags like every other tag.
+    /// Everything else silent still needs a decision.
     static func sound(_ input: TierInput) -> TierOutcome {
+        var tally = SoundTally()
+        for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
+            tally.judge(r)
+        }
+        let findings = tally.findings
+        let couldNotCheck = tally.unstamped + tally.referenced
+        var t = IntegrityTier(tier: 3, name: name(3), verifiedAt: input.now, runID: input.runID, result: .ok,
+                              checked: tally.stamped, passed: tally.stamped - findings.count, needsDecision: findings.count,
+                              couldNotCheck: couldNotCheck, summary: "")
+        var parts: [String] = []
+        if !findings.isEmpty {
+            t.result = .needsDecision(findings.count)
+            parts.append("\(findings.count.formatted()) headers say sound the print never heard")
+        } else if couldNotCheck > 0 {
+            t.result = .couldNotCheck(couldNotCheck)
+            parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced))
+        } else if tally.livePhoto + tally.checkedByPerson == 0 {
+            parts.append("every Video+Audio file's print heard sound (\(tally.stamped.formatted()))")
+        } else {
+            parts.append("every Video+Audio file's print heard sound or is silent for a known reason (\(tally.stamped.formatted()))")
+        }
+        if let expected = expectedSilenceWords(livePhoto: tally.livePhoto, checked: tally.checkedByPerson) { parts.append(expected) }
+        t.summary = parts.joined(separator: " · ")
+        return TierOutcome(tier: t, findings: findings)
+    }
+
+    /// Tier 3's running count — one row at a time (≈ a fold's accumulator).
+    struct SoundTally {
         var findings: [IntegrityFinding] = []
         var stamped = 0
         var unstamped = 0
         var referenced = 0
-        for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
+        /// Silent and passed: a Live Photo's motion clip.
+        var livePhoto = 0
+        /// Silent and passed: a person tagged it "Silent — checked".
+        var checkedByPerson = 0
+
+        mutating func judge(_ r: IntegrityRow) {
             guard let stamp = r.audioFingerprint, CatalogConstraints.staleStampReason(stamp, row: r) == nil else {
                 unstamped += 1
-                continue
+                return
             }
             if stamp.outcome == .noAudio, CatalogConstraints.isPossibleReferenceMovie(r) {
                 referenced += 1
-                continue
+                return
             }
             stamped += 1
-            if let why = silentPrintReason(stamp) {
+            guard let why = silentPrintReason(stamp) else { return }
+            if isLivePhotoMotionClip(r) {
+                livePhoto += 1
+            } else if r.silenceCheckedByPerson {
+                checkedByPerson += 1
+            } else {
                 findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
                                                  words: "the header says Video+Audio, \(why)", needsDecision: true))
             }
         }
-        let couldNotCheck = unstamped + referenced
-        var t = IntegrityTier(tier: 3, name: name(3), verifiedAt: input.now, runID: input.runID, result: .ok,
-                              checked: stamped, passed: stamped - findings.count, needsDecision: findings.count,
-                              couldNotCheck: couldNotCheck, summary: "")
-        if !findings.isEmpty {
-            t.result = .needsDecision(findings.count)
-            t.summary = "\(findings.count.formatted()) headers say sound the print never heard"
-        } else if couldNotCheck > 0 {
-            t.result = .couldNotCheck(couldNotCheck)
-            t.summary = soundGapWords(unstamped: unstamped, referenced: referenced)
-        } else {
-            t.summary = "every Video+Audio file's print heard sound (\(stamped.formatted()))"
-        }
-        return TierOutcome(tier: t, findings: findings)
+    }
+
+    /// "72 Live Photo motion clips — silent by design · 3 silent clips
+    /// checked by a person"; nil when neither.
+    static func expectedSilenceWords(livePhoto: Int, checked: Int) -> String? {
+        var parts: [String] = []
+        if livePhoto > 0 { parts.append("\(livePhoto.formatted()) \(livePhotoSilentWords)") }
+        if checked > 0 { parts.append("\(checked.formatted()) silent clip\(checked == 1 ? "" : "s") checked by a person") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static let livePhotoSilentWords = "Live Photo motion clips — silent by design"
+
+    /// A Live Photo's motion clip never runs longer than this (iOS records
+    /// ~1.5 s either side of the still; the library's copies measure 2–3 s).
+    static let livePhotoMaxSeconds = 3.5
+
+    /// NARROW on purpose: SHORT (known duration, ≤ `livePhotoMaxSeconds`)
+    /// AND either inside a photo library (a `.photoslibrary`,
+    /// `.photolibrary` or `.migratedphotolibrary` package, or an "iPhoto
+    /// Library" folder) or named like Photos' own complement file
+    /// (`videocomplementoutput…`). A long file, or a short one outside a
+    /// photo library, still needs a decision.
+    static func isLivePhotoMotionClip(_ r: IntegrityRow) -> Bool {
+        guard r.durationSeconds > 0, r.durationSeconds <= livePhotoMaxSeconds else { return false }
+        if r.filename.lowercased().hasPrefix("videocomplementoutput") { return true }
+        return r.fullPath.split(separator: "/").contains { isPhotoLibraryComponent($0) }
+    }
+
+    static func isPhotoLibraryComponent(_ component: Substring) -> Bool {
+        let c = component.lowercased()
+        return c.hasSuffix(".photoslibrary") || c.hasSuffix(".photolibrary") || c.hasSuffix(".migratedphotolibrary")
+            || c.hasPrefix("iphoto library")
     }
 
     /// What tier 3 could not check, each with its door: no current print
@@ -346,6 +441,7 @@ enum VerifyCatalogTiers {
     }
 
     static func constraints(_ input: TierInput) -> TierOutcome {
+        if input.snapshot.store == .sqlite { return databaseConstraints(input) }
         let all = input.constraintFindings
             ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
         var found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
@@ -374,6 +470,52 @@ enum VerifyCatalogTiers {
             t.summary += " · " + said
         }
         return TierOutcome(tier: t, findings: found, catalogHash: file.hash)
+    }
+
+    /// Tier 5 over catalog.sqlite (GH #342): the same constraints over the
+    /// rows the database returned, and — instead of a file hash — the
+    /// store's own generation. A WAL database's bytes change at every
+    /// checkpoint with no new generation, so a byte hash would manufacture
+    /// "changed with the SAME generation" decisions; the generation is the
+    /// store's own monotonic counter (every commit is +1, a CAS). A store
+    /// that moved on since the rows were read is said (run again), never a
+    /// decision; a store whose generation could not be read could not be
+    /// checked.
+    static func databaseConstraints(_ input: TierInput) -> TierOutcome {
+        let all = input.constraintFindings
+            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
+        let found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
+        let decided = found.filter(\.needsDecision)
+        let rows = input.snapshot.rows.count
+        let unreadable: String? = {
+            switch input.databaseGeneration {
+            case .unreadable(let why): return why
+            case nil: return "not asked"
+            case .read: return nil
+            }
+        }()
+        let couldNotCheck = found.count - decided.count + (unreadable == nil ? 0 : 1)
+        var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
+                              checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
+                              needsDecision: decided.count, couldNotCheck: couldNotCheck, summary: "")
+        if !decided.isEmpty {
+            t.result = .needsDecision(decided.count)
+        } else if couldNotCheck > 0 {
+            t.result = .couldNotCheck(couldNotCheck)
+        }
+        let file = VerifyCatalogStore.sqlite.fileName
+        let generationWords: String
+        if let unreadable {
+            generationWords = "\(file)'s generation could not be read (\(unreadable)) — run again"
+        } else if case .read(let now) = input.databaseGeneration,
+                  let moved = generationMismatch(snapshot: input.snapshot.catalogGeneration, file: now) {
+            generationWords = moved.replacingOccurrences(of: "the file on disk", with: file)
+        } else {
+            generationWords = "\(file) at generation \(input.snapshot.catalogGeneration) — the findings describe it"
+        }
+        t.summary = relationWords(found, rows: rows, fileWords: generationWords)
+        if !decided.isEmpty { t.summary += " · " + generationWords }   // relationWords names it only when nothing is decided
+        return TierOutcome(tier: t, findings: found)
     }
 
     /// The decisions by rule (most first), then the UNVERIFIED findings

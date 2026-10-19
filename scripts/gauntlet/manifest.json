@@ -7679,6 +7679,45 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSettleFindingsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DuplicateDigestPartitionTests",
+        "DuplicateDigestSplitPlanTests",
+        "DuplicateDetectorDigestTests",
+        "VerifyCatalogExpectedSilenceTests",
+        "VerifyCatalogSQLiteTierTests",
+        "VerifyCatalogSQLiteSourceTests",
+        "DuplicateDigestSplitDoorTests",
+        "DuplicateDigestSplitScaleTests",
+        "CatalogSettleFindingsSensorTests",
+        "CatalogSettleRealCopyEvidence"
+      ],
+      "tests": [
+        "bucketsByDigest",
+        "causeAndSource",
+        "checkedByPerson",
+        "copiesOnJSON",
+        "differentDigestsNeverGroup",
+        "doorOrder",
+        "evidence",
+        "idempotent",
+        "keeperAlone",
+        "livePhotosPass",
+        "movedOrUnreadable",
+        "narrowRuleStillFlags",
+        "planAt100k",
+        "readOnlyRefuses",
+        "redSplitGreen",
+        "sameGeneration",
+        "splitsIntoCopies",
+        "starSplits",
+        "unknownStaysWithKeeper",
+        "verifiesTheDatabase"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogShowingSummaryTests.swift",
@@ -31864,7 +31903,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2667,
+      "expected_floor": 2687,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32277,7 +32316,17 @@
         "VideoScanTests/ImportToSQLiteJobTests",
         "VideoScanTests/ImportToSQLiteSensorTests",
         "VideoScanTests/ImportToSQLiteQuitPathTests",
-        "VideoScanTests/ImportToSQLiteQuitSensorTests"
+        "VideoScanTests/ImportToSQLiteQuitSensorTests",
+        "VideoScanTests/DuplicateDigestPartitionTests",
+        "VideoScanTests/DuplicateDigestSplitPlanTests",
+        "VideoScanTests/DuplicateDetectorDigestTests",
+        "VideoScanTests/VerifyCatalogExpectedSilenceTests",
+        "VideoScanTests/VerifyCatalogSQLiteTierTests",
+        "VideoScanTests/VerifyCatalogSQLiteSourceTests",
+        "VideoScanTests/DuplicateDigestSplitDoorTests",
+        "VideoScanTests/DuplicateDigestSplitScaleTests",
+        "VideoScanTests/CatalogSettleFindingsSensorTests",
+        "VideoScanTests/CatalogSettleRealCopyEvidence"
       ]
     },
     {
