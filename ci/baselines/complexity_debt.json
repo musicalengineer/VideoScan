@@ -1159,8 +1159,8 @@
    "nloc": 57
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift::VideoScanModel.runRelocate scope : [ VideoRecord ] , options : RelocateOptions , jobID : UUID": {
-   "ccn": 32,
-   "nloc": 235
+   "ccn": 31,
+   "nloc": 233
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+RepairLifecycle.swift::VideoScanModel.applyHumanMetadataInheritance": {
    "ccn": 16,
