@@ -412,6 +412,11 @@ struct CatalogView: View {
     /// verb created the focus ("A/V Pair focus", "Online copies",
     /// "Not migrated from <volume>").
     @State private var focusLabel = "A/V Pair focus"
+    /// The label of the last focus handed over WITH a name
+    /// (`model.showInCatalog(focus:label:)` → restoreFocusedMedia). The
+    /// banner shows a named set while `focusLabel` is still that label —
+    /// any other verb that refocuses writes its own label (Make Folder…).
+    @State private var namedFocusLabel: String?
     /// punch-list #5: non-nil drives a brief alert when an Archive→Catalog
     /// navigation resolves to no live records (stale id after live-reload
     /// identity churn). We clear the filter (leaving the full catalog
@@ -762,6 +767,7 @@ struct CatalogView: View {
             filterByIDs: filterByIDs,
             focusMatchScore: focusMatchScore,
             focusLabel: focusLabel,
+            focusIsNamedSet: focusMatchScore == nil && namedFocusLabel == focusLabel,
             previewImage: model.previewImage,
             previewFilename: model.previewFilename,
             previewOfflineVolumeName: model.previewOfflineVolumeName,
@@ -834,6 +840,15 @@ struct CatalogView: View {
                 selectedIDs = [repairID]
                 focusMatchScore = nil
                 focusLabel = "Repaired copy"
+            },
+            onMadeFolder: {
+                // Make Folder…: the focus is done; the new folder shows in
+                // Show ▸ As folders (the table selects and opens it).
+                filterByIDs = []
+                focusMatchScore = nil
+                namedFocusLabel = nil
+                model.focusedMediaIDs = []
+                showFootageFolders = true
             }
         )
     }
@@ -1403,6 +1418,7 @@ struct CatalogView: View {
         filterByIDs = model.focusedMediaIDs
         focusMatchScore = nil
         focusLabel = model.pendingFocusLabel ?? "A/V Pair focus"
+        namedFocusLabel = model.pendingFocusLabel
         model.pendingFocusLabel = nil
         selectedIDs = model.focusedMediaIDs
     }

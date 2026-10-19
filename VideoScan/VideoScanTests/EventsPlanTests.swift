@@ -142,7 +142,9 @@ struct EventsPlanTests {
                 "folder AND date together; the same folder 25 days on and the same day elsewhere stay out")
         let kids = s.members.first { $0.filename == "kids_outside.mov" }
         #expect(kids?.strength == nil && kids?.link != nil)
-        #expect(s.name == "Birthday · Jun 5, 1998 (your date)")
+        // The name carries the date alone (2026-10-19); the source stays in dateWords.
+        #expect(s.name == "Birthday · Jun 5, 1998")
+        #expect(s.dateWords == "Jun 5, 1998 (your date)")
     }
 
     @Test("same folder, same category, inferred dates years apart: two suggestions and the one question; the answer survives a rerun")
@@ -168,8 +170,10 @@ struct EventsPlanTests {
             $0.relative.hasPrefix("Events/") || $0.relative == "Catalog/EventsPane.swift" || $0.relative == "Catalog/EventDetailSheet.swift"
         }
         // Reviewed 2026-10-16: VideoScanModel+RelatedEvidence builds Compare Media's evidence (values + the sidecar
-        // audio match); it reads records and never changes one.
+        // audio match); it reads records and never changes one. Reviewed 2026-10-19: EventsFolderDraft turns
+        // files into ContentRanges and calls `confirm` — it reads records and never changes one.
         #expect(Set(files.map(\.relative)) == ["Events/EventsPlan.swift", "Events/EventsDecisionStore.swift",
+                                               "Events/EventsFolderDraft.swift",
                                                "Events/VideoScanModel+Events.swift", "Events/VideoScanModel+RelatedEvidence.swift",
                                                "Catalog/EventsPane.swift", "Catalog/EventDetailSheet.swift"],
                 "a new Events file must be added here (and reviewed): \(files.map(\.relative).sorted())")

@@ -423,6 +423,7 @@ extension CatalogContent {
         tableState.folderLevel = level
         tableState.folderRows = folderTableRows(level, index: index)
         tableState.folderIDs = level.folderIDs
+        let revealedFolder = takePendingFolderReveal(in: level)   // opens its triangle before the count below
         tableState.folderRecordIDs = level.recordIDs(expanded: tableState.expandedFolderIDs)
         // The empty display is also what `stop()` and a fresh subscription
         // deliver (the pane re-appearing with the option on): nothing is
@@ -431,6 +432,7 @@ extension CatalogContent {
         guard tableState.folderKeyMirror.isOn, !display.rows.isEmpty else { return }
         pruneSelectionToDisplay()
         completePendingReveal()
+        if revealedFolder { CatalogTableReveal.scrollSelectionIntoView() }
     }
 
     private func folderTableRows(_ level: FootageFolderLevel.Level, index: FootageFolders.Index) -> [FootageFolderTableRow] {
@@ -467,6 +469,7 @@ extension CatalogContent {
         } else {
             tableState.folderScope = nil
             tableState.pendingReveal = nil
+            tableState.pendingFolderReveal = nil
             tableState.folderRows = []
             tableState.folderIDs = []
             tableState.folderLevel = .empty

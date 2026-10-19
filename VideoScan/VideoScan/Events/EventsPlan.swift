@@ -155,12 +155,19 @@ struct EventsDate: Sendable, Hashable {
 
     /// "Jun 5, 1998 (your date)", "Jun 1998 (camera)", "1998 (folder name (year only))", "no date".
     var words: String {
-        guard let year else { return source.words }
-        let base: String
-        if let month, let day { base = "\(Self.monthNames[month - 1]) \(day), \(year)" }
-        else if let month { base = "\(Self.monthNames[month - 1]) \(year)" }
-        else { base = String(year) }
-        return "\(base) (\(source.words))"
+        guard let bare = bareWords else { return source.words }
+        return "\(bare) (\(source.words))"
+    }
+
+    /// The date alone, no source: "Jun 5, 1998", "Jun 1998", "1998"; nil
+    /// when undated. What an event's NAME carries — the source is evidence
+    /// and stays in `words` (Rick 2026-10-19: "Thanksgiving · 1984 (folder
+    /// name (year only))" was saved as a name).
+    var bareWords: String? {
+        guard let year else { return nil }
+        if let month, let day { return "\(Self.monthNames[month - 1]) \(day), \(year)" }
+        if let month { return "\(Self.monthNames[month - 1]) \(year)" }
+        return String(year)
     }
 
     static let utc: Calendar = {
@@ -661,14 +668,17 @@ enum EventsPlanner {
         let strength = run.members.compactMap(\.bestStrength).max()
         let dated = run.members.filter { $0.dayInstant != nil }.map(\.date)
         let folderOnly = run.members.allSatisfy { $0.date.source == .folderYear || $0.date.source == .none }
-        let dateWords = EventsNaming.dateWords(dated: dated, fallback: folderOnly ? run.members.first?.date : nil)
+        let fallback = folderOnly ? run.members.first?.date : nil
+        let dateWords = EventsNaming.dateWords(dated: dated, fallback: fallback)
         let primary = categories.first ?? ""
         let longTape = run.members.contains {
             $0.representative.durationSeconds >= Rules.longTapeSeconds && $0.evidence.contains { $0.lines.contains { $0.source == .transcript } }
         }
         return EventSuggestion(
             key: primary + "|" + (run.keys.min() ?? ""),
-            name: EventsNaming.suggestionName(category: primary, dateWords: dateWords),
+            // The name carries the date alone; its source stays in dateWords.
+            name: EventsNaming.suggestionName(category: primary,
+                                              dateWords: EventsNaming.dateWords(dated: dated, fallback: fallback, withSources: false)),
             categories: categories, members: members, dateWords: dateWords, start: run.first, end: run.last,
             folders: run.folders.sorted(), strength: strength,
             isStrong: strength == .seenAndSaid || run.members.count >= Rules.strongMemberCount,
@@ -707,7 +717,9 @@ enum EventsPlanner {
             for (a, b) in zip(sorted, sorted.dropFirst()) where asksSameOccasion(a, b) {
                 out.append(EventsQuestion(a: a.key, b: b.key, category: key.category, folder: key.folder,
                                           aRange: a.members[0].range, bRange: b.members[0].range,
-                                          aWords: a.name, bWords: b.name))
+                                          // The question compares dates: it keeps their sources.
+                                          aWords: EventsNaming.suggestionName(category: a.primaryCategory, dateWords: a.dateWords),
+                                          bWords: EventsNaming.suggestionName(category: b.primaryCategory, dateWords: b.dateWords)))
             }
         }
         return out.sorted { $0.id < $1.id }
@@ -812,14 +824,44 @@ enum EventsNaming {
     }
 
     /// One day, a range, a folder year, or "date unknown" — the source
-    /// kept with it.
-    static func dateWords(dated: [EventsDate], fallback: EventsDate?) -> String {
+    /// kept with it unless `withSources` is false (an event's name: the
+    /// date alone).
+    static func dateWords(dated: [EventsDate], fallback: EventsDate?, withSources: Bool = true) -> String {
+        func say(_ d: EventsDate) -> String { withSources ? d.words : (d.bareWords ?? d.words) }
         let sorted = dated.compactMap { d in d.dayInstant.map { ($0, d) } }.sorted { $0.0 < $1.0 }
         guard let first = sorted.first, let last = sorted.last else {
             guard let fallback, fallback.year != nil else { return "date unknown" }
-            return fallback.words
+            return say(fallback)
         }
-        if first.0 == last.0 { return first.1.words }
-        return "\(first.1.words) – \(last.1.words)"
+        if first.0 == last.0 { return say(first.1) }
+        return "\(say(first.1)) – \(say(last.1))"
+    }
+
+    /// The name shown as a folder title: every " (your date)", " (camera)",
+    /// " (folder name (year only))" … taken out. Events confirmed before
+    /// 2026-10-19 were saved with the date's source in the name; the stored
+    /// name is never rewritten, only shown without it. A name with no
+    /// source words is unchanged (Rick's own parentheses stay).
+    static func folderTitle(_ name: String) -> String {
+        var out = name
+        for words in provenanceSuffixes where out.contains(words) {
+            out = out.replacingOccurrences(of: words, with: "")
+        }
+        let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? name : trimmed
+    }
+
+    /// " (<source words>)" for every dated source (`.none` is never in
+    /// parentheses).
+    static let provenanceSuffixes: [String] = [EventsDate.Source.you, .camera, .inferred, .fileName, .folderYear]
+        .map { " (\($0.words))" }
+
+    /// The categories a typed name implies ("Thanksgiving 1984" →
+    /// ["Thanksgiving"]): the name read as a file name by the planner's
+    /// own name rules (EventLabeler → EventCategoryRules). Empty when the
+    /// name says no occasion.
+    static func categories(forName name: String) -> [String] {
+        let labels = EventLabeler.nameLabels(filename: name, fullPath: name, year: nil)
+        return EventCategoryRules.evidence(captions: [], transcript: nil, labels: labels).map(\.category)
     }
 }
