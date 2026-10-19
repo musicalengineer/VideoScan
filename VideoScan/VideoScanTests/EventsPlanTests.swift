@@ -171,9 +171,10 @@ struct EventsPlanTests {
         }
         // Reviewed 2026-10-16: VideoScanModel+RelatedEvidence builds Compare Media's evidence (values + the sidecar
         // audio match); it reads records and never changes one. Reviewed 2026-10-19: EventsFolderDraft turns
-        // files into ContentRanges and calls `confirm` — it reads records and never changes one.
+        // files into ContentRanges and calls `confirm` — it reads records and never changes one. Reviewed 2026-10-19:
+        // EventsFolderDrop plans a drop onto a folder and calls `addMembers` — event decisions only, no record change.
         #expect(Set(files.map(\.relative)) == ["Events/EventsPlan.swift", "Events/EventsDecisionStore.swift",
-                                               "Events/EventsFolderDraft.swift",
+                                               "Events/EventsFolderDraft.swift", "Events/EventsFolderDrop.swift",
                                                "Events/VideoScanModel+Events.swift", "Events/VideoScanModel+RelatedEvidence.swift",
                                                "Catalog/EventsPane.swift", "Catalog/EventDetailSheet.swift"],
                 "a new Events file must be added here (and reviewed): \(files.map(\.relative).sorted())")
