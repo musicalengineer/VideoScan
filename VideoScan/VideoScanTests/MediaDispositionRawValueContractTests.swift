@@ -8,9 +8,10 @@ import Testing
 // wrote the Swift case NAME ("confirmedJunk") into JSON instead of the
 // case's RAW VALUE ("Confirmed Junk"). The Swift JSONDecoder silently
 // falls back to .unreviewed on raw-value mismatch, so 132 records were
-// effectively un-tagged with no error surface. The Python script side is
-// pinned by tests/test_tag_imovie_stock_as_junk.py::
-// test_writes_swift_enum_raw_value — these two tests must move together.
+// effectively un-tagged with no error surface. The Python script and its
+// sibling test were retired 2026-10-19 (cutover audit gap 3: no script
+// writes the catalog); the raw values are still the catalog.sqlite
+// `dispositions` CHECK words, so these pins stay.
 
 @Suite("MediaDisposition raw-value contract")
 struct MediaDispositionRawValueContractTests {

@@ -568,26 +568,27 @@ def test_events_gate_refuses_strings_names_and_bad_shapes(mutate, why):
 
 
 def test_events_prototype_stats_json_is_counts_only(tmp_path, monkeypatch):
-    """scripts/events_prototype.py --stats-json: counts from a fake catalog and a fake marks export;
+    """scripts/events_prototype.py --stats-json: counts from a fake catalog.sqlite and a fake marks export;
     no path, caption, transcript or name reaches the file, and the publisher's gate accepts it."""
     ep_spec = importlib.util.spec_from_file_location("events_prototype", ROOT / "scripts" / "events_prototype.py")
     ep = importlib.util.module_from_spec(ep_spec)
     ep_spec.loader.exec_module(ep)
+    import sys
+    sys.path.insert(0, str(ROOT / "tests"))
+    from catalog_sqlite_fixture import Catalog
     sha = "a" * 64
-    tape = {"id": 1, "fullPath": "/Volumes/LaCie/1995/Donna/tape1.mov", "contentFixity": {"sha256": sha},
-            "userDate": "1995-06-05", "audioTranscript": "happy birthday Donna, make a wish",
-            "sceneCaptions": [{"timestamp": 95, "text": "a child blowing out the candles on a cake"}]}
-    records = [
-        tape,
-        dict(tape, id=2, fullPath="/Volumes/RAID/copies/tape1.mov"),                      # a copy: one witness
-        {"id": 3, "fullPath": "/Volumes/LaCie/1996/xmas.mov", "contentFixity": {"sha256": "b" * 64},
-         "userDate": "1996-12-25", "sceneCaptions": [{"timestamp": 3, "text": "santa hands out wrapped presents"}]},
-        {"id": 4, "fullPath": "/Volumes/LaCie/misc/lawn.mov", "sceneCaptions": [{"timestamp": 0, "text": "a lawn"}],
-         "audioTranscript": "   "},                                                       # evidence-free, blank transcript
-        {"id": 5, "fullPath": "/Volumes/LaCie/gone.mov", "purgedAt": "2026-10-01T00:00:00Z",
-         "sceneCaptions": [{"timestamp": 0, "text": "birthday"}]},                       # purged: not active
-    ]
-    (tmp_path / "catalog.json").write_text(json.dumps({"records": records}))
+    # The catalog is catalog.sqlite since the 10/18 cutover (read through scripts/catalog_db.py).
+    db = Catalog(tmp_path)
+    tape = dict(digest=sha, user_date="1995-06-05", transcript="happy birthday Donna, make a wish",
+                captions=[(95, "a child blowing out the candles on a cake")])
+    db.add("/Volumes/LaCie/1995/Donna/tape1.mov", **tape)
+    db.add("/Volumes/RAID/copies/tape1.mov", **tape)                                     # a copy: one witness
+    db.add("/Volumes/LaCie/1996/xmas.mov", digest="b" * 64, user_date="1996-12-25",
+           captions=[(3, "santa hands out wrapped presents")])
+    db.add("/Volumes/LaCie/misc/lawn.mov", captions=[(0, "a lawn")], transcript="   ")  # evidence-free, blank transcript
+    db.add("/Volumes/LaCie/gone.mov", removal=("removedFromCatalog", "purged"),
+           captions=[(0, "birthday")])                                                   # purged: not active
+    catalog_path = db.close()
     downloads = tmp_path / "Downloads"
     downloads.mkdir()
     (downloads / "events-v0-marks (1).json").write_text(json.dumps({f"Birthday|{sha}": "yes", "Birthday|zzz": "no",
@@ -595,7 +596,7 @@ def test_events_prototype_stats_json_is_counts_only(tmp_path, monkeypatch):
                                                                     f"Easter|{sha}": "maybe"}))
     (downloads / "events-v0-marks.json").write_text("{}")                                 # older: ignored
     os.utime(downloads / "events-v0-marks.json", (1_600_000_000, 1_600_000_000))
-    monkeypatch.setattr(ep, "CATALOG", tmp_path / "catalog.json")
+    monkeypatch.setattr(ep, "CATALOG", catalog_path)
     monkeypatch.setattr(ep, "OUT_DIR", tmp_path / "events-prototype")
     monkeypatch.setattr(ep, "PREVIEWS", tmp_path / "previews")
     monkeypatch.setattr(ep, "DOWNLOADS", downloads)

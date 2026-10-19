@@ -1,20 +1,24 @@
 // PreviewSweepCLIRunner.swift (VideoScanCore)
 // The out-of-process helper's driver (2026-07-28, Stage 1): wires the
-// file-backed catalog source + the SHARED PreviewDiskCache + the ffmpeg
+// catalog.sqlite source + the SHARED PreviewDiskCache + the ffmpeg
 // renderer into the SAME PreviewSweepEngine the app runs in-process, and
 // surfaces honest progress to a stdout sink. Kept in Core so it can be
 // exercised by VideoScanCoreTests with a fake renderer (no real ffmpeg).
 //
 // Modes:
 //   .once  — one plan+sweep pass, then return.
-//   .watch — sweep, sleep `intervalSeconds`, re-check catalog.json's mtime;
+//   .watch — sweep, sleep `intervalSeconds`, re-check the catalog's
+//            high-water sidecar mtime (every commit rewrites it);
 //            re-read + re-sweep only when it changed (or something was
 //            deferred last pass). Ctrl-C ends it (the process just exits).
 //   dry-run — plan via the SAME shared planner functions the engine uses,
 //            print the work-item counts, rip NOTHING.
 //
-// The runner treats catalog.json as READ-ONLY (FileBackedCatalogSource only
-// reads) and never touches metadata_cache.sqlite.
+// The runner opens catalog.sqlite READ-ONLY (SQLiteCatalogSource →
+// GRDBCatalogRepository.openForReading) and never touches
+// metadata_cache.sqlite. Since the 10/18 cutover catalog.json is frozen;
+// the helper refuses to run without `catalog.cutover` (2026-10-19, audit
+// gap 3) rather than sweep a stale list.
 
 import Foundation
 
@@ -147,10 +151,15 @@ public struct PreviewSweepCLIRunner {
     /// Run according to `options.mode`. Returns when a `.once` pass finishes;
     /// loops forever in `.watch` (the process exits on signal).
     public func run() async {
+        if let failure = SQLiteCatalogReader.preflight(databaseURL: options.catalogURL) {
+            out("preview sweep helper: \(failure.words)")
+            return
+        }
         let cache = PreviewDiskCache(rootURL: cacheRootURL)
-        let catalogSource = FileBackedCatalogSource(
-            catalogURL: options.catalogURL,
-            isReachable: isReachable)
+        let catalogSource = SQLiteCatalogSource(
+            databaseURL: options.catalogURL,
+            isReachable: isReachable,
+            report: out)
 
         out("preview sweep helper: catalog=\(options.catalogURL.path)")
         out("preview sweep helper: cache=\(cacheRootURL.path)")
@@ -181,7 +190,8 @@ public struct PreviewSweepCLIRunner {
     private func watchLoop(cache: PreviewDiskCache,
                            catalogSource: any PreviewCatalogSource) async {
         var freshness = CatalogFreshness()
-        _ = freshness.hasChanged(catalogURL: options.catalogURL)  // seed
+        let freshnessURL = SQLiteCatalogReader.freshnessURL(databaseURL: options.catalogURL)
+        _ = freshness.hasChanged(catalogURL: freshnessURL)  // seed
         let idlePolicy = HelperIdleExitPolicy(idleGraceSeconds: options.idleExitSeconds)
         var idleElapsed: Double = 0
 
@@ -199,7 +209,7 @@ public struct PreviewSweepCLIRunner {
                 return  // cancelled
             }
 
-            if freshness.hasChanged(catalogURL: options.catalogURL) {
+            if freshness.hasChanged(catalogURL: freshnessURL) {
                 idleElapsed = 0          // fresh work — reset the idle clock
                 continue                 // re-sweep immediately
             }

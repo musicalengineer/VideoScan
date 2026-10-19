@@ -15832,7 +15832,6 @@
         "cancelAbandonsPendingClarificationWithoutContinuation",
         "cancellationReachesInjectedTurnSeamAndPerformsNoMediaAction",
         "cancellingDuringSpeechDoesNotReadAnotherQuestion",
-        "catalogHeaderProbeReadsMasterWithoutDecodingRecords",
         "catalogPeopleRosterIsLocalBoundedAndSourceScoped",
         "citationsAreBoundedAndRetainPlaybackCoordinates",
         "clarificationNumberAndExactNameDoNotRetranslate",
@@ -15877,6 +15876,7 @@
         "selectionDateQuestionsUseTheEmbeddedDateAtDayPrecision",
         "selectionDateQuestionsWithoutASelectionStillTranslate",
         "selectionQuestionsWithNothingSelectedAskForASelectionOrAName",
+        "shellReadsCatalogSQLiteReadOnlyWithDesignation",
         "showMoreAfterTheTreeChangedIsRefusedThroughTheShell",
         "speechIsOptInAndParsesWithOnce",
         "speechReadsOnlyRecordedAnswersAndFinishesBeforeNextInput",
@@ -26167,6 +26167,23 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_catalog_db.py",
+      "stage": "unit",
+      "suites": [
+        "test_catalog_db.py"
+      ],
+      "tests": [
+        "test_bound_beats_unverified_and_unverified_is_the_rows_own",
+        "test_curated_values_are_shared_by_copies",
+        "test_hallie_snapshot_exports_from_catalog_sqlite",
+        "test_held_records_are_included_from_their_payload",
+        "test_purged_rows_are_not_records_but_removed_ones_carry_their_marker",
+        "test_scale_20k_rows"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_ci_test_verdict.py",
       "stage": "unit",
       "suites": [
@@ -26424,29 +26441,6 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
-      "path": "tests/test_dedup_bogus_dates.py",
-      "stage": "unit",
-      "suites": [
-        "test_dedup_bogus_dates.py"
-      ],
-      "tests": [
-        "test_bogus_record_alone_is_cleared_not_dropped",
-        "test_bogus_record_with_real_sibling_is_dropped",
-        "test_empty_catalog_yields_empty_classifications",
-        "test_empty_string_is_not_bogus",
-        "test_exact_match_is_bogus",
-        "test_index_stability",
-        "test_multiple_bogus_with_one_real_sibling_drops_all_bogus",
-        "test_none_is_not_bogus",
-        "test_other_2040_dates_are_not_bogus",
-        "test_real_record_alone_is_left_alone",
-        "test_two_bogus_records_without_a_real_sibling_both_get_cleared",
-        "test_unrelated_records_in_same_catalog_are_untouched"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
       "path": "tests/test_docs_links.py",
       "stage": "unit",
       "suites": [
@@ -26458,40 +26452,6 @@
         "test_relative_links_images_and_reference_links_are_checked",
         "test_templates_still_require_the_current_output_directory",
         "test_tracked_docs_references_exist"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_dossier_batch_helpers.py",
-      "stage": "unit",
-      "suites": [
-        "test_dossier_batch_helpers.py"
-      ],
-      "tests": [
-        "test_canonical_three_letter_month",
-        "test_empty_returns_none",
-        "test_filter_expr_people_matches_detected",
-        "test_filter_expr_people_matches_suspected",
-        "test_filter_expr_unsupported_key_raises",
-        "test_full_month_name",
-        "test_garbage_ocr_strings_fall_through_to_mtime",
-        "test_invalid_day_returns_none",
-        "test_lowercase_input",
-        "test_mtime_fallback_low_confidence",
-        "test_no_filter_returns_all_records",
-        "test_no_signals_zero_confidence",
-        "test_none_returns_none",
-        "test_paths_file_preserves_catalog_order",
-        "test_paths_file_returns_matching_records_only",
-        "test_paths_file_skips_blank_lines",
-        "test_single_ocr_hit_medium",
-        "test_three_frame_consensus_high_confidence",
-        "test_time_only_returns_none",
-        "test_two_digit_year_returns_none",
-        "test_two_frame_consensus_lower",
-        "test_with_dots",
-        "test_with_pm_prefix"
       ]
     },
     {
@@ -26665,36 +26625,6 @@
         "test_timestamps_are_strictly_increasing",
         "test_too_short_returns_empty",
         "test_zero_or_negative_args_return_empty"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_folder_date_interp.py",
-      "stage": "unit",
-      "suites": [
-        "test_folder_date_interp.py"
-      ],
-      "tests": [
-        "test_confidence_is_configurable",
-        "test_drops_unparseable_dates",
-        "test_each_folder_independent",
-        "test_empty_when_no_dates",
-        "test_extracts_only_records_with_inferred_date",
-        "test_extracts_year_from_full_iso",
-        "test_extracts_year_from_iso_with_z",
-        "test_median_is_robust_to_outlier_year",
-        "test_mid_year_iso",
-        "test_min_signals_can_be_lowered",
-        "test_propagates_year_from_dated_siblings_to_undated_ones",
-        "test_records_with_empty_directory_skipped",
-        "test_records_with_inferred_date_are_left_alone",
-        "test_records_without_fullPath_skipped",
-        "test_rejects_year_out_of_range",
-        "test_requires_min_signals_default_2",
-        "test_returns_none_for_empty",
-        "test_returns_none_for_garbage",
-        "test_returns_none_for_none"
       ]
     },
     {
@@ -27095,61 +27025,6 @@
         "test_hallie_voice_line_only_when_last_night_alerted",
         "test_local_review_line",
         "test_local_review_line_matches_what_nightly_review_writes"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_merge_dossier_jsonl.py",
-      "stage": "unit",
-      "suites": [
-        "test_merge_dossier_jsonl.py"
-      ],
-      "tests": [
-        "test_advances_offset_so_next_call_reads_nothing",
-        "test_applies_fields_to_matching_record",
-        "test_applies_in_order_when_multiple_deltas_target_one_record",
-        "test_apply_deltas_skips_bad_fields_but_applies_rest",
-        "test_apply_deltas_skips_whole_delta_when_all_fields_rejected",
-        "test_atomic_write_uses_tmp_rename",
-        "test_compute_manifest_lines_format_matches_shasum",
-        "test_compute_manifest_lines_handles_missing_roots_gracefully",
-        "test_compute_manifest_lines_skips_hidden_files_in_poi",
-        "test_compute_manifest_lines_sorted_by_relpath",
-        "test_empty_file_returns_nothing",
-        "test_handles_missing_primary_on_first_write",
-        "test_handles_multiple_jsonl_files",
-        "test_load_malformed_file_returns_empty",
-        "test_load_missing_file_returns_empty",
-        "test_manifest_changes_when_catalog_changes",
-        "test_migrate_copies_legacy_offsets_when_new_path_missing",
-        "test_migrate_creates_parent_dir",
-        "test_migrate_no_op_when_legacy_path_missing",
-        "test_migrate_no_op_when_new_path_already_exists",
-        "test_no_tmp_file_remains_after_call",
-        "test_offset_reset_replays_all_deltas_onto_wiped_catalog",
-        "test_picks_up_appended_lines_after_offset",
-        "test_preserves_unrelated_fields_on_the_record",
-        "test_reads_all_lines_when_offset_is_zero",
-        "test_replay_is_idempotent_apply_twice_same_result",
-        "test_replay_matches_records_by_fullPath_even_after_record_rebuild",
-        "test_round_trip_writes_and_reads",
-        "test_sha256_hex_of_file_matches_known_value",
-        "test_short_circuits_when_file_smaller_than_offset",
-        "test_skips_delta_with_empty_path_or_fields",
-        "test_skips_delta_with_no_matching_record",
-        "test_skips_malformed_lines_without_aborting",
-        "test_validate_accepts_null_for_nullable_fields",
-        "test_validate_accepts_well_formed_dossier_fields",
-        "test_validate_mixes_kept_and_rejected_fields",
-        "test_validate_passes_unknown_fields_through",
-        "test_validate_rejects_bad_iso_date_string",
-        "test_validate_rejects_bool_disguised_as_number",
-        "test_validate_rejects_caption_list_with_wrong_inner_shape",
-        "test_validate_rejects_wrong_type_for_caption_list",
-        "test_write_manifest_is_atomic_no_tmp_left_behind",
-        "test_write_manifest_round_trips_through_disk",
-        "test_writes_primary_and_rotates_backup"
       ]
     },
     {
@@ -27786,38 +27661,6 @@
         "test_parser_preserves_scores_counts_and_errors",
         "test_summary_detects_route_tier_flip",
         "test_summary_never_counts_suspected_as_detected"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_tag_imovie_stock_as_junk.py",
-      "stage": "unit",
-      "suites": [
-        "test_tag_imovie_stock_as_junk.py"
-      ],
-      "tests": [
-        "test_already_confirmedJunk_skipped",
-        "test_animated_gradient_with_number",
-        "test_basic_stock_asset_gets_tagged",
-        "test_bounce_across_multiple",
-        "test_clip_n_dv_intentionally_excluded",
-        "test_delta_shape_matches_merger_contract",
-        "test_dossier_state_does_not_affect_tagging",
-        "test_empty_filename",
-        "test_existing_notes_preserved",
-        "test_no_fullpath_skipped",
-        "test_non_imovie_filename",
-        "test_non_stock_asset_skipped",
-        "test_notes_field_marker_appended",
-        "test_push_just_prefix_and_ext",
-        "test_pusher_does_not_match_push",
-        "test_random_video_with_lowercase_prefix",
-        "test_records_with_undossiered_sibling_still_tagged",
-        "test_rolling_credits",
-        "test_typewriter",
-        "test_writes_swift_enum_raw_value",
-        "test_zoom_with_space_and_number"
       ]
     },
     {
@@ -28887,6 +28730,25 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/SQLiteCatalogReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SQLiteCatalogReaderTests"
+      ],
+      "tests": [
+        "freshnessIsTheHighWater",
+        "jsonPathRefused",
+        "missingDatabaseRefused",
+        "openForReadingMissingFile",
+        "openForReadingRefusesWrites",
+        "previewSourcePlansFromSQLite",
+        "previewSourceWithoutLatch",
+        "readsTheAppsRecordsReadOnly",
+        "refusedWithoutLatch"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
       "stage": "regression",
       "suites": [
@@ -29362,7 +29224,6 @@
         "CatalogLockRealBackupTests"
       ],
       "tests": [
-        "testActualReducerOutputDecodes_endToEnd",
         "testPythonRoundTripOfRealBackupDecodes"
       ]
     },
@@ -29405,6 +29266,25 @@
         "test_package_known_issue_and_missing_summary_are_not_passes",
         "test_package_only_stage_runs",
         "test_unblocked_package_suite_without_selectors_fails_preflight"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_no_script_writes_catalog.py",
+      "stage": "unit",
+      "suites": [
+        "test_no_script_writes_catalog.py"
+      ],
+      "tests": [
+        "test_allowlist_has_no_stale_entries",
+        "test_catalog_db_opens_read_only_by_construction",
+        "test_engine_refuses_a_write_through_catalog_db",
+        "test_no_script_writes_catalog_json",
+        "test_no_shell_script_touches_the_catalog_files",
+        "test_only_catalog_db_names_catalog_sqlite",
+        "test_refuses_without_cutover_latch_and_never_reads_json",
+        "test_scan_sees_the_scripts"
       ]
     }
   ],
@@ -31770,15 +31650,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "tests/test_dedup_bogus_dates.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "tests/test_docs_links.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tests/test_dossier_batch_helpers.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -31806,10 +31678,6 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "tests/test_folder_date_interp.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "tests/test_footage_spectrum.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -31827,10 +31695,6 @@
         },
         {
           "name": "tests/test_local_review_morning_line.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tests/test_merge_dossier_jsonl.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -31910,10 +31774,6 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "tests/test_tag_imovie_stock_as_junk.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "tests/test_test_host_detection_subprocess.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -31948,11 +31808,19 @@
         {
           "name": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "tests/test_catalog_db.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_no_script_writes_catalog.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 2667,
       "name": "unit",
-      "package_expected_floor": 294,
+      "package_expected_floor": 303,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -31979,7 +31847,8 @@
         "VideoScanCoreTests.CatalogJSONValueCoderTests",
         "VideoScanCoreTests.CatalogRecordDTORecordTests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
-        "VideoScanCoreTests.CatalogChangeDetectorTests"
+        "VideoScanCoreTests.CatalogChangeDetectorTests",
+        "VideoScanCoreTests.SQLiteCatalogReaderTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

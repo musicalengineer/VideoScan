@@ -338,28 +338,40 @@ struct HallieShellCLITests {
             base.appendingPathComponent("unrelated/family.ged")) == nil)
     }
 
-    @Test func catalogHeaderProbeReadsMasterWithoutDecodingRecords() throws {
+    /// 2026-10-19 (cutover audit gap 3): the shell reads catalog.sqlite
+    /// read-only — records AND the Master Archive designation in one read —
+    /// and refuses, with words, a catalog that was never switched. The
+    /// frozen catalog.json beside it is never the fallback.
+    @Test func shellReadsCatalogSQLiteReadOnlyWithDesignation() async throws {
         let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("HallieCatalogHeader-\(UUID())", isDirectory: true)
+            .appendingPathComponent("HallieCatalogSQLite-\(UUID())", isDirectory: true)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: base) }
-        let catalog = base.appendingPathComponent("catalog.json")
-        let json = """
-        {"version":6,"generation":12,"savedAt":"2026-08-23T01:31:09Z","savedFromHost":"fixture","masterArchive":{"targetPath":"/Volumes/FamilyArchive","rootPath":"/Volumes/FamilyArchive/Breen_Family_Archive","volumeUUID":"fixture-uuid","designatedAt":"2026-08-21T00:28:35Z"},"records":[{"intentionally":"not a VideoRecord"}]}
+        let database = base.appendingPathComponent(SQLiteCatalogReader.databaseFileName)
+        let designationJSON = """
+        {"targetPath":"/Volumes/FamilyArchive","rootPath":"/Volumes/FamilyArchive/Breen_Family_Archive","volumeUUID":"fixture-uuid","designatedAt":"2026-08-21T00:28:35Z"}
         """
-        try Data(json.utf8).write(to: catalog)
+        let writer = GRDBCatalogRepository(host: "hallie-test", durability: .volatileForTests)
+        #expect(await writer.open(at: database) == .readWrite)
+        let wrote = await writer.write(as: .ui) { try $0.setMasterArchive(json: designationJSON) }
+        guard case .committed = wrote else {
+            Issue.record("fixture write failed: \(wrote)")
+            return
+        }
+        await writer.close()
+        try Data("{\"records\":[]}".utf8).write(to: base.appendingPathComponent("catalog.json"))
 
-        let designation = try #require(
-            HallieShellCLI.masterArchiveDesignation(catalogURL: catalog))
+        // Not switched: refused, nothing loaded.
+        #expect(await HallieShellCLI.loadCatalogReadOnly(database) == nil)
+
+        try Data("{}".utf8).write(to: base.appendingPathComponent(SQLiteCatalogReader.latchFileName))
+        let loaded = try #require(await HallieShellCLI.loadCatalogReadOnly(database))
+        #expect(loaded.records.isEmpty)
+        let designation = try #require(CatalogCommitter.designation(fromJSON: loaded.masterArchiveJSON))
         #expect(designation.targetPath == "/Volumes/FamilyArchive")
-        #expect(designation.rootPath
-            == "/Volumes/FamilyArchive/Breen_Family_Archive")
+        #expect(designation.rootPath == "/Volumes/FamilyArchive/Breen_Family_Archive")
         #expect(designation.volumeUUID == "fixture-uuid")
-
-        let missingMarker = base.appendingPathComponent("missing.json")
-        try Data("{}".utf8).write(to: missingMarker)
-        #expect(HallieShellCLI.masterArchiveDesignation(
-            catalogURL: missingMarker) == nil)
+        #expect(HallieShellCLI.Options().catalogURL.lastPathComponent == SQLiteCatalogReader.databaseFileName)
     }
 
     // MARK: - Native speech (no real preferences, audio, or model calls)

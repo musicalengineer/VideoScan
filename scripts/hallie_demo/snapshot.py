@@ -9,7 +9,9 @@ Reads (never writes):
   - People tab profiles (POI/<uuid>/profile.json) and family groups
     (POI/Families/*.json);
   - CyberBrain (cyberbrain/cyberbrain.json);
-  - the catalog (catalog.json), skipping purged / deleted / trashed records.
+  - the catalog (catalog.sqlite, read-only through scripts/catalog_db.py —
+    no catalog.cutover ⇒ refused; never the frozen catalog.json), skipping
+    purged / deleted / trashed records.
 
 Writes four JSON files into --out:
   tree.json, people.json, brain.json, catalog.json  (+ manifest.json)
@@ -31,6 +33,9 @@ import os
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+import catalog_db  # noqa: E402  (the one read-only door to catalog.sqlite)
 
 APP_SUPPORT = os.path.expanduser("~/Library/Application Support/VideoScan")
 DEFAULT_OUT = ("/private/tmp/claude-501/-Users-rickb-dev-VideoScan/"
@@ -316,9 +321,9 @@ def names_of(v) -> list[str]:
 
 
 def build_catalog(app: str) -> tuple[dict, dict]:
-    d = json.load(open(os.path.join(app, "catalog.json")))
+    all_records, generation = catalog_db.load(os.path.join(app, catalog_db.DATABASE_FILE_NAME))
     recs, skipped = [], {"purged": 0, "deletedOrTrashed": 0}
-    for r in d["records"]:
+    for r in all_records:
         if r.get("purgedAt"):
             skipped["purged"] += 1
             continue
@@ -341,7 +346,7 @@ def build_catalog(app: str) -> tuple[dict, dict]:
             "archiveStage": r.get("archiveStage"),
             "contentHash": r.get("contentHash"),
             "duplicateGroupID": r.get("duplicateGroupID"),
-            "dateCreated": r.get("dateCreated"),
+            "dateCreated": r.get("dateCreated") or r.get("dateCreatedRaw"),
             "embeddedCreationDate": r.get("embeddedCreationDate"),
             "userDate": r.get("userDate"),
             "inferredRecordDate": r.get("inferredRecordDate"),
@@ -361,8 +366,8 @@ def build_catalog(app: str) -> tuple[dict, dict]:
             "captions": caps,
         }
         recs.append({k: v for k, v in rec.items() if v not in (None, "", [])})
-    meta = {"savedAt": d.get("savedAt"), "generation": d.get("generation"),
-            "recordsInCatalog": len(d["records"]), "recordsKept": len(recs), "skipped": skipped}
+    meta = {"source": catalog_db.DATABASE_FILE_NAME, "generation": generation,
+            "recordsInCatalog": len(all_records), "recordsKept": len(recs), "skipped": skipped}
     return {"meta": meta, "records": recs}, meta
 
 

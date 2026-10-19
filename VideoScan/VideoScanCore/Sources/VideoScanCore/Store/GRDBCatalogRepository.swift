@@ -153,6 +153,33 @@ public actor GRDBCatalogRepository: CatalogRepository {
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
+        return await finishOpen(opened, at: url)
+    }
+
+    public static let readerOnlyWords = "opened for reading only by a process that is not the catalog's writer"
+
+    /// READ-ONLY open for a process that is not the catalog's writer (the
+    /// preview helper, the Hallie shell — 2026-10-19, cutover audit gap 3):
+    /// SQLITE_OPEN_READONLY, no migration (an unmigrated file is refused), no
+    /// high-water reconcile or raise, every write refused. The engine checks
+    /// still run. The outcome is always `.readOnly` or `.refused`.
+    public func openForReading(at url: URL) async -> CatalogOpenOutcome {
+        guard pool == nil else { return .refused(reason: "already open at \(databaseURL?.path ?? "?")") }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return refusedToOpen(url, "could not open: no file at \(url.path)")
+        }
+        let opened: Opened
+        do {
+            opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true),
+                            readOnlyReason: Self.readerOnlyWords)
+        } catch {
+            return refusedToOpen(url, "could not open: \(Self.words(error))")
+        }
+        return await finishOpen(opened, at: url)
+    }
+
+    /// The open checks, the settle, and publishing the session (both doors).
+    private func finishOpen(_ opened: Opened, at url: URL) async -> CatalogOpenOutcome {
         do {
             let loaded = try await Self.prepare(opened, host: host)
             let settled = try await settle(opened, loaded: loaded, at: url)

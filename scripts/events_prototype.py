@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Events prototype v0 (Rick 2026-10-12): which recordings belong to the same family memory?
 
-Read-only. Uses evidence the catalog already holds — Dossier scene captions,
+Read-only (catalog.sqlite through scripts/catalog_db.py, which opens it
+mode=ro and refuses a catalog that was never switched). Uses evidence the catalog already holds — Dossier scene captions,
 Whisper transcripts, dates and folder names — to propose event *categories*
 per clip and group clips into candidate event *instances*. Copies collapse by
 full SHA-256 (Fill In Full Hashes, 10/11), so three copies of one tape are one
@@ -35,8 +36,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-APP_SUPPORT = Path.home() / "Library" / "Application Support" / "VideoScan"
-CATALOG = APP_SUPPORT / "catalog.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import catalog_db  # noqa: E402  (the one read-only door to catalog.sqlite)
+
+APP_SUPPORT = catalog_db.APP_SUPPORT
+CATALOG = catalog_db.DEFAULT_DATABASE
 PREVIEWS = APP_SUPPORT / "preview-cache"
 OUT_DIR = APP_SUPPORT / "events-prototype"
 DOWNLOADS = Path.home() / "Downloads"          # where the page's "Export marks" lands
@@ -64,9 +68,7 @@ GROUP_WINDOW = timedelta(days=4)
 
 
 def load_records() -> list[dict]:
-    with CATALOG.open() as f:
-        d = json.load(f)
-    recs = d["records"] if isinstance(d, dict) else d
+    recs, _generation = catalog_db.load(CATALOG)
     return [r for r in recs if not r.get("purgedAt") and not r.get("removal")]
 
 
@@ -345,7 +347,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stats-json", metavar="PATH",
                     help="also write counts only (no names, paths or text) to PATH for the metrics page")
     args = ap.parse_args(argv)
-    records = load_records()
+    try:
+        records = load_records()
+    except catalog_db.CatalogUnavailable as e:
+        print(f"events_prototype: {e}", file=sys.stderr)
+        return 2
     clips = []
     for r in collapse_copies(records):
         ev = evidence(r)

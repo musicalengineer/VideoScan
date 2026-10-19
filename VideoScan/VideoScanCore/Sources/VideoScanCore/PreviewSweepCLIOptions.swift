@@ -18,8 +18,9 @@ public struct PreviewSweepCLIOptions: Equatable {
         case watch
     }
 
-    /// Path to the persisted catalog.json (READ-ONLY — the catalog is
-    /// single-writer, owned by the app).
+    /// Path to catalog.sqlite (opened READ-ONLY — the catalog is
+    /// single-writer, owned by the app). catalog.json is frozen since the
+    /// 10/18 cutover and is refused (SQLiteCatalogReader.preflight).
     public var catalogURL: URL
     public var mode: Mode
     /// Plan only, rip nothing (`--dry-run`).
@@ -59,16 +60,11 @@ public struct PreviewSweepCLIOptions: Equatable {
 
     /// Daemon/CLI-only; never a test default (app call sites gate on TestEnvironment.isTestHost first).
     /// The real production catalog:
-    /// ~/Library/Application Support/VideoScan/catalog.json
+    /// ~/Library/Application Support/VideoScan/catalog.sqlite
     public static func defaultCatalogURL(
         fileManager: FileManager = .default
     ) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory,
-                                    in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        return base
-            .appendingPathComponent("VideoScan", isDirectory: true)
-            .appendingPathComponent("catalog.json")
+        SQLiteCatalogReader.defaultDatabaseURL(fileManager: fileManager)
     }
 
     // MARK: Parsing
@@ -156,8 +152,9 @@ public struct PreviewSweepCLIOptions: Equatable {
       --once            Run a single plan+sweep pass, then exit.
       --watch           Keep running: sweep, sleep, re-check the catalog, repeat. (default)
       --dry-run         Plan only — report what would be ripped, rip nothing.
-      --catalog <path>  catalog.json to read (READ-ONLY). Default:
-                        ~/Library/Application Support/VideoScan/catalog.json
+      --catalog <path>  catalog.sqlite to read (READ-ONLY; catalog.cutover must be
+                        beside it). Default:
+                        ~/Library/Application Support/VideoScan/catalog.sqlite
       --cache-dir <p>   Preview-cache directory to write. Default:
                         ~/Library/Application Support/VideoScan/preview-cache
       --workers <n>     Sweep workers across volumes (per-volume is always 1). Default: 2.
@@ -166,7 +163,7 @@ public struct PreviewSweepCLIOptions: Equatable {
                         cache with an unchanged catalog. 0 = never. Default: 300.
       -h, --help        Show this help.
 
-    The app owns catalog.json and metadata_cache.sqlite; this helper never writes them.
+    The app owns catalog.sqlite and metadata_cache.sqlite; this helper never writes them.
     Only ONE instance runs at a time (single-instance lock). Cache writes are guarded by
     an advisory file lock so the app and this helper never corrupt a payload.
     """
@@ -174,10 +171,11 @@ public struct PreviewSweepCLIOptions: Equatable {
 
 // MARK: - Catalog freshness (watch mode)
 
-/// Tracks catalog.json's modification time between passes so `--watch` only
-/// re-reads the snapshot when the app actually rewrote it. Simple by design
-/// for Stage 1: mtime is the freshness signal (the app rewrites the whole
-/// file atomically). Missing/unstattable file ⇒ nil mtime ⇒ treated as
+/// Tracks a file's modification time between passes so `--watch` only
+/// re-reads the snapshot when the app actually committed. Simple by design
+/// for Stage 1: mtime is the freshness signal. Since the SQLite cutover the
+/// runner watches the high-water sidecar beside catalog.sqlite
+/// (`SQLiteCatalogReader.freshnessURL`), which every commit rewrites. Missing/unstattable file ⇒ nil mtime ⇒ treated as
 /// "changed" so the next pass still attempts a read (it will just plan
 /// nothing if the file is absent).
 public struct CatalogFreshness {
