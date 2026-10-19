@@ -531,13 +531,13 @@ struct RemoteViewerReadOnlySensorTests {
         // DeleteDuplicatesJob 1 → 0 and DerivativeOutputPublish 1 → 0
         // (GH #143): both reach MediaTrash.move (above).
         // The app's own temp / partial / staging / cache / output files.
-        "App/BundleExporter.swift": (1, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
+        "App/BundleExporter.swift": (2, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
         "Archive/ArchiveIndexRename.swift": (3, nil, nil),
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift": (1, nil, nil),
         "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": (2, nil, nil),
         "Catalog/CatalogStore.swift": (1, nil, nil), "Catalog/CatalogSync.swift": (3, nil, nil),
-        // Sealed-copy temp files of Back Up Catalog / the viewer snapshot (app data, renamed on success).
-        "Catalog/CatalogBackupSeal.swift": (1, nil, nil), "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),
+        // Back Up Catalog's sealed-copy temp file (app data, renamed on success).
+        "Catalog/CatalogBackupSeal.swift": (1, nil, nil),
         // The master's own VACUUM INTO temp (.catalog.sqlite.<uuid>.vspublish.tmp)
         // when a viewer-snapshot publish fails before its rename (phase 2, 2026-10-19).
         "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),
