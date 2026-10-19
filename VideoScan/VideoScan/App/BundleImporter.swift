@@ -25,6 +25,33 @@ enum BundleImporter {
         var bundleExportedAt: Date
     }
 
+    /// What catalog a bundle holds — decided BEFORE anything is decoded, so
+    /// a v2 (catalog.sqlite) bundle is never fed to the JSON reader and a
+    /// v1 (catalog.json) bundle is never merged into catalog.sqlite.
+    enum CatalogKind: Equatable, Sendable {
+        /// Bundle v2: a sealed catalog.sqlite; the manifest's generation when readable.
+        case sqlite(generation: Int?)
+        /// Bundle v1 (before the database switch): catalog.json.
+        case legacyJSON
+        /// Neither — not a VideoScan backup.
+        case none
+    }
+
+    /// Which catalog the bundle at `bundleURL` holds. A catalog.sqlite wins
+    /// over a stray catalog.json. Reads only manifest.json (small).
+    static func catalogKind(of bundleURL: URL) -> CatalogKind {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: bundleURL.appendingPathComponent(CatalogBackupSeal.databaseFileName).path) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let manifest = (try? Data(contentsOf: bundleURL.appendingPathComponent("manifest.json")))
+                .flatMap { try? decoder.decode(BundleManifest.self, from: $0) }
+            return .sqlite(generation: manifest?.catalogDatabase?.generation)
+        }
+        if fm.fileExists(atPath: bundleURL.appendingPathComponent("catalog.json").path) { return .legacyJSON }
+        return .none
+    }
+
     /// Per-POI conflict-resolution timeout for iCloud materialization.
     /// 60s per POI is generous; the typical POI is a few MB of HEIC photos.
     static let iCloudMaterializeTimeoutSeconds: TimeInterval = 60

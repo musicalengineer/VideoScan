@@ -29312,6 +29312,26 @@
         "rescanKeepsTheCuratedReplacedAtPathRow",
         "scale_100kWithHistoryWithinBudget"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogBackupSQLiteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogBackupSQLiteTests",
+        "CatalogBackupImportTests",
+        "CatalogBackupScaleTests"
+      ],
+      "tests": [
+        "backupRoundTrip",
+        "backupWritesNothingBesideTheLiveCatalog",
+        "decisionTable",
+        "heldCatalogRefuses",
+        "jsonAuthorityRefuses",
+        "jsonBundleRefusedDatabaseUnchanged",
+        "sqliteBundleRefused",
+        "twelveThousandRows"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32551,7 +32571,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 213,
+      "expected_floor": 221,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [
@@ -32650,7 +32670,10 @@
         "VideoScanTests/AdvRelocateBucketBPresentFileTests",
         "VideoScanTests/AdvRelocateClosingSummaryTests",
         "VideoScanTests/AdvRescanKeepsReplacedHistoryTests",
-        "VideoScanTests/AdvRescanLiveAppliedCountTests"
+        "VideoScanTests/AdvRescanLiveAppliedCountTests",
+        "VideoScanTests/CatalogBackupSQLiteTests",
+        "VideoScanTests/CatalogBackupImportTests",
+        "VideoScanTests/CatalogBackupScaleTests"
       ]
     },
     {
