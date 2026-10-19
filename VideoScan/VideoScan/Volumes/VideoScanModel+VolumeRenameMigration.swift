@@ -815,46 +815,7 @@ extension VideoScanModel {
         pendingVolumeRenameNotice = nil
     }
 
-    /// Undo an auto/accepted migration: restore the pre-migration catalog
-    /// snapshot verbatim (records array AND the scan target's old path),
-    /// rebuild the search index, persist, and suppress the auto pass for
-    /// this volume so the very next rebuild doesn't redo what Rick just
-    /// undid. Returns false (and changes nothing) when the snapshot can't
-    /// be read back.
-    @discardableResult
-    func undoVolumeRenameMigration(_ notice: VolumeRenameNotice) -> Bool {
-        guard case .migrated(let snapshotPath) = notice.kind else { return false }
-        guard let restored = catalogStore.loadRecords(fromSnapshotAtPath: snapshotPath) else {
-            log("  ⚠ Couldn't read the pre-update snapshot at \(snapshotPath) — the catalog was left as-is.")
-            volumeRenameLog.error("Volume rename UNDO failed: snapshot unreadable at \(snapshotPath, privacy: .public)")
-            pendingVolumeRenameNotice = nil
-            return false
-        }
-        // Suppress BEFORE mutating records — the didSet schedules a
-        // detection rebuild whose auto pass must not re-migrate.
-        volumeRenameAutoSuppressed.insert(PathScope.normalize(notice.oldTargetPath))
-        let before = Set(records.map(\.id))
-        records = restored
-        // Cutover B2.3: ids the snapshot does not hold left with this Undo — purged explicitly.
-        purgeCatalogRows(ids: before, reason: "Undo of the volume rename \(notice.oldVolumeName) → \(notice.newVolumeName)")
-        if let target = scanTargets.first(where: { $0.id == notice.targetID }) {
-            target.searchPath = notice.oldTargetPath
-            target.isReachable = VolumeReachability.isReachable(path: notice.oldTargetPath)
-            persistScanTargets()
-            persistScanDates()
-        }
-        searchIndex.rebuild(records: records)
-        if !Self.isRunningTests { try? searchIndex.saveToDisk() }
-        notifyVolumeAggregatesStale()
-        notifyTargetsChanged()
-        saveCatalogNow()
-        pendingVolumeRenameNotice = nil
-        noteVolumeRenameCandidatesStale()
-        volumeRenameLog.notice("Volume rename UNDONE: restored \(restored.count) record(s) from \(snapshotPath, privacy: .public); target back to \(notice.oldTargetPath, privacy: .public)")
-        appLog.write("Volume rename undone: \(notice.newVolumeName) → \(notice.oldVolumeName); catalog restored from \(snapshotPath)")
-        log("Undone — the catalog is back to how it was before the \(notice.oldVolumeName) → \(notice.newVolumeName) update.")
-        return true
-    }
+    // Undo: VideoScanModel+VolumeRenameUndo.swift (adversarial 2026-10-18 #2).
 
     /// Dialog follow-up when drift was seen: run the EXISTING incremental
     /// rescan on the migrated target ("Rescan" — the same
