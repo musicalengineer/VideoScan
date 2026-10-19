@@ -80,10 +80,20 @@ struct NotesAuthorshipSensorTests {
         var out: [URL] = []
         for root in roots {
             guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { continue }
-            for case let url as URL in e where url.pathExtension == "swift" { out.append(url) }
+            for case let url as URL in e where url.pathExtension == "swift" && !Self.isTestOnlyExecutable(url) {
+                out.append(url)
+            }
         }
         try #require(out.count > 100, "source scan found only \(out.count) files under \(projectRoot.path)")
         return out
+    }
+
+    /// Executables that exist only to be killed by tests (CatalogHardKillTests)
+    /// write synthetic notes into a throwaway catalog; they never ship.
+    static let testOnlyExecutableDirs: Set<String> = ["catalog-crash-helper"]
+
+    static func isTestOnlyExecutable(_ url: URL) -> Bool {
+        url.pathComponents.contains { testOnlyExecutableDirs.contains($0) }
     }
 
     static func scan(pattern: String) throws -> [Hit] {
