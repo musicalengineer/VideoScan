@@ -63,6 +63,10 @@ you cited, and the tool calls you made.
 - Snapshots: `venv/bin/python scripts/hallie_demo/snapshot.py [--out DIR]`
   (text only: no pixels, audio, frames or face embeddings). Default `--out` is the
   session scratchpad; tools.py reads the same default or `--snapshots DIR`.
+  Since 2026-10-19 the catalog side is read from `catalog.sqlite` (read-only,
+  through `scripts/catalog_db.py`); without `catalog.cutover` the snapshot
+  stops with a message. The snapshot's own output file is still named
+  `catalog.json` — it is the export, not the app's catalog.
 - Give the agent `questions.json`, this README and the tools. Never
   `hallie_baseline.json`, `tests/hallie_acceptance_v1.json` or the repo.
 - Scoring: `scoring.md`. Frozen suite: `tests/hallie_acceptance_v1.json`,

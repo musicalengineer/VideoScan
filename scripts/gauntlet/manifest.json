@@ -26132,6 +26132,23 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_catalog_db.py",
+      "stage": "unit",
+      "suites": [
+        "test_catalog_db.py"
+      ],
+      "tests": [
+        "test_bound_beats_unverified_and_unverified_is_the_rows_own",
+        "test_curated_values_are_shared_by_copies",
+        "test_hallie_snapshot_exports_from_catalog_sqlite",
+        "test_held_records_are_included_from_their_payload",
+        "test_purged_rows_are_not_records_but_removed_ones_carry_their_marker",
+        "test_scale_20k_rows"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_ci_test_verdict.py",
       "stage": "unit",
       "suites": [
@@ -31917,6 +31934,10 @@
         {
           "name": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "tests/test_catalog_db.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 2667,
