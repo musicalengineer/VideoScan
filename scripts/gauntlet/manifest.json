@@ -2571,6 +2571,22 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFolderDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFolderDoorsTests"
+      ],
+      "tests": [
+        "aFolderRoundTripsWithItsKindTheStreamAndItsMembers",
+        "aKindOutsideTheThreeIsRefusedAndNothingLands",
+        "aSealedCopyCarriesTheFoldersTheStreamAndTheMembers",
+        "aV19DatabasesEventsReadKindEventAfterTheOpen",
+        "anUpsertKeepsCreatedAtAndChangesNameKindAndState",
+        "replaceFolderMembersSaysHowManyLanded"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SurnameVariantPropertyTests.swift",

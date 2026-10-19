@@ -359,14 +359,20 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // Catalog folders (v1.10): additive — `events.kind`, version 11.
+        migrator.registerMigration(CatalogFolderKindSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            for statement in CatalogFolderKindSchema.statements + CatalogFolderKindSchema.versionBump {
+                try db.execute(sql: statement)
+            }
+        }
         return migrator
     }
 
     /// The `catalog_state.schema_version` a fully migrated database carries
     /// (v1 creates 7; `v3_live_writes` raises it to 8; `v4_pending_rows` to
-    /// 9; `v5_b22_commit` to 10). A HIGHER number is a newer build's
-    /// file and is refused at open.
-    static let currentSchemaVersion = CatalogCommitB22Schema.schemaVersion
+    /// 9; `v5_b22_commit` to 10; `v6_folder_kind` to 11). A HIGHER number is
+    /// a newer build's file and is refused at open.
+    static let currentSchemaVersion = CatalogFolderKindSchema.schemaVersion
 
     private static func migrationsComplete(_ pool: DatabasePool, host: String) async throws -> Bool {
         let migrator = migrator(host: host)

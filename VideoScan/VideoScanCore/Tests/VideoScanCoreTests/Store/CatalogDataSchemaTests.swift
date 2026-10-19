@@ -78,9 +78,10 @@ struct CatalogDataSchemaTests {
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid")
         }
         #expect(migrations == [CatalogBookkeepingSchema.migrationID, CatalogDataSchema.migrationID, CatalogLiveWritesSchema.migrationID,
-                               CatalogPendingRowsSchema.migrationID, CatalogCommitB22Schema.migrationID])
+                               CatalogPendingRowsSchema.migrationID, CatalogCommitB22Schema.migrationID,
+                               CatalogFolderKindSchema.migrationID])
         let version = try count(try rawQueue(fixture), "SELECT schema_version FROM catalog_state")
-        #expect(version == CatalogCommitB22Schema.schemaVersion)
+        #expect(version == CatalogFolderKindSchema.schemaVersion)
     }
 
     @Test func theSwiftSchemaIsSplitByTableInDocumentOrder() throws {

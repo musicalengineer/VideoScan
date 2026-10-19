@@ -54,6 +54,11 @@
 -- commit's one-row read-back needs (VideoScanCore/Store/CatalogCommitB22Schema.swift, migration
 -- `v5_b22_commit`, which raises catalog_state.schema_version to 10). ADDITIVE: no earlier table,
 -- trigger, index or CHECK changes.
+-- Revision 11 (v1.10, 2026-10-19, Catalog folders live in catalog.sqlite): §15 — `events.kind`
+-- (event | person | other, default 'event') by ALTER TABLE … ADD COLUMN (VideoScanCore/Store/
+-- CatalogFolderKindSchema.swift, migration `v6_folder_kind`, which raises
+-- catalog_state.schema_version to 11). ADDITIVE: one column with a default; no row rewritten, no
+-- earlier table, trigger, index or CHECK changed.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1136,8 +1141,12 @@ CREATE TABLE events (
   updated_at   INTEGER NOT NULL,
   import_run   TEXT REFERENCES import_runs(run_id) ON DELETE RESTRICT,   -- F4
   source_ordinal INTEGER,
+  kind         TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','person','other')),   -- v1.10: added by §15's ALTER
   CHECK ((import_run IS NULL) = (source_ordinal IS NULL))
 ) STRICT, WITHOUT ROWID;
+-- (v1.10) The `kind` line is NOT in `v2_data`'s CREATE: migration `v6_folder_kind` (§15) adds it
+-- with ALTER TABLE … ADD COLUMN, and SQLite writes the column into sqlite_master's text right
+-- after the last column — this is the table as a fully migrated database holds it.
 -- A duplicated event id in events-decisions.json is a RUN-LEVEL refusal (contract §f), not a
 -- replacement: the PK above refuses the second plain INSERT and the run rolls back.     -- F4
 CREATE TABLE event_decisions (               -- the stream, verbatim, in order; unknown kinds kept
@@ -1641,3 +1650,17 @@ CREATE TABLE pending_purges (              -- v1.9: a held record the app no lon
 ) STRICT;
 CREATE INDEX import_items_landed_files ON import_items(landed_ref)
  WHERE source_file = 'catalog.json' AND landed_table = 'files';
+
+-- ---------------------------------------------------------------------------------------------
+-- 15. FOLDER KIND (v1.10, Catalog folders, migration `v6_folder_kind`). A Catalog folder is a
+--     confirmed event — a label Rick makes, never a place on disk ("Finder's handling, Photos
+--     albums' meaning", 2026-10-19). Its kind says what the label is about: 'event' (an
+--     occasion — every folder made before v1.10), 'person' (one person's footage), 'other'.
+--     The app's folder edits write `events` (upsert by event_id), append to `event_decisions`
+--     (import_run NULL — the append-only stream keeps every add, move, remove, rename, kind
+--     change and delete) and rebuild `event_members` for the folders a change touched (the fold,
+--     digests only: a "pair:" key stays in the stream).
+--     The migration runs (not a CREATE, so it is written here as a comment — §7 shows its result):
+--       ALTER TABLE events ADD COLUMN kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','person','other'));
+--       UPDATE catalog_state SET schema_version = 11 WHERE singleton = 1; PRAGMA user_version = 11.
+-- ---------------------------------------------------------------------------------------------
