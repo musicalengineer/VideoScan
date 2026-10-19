@@ -536,6 +536,8 @@ struct RemoteViewerReadOnlySensorTests {
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift": (1, nil, nil),
         "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": (2, nil, nil),
         "Catalog/CatalogStore.swift": (1, nil, nil), "Catalog/CatalogSync.swift": (3, nil, nil),
+        // Sealed-copy temp files of Back Up Catalog / the viewer snapshot (app data, renamed on success).
+        "Catalog/CatalogBackupSeal.swift": (1, nil, nil), "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),
         // The master's own VACUUM INTO temp (.catalog.sqlite.<uuid>.vspublish.tmp)
         // when a viewer-snapshot publish fails before its rename (phase 2, 2026-10-19).
         "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),
