@@ -30,7 +30,9 @@ enum FootageFolderWords {
     static let copyGlyph = "="
     static let clipGlyph = "\u{2282}"          // ⊂
     static let sameEventGlyph = "\u{2248}"     // ≈
-    static let folderSymbol = "folder"
+    /// Filled, like the Finder's list view: an outline folder vanished on
+    /// the dark theme (Rick 2026-10-19).
+    static let folderSymbol = "folder.fill"
     static let backSymbol = "chevron.left"
 
     // MARK: Relation words (after the name, muted)
@@ -158,7 +160,11 @@ enum FootageFolderWords {
     static let copyColor = Color.secondary
     static let relationColor = Color.secondary
     static let summaryColor = Color.secondary
-    static let folderTint = Color.accentColor
+    /// The Finder's folder blue, a lighter blue than the accent so it
+    /// reads on the dark theme (the accent blue sank into the row stripes).
+    static let folderTint = Color(red: 0.36, green: 0.68, blue: 0.96)
+    static let folderSymbolFont = Font.system(size: 15)
+    static let folderTitleFont = Font.system(.body).weight(.semibold)
     static let relationFont = Font.system(size: 11)
     static let summaryFont = Font.system(size: 11, design: .monospaced)
     static let legendFont = Font.system(size: 11)

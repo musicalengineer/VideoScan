@@ -205,9 +205,10 @@ extension CatalogContent {
     private func folderTitleCell(title: String, selected: Bool) -> some View {
         HStack(spacing: 6) {
             Image(systemName: FootageFolderWords.folderSymbol)
+                .font(FootageFolderWords.folderSymbolFont)
                 .foregroundColor(selected ? .primary : FootageFolderWords.folderTint)
             Text(title)
-                .font(.system(.body, design: .default).weight(.medium))
+                .font(FootageFolderWords.folderTitleFont)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
