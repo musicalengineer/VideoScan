@@ -65,11 +65,12 @@ struct FolderInspectorView: View {
 /// "In folders: Dad, Thanksgiving 1990" under a file's header; nothing when
 /// the file is in no folder.
 struct InspectorFoldersLine: View {
-    let contentKey: String
+    /// nil = the file cannot be in a folder (no content identity).
+    let contentKey: String?
     @ObservedObject private var store = EventsDecisionStore.shared
 
     var body: some View {
-        let names = store.folderNames(containing: contentKey)
+        let names = contentKey.map(store.folderNames(containing:)) ?? []
         if !names.isEmpty {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: FootageFolderWords.folderSymbol)

@@ -54,9 +54,7 @@ struct InspectorPanel: View {
                 VStack(alignment: .leading, spacing: 0) {
                     headerSection(rec)
 
-                    if let folderKey {
-                        InspectorFoldersLine(contentKey: folderKey)
-                    }
+                    InspectorFoldersLine(contentKey: folderKey)   // nothing when in no folder
 
                     Divider().padding(.horizontal, 16)
 

@@ -146,7 +146,10 @@ enum EventsCatalogRows {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.sortedKeys]
-        return String(decoding: try enc.encode(d), as: UTF8.self)
+        guard let text = String(bytes: try enc.encode(d), encoding: .utf8) else {
+            throw CocoaError(.coderInvalidValue)   // JSONEncoder writes UTF-8; never expected
+        }
+        return text
     }
 
     /// A payload this build cannot read at all is kept as `.unknown` with
