@@ -987,7 +987,8 @@ extension VideoScanModel {
     /// and in relocate.log — never one line per row (adversarial review
     /// 2026-10-18 #9: the sheet said N rows were "marked" when none were,
     /// and a held catalog wrote one console line per refused file).
-    func markBucketBSourcesNotFound(_ rows: [VideoRecord]) {
+    func markBucketBSourcesNotFound(_ rows: [VideoRecord],
+                                    presence: (String) -> JourneyPresence = { JourneyPresence.probe($0) }) {
         var refused = 0
         var firstRefusal: String?
         for r in rows {
@@ -1080,7 +1081,18 @@ extension VideoScanModel {
             ? "\n  Pre-migrate snapshot kept in app support — restore via `cp` if needed."
             : ""
 
-        log("""
+        let lines = relocateClosingSummaryLines(elapsed: elapsed, savedMB: savedMB, mb: mb, mbps: mbps,
+                                                failedBlock: failedBlock, snapshotHint: snapshotHint)
+        log(lines.console)
+        relocateLog.write(lines.log)
+    }
+
+    /// The closing block (console) and the "Migrate complete:" line
+    /// (relocate.log), built from the dashboard counters. Internal so tests
+    /// can read the words without running a whole Migrate.
+    func relocateClosingSummaryLines(elapsed: Double, savedMB: Double, mb: Double, mbps: Double,
+                                     failedBlock: String = "", snapshotHint: String = "") -> (console: String, log: String) {
+        let console = """
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           Migrate Complete
@@ -1095,7 +1107,8 @@ extension VideoScanModel {
           Bytes copied:     \(String(format: "%.1f", mb)) MB
           Wall clock:       \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", mbps)) MB/s)\(failedBlock)\(snapshotHint)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        """)
-        relocateLog.write("─── Migrate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s")
+        """
+        let line = "─── Migrate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s"
+        return (console, line)
     }
 }

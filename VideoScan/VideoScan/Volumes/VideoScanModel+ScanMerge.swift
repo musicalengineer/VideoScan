@@ -76,6 +76,10 @@ private let scanMergeLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "
 /// What a scan-completion merge did to the catalog. Returned for logging
 /// and pinned by ScanMergeScopeTests.
 struct ScanMergeOutcome: Equatable {
+    /// Fresh records that took the LIVE record's preserved values at the
+    /// last moment before replacement (`reconcileLivePreservedFieldsBeforeReplacement`).
+    /// A count only; said on the merge's summary line (adversarial 2026-10-19).
+    var liveValuesApplied: Int = 0
     /// Old records under the root replaced by a fresh record at the same path.
     var refreshed: Int = 0
     /// Old records under the root removed because their file is GENUINELY

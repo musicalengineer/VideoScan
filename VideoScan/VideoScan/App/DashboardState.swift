@@ -392,6 +392,13 @@ final class DashboardState: ObservableObject {
     @Published var relocateSucceeded: Int = 0
     @Published var relocateSalvageFailed: Int = 0
     @Published var relocateManuallyDeleted: Int = 0
+    /// Bucket B rows the catalog refused to mark (held / read-only
+    /// catalog.sqlite) — NOT marked; the next Reconcile asks again.
+    @Published var relocateBucketBNotMarked: Int = 0
+    /// Bucket B rows whose path still holds a file (or could not be
+    /// checked) at mark time — NOT marked "source not found" (adversarial
+    /// 2026-10-19: Bucket B is "no other bucket fit", not "absent").
+    @Published var relocateBucketBStillThere: Int = 0
     @Published var relocateAdopted: Int = 0
     @Published var relocateSourceMoves: Int = 0
     @Published var relocateSkipped: Int = 0
@@ -414,6 +421,8 @@ final class DashboardState: ObservableObject {
         relocateSucceeded = 0
         relocateSalvageFailed = 0
         relocateManuallyDeleted = 0
+        relocateBucketBNotMarked = 0
+        relocateBucketBStillThere = 0
         relocateAdopted = 0
         relocateSourceMoves = 0
         relocateSkipped = 0

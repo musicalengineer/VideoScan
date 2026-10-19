@@ -29406,6 +29406,32 @@
         "test_package_only_stage_runs",
         "test_unblocked_package_suite_without_selectors_fails_preflight"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvReview20261019Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvRelocateSnapshotUnderSQLiteTests",
+        "AdvRelocateBucketBPresentFileTests",
+        "AdvRelocateClosingSummaryTests",
+        "AdvRescanKeepsReplacedHistoryTests",
+        "AdvRescanLiveAppliedCountTests"
+      ],
+      "tests": [
+        "aFileStillAtItsPathIsNeverMarkedNotFound",
+        "historyRowSurvivesInCatalogSQLite",
+        "jsonAuthoritySnapshotHoldsMemory",
+        "liveAppliedCountReachesTheOutcome",
+        "manyPresentRowsOneLine",
+        "nothingRefusedNoRow",
+        "partialRescanKeepsHistory",
+        "preMigrateSnapshotIsTheCatalogInUse",
+        "presenceDecidesEachRow",
+        "refusedRowsAreInTheClosingSummary",
+        "rescanKeepsTheCuratedReplacedAtPathRow",
+        "scale_100kWithHistoryWithinBudget"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32656,7 +32682,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 201,
+      "expected_floor": 213,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [
@@ -32750,7 +32776,12 @@
         "VideoScanTests/AdvJunkDeleteHeldTests",
         "VideoScanTests/CatalogSyncSQLiteSnapshotPublishTests",
         "VideoScanTests/CatalogSyncSQLiteSnapshotViewerTests",
-        "VideoScanTests/CatalogSyncSQLiteSnapshotLegacyTests"
+        "VideoScanTests/CatalogSyncSQLiteSnapshotLegacyTests",
+        "VideoScanTests/AdvRelocateSnapshotUnderSQLiteTests",
+        "VideoScanTests/AdvRelocateBucketBPresentFileTests",
+        "VideoScanTests/AdvRelocateClosingSummaryTests",
+        "VideoScanTests/AdvRescanKeepsReplacedHistoryTests",
+        "VideoScanTests/AdvRescanLiveAppliedCountTests"
       ]
     },
     {
