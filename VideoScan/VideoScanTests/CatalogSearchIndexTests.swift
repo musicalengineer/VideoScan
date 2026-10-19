@@ -868,3 +868,279 @@ struct CatalogSearchIndexTests {
                 "Fast-path whole-word AND took \(best * 1000) ms — expected <100 ms")
     }
 }
+
+// MARK: - Case-insensitivity everywhere + the stale persisted index (2026-10-19)
+//
+// Rick 2026-10-19: with Show ▸ As folders on, "Thanksgiving" showed his
+// "Thanksgiving · 1984" folder and "thanksgiving" did not.
+//
+// What the investigation found (bug-fix agent, 2026-10-19):
+//   * The matcher itself is case-invariant on every field: the query is
+//     lowercased + NFC before ANY branch (prepareTokens / pfFieldTokenMatches
+//     / the person index), so two casings reach the same code with the same
+//     needles. Pinned field by field below so it stays that way.
+//   * What CAN make the same word answer differently is a stale persisted
+//     index: since the SQLite cutover catalog.json no longer changes, so a
+//     staleness check against catalog.json alone accepted the 10/18 index
+//     at every launch, and every in-place edit since (tags, notes, place,
+//     people, captions, transcripts) dropped out of search at relaunch —
+//     a search before the relaunch and the same word after it disagree.
+//     Pinned by "Search index staleness — the catalog store".
+//   * A folder's own title is searchable too — FootageFolderTitleSearchTests in
+//     FootageFoldersTests.swift.
+//
+// Five dimensions: Logic (every field × four casings; folder titles) ·
+// Scale (the per-record path is unchanged; CatalogSearchBudgetSensors
+// re-run) · Media matrix N/A (no file is opened) · Isolation (a private
+// temp folder for the staleness files, never Application Support) ·
+// Sensor (the model's launch path uses the store-aware staleness date).
+
+// MARK: - Fixtures
+
+/// One record whose ONLY "Thanksgiving" signal is the named field.
+@MainActor
+private func caseFixtures() -> [(field: String, record: VideoRecord)] {
+    var out: [(String, VideoRecord)] = []
+    func add(_ field: String, filename: String = "clip.mov", _ set: (VideoRecord) -> Void) {
+        let r = VideoRecord()
+        r.fullPath = "/Volumes/LaCie/probe/\(field)/\(filename)"
+        r.filename = filename
+        r.directory = "/Volumes/LaCie/probe/\(field)"
+        set(r)
+        out.append((field, r))
+    }
+    add("filename", filename: "1984-11-xx_Thanksgiving_1984.mkv") { _ in }
+    add("filenameCamel", filename: "DadThanksgiving1984-Part1.mkv") { _ in }
+    add("directory") { $0.directory = "/Volumes/LaCie/Thanksgiving · 1984"; $0.fullPath = "/Volumes/LaCie/Thanksgiving · 1984/clip.mov" }
+    add("volume") { $0.fullPath = "/Volumes/ThanksgivingDrive/clip.mov" }
+    add("detectedPeople") { $0.detectedPeople = ["Thanksgiving Guest"] }
+    add("suspectedPeople") { $0.suspectedPeople = ["Thanksgiving Guest"] }
+    add("confirmedPeople") { $0.confirmedByUserPeople = [ConfirmedTag(name: "Thanksgiving Guest", confirmedAt: Date())] }
+    add("tag") { $0.tags = ["Thanksgiving"] }
+    add("userNotes") { $0.userNotes = "Thanksgiving at Ma's" }
+    add("userPlace") { $0.userPlace = "Thanksgiving, UT" }
+    add("caption") { $0.sceneCaptions = [SceneCaption(timestamp: 0, text: "A Thanksgiving dinner table")] }
+    add("transcript") { $0.audioTranscript = "Happy Thanksgiving, everybody" }
+    add("ocrText") { $0.ocrText = [SceneCaption(timestamp: 0, text: "THANKSGIVING")] }
+    add("ocrDate") { $0.ocrDateCandidates = [SceneCaption(timestamp: 0, text: "Thanksgiving NOV 22 1984")] }
+    // A record that must match NOTHING — guards against a vacuous pass.
+    add("control") { $0.tags = ["Christmas"] }
+    return out
+}
+
+private let casings = ["Thanksgiving", "thanksgiving", "THANKSGIVING", "tHANKSgiving"]
+
+// MARK: - Logic: every field, every casing
+
+@MainActor
+@Suite("Search is case-insensitive — every field")
+struct SearchCaseInsensitivityTests {
+
+    private func hits(_ idx: CatalogSearchIndex, _ fx: [(field: String, record: VideoRecord)], _ q: String) -> [String] {
+        let paths = Set(idx.filter(records: fx.map(\.record), query: q).map(\.fullPath))
+        return fx.filter { paths.contains($0.record.fullPath) }.map(\.field).sorted()
+    }
+
+    private func canonicalHits(_ fx: [(field: String, record: VideoRecord)], _ q: String) -> [String] {
+        fx.filter { pfRecordFilenameOrPersonMatch($0.record, query: q) }.map(\.field).sorted()
+    }
+
+    @Test func plainWordFindsEveryFieldInEveryCasing() {
+        let fx = caseFixtures()
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: fx.map(\.record))
+        let expected = fx.map(\.field).filter { $0 != "control" }.sorted()
+        for q in casings {
+            #expect(hits(idx, fx, q) == expected, "index, \"\(q)\"")
+            #expect(canonicalHits(fx, q) == expected, "canonical matcher, \"\(q)\"")
+        }
+    }
+
+    /// The same, with the haystack built inline (a record the index has not
+    /// seen) — the defensive path must agree too.
+    @Test func inlineHaystackPathAgreesInEveryCasing() {
+        let fx = caseFixtures()
+        let idx = CatalogSearchIndex()   // never rebuilt: every record goes inline
+        let expected = fx.map(\.field).filter { $0 != "control" }.sorted()
+        for q in casings {
+            #expect(hits(idx, fx, q) == expected, "inline, \"\(q)\"")
+        }
+    }
+
+    /// Phrases and multi-word queries: case never splits the AND.
+    @Test func phrasesAndMultiWordQueriesInEveryCasing() {
+        let fx = caseFixtures()
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: fx.map(\.record))
+        let phrase = hits(idx, fx, "\"thanksgiving dinner\"")
+        #expect(phrase == ["caption"])
+        #expect(hits(idx, fx, "\"THANKSGIVING DINNER\"") == phrase)
+        #expect(hits(idx, fx, "\"Thanksgiving Dinner\"") == phrase)
+        let two = hits(idx, fx, "thanksgiving 1984")
+        #expect(two.contains("filename") && two.contains("ocrDate"))
+        #expect(hits(idx, fx, "THANKSGIVING 1984") == two)
+    }
+
+    /// Field prefixes — the value AND the prefix itself in any case.
+    @Test(arguments: [
+        ("people", ["confirmedPeople", "detectedPeople", "suspectedPeople"]),
+        ("who", ["confirmedPeople", "detectedPeople", "suspectedPeople"]),
+        ("tag", ["tag"]),
+        ("note", ["userNotes"]),
+        ("caption", ["caption"]),
+        ("transcript", ["transcript"]),
+        ("ocr", ["ocrDate", "ocrText"]),
+        ("filename", ["filename", "filenameCamel"]),
+    ])
+    func fieldPrefixInEveryCasing(prefix: String, expected: [String]) {
+        let fx = caseFixtures()
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: fx.map(\.record))
+        for p in [prefix, prefix.uppercased(), prefix.capitalized] {
+            for v in casings {
+                let q = "\(p):\(v)"
+                #expect(hits(idx, fx, q) == expected, "index, \(q)")
+                #expect(canonicalHits(fx, q) == expected, "canonical, \(q)")
+            }
+        }
+    }
+
+    /// `place:` is exact (the town, or the whole phrase) — and case-blind,
+    /// prefix and value alike.
+    @Test func placeFieldIsExactAndCaseBlind() throws {
+        let fx = caseFixtures()
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: fx.map(\.record))
+        for p in ["place", "PLACE", "Where"] {
+            for v in casings {
+                #expect(hits(idx, fx, "\(p):\(v)") == ["userPlace"], "\(p):\(v) — the town alone")
+                #expect(canonicalHits(fx, "\(p):\(v)") == ["userPlace"], "canonical \(p):\(v)")
+            }
+        }
+        #expect(hits(idx, fx, "place:thanks").isEmpty, "exact rule: part of a town is not the town")
+        let placed = try #require(fx.first { $0.field == "userPlace" }?.record)
+        #expect(pfPlaceFieldMatches(value: "THANKSGIVING, ut", rec: placed), "the whole phrase, any case")
+    }
+
+    /// The person index (the people: fast path) answers mixed-case names
+    /// exactly as the canonical matcher does.
+    @Test func personIndexIsCaseBlind() {
+        let r = VideoRecord()
+        r.fullPath = "/Volumes/LaCie/p/a.mov"
+        r.filename = "a.mov"
+        r.confirmedByUserPeople = [ConfirmedTag(name: "Donna McGill", confirmedAt: Date())]
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [r])
+        for q in ["people:donna", "people:DONNA", "People:McGill", "WHO:mcgill", "person:dOnNa"] {
+            #expect(idx.filter(records: [r], query: q).count == 1, "index, \(q)")
+            #expect(pfRecordFilenameOrPersonMatch(r, query: q), "canonical, \(q)")
+        }
+    }
+}
+
+// MARK: - The stale persisted index (the case-looking symptom)
+
+@MainActor
+@Suite("Search index staleness — the catalog store")
+struct SearchIndexCatalogStoreStalenessTests {
+
+    private func tempFolder() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SearchIndexStaleness-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func write(_ name: String, in dir: URL, modified: Date) throws {
+        let url = dir.appendingPathComponent(name)
+        try Data("x".utf8).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+    }
+
+    private func record(tags: [String] = []) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = "/Volumes/FamilyArchive/1980s/Tape12.dv"
+        r.filename = "Tape12.dv"
+        r.directory = "/Volumes/FamilyArchive/1980s"
+        r.tags = tags
+        return r
+    }
+
+    /// RED before the fix: catalog.json frozen (the cutover), a tag saved
+    /// into catalog.sqlite after the index was written. The old check read
+    /// catalog.json only, accepted the index, and the tag was unsearchable
+    /// after relaunch.
+    @Test func aCatalogSqliteWriteAfterTheIndexSaveForcesARebuild() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let indexURL = dir.appendingPathComponent("catalog.search-index.v1.plist")
+        try write("catalog.json", in: dir, modified: Date().addingTimeInterval(-86_400))
+        try write("catalog.sqlite", in: dir, modified: Date().addingTimeInterval(-3_600))
+
+        // Session 1: index built and saved; then Rick tags the tape.
+        let session1 = CatalogSearchIndex()
+        session1.rebuild(records: [record()])
+        try session1.saveToDisk(at: indexURL)
+        let tagged = record(tags: ["Thanksgiving"])
+        session1.update(tagged)
+        #expect(session1.filter(records: [tagged], query: "thanksgiving").count == 1, "found in the session it was tagged")
+        try write("catalog.sqlite-wal", in: dir, modified: Date().addingTimeInterval(5))   // the save funnel's commit
+
+        // Session 2 (relaunch): the persisted index predates the commit.
+        let stamp = CatalogSearchIndex.catalogStoreModifiedAt(in: dir)
+        let session2 = CatalogSearchIndex()
+        let accepted = session2.loadFromDisk(at: indexURL, catalogModifiedAt: stamp, expectedRecordCount: 1)
+        #expect(!accepted, "an index older than the catalog's last write must be rejected")
+        if !accepted { session2.rebuild(records: [tagged]) }
+        for q in casings {
+            #expect(session2.filter(records: [tagged], query: q).count == 1, "after relaunch, \"\(q)\"")
+        }
+    }
+
+    @Test func theMainDatabaseFileCountsToo() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let indexURL = dir.appendingPathComponent("idx.plist")
+        try write("catalog.json", in: dir, modified: Date().addingTimeInterval(-86_400))
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [record()])
+        try idx.saveToDisk(at: indexURL)
+        try write("catalog.sqlite", in: dir, modified: Date().addingTimeInterval(5))   // a checkpoint
+        let stamp = CatalogSearchIndex.catalogStoreModifiedAt(in: dir)
+        #expect(!CatalogSearchIndex().loadFromDisk(at: indexURL, catalogModifiedAt: stamp, expectedRecordCount: 1))
+    }
+
+    /// No needless rebuild: nothing written since the save → accepted.
+    @Test func anUnchangedCatalogKeepsThePersistedIndex() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let indexURL = dir.appendingPathComponent("idx.plist")
+        try write("catalog.json", in: dir, modified: Date().addingTimeInterval(-86_400))
+        try write("catalog.sqlite", in: dir, modified: Date().addingTimeInterval(-3_600))
+        try write("catalog.sqlite-wal", in: dir, modified: Date().addingTimeInterval(-60))
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [record()])
+        try idx.saveToDisk(at: indexURL)
+        let stamp = CatalogSearchIndex.catalogStoreModifiedAt(in: dir)
+        #expect(stamp != nil)
+        #expect(CatalogSearchIndex().loadFromDisk(at: indexURL, catalogModifiedAt: stamp, expectedRecordCount: 1))
+    }
+
+    /// A JSON-only catalog (before the switch) behaves exactly as before.
+    @Test func aJsonOnlyCatalogStillUsesItsOwnDate() throws {
+        let dir = try tempFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let then = Date(timeIntervalSince1970: 1_800_000_000)
+        try write("catalog.json", in: dir, modified: then)
+        #expect(CatalogSearchIndex.catalogStoreModifiedAt(in: dir) == then)
+        #expect(CatalogSearchIndex.catalogStoreModifiedAt(in: dir.appendingPathComponent("nowhere")) == nil)
+    }
+
+    /// Sensor: the launch path asks the store-aware function, never a
+    /// hand-rolled catalog.json stat.
+    @Test func launchPathUsesTheStoreAwareDate() throws {
+        let model = try SourceTree.strippingComments(SourceTree.appSource(named: "VideoScanModel.swift"))
+        #expect(model.contains("CatalogSearchIndex.catalogStoreModifiedAt(in:"))
+        #expect(!model.contains("appendingPathComponent(\"catalog.json\").path\n        let catalogMTime"))
+    }
+}
