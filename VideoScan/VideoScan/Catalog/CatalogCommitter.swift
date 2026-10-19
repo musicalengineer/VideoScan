@@ -117,6 +117,10 @@ final class CatalogCommitter {
         /// MOPS-16: the job holding catalog writes, if any, and its token.
         var holdReason: String?
         var holdOwner: CatalogWriteHoldOwner?
+        /// Codex cycle #112: why this session may not write at all (a viewer,
+        /// a read-only launch, a Switch freeze — `CatalogReadOnlyFacts
+        /// .readOnlyWords`). Non-nil refuses EVERY commit at admission.
+        var readOnlyReason: String? = nil
     }
 
     static let debounce: Duration = .seconds(2)
@@ -228,7 +232,9 @@ final class CatalogCommitter {
     private func saveRefusal() -> String? {
         if reopening { return Self.cantSave("it is being reopened", until: "the reopen finishes") }
         if let blockedReason { return Self.cantSave(blockedReason, until: "you choose Catalog ▸ Reopen SQLite Catalog") }
-        if let hold = input().holdReason { return Self.cantSave("held — \(hold)", until: "that job finishes") }
+        let now = input()
+        if let readOnly = now.readOnlyReason { return Self.readOnlyWords(readOnly) }
+        if let hold = now.holdReason { return Self.cantSave("held — \(hold)", until: "that job finishes") }
         return nil
     }
 
@@ -244,6 +250,11 @@ final class CatalogCommitter {
 
     static func cantSave(_ words: String, until: String) -> String {
         "the catalog can't save (\(words)); try again when \(until)"
+    }
+
+    /// A read-only session never saves; there is no "try again when".
+    static func readOnlyWords(_ why: String) -> String {
+        "the catalog is read-only in this session (\(why)) — nothing is saved"
     }
 
     // MARK: - The doors
@@ -430,6 +441,14 @@ final class CatalogCommitter {
             return nil
         }
         let now = input()
+        // Codex cycle #112: the session's read-only facts gate EVERY commit —
+        // the timer's, saveNow / acknowledged, the marker door and the safety
+        // copy's commit-first all come through here. Not re-armed: a
+        // read-only session has nothing to wait for.
+        if let readOnly = now.readOnlyReason {
+            noteOnce("Catalog store: NOT SAVED — \(Self.readOnlyWords(readOnly))")
+            return nil
+        }
         if let hold = now.holdReason, owner == nil || owner != now.holdOwner {
             if heldBy != hold { sink("Catalog store: HELD — \(hold); the commit waits until it finishes") }
             heldBy = hold

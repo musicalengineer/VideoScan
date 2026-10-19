@@ -28904,13 +28904,15 @@
         "modelRefusedIsJSONReadOnly",
         "normalSQLiteLaunchFollowsTheRole",
         "nothingIsJSON",
+        "pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives",
         "quarantineAndCounts",
         "readOnlyHasOneWriter",
         "readOnlySQLiteSurvivesApplyReadOnlyMode",
         "refusedLaunchSurvivesApplyReadOnlyMode",
         "sqliteRecordsEqualJSONRecords",
         "theSeamIsOneLine",
-        "unprovenRowsAreNotRecords"
+        "unprovenRowsAreNotRecords",
+        "viewerLaunchOpensCatalogSQLiteReadOnly"
       ]
     },
     {
@@ -32633,7 +32635,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 199,
+      "expected_floor": 201,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [

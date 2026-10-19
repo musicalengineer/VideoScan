@@ -471,6 +471,16 @@ final class CatalogSync: ObservableObject {
         log("CatalogSync: mode=\(isMaster ? "master" : "viewer") host=\(local) master=\(masterHostname)")
     }
 
+    /// The mode `production()` would decide, without building the engine —
+    /// for the model's launch, which must know it BEFORE catalog.sqlite opens
+    /// (codex cycle #112: a viewer opens it read-only). Same defaults key,
+    /// same default master, same compare.
+    static func launchMode(hostnameSource: HostnameSource = SystemHostnameSource(),
+                           defaults: UserDefaults = .standard) -> CatalogSyncMode {
+        let master = defaults.string(forKey: CatalogSyncDefaultsKey.masterHostname) ?? defaultMasterHostname
+        return hostnameMatches(local: hostnameSource.currentHostname(), master: master) ? .master : .viewer
+    }
+
     /// Hostname compare that ignores `.local` suffix and is case-insensitive.
     /// Exposed for tests.
     static func hostnameMatches(local: String, master: String) -> Bool {

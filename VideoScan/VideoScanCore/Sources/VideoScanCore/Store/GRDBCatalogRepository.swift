@@ -168,75 +168,6 @@ public actor GRDBCatalogRepository: CatalogRepository {
         }
     }
 
-    // MARK: - Open a sealed snapshot (viewer Macs, CatalogSync phase 2)
-
-    /// The words every sealed-snapshot session carries as its read-only reason.
-    public static let sealedSnapshotWords = "a sealed snapshot of the master's catalog — read-only on this Mac"
-
-    /// Open a sealed snapshot (a finished `VACUUM INTO` copy) for READING
-    /// ONLY. The viewer Macs' door (CatalogSync phase 2, 2026-10-19).
-    ///
-    /// Unlike `open`, nothing is ever written: the file is opened with
-    /// SQLITE_OPEN_READONLY, no migration runs, the high-water witnesses
-    /// are neither read nor raised, and every write is refused for the
-    /// session. The same engine and schema checks run (integrity_check,
-    /// foreign_key_check, schema version, migrations complete).
-    ///
-    /// Refused before any connection is made when the file is not a
-    /// rollback-journal SQLite file (`VACUUM INTO` output always is): a
-    /// read-only open of a WAL file can still create `-shm` beside it,
-    /// and a `-wal` / `-journal` already beside it means the file is not
-    /// sealed. (For Rick: a rollback-journal read takes only fcntl shared
-    /// locks — no file is created, so the folder stays byte-identical.)
-    public func openSealedSnapshot(at url: URL) async -> CatalogOpenOutcome {
-        guard pool == nil else {
-            return .refused(reason: "already open at \(databaseURL?.path ?? "?")")
-        }
-        if let why = Self.sealedSnapshotRefusal(url) { return refusedToOpen(url, why) }
-        let opened: Opened
-        do {
-            opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true),
-                            readOnlyReason: Self.sealedSnapshotWords)
-        } catch {
-            return refusedToOpen(url, "could not open: \(Self.words(error))")
-        }
-        do {
-            let loaded = try await Self.prepare(opened, host: host)
-            pool = opened.pool
-            databaseURL = url
-            session.reset(generation: loaded)
-            mode = .readOnly(reason: Self.sealedSnapshotWords)
-            storeLog.notice("catalog store OPEN SEALED \(url.lastPathComponent, privacy: .public) generation \(loaded, privacy: .public) → read-only")
-            return .readOnly(reason: Self.sealedSnapshotWords)
-        } catch {
-            try? opened.pool.close()
-            return refusedToOpen(url, Self.words(error))
-        }
-    }
-
-    /// Why `url` is not a sealed snapshot this Mac may open read-only, or
-    /// nil when it is. Reads the first 100 bytes only (the SQLite header):
-    /// the magic string, then the read / write format versions at offsets
-    /// 18 and 19 — 1 = rollback journal, 2 = WAL.
-    public static func sealedSnapshotRefusal(_ url: URL) -> String? {
-        let fm = FileManager.default
-        for suffix in ["-wal", "-journal", "-shm"] where fm.fileExists(atPath: url.path + suffix) {
-            return "\(url.lastPathComponent)\(suffix) is beside it — not a sealed snapshot"
-        }
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            return "\(url.lastPathComponent) could not be read"
-        }
-        defer { try? handle.close() }
-        let header = (try? handle.read(upToCount: 100)) ?? Data()
-        guard header.count == 100, header.prefix(16) == Data("SQLite format 3\u{0}".utf8) else {
-            return "\(url.lastPathComponent) is not an SQLite database"
-        }
-        guard header[18] == 1, header[19] == 1 else {
-            return "\(url.lastPathComponent) is in write-ahead-log mode (format \(header[18])/\(header[19])) — not a sealed snapshot"
-        }
-        return nil
-    }
-
     private func refusedToOpen(_ url: URL, _ reason: String) -> CatalogOpenOutcome {
         storeLog.error("catalog store OPEN REFUSED \(url.lastPathComponent, privacy: .public): \(reason, privacy: .public)")
         return .refused(reason: reason)
@@ -907,6 +838,88 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if let refusal = error as? Refusal { return refusal.reason }
         if let engine = error as? DatabaseError { return engine.description }
         return String(describing: error)
+    }
+}
+
+// MARK: - Read-only opens (viewer Macs, 2026-10-19)
+//
+// Two doors that never write, beside `open` (which may migrate and raise the
+// high-water): `openReadOnly` for this Mac's own catalog.sqlite when the
+// session is read-only (a viewer — codex cycle #112), and
+// `openSealedSnapshot` for the master's sealed copy a viewer receives
+// (CatalogSync phase 2). In an extension in this file so they share the
+// actor's private state without widening it.
+
+extension GRDBCatalogRepository {
+
+    /// The words every sealed-snapshot session carries as its read-only reason.
+    public static let sealedSnapshotWords = "a sealed snapshot of the master's catalog — read-only on this Mac"
+
+    /// Open `url` for READING ONLY, with `reason` as the session's read-only
+    /// words. SQLITE_OPEN_READONLY; no migration (an incomplete schema is
+    /// refused); the high-water witnesses are neither read nor raised; every
+    /// write is refused for the session. The same engine and schema checks
+    /// as `open` (integrity_check, foreign_key_check, schema version).
+    public func openReadOnly(at url: URL, reason: String) async -> CatalogOpenOutcome {
+        guard pool == nil else {
+            return .refused(reason: "already open at \(databaseURL?.path ?? "?")")
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return refusedToOpen(url, "\(url.lastPathComponent) does not exist")
+        }
+        let opened: Opened
+        do {
+            opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason)
+        } catch {
+            return refusedToOpen(url, "could not open: \(Self.words(error))")
+        }
+        do {
+            let loaded = try await Self.prepare(opened, host: host)
+            pool = opened.pool
+            databaseURL = url
+            session.reset(generation: loaded)
+            mode = .readOnly(reason: reason)
+            storeLog.notice("catalog store OPEN READ-ONLY \(url.lastPathComponent, privacy: .public) generation \(loaded, privacy: .public) — \(reason, privacy: .public)")
+            return .readOnly(reason: reason)
+        } catch {
+            try? opened.pool.close()
+            return refusedToOpen(url, Self.words(error))
+        }
+    }
+
+    /// Open a sealed snapshot (a finished `VACUUM INTO` copy) read-only —
+    /// the viewer Macs' door (CatalogSync phase 2). Refused before any
+    /// connection is made unless the file is a rollback-journal SQLite file
+    /// with nothing beside it (`VACUUM INTO` output always is): a read-only
+    /// open of a WAL file can still create `-shm` beside it. (For Rick: a
+    /// rollback-journal read takes only fcntl shared locks — no file is
+    /// created, so the synced folder stays byte-identical.)
+    public func openSealedSnapshot(at url: URL) async -> CatalogOpenOutcome {
+        if let why = Self.sealedSnapshotRefusal(url) { return refusedToOpen(url, why) }
+        return await openReadOnly(at: url, reason: Self.sealedSnapshotWords)
+    }
+
+    /// Why `url` is not a sealed snapshot this Mac may open read-only, or
+    /// nil when it is. Reads the first 100 bytes only (the SQLite header):
+    /// the magic string, then the read / write format versions at offsets
+    /// 18 and 19 — 1 = rollback journal, 2 = WAL.
+    public static func sealedSnapshotRefusal(_ url: URL) -> String? {
+        let fm = FileManager.default
+        for suffix in ["-wal", "-journal", "-shm"] where fm.fileExists(atPath: url.path + suffix) {
+            return "\(url.lastPathComponent)\(suffix) is beside it — not a sealed snapshot"
+        }
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return "\(url.lastPathComponent) could not be read"
+        }
+        defer { try? handle.close() }
+        let header = (try? handle.read(upToCount: 100)) ?? Data()
+        guard header.count == 100, header.prefix(16) == Data("SQLite format 3\u{0}".utf8) else {
+            return "\(url.lastPathComponent) is not an SQLite database"
+        }
+        guard header[18] == 1, header[19] == 1 else {
+            return "\(url.lastPathComponent) is in write-ahead-log mode (format \(header[18])/\(header[19])) — not a sealed snapshot"
+        }
+        return nil
     }
 }
 

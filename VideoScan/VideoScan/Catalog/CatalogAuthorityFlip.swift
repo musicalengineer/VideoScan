@@ -50,7 +50,10 @@ enum CatalogAuthority: Equatable, Sendable {
 
     /// The launch rule. Reads; writes nothing but what `open` itself does
     /// to an existing database (its schema check and high-water witness).
-    static func decide(folder: URL) async -> CatalogAuthority {
+    /// `readOnly` (codex cycle #112): a viewer — or any session whose role is
+    /// read-only — opens catalog.sqlite with `openReadOnly`: no migration, no
+    /// high-water witness, nothing written.
+    static func decide(folder: URL, readOnly: Bool = false) async -> CatalogAuthority {
         let latch = folder.appendingPathComponent(latchFileName)
         guard FileManager.default.fileExists(atPath: latch.path) else { return .json }
         let db = folder.appendingPathComponent(databaseFileName)
@@ -58,7 +61,7 @@ enum CatalogAuthority: Equatable, Sendable {
             return .refused("the catalog was switched to SQLite (\(latchFileName)) but \(databaseFileName) is not beside it")
         }
         let repository = GRDBCatalogRepository()
-        if case .refused(let reason) = await repository.open(at: db) {
+        if case .refused(let reason) = await open(repository, at: db, readOnly: readOnly) {
             await repository.close()
             return .refused("\(databaseFileName) would not open: \(reason)")
         }
@@ -76,6 +79,15 @@ enum CatalogAuthority: Equatable, Sendable {
         return .sqlite(db)
     }
 
+    /// The read-only reason a viewer's own catalog.sqlite opens with.
+    static let viewerReadOnlyWords = "this Mac is a viewer — catalog.sqlite opened read-only; only the master writes the catalog"
+
+    /// The launch's one open: read-write (`open`, which may migrate and
+    /// raise the high-water) or, for a read-only session, `openReadOnly`.
+    static func open(_ repository: GRDBCatalogRepository, at url: URL, readOnly: Bool) async -> CatalogOpenOutcome {
+        readOnly ? await repository.openReadOnly(at: url, reason: viewerReadOnlyWords) : await repository.open(at: url)
+    }
+
     /// The words a refusal shows (console, catalog.log, videoscan.log).
     static func readOnlyWords(_ why: String) -> String {
         "SQLite catalog refused — \(why). catalog.json is open READ-ONLY: nothing will be saved this session."
@@ -90,9 +102,9 @@ struct SQLiteLaunchRead: Sendable {
     let snapshot: CatalogLoad.Snapshot
     let designationJSON: String?
 
-    static func read(_ url: URL) async -> Result<SQLiteLaunchRead, CatalogLoad.Failure> {
+    static func read(_ url: URL, readOnly: Bool = false) async -> Result<SQLiteLaunchRead, CatalogLoad.Failure> {
         let repository = GRDBCatalogRepository()
-        let opened = await repository.open(at: url)
+        let opened = await CatalogAuthority.open(repository, at: url, readOnly: readOnly)
         if case .refused(let reason) = opened {
             await repository.close()
             return .failure(.readFailed("\(CatalogAuthority.databaseFileName) would not open: \(reason)"))
@@ -149,22 +161,35 @@ extension VideoScanModel {
         // and never a look at the real Application Support folder.
         if Self.isRunningTests && catalogStore === CatalogStore.shared { return catalogStore.load() }
         let folder = URL(fileURLWithPath: catalogStore.fileLocation).deletingLastPathComponent()
-        let authority = CatalogLaunchWait.run { await CatalogAuthority.decide(folder: folder) }
+        // Codex cycle #112: the role is known BEFORE the store opens, so a
+        // viewer never opens its catalog.sqlite read-write (the window's
+        // applyReadOnlyMode later sets the same fact again).
+        let viewer = launchesAsViewer()
+        if viewer { updateReadOnlyFacts { $0.viewerRole = true } }
+        let authority = CatalogLaunchWait.run { await CatalogAuthority.decide(folder: folder, readOnly: viewer) }
         switch authority {
         case .json:
             return catalogStore.load()
         case .sqlite(let url):
-            return loadFromSQLite(url)
+            return loadFromSQLite(url, readOnly: viewer)
         case .refused(let why):
             return loadJSONReadOnly(why)
         }
     }
 
+    /// Is this launch a viewer's? Production: CatalogSync's hostname rule.
+    /// Test hosts: the role fact a test applied before launching, so a test
+    /// run on a viewer laptop (M5 / M1) behaves like one on the master.
+    private func launchesAsViewer() -> Bool {
+        if Self.isRunningTests { return readOnlyFacts.viewerRole }
+        return CatalogSync.launchMode() == .viewer
+    }
+
     /// The records from catalog.sqlite; any failure falls to the JSON
     /// catalog READ-ONLY with the words. On success the repository stays
     /// open: it is the committer's for the session.
-    private func loadFromSQLite(_ url: URL) -> [VideoRecord] {
-        let read: Result<SQLiteLaunchRead, CatalogLoad.Failure> = CatalogLaunchWait.run { await SQLiteLaunchRead.read(url) }
+    private func loadFromSQLite(_ url: URL, readOnly: Bool) -> [VideoRecord] {
+        let read: Result<SQLiteLaunchRead, CatalogLoad.Failure> = CatalogLaunchWait.run { await SQLiteLaunchRead.read(url, readOnly: readOnly) }
         switch read {
         case .failure(let failure):
             return loadJSONReadOnly(failure.words)
@@ -217,7 +242,13 @@ extension VideoScanModel {
                                  + (reason.hasPrefix("restoredBelowHighWater") ? " unless you choose Catalog ▸ Adopt This SQLite Catalog…." : "."))
         } else {
             updateReadOnlyFacts { $0.sessionReadOnlyByLaunch = false }
-            committer.scheduleCommit()
+            // Codex cycle #112: the launch-migration commit only when this
+            // session may write (admission refuses it anyway; say so here).
+            if readOnlyFacts.modelReadOnly {
+                catalogAuthorityNote("catalog.sqlite opened, but this session is read-only — no launch commit is scheduled")
+            } else {
+                committer.scheduleCommit()
+            }
             catalogAuthorityNote("catalog.json is frozen (read-only); every save now commits to \(url.lastPathComponent)")
         }
         catalogCutover.install(committer, databaseURL: url, readOnlyReason: readOnlyReason)
@@ -228,7 +259,7 @@ extension VideoScanModel {
     func catalogCommitInput() -> CatalogCommitter.Input {
         CatalogCommitter.Input(records: records, designation: masterArchive,
                                clearAuthorized: catalogStore.designationClearAuthorized, holdReason: catalogStore.writeHold,
-                               holdOwner: catalogStore.writeHoldOwner)
+                               holdOwner: catalogStore.writeHoldOwner, readOnlyReason: readOnlyFacts.readOnlyWords)
     }
 
     private func loadJSONReadOnly(_ why: String) -> [VideoRecord] {

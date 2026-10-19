@@ -368,9 +368,60 @@ struct CatalogAuthorityFlipTests {
         scene.model.applyReadOnlyMode(true)                     // viewer
         #expect(scene.model.isReadOnly)
         #expect(scene.model.catalogStore.isReadOnly)
+        // Codex cycle #112: the role reaches the committer — a viewer's save is
+        // refused and catalog.sqlite keeps the old rating.
+        try scene.record(.healthy).starRating = 5
+        #expect(scene.model.saveCatalogNow() == false, "a viewer's saveCatalogNow must be refused")
+        #expect(try await scene.reloaded(.healthy).starRating == 3, "catalog.sqlite keeps the master's value")
+        try scene.record(.healthy).starRating = 3
         scene.model.applyReadOnlyMode(false)                    // the role lifted → back to the launch's decision
         #expect(scene.model.isReadOnly == false)
         #expect(scene.model.catalogStore.isReadOnly)
+    }
+
+    @Test("codex #112: a launch commit pending when viewer mode is applied — the timer's commit is refused at admission, and so is the safety copy's commit-first")
+    func pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives() async throws {
+        let scene = try CutoverScene.make("role_timer"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()                        // a writable launch: the launch commit is scheduled
+        let committer = try #require(scene.model.catalogCutover.committer)
+        #expect(committer.isBusy, "the launch-migration commit is on the timer")
+        let stored = try await scene.reloaded(.healthy).starRating
+        #expect(stored != 4)
+        try scene.record(.healthy).starRating = 4              // what a launch migration would have changed
+        scene.model.applyReadOnlyMode(true)                     // onAppear: this Mac is a viewer
+        let before = committer.commitCount
+        try await Task.sleep(for: CatalogCommitter.debounce + .milliseconds(800))
+        #expect(!committer.isBusy, "the timer fired")
+        #expect(committer.commitCount == before, "admission refused the timer's commit — nothing was written")
+        #expect(try await scene.reloaded(.healthy).starRating == stored, "catalog.sqlite is untouched")
+        let why = try #require(committer.commitBeforeSafetyCopy(), "no safety copy may be sealed from a viewer's memory")
+        #expect(why.contains("read-only in this session"), Comment(rawValue: why))
+        #expect(committer.commitCount == before)
+    }
+
+    @Test("codex #112: a viewer launch opens its catalog.sqlite READ-ONLY — no launch commit, no high-water write, every save refused")
+    func viewerLaunchOpensCatalogSQLiteReadOnly() async throws {
+        let scene = try CutoverScene.make("role_viewer_launch"); defer { scene.cleanup() }
+        try await scene.importCatalog()
+        try scene.writeLatch()
+        // A writer's first load fills the display tables (a read-only session
+        // cannot, and is refused to read-only catalog.json if it would have to).
+        _ = try await scene.sqliteLoad()
+        let highWater = scene.folder.appendingPathComponent(CatalogHighWater.fileName)
+        let witnessBefore = try? scene.sha256(highWater)
+        let databaseBefore = try scene.sha256(scene.databaseURL)
+        scene.model.applyReadOnlyMode(true)                     // the role is known before the launch (test hosts)
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        let committer = try #require(scene.model.catalogCutover.committer)
+        #expect(!scene.model.records.isEmpty)
+        #expect(!committer.isBusy, "no launch commit is scheduled on a viewer")
+        #expect(scene.model.catalogCutover.readOnlyReason == CatalogAuthority.viewerReadOnlyWords)
+        #expect(scene.model.isReadOnly)
+        try scene.record(.healthy).starRating = 5
+        #expect(scene.model.saveCatalogNow() == false)
+        let witnessAfter = try? scene.sha256(highWater)
+        #expect(witnessAfter == witnessBefore, "the high-water witness is neither raised nor written")
+        #expect(try scene.sha256(scene.databaseURL) == databaseBefore, "not one byte of catalog.sqlite changed")
     }
 
     @Test("no regression: a JSON launch follows the role both ways")
