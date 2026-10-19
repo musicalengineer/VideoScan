@@ -173,7 +173,14 @@ struct EventsPlanTests {
         // audio match); it reads records and never changes one. Reviewed 2026-10-19: EventsFolderDraft turns
         // files into ContentRanges and calls `confirm` — it reads records and never changes one. Reviewed 2026-10-19:
         // EventsFolderDrop plans a drop onto a folder and calls `addMembers` — event decisions only, no record change.
+        // Reviewed 2026-10-19 (folders live in catalog.sqlite): EventsDecisionValues holds the decision values;
+        // EventsCatalogBacking / EventsJSONImport write folder rows, the decision stream and membership folds through
+        // the committer's folder door (never a record, never a file); EventsFolderLog only formats and logs lines;
+        // EventsFolderInspector only counts. None reads or writes a recording's fate.
         #expect(Set(files.map(\.relative)) == ["Events/EventsPlan.swift", "Events/EventsDecisionStore.swift",
+                                               "Events/EventsDecisionValues.swift", "Events/EventsCatalogBacking.swift",
+                                               "Events/EventsJSONImport.swift", "Events/EventsFolderLog.swift",
+                                               "Events/EventsFolderInspector.swift",
                                                "Events/EventsFolderDraft.swift", "Events/EventsFolderDrop.swift",
                                                "Events/VideoScanModel+Events.swift", "Events/VideoScanModel+RelatedEvidence.swift",
                                                "Catalog/EventsPane.swift", "Catalog/EventDetailSheet.swift"],

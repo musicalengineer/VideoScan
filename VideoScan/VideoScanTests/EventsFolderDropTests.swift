@@ -1,11 +1,13 @@
 // EventsFolderDropTests.swift
 // Catalog ▸ drag files onto a folder (2026-10-19).
-// LOGIC: dropped ids become members (copies folded, keyless skipped); a
-// recording in another folder moves out of it; a drop on the folder the
-// files are already in does nothing; the drag payload round-trips and
-// ignores foreign text. ISOLATION: the store writes only into its test
-// directory. Scale / media matrix: not applicable — no media opened,
-// O(dropped ids + live members).
+// LOGIC: dropped ids become members (copies folded, keyless skipped); ADD
+// keeps every other folder (a file may be in many — 2026-10-19); MOVE
+// leaves only the source folder; Remove from Folder leaves only that one;
+// a drop on the folder the files are already in does nothing; Finder's
+// drag rule (out of a folder = move, ⌥ = add, loose = add); the drag
+// payload round-trips with its folder and ignores foreign text.
+// ISOLATION: the store writes only into its test directory. Scale / media
+// matrix: not applicable — no media opened, O(dropped ids + members).
 
 import Foundation
 import Testing
@@ -53,7 +55,7 @@ struct EventsFolderDropTests {
         #expect(store.snapshot().members(of: folder.id).map(\.contentKey).sorted() == [Self.shaA, Self.shaB, Self.shaC])
     }
 
-    @Test("a recording in another folder moves: it leaves the old folder and joins the new one")
+    @Test("MOVE from a folder: the file leaves that folder and joins the new one")
     func moveTakesTheFileOutOfTheOldEvent() async throws {
         let store = try await Self.loadedStore("drop-move")
         let old = try #require(store.confirm(name: "Old", categories: [],
@@ -61,13 +63,76 @@ struct EventsFolderDropTests {
         let new = try #require(store.confirm(name: "New", categories: [], members: [ContentRange(contentKey: Self.shaC)]))
         let a = F.record("/Volumes/LaCie/x/a.mov", digest: Self.shaA)
 
-        let drop = EventsFolderDrop(target: new.id, recordIDs: [a.id], record: Self.lookup([a]), decisions: store.snapshot())
+        let drop = EventsFolderDrop(target: new.id, recordIDs: [a.id], record: Self.lookup([a]), decisions: store.snapshot(),
+                                    mode: .move(from: old.id))
         #expect(drop.movingFrom == [old.id: [ContentRange(contentKey: Self.shaA)]])
         #expect(drop.apply(in: store))
         let after = store.snapshot()
         #expect(after.members(of: old.id) == [ContentRange(contentKey: Self.shaB)], "A left the old folder; B stayed")
         #expect(after.members(of: new.id) == [ContentRange(contentKey: Self.shaA), ContentRange(contentKey: Self.shaC)])
-        #expect(FolderDropWords.moved(drop, title: { $0 == old.id ? "Old" : "New" }) != nil, "one console line says which folder")
+    }
+
+    @Test("ADD keeps every folder the file is already in: one content, several folders")
+    func addKeepsOtherFolders() async throws {
+        let store = try await Self.loadedStore("drop-add")
+        let dad = try #require(store.confirm(name: "Dad", categories: [], members: [ContentRange(contentKey: Self.shaA)], kind: .person))
+        let xmas = try #require(store.confirm(name: "Christmas 1990", categories: [], members: [ContentRange(contentKey: Self.shaC)]))
+        let a = F.record("/Volumes/LaCie/x/a.mov", digest: Self.shaA)
+
+        let drop = EventsFolderDrop(target: xmas.id, recordIDs: [a.id], record: Self.lookup([a]), decisions: store.snapshot())
+        #expect(drop.mode == .add)
+        #expect(drop.movingFrom.isEmpty, "an add never takes a file out of another folder")
+        #expect(drop.apply(in: store))
+        let after = store.snapshot()
+        #expect(after.members(of: dad.id) == [ContentRange(contentKey: Self.shaA)], "still in Dad")
+        #expect(after.members(of: xmas.id).map(\.contentKey).sorted() == [Self.shaA, Self.shaC])
+        #expect(Set(after.folders(containing: Self.shaA)) == [dad.id, xmas.id], "overlap: the content is in both")
+        #expect(store.folderNames(containing: Self.shaA) == ["Christmas 1990", "Dad"], "In folders: by name")
+    }
+
+    @Test("a MOVE onto a folder that already holds the file still takes it out of the source")
+    func moveIntoAFolderThatHasItLeavesTheSource() async throws {
+        let store = try await Self.loadedStore("drop-move-dup")
+        let a1 = ContentRange(contentKey: Self.shaA)
+        let src = try #require(store.confirm(name: "Src", categories: [], members: [a1]))
+        let dst = try #require(store.confirm(name: "Dst", categories: [], members: [a1]))
+        let a = F.record("/Volumes/LaCie/x/a.mov", digest: Self.shaA)
+        let drop = EventsFolderDrop(target: dst.id, recordIDs: [a.id], record: Self.lookup([a]), decisions: store.snapshot(),
+                                    mode: .move(from: src.id))
+        #expect(drop.adding.isEmpty)
+        #expect(!drop.isNoOp, "something leaves the source")
+        #expect(drop.apply(in: store))
+        #expect(store.snapshot().members(of: src.id).isEmpty)
+        #expect(store.snapshot().members(of: dst.id) == [a1])
+    }
+
+    @Test("Remove from Folder: the content leaves that folder only")
+    func removeLeavesOneFolder() async throws {
+        let store = try await Self.loadedStore("drop-remove")
+        let a1 = ContentRange(contentKey: Self.shaA)
+        let one = try #require(store.confirm(name: "One", categories: [], members: [a1, ContentRange(contentKey: Self.shaB)]))
+        let two = try #require(store.confirm(name: "Two", categories: [], members: [a1]))
+        let a = F.record("/Volumes/LaCie/x/a.mov", digest: Self.shaA)
+        let removal = EventsFolderRemoval(folder: one.id, recordIDs: [a.id], record: Self.lookup([a]), decisions: store.snapshot())
+        #expect(removal.leaving == [a1])
+        #expect(removal.apply(in: store))
+        #expect(store.snapshot().members(of: one.id) == [ContentRange(contentKey: Self.shaB)])
+        #expect(store.snapshot().members(of: two.id) == [a1], "the other folder keeps it")
+        let none = EventsFolderRemoval(folder: one.id, recordIDs: [a.id], record: Self.lookup([a]), decisions: store.snapshot())
+        #expect(none.isNoOp, "removing what is not there does nothing")
+    }
+
+    @Test("Finder's drag rule: out of a folder = move, option = add, loose files = add")
+    func dragModeFollowsFinder() {
+        let f = UUID(), g = UUID(), target = UUID()
+        let fromF = [CatalogRecordDrag.Item(record: UUID(), folder: f), CatalogRecordDrag.Item(record: UUID(), folder: f)]
+        #expect(CatalogRecordDrag.mode(for: fromF, target: target, optionHeld: false) == .move(from: f))
+        #expect(CatalogRecordDrag.mode(for: fromF, target: target, optionHeld: true) == .add, "option-drag adds")
+        let loose = [CatalogRecordDrag.Item(record: UUID(), folder: nil)]
+        #expect(CatalogRecordDrag.mode(for: loose, target: target, optionHeld: false) == .add)
+        let mixed = [CatalogRecordDrag.Item(record: UUID(), folder: f), CatalogRecordDrag.Item(record: UUID(), folder: g)]
+        #expect(CatalogRecordDrag.mode(for: mixed, target: target, optionHeld: false) == .add, "rows from two folders: add")
+        #expect(CatalogRecordDrag.mode(for: fromF, target: f, optionHeld: false) == .add, "onto its own folder: nothing moves")
     }
 
     @Test("a drop on the folder the files are already in does nothing")
@@ -88,11 +153,14 @@ struct EventsFolderDropTests {
         #expect(store.decisionCount == decisions)
     }
 
-    @Test("the drag payload is a record id as a string; foreign text is ignored")
+    @Test("the drag payload is a record id as a string (with its folder); foreign text is ignored")
     func payloadRoundTrips() {
-        let id = UUID()
-        let items = [CatalogRecordDrag.payload(id), "hello", "file:///Volumes/LaCie/a.mov", CatalogRecordDrag.prefix + "not-a-uuid"]
-        #expect(CatalogRecordDrag.recordIDs(in: items) == [id])
+        let id = UUID(), other = UUID(), folder = UUID()
+        let items = [CatalogRecordDrag.payload(id), CatalogRecordDrag.payload(other, from: folder), "hello",
+                     "file:///Volumes/LaCie/a.mov", CatalogRecordDrag.prefix + "not-a-uuid"]
+        #expect(CatalogRecordDrag.recordIDs(in: items) == [id, other])
+        #expect(CatalogRecordDrag.items(in: items) == [CatalogRecordDrag.Item(record: id, folder: nil),
+                                                       CatalogRecordDrag.Item(record: other, folder: folder)])
         #expect(!CatalogRecordDrag.payload(id).hasPrefix("file:"), "never a file URL: a drop into Finder must not copy media")
     }
 

@@ -134,6 +134,39 @@ enum FootageFolderWords {
     static let showCopiesAndRelated = "Show Copies & Related\u{2026}"
     static let showInItsEvent = "Show in its event"
     static let openFolder = "Open Folder"
+    static let renameFolder = "Rename\u{2026}"
+    static let folderKindMenu = "Folder Kind"
+    static let deleteFolder = "Delete Folder\u{2026}"
+    static let addToFolder = "Add to Folder"
+    static let moveToFolder = "Move to Folder"
+    static func removeFromFolder(_ name: String) -> String { "Remove from \u{201C}\(name)\u{201D}" }
+    static let noOtherFolders = "No other folders"
+    static let addHelp = "The files join that folder and stay in every folder they are already in."
+    static let moveHelp = "The files leave this folder and join that one (other folders keep them)."
+    static let removeHelp = "The files leave this folder only — they stay on disk and in every other folder."
+
+    // MARK: Rename and delete
+
+    static let renameTitle = "Rename Folder"
+    static let renameButton = "Rename"
+    static func deleteTitle(_ name: String) -> String { "Delete the folder \u{201C}\(name)\u{201D}?" }
+    static func deleteMessage(files: Int) -> String {
+        "It holds \(files) file\(files == 1 ? "" : "s"). Only the folder goes: the files stay on disk, in the catalog and in every other folder, and the folder's history is kept."
+    }
+    static let deleteButton = "Delete Folder"
+
+    // MARK: The folder inspector
+
+    static let inspectorKind = "Kind"
+    static let inspectorCreated = "Created"
+    static let inspectorChanged = "Last changed"
+    static let inspectorFiles = "Files"
+    static let inspectorDuration = "Total duration"
+    static let inspectorSize = "Total size"
+    static let inspectorDates = "Dates"
+    static let inspectorVolumes = "Volumes"
+    static let inspectorOnline = "Online"
+    static let inFolders = "In folders"
 
     // MARK: A derivative landed — the one console line
 
@@ -163,6 +196,19 @@ enum FootageFolderWords {
     /// The Finder's folder blue, a lighter blue than the accent so it
     /// reads on the dark theme (the accent blue sank into the row stripes).
     static let folderTint = Color(red: 0.36, green: 0.68, blue: 0.96)
+    /// A person's folder (Rick 2026-10-19): green, as light as the blue.
+    static let personFolderTint = Color(red: 0.40, green: 0.80, blue: 0.47)
+    /// Any other folder: a neutral grey that still reads on the dark theme.
+    static let otherFolderTint = Color(white: 0.62)
+
+    /// Event blue, person green, other grey.
+    static func folderTint(for kind: FolderKind) -> Color {
+        switch kind {
+        case .event: return folderTint
+        case .person: return personFolderTint
+        case .other: return otherFolderTint
+        }
+    }
     static let folderSymbolFont = Font.system(size: 17.3)
     static let folderTitleFont = Font.system(.body).weight(.semibold)
     static let relationFont = Font.system(size: 11)

@@ -10979,6 +10979,22 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsCatalogBackingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsCatalogBackingTests"
+      ],
+      "tests": [
+        "aSealedBackupContainsTheFolders",
+        "editsPersistToTheCatalogOnly",
+        "importCarriesEverythingAndVerifies",
+        "importIsIdempotent",
+        "noFileImportsNothing",
+        "readOnlySessionRefuses"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EventsDecisionStoreTests.swift",
       "stage": "unit",
       "suites": [
@@ -11021,10 +11037,14 @@
         "EventsFolderDropTests"
       ],
       "tests": [
+        "addKeepsOtherFolders",
+        "dragModeFollowsFinder",
         "dropOnTheSameEventDoesNothing",
         "droppedIDsBecomeMembers",
+        "moveIntoAFolderThatHasItLeavesTheSource",
         "moveTakesTheFileOutOfTheOldEvent",
         "payloadRoundTrips",
+        "removeLeavesOneFolder",
         "writesOnlyIntoTheTestDirectory"
       ]
     },
@@ -12795,6 +12815,29 @@
         "tail_starting_mid_multibyte_char_without_newline_returns_nil",
         "unchanged_file_reuses_cached_result_without_rereading",
         "whole_small_file_as_tail_returns_its_last_line"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FolderLabelsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FolderLabelsLogicTests",
+        "FolderLabelsScaleTests",
+        "FolderLabelsSensorTests"
+      ],
+      "tests": [
+        "aliasIsStable",
+        "eventRecordKindDecodes",
+        "hundredThousandInTwoFoldersEach",
+        "inspectorFactsAtScale",
+        "inspectorFactsCount",
+        "kindTintsAreDistinct",
+        "logLinesNameFiles",
+        "overlapShowsUnderEveryFolderWithUniqueRowIDs",
+        "rowIDsBecomeRecordsAndTheInspectorIsAHandler",
+        "rowSelectionMapsBothWays",
+        "versionFollowsEveryLeadingFolder"
       ]
     },
     {
@@ -31880,7 +31923,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2667,
+      "expected_floor": 2688,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32293,7 +32336,11 @@
         "VideoScanTests/ImportToSQLiteJobTests",
         "VideoScanTests/ImportToSQLiteSensorTests",
         "VideoScanTests/ImportToSQLiteQuitPathTests",
-        "VideoScanTests/ImportToSQLiteQuitSensorTests"
+        "VideoScanTests/ImportToSQLiteQuitSensorTests",
+        "VideoScanTests/EventsCatalogBackingTests",
+        "VideoScanTests/FolderLabelsLogicTests",
+        "VideoScanTests/FolderLabelsScaleTests",
+        "VideoScanTests/FolderLabelsSensorTests"
       ]
     },
     {
@@ -32589,7 +32636,7 @@
       ],
       "expected_floor": 221,
       "name": "regression",
-      "package_expected_floor": 184,
+      "package_expected_floor": 190,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -32619,7 +32666,8 @@
         "VideoScanCoreTests.CatalogCommitB25Tests",
         "VideoScanCoreTests.CatalogCommitB26Tests",
         "VideoScanCoreTests.CatalogHardKillTests",
-        "VideoScanCoreTests.CatalogDiskFullTests"
+        "VideoScanCoreTests.CatalogDiskFullTests",
+        "VideoScanCoreTests.CatalogFolderDoorsTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

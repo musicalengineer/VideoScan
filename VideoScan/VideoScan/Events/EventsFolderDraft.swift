@@ -77,18 +77,19 @@ struct EventsFolderMembers: Sendable, Equatable {
     static let idKeyPrefix = "id:"
 }
 
-/// What the Make Folder sheet commits: the name Rick types, the members
-/// found when the sheet opened, the categories the name implies. Backed by
-/// a confirmed event today; a later folder KIND (event / person / other)
-/// is one more field here and one picker in the sheet — neither the
-/// sheet's nor `CatalogContent.makeFolder(name:recordIDs:)`'s shape moves.
+/// What the Make Folder sheet commits: the name Rick types, the KIND he
+/// picks (event / person / other, 2026-10-19), the members found when the
+/// sheet opened, the categories the name implies. Backed by a confirmed
+/// event.
 struct EventsFolderDraft: Sendable, Equatable {
     var name: String
+    var kind: FolderKind = .event
     let members: EventsFolderMembers
 
-    init(name: String, members: EventsFolderMembers) {
+    init(name: String, members: EventsFolderMembers, kind: FolderKind = .event) {
         self.name = name
         self.members = members
+        self.kind = kind
     }
 
     init(name: String, records: [VideoRecord]) {
@@ -119,6 +120,7 @@ struct EventsFolderDraft: Sendable, Equatable {
     @MainActor
     func make(in store: EventsDecisionStore, now: Date = Date()) -> EventRecord? {
         guard refusal == nil else { return nil }
-        return store.confirm(name: trimmedName, categories: categories, members: members.ranges, now: now)
+        return store.confirm(name: trimmedName, categories: kind == .event ? categories : [], members: members.ranges,
+                             kind: kind, now: now)
     }
 }

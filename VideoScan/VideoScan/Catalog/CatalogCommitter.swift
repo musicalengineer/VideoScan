@@ -323,6 +323,34 @@ final class CatalogCommitter {
         return nil
     }
 
+    /// Catalog folders (2026-10-19, EventsCatalogBacking.swift): why a
+    /// folder change cannot be written now — the same refusals as a
+    /// person's marker request (read-only session, held, blocked, being
+    /// reopened) — nil when it can.
+    var folderWriteRefusal: String? { saveRefusal() }
+
+    /// Catalog folders: ONE synchronous write of a folder change (its
+    /// `events` rows, its decisions, its membership folds), on the main
+    /// actor like every commit here. nil = committed; else the words, and
+    /// nothing was written. Records are not touched: their baseline is
+    /// unaffected (the store tracks the generation itself).
+    func commitFolders(_ what: String, _ body: (any CatalogTransaction) throws -> Void) -> String? {
+        if let why = saveRefusal() { return why }
+        switch repository.writeBlocking(as: .ui, body) {
+        case .committed(let generation):
+            sink("Catalog store: OUTCOME commit generation \(generation) via folders — \(what)")
+            return nil
+        case .refused(let words):
+            sink("Catalog store: REFUSED a folder change (\(what)) — \(words). Nothing was written.")
+            return words
+        case .generationMismatch(let expected, let found):
+            let words = "another writer committed generation \(found) (this session expected \(expected)) — reopen the catalog"
+            blockedReason = words
+            sink("Catalog store: REFUSED a folder change (\(what)) — \(words). Nothing was written.")
+            return words
+        }
+    }
+
     /// A door took these records out of the catalog (VideoScanModel
     /// .purgeCatalogRows): their rows are purged in one synchronous commit
     /// now — or, while the store is held or blocked, at the first commit
