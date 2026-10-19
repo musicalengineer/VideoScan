@@ -13,8 +13,27 @@
 //
 // One-shot "whole shebang" export/import so the user can move their entire
 // VideoScan world from one Mac to another (Mac Studio → MacBook Pro is the
-// driving scenario). The bundle is a directory `<name>.videoscanbundle/`
-// containing four JSON files plus the wholesale POI folder tree:
+// driving scenario). The bundle is a directory `<name>.videoscanbundle/`.
+// Bundle v2 (2026-10-19) — the catalog is the database, sealed:
+//
+//     <name>.videoscanbundle/
+//     ├── manifest.json     // version 2, host, counts, sizes, and
+//     │                     //   catalogDatabase {generation, highWater,
+//     │                     //   files, quarantine, content, bytes, sha256}
+//     ├── catalog.sqlite    // sealed VACUUM INTO copy (CatalogBackupSeal) —
+//     │                     //   every row, removed rows and quarantine too
+//     ├── catalog.cutover   // byte copy of the latch
+//     ├── catalog.highwater // the high-water this Mac had written
+//     ├── volumes.json      // per-volume metadata (role, trust, media, …)
+//     ├── settings.json     // machine-portable PersonFinderSettings only
+//     ├── deltas/ , catalog-manifest.sha256   (optional, as before)
+//     └── people/<UUID>/…   // as below
+//
+// Import Catalog never merges into catalog.sqlite: a v2 bundle is refused
+// (no safe Restore exists yet) and so is a v1 bundle under catalog.sqlite.
+//
+// Bundle v1 (before the database switch) — still readable by the legacy
+// merge on a Mac whose catalog is catalog.json; never written any more:
 //
 //     <name>.videoscanbundle/
 //     ├── manifest.json     // version, host, counts, total size

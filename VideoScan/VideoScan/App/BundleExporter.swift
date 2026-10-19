@@ -1,8 +1,9 @@
 // BundleExporter.swift
 // The export half of the bundle "whole shebang" feature — extracted verbatim
 // from BundleExportImport.swift (refactor 2026-06-25). Writes the
-// <name>.videoscanbundle/ tree (manifest/catalog/volumes/settings JSON plus
-// the people/ and deltas/ subtrees). Serialization formats, file paths,
+// <name>.videoscanbundle/ tree (manifest/volumes/settings JSON, the sealed
+// catalog.sqlite since bundle v2 — see CatalogBackupSeal — plus the people/
+// and deltas/ subtrees). Serialization formats, file paths,
 // symlink-resolution and skip/warning logic are load-bearing and were moved
 // byte-for-byte. See the file-header comment in BundleExportImport.swift for
 // the export-safety story (symlink dereferencing, profile.json validation)
@@ -23,7 +24,7 @@ import AppKit
 /// covers the case where catalog.json itself is corrupt at restore time.
 enum DossierDeltaPaths {
     /// Live source directory in production. Tests override via
-    /// `BundleExporter.writeBundle(..., dossierDeltaDirOverride:)`.
+    /// `BundleExporter.Inputs.dossierDeltaDir` (BackupSideFiles).
     /// The delta dir has lived on the same physical drive under two names
     /// (Crucial2TB → renamed CrucialX9, 2026-07). Prefer whichever exists;
     /// fall back to the current name so the warning text names a real
@@ -82,28 +83,42 @@ enum BundleExporter {
         }
     }
 
+    /// What one backup is made of. Gathered on the main actor by the model
+    /// (`VideoScanModel.backUpCatalog`), handed to `writeBundle` off it, so
+    /// nothing here reads main-actor state.
+    struct Inputs: Sendable {
+        /// The open catalog.sqlite to seal (the caller committed memory first).
+        var catalog: CatalogBackupSeal.Source
+        /// Volume metadata, the RAM scratch volume already excluded.
+        var volumes: [VolumeMetadataSnapshot]
+        var settings: SettingsSnapshot
+        /// The POI folders to copy (POIStorage.allPOIFolders() in production).
+        var poiFolders: [URL]
+        /// Where the dossier JSONL deltas live (DossierDeltaPaths.liveDir).
+        var dossierDeltaDir: URL
+        /// manifest.sha256 beside the catalog (DossierDeltaPaths.liveManifestSha256).
+        var catalogManifest: URL
+    }
+
     /// Write a complete bundle. `bundleURL` should end in `.videoscanbundle`.
     /// Overwrites any existing bundle at the same path.
     ///
-    /// Purge policy: removed-from-catalog records are LOCAL-ONLY. They are
-    /// stripped from the bundled catalog.json (and the manifest's record
-    /// count) so a bundle moved to another Mac mirrors the user's curated
-    /// view, not their personal trash bin. The caller can compute the
-    /// excluded count from `records.count - summary.manifest.counts.records`
-    /// and log it for discoverability.
+    /// Bundle v2 (2026-10-19): the catalog is a sealed catalog.sqlite — every
+    /// row, removed (tombstoned) rows and quarantine included, plus the latch
+    /// and the high-water (`CatalogBackupSeal`). There is no catalog.json any
+    /// more: it was built from memory, stripped removed records and carried
+    /// no quarantine, generation or history, so it was not a backup of the
+    /// database. Volume metadata, settings, reference photos and the dossier
+    /// deltas are unchanged.
     ///
-    /// Set-aside policy (QA blocker fix, 2026-07-15): set-aside records
-    /// TRAVEL, with their `setAsideReason` — they are part of the catalog
-    /// ("hidden, never deleted"), and a bundle is a backup/transfer of the
-    /// catalog. Dropping them here silently destroyed Tidy state on
-    /// restore. See `pfExportableRecords`.
-    @MainActor
-    static func writeBundle(records inputRecords: [VideoRecord],
-                            scanTargets: [CatalogScanTarget],
-                            to bundleURL: URL,
-                            dossierDeltaDirOverride: URL? = nil,
-                            catalogManifestOverride: URL? = nil,
-                            masterArchive: MasterArchiveDesignation? = nil) throws -> Summary {
+    /// Runs entirely off the main actor (`@concurrent`): the seal blocks its
+    /// thread for the length of `VACUUM INTO`, and the photo copy is plain
+    /// file IO. `progress` is called with a short phrase as each phase starts.
+    /// If the seal is refused, the half-made bundle folder is removed and the
+    /// error is thrown — no bundle without its catalog is left behind.
+    @concurrent
+    nonisolated static func writeBundle(_ inputs: Inputs, to bundleURL: URL,
+                                        progress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> Summary {
         guard bundleURL.pathExtension == "videoscanbundle" else {
             throw BundleError.badExtension
         }
@@ -113,110 +128,49 @@ enum BundleExporter {
         }
         try fm.createDirectory(at: bundleURL, withIntermediateDirectories: true)
 
+        // 1. Catalog — the sealed catalog.sqlite (+ latch, high-water).
+        progress("sealing catalog.sqlite")
+        let sealed: CatalogBackupSeal.Sealed
+        do {
+            sealed = try await CatalogBackupSeal.seal(inputs.catalog, into: bundleURL)
+        } catch {
+            try? fm.removeItem(at: bundleURL)   // our own half-made folder
+            throw error
+        }
+
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
 
-        // Export filter applied before serialization — purged records never
-        // cross the bundle boundary; set-aside records DO (with their
-        // reason), so a restore round-trips the user's Tidy state. Single
-        // filter site keeps the record-count math in the manifest
-        // consistent with what's actually encoded in catalog.json.
-        let records = pfExportableRecords(inputRecords)
-
-        // 1. Catalog — same shape as the standalone catalog export so a
-        //    catalog.json pulled out of a bundle could be imported via the
-        //    existing "Import Catalog…" entry point.
-        let catalogSnapshot = CatalogSnapshot(
-            version: CatalogSnapshot.currentVersion,
-            savedAt: Date(),
-            records: records,
-            savedFromHost: CatalogHost.currentName,
-            masterArchive: masterArchive   // designation travels with the catalog (§3)
-        )
-        // Encode through the Sendable DTO — VideoRecord is Decodable-only
-        // (step 5b); CatalogSnapshotDTO owns the single encoder.
-        try CatalogSnapshotDTO(catalogSnapshot).encoded(using: encoder)
-            .write(to: bundleURL.appendingPathComponent("catalog.json"), options: .atomic)
-
-        // 2. Volumes — exclude the RAM scratch volume (it's plumbing, not
-        //    archive metadata, and its path is machine-specific anyway).
-        let volumeSnapshots = CatalogScanTarget.excludingScratch(scanTargets)
-            .map(VolumeMetadataSnapshot.init(from:))
-        let volumesSnapshot = VolumesSnapshot(savedAt: Date(), volumes: volumeSnapshots)
+        // 2. Volumes — the caller already excluded the RAM scratch volume
+        //    (plumbing, not archive metadata, and machine-specific anyway).
+        let volumesSnapshot = VolumesSnapshot(savedAt: Date(), volumes: inputs.volumes)
         try encoder.encode(volumesSnapshot)
             .write(to: bundleURL.appendingPathComponent("volumes.json"), options: .atomic)
 
-        // 3. Settings — pull current PersonFinderSettings from UserDefaults.
-        //    No need for a live PersonFinderModel; restored() reads from
-        //    the same prefix the model writes to.
-        let settings = PersonFinderSettings.restored()
-        let settingsSnapshot = SettingsSnapshot(from: settings)
-        try encoder.encode(settingsSnapshot)
+        // 3. Settings — the machine-portable PersonFinderSettings.
+        try encoder.encode(inputs.settings)
             .write(to: bundleURL.appendingPathComponent("settings.json"), options: .atomic)
 
-        // 4. People — copy each POI folder verbatim, BUT resolve symlinks at
-        //    copy time. profile.json + photos travel together; referencePath
-        //    in the JSON gets re-derived on the destination machine, so we
-        //    don't have to rewrite it here.
-        let peopleDir = bundleURL.appendingPathComponent("people", isDirectory: true)
-        try fm.createDirectory(at: peopleDir, withIntermediateDirectories: true)
-        var photoCount = 0
-        var photoBytes: Int64 = 0
-        var warnings: [(String, String)] = []
-        let poiFolders = POIStorage.allPOIFolders()
-        for src in poiFolders {
-            let dest = peopleDir.appendingPathComponent(src.lastPathComponent, isDirectory: true)
-            let perPOIWarnings = try copyResolvingSymlinks(from: src, to: dest)
-            for w in perPOIWarnings {
-                warnings.append(("\(src.lastPathComponent)/\(w.relPath)", w.reason))
-            }
+        // 4. People — each POI folder, symlinks resolved, profile.json checked.
+        progress("copying \(inputs.poiFolders.count) people's reference photos")
+        let people = try copyPeople(inputs.poiFolders, into: bundleURL)
+        var warnings = people.warnings
 
-            // Validate that profile.json made it into `dest`. This catches the
-            // failure mode behind the 2026-05-15 MS→M5 incident, where the
-            // old exporter shipped POI folders containing only photos. The
-            // importer caught it then, but only after a half-broken bundle
-            // had already been moved between machines; this pass catches it
-            // at export time so Rick can re-export immediately. Per spec we
-            // DO NOT fail the export or delete the partial folder.
-            if let reason = profileJSONValidationReason(dest: dest) {
-                warnings.append(("\(src.lastPathComponent)/profile.json", reason))
-            }
-
-            // Tally photo size for the manifest sizes block (recursive walk).
-            if let it = fm.enumerator(at: dest,
-                                      includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
-                for case let k as URL in it {
-                    guard referencePhotoExts.contains(k.pathExtension.lowercased()) else { continue }
-                    photoCount += 1
-                    if let v = try? k.resourceValues(forKeys: [.fileSizeKey]),
-                       let s = v.fileSize {
-                        photoBytes += Int64(s)
-                    }
-                }
-            }
-        }
-
-        // 5. Dossier JSONL deltas — the worker write-ahead log. catalog.json
-        //    already carries the dossier fields, but the deltas are the
-        //    durable source-of-truth that survives a corrupted catalog.
-        //    See docs/guides/database_design.md for the recovery story. Resilient:
+        // 5. Dossier JSONL deltas — the worker write-ahead log. Resilient:
         //    if the source dir is missing (Crucial2TB unmounted), the export
         //    still succeeds — Rick gets a warning, not a thrown error.
-        let deltaSrcDir = dossierDeltaDirOverride ?? DossierDeltaPaths.liveDir
-        let deltaSummary = copyDossierDeltas(from: deltaSrcDir,
+        progress("copying the dossier deltas")
+        let deltaSummary = copyDossierDeltas(from: inputs.dossierDeltaDir,
                                              into: bundleURL,
                                              warnings: &warnings)
 
-        // 6. Catalog integrity manifest (manifest.sha256). Optional: a
-        //    missing file is skipped silently — some installs predate the
-        //    merger's manifest writer.
-        let manifestSrc = catalogManifestOverride ?? DossierDeltaPaths.liveManifestSha256
-        copyCatalogManifestIfPresent(from: manifestSrc, into: bundleURL)
+        // 6. manifest.sha256 beside the catalog. Optional: a missing file
+        //    is skipped silently.
+        copyCatalogManifestIfPresent(from: inputs.catalogManifest, into: bundleURL)
 
         // 7. Manifest — written last so a partial bundle without manifest.json
         //    is unambiguously detectable on import.
-        let totalBytes = directorySize(bundleURL)
         let manifest = BundleManifest(
             bundleVersion: BundleManifest.currentVersion,
             exportedAt: Date(),
@@ -224,20 +178,73 @@ enum BundleExporter {
             appVersion: BuildInfo.version,
             appBuild: BuildInfo.build,
             counts: .init(
-                records: records.count,
-                volumes: volumeSnapshots.count,
-                people: poiFolders.count,
-                referencePhotos: photoCount,
+                records: sealed.files,
+                volumes: inputs.volumes.count,
+                people: inputs.poiFolders.count,
+                referencePhotos: people.photoCount,
                 dossierDeltaLines: deltaSummary.lineCount
             ),
-            sizes: .init(totalBytes: totalBytes,
-                         referencePhotoBytes: photoBytes,
-                         dossierDeltaBytes: deltaSummary.byteCount)
+            sizes: .init(totalBytes: directorySize(bundleURL),
+                         referencePhotoBytes: people.photoBytes,
+                         dossierDeltaBytes: deltaSummary.byteCount),
+            catalogDatabase: sealed
         )
         try encoder.encode(manifest)
             .write(to: bundleURL.appendingPathComponent("manifest.json"), options: .atomic)
 
         return Summary(path: bundleURL, manifest: manifest, exportWarnings: warnings)
+    }
+
+    /// What `copyPeople` copied: reference-photo totals for the manifest and
+    /// the per-file warnings for the post-export alert.
+    struct PeopleCopy {
+        var photoCount = 0
+        var photoBytes: Int64 = 0
+        var warnings: [(String, String)] = []
+    }
+
+    /// Copy each POI folder into `bundleURL/people/`, resolving symlinks at
+    /// copy time. profile.json + photos travel together; referencePath in
+    /// the JSON gets re-derived on the destination machine, so it is not
+    /// rewritten here.
+    ///
+    /// After each copy, profile.json is validated. This catches the failure
+    /// mode behind the 2026-05-15 MS→M5 incident, where the old exporter
+    /// shipped POI folders containing only photos. Per spec the export does
+    /// NOT fail and the partial folder is NOT deleted — a warning is added.
+    nonisolated static func copyPeople(_ poiFolders: [URL], into bundleURL: URL) throws -> PeopleCopy {
+        let fm = FileManager.default
+        let peopleDir = bundleURL.appendingPathComponent("people", isDirectory: true)
+        try fm.createDirectory(at: peopleDir, withIntermediateDirectories: true)
+        var copy = PeopleCopy()
+        for src in poiFolders {
+            let dest = peopleDir.appendingPathComponent(src.lastPathComponent, isDirectory: true)
+            for w in try copyResolvingSymlinks(from: src, to: dest) {
+                copy.warnings.append(("\(src.lastPathComponent)/\(w.relPath)", w.reason))
+            }
+            if let reason = profileJSONValidationReason(dest: dest) {
+                copy.warnings.append(("\(src.lastPathComponent)/profile.json", reason))
+            }
+            let photos = referencePhotoTotals(in: dest)
+            copy.photoCount += photos.count
+            copy.photoBytes += photos.bytes
+        }
+        return copy
+    }
+
+    /// Reference photos under `dir` (recursive): how many, and their bytes.
+    nonisolated static func referencePhotoTotals(in dir: URL) -> (count: Int, bytes: Int64) {
+        guard let it = FileManager.default.enumerator(at: dir,
+                                                      includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else {
+            return (0, 0)
+        }
+        var count = 0
+        var bytes: Int64 = 0
+        for case let k as URL in it where referencePhotoExts.contains(k.pathExtension.lowercased()) {
+            count += 1
+            bytes += Int64((try? k.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        return (count, bytes)
     }
 
     /// Inspect the just-copied POI directory and return a warning reason if

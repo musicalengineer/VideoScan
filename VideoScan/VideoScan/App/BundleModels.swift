@@ -6,13 +6,21 @@
 // and the importer reads, so the serialization format is load-bearing: moved
 // byte-for-byte, no field or key changes. (Swift `struct: Codable` ≈ a C++
 // POD with auto-generated (de)serialization.)
+//
+// Bundle format v2 (2026-10-19, catalog.sqlite backups): the catalog is a
+// sealed catalog.sqlite (+ catalog.cutover, catalog.highwater) instead of
+// catalog.json, and the manifest gains `catalogDatabase` (generation, row
+// counts, SHA-256). Additive: every v1 key is unchanged; a v1 build refuses
+// a v2 bundle ("made with a newer VideoScan format") instead of looking
+// for a catalog.json that is not there.
 
 import Foundation
 
 // MARK: - Snapshot Types
 
 struct BundleManifest: Codable {
-    static let currentVersion = 1
+    /// 2 = the catalog is a sealed catalog.sqlite (see the header).
+    static let currentVersion = 2
 
     var bundleVersion: Int = Self.currentVersion
     var exportedAt: Date
@@ -21,6 +29,9 @@ struct BundleManifest: Codable {
     var appBuild: String
     var counts: Counts
     var sizes: Sizes
+    /// The sealed catalog.sqlite in the bundle (v2). nil in a v1 bundle,
+    /// whose catalog is catalog.json.
+    var catalogDatabase: CatalogBackupSeal.Sealed? = nil
 
     struct Counts: Codable {
         var records: Int

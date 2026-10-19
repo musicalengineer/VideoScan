@@ -7944,6 +7944,26 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogBackupSQLiteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogBackupSQLiteTests",
+        "CatalogBackupImportTests",
+        "CatalogBackupScaleTests"
+      ],
+      "tests": [
+        "backupRoundTrip",
+        "backupWritesNothingBesideTheLiveCatalog",
+        "decisionTable",
+        "heldCatalogRefuses",
+        "jsonAuthorityRefuses",
+        "jsonBundleRefusedDatabaseUnchanged",
+        "sqliteBundleRefused",
+        "twelveThousandRows"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTableStateTests.swift",
       "stage": "unit",
       "suites": [
@@ -32656,7 +32676,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 201,
+      "expected_floor": 209,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [
@@ -32750,7 +32770,10 @@
         "VideoScanTests/AdvJunkDeleteHeldTests",
         "VideoScanTests/CatalogSyncSQLiteSnapshotPublishTests",
         "VideoScanTests/CatalogSyncSQLiteSnapshotViewerTests",
-        "VideoScanTests/CatalogSyncSQLiteSnapshotLegacyTests"
+        "VideoScanTests/CatalogSyncSQLiteSnapshotLegacyTests",
+        "VideoScanTests/CatalogBackupSQLiteTests",
+        "VideoScanTests/CatalogBackupImportTests",
+        "VideoScanTests/CatalogBackupScaleTests"
       ]
     },
     {

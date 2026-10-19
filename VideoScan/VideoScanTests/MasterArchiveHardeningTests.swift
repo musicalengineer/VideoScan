@@ -559,7 +559,10 @@ struct MasterArchiveHardeningTests {
         func importInto(_ model: VideoScanModel) async throws -> (added: Int, skipped: Int) {
             if viaBundle {
                 let url = sb.root.appendingPathComponent("remote.videoscanbundle")
-                _ = try BundleExporter.writeBundle(records: remote.records, scanTargets: [], to: url)
+                // A v1 (catalog.json) bundle, as builds before 2026-10-19
+                // wrote it; this model is on catalog.json, so the legacy
+                // merge still applies.
+                try LegacyJSONBundle.write(records: remote.records, to: url)
                 var payload = try BundleImporter.read(from: url)
                 // This test is about catalog relinking. The exporter copied
                 // the WHOLE per-process People store into `people/`, and

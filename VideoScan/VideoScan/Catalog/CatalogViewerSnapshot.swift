@@ -135,16 +135,33 @@ enum CatalogViewerSnapshot {
     /// generation and row counts. Throws `.notSealed` with the store's words.
     @concurrent
     nonisolated static func validate(_ url: URL) async throws -> Checked {
+        let facts = try await inspect(url)
+        return Checked(generation: facts.generation, files: facts.counts.files)
+    }
+
+    /// Everything `inspect` reads from a sealed copy: its generation and
+    /// every table count (the backup's manifest records them all).
+    struct Facts: Equatable, Sendable {
+        let generation: Int
+        let counts: CatalogRow.TableCounts
+    }
+
+    /// The one sealed-copy check, shared by the viewer publish (`validate`)
+    /// and Back Up Catalog (`CatalogBackupSeal`): open sealed + read-only
+    /// (integrity_check, foreign_key_check, schema version), read the
+    /// generation and the table counts, close. Throws `.notSealed`.
+    @concurrent
+    nonisolated static func inspect(_ url: URL) async throws -> Facts {
         let reader = GRDBCatalogRepository()
         if case .refused(let why) = await reader.openSealedSnapshot(at: url) {
             throw PublishError.notSealed(why)
         }
         do {
-            let checked = try await reader.read { snapshot in
-                Checked(generation: snapshot.generation, files: try snapshot.recordCounts().files)
+            let facts = try await reader.read { snapshot in
+                Facts(generation: snapshot.generation, counts: try snapshot.recordCounts())
             }
             await reader.close()
-            return checked
+            return facts
         } catch {
             await reader.close()
             throw PublishError.notSealed(String(describing: error))
