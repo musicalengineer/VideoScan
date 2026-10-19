@@ -135,6 +135,16 @@ extension CatalogContent {
         tableWithFilterTriggers
             .onChange(of: showFootageFolders, initial: true) { footageFoldersOptionChanged(on: showFootageFolders) }
             .onReceive(folderDisplayPublisher) { rebuildFolderRows($0) }
+            // A folder's title answers the search (FootageFolderTitleSearch):
+            // a join that lands AFTER the query was typed (the first index
+            // once the option turns on, a folder just made or renamed)
+            // re-runs the filter, or the titled folder would wait for the
+            // next keystroke. Only while a search is active. dropFirst: a
+            // @Published publisher replays its current value on subscribe,
+            // and that one is already what the appear pass filtered with.
+            .onReceive(folderIndexPublisher.dropFirst()) { _ in
+                if showFootageFolders && !searchText.isEmpty { refreshRows() }
+            }
             .onChange(of: model.lastDerivativeLanding) {
                 if let landing = model.lastDerivativeLanding { revealDerivative(landing) }
             }
@@ -144,6 +154,12 @@ extension CatalogContent {
 
     private var folderDisplayPublisher: Published<FootageFolders.Display>.Publisher {
         model.footageFolders.$display
+    }
+
+    /// The join itself (equality-gated in FootageFoldersSnapshot) — only the
+    /// title search listens, see `tableWithFolderTriggers`.
+    private var folderIndexPublisher: Published<FootageFolders.Index>.Publisher {
+        model.footageFolders.$index
     }
 
     /// Reveal toggles: disconnected media, kind facet, removed / set-aside /

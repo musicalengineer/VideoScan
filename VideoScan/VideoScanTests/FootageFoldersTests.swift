@@ -742,3 +742,124 @@ struct FootageFoldersSelectionTests {
     }
 }
 
+// MARK: - A folder's own title is searchable (2026-10-19)
+//
+// A folder's own title is searchable (Rick 2026-10-19): with Show ▸ As
+// folders on, "thanksgiving" in any case shows the "Thanksgiving · 1984"
+// folder with its visible members, even when no member's own fields
+// carry the word.
+//
+// Five dimensions: Logic (title rule, casing, NFC, what never answers by
+// title, hits-first union) · Scale (100k rows / 2k folders) · Media matrix
+// N/A (no file is opened) · Isolation N/A (pure values; no global state) ·
+// Sensor (computeFiltered adds the titled folders' members; a late join
+// re-runs the filter).
+
+private let titleCasings = ["Thanksgiving", "thanksgiving", "THANKSGIVING", "tHANKSgiving"]
+
+
+private func folderRow(_ name: String, id: UUID = UUID()) -> FootageFolders.Row {
+    FootageFolders.Row(id: id, sizeBytes: 1_000, durationSeconds: 60, volume: "LaCie",
+                       keys: FootageFolders.SortKeys(filename: name, volume: "LaCie", duration: 60, size: 1_000))
+}
+
+@MainActor
+@Suite("Footage folders — a folder's title is searchable")
+struct FootageFolderTitleSearchTests {
+
+    @Test func titleAnswersInEveryCasing() {
+        let a = folderRow("Tape12.dv"), b = folderRow("Tape13.dv")
+        let e = FootageFolders.Event(title: "Thanksgiving · 1984", contentKeys: [a.contentKey, b.contentKey])
+        let index = FootageFolders.index(rows: [a, b], events: [e])
+        for q in titleCasings + ["thanks", "1984", "thanksgiving 1984", "1984 THANKSGIVING", "\"thanksgiving · 1984\""] {
+            #expect(FootageFolderTitleSearch.folderIDs(answering: q, in: index) == [e.id], "\(q)")
+            #expect(FootageFolderTitleSearch.memberIDs(answering: q, in: index) == [a.id, b.id], "\(q)")
+        }
+    }
+
+    @Test func otherQueriesDoNotAnswerByTitle() {
+        let a = folderRow("Tape12.dv")
+        let e = FootageFolders.Event(title: "Thanksgiving · 1984", contentKeys: [a.contentKey])
+        let index = FootageFolders.index(rows: [a], events: [e])
+        for q in ["", "   ", "christmas", "thanksgiving christmas", "1980s", "year:1984", "tag:thanksgiving", "people:thanksgiving"] {
+            #expect(FootageFolderTitleSearch.folderIDs(answering: q, in: index).isEmpty, "\"\(q)\" is about the files, not the name")
+        }
+        #expect(FootageFolderTitleSearch.folderIDs(answering: "thanksgiving", in: .empty).isEmpty)
+    }
+
+    /// Accents: an NFD title (as macOS file names arrive) matches an NFC query.
+    @Test func decomposedTitleMatchesComposedQuery() {
+        let a = folderRow("x.mov")
+        let e = FootageFolders.Event(title: "Cafe\u{301} Night", contentKeys: [a.contentKey])
+        let index = FootageFolders.index(rows: [a], events: [e])
+        #expect(FootageFolderTitleSearch.folderIDs(answering: "CAFÉ", in: index) == [e.id])
+    }
+
+    /// The members join the hits; the hits keep their order; nothing the
+    /// view's filters removed (absent from the candidates) comes back.
+    @Test func addingKeepsHitsFirstAndNeverResurrectsAFilteredRow() {
+        func rec(_ n: String) -> VideoRecord { let r = VideoRecord(); r.fullPath = "/V/\(n)"; r.filename = n; return r }
+        let hit1 = rec("h1"), hit2 = rec("h2"), member = rec("m"), hidden = rec("gone")
+        let out = FootageFolderTitleSearch.adding(folderMembers: [member.id, hit2.id, hidden.id],
+                                                  from: [hit1, member, hit2], to: [hit2, hit1])
+        #expect(out.map(\.id) == [hit2.id, hit1.id, member.id])
+        #expect(FootageFolderTitleSearch.adding(folderMembers: [], from: [member], to: [hit1]).map(\.id) == [hit1.id])
+    }
+
+    /// End to end through the join: the lowercase word shows the folder
+    /// with ALL its visible members although no member's own fields carry it.
+    @Test func lowercaseWordShowsTheFolderWithItsMembers() {
+        let tape12 = VideoRecord(), tape13 = VideoRecord(), other = VideoRecord()
+        for (r, n) in [(tape12, "Tape12.dv"), (tape13, "Tape13.dv"), (other, "Beach.mov")] {
+            r.fullPath = "/Volumes/FamilyArchive/\(n)"
+            r.filename = n
+            r.directory = "/Volumes/FamilyArchive"
+        }
+        let records = [tape12, tape13, other]
+        let rows = records.map { FootageFolders.Row(id: $0.id, keys: FootageFolders.SortKeys(filename: $0.filename)) }
+        let e = FootageFolders.Event(title: "Thanksgiving · 1984", contentKeys: [rows[0].contentKey, rows[1].contentKey])
+        let index = FootageFolders.index(rows: rows, events: [e])
+        let search = CatalogSearchIndex()
+        search.rebuild(records: records)
+        for q in titleCasings {
+            let hits = search.filter(records: records, query: q)
+            #expect(hits.isEmpty, "no member's own field says thanksgiving")
+            let shown = FootageFolderTitleSearch.adding(
+                folderMembers: FootageFolderTitleSearch.memberIDs(answering: q, in: index), from: records, to: hits)
+            let display = FootageFolders.compose(index: index, visible: shown.map(\.id), sort: .byName,
+                                                 open: [e.id], scope: nil)
+            #expect(display.rows.compactMap(\.eventID) == [e.id], "the folder shows for \"\(q)\"")
+            #expect(Set(display.rows.compactMap(\.recordID)) == [tape12.id, tape13.id], "with both members, not Beach")
+        }
+    }
+
+    /// Sensor: the catalog's filter pass adds the titled folders' members
+    /// only while the folder view is on, from the search's own input.
+    @Test func computeFilteredAddsTitledFolderMembers() throws {
+        let helpers = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogHelpers.swift"))
+        #expect(helpers.contains("FootageFolderTitleSearch.memberIDs(answering: searchText, in: model.footageFolders.index)"))
+        #expect(helpers.contains("FootageFolderTitleSearch.adding(folderMembers:"))
+        let table = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogContent+Table.swift"))
+        #expect(table.contains(".onReceive(folderIndexPublisher.dropFirst())"), "a join that lands after the query re-runs the filter")
+    }
+
+    /// Scale: 100k rows, 2k folders — the title pass is cheap.
+    @Test func titleSearchAtScale() {
+        var rows: [FootageFolders.Row] = []
+        rows.reserveCapacity(100_000)
+        var events: [FootageFolders.Event] = []
+        for i in 0..<100_000 { rows.append(FootageFolders.Row(digest: String(format: "%040x", i))) }
+        for f in 0..<2_000 {
+            let keys = (0..<20).map { rows[f * 20 + $0].contentKey }
+            events.append(.init(title: f % 100 == 0 ? "Thanksgiving \(1900 + f / 10)" : "Event \(f)", contentKeys: keys))
+        }
+        let index = FootageFolders.index(rows: rows, events: events)
+        let load = TimingBudget.sampleLoad()
+        let start = ContinuousClock.now
+        let ids = FootageFolderTitleSearch.memberIDs(answering: "THANKSGIVING", in: index)
+        let elapsed = ContinuousClock.now - start
+        #expect(ids.count == 20 * 20, "20 titled folders × 20 members")
+        expectWithinTimingBudget("FootageFolderTitleSearch.memberIDs 2k folders",
+                                 measured: elapsed, budget: PerformanceLane.debugCeiling(.milliseconds(50)), loadBefore: load)
+    }
+}

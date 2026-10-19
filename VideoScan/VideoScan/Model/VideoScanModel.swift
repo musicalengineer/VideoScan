@@ -1310,15 +1310,14 @@ final class VideoScanModel: ObservableObject {
         // operations route through this index — see searchIndex above.
         // Rick 2026-06-16: try to load the persisted index first
         // (~70% launch-time savings on a warm cache). Stale-check
-        // against catalog.json's mtime — any catalog change since save
-        // forces a fresh rebuild for correctness.
+        // against the catalog store's newest mtime — catalog.json,
+        // catalog.sqlite and its -wal (2026-10-19: catalog.json alone
+        // went silent at the SQLite cutover) — any catalog change since
+        // save forces a fresh rebuild for correctness.
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first?.appendingPathComponent("VideoScan", isDirectory: true)
-        let catalogJSONPath = appSupport?.appendingPathComponent("catalog.json").path
-        let catalogMTime: Date? = catalogJSONPath.flatMap {
-            try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date
-        }
+        let catalogMTime: Date? = appSupport.flatMap { CatalogSearchIndex.catalogStoreModifiedAt(in: $0) }
         // GH #123 (2026-07-19): two poisoning defenses live in the index
         // itself — defaultPersistenceURL() diverts test hosts to a temp
         // dir (so this load/rebuild/save block can never touch the real

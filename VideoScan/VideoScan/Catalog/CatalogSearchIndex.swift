@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 // MARK: - CatalogSearchIndex
 //
@@ -499,6 +500,39 @@ final class CatalogSearchIndex {
         let dir = appSupport.appendingPathComponent("VideoScan", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("catalog.search-index.v1.plist")
+    }
+
+    /// The catalog's files whose change makes a persisted index stale: the
+    /// JSON catalog, and since the SQLite cutover (2026-10-18) the
+    /// database and its write-ahead log — a commit lands in the `-wal`
+    /// first and reaches the main file only at a checkpoint.
+    nonisolated static let catalogStoreFileNames = [
+        "catalog.json",
+        CatalogImporter.Inputs.databaseFileName,
+        CatalogImporter.Inputs.databaseFileName + "-wal",
+    ]
+
+    /// When the catalog last changed on disk — the NEWEST modification date
+    /// of `catalogStoreFileNames` in `folder` (the catalog's folder,
+    /// `~/Library/Application Support/VideoScan`); nil when none exists.
+    /// For `loadFromDisk`'s staleness check.
+    ///
+    /// Bug fixed 2026-10-19: this used to read catalog.json alone. After
+    /// the cutover catalog.json no longer changes, so the 10/18 index was
+    /// accepted at every launch and every in-place edit since (tags, notes,
+    /// place, people, captions, transcripts) dropped out of search at
+    /// relaunch — the same word found a file before a relaunch and not
+    /// after, which Rick read as a case difference ("Thanksgiving" vs
+    /// "thanksgiving"). Pinned by SearchIndexCatalogStoreStalenessTests.
+    nonisolated static func catalogStoreModifiedAt(in folder: URL) -> Date? {
+        var newest: Date?
+        for name in catalogStoreFileNames {
+            let path = folder.appendingPathComponent(name).path
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let date = attrs[.modificationDate] as? Date else { continue }   // absent file: no signal
+            if newest.map({ date > $0 }) ?? true { newest = date }
+        }
+        return newest
     }
 
     /// Persist the haystack + year caches atomically. Caller usually

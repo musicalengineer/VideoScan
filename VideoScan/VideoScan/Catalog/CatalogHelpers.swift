@@ -532,7 +532,9 @@ struct CatalogContent: View {
             // narrows the survivors. Filters are independent per-record
             // predicates, so search-then-volume yields exactly the same
             // rows as volume-then-search.
-            out = model.searchIndex.filter(records: out, query: searchText)
+            let searchInput = out
+            out = addingTitledFolderMembers(to: model.searchIndex.filter(records: searchInput, query: searchText),
+                                            from: searchInput)
             // Badge honors the reachable-only baseline (2026-07-20, Rick): in the
             // default connected-only view the hit count matches the media you can
             // actually see, instead of #123's cross-catalog count that included
@@ -649,6 +651,18 @@ struct CatalogContent: View {
             out = FootageOnePerGroup.filter(out)
         }
         return out
+    }
+
+    /// A folder's own title is searchable (Rick 2026-10-19): with the folder
+    /// view on, the members of every folder whose title holds the typed
+    /// words join the search's `hits` — taken from the search's own `input`,
+    /// so nothing a filter before the search removed comes back. The view
+    /// off, or no folder named so → `hits` unchanged, no extra pass.
+    /// Event handlers only (computeFiltered), never a body.
+    private func addingTitledFolderMembers(to hits: [VideoRecord], from input: [VideoRecord]) -> [VideoRecord] {
+        guard showFootageFolders else { return hits }
+        let titled = FootageFolderTitleSearch.memberIDs(answering: searchText, in: model.footageFolders.index)
+        return FootageFolderTitleSearch.adding(folderMembers: titled, from: input, to: hits)
     }
 
     /// Extracted (2026-09-09): the ternary + concatenation inside Text
