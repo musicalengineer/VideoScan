@@ -138,6 +138,8 @@ extension CatalogContent {
             .onChange(of: model.lastDerivativeLanding) {
                 if let landing = model.lastDerivativeLanding { revealDerivative(landing) }
             }
+            // Triage ▸ Events' Show in Catalog (the after-make reveal).
+            .onChange(of: model.pendingCatalogFolderReveal) { takeFolderRevealRequest() }
     }
 
     private var folderDisplayPublisher: Published<FootageFolders.Display>.Publisher {

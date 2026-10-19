@@ -92,6 +92,48 @@ struct EventsSensorTests {
         #expect(FileManager.default.fileExists(atPath: store.decisions.statsURL.path), "the counts-only object was written")
     }
 
+    @Test("Make Folder leaves a trace naming the new event; Show in Catalog routes that id to the after-make reveal")
+    func makeFolderTraceCarriesTheEventIntoTheCatalogReveal() async throws {
+        let store = EventsStore(decisions: EventsDecisionStore(directory: try F.scratchDirectory("trace")))
+        let model = VideoScanModel()
+        model.records = [
+            F.record("/Volumes/Tapes/June98/cake.mov", caption: "A cake with lit candles.", userDate: F.iso(1998, 6, 5)),
+        ]
+        await store.refresh(model: model)?.value
+        let suggestion = try #require(store.plan?.suggestions.first)
+        #expect(store.lastMadeFolder == nil, "no trace before a folder is made")
+        store.confirm(suggestion)
+        let trace = try #require(store.lastMadeFolder)
+        let made = try #require(store.plan?.confirmed.first)
+        #expect(trace.eventID == made.id, "the trace carries the confirmed event's id — the folder's id in the Catalog")
+        #expect(trace.name == suggestion.name)
+        // Only the latest: a second make replaces it.
+        store.confirm(suggestion, name: "Cake")
+        let second = try #require(store.lastMadeFolder)
+        #expect(second.eventID != trace.eventID)
+        #expect(second.name == "Cake")
+
+        // The Catalog end (view @State — not reachable without UI): the model's
+        // request feeds the ONE after-make reveal, which selects the folder and
+        // opens its triangle.
+        let pane = try SourceTree.appCode(named: "EventsPane.swift")
+        #expect(pane.contains("model.pendingCatalogFolderReveal = eventID"))
+        #expect(pane.contains("selectedTab = MainTab.catalog.rawValue"))
+        #expect(pane.contains("onShowInCatalog: { showFolderInCatalog(e.id) }"), "each Confirmed card links to its folder")
+        let make = try SourceTree.appCode(named: "CatalogContent+MakeFolder.swift")
+        #expect(make.contains("tableState.pendingFolderReveal = id"))
+        #expect(make.contains("takePendingFolderReveal(in: tableState.folderLevel)"))
+        #expect(make.contains("tableState.expandedFolderIDs.insert(id)"))
+        #expect(make.contains("selectedIDs = [id]"))
+        let table = try SourceTree.appCode(named: "CatalogContent+Table.swift")
+        #expect(table.contains(".onChange(of: model.pendingCatalogFolderReveal) { takeFolderRevealRequest() }"))
+        let folders = try SourceTree.appCode(named: "CatalogContent+FolderTable.swift")
+        #expect(folders.contains("takeFolderRevealRequest()"), "turning the folder view on completes a waiting request")
+        let content = try SourceTree.appCode(named: "ContentView.swift")
+        #expect(content.contains(".onChange(of: model.pendingCatalogFolderReveal) { handlePendingFolderReveal() }"))
+        #expect(content.contains("showFootageFolders = true"))
+    }
+
     @Test("the page's words are pinned")
     func wordsArePinned() {
         #expect(EventsWords.title == "Events")
@@ -99,7 +141,10 @@ struct EventsSensorTests {
         #expect(EventsWords.sameOccasion == "Same occasion, or different years?")
         #expect(EventsWords.sameOccasionYes == "Same occasion")
         #expect(EventsWords.sameOccasionNo == "Different occasions")
-        #expect(EventsWords.confirm == "Confirm")
+        #expect(EventsWords.confirm == "Make Folder")
+        #expect(EventsWords.showInCatalog == "Show in Catalog")
+        #expect(EventsWords.folderMade("Thanksgiving · 1984 (folder name (year only))") == "✓ Folder made: Thanksgiving · 1984",
+                "the trace names the folder as the Catalog shows it")
         #expect(EventsWords.dismiss == "Dismiss")
         #expect(EventsWords.details == "Details…")
         #expect(EventsWords.nothingToReview == "Nothing to review — every suggestion has your answer.")

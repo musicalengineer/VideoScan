@@ -11,7 +11,8 @@
 //   │ in /Volumes/Tapes/Xmas          [Same occasion] [Different]    │
 //   └────────────────────────────────────────────────────────────────┘
 //   Birthday · Jun 5, 1998 (your date)         seen and said · 3 recordings
-//   Birthday                                   [Confirm] [Dismiss] [Details…]
+//   ✓ Folder made: Thanksgiving · 1984 — Show in Catalog            ✕
+//   Birthday                               [Make Folder] [Dismiss] [Details…]
 //   …
 //   Left out: 1,204 recordings — no event words …
 //
@@ -62,6 +63,10 @@ final class EventsStore: ObservableObject {
     @Published private(set) var numbers = Numbers()
     @Published private(set) var shownSuggestions: [EventSuggestion] = []
     @Published private(set) var shownConfirmed: [ConfirmedEvent] = []
+    /// The last folder made on this page (a card's or the sheet's Make
+    /// Folder, a "Same occasion" answer): the line at the top of To review
+    /// says so and links to it. Session only — never saved; ✕ clears it.
+    @Published var lastMadeFolder: MadeFolderTrace?
     /// O(1) lookups for the detail sheet, rebuilt once per plan.
     private(set) var suggestionByKey: [String: EventSuggestion] = [:]
     private(set) var confirmedByID: [UUID: ConfirmedEvent] = [:]
@@ -168,7 +173,8 @@ final class EventsStore: ObservableObject {
 
     func confirm(_ s: EventSuggestion, name: String? = nil) {
         let members = s.members.filter { $0.state != .rejected }.map(\.range)
-        guard decisions.confirm(name: name ?? s.name, categories: s.categories, members: members) != nil else { return }
+        guard let e = decisions.confirm(name: name ?? s.name, categories: s.categories, members: members) else { return }
+        lastMadeFolder = MadeFolderTrace(e)
         reapply()
     }
 
@@ -218,7 +224,8 @@ final class EventsStore: ObservableObject {
             guard let a = suggestionByKey[q.a], let b = suggestionByKey[q.b] else { return }
             let categories = a.categories + b.categories.filter { !a.categories.contains($0) }
             let members = (a.members + b.members).filter { $0.state != .rejected }.map(\.range)
-            guard decisions.confirm(name: a.name, categories: categories, members: members) != nil else { return }
+            guard let e = decisions.confirm(name: a.name, categories: categories, members: members) else { return }
+            lastMadeFolder = MadeFolderTrace(e)
         } else {
             guard decisions.record(.differentOccasions(a: q.aRange, b: q.bRange)) else { return }
         }
@@ -253,6 +260,21 @@ final class EventsStore: ObservableObject {
     }
 }
 
+// MARK: - The after-make trace
+
+/// "✓ Folder made: <name>": which event became a folder, for the line at
+/// the top of To review and its Show in Catalog. A value (≈ a plain C++
+/// struct copied by value), held by the store in memory only.
+struct MadeFolderTrace: Equatable {
+    let eventID: UUID
+    let name: String
+
+    init(_ e: EventRecord) {
+        eventID = e.id
+        name = e.name
+    }
+}
+
 // MARK: - Words (pure — the tests pin them)
 
 enum EventsWords {
@@ -261,12 +283,16 @@ enum EventsWords {
     static let sameOccasion = "Same occasion, or different years?"
     static let sameOccasionYes = "Same occasion"
     static let sameOccasionNo = "Different occasions"
-    static let confirm = "Confirm"
+    static let confirm = "Make Folder"
+    static let confirmHelp = "Make these recordings one folder — it shows in the Catalog's folder view (Show ▸ As folders)."
+    static let showInCatalog = "Show in Catalog"
+    static let showInCatalogHelp = "Open the Catalog with Show ▸ As folders on, this folder selected and open."
+    static let dismissTrace = "Hide this line"
     static let dismiss = "Dismiss"
     static let details = "Details…"
     static let looking = "Looking for family memories…"
     static let nothingToReview = "Nothing to review — every suggestion has your answer."
-    static let nothingConfirmed = "No confirmed events yet. Confirm a suggestion and it stays here."
+    static let nothingConfirmed = "No folders made yet. Make Folder on a suggestion and it stays here."
     static let noWordsYet = "No event words yet. Captions and transcripts arrive from the Dossier and Whisper cyclers; file names, folder names and dates count too."
     static let differentOccasions = "These are different occasions"
     static let mergeWith = "Merge with…"
@@ -303,6 +329,12 @@ enum EventsWords {
         return "\(n.toReview.formatted()) to review"
     }
 
+    /// "✓ Folder made: Thanksgiving · 1984" — the folder's title as the
+    /// Catalog shows it (the date's source words taken out).
+    static func folderMade(_ name: String) -> String {
+        "✓ Folder made: \(EventsNaming.folderTitle(name))"
+    }
+
     static func checked(_ at: Date) -> String {
         "Checked \(at.formatted(date: .omitted, time: .shortened))"
     }
@@ -314,6 +346,9 @@ struct EventsPane: View {
     let model: VideoScanModel
     @ObservedObject var store: EventsStore
     @State private var detail: EventsDetailSubject?
+    /// The main window's tab (≈ a persisted global the TabView reads) —
+    /// how every Triage "Show in Catalog" switches tabs.
+    @AppStorage("selectedTab") private var selectedTab: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -354,6 +389,7 @@ struct EventsPane: View {
             if let why = plan.readOnlyReason { readOnlyBox(why) }
             filters
             if store.filter.lane == .toReview {
+                if let made = store.lastMadeFolder { madeFolderLine(made) }
                 if !plan.questions.isEmpty { questionsStrip(plan.questions) }
                 suggestionsList
             } else {
@@ -361,6 +397,36 @@ struct EventsPane: View {
             }
             footer(plan)
         }
+    }
+
+    /// "✓ Folder made: <name> — Show in Catalog   ✕". Only the latest.
+    private func madeFolderLine(_ made: MadeFolderTrace) -> some View {
+        HStack(spacing: 6) {
+            Text(EventsWords.folderMade(made.name)).font(.system(size: 12, weight: .medium))
+            Text("—").font(.system(size: 12)).foregroundStyle(.secondary)
+            Button(EventsWords.showInCatalog) { showFolderInCatalog(made.eventID) }
+                .buttonStyle(.link)
+                .font(.system(size: 12))
+                .help(EventsWords.showInCatalogHelp)
+                .accessibilityIdentifier("events.madeFolder.showInCatalog")
+            Spacer()
+            Button { store.lastMadeFolder = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .help(EventsWords.dismissTrace)
+                .accessibilityIdentifier("events.madeFolder.dismiss")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.1)))
+        .accessibilityIdentifier("events.madeFolder")
+    }
+
+    /// The Catalog takes it from here: the model's request, then the tab
+    /// (the same two steps as Triage's other Show in Catalog actions).
+    private func showFolderInCatalog(_ eventID: UUID) {
+        model.pendingCatalogFolderReveal = eventID
+        selectedTab = MainTab.catalog.rawValue
     }
 
     private func readOnlyBox(_ why: String) -> some View {
@@ -449,7 +515,8 @@ struct EventsPane: View {
         } else {
             LazyVStack(alignment: .leading, spacing: 8) {
                 ForEach(store.shownConfirmed) { e in
-                    ConfirmedCardRow(event: e, onDetails: { detail = .confirmed(e.id) })
+                    ConfirmedCardRow(event: e, onDetails: { detail = .confirmed(e.id) },
+                                     onShowInCatalog: { showFolderInCatalog(e.id) })
                 }
             }
         }
@@ -504,6 +571,7 @@ struct EventCardRow: View {
             }
             HStack {
                 Button(EventsWords.confirm, action: onConfirm).accessibilityIdentifier("events.confirm")
+                    .help(EventsWords.confirmHelp)
                     .disabled(isReadOnly)
                 Button(EventsWords.dismiss, action: onDismiss).accessibilityIdentifier("events.dismiss")
                     .disabled(isReadOnly)
@@ -520,6 +588,7 @@ struct EventCardRow: View {
 struct ConfirmedCardRow: View {
     let event: ConfirmedEvent
     let onDetails: () -> Void
+    let onShowInCatalog: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -530,7 +599,13 @@ struct ConfirmedCardRow: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Text(event.categories.joined(separator: " · ")).font(.system(size: 11)).foregroundStyle(.secondary)
-            Button(EventsWords.details, action: onDetails).controlSize(.small)
+            HStack {
+                Button(EventsWords.showInCatalog, action: onShowInCatalog)
+                    .help(EventsWords.showInCatalogHelp)
+                    .accessibilityIdentifier("events.confirmed.showInCatalog")
+                Button(EventsWords.details, action: onDetails)
+            }
+            .controlSize(.small)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
