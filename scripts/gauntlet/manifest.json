@@ -12770,16 +12770,20 @@
         "FootageFolderLevelTests"
       ],
       "tests": [
+        "aCopyIndentsUnderItsRecordingAndASameEventRowDoesNot",
         "aFolderRowNeverReachesARowAction",
         "aFolderRowTheDisplayNoLongerHasIsDropped",
         "aFolderTheJoinNoLongerHasSendsTheTableToTheTop",
+        "aGoneFoldersMembersAreDroppedWithIt",
+        "anOpenFolderCarriesItsMembersAsChildrenAndTheTopRowsDoNotMove",
         "finderKeysAreTheCommandArrowsBesideTheBareOnes",
         "folderRowCarriesTheCountsTheSizeAndTheDateRange",
         "foldersWithTheSameDateSortByName",
         "hundredThousandRowsUnderBudget",
         "insideAFamilyIsShowCopiesAndRelated",
         "insideLevelIsTheFlatEventScopeWithoutTheFolderRow",
-        "theTableComposesWithNoOpenSet",
+        "onlyAnExpandedFoldersMembersAreOnScreen",
+        "theTopComposesEveryFolderOpenAndTheTriangleIsViewState",
         "theWordsReadLikeTheFinder",
         "topLevelListsFoldersByDateThenNameThenTheLooseFiles"
       ]
@@ -31863,7 +31867,7 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2650,
+      "expected_floor": 2654,
       "name": "unit",
       "package_expected_floor": 294,
       "package_selectors": [
