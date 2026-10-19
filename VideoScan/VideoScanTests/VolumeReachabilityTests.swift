@@ -18,7 +18,7 @@ struct VolumeReachabilityExtendedTests {
     }
 
     @Test func userHomePath() {
-        let name = VolumeReachability.volumeName(forPath: "/Users/rickb/Movies/Timmy-1992-part2.m4v")
+        let name = VolumeReachability.volumeName(forPath: "/Users/rickb/Movies/test_clip-1992-part2.m4v")
         #expect(name == "rickb")
     }
 
@@ -94,7 +94,7 @@ struct VideoRecordVolumeNameTests {
 
     @Test func storedVolumeNameTakesPrecedence() {
         let rec = VideoRecord()
-        rec.fullPath = "/Users/rickb/Movies/Timmy-1992-part2.m4v"
+        rec.fullPath = "/Users/rickb/Movies/test_clip-1992-part2.m4v"
         rec.scanContext.volumeName = "Macintosh HD"
         #expect(rec.volumeName == "Macintosh HD")
     }
@@ -108,7 +108,7 @@ struct VideoRecordVolumeNameTests {
 
     @Test func fallsBackForUserPathWithoutStoredName() {
         let rec = VideoRecord()
-        rec.fullPath = "/Users/rickb/Movies/Timmy-1992-part2.m4v"
+        rec.fullPath = "/Users/rickb/Movies/test_clip-1992-part2.m4v"
         #expect(rec.volumeName == "rickb")
     }
 

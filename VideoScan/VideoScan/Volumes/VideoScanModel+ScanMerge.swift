@@ -76,6 +76,10 @@ private let scanMergeLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "
 /// What a scan-completion merge did to the catalog. Returned for logging
 /// and pinned by ScanMergeScopeTests.
 struct ScanMergeOutcome: Equatable {
+    /// Fresh records that took the LIVE record's preserved values at the
+    /// last moment before replacement (`reconcileLivePreservedFieldsBeforeReplacement`).
+    /// A count only; said on the merge's summary line (adversarial 2026-10-19).
+    var liveValuesApplied: Int = 0
     /// Old records under the root replaced by a fresh record at the same path.
     var refreshed: Int = 0
     /// Old records under the root removed because their file is GENUINELY
@@ -524,7 +528,7 @@ extension VideoScanModel {
         // immediately before replacement. There is no suspension between
         // this pass and removeAll/append, so stale scan/preview instances can
         // no longer replay an earlier value over a later edit or verdict.
-        reconcileLivePreservedFieldsBeforeReplacement(
+        outcome.liveValuesApplied = reconcileLivePreservedFieldsBeforeReplacement(
             root: root, targetRecords: targetRecords)
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
@@ -533,10 +537,14 @@ extension VideoScanModel {
         // by construction: their CURRENT path is the old one (updated only
         // below), which is neither re-seen nor in the (post-exclusion) gone
         // set, and cross-root candidates aren't under the root at all.
+        // A `replacedAtPath` history row beside its successor is not the
+        // file the scan re-saw: it stays (see `historyRowsKeptAtReseenPaths`).
         let gonePaths = Set(genuinelyGone.map(\.fullPath))
+        let keptHistory = Self.historyRowsKeptAtReseenPaths(records, root: root, newPaths: newPaths)
         let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root)
                 && (newPaths.contains($0.fullPath) || gonePaths.contains($0.fullPath))
+                && !keptHistory.contains(ObjectIdentifier($0))
         }
         let replacedIDs = Set(records.lazy.filter(leaving).map(\.id))
         records.removeAll(where: leaving)
@@ -564,8 +572,8 @@ extension VideoScanModel {
         // record carries the preserved values) or gone from disk — are
         // purged explicitly, in this same turn. Nothing else is.
         purgeCatalogRows(ids: replacedIDs, reason: "rescan of \(root): replaced by a fresh record or gone from disk")
-        scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
-        appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
+        scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed, \(outcome.liveValuesApplied) took live values), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
+        appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed, \(outcome.liveValuesApplied) took the catalog's live values), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
         return outcome
     }
 
@@ -665,10 +673,12 @@ extension VideoScanModel {
         // Partial merges do not suspend, but use the same last-moment rule so
         // every replacement door has one live-wins contract (curated values
         // edited during the scan, and the fixity verdict).
-        reconcileLivePreservedFieldsBeforeReplacement(
+        outcome.liveValuesApplied = reconcileLivePreservedFieldsBeforeReplacement(
             root: root, targetRecords: targetRecords)
+        let keptHistory = Self.historyRowsKeptAtReseenPaths(records, root: root, newPaths: newPaths)
         let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
+                && !keptHistory.contains(ObjectIdentifier($0))
         }
         let replacedIDs = Set(records.lazy.filter(leaving).map(\.id))
         records.removeAll(where: leaving)
@@ -686,8 +696,8 @@ extension VideoScanModel {
         if !vanished.isEmpty {
             log("  ⚠ Scan of \(volName) did not complete — kept \(vanished.count) existing record(s) under \(root) that were not re-verified (no pruning on partial scans).")
         }
-        scanMergeLog.notice("Partial-scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted, \(vanished.count) stale retained under \(root, privacy: .public)")
-        appLog.write("Catalog merge (\(volName), PARTIAL): \(targetRecords.count) upserted, \(vanished.count) stale retained, 0 pruned")
+        scanMergeLog.notice("Partial-scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.liveValuesApplied) took live values), \(vanished.count) stale retained under \(root, privacy: .public)")
+        appLog.write("Catalog merge (\(volName), PARTIAL): \(targetRecords.count) upserted (\(outcome.liveValuesApplied) took the catalog's live values), \(vanished.count) stale retained, 0 pruned")
         return outcome
     }
 
@@ -738,6 +748,32 @@ extension VideoScanModel {
     static func sharedPathRank(_ rec: VideoRecord) -> Int {
         guard let removal = rec.removal else { return 2 }
         return removal.reason == .replacedAtPath ? 0 : 1
+    }
+
+    /// The `replacedAtPath` history rows a rescan must KEEP: those at a
+    /// re-seen path under `root` that sit beside a higher-ranked row (their
+    /// successor) at the same path. The fresh record replaces the successor
+    /// — the file the scan saw — never the history behind it.
+    ///
+    /// Why (adversarial 2026-10-19, VOL-4): B2.4's `placeRecord` keeps the
+    /// earlier, curated row as history ("kept in the catalog's history …
+    /// nothing purged") when a job lands different bytes at its path. The
+    /// merge's `leaving` predicate matched every row at a re-seen path, so a
+    /// plain rescan removed the history row and purged its id from
+    /// catalog.sqlite — its notes, stars and date left the catalog.
+    ///
+    /// A history row ALONE at a re-seen path (no successor) is not kept: it
+    /// is the only row for that path, and the merge treats it as before.
+    /// Identity-keyed (ObjectIdentifier — the C++ analogue is a set of
+    /// object addresses), O(records), no I/O.
+    static func historyRowsKeptAtReseenPaths(_ records: [VideoRecord], root: String,
+                                             newPaths: Set<String>) -> Set<ObjectIdentifier> {
+        var successorPaths = Set<String>()
+        var history: [VideoRecord] = []
+        for rec in records where newPaths.contains(rec.fullPath) && PathScope.contains(rec.fullPath, within: root) {
+            if sharedPathRank(rec) == 0 { history.append(rec) } else { successorPaths.insert(rec.fullPath) }
+        }
+        return Set(history.lazy.filter { successorPaths.contains($0.fullPath) }.map(ObjectIdentifier.init))
     }
 
     @discardableResult

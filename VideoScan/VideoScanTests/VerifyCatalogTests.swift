@@ -464,7 +464,7 @@ struct VerifyCatalogTierTests {
     func referenceMovieWithNoAudioIsNotATier3Decision() {
         let va = StreamType.videoAndAudio.rawValue
         func reference(_ name: String, _ stamp: (Int64) -> AudioFingerprintStamp) -> IntegrityRow {
-            var r = row("/Volumes/LaCie/babies.iMovieProject/Shared Movies/iDVD/\(name)")
+            var r = row("/Volumes/TestDrive/test_project.iMovieProject/Shared Movies/iDVD/\(name)")
             r.streamTypeRaw = va
             r.sizeBytes = 3_274_279
             r.durationSeconds = 7_289
@@ -472,9 +472,9 @@ struct VerifyCatalogTierTests {
             r.audioFingerprint = stamp(r.sizeBytes)
             return r
         }
-        let noAudio = reference("babies tim and matt.mov") { print(outcome: .noAudio, seconds: 0, landmarks: 0, size: $0) }
-        let silent = reference("CapeCod1997.mov") { print(landmarks: 0, size: $0) }
-        var realNoAudio = row("/Volumes/LaCie/real.mov")
+        let noAudio = reference("test_reference_A.mov") { print(outcome: .noAudio, seconds: 0, landmarks: 0, size: $0) }
+        let silent = reference("test_reference_B.mov") { print(landmarks: 0, size: $0) }
+        var realNoAudio = row("/Volumes/TestDrive/test_real.mov")
         realNoAudio.streamTypeRaw = va
         realNoAudio.audioFingerprint = print(outcome: .noAudio, seconds: 0, landmarks: 0)
         #expect(CatalogConstraints.isPossibleReferenceMovie(noAudio) && !CatalogConstraints.isPossibleReferenceMovie(realNoAudio))

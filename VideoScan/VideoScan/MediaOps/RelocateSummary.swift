@@ -77,6 +77,15 @@ struct RelocateSummary: Identifiable, Equatable {
     /// snapshotting failed (logged + we proceeded anyway).
     let snapshotPath: String?
 
+    /// Bucket B rows the catalog refused to mark (held / read-only) —
+    /// left unmarked; the next Reconcile asks again. Defaulted so the
+    /// memberwise init keeps its historical shape.
+    var notMarkedCount: Int = 0
+    /// Bucket B rows whose file was still at its path (or could not be
+    /// checked) when Migrate went to mark it "source not found" — left
+    /// unmarked and not copied (adversarial 2026-10-19).
+    var stillThereCount: Int = 0
+
     /// One source-to-witness pairing. Carries the host volume's
     /// role + trust so the summary sheet can render the safety badge
     /// without having to query the model.
