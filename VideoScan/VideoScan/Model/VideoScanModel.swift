@@ -40,12 +40,18 @@ final class VideoScanModel: ObservableObject {
             archiveAngel.catalogChanged()
         }
     }
-    /// True when the app is running on a non-master Mac (viewer mode).
-    /// Set by the sync engine at launch via `applyReadOnlyMode(_:)` so
-    /// views can disable Combine / Archive / Delete affordances. The
-    /// CatalogStore layer also refuses writes — this flag is the UI
-    /// half of the belt-and-suspenders. See CatalogSync.swift.
+    /// True when this session may not edit the catalog: a viewer Mac, a
+    /// refused SQLite launch, a read-only catalog.sqlite, or a Switch in
+    /// progress. Views disable Combine / Archive / Delete affordances on
+    /// it; the CatalogStore layer also refuses writes — this flag is the
+    /// UI half of the belt-and-suspenders. App code never assigns it: it
+    /// is `readOnlyFacts.modelReadOnly`, written by `updateReadOnlyFacts`
+    /// (a source sensor pins that). Tests may still poke it directly.
     @Published var isReadOnly: Bool = false
+
+    /// Why the session is read-only, one fact per owner (launch, role,
+    /// Switch). See CatalogReadOnlyFacts.swift.
+    private(set) var readOnlyFacts = CatalogReadOnlyFacts()
 
     /// Relocate Bucket E: is a witness an independent copy, off the drive
     /// being emptied? Production compares devices + inodes. Test seam only:
@@ -1470,13 +1476,23 @@ final class VideoScanModel: ObservableObject {
         log("Deleted all \(count) catalog record(s).")
     }
 
-    /// Apply viewer-mode semantics: flip the UI flag and tell the
-    /// underlying CatalogStore to refuse writes. Idempotent.
-    /// Called by VideoScanApp once CatalogSync has decided the mode.
-    func applyReadOnlyMode(_ readOnly: Bool) {
-        isReadOnly = readOnly
-        catalogStore.isReadOnly = readOnly
+    /// Apply the viewer/master ROLE. Called by VideoScanApp (and the
+    /// audit CLI) once CatalogSync has decided the mode — after the
+    /// launch already decided. The role only ADDS read-only: `false`
+    /// (master) never clears what the launch or a Switch decided. Idempotent.
+    func applyReadOnlyMode(_ viewer: Bool) {
+        updateReadOnlyFacts { $0.viewerRole = viewer }
         publishFamilyAssetConfiguration()
+    }
+
+    /// THE one writer of `isReadOnly` and `catalogStore.isReadOnly`: the
+    /// owner changes its own fact, then both flags are recomputed as the
+    /// OR of all facts. (C++: a setter that edits one member of a bitset
+    /// and re-derives the cached flags.)
+    func updateReadOnlyFacts(_ change: (inout CatalogReadOnlyFacts) -> Void) {
+        change(&readOnlyFacts)
+        isReadOnly = readOnlyFacts.modelReadOnly
+        catalogStore.isReadOnly = readOnlyFacts.storeReadOnly
     }
 
     /// Persist the current records array. Debounced; bursts of mutations

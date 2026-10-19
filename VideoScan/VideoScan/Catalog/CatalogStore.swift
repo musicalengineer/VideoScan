@@ -348,8 +348,9 @@ final class CatalogStore {
     /// writing. The UI also disables write affordances and shows a banner,
     /// but this is the last line of defense at the data layer — any future
     /// write path automatically picks up the guard without remembering to
-    /// check `model.isReadOnly`. Set once at construction by the sync
-    /// engine; never flips at runtime.
+    /// check `model.isReadOnly`. In the app it is written only by
+    /// VideoScanModel.updateReadOnlyFacts (launch authority, viewer role,
+    /// Switch freeze — OR'd; see CatalogReadOnlyFacts.swift).
     var isReadOnly: Bool = false
 
     /// Notified after every successful write. Used by CatalogSync on the

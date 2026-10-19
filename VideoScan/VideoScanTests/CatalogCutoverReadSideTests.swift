@@ -310,6 +310,116 @@ struct CatalogAuthorityFlipTests {
         #expect(scene.sandbox.catalogLogText().contains("OUTCOME loaded 5 records from catalog.sqlite"))
     }
 
+    // MARK: The role only ADDS read-only (P0, 2026-10-19)
+    //
+    // The window's onAppear calls applyReadOnlyMode(catalogSync.isReadOnly)
+    // AFTER the launch decided. On the master that is `false`, and it used to
+    // assign both flags outright: a refused launch became a writable
+    // catalog.json with no committer (two writable catalogs), and a read-only
+    // catalog.sqlite lit up its edit controls while every commit was refused.
+
+    @Test("P0: a refused SQLite launch stays read-only after applyReadOnlyMode(false); saveCatalogNow leaves catalog.json's bytes alone")
+    func refusedLaunchSurvivesApplyReadOnlyMode() async throws {
+        let scene = try CutoverScene.make("role_refused"); defer { scene.cleanup() }
+        let repository = GRDBCatalogRepository(host: "cutover-test")
+        _ = await repository.open(at: scene.databaseURL)
+        await repository.close()
+        try scene.writeLatch()
+        let before = try scene.sha256(scene.catalogURL)
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        scene.model.applyReadOnlyMode(false)                    // the master's onAppear
+        #expect(scene.model.catalogStore.isReadOnly)
+        #expect(scene.model.isReadOnly)
+        #expect(scene.model.catalogCutover.committer == nil, "no committer: catalog.json is the only door, and it is shut")
+        try #require(scene.model.records.first).starRating = 3
+        #expect(scene.model.saveCatalogNow() == false)
+        #expect(try scene.sha256(scene.catalogURL) == before)
+    }
+
+    @Test("P0: a read-only catalog.sqlite (restoredBelowHighWater) stays read-only after applyReadOnlyMode(false)")
+    func readOnlySQLiteSurvivesApplyReadOnlyMode() async throws {
+        let scene = try CutoverScene.make("role_highwater"); defer { scene.cleanup() }
+        try await scene.importCatalog()
+        _ = try await scene.sqliteLoad()
+        try Data("99\n".utf8).write(to: CatalogHighWater.url(besideDatabaseAt: scene.databaseURL))
+        try scene.writeLatch()
+        let before = try scene.sha256(scene.catalogURL)
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        #expect(scene.model.catalogCutover.blockedReason?.contains("restoredBelowHighWater") == true)
+        scene.model.applyReadOnlyMode(false)
+        #expect(scene.model.isReadOnly, "the edit controls stay off: every commit is refused this session")
+        #expect(scene.model.catalogStore.isReadOnly, "catalog.json stays frozen")
+        #expect(scene.model.saveCatalogNow() == false)
+        #expect(try scene.sha256(scene.catalogURL) == before)
+    }
+
+    @Test("no regression: a normal SQLite launch is writable after applyReadOnlyMode(false), catalog.json stays frozen; the viewer role still makes it read-only")
+    func normalSQLiteLaunchFollowsTheRole() async throws {
+        let scene = try CutoverScene.make("role_sqlite"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let before = try scene.sha256(scene.catalogURL)
+        scene.model.applyReadOnlyMode(false)
+        #expect(scene.model.isReadOnly == false)
+        #expect(scene.model.catalogStore.isReadOnly, "the master role never un-freezes catalog.json under SQLite")
+        try scene.record(.healthy).starRating = 3
+        #expect(scene.model.saveCatalogNow())
+        #expect(try await scene.reloaded(.healthy).starRating == 3)
+        #expect(try scene.sha256(scene.catalogURL) == before)
+        scene.model.applyReadOnlyMode(true)                     // viewer
+        #expect(scene.model.isReadOnly)
+        #expect(scene.model.catalogStore.isReadOnly)
+        scene.model.applyReadOnlyMode(false)                    // the role lifted → back to the launch's decision
+        #expect(scene.model.isReadOnly == false)
+        #expect(scene.model.catalogStore.isReadOnly)
+    }
+
+    @Test("no regression: a JSON launch follows the role both ways")
+    func jsonLaunchFollowsTheRole() async throws {
+        let scene = try CutoverScene.make("role_json"); defer { scene.cleanup() }
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        scene.model.applyReadOnlyMode(false)
+        #expect(scene.model.isReadOnly == false)
+        #expect(scene.model.catalogStore.isReadOnly == false)
+        scene.model.applyReadOnlyMode(true)
+        #expect(scene.model.isReadOnly)
+        #expect(scene.model.catalogStore.isReadOnly)
+        scene.model.applyReadOnlyMode(false)
+        #expect(scene.model.isReadOnly == false)
+        #expect(scene.model.catalogStore.isReadOnly == false)
+    }
+
+    @Test("SENSOR (source): no app code assigns isReadOnly outside the one combining function; no `isReadOnly = false` anywhere")
+    func readOnlyHasOneWriter() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let app = root.appendingPathComponent("VideoScan")
+        // An assignment (not `==`) to a model / store `isReadOnly`. The Archive
+        // Angel's `cfg.isReadOnly = { … }` is a reader closure, not a flag.
+        let assignment = try NSRegularExpression(pattern: #"isReadOnly\s*=(?!=)(?!\s*\{)"#)
+        var offenders: [String] = []
+        var combinerHits = 0
+        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+        #expect(files.count > 100, "the sensor must actually read the app's sources")
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let lines = text.components(separatedBy: "\n")
+            var insideCombiner = false
+            for (n, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("//") || trimmed.hasPrefix("///") { continue }
+                if line.contains("func updateReadOnlyFacts(") { insideCombiner = true }
+                else if insideCombiner, line.hasPrefix("    }") { insideCombiner = false }
+                let range = NSRange(line.startIndex..., in: line)
+                guard assignment.firstMatch(in: line, range: range) != nil else { continue }
+                if insideCombiner { combinerHits += 1; continue }
+                offenders.append("\(file.lastPathComponent):\(n + 1): \(trimmed)")
+            }
+            #expect(!text.contains("isReadOnly = false"), "\(file.lastPathComponent) clears a read-only flag outright")
+        }
+        #expect(offenders.isEmpty, "isReadOnly written outside updateReadOnlyFacts: \(offenders)")
+        #expect(combinerHits == 2, "the combiner writes exactly the model flag and the store flag")
+    }
+
     @Test("source sensor: the init's one seam; no GRDB import in the app")
     func theSeamIsOneLine() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
