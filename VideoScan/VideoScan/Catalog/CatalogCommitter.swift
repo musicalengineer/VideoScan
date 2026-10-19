@@ -292,6 +292,26 @@ final class CatalogCommitter {
         return saveRefusal() ?? baseline.waiting[id]?.words ?? "its current values could not be stored"
     }
 
+    /// A safety copy of catalog.sqlite is about to be sealed (`VACUUM INTO`,
+    /// B2.3): what is in memory is committed FIRST, so the copy holds what
+    /// the person sees — including an edit typed inside the 2 s debounce
+    /// (adversarial review 2026-10-18 #3; the catalog.json snapshot was
+    /// written from memory for the same reason, QA #7). nil = the commit ran
+    /// (the copy may be sealed); else the words why no commit can be written
+    /// now — held, blocked, being reopened, refused — and the caller must
+    /// not seal a copy that lags memory. A row the store itself refuses
+    /// (named once at its commit) does not stop the copy: it is said here
+    /// and the copy carries that row's last stored values.
+    func commitBeforeSafetyCopy() -> String? {
+        cancelTimer()
+        let stored = commit(.save, owner: nil, scope: .everything)
+        if let why = saveRefusal() { return why }
+        if !stored {
+            sink("Catalog store: safety copy — \(baseline.waiting.count) row(s) the store would not take are in it at their last stored values")
+        }
+        return nil
+    }
+
     /// A door took these records out of the catalog (VideoScanModel
     /// .purgeCatalogRows): their rows are purged in one synchronous commit
     /// now — or, while the store is held or blocked, at the first commit

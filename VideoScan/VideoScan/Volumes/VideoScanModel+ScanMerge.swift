@@ -917,8 +917,16 @@ extension VideoScanModel {
 
     /// The SQLite authority's safety copy (B2.3): a sealed copy of
     /// catalog.sqlite, said in the one sink. nil = none (the door fails safe).
+    /// The in-memory edits are committed first (adversarial 2026-10-18 #3):
+    /// without that the copy is the LAST COMMIT, up to one debounce behind
+    /// memory, and an edit on a row the door is about to remove would be in
+    /// neither catalog.sqlite nor the copy.
     private func sqliteSnapshot(prefix: String) -> String? {
         guard let committer = catalogCutover.committer, let snap = snapshotPath(prefix: prefix, ext: "sqlite") else { return nil }
+        if let why = committer.commitBeforeSafetyCopy() {
+            catalogAuthorityNote("REFUSED safety copy \(prefix) — what is in memory could not be committed first: \(why)")
+            return nil
+        }
         if let why = committer.repository.sealedCopyBlocking(to: URL(fileURLWithPath: snap)) {
             catalogAuthorityNote("REFUSED safety copy \(prefix) — \(why)")
             return nil
