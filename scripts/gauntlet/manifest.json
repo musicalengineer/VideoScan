@@ -10964,6 +10964,21 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsFolderDropTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsFolderDropTests"
+      ],
+      "tests": [
+        "dropOnTheSameEventDoesNothing",
+        "droppedIDsBecomeMembers",
+        "moveTakesTheFileOutOfTheOldEvent",
+        "payloadRoundTrips",
+        "writesOnlyIntoTheTestDirectory"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EventsIsolationTests.swift",
       "stage": "unit",
       "suites": [
@@ -31884,7 +31899,7 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2661,
+      "expected_floor": 2666,
       "name": "unit",
       "package_expected_floor": 294,
       "package_selectors": [
@@ -32056,6 +32071,7 @@
         "VideoScanTests/EvalPresenceRuleTests",
         "VideoScanTests/EventsDecisionStoreTests",
         "VideoScanTests/EventsFolderDraftTests",
+        "VideoScanTests/EventsFolderDropTests",
         "VideoScanTests/EventsIsolationTests",
         "VideoScanTests/EventsPlanTests",
         "VideoScanTests/EventsReviewRedTests",

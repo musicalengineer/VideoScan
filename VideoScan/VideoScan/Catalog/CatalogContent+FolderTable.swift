@@ -54,14 +54,20 @@ extension CatalogContent {
         } rows: {
             // A folder with members twists open in place; every other row
             // is a plain row. (A result-builder `if` ≈ a compile-time
-            // variant: each branch is its own row type.)
+            // variant: each branch is its own row type.) A folder row is a
+            // drop target, a record row a drag source — a record id as a
+            // string, never a file URL (CatalogContent+FolderDrop.swift).
             ForEach(folderRows) { row in
                 if let members = row.children {
                     DisclosureTableRow(row, isExpanded: folderExpansion(row.id)) {
-                        ForEach(members) { TableRow($0) }
+                        ForEach(members) { TableRow($0).draggable(CatalogRecordDrag.payload($0.id)) }
                     }
-                } else {
+                    .dropDestination(for: String.self) { dropOnFolder(row.id, items: $0) }
+                } else if row.isFolder {
                     TableRow(row)
+                        .dropDestination(for: String.self) { dropOnFolder(row.id, items: $0) }
+                } else {
+                    TableRow(row).draggable(CatalogRecordDrag.payload(row.id))
                 }
             }
         }
@@ -372,6 +378,7 @@ extension CatalogContent {
         guard scope != tableState.folderScope else { return }
         tableState.folderScope = scope
         tableState.pendingReveal = nil   // Rick moved: a waiting reveal is stale
+        tableState.pendingDropSelection = nil
         refreshFolderDisplay()
     }
 
@@ -433,6 +440,7 @@ extension CatalogContent {
         guard tableState.folderKeyMirror.isOn, !display.rows.isEmpty else { return }
         pruneSelectionToDisplay()
         completePendingReveal()
+        completePendingDrop(in: level)
         if revealedFolder { CatalogTableReveal.scrollSelectionIntoView() }
     }
 
@@ -472,6 +480,7 @@ extension CatalogContent {
             tableState.folderScope = nil
             tableState.pendingReveal = nil
             tableState.pendingFolderReveal = nil
+            tableState.pendingDropSelection = nil
             tableState.folderRows = []
             tableState.folderIDs = []
             tableState.folderLevel = .empty

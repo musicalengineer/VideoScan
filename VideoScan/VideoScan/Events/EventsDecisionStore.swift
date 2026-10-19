@@ -460,6 +460,31 @@ final class EventsDecisionStore: ObservableObject {
         return e
     }
 
+    /// Add `ranges` to event `id` — a drag onto its folder (Catalog,
+    /// 2026-10-19). `movingFrom` names, per OTHER event, the ranges that
+    /// leave it (events do not overlap: a moved recording is rejected from
+    /// its old event, the way `split` moves one). The same `member`
+    /// decisions as `split` and `setMember`, as ONE change (one revision,
+    /// one save); no new decision kind. false when read-only, when `id` is
+    /// unknown, or when there is nothing to add.
+    @discardableResult
+    func addMembers(_ ranges: [ContentRange], to id: UUID, movingFrom: [UUID: [ContentRange]] = [:],
+                    now: Date = Date()) -> Bool {
+        guard isWritable, events[id] != nil, !ranges.isEmpty else { return false }
+        // Sorted for a deterministic file (a Dictionary has no order).
+        let leaving = movingFrom.filter { $0.key != id && !$0.value.isEmpty }.sorted { $0.key.uuidString < $1.key.uuidString }
+        var batch: [EventDecision] = []
+        for (from, moved) in leaving {
+            batch += moved.map { .member(eventID: from, range: $0, verdict: .rejected) }
+            events[from]?.updatedAt = now
+        }
+        batch += ranges.map { .member(eventID: id, range: $0, verdict: .accepted) }
+        events[id]?.updatedAt = now
+        decisions += batch
+        changed()
+        return true
+    }
+
     private func changed() {
         revision &+= 1
         scheduleSave()
