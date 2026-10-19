@@ -100,7 +100,7 @@ struct AdvRelocateBucketBHeldTests {
         await scene.hold()
         defer { scene.release() }
 
-        scene.model.markBucketBSourcesNotFound(rows)
+        scene.model.markBucketBSourcesNotFound(rows, presence: { _ in .missing })   // the source IS gone (2026-10-19: the disk is asked)
         #expect(scene.model.dashboard.relocateManuallyDeleted == 0, "the sheet says rows were marked when none were")
         #expect(scene.model.dashboard.relocateCompleted == 2, "the progress bar still reaches the end")
         for r in rows {
@@ -118,7 +118,7 @@ struct AdvRelocateBucketBHeldTests {
         let scene = try CutoverScene.make("adv_relocate_b_free"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let rows = [try scene.record(.healthy), try scene.record(.curatedConflictA)]
-        scene.model.markBucketBSourcesNotFound(rows)
+        scene.model.markBucketBSourcesNotFound(rows, presence: { _ in .missing })   // the source IS gone (2026-10-19: the disk is asked)
         #expect(scene.model.dashboard.relocateManuallyDeleted == 2)
         #expect(scene.model.dashboard.relocateCompleted == 2)
         for r in rows { #expect(r.removal?.state == .missing) }
@@ -144,7 +144,7 @@ struct AdvRelocateBucketBHeldTests {
         defer { scene.release() }
         let clock = ContinuousClock()
         let start = clock.now
-        scene.model.markBucketBSourcesNotFound(extra)
+        scene.model.markBucketBSourcesNotFound(extra, presence: { _ in .missing })
         let elapsed = clock.now - start
         #expect(scene.model.dashboard.relocateManuallyDeleted == 0)
         #expect(scene.model.dashboard.relocateCompleted == n)

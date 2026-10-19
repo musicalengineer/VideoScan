@@ -369,6 +369,9 @@ extension VideoScanModel {
         // Buckets B/D/E starts immediately below, so the snapshot must
         // stay HERE (not after the dry-run early-return further down,
         // which would put it after the first real mutation).
+        // Bucket B presence, asked off the main actor BEFORE the snapshot so
+        // the snapshot → first mutation stretch stays await-free.
+        let bucketBPresence = await Self.bucketBPresence(for: reconcile, options: options)
         let snapshotPath: String? = options.dryRun ? nil : snapshotCatalogPreRelocate()
 
         // Apply zero-copy mutations: Bucket B (manuallyDeleted),
@@ -386,7 +389,8 @@ extension VideoScanModel {
         // summary we drive the counts off `reconcile.*.count` instead.
         var safelyRedundantBytes: Int64 = 0
         if !options.dryRun {
-            markBucketBSourcesNotFound(reconcile.manuallyDeleted)
+            markBucketBSourcesNotFound(reconcile.manuallyDeleted,
+                                       presence: { bucketBPresence[$0] ?? JourneyPresence.probe($0) })
             for (r, dest) in reconcile.adopted {
                 if r.originalFullPath == nil { r.originalFullPath = r.fullPath }
                 if r.originVolume == nil { r.originVolume = r.volumeName }
@@ -770,7 +774,9 @@ extension VideoScanModel {
             witnessSamples: samples,
             elapsedSeconds: elapsed,
             averageMBps: mbps,
-            snapshotPath: snapshotPath
+            snapshotPath: snapshotPath,
+            notMarkedCount: dashboard.relocateBucketBNotMarked,
+            stillThereCount: dashboard.relocateBucketBStillThere
         )
         pendingRelocateSummary = summary
         // Attach to the queued job and flip status. The job's summary
@@ -931,79 +937,141 @@ extension VideoScanModel {
 
     // MARK: - Snapshot
 
-    /// Snapshot the live catalog.json into a sibling
-    /// `catalog.pre-relocate.<stamp>.json`. Returns the absolute path of
-    /// the snapshot on success, nil if no source catalog existed yet OR
-    /// the copy threw. Path is surfaced in the post-Apply summary so
-    /// Rick can click through to it in Finder.
+    /// The pre-migrate safety copy, through the ONE door every other safety
+    /// copy uses (`snapshotCatalog`): under catalog.json, the in-memory
+    /// records written to `catalog.pre-relocate.<stamp>.json`; under
+    /// catalog.sqlite, what is in memory committed first and then a sealed
+    /// `catalog.pre-relocate.<stamp>.sqlite`. Returns the path, or nil when
+    /// no copy could be made (logged; Migrate proceeds, as it always has).
+    ///
+    /// Adversarial 2026-10-19 (MOPS-6): this used to `copyItem` the file at
+    /// `catalogStore.fileLocation` — after the switch that is catalog.json as
+    /// frozen at the switch, so the advertised "Pre-migrate snapshot" held
+    /// none of the rows or edits made since, and restoring it would have put
+    /// back the pre-switch catalog. Under JSON it also lagged memory by the
+    /// save debounce.
     @discardableResult
     private func snapshotCatalogPreRelocate() -> String? {
-        let dst = (catalogStore.fileLocation as NSString).deletingLastPathComponent
-        let snap = (dst as NSString).appendingPathComponent("catalog.pre-relocate.\(snapshotStamp()).json")
-        do {
-            if FileManager.default.fileExists(atPath: catalogStore.fileLocation) {
-                try FileManager.default.copyItem(atPath: catalogStore.fileLocation, toPath: snap)
-                log("Pre-migrate snapshot: \(snap)")
-                return snap
-            }
-            return nil
-        } catch {
-            log("⚠ Pre-migrate snapshot failed: \(error.localizedDescription) — proceeding anyway")
-            return nil
+        if let snap = snapshotCatalog(prefix: "pre-relocate") {
+            log("Pre-migrate snapshot: \(snap)")
+            return snap
         }
-    }
-
-    private func snapshotStamp() -> String {
-        let fmt = ISO8601DateFormatter()
-        return fmt.string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        log("⚠ Pre-migrate snapshot failed (no safety copy could be written) — proceeding anyway")
+        return nil
     }
 
     private func stamp() -> String { ISO8601DateFormatter().string(from: Date()) }
 
-    /// Bucket B — Migrate could not find the source file. GH #143: the one
+    /// What happened to one Bucket B row.
+    enum BucketBMark: Equatable {
+        /// Marked Missing / "source file not found".
+        case marked
+        /// The catalog refused the marker (B2.3: held / read-only
+        /// catalog.sqlite); NOTHING was written.
+        case refused(String)
+        /// Something is at the path — not marked.
+        case stillThere
+        /// The disk would not say (I/O error, permission, volume away) —
+        /// not marked; the reason in the system's words.
+        case couldNotCheck(String)
+    }
+
+    /// Bucket B — Migrate could not match the source file. GH #143: the one
     /// removal marker says Missing (through the engine). The legacy
     /// `.manuallyDeleted` label is still written beside it because Retire's
     /// "disposed" rule reads it; retiring the label waits on Rick's sign-off
     /// for the 959 classification. Plus the audit note and the relocate log
     /// line, as before.
-    /// Returns nil when the row was marked; else the catalog's refusal
-    /// words (B2.3: held / read-only catalog.sqlite) and NOTHING was written
-    /// — the next Reconcile asks again.
-    private func markSourceNotFound(_ r: VideoRecord) -> String? {
+    ///
+    /// Truth first (adversarial 2026-10-19, MOPS-7): Bucket B is "no other
+    /// bucket fit", NOT "the file is absent" — a file edited in place (new
+    /// size), or one whose partial-MD5 sample could not be read, lands here
+    /// too. So the disk is asked: only "nothing is there" (ENOENT / ENOTDIR,
+    /// or a link to nothing) marks. A file at the path, or a disk that would
+    /// not answer, leaves the row exactly as it was.
+    private func markSourceNotFound(_ r: VideoRecord, presence: JourneyPresence) -> BucketBMark {
+        switch presence {
+        case .missing, .brokenLink:
+            break
+        case .regularFile, .regularFileThroughLink, .linkToFile, .notAFile:
+            return .stillThere
+        case .unknown(let reason), .linkTargetUnknown(_, let reason):
+            return .couldNotCheck(reason)
+        case .volumeOffline(let volume):
+            return .couldNotCheck("\(volume) is not connected")
+        }
         if r.removal == nil,
            let why = Self.stampRemoval(r, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingAtMigrate)) {
-            return why
+            return .refused(why)
         }
         r.archiveStage = .manuallyDeleted
         r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
         relocateLog.write(ReconcileLogLines.manuallyDeletedLine(path: r.fullPath))
-        return nil
+        return .marked
     }
 
-    /// Bucket B for a real run: mark each row whose source was not found.
-    /// `relocateManuallyDeleted` counts only the rows actually marked; a row
-    /// the catalog refused still moves the progress bar (`relocateCompleted`)
-    /// but is said ONCE, as a count with the first reason, on the console
-    /// and in relocate.log — never one line per row (adversarial review
-    /// 2026-10-18 #9: the sheet said N rows were "marked" when none were,
-    /// and a held catalog wrote one console line per refused file).
+    /// Ask the disk about every Bucket B source path OFF the main actor (an
+    /// lstat per row plus the ancestor-link walk; on the failing drive
+    /// Migrate is built for, a stat can be slow and the UI must not wait).
+    /// The presence answers the apply phase needs: none for a dry run (it
+    /// writes nothing, so it asks the drive nothing).
+    static func bucketBPresence(for reconcile: ReconcileResult, options: RelocateOptions) async -> [String: JourneyPresence] {
+        guard !options.dryRun else { return [:] }
+        return await probeBucketBPresence(reconcile.manuallyDeleted.map(\.fullPath))
+    }
+
+    nonisolated static func probeBucketBPresence(_ paths: [String]) async -> [String: JourneyPresence] {
+        await Task.detached(priority: .userInitiated) {
+            var out: [String: JourneyPresence] = [:]
+            out.reserveCapacity(paths.count)
+            for path in paths where out[path] == nil { out[path] = JourneyPresence.probe(path) }
+            return out
+        }.value
+    }
+
+    /// Bucket B for a real run: mark each row whose source is not there.
+    /// `relocateManuallyDeleted` counts only the rows actually marked. A row
+    /// left unmarked still moves the progress bar (`relocateCompleted`) and
+    /// is said ONCE per kind, as a count with the first reason, on the
+    /// console and in relocate.log — never one line per row (adversarial
+    /// 2026-10-18 #9). Refused rows count in `relocateBucketBNotMarked`;
+    /// rows still on disk, or not checkable, in `relocateBucketBStillThere`
+    /// (adversarial 2026-10-19) — both reach the closing summary.
+    /// `presence` is injectable for tests; the live run passes answers it
+    /// probed off the main actor.
     func markBucketBSourcesNotFound(_ rows: [VideoRecord],
                                     presence: (String) -> JourneyPresence = { JourneyPresence.probe($0) }) {
-        var refused = 0
-        var firstRefusal: String?
+        var refused = 0, there = 0, unchecked = 0
+        var firstRefusal: String?, firstUnchecked: String?
         for r in rows {
-            if let why = markSourceNotFound(r) {
+            switch markSourceNotFound(r, presence: presence(r.fullPath)) {
+            case .marked:
+                dashboard.relocateManuallyDeleted += 1
+            case .refused(let why):
                 refused += 1
                 if firstRefusal == nil { firstRefusal = why }
-            } else {
-                dashboard.relocateManuallyDeleted += 1
+            case .stillThere:
+                there += 1
+            case .couldNotCheck(let why):
+                unchecked += 1
+                if firstUnchecked == nil { firstUnchecked = why }
             }
             dashboard.relocateCompleted += 1
         }
-        guard let firstRefusal else { return }
-        let line = "Reconcile: \(refused) row(s) whose source was not found were NOT marked Missing — \(firstRefusal). The next Reconcile asks again."
-        log("  " + line)
-        relocateLog.write(line)
+        dashboard.relocateBucketBNotMarked += refused
+        dashboard.relocateBucketBStillThere += there + unchecked
+        if let firstRefusal {
+            let line = "Reconcile: \(refused) row(s) whose source was not found were NOT marked Missing — \(firstRefusal). The next Reconcile asks again."
+            log("  " + line)
+            relocateLog.write(line)
+        }
+        if there + unchecked > 0 {
+            var detail = "\(there) file(s) there"
+            if let firstUnchecked { detail += "; \(unchecked) could not be checked: \(firstUnchecked)" }
+            let line = "Reconcile: \(there + unchecked) row(s) Migrate could not match were NOT marked \"source file not found\" and not copied — still at their path, or the disk would not say (\(detail)). Rescan the drive, then Migrate again."
+            log("  " + line)
+            relocateLog.write(line)
+        }
     }
 
     private func appendNote(_ existing: String, _ msg: String) -> String {
@@ -1092,6 +1160,15 @@ extension VideoScanModel {
     /// can read the words without running a whole Migrate.
     func relocateClosingSummaryLines(elapsed: Double, savedMB: Double, mb: Double, mbps: Double,
                                      failedBlock: String = "", snapshotHint: String = "") -> (console: String, log: String) {
+        // Bucket B rows left unmarked, only when there are any, so the
+        // categories add up to the total (adversarial 2026-10-19).
+        var bucketBRows = ""
+        if dashboard.relocateBucketBNotMarked > 0 {
+            bucketBRows += "\n  Not marked:       \(dashboard.relocateBucketBNotMarked)   (the catalog could not save — the next Reconcile asks again)"
+        }
+        if dashboard.relocateBucketBStillThere > 0 {
+            bucketBRows += "\n  Still at path:    \(dashboard.relocateBucketBStillThere)   (not matched, not marked, not copied — rescan, then Migrate again)"
+        }
         let console = """
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1101,14 +1178,14 @@ extension VideoScanModel {
           Adopted:          \(dashboard.relocateAdopted)
           Safely redundant: \(dashboard.relocateSafelyRedundant)   (\(String(format: "%.1f", savedMB)) MB not copied)
           Source moves:     \(dashboard.relocateSourceMoves)
-          Manually deleted: \(dashboard.relocateManuallyDeleted)
+          Manually deleted: \(dashboard.relocateManuallyDeleted)\(bucketBRows)
           Salvage failed:   \(dashboard.relocateSalvageFailed)
           Skipped:          \(dashboard.relocateSkipped)
           Bytes copied:     \(String(format: "%.1f", mb)) MB
           Wall clock:       \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", mbps)) MB/s)\(failedBlock)\(snapshotHint)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """
-        let line = "─── Migrate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s"
+        let line = "─── Migrate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) notMarked=\(dashboard.relocateBucketBNotMarked) stillThere=\(dashboard.relocateBucketBStillThere) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s"
         return (console, line)
     }
 }

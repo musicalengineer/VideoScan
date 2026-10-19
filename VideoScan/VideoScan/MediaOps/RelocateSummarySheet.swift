@@ -187,6 +187,22 @@ struct RelocateSummarySheet: View {
                          detail: "marked, kept for audit",
                          identifier: "relocateSummary.row.manuallyDeleted")
             }
+            if summary.notMarkedCount > 0 {
+                countRow(icon: "pause.circle",
+                         color: .orange,
+                         label: "Not marked",
+                         count: summary.notMarkedCount,
+                         detail: "the catalog could not save — the next Migrate asks again",
+                         identifier: "relocateSummary.row.notMarked")
+            }
+            if summary.stillThereCount > 0 {
+                countRow(icon: "questionmark.folder",
+                         color: .orange,
+                         label: "Still at their path",
+                         count: summary.stillThereCount,
+                         detail: "not matched, not marked, not copied — rescan, then Migrate again",
+                         identifier: "relocateSummary.row.stillThere")
+            }
             if summary.salvageFailedCount > 0 {
                 countRow(icon: "exclamationmark.octagon.fill",
                          color: .red,
