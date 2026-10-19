@@ -29246,6 +29246,27 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvHeldCatalogDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvUndoPurgeWhileHeldTests",
+        "AdvRelocateBucketBHeldTests",
+        "AdvJunkDeleteHeldTests"
+      ],
+      "tests": [
+        "blockedRefusesBeforeDiskWork",
+        "diskFactNotRecordedIsSaid",
+        "freeBucketBMarks",
+        "freeMovesAndMarks",
+        "heldBucketBIsNotCountedAsMarked",
+        "heldRefusesBeforeDiskWork",
+        "manyRefusedRowsOneLine",
+        "undoNotHeldUnchanged",
+        "undoWhileHeldKeepsTheBanner"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
@@ -32546,7 +32567,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 175,
+      "expected_floor": 184,
       "name": "regression",
       "package_expected_floor": 184,
       "package_selectors": [
@@ -32634,7 +32655,10 @@
         "VideoScanTests/P0TruthRegressionTests",
         "VideoScanTests/AdvRescanEditDuringScanTests",
         "VideoScanTests/AdvSQLiteSafetyCopyTests",
-        "VideoScanTests/AdvVolumeRenameUndoSQLiteTests"
+        "VideoScanTests/AdvVolumeRenameUndoSQLiteTests",
+        "VideoScanTests/AdvUndoPurgeWhileHeldTests",
+        "VideoScanTests/AdvRelocateBucketBHeldTests",
+        "VideoScanTests/AdvJunkDeleteHeldTests"
       ]
     },
     {
