@@ -226,7 +226,7 @@ struct VerifyCatalogConstraintTests {
         #expect(CatalogConstraints.check(rows: [dangling], events: []).filter { $0.rule.rawValue == "supersessionCycle" }.isEmpty)
     }
 
-    @Test("duplicate group digests agree: a group is a CANDIDATE (duration/timecode/audio/created) — differing whole-file digests are a finding ONLY when some live member's reasons say the sampled hashes matched; equal digests in any case, or one known digest, are not")
+    @Test("duplicate group digests agree: a group is a set of COPIES (Rick 2026-10-19) — differing whole-file digests among live members are a finding whatever formed the group, and the words say whether it claimed the bytes (sampled hash) or only looked alike; equal digests, or one known digest, are not")
     func duplicateGroupDigestsAgree() {
         let group = UUID()
         var p = row("/p.mov")
@@ -239,13 +239,15 @@ struct VerifyCatalogConstraintTests {
         q.duplicateReasons = "duration+timecode"
         var unknown = row("/u.mov")
         unknown.duplicateGroupID = group
-        let candidates = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
-        #expect(candidates.isEmpty, "formed on similarity, not on bytes — the 514 false positives of 2026-10-17")
+        let g = CatalogConstraints.short(group)
+        let alike = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
+        #expect(alike.count == 1, "formed on likeness alone, still not copies")
+        #expect(alike.first?.words == "duplicate group \(g): formed on likeness alone (similar footage, not copies), but its members carry 2 different whole-file digests — Split Duplicate Groups by Full Hash settles it")
         p.duplicateReasons = "hash+duration"
         let red = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
         #expect(red.count == 1)
         #expect(red.first?.recordID == p.id)
-        #expect(red.first?.words == "duplicate group \(CatalogConstraints.short(group)): formed on a sampled-hash match, but its members carry 2 different whole-file digests")
+        #expect(red.first?.words == "duplicate group \(g): formed on a sampled-hash match, but its members carry 2 different whole-file digests — Split Duplicate Groups by Full Hash settles it")
         #expect(red.first?.needsDecision == true)
         q.fullDigest = sha.uppercased()
         #expect(CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }.isEmpty)
@@ -863,7 +865,8 @@ struct VerifyCatalogJobTests {
         #expect(CatalogFreshnessFactsReader.read(catalogFile: catalog.path).integrity.outcome == .ok)
         // The sink: START, one line per tier, OUTCOME.
         let log = sb.catalogLogText()
-        #expect(log.contains("Verify catalog: START — 2 row(s) (2 live)"), Comment(rawValue: log))
+        #expect(log.contains("Verify catalog: START — catalog.json at generation "), Comment(rawValue: log))
+        #expect(log.contains(": 2 row(s) (2 live)"), Comment(rawValue: log))
         for n in 0...6 { #expect(log.contains("Verify catalog: tier \(n) "), "no line for tier \(n)") }
         #expect(log.contains("Verify catalog: OUTCOME — "), Comment(rawValue: log))
         // Nothing changed on the rows.

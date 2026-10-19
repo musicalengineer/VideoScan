@@ -91,19 +91,31 @@ enum DuplicateDetector {
             guard starMembers.count > 1 else { continue }
             let keeper = electKeeper(from: starMembers, policy: keeperPolicy) ?? hub
 
-            let result = classifyGroup(
-                starMembers: starMembers, keeper: keeper,
-                pairByIDs: pairByIDs, assigned: &assigned
-            )
+            // A group is a set of COPIES (Rick 2026-10-19): members whose
+            // stored whole-file SHA-256s are known and differ are never
+            // stamped into one group, whatever the sampled hash said. The
+            // keeper's copies stay its group; other copies form their own;
+            // a file with no copy here stays ungrouped.
+            let copies = DuplicateGroupDigestSplit.partition(
+                starMembers, keeper: starMembers.firstIndex { $0 === keeper },
+                digest: VideoScanModel.storedFullDigest)
+            for members in copies {
+                let groupKeeper = members.contains { $0 === keeper }
+                    ? keeper : (electKeeper(from: members, policy: keeperPolicy) ?? members[0])
+                let result = classifyGroup(
+                    starMembers: members, keeper: groupKeeper,
+                    pairByIDs: pairByIDs, assigned: &assigned
+                )
 
-            groups += 1
-            switch result.confidence {
-            case .high: highGroups += 1
-            case .medium: mediumGroups += 1
-            case .low: lowGroups += 1
+                groups += 1
+                switch result.confidence {
+                case .high: highGroups += 1
+                case .medium: mediumGroups += 1
+                case .low: lowGroups += 1
+                }
+                extraCopies += result.extraCopies
+                reviewItems += result.reviewItems
             }
-            extraCopies += result.extraCopies
-            reviewItems += result.reviewItems
         }
 
         return DuplicateAnalysisSummary(
@@ -466,6 +478,9 @@ enum DuplicateDetector {
         // here while differing everywhere in between. Enough to PROPOSE
         // a duplicate; never enough to delete one. See
         // SignatureVerification, which every destructive path must call.
+        // Grouping no longer trusts it alone either: members whose stored
+        // whole-file SHA-256s differ are split apart before a group is
+        // stamped (DuplicateGroupDigestSplit.partition, in `analyze`).
         ScoringRule(reason: "hash") { l, r in
             guard !l.partialMD5.isEmpty,
                   l.partialMD5 == r.partialMD5,

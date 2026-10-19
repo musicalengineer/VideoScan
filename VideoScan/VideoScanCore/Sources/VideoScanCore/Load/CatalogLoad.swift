@@ -66,6 +66,14 @@ public enum CatalogLoad {
     /// Display pass, then one snapshot of every row.
     public static func read(_ repository: any CatalogRepository) async throws -> Snapshot {
         let pass = try await fillDisplayTablesIfEmpty(repository)
+        return try await rows(repository, displayPass: pass)
+    }
+
+    /// The snapshot WITHOUT the display pass — a pure read, never a write.
+    /// Verify Catalog reads catalog.sqlite through this (GH #342): the same
+    /// rows, the same purge rule and the same held rows a load sees.
+    public static func rows(_ repository: any CatalogRepository,
+                            displayPass pass: DisplayPass = .alreadyFilled) async throws -> Snapshot {
         do {
             return try await repository.read { reader in
                 var rows: [CatalogLoadedRow] = []

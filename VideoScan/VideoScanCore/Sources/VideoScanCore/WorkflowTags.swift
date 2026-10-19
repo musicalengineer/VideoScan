@@ -27,7 +27,15 @@ public enum WorkflowTags {
         "Interesting",
         "Gold",
         "Fix Audio",
+        silentChecked,
     ]
+
+    /// A person listened and the silence is right (Rick 2026-10-19): Verify
+    /// Catalog's tier 3 then passes a silent sound print on this content
+    /// instead of asking again. Per content (workflow_tags is keyed by the
+    /// whole-file digest), so every copy carries it; removing the tag takes
+    /// the decision back. No comma in it — tag lists are shown ", "-joined.
+    public static let silentChecked = "Silent — checked"
 
     /// Canonicalize a raw (possibly user-typed) tag: trim whitespace,
     /// and if it case-insensitively equals a quick-pick, snap to the

@@ -83,6 +83,9 @@ struct IntegrityRow: Sendable, Equatable {
     var auditSeenOn: AuditSeenOn?
     var audioFingerprint: AudioFingerprintStamp?
     var isSetAside: Bool
+    /// A person tagged this content "Silent — checked" (WorkflowTags
+    /// .silentChecked): tier 3 passes its silent print.
+    var silenceCheckedByPerson: Bool
 
     init(id: UUID = UUID(), fullPath: String, filename: String = "", sizeBytes: Int64 = 1, durationSeconds: Double = 0,
          streamTypeRaw: String = "", container: String = "", videoCodec: String = "", audioCodec: String = "", contentHash: String = "",
@@ -91,7 +94,8 @@ struct IntegrityRow: Sendable, Equatable {
          removal: RemovalMarker? = nil, removalRevision: Int = 0,
          derivedFrom: UUID? = nil, derivationKind: String? = nil, supersededByID: UUID? = nil,
          duplicateGroupID: UUID? = nil, duplicateReasons: String = "", pairGroupID: UUID? = nil,
-         auditSeenOn: AuditSeenOn? = nil, audioFingerprint: AudioFingerprintStamp? = nil, isSetAside: Bool = false) {
+         auditSeenOn: AuditSeenOn? = nil, audioFingerprint: AudioFingerprintStamp? = nil, isSetAside: Bool = false,
+         silenceCheckedByPerson: Bool = false) {
         self.id = id
         self.fullPath = fullPath
         self.filename = filename.isEmpty ? (fullPath as NSString).lastPathComponent : filename
@@ -118,6 +122,7 @@ struct IntegrityRow: Sendable, Equatable {
         self.auditSeenOn = auditSeenOn
         self.audioFingerprint = audioFingerprint
         self.isSetAside = isSetAside
+        self.silenceCheckedByPerson = silenceCheckedByPerson
     }
 
     /// Project one record, on whichever task owns it: the main actor for
@@ -136,7 +141,8 @@ struct IntegrityRow: Sendable, Equatable {
                   derivedFrom: r.derivedFrom, derivationKind: r.derivationKind, supersededByID: r.supersededByID,
                   duplicateGroupID: r.duplicateGroupID, duplicateReasons: r.duplicateReasons, pairGroupID: r.pairGroupID,
                   auditSeenOn: r.auditSeenOn,
-                  audioFingerprint: r.audioFingerprint, isSetAside: r.isSetAside)
+                  audioFingerprint: r.audioFingerprint, isSetAside: r.isSetAside,
+                  silenceCheckedByPerson: WorkflowTags.contains(r.tags, WorkflowTags.silentChecked))
     }
 
     /// No removal marker: the row stands for a file that is (as far as the
@@ -278,8 +284,8 @@ enum CatalogConstraints {
         var caseAliasedPaths: [String: CaseAlias] = [:]
         /// row id → the row that superseded it.
         var supersededBy: [UUID: UUID] = [:]
-        /// duplicate group → its live members' digests, only when the group
-        /// was formed on a sampled-hash match AND the digests differ.
+        /// duplicate group → its live members' digests, only when the
+        /// digests differ (Rick 2026-10-19: a group is a set of copies).
         var disagreeingGroups: [UUID: GroupDigests] = [:]
         var pairGroups: Set<UUID> = []
         /// Lowercase whole-file digests any row carries.
@@ -308,7 +314,7 @@ enum CatalogConstraints {
         idx.duplicatedIDs = seen.filter { $0.value > 1 }
         idx.sharedLivePaths = byPath.filter { $0.value.count > 1 }
         idx.caseAliasedPaths = byFoldedPath.filter { $0.value.paths.count > 1 }
-        idx.disagreeingGroups = groups.filter { $0.value.sampledHashMatch && $0.value.digests.count > 1 }
+        idx.disagreeingGroups = groups.filter { $0.value.digests.count > 1 }
         return idx
     }
 
@@ -533,15 +539,21 @@ enum CatalogConstraints {
         return out
     }
 
-    /// Consistency: a duplicate group formed on a sampled-hash match
-    /// ("hash" among some live member's reasons) claimed the bytes agree;
-    /// two whole-file digests among its live members say they do not. A
-    /// group formed on similarity alone (duration, timecode, audio,
-    /// created…) never promised byte identity and is not a finding.
+    /// Consistency: a duplicate group is a set of COPIES (Rick 2026-10-19
+    /// — "a group must never contain members with known different full
+    /// digests"). Two whole-file digests among its live members are a
+    /// finding whatever formed the group; the words say whether it claimed
+    /// the bytes (a sampled-hash match) or only looked alike (duration,
+    /// timecode, audio, created… — similar footage, which Find Similar
+    /// Footage records, not copies). Before 2026-10-19 only the sampled-hash
+    /// groups were findings (10/17: groups were candidates). The machine
+    /// settles both: Split Duplicate Groups by Full Hash
+    /// (DuplicateGroupDigestSplit), and DuplicateDetector no longer forms them.
     static func duplicateGroupDigestsAgree(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
         idx.disagreeingGroups.sorted { $0.key.uuidString < $1.key.uuidString }.map { group, g in
-            Finding(.duplicateGroupDigestsAgree, recordID: g.firstID,
-                    words: "duplicate group \(short(group)): formed on a sampled-hash match, but its members carry \(g.digests.count) different whole-file digests")
+            let formed = g.sampledHashMatch ? "formed on a sampled-hash match" : "formed on likeness alone (similar footage, not copies)"
+            return Finding(.duplicateGroupDigestsAgree, recordID: g.firstID,
+                           words: "duplicate group \(short(group)): \(formed), but its members carry \(g.digests.count) different whole-file digests — Split Duplicate Groups by Full Hash settles it")
         }
     }
 

@@ -917,6 +917,12 @@ struct VideoScanApp: App {
                 // over the catalog's own stamps and relations; the only
                 // file written is the report beside the catalog.
                 VerifyCatalogMenuItem(model: catalogModel, center: fileOpsCenter, isReadOnly: catalogModel.isReadOnly)
+                // Split Duplicate Groups by Full Hash (2026-10-19): settles
+                // Verify's duplicateGroupDigestsAgree findings — the machine
+                // has the digests. Safety copy first; one commit; logged.
+                Button(VideoScanModel.duplicateDigestSplitTitle) { catalogModel.splitDuplicateGroupsByFullDigest() }
+                    .disabled(catalogModel.isReadOnly)
+                    .help("Every duplicate group whose files carry different whole-file SHA-256s is split into groups of true copies; a file whose bytes match no other member leaves its group. Only the duplicate-group fields change — no file is touched. A safety copy of the catalog is made first.")
                 Divider()
                 // Import to SQLite (2026-10-17, catalog_sqlite_migration
                 // §10c; one action verb): audit + verify + import in one

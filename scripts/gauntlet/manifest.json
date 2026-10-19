@@ -7679,6 +7679,45 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSettleFindingsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DuplicateDigestPartitionTests",
+        "DuplicateDigestSplitPlanTests",
+        "DuplicateDetectorDigestTests",
+        "VerifyCatalogExpectedSilenceTests",
+        "VerifyCatalogSQLiteTierTests",
+        "VerifyCatalogSQLiteSourceTests",
+        "DuplicateDigestSplitDoorTests",
+        "DuplicateDigestSplitScaleTests",
+        "CatalogSettleFindingsSensorTests",
+        "CatalogSettleRealCopyEvidence"
+      ],
+      "tests": [
+        "bucketsByDigest",
+        "causeAndSource",
+        "checkedByPerson",
+        "copiesOnJSON",
+        "differentDigestsNeverGroup",
+        "doorOrder",
+        "evidence",
+        "idempotent",
+        "keeperAlone",
+        "livePhotosPass",
+        "movedOrUnreadable",
+        "narrowRuleStillFlags",
+        "planAt100k",
+        "readOnlyRefuses",
+        "redSplitGreen",
+        "sameGeneration",
+        "splitsIntoCopies",
+        "starSplits",
+        "unknownStaysWithKeeper",
+        "verifiesTheDatabase"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogShowingSummaryTests.swift",
