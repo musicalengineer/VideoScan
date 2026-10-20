@@ -366,7 +366,7 @@ struct CatalogStatusWordsTests {
             FreshnessRow(kind: "fullHashes", title: "Full Hashes", eligible: 3, covered: 3, lastOutcome: .ok),
         ], reality: validatedAnHourAgo)
         #expect(s.summary.colour == .green)
-        #expect(CatalogStatusWords.chipWords(s) == "reflects reality")
+        #expect(CatalogStatusWords.chipWords(s) == "Reconciled")
         #expect(CatalogStatusWords.menuTitle(s.summary.colour) == "Catalog Status…")
     }
 
@@ -379,9 +379,9 @@ struct CatalogStatusWordsTests {
             FreshnessRow(kind: "soundPrints", title: "Sound Prints", eligible: 20, covered: 8, lastOutcome: .ok,
                          phrases: CatalogFreshnessRows.phrases(.soundPrints)),
         ], reality: unsettled)
-        #expect(CatalogStatusWords.chipWords(yellow) == "can't fully vouch")
-        #expect(yellow.summary.headline == "The catalog can't fully vouch for itself: tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")
-        #expect(CatalogStatusWords.menuTitle(yellow.summary.colour) == "Catalog Status — can't fully vouch…")
+        #expect(CatalogStatusWords.chipWords(yellow) == "Needs a look")
+        #expect(yellow.summary.headline == "Tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")
+        #expect(CatalogStatusWords.menuTitle(yellow.summary.colour) == "Catalog Status…")
         #expect(yellow.summary.items.map(\.words) == ["660 files without a full hash", "12 files without a sound print"],
                 "the stale rows are still listed under the band")
 
@@ -389,10 +389,10 @@ struct CatalogStatusWordsTests {
         broken.breaks = [CatalogRealityCount(count: 2, words: "2 paths have more than one live row"),
                          CatalogRealityCount(count: 1, words: "1 duplicate groups hold files with different whole-file digests")]
         let red = state([], reality: broken)
-        #expect(CatalogStatusWords.chipWords(red) == "something is wrong")
-        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — something is wrong…")
+        #expect(CatalogStatusWords.chipWords(red) == "Needs attention…")
+        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — Needs attention…")
         #expect(CatalogStatusWords.launchLine(red.reality)
-                == "Something is wrong: 2 paths have more than one live row · 1 more — 1 duplicate groups hold files with different whole-file digests. Catalog ▸ Catalog Status… lists the doors.")
+                == "Needs attention: 2 paths have more than one live row · 1 more — 1 duplicate groups hold files with different whole-file digests. Catalog ▸ Catalog Status… lists the doors.")
     }
 
     @Test func uncomputedStaysQuietAndNothingKnownCannotVouch() {
@@ -400,7 +400,7 @@ struct CatalogStatusWordsTests {
         // Every drive offline and no Validate on record: the catalog can't vouch (yellow), not "nothing to check".
         let offline = state([FreshnessRow(kind: "fullHashes", title: "Full Hashes", offline: 5)])
         #expect(offline.summary.colour == .yellow)
-        #expect(CatalogStatusWords.chipWords(offline) == "can't fully vouch")
+        #expect(CatalogStatusWords.chipWords(offline) == "Needs validation")
     }
 
     /// ONE button per item (§2.1), from the reason.

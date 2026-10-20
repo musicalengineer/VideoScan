@@ -19,11 +19,11 @@ struct CatalogRealityTests {
         CatalogRealityFacts(validation: .completed(at: now.addingTimeInterval(-day)), rowsToCheck: 14_000, rowsNotChecked: 0)
     }
 
-    @Test("GREEN: a fresh, completed Validate, nothing broken, nothing unsettled — 'The catalog reflects reality'")
+    @Test("GREEN: a fresh, completed Validate, nothing broken, nothing unsettled — 'The catalog is reconciled'")
     func greenReflectsReality() {
         #expect(CatalogRealityPolicy.colour(green, now: now) == .green)
         let v = CatalogRealityPolicy.judge(green, now: now)
-        #expect(v.headline == "The catalog reflects reality")
+        #expect(v.headline == "The catalog is reconciled")
         #expect(v.reasons.isEmpty && v.reviewLine == nil)
     }
 
@@ -51,7 +51,7 @@ struct CatalogRealityTests {
             #expect(CatalogRealityPolicy.colour(f, now: now) == .yellow)
         }
         #expect(CatalogRealityPolicy.judge(offline, now: now).headline
-                == "The catalog can't fully vouch for itself: \(1_400.formatted()) of \(14_000.formatted()) files could not be checked (drives not connected?)")
+                == "\(1_400.formatted()) of \(14_000.formatted()) files could not be checked (drives not connected?)")
     }
 
     @Test("RED: an integrity break · a failed or killed Validate · an unreadable sidecar — red beats yellow, red reasons first")
@@ -60,9 +60,9 @@ struct CatalogRealityTests {
         var failed = green; failed.validation = .failed("did not finish checking files on disk (quit or crash)")
         var sidecar = green; sidecar.unreadable = ["the sound print sidecar can't be opened: not a database"]
         for f in [broke, failed, sidecar] { #expect(CatalogRealityPolicy.colour(f, now: now) == .red) }
-        #expect(CatalogRealityPolicy.judge(broke, now: now).headline == "Something is wrong: 2 paths have more than one live row")
+        #expect(CatalogRealityPolicy.judge(broke, now: now).headline == "Needs attention: 2 paths have more than one live row")
         #expect(CatalogRealityPolicy.judge(failed, now: now).headline
-                == "Something is wrong: the last Validate Catalog did not finish checking files on disk (quit or crash) — run it again")
+                == "Needs attention: the last Validate Catalog did not finish checking files on disk (quit or crash) — run it again")
         var both = broke
         both.unsettled = [CatalogRealityCount(count: 9, words: "9 unsettled")]
         both.validation = .neverRan

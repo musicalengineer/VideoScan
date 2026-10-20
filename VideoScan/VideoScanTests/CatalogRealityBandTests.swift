@@ -237,9 +237,9 @@ struct CatalogRealityStateTests {
         let s = CatalogFreshnessState.judged(rows: rows, reality: CatalogRealityInputs(facts: greenFacts, review: review,
                                              information: ["128 lineage links … kept as history"]), now: now, wording: wording)
         #expect(s.summary.colour == .green)
-        #expect(s.summary.headline == "The catalog reflects reality")
+        #expect(s.summary.headline == "The catalog is reconciled")
         #expect(s.reality.reviewLine == "1,358 to review")
-        #expect(CatalogStatusWords.chipWords(s) == "reflects reality")
+        #expect(CatalogStatusWords.chipWords(s) == "Reconciled")
         #expect(s.summary.items.map(\.kind) == ["ocr"], "the stale rows are still listed for Update everything stale")
         let without = CatalogFreshnessState.judged(rows: rows, reality: CatalogRealityInputs(facts: greenFacts), now: now, wording: wording)
         #expect(without.summary.colour == s.summary.colour && without.summary.headline == s.summary.headline)
@@ -249,11 +249,11 @@ struct CatalogRealityStateTests {
     func words() {
         var broke = greenFacts; broke.breaks = [CatalogRealityCount(count: 1, words: "1 paths have more than one live row")]
         let red = CatalogFreshnessState.judged(rows: [], reality: CatalogRealityInputs(facts: broke), now: now, wording: wording)
-        #expect(CatalogStatusWords.chipWords(red) == "something is wrong")
-        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — something is wrong…")
+        #expect(CatalogStatusWords.chipWords(red) == "Needs attention…")
+        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — Needs attention…")
         let yellow = CatalogFreshnessState.judged(rows: [], now: now, wording: wording)
         #expect(yellow.summary.colour == .yellow, "nothing known = never validated")
-        #expect(CatalogStatusWords.chipWords(yellow) == "can't fully vouch")
-        #expect(CatalogStatusWords.menuTitle(.yellow) == "Catalog Status — can't fully vouch…")
+        #expect(CatalogStatusWords.chipWords(yellow) == "Needs validation")
+        #expect(CatalogStatusWords.menuTitle(.yellow) == "Catalog Status…")
     }
 }

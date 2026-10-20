@@ -218,9 +218,9 @@ enum CatalogStatusWords {
         guard state.isComputed else { return "checking…" }
         // Rick 2026-10-20: the colour answers "does the catalog reflect reality?"
         switch state.summary.colour {
-        case .green: return "reflects reality"
-        case .yellow: return "can't fully vouch"
-        case .red: return "something is wrong"
+        case .green: return "Reconciled"
+        case .yellow: return state.reality.reasons.first?.shortWords ?? "Needs validation"
+        case .red: return "Needs attention…"
         case .grey: return "nothing to check"
         }
     }
@@ -228,9 +228,8 @@ enum CatalogStatusWords {
     /// Catalog ▸ "Catalog Status…" carries the colour word when not green.
     static func menuTitle(_ colour: FreshnessColour) -> String {
         switch colour {
-        case .red: return "Catalog Status — something is wrong…"
-        case .yellow: return "Catalog Status — can't fully vouch…"
-        case .green, .grey: return "Catalog Status…"
+        case .red: return "Catalog Status — Needs attention…"
+        case .yellow, .green, .grey: return "Catalog Status…"
         }
     }
 

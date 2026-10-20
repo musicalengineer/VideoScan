@@ -104,6 +104,17 @@ public enum CatalogRealityReason: Sendable, Equatable {
     case largeShareNotChecked(notChecked: Int, of: Int)
     case unsettled(CatalogRealityCount)
 
+    /// Two or three words for the Catalog Status chip (Rick 2026-10-20:
+    /// "something short"); the full words are one click away.
+    public var shortWords: String {
+        switch self {
+        case .unreadable, .validateFailed, .integrityBreak: return "Needs attention…"
+        case .neverValidated, .validatePartial, .validateOverdue: return "Needs validation"
+        case .largeShareNotChecked: return "Drives offline"
+        case .unsettled: return "Needs a look"
+        }
+    }
+
     public var colour: FreshnessColour {
         switch self {
         case .unreadable, .validateFailed, .integrityBreak: return .red
@@ -296,10 +307,13 @@ public enum CatalogRealityPolicy {
     // MARK: Words
 
     static func headline(_ colour: FreshnessColour, _ reasons: [CatalogRealityReason], now: Date) -> String {
-        guard let first = reasons.first else { return "The catalog reflects reality" }
+        // Rick 2026-10-20: green = "reconciled"; yellow = just the summary
+        // (the door is one click away); red = "Needs attention".
+        guard let first = reasons.first else { return "The catalog is reconciled" }
         let more = reasons.count > 1 ? " · \(reasons.count - 1) more" : ""
-        let lead = colour == .red ? "Something is wrong" : "The catalog can't fully vouch for itself"
-        return "\(lead): \(words(first, now: now))\(more)"
+        let summary = words(first, now: now)
+        guard colour == .red else { return summary.prefix(1).uppercased() + summary.dropFirst() + more }
+        return "Needs attention: \(summary)\(more)"
     }
 
     /// Plain family-app English for each reason.
