@@ -6,6 +6,11 @@ then what changed underneath. A version is bumped when it ships to Rick's daily 
 ## Unreleased — 5.3 (the SQLite cutover)
 
 **For the catalog**
+- Catalog ▸ Validate Catalog… — ONE verb (10/20) in place of Audit Catalog… and Verify
+  Catalog…: every file on disk first, then, only after a complete file check, the catalog
+  against itself, as one Media File Operations row. A stopped or failed file check never
+  runs the catalog check, and the row says so. The nightly's `--audit-catalog` (and the new
+  `--validate-catalog`) run the same job.
 - The catalog moves from one JSON file to a SQLite database (GRDB, behind a plugin seam).
   Every save is one transaction; the database refuses invalid writes itself; a restored older
   copy opens read-only until a person adopts it. The JSON catalog stays on disk, frozen

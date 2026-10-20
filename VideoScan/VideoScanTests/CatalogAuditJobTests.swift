@@ -560,7 +560,7 @@ struct CatalogAuditJobSensorTests {
     static let modelHalf = "VideoScanModel+CatalogAudit.swift"
     static let sources = [
         "CatalogAuditPlan.swift", "CatalogAuditJob.swift", "CatalogAuditRun.swift", "CatalogAuditDetailView.swift",
-        "CatalogAuditMenuItem.swift", "CatalogAuditCLI.swift", modelHalf,
+        "ValidateCatalogMenuItem.swift", "ValidateCatalogJob.swift", "CatalogPhaseDriver.swift", "CatalogAuditCLI.swift", modelHalf,
     ]
 
     static func code(_ name: String) throws -> String {

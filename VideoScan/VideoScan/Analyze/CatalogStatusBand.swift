@@ -58,7 +58,8 @@ enum CatalogStatusDoor: Equatable {
     /// Red, File Presence found rows pointing at nothing: Fix Links (§2b)
     /// is not built yet — the button is shown DISABLED and says so.
     case fixLinks
-    /// Red, Verify Catalog found decisions pending: run it again — its MFO
+    /// Red, the catalog check found decisions pending: run Validate Catalog
+    /// again (Rick 2026-10-20: the files first, then the catalog) — its MFO
     /// row lists every finding (the decisions themselves are taken
     /// elsewhere: Fix Links, Fingerprint Sound, the person).
     case verifyAgain
@@ -71,7 +72,7 @@ enum CatalogStatusDoor: Equatable {
         case .runAgain: return "Run again"
         case .fingerprintAgain: return "Fingerprint again"
         case .fixLinks: return "Fix Links…"
-        case .verifyAgain: return "Verify again"
+        case .verifyAgain: return "Validate again"
         case .none: return ""
         }
     }
@@ -79,8 +80,8 @@ enum CatalogStatusDoor: Equatable {
     /// False only for the door that is not built yet.
     var isEnabled: Bool { self != .fixLinks }
 
-    static let fixLinksHelp = "Fix Links is coming next: a review sheet for rows whose file is gone or changed, with relink / forget per row. Until then the Audit Catalog detail (Media File Operations) lists them."
-    static let verifyAgainHelp = "Run Verify Catalog again; its Media File Operations row lists every finding by tier, with the file and the words."
+    static let fixLinksHelp = "Fix Links is coming next: a review sheet for rows whose file is gone or changed, with relink / forget per row. Until then the Validate Catalog detail (Media File Operations) lists them."
+    static let verifyAgainHelp = "Run Validate Catalog again — the files on disk first, then the catalog itself; its Media File Operations row lists every finding by tier, with the file and the words."
 
     /// The button's help, per door.
     func help(cycler: AnalyzeCycler) -> String {

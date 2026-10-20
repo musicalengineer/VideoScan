@@ -908,15 +908,14 @@ struct VideoScanApp: App {
                 // restart = resume.
                 AudioFingerprintBackfillMenuItem(model: catalogModel)
                 Divider()
-                // Audit Catalog (2026-10-16, tier 0): every live row on a
-                // connected drive is stat'ed; gone → Missing, back → live.
-                // The same job the nightly runs through --audit-catalog.
-                CatalogAuditMenuItem(model: catalogModel, center: fileOpsCenter,
-                                     marker: catalogModel.catalogAuditRunMarker, isReadOnly: catalogModel.isReadOnly)
-                // Verify Catalog (2026-10-16, integrity first): tiers 0–6
-                // over the catalog's own stamps and relations; the only
-                // file written is the report beside the catalog.
-                VerifyCatalogMenuItem(model: catalogModel, center: fileOpsCenter, isReadOnly: catalogModel.isReadOnly)
+                // Validate Catalog (Rick 2026-10-20, ONE verb): every live
+                // row on a connected drive is stat'ed (gone → Missing, back
+                // → live), then — only after a complete file check — the
+                // catalog is checked against itself (tiers 0–6, the report
+                // beside the catalog). One MFO job; the same job the nightly
+                // runs through --validate-catalog / --audit-catalog.
+                ValidateCatalogMenuItem(model: catalogModel, center: fileOpsCenter,
+                                        marker: catalogModel.catalogAuditRunMarker, isReadOnly: catalogModel.isReadOnly)
                 // Split Duplicate Groups by Full Hash (2026-10-19): settles
                 // Verify's duplicateGroupDigestsAgree findings — the machine
                 // has the digests. Safety copy first; one commit; logged.

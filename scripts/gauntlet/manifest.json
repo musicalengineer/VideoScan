@@ -25040,6 +25040,32 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ValidateCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ValidateCatalogOutcomeTests",
+        "ValidateCatalogJobTests",
+        "ValidateCatalogMenuSensorTests"
+      ],
+      "tests": [
+        "aCompleteFileCheckThenVerify",
+        "aFailedFileCheckNeverRunsVerify",
+        "aGoodRunNeverReadsTheStaleRecord",
+        "aReadOnlyCatalogRefuses",
+        "aStoppedFileCheckNeverRunsVerify",
+        "bothLaunchArgumentsRunTheCombinedJob",
+        "exactlyOneVerbInTheMenu",
+        "filesFailed",
+        "filesStopped",
+        "oneCheckerAtATime",
+        "theAuditRecordGate",
+        "theDoorsPointAtValidate",
+        "theOtherEndings",
+        "validated"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VerifyArchiveCopiesTests.swift",
@@ -32249,7 +32275,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2776,
+      "expected_floor": 2790,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32703,7 +32729,10 @@
         "VideoScanTests/IgnoredContentCatalogSensorTests",
         "VideoScanTests/PutBackStaysPutBackTests",
         "VideoScanTests/SplitUnknownDigestHoldTests",
-        "VideoScanTests/SideStoreAuthorityTests"
+        "VideoScanTests/SideStoreAuthorityTests",
+        "VideoScanTests/ValidateCatalogOutcomeTests",
+        "VideoScanTests/ValidateCatalogJobTests",
+        "VideoScanTests/ValidateCatalogMenuSensorTests"
       ]
     },
     {

@@ -137,9 +137,10 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
     /// Phases 1 and 2 (internal so tests can read their results).
     private(set) var auditJob: CatalogAuditJob?
     private(set) var verifyJob: VerifyCatalogJob?
-    /// The phase job in flight (Stop is forwarded to it) and its share of the bar.
-    private var activeChild: (any ImportPhaseJob)?
-    private var activeSpan: ClosedRange<Double> = 0...0
+    /// Runs the phase job in flight (Stop is forwarded to it) and mirrors
+    /// its line and its share of the bar (CatalogPhaseDriver, shared with
+    /// Validate Catalog).
+    private let driver = CatalogPhaseDriver()
     private let stopFlag = ImportStopFlag()
 
     /// TEST SEAMS (nil in production): set up the phase jobs (sandbox lane
@@ -198,7 +199,7 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
         guard state.isActive else { return }
         state = .cancelling
         stopFlag.raise()
-        activeChild?.cancel()
+        driver.cancel()
         subtitleText = "Stopping — nothing will be imported…"
     }
 
@@ -359,17 +360,11 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
     private func runPhase(_ child: any ImportPhaseJob, _ next: Phase, span: ClosedRange<Double>,
                           model: VideoScanModel) async -> MediaFileOperationState {
         phase = next
-        activeChild = child
-        activeSpan = span
         subtitleText = Self.lead(next)
         fractionValue = span.lowerBound
         model.importToSQLiteNote("phase \(next == .audit ? 1 : 2) of 3 — \(child.title)")
         onPhaseForTesting?(next)
-        if stopFlag.isRaised { child.cancel() }
-        child.start()
-        await child.task?.value
-        activeChild = nil
-        return child.state
+        return await driver.run(child, span: span, stopRequested: stopFlag.isRaised)
     }
 
     /// What a phase's verdict means for the run; nil = go on.
@@ -383,18 +378,13 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
 
     /// The row mirrors the phase job's own line and bar while it runs.
     private func startMirror() -> Task<Void, Never> {
-        Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                self?.copyPhaseProgress()
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-        }
+        driver.mirror { [weak self] subtitle, fraction in self?.copyPhaseProgress(subtitle, fraction) }
     }
 
-    private func copyPhaseProgress() {
-        guard state == .running, let child = activeChild else { return }
-        subtitleText = Self.lead(phase) + " " + child.subtitle
-        fractionValue = activeSpan.lowerBound + child.fraction * (activeSpan.upperBound - activeSpan.lowerBound)
+    private func copyPhaseProgress(_ subtitle: String, _ fraction: Double) {
+        guard state == .running else { return }
+        subtitleText = Self.lead(phase) + " " + subtitle
+        fractionValue = fraction
     }
 
     /// The row's lead words for a phase.

@@ -409,7 +409,7 @@ final class CatalogAuditRunMarker: ObservableObject {
         let started = r.startedAt.formatted(date: .abbreviated, time: .shortened)
         if CatalogFreshnessFactsReader.predatesSwitch(r.startedAt, switchedAt: switchedAt) {
             return "Audit catalog: the last run (\(started)) audited catalog.json, before the switch to SQLite — "
-                + "it says nothing about this catalog; run Catalog ▸ Audit Catalog… again."
+                + "it says nothing about this catalog; run Catalog ▸ Validate Catalog… again."
         }
         switch r.outcome {
         case .completed:
@@ -422,9 +422,9 @@ final class CatalogAuditRunMarker: ObservableObject {
                 + (unseen > 0 ? " and \(unseen.formatted()) file(s) not at their path that no audit had seen before (not marked — Fix Links decides)" : "")
                 + " — the Catalog Status panel lists them."
         case .running:
-            return "Audit catalog: the run started \(started) did not finish (quit or crash) — marks saved before that are kept; run Catalog ▸ Audit Catalog… again."
+            return "Audit catalog: the run started \(started) did not finish (quit or crash) — marks saved before that are kept; run Catalog ▸ Validate Catalog… again."
         case .stopped, .failed:
-            return "Audit catalog: the run of \(started) \(r.outcome.rawValue) (partial) — run Catalog ▸ Audit Catalog… again."
+            return "Audit catalog: the run of \(started) \(r.outcome.rawValue) (partial) — run Catalog ▸ Validate Catalog… again."
         case .refused:
             return nil
         }

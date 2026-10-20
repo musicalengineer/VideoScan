@@ -183,13 +183,13 @@ enum VerifyCatalogTiers {
     static func presence(audit record: CatalogAuditRunRecord?, switchedAt: Date? = nil) -> TierOutcome {
         var t = IntegrityTier(tier: 0, name: name(0), result: .notRun(""), summary: "")
         guard let record else {
-            t.result = .notRun("Audit Catalog has not run — Catalog ▸ Audit Catalog… (the nightly runs it too)")
-            t.summary = "Audit Catalog has not run"
+            t.result = .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the nightly runs it too)")
+            t.summary = "the files on disk have not been checked"
             return TierOutcome(tier: t)
         }
         let facts = CatalogAuditPresenceFacts.from(record, switchedAt: switchedAt)
         if facts.predatesSwitch {
-            t.result = .notRun("the last audit ran on catalog.json, before the switch to SQLite — run Audit Catalog again")
+            t.result = .notRun("the last audit ran on catalog.json, before the switch to SQLite — run Validate Catalog again")
             t.summary = "the last audit ran before the switch to SQLite"
             return TierOutcome(tier: t)
         }
@@ -214,9 +214,9 @@ enum VerifyCatalogTiers {
         case .failed:
             t.result = .couldNotCheck(max(1, planned))
             t.couldNotCheck = max(1, planned)
-            t.summary = "the last audit failed or was killed — run Audit Catalog again"
+            t.summary = "the last audit failed or was killed — run Validate Catalog again"
         case .neverRan:
-            t.result = .notRun("the last audit was refused — run Audit Catalog again")
+            t.result = .notRun("the last audit was refused — run Validate Catalog again")
             t.summary = "the last audit was refused"
         }
         return TierOutcome(tier: t)

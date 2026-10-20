@@ -77,7 +77,7 @@ extension VideoScanModel {
     /// and it is said, with where the file went, never silent.
     func recordFileLeft(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage, whereNow: String) {
         guard let why = Self.stampRemoval(rec, marker, stage: stage, kind: .diskFact) else { return }
-        log("  NOT RECORDED: \(rec.filename) \(whereNow), but its row could not be marked — \(why). Verify Catalog will find it.")
+        log("  NOT RECORDED: \(rec.filename) \(whereNow), but its row could not be marked — \(why). Validate Catalog will find it.")
     }
 
     /// "can't move clip.mov to the Trash right now — the catalog can't save

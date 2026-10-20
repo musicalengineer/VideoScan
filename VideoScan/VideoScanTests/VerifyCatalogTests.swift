@@ -344,7 +344,7 @@ struct VerifyCatalogTierTests {
 
     @Test("tier 0 reads the audit's marker: absent → not run; completed with gone rows → needs a decision; completed clean → ok; partial / failed → could not check")
     func presenceFromTheAuditMarker() {
-        #expect(VerifyCatalogTiers.presence(audit: nil).tier.result == .notRun("Audit Catalog has not run — Catalog ▸ Audit Catalog… (the nightly runs it too)"))
+        #expect(VerifyCatalogTiers.presence(audit: nil).tier.result == .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the nightly runs it too)"))
         var r = CatalogAuditRunRecord(startedAt: now.addingTimeInterval(-60))
         r.finishedAt = now
         r.outcome = .completed
@@ -368,7 +368,7 @@ struct VerifyCatalogTierTests {
     /// before the switch (catalog.cutover 15:39:47); its 144 never-seen
     /// rows and 1 changed row went to quarantine, so none of them is a
     /// record. Tier 0 must not stand on that run: not run, with the door.
-    @Test("tier 0: an audit that started before the switch to SQLite is not this catalog's — not run, 'run Audit Catalog again'; one that started after keeps its decision")
+    @Test("tier 0: an audit that started before the switch to SQLite is not this catalog's — not run, 'run Validate Catalog again'; one that started after keeps its decision")
     func presenceFromBeforeTheSwitchIsNotRun() {
         let switched = now
         var before = CatalogAuditRunRecord(startedAt: switched.addingTimeInterval(-58))
@@ -376,7 +376,7 @@ struct VerifyCatalogTierTests {
         before.outcome = .completed
         before.counts = ["present": 10_831, "neverSeenByAnAudit": 144, "changed": 1, "planned": 11_194]
         let stale = VerifyCatalogTiers.presence(audit: before, switchedAt: switched).tier
-        #expect(stale.result == .notRun("the last audit ran on catalog.json, before the switch to SQLite — run Audit Catalog again"))
+        #expect(stale.result == .notRun("the last audit ran on catalog.json, before the switch to SQLite — run Validate Catalog again"))
         #expect(stale.needsDecision == 0, "145 rows that are not records are no decision of this catalog's")
         #expect(stale.verifiedAt == nil)
         #expect(VerifyCatalogTiers.presence(audit: before).tier.result == .needsDecision(145), "no latch: judged as before")
@@ -395,7 +395,7 @@ struct VerifyCatalogTierTests {
         before.counts = ["neverSeenByAnAudit": 144, "planned": 11_194]
         let line = try #require(CatalogAuditRunMarker.launchLine(before, switchedAt: switched))
         #expect(line.contains("before the switch to SQLite"), Comment(rawValue: line))
-        #expect(line.hasSuffix("run Catalog ▸ Audit Catalog… again."), Comment(rawValue: line))
+        #expect(line.hasSuffix("run Catalog ▸ Validate Catalog… again."), Comment(rawValue: line))
         #expect(!line.contains("lists them"), Comment(rawValue: line))
         #expect(CatalogAuditRunMarker.launchLine(before)?.contains("lists them") == true, "no latch: as before")
         var clean = before
@@ -846,7 +846,7 @@ struct VerifyCatalogJobTests {
         #expect(summary.contains("report → integrity-latest.json"), Comment(rawValue: summary))
         let report = try #require(job.report)
         #expect(report.tiers.map(\.tier) == [0, 1, 2, 3, 4, 5, 6])
-        #expect(report.tier(0)?.result == .notRun("Audit Catalog has not run — Catalog ▸ Audit Catalog… (the nightly runs it too)"))
+        #expect(report.tier(0)?.result == .notRun("the files on disk have not been checked — Catalog ▸ Validate Catalog… (the nightly runs it too)"))
         #expect(report.tier(1)?.result == .couldNotCheck(1), "b.mov has no whole-file hash")
         #expect(report.tier(2)?.result == .notRun("weekly deep pass — not built yet"))
         #expect(report.tier(5)?.result == .ok)
@@ -1133,10 +1133,10 @@ struct VerifyCatalogStatusTests {
         #expect(partial.reason == .lastRunPartial)
     }
 
-    @Test("the door: red decisions on Integrity → 'Verify again'; yellow → Run now; the summary band names the Integrity item")
+    @Test("the door: red decisions on Integrity → 'Validate again'; yellow → Run now; the summary band names the Integrity item")
     func doorAndBand() {
         #expect(CatalogStatusDoor.door(for: .needsDecision(3), cycler: .integrity) == .verifyAgain)
-        #expect(CatalogStatusDoor.verifyAgain.title == "Verify again")
+        #expect(CatalogStatusDoor.verifyAgain.title == "Validate again")
         #expect(CatalogStatusDoor.verifyAgain.isEnabled)
         #expect(CatalogStatusDoor.door(for: .neverRan(waiting: 1), cycler: .integrity) == .runNow)
         #expect(CatalogStatusDoor.door(for: .needsDecision(3), cycler: .filePresence) == .fixLinks, "the audit's door is unchanged")
@@ -1148,7 +1148,9 @@ struct VerifyCatalogStatusTests {
         #expect(summary.items.first?.words == "2 findings — 2 rows share a path")
     }
 
-    @Test("Run now on the Integrity row starts Verify Catalog through the center; the runner sees it running and can stop it")
+    // Rick 2026-10-20 (one verb): the Integrity row runs Validate Catalog —
+    // the files on disk first, then Verify — never Verify on its own.
+    @Test("Run now on the Integrity row starts Validate Catalog through the center; the runner sees it running behind both File Presence and Integrity and can stop it")
     @MainActor func runNowStartsVerifyCatalog() async throws {
         let sb = try ShowAgainSandbox.make("vc_runnow"); defer { sb.cleanup() }
         try sb.live("a.mov")
@@ -1156,7 +1158,8 @@ struct VerifyCatalogStatusTests {
         let runner = AnalyzeRunner(model: sb.model, orchestrator: nil, center: center)
         #expect(!runner.isRunning(.integrity))
         runner.runNow(.integrity, source: "test")
-        let job = try #require(center.jobs.first as? VerifyCatalogJob)
+        let job = try #require(center.jobs.first as? ValidateCatalogJob)
+        #expect(runner.activeIntegrityJob(for: .filePresence) === job || !job.state.isActive)
         #expect(runner.isRunning(.integrity) || !job.state.isActive)
         #expect(runner.activeIntegrityJob(for: .integrity) === job || !job.state.isActive)
         await job.task?.value
@@ -1260,7 +1263,7 @@ struct VerifyCatalogStatusTests {
         let noAudit = VerifyCatalogTiers.presence(audit: nil).tier
         let notRun = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([noAudit, okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
         #expect(notRun.colour == .yellow)
-        #expect(notRun.words.contains("tier 0 File presence: not run — Audit Catalog has not run"), Comment(rawValue: notRun.words))
+        #expect(notRun.words.contains("tier 0 File presence: not run — the files on disk have not been checked"), Comment(rawValue: notRun.words))
         var sound = okTier(3)
         sound.result = .needsDecision(2)
         sound.needsDecision = 2
@@ -1286,7 +1289,7 @@ struct VerifyCatalogSensorTests {
     static let hashFile = "CatalogFileHash.swift"
     static let sources = [
         "CatalogConstraints.swift", hashFile, reportFile, "VerifyCatalogTiers.swift",
-        "VerifyCatalogJob.swift", "VerifyCatalogDetailView.swift", "VerifyCatalogMenuItem.swift",
+        "VerifyCatalogJob.swift", "VerifyCatalogDetailView.swift",
     ]
 
     static func code(_ name: String) throws -> String {
@@ -1345,10 +1348,15 @@ struct VerifyCatalogSensorTests {
         let view = try Self.code("VerifyCatalogDetailView.swift")
         #expect(!view.contains("model.") && !view.contains(".records"), "the detail view reads the job only")
         let runner = try SourceTree.appSource(named: "AnalyzeRunner.swift")
-        #expect(runner.contains("case .integrity:\n                _ = c.startVerifyCatalog(model: model)"))
+        // Rick 2026-10-20 (one verb): the Integrity row runs Validate
+        // Catalog — the files first, then this job — never Verify alone;
+        // the menu has no Verify item (ValidateCatalogMenuSensorTests).
+        #expect(runner.contains("_ = c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)"))
+        #expect(!runner.contains("startVerifyCatalog("))
         let snapshot = try SourceTree.appSource(named: "CatalogFreshnessSnapshot.swift")
         #expect(snapshot.contains("else if job is VerifyCatalogJob { s.insert(.integrity) }"))
+        #expect(snapshot.contains("if job is ValidateCatalogJob { s.formUnion([.filePresence, .integrity]) }"))
         let app = try SourceTree.appSource(named: "VideoScanApp.swift")
-        #expect(app.contains("VerifyCatalogMenuItem(model: catalogModel, center: fileOpsCenter"))
+        #expect(app.contains("ValidateCatalogMenuItem(model: catalogModel, center: fileOpsCenter"))
     }
 }

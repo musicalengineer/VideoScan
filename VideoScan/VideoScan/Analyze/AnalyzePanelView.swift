@@ -285,7 +285,7 @@ struct AnalyzePanelView: View {
         case .soundPrints:
             return (counts.line, counts.sideLine, "a stamp per file, fingerprint or \"no sound\"; the landmarks live in the sidecar")
         case .integrity:
-            let line = counts.eligible > 0 ? "\(counts.eligible.formatted()) rows checked by the last Verify Catalog run" : "nothing eligible"
+            let line = counts.eligible > 0 ? "\(counts.eligible.formatted()) rows checked by the last Validate Catalog run" : "nothing eligible"
             return (line, counts.sideLine, "the run's own record is integrity-latest.json beside the catalog, not a stamp per row")
         default:
             return (counts.line, counts.sideLine, "")

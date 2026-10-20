@@ -134,7 +134,7 @@ enum CatalogFreshnessRows {
             return .init(unit: "file", uncovered: "without a sound print")
         case .integrity:
             return .init(unit: "finding", uncovered: "not yet verified",
-                         decision: "needing a decision — Verify Catalog's row lists them")
+                         decision: "needing a decision — Validate Catalog's row lists them")
         case .correlate:
             return .init(unit: "file", uncovered: "unpaired")
         case .dateInference:
@@ -349,6 +349,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     static func jobRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
         var s: Set<AnalyzeCycler> = []
         for job in center.jobs where job.state.isActive {
+            if job is ValidateCatalogJob { s.formUnion([.filePresence, .integrity]) }   // both steps, one job
             if job is CatalogAuditJob { s.insert(.filePresence) }
             else if job is FullHashBackfillJob { s.insert(.fullHashes) }
             else if job is AudioFingerprintBackfillJob { s.insert(.soundPrints) }

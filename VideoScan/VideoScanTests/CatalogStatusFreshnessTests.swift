@@ -744,8 +744,9 @@ struct CatalogStatusSensorTests {
         #expect(volumes.contains("CatalogAuditSheet()"), "the bookkeeping check keeps its code")
         let sheet = code(try source("CatalogAuditSheet.swift"))
         #expect(sheet.contains("Text(\"Check Totals\")"))
-        let menuItem = code(try source("CatalogAuditMenuItem.swift"))
-        #expect(menuItem.contains("Button(\"Audit Catalog…\")"), "the presence job keeps the Audit name")
+        // Rick 2026-10-20: the presence check is step 1 of the one verb.
+        let menuItem = code(try source("ValidateCatalogMenuItem.swift"))
+        #expect(menuItem.contains("Button(\"Validate Catalog…\")"), "the presence check runs as Validate Catalog")
     }
 }
 

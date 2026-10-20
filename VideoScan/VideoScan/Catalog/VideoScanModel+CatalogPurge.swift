@@ -114,7 +114,7 @@ extension VideoScanModel {
         records.insert(newRec, at: index + 1)
         noteReplacement("NOT RECORDED: a new file landed at \(path), but the earlier record there "
                         + "(\(CatalogReplacedRecord.describe(old))) could not be saved first — \(why). Nothing was "
-                        + "replaced; both stay in the catalog; Verify Catalog will find it.")
+                        + "replaced; both stay in the catalog; Validate Catalog will find it.")
     }
 
     /// The same bytes: every curated value moves to `heir`, then the old id goes.
@@ -153,7 +153,7 @@ extension VideoScanModel {
         records.insert(newRec, at: index + 1)
         if let why = refusal {
             noteReplacement("NOT RECORDED: a new file landed at \(path), but the earlier record there (\(carried)) could not be "
-                            + "marked replaced — \(why). Both stay in the catalog; Verify Catalog will find it.")
+                            + "marked replaced — \(why). Both stay in the catalog; Validate Catalog will find it.")
             return
         }
         noteReplacement("the earlier file at \(path) had \(carried) — kept in the catalog's history "
