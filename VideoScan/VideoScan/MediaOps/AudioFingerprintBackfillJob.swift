@@ -431,7 +431,21 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         switch AudioFingerprintStamp.reading(of: fingerprint) {
         case .printable, .silence: return .fingerprint(fingerprint)
         case .heardTooLittle(let audible): return .heardTooLittle(fingerprint, audibleSeconds: audible)
+        // Only a pass that skipped `AudioFingerprint.compute` (a test stub)
+        // can get here: no loudness measurement, so no verdict either way.
+        case .notMeasured: return .failed(notMeasuredWords)
         }
+    }
+
+    nonisolated static let notMeasuredWords =
+        "the print carries no loudness measurement (0 landmarks) — not judged silent or heard; retried next run"
+
+    /// The detail row for a stamped print: "12 s of sound · 340 landmarks ·
+    /// 3 KB", or for measured silence "3 s, measured silent" (QA P3b — a
+    /// silent print is never "N s of sound").
+    nonisolated static func fingerprintedWords(_ stamp: AudioFingerprintStamp) -> String {
+        if stamp.landmarks == 0 { return "\(seconds(stamp.analyzedSeconds)), measured silent" }
+        return "\(seconds(stamp.analyzedSeconds)) of sound · \(stamp.landmarks.formatted()) landmarks · \(MediaBytes.display(Int64(stamp.bytes)))"
     }
 
     /// The words for a print that heard sound but made no landmark.
@@ -544,7 +558,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                                                                    computedAt: stamp.computedAt)
             totals.landmarks += stamp.landmarks
             totals.sidecarBytes += Int64(stamp.bytes)
-            let detail = "\(Self.seconds(stamp.analyzedSeconds)) of sound · \(stamp.landmarks.formatted()) landmarks · \(MediaBytes.display(Int64(stamp.bytes)))"
+            let detail = Self.fingerprintedWords(stamp)
             if stamp.complete {
                 totals.add(.fingerprinted, bytes: item.sizeBytes)
                 addSample(item, lane: lane, .fingerprinted, detail)
@@ -554,6 +568,11 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                            "only the first \(Self.seconds(stamp.analyzedSeconds)) of \(Self.seconds(item.durationSeconds)) were fingerprinted (the decoder's cap) — kept as partial; not retried")
             }
         case .heardTooLittle(let fingerprint, let audible):
+            // FOLLOW-UP (pending Rick: additive `sound_prints.audible_s REAL
+            // NULL`): stamp here instead — `.fingerprinted`, 0 landmarks,
+            // audibleSeconds = `audible` — and teach `hearing`/`describes`
+            // that a rule-5 stamp with audible_s > 0 is "heard too little"
+            // (stands, not retried). Until then: listed, never stamped.
             totals.readBytes += item.sizeBytes
             totals.add(.heardTooLittle, bytes: item.sizeBytes)
             let why = Self.heardTooLittleWords(analyzedSeconds: fingerprint.analyzedSeconds, audibleSeconds: audible)

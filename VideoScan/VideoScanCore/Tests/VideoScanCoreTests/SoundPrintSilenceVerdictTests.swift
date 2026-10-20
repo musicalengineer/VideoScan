@@ -29,10 +29,13 @@ struct SoundPrintSilenceVerdictTests {
 
     // MARK: Helpers
 
-    static func print(landmarks: Int, active: [Bool], seconds: Double) -> AudioFingerprint {
+    /// `loud` = seconds above the ABSOLUTE ceiling (nil = not measured).
+    /// `active` is the gain-relative bitmap — deliberately independent, to
+    /// prove the reading never uses it.
+    static func print(landmarks: Int, active: [Bool], seconds: Double, loud: Int?) -> AudioFingerprint {
         AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds,
                          activeSeconds: active, hashes: Array(repeating: 1, count: landmarks),
-                         times: Array(repeating: 0, count: landmarks))
+                         times: Array(repeating: 0, count: landmarks), secondsAboveSilenceCeiling: loud)
     }
 
     static func stamp(version: Int, _ outcome: AudioFingerprintStamp.Outcome, landmarks: Int,
@@ -45,21 +48,26 @@ struct SoundPrintSilenceVerdictTests {
 
     // MARK: Logic — reading a fresh print
 
-    @Test("reading: landmarks → printable; no landmark + every second quiet → silence; no landmark + any audible second → heard too little (never silence)")
+    @Test("reading: landmarks → printable; no landmark + no second above −60 dBFS (gain 1) → silence; no landmark + any loud second → heard too little — the gain-relative bitmap is never consulted")
     func readingOfAFreshPrint() {
-        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 3, active: [true, false], seconds: 2)) == .printable)
-        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [false, false, false], seconds: 3)) == .silence)
-        // 00085.MTS on 10/20: 1.504 s, both seconds audible, one peak, 0 landmarks.
-        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [true, true], seconds: 1.504))
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 3, active: [true, false], seconds: 2, loud: 1)) == .printable)
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [false, false, false], seconds: 3, loud: 0)) == .silence)
+        // QA P1: dither the ×100 gain lifted into the bitmap is still silence.
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [true, true, true], seconds: 3, loud: 0)) == .silence)
+        // 00085.MTS on 10/20: 1.504 s at −0.1 dB peak, one peak, 0 landmarks.
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [true, true], seconds: 1.504, loud: 2))
                 == .heardTooLittle(audibleSeconds: 2))
-        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [false, true, false], seconds: 3))
-                == .heardTooLittle(audibleSeconds: 1), "one audible second is enough to rule out 'silent'")
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [false, false, false], seconds: 3, loud: 1))
+                == .heardTooLittle(audibleSeconds: 1), "one loud second is enough to rule out 'silent', whatever the bitmap says")
     }
 
-    @Test("reading: an empty bitmap is UNKNOWN — the conservative side is 'heard', never 'silent'; so is 0 analysed seconds")
+    @Test("reading: no absolute measurement (a sidecar blob, a hand-built print) is NOT MEASURED — never silent, never heard; so is 0 analysed seconds")
     func emptyBitmapIsNotSilence() {
-        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [], seconds: 3)) == .heardTooLittle(audibleSeconds: 0))
-        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [], seconds: 0)) == .heardTooLittle(audibleSeconds: 0))
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [false, false, false], seconds: 3, loud: nil)) == .notMeasured)
+        #expect(AudioFingerprintStamp.reading(of: Self.print(landmarks: 0, active: [], seconds: 0, loud: 0)) == .notMeasured)
+        let blob = try? AudioFingerprint.decode(AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: [Int16](repeating: 0, count: 16_000))).encoded())
+        #expect(blob?.secondsAboveSilenceCeiling == nil, "VSAF does not carry the measurement")
+        #expect(blob.map(AudioFingerprintStamp.reading(of:)) == .notMeasured)
     }
 
     @Test("the engine on PCM: a 0.3 s loud tone makes no landmark and is heard too little; 3 s of digital zeros is silence")
@@ -67,12 +75,25 @@ struct SoundPrintSilenceVerdictTests {
         let tone = (0..<2_400).map { Int16(12_000 * sin(2 * Double.pi * 1_000 * Double($0) / 8_000)) }
         let toneFP = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: tone))
         #expect(toneFP.landmarkCount == 0, "fewer than 7 frames: no centre frame, no peak")
-        #expect(toneFP.activeSecondCount == 1)
+        #expect(toneFP.secondsAboveSilenceCeiling == 1)
         #expect(AudioFingerprintStamp.reading(of: toneFP) == .heardTooLittle(audibleSeconds: 1))
+        // Quiet but REAL: a 0.3 s tone peaking at −50 dBFS is heard, not silent.
+        let quiet = (0..<2_400).map { Int16(104 * sin(2 * Double.pi * 700 * Double($0) / 8_000)) }
+        #expect(AudioFingerprintStamp.reading(of: AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: quiet)))
+                == .heardTooLittle(audibleSeconds: 1))
 
         let zeros = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: [Int16](repeating: 0, count: 24_000)))
-        #expect(zeros.landmarkCount == 0 && zeros.activeSeconds == [false, false, false])
+        #expect(zeros.landmarkCount == 0 && zeros.secondsAboveSilenceCeiling == 0)
         #expect(AudioFingerprintStamp.reading(of: zeros) == .silence)
+        // The ceiling itself, at gain 1: −62 dBFS peaks (26 of 32,768) are
+        // quiet seconds; one sample of 33 makes its second loud. (A tonal
+        // −62 dBFS signal still PRINTS after normalisation — a print with
+        // landmarks is never asked whether it is silent.)
+        #expect(AudioFingerprint.silenceCeilingSample == 32)
+        let underCeiling = (0..<24_000).map { Int16(26 * sin(2 * Double.pi * 440 * Double($0) / 8_000)) }
+        #expect(AudioFingerprint.loudSeconds(underCeiling, sampleRate: 8_000) == 0)
+        var oneSpike = [Int16](repeating: 0, count: 24_000); oneSpike[12_345] = -33
+        #expect(AudioFingerprint.loudSeconds(oneSpike, sampleRate: 8_000) == 1)
     }
 
     // MARK: Logic — reading a stamp
@@ -119,7 +140,7 @@ struct SoundPrintSilenceVerdictTests {
 
     // MARK: Sensor — "silent" only for decoded, measured silence
 
-    @Test("SENSOR: across every stamp shape, measuredSilence ⇔ (fingerprinted, rule ≥ 4, 0 landmarks, analysed > 0); across every print shape, .silence ⇔ (0 landmarks, a bitmap, no audible second)")
+    @Test("SENSOR: across every stamp shape, measuredSilence ⇔ (fingerprinted, rule ≥ 4, 0 landmarks, analysed > 0); across every print shape, .silence ⇔ (0 landmarks, analysed > 0, measured, 0 loud seconds) — whatever the bitmap")
     func silentOnlyForMeasuredSilence() {
         var silentStamps = 0
         for version in 1...5 {
@@ -142,16 +163,20 @@ struct SoundPrintSilenceVerdictTests {
         #expect(silentStamps > 0, "the sweep reached the silent shape")
         for landmarks in [0, 1] {
             for active in [[], [false], [false, false], [true], [false, true], [true, true]] as [[Bool]] {
-                let r = AudioFingerprintStamp.reading(of: Self.print(landmarks: landmarks, active: active, seconds: Double(max(1, active.count))))
-                #expect((r == .silence) == (landmarks == 0 && !active.isEmpty && !active.contains(true)),
-                        "lm=\(landmarks) active=\(active) → \(r)")
+                for loud in [nil, 0, 1, 2] as [Int?] {
+                    for seconds in [0.0, 2.0] {
+                        let r = AudioFingerprintStamp.reading(of: Self.print(landmarks: landmarks, active: active, seconds: seconds, loud: loud))
+                        #expect((r == .silence) == (landmarks == 0 && seconds > 0 && loud == 0),
+                                "lm=\(landmarks) active=\(active) loud=\(String(describing: loud)) s=\(seconds) → \(r)")
+                    }
+                }
             }
         }
     }
 
     // MARK: Media matrix — real ffmpeg fixtures through the real decoder
 
-    @Test("MEDIA: short AC-3 .mts with a tone → heard too little (not silent); AAC .mov with tones → printable; DV digital silence → silence; a TS whose header names AC-3 but holds no sound → a decode failure, never PCM")
+    @Test("MEDIA: short AC-3 .mts with a tone → heard too little (not silent); AAC .mov with tones → printable; DV digital silence and a −80 dBFS hiss .mov → silence; a TS whose header names AC-3 but holds no sound → a decode failure, never PCM")
     func mediaMatrix() async throws {
         let fx = try await SilenceFixtures.build()
         defer { try? FileManager.default.removeItem(at: fx.directory) }
@@ -172,6 +197,10 @@ struct SoundPrintSilenceVerdictTests {
         #expect(silencePCM.samples.count > 8_000, "the DV silence track decoded (\(silencePCM.samples.count) samples)")
         let silence = AudioFingerprint.compute(silencePCM)
         #expect(AudioFingerprintStamp.reading(of: silence) == .silence, "decoded digital zeros are measured silence")
+
+        let hiss = AudioFingerprint.compute(try await decoder.decode(path: try fx.url("low_hiss_pcm_mov").path))
+        #expect(AudioFingerprintStamp.reading(of: hiss) == .silence,
+                "a −80 dBFS hiss track through the real decoder is measured silence (bitmap \(hiss.activeSeconds))")
 
         let undecodable = try fx.url("undecodable_sound_mts")
         await #expect(throws: AudioPCMDecoder.Failure.self) {
@@ -207,6 +236,9 @@ struct SilenceFixtures {
             ("digital_silence_dv", "test_digital_silence.dv",
              ["-f", "lavfi", "-i", "testsrc=size=720x480:rate=30000/1001", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
               "-t", "3", "-map", "0:v", "-map", "1:a", "-c:v", "dvvideo", "-pix_fmt", "yuv411p", "-c:a", "pcm_s16le", "-f", "dv"]),
+            ("low_hiss_pcm_mov", "test_low_hiss_pcm.mov",
+             picture + ["-f", "lavfi", "-i", "anoisesrc=color=white:amplitude=0.0001:sample_rate=48000", "-t", "3",
+                        "-map", "0:v", "-map", "1:a"] + h264 + ["-c:a", "pcm_s16le"]),
             ("tone_ac3_ts_source", "test_tone_ac3_source.mts",
              picture + ["-f", "lavfi", "-i", "aevalsrc=0.4*sin(2*PI*(400+300*floor(4*t))*t):s=48000", "-t", "2",
                         "-map", "0:v", "-map", "1:a"] + h264 + ["-c:a", "ac3", "-ac", "2", "-f", "mpegts"]),

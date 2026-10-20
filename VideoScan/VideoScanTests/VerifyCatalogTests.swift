@@ -452,7 +452,8 @@ struct VerifyCatalogTierTests {
         #expect(out.findings.first?.words == "the header says Video+Audio, but the sound print heard nothing (silent)")
         #expect(out.findings.last?.words == "the header says Video+Audio, but the sound print recorded no audio — Fingerprint Sound again")
         #expect(out.findings.first?.filename == "silent.m4v")
-        #expect(out.tier.summary == "2 headers say sound the print never heard")
+        #expect(out.tier.summary == "2 headers say sound the print never heard · 1 Video+Audio files have no current sound print yet — Fingerprint Sound",
+                "the could-not-check rows stay named beside the decisions (QA P3c, 2026-10-20)")
     }
 
     /// RED 2026-10-18: 25 of Rick's 131 tier-3 decisions were iMovie
@@ -492,7 +493,7 @@ struct VerifyCatalogTierTests {
         #expect(mixed.tier.result == .needsDecision(2))
         #expect(mixed.tier.couldNotCheck == 1)
         #expect(mixed.tier.checked == 2)
-        #expect(mixed.tier.summary == "2 headers say sound the print never heard")
+        #expect(mixed.tier.summary == "2 headers say sound the print never heard · 1 possible reference movies — their sound lives in other files; Verify Media decides")
     }
 
     @Test("tier 4 computes the constraints once and hands them to tier 5; tier 5 names the worst rule first and carries the filename")

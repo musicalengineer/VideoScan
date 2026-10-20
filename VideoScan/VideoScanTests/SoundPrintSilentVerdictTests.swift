@@ -83,6 +83,33 @@ struct SoundPrintSilentVerdictTier3Tests {
         #expect(VerifyCatalogTiers.silentPrintReason(.notEvidence) == nil)
         #expect(VerifyCatalogTiers.silentPrintReason(.heardSound) == nil)
     }
+
+    @Test("QA P2: a person's 'Silent — checked' settles the row even when the stamp is not evidence (pre-4 zero-landmark, v2 decode failure); so does a Live Photo motion clip")
+    func personCheckedPreFourStillSettles() {
+        var checkedB = vaRow("00085.MTS", codec: "ac3", stamp(version: 2, landmarks: 0, seconds: 1.504))
+        checkedB.silenceCheckedByPerson = true
+        var checkedC = vaRow("IMG_0164.MOV", codec: "aac", stamp(version: 2, .noAudio, landmarks: 0))
+        checkedC.silenceCheckedByPerson = true
+        var live = IntegrityRow(fullPath: "/Volumes/X/Pictures/Photos Library.photoslibrary/originals/A/live.mov", sizeBytes: 100)
+        live.filename = "live.mov"; live.streamTypeRaw = va; live.audioCodec = "aac"; live.contentHash = "v1:x"; live.durationSeconds = 2.5
+        live.audioFingerprint = stamp(version: 2, landmarks: 0, seconds: 2.5)
+        let out = tier3([checkedB, checkedC, live])
+        #expect(out.findings.isEmpty && out.tier.couldNotCheck == 0, "\(out.findings.map(\.words)) cnc=\(out.tier.couldNotCheck)")
+        #expect(out.tier.result == .ok && out.tier.checked == 3 && out.tier.passed == 3)
+        #expect(out.tier.summary.contains("2 silent clips checked by a person"), Comment(rawValue: out.tier.summary))
+        #expect(out.tier.summary.contains("1 \(VerifyCatalogTiers.livePhotoSilentWords)"), Comment(rawValue: out.tier.summary))
+    }
+
+    @Test("QA P3c: when there ARE decisions, the summary still names what could not be checked")
+    func summaryKeepsCouldNotCheckBesideDecisions() {
+        let a = vaRow("Fog 02.dv", codec: "pcm_s16le", stamp(version: 4, landmarks: 0, seconds: 3))
+        let b = vaRow("00085.MTS", codec: "ac3", stamp(version: 2, landmarks: 0, seconds: 1.504))
+        let none = vaRow("none.mov", codec: "aac", nil)
+        let out = tier3([a, b, none])
+        #expect(out.tier.result == .needsDecision(1) && out.tier.couldNotCheck == 2)
+        #expect(out.tier.summary == "1 headers say sound the print never heard · 1 Video+Audio files have no current sound print yet — Fingerprint Sound · 1 sound prints could not tell sound from silence (a failed decode, or made before silence was measured) — Fingerprint Sound looks again",
+                Comment(rawValue: out.tier.summary))
+    }
 }
 
 @Suite("Sound print verdicts — Stream column and Compare", .serialized)
@@ -120,9 +147,31 @@ struct SoundPrintSilentVerdictSurfaceTests {
         #expect(audible(stamp(version: 2, landmarks: 40, seconds: 10), "ac3") == 10)
 
         let heard = AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: 1.5,
-                                     activeSeconds: [true, true], hashes: [], times: [])
+                                     activeSeconds: [true, true], hashes: [], times: [], secondsAboveSilenceCeiling: 2)
         #expect(VideoScanModel.printAudibleSeconds(heard) == nil, "heard too little to print is not 'no sound'")
-        #expect(VideoScanModel.soundStrip(heard) == [true, true], "the spool draws the sound the bitmap measured")
+        #expect(VideoScanModel.soundStrip(heard) == nil, "and not a drawn silence either")
+    }
+
+    @Test("QA P3a: a zero-landmark print with no measurement (pre-bitmap, or any sidecar blob) draws NO strip — unknown, never silence; measured silence draws quiet; a print with landmarks draws its bitmap")
+    func unmeasuredStripIsNotSilence() {
+        func fp(_ active: [Bool], landmarks: Int = 0, loud: Int? = nil, seconds: Double = 3) -> AudioFingerprint {
+            AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds, activeSeconds: active,
+                             hashes: Array(repeating: 1, count: landmarks), times: Array(repeating: 0, count: landmarks),
+                             secondsAboveSilenceCeiling: loud)
+        }
+        #expect(VideoScanModel.soundStrip(fp([])) == nil, "pre-bitmap, zero landmarks: unknown")
+        #expect(VideoScanModel.soundStrip(fp([false, false, false])) == nil, "a sidecar blob's quiet-looking bitmap is gain-relative: unknown")
+        #expect(VideoScanModel.soundStrip(fp([true, true, true], loud: 0)) == [false, false, false], "measured silence draws quiet")
+        #expect(VideoScanModel.soundStrip(fp([true, false, true], landmarks: 4)) == [true, false, true])
+        #expect(VideoScanModel.soundStrip(fp([], landmarks: 4)) == [true, true, true], "pre-bitmap print that heard: all audible")
+    }
+
+    @Test("QA P3a: Compare only offers a stamp that heard sound for the match — a not-evidence or measured-silent stamp gives no sidecar key")
+    func fingerprintKeyOnlyForEvidence() {
+        #expect(VideoScanModel.fingerprintKey(record(stamp(version: 2, landmarks: 40), codec: "ac3")) != nil)
+        #expect(VideoScanModel.fingerprintKey(record(stamp(version: 2, landmarks: 0), codec: "ac3")) == nil, "pre-4 zero-landmark: not evidence")
+        #expect(VideoScanModel.fingerprintKey(record(stamp(version: 4, landmarks: 0), codec: "pcm_s16le")) == nil, "silence has nothing to match")
+        #expect(VideoScanModel.fingerprintKey(record(stamp(version: 2, .noAudio, landmarks: 0), codec: "aac")) == nil)
     }
 }
 

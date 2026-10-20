@@ -180,7 +180,7 @@ public struct AudioFingerprintParameters: Sendable, Equatable {
     }
 }
 
-public struct AudioFingerprint: Sendable, Equatable {
+public struct AudioFingerprint: Sendable {
     /// On-disk FORMAT version (the header layout below). 2 = recipeID,
     /// completeness flag and audible-seconds bitmap added (codex F3/F2/F1,
     /// 2026-10-14). Nothing was persisted at version 1.
@@ -225,13 +225,33 @@ public struct AudioFingerprint: Sendable, Equatable {
     /// Parallel arrays: `hashes[i]` was anchored at frame `times[i]`.
     public let hashes: [UInt32]
     public let times: [UInt32]
+    /// ABSOLUTE loudness, measured by `compute` on the decoded PCM at gain 1
+    /// (before normalisation): how many one-second blocks have a peak above
+    /// `silenceCeilingDBFS`. 0 = decoded and measured silent. nil = not
+    /// measured (a print decoded from a VSAF blob, or built by hand).
+    ///
+    /// NOT `activeSeconds`: that bitmap is judged AFTER normalisation (gain
+    /// up to ×100 = +40 dB), so it calls −92 dBFS dither "audible" — right
+    /// for the matcher, wrong for "is this track silent?" (QA P1 on
+    /// af4be5f38). In memory only: not in VSAF, not in the recipe, not part
+    /// of equality (`==` compares the persisted print). The stamp's future
+    /// `sound_prints.audible_s` column (Rick's decision) would persist it.
+    public let secondsAboveSilenceCeiling: Int?
+
+    /// The absolute "silent" ceiling: a second whose peak sample is at or
+    /// below this is silence (−60 dBFS = 32 of 32,768; 16-bit dither is
+    /// ±1–2, a quiet hiss floor ±6). A constant, not a recipe knob, so
+    /// `recipeID` and every stored fingerprint are unchanged.
+    public static let silenceCeilingDBFS: Float = -60
+    static var silenceCeilingSample: Int { Int(32_768 * powf(10, silenceCeilingDBFS / 20)) }
 
     /// Memberwise; `sampleRate`, `hopSamples` and `frameSize` must be
     /// positive (decode and compute validate before they get here).
     public init(version: UInt16 = AudioFingerprint.currentVersion,
                 recipeID: UInt32 = AudioFingerprintParameters.default.recipeID,
                 sampleRate: Int, hopSamples: Int, frameSize: Int, durationSeconds: Double,
-                complete: Bool = true, activeSeconds: [Bool] = [], hashes: [UInt32], times: [UInt32]) {
+                complete: Bool = true, activeSeconds: [Bool] = [], hashes: [UInt32], times: [UInt32],
+                secondsAboveSilenceCeiling: Int? = nil) {
         precondition(sampleRate > 0 && hopSamples > 0 && frameSize > 0,
                      "AudioFingerprint: sampleRate, hopSamples and frameSize must be positive")
         precondition(hashes.count == times.count, "AudioFingerprint: hashes and times must be parallel")
@@ -245,6 +265,7 @@ public struct AudioFingerprint: Sendable, Equatable {
         self.activeSeconds = activeSeconds
         self.hashes = hashes
         self.times = times
+        self.secondsAboveSilenceCeiling = secondsAboveSilenceCeiling
     }
 
     public var landmarkCount: Int { hashes.count }
@@ -386,7 +407,30 @@ public struct AudioFingerprint: Sendable, Equatable {
         return AudioFingerprint(recipeID: parameters.recipeID, sampleRate: pcm.sampleRate,
                                 hopSamples: parameters.hopSamples, frameSize: parameters.frameSize,
                                 durationSeconds: pcm.durationSeconds, complete: !pcm.reachedCap,
-                                activeSeconds: active, hashes: landmarks.hashes, times: landmarks.times)
+                                activeSeconds: active, hashes: landmarks.hashes, times: landmarks.times,
+                                secondsAboveSilenceCeiling: loudSeconds(pcm.samples, sampleRate: pcm.sampleRate))
+    }
+
+    /// One-second blocks whose peak |sample| (gain 1) is above
+    /// `silenceCeilingSample`. One pass, no copy (`vDSP_maxmgv` per block
+    /// would need a Float copy; a plain loop over Int16 is enough here).
+    static func loudSeconds(_ samples: [Int16], sampleRate: Int) -> Int {
+        guard sampleRate > 0, !samples.isEmpty else { return 0 }
+        let ceiling = Int32(silenceCeilingSample)
+        var loud = 0
+        samples.withUnsafeBufferPointer { src in
+            var start = 0
+            while start < src.count {
+                let end = min(start + sampleRate, src.count)
+                var i = start
+                while i < end {
+                    if abs(Int32(src[i])) > ceiling { loud += 1; break }
+                    i += 1
+                }
+                start = end
+            }
+        }
+        return loud
     }
 
     /// Per-second audibility: RMS of each one-second block (× `gain`,
@@ -436,6 +480,18 @@ public struct AudioFingerprint: Sendable, Equatable {
         let rms = Float((sumOfSquares / Double(samples.count)).squareRoot()) / 32_768
         guard rms > 0 else { return 1 }
         return min(parameters.maxGain, parameters.targetRMS / rms)
+    }
+}
+
+/// Equality is the PERSISTED print (everything VSAF carries); the in-memory
+/// `secondsAboveSilenceCeiling` measurement is not part of it, so a print
+/// equals its own decoded blob. (For Rick: a hand-written operator== that
+/// skips one cached field, as you would for a C++ memo member.)
+extension AudioFingerprint: Equatable {
+    public static func == (a: AudioFingerprint, b: AudioFingerprint) -> Bool {
+        a.version == b.version && a.recipeID == b.recipeID && a.sampleRate == b.sampleRate
+            && a.hopSamples == b.hopSamples && a.frameSize == b.frameSize && a.durationSeconds == b.durationSeconds
+            && a.complete == b.complete && a.activeSeconds == b.activeSeconds && a.hashes == b.hashes && a.times == b.times
     }
 }
 

@@ -115,27 +115,30 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     public enum Reading: Equatable, Sendable {
         /// At least one landmark: a usable fingerprint.
         case printable
-        /// No landmark AND every analysed second measured below the
-        /// audible floor (`AudioFingerprintParameters.activeFloorDB`):
-        /// decoded, measured digital silence (or near it).
+        /// No landmark AND every analysed second's peak, measured on the
+        /// decoded PCM at gain 1, at or below −60 dBFS
+        /// (`AudioFingerprint.silenceCeilingDBFS`): decoded and measured
+        /// silent — digital zeros, dither, a hiss floor nobody can hear.
         case silence
-        /// No landmark, yet the audio was heard — at least one audible
-        /// second (or no bitmap to say otherwise): too short or too sparse
-        /// for the peak picker (it needs two peaks, each the loudest of a
-        /// ±3-frame × ±15-bin patch, ≥ 1 frame apart; the first and last
-        /// 3 frames are never centres). Never "silent".
+        /// No landmark, yet at least one second peaks above the ceiling:
+        /// real sound too short or too sparse for the peak picker (it needs
+        /// two peaks, each the loudest of a ±3-frame × ±15-bin patch, ≥ 1
+        /// frame apart; the first and last 3 frames are never centres).
+        /// Never "silent". `audibleSeconds` is the absolute count — the
+        /// value a future `sound_prints.audible_s` column would persist.
         case heardTooLittle(audibleSeconds: Int)
+        /// No landmark and no absolute measurement (a print decoded from a
+        /// sidecar blob, which does not carry it): says nothing either way.
+        case notMeasured
     }
 
+    /// Decided on the ABSOLUTE level only — never on `activeSeconds`, whose
+    /// floor moves with the normalising gain (×100 makes −92 dBFS dither
+    /// "audible"; QA P1 on af4be5f38).
     public static func reading(of fingerprint: AudioFingerprint) -> Reading {
         if fingerprint.landmarkCount > 0 { return .printable }
-        // An empty bitmap is "unknown" (AudioFingerprint.activeSeconds):
-        // the conservative side is "heard", never "silent".
-        guard fingerprint.analyzedSeconds > 0, !fingerprint.activeSeconds.isEmpty else {
-            return .heardTooLittle(audibleSeconds: fingerprint.activeSeconds.isEmpty ? 0 : fingerprint.activeSecondCount)
-        }
-        let audible = fingerprint.activeSecondCount
-        return audible == 0 ? .silence : .heardTooLittle(audibleSeconds: audible)
+        guard fingerprint.analyzedSeconds > 0, let loud = fingerprint.secondsAboveSilenceCeiling else { return .notMeasured }
+        return loud == 0 ? .silence : .heardTooLittle(audibleSeconds: loud)
     }
 
     /// What a STAMP says about the sound, judged against the row's header

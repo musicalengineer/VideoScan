@@ -34,8 +34,11 @@ struct RelatedAnswer: Sendable, Equatable {
 /// One flag per second of each file (true = audible), and the matched
 /// stretch in each file's own seconds, when the sound matched.
 struct RelatedStrips: Sendable, Equatable {
-    var a: [Bool] = []
-    var b: [Bool] = []
+    /// One flag per second; nil = not measured (no fingerprint, or a print
+    /// with no landmark and no measurement) — drawn as "not measured",
+    /// never as silence.
+    var a: [Bool]?
+    var b: [Bool]?
     /// Where `a`'s second 0 sits in `b` (negative: `b` starts inside `a`).
     var offsetSeconds: Double = 0
     var matchedA: Range<Int>?
@@ -120,7 +123,7 @@ extension VideoScanModel {
     nonisolated static func printAudibleSeconds(_ print: AudioFingerprint) -> Double? {
         switch AudioFingerprintStamp.reading(of: print) {
         case .silence: return 0
-        case .heardTooLittle: return nil
+        case .heardTooLittle, .notMeasured: return nil
         case .printable:
             return Double(print.activeSeconds.isEmpty ? Int(print.durationSeconds) : print.activeSecondCount)
         }
@@ -188,18 +191,26 @@ extension VideoScanModel {
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
     }
 
-    /// One flag per second: the bitmap whenever the print has one (it is
-    /// the measurement — a no-landmark print that heard sound draws that
-    /// sound); without a bitmap, all quiet for a print with no landmark and
-    /// all audible for a pre-bitmap print that heard something.
-    nonisolated static func soundStrip(_ print: AudioFingerprint) -> [Bool] {
-        if !print.activeSeconds.isEmpty { return print.activeSeconds }
-        let seconds = max(0, Int(print.durationSeconds))
-        return Array(repeating: print.landmarkCount > 0, count: seconds)
+    /// One flag per second, or nil when unknown. With landmarks: the bitmap
+    /// (all audible for a pre-bitmap print). With NO landmark it is decided
+    /// like `printAudibleSeconds`: all quiet only for measured silence;
+    /// nil otherwise (QA P3a) — a sidecar blob carries no absolute
+    /// measurement, and the bitmap's floor moves with the gain.
+    nonisolated static func soundStrip(_ print: AudioFingerprint) -> [Bool]? {
+        let seconds = print.activeSeconds.isEmpty ? max(0, Int(print.durationSeconds)) : print.activeSeconds.count
+        guard print.landmarkCount == 0 else {
+            return print.activeSeconds.isEmpty ? Array(repeating: true, count: seconds) : print.activeSeconds
+        }
+        if case .silence = AudioFingerprintStamp.reading(of: print) { return Array(repeating: false, count: seconds) }
+        return nil
     }
 
+    /// The sidecar key of a stamp that is EVIDENCE of sound to match
+    /// (`hearing == .heardSound`). A measured-silent print has nothing to
+    /// match, and a not-evidence stamp (a pre-rule-4 zero-landmark print)
+    /// must not be offered as if it were (QA P3a).
     nonisolated static func fingerprintKey(_ r: VideoRecord) -> AudioFingerprintStore.Key? {
-        guard let s = r.audioFingerprint, s.outcome == .fingerprinted else { return nil }
+        guard let s = r.audioFingerprint, s.hearing(headerHasAudio: !r.audioCodec.isEmpty) == .heardSound else { return nil }
         return AudioFingerprintStore.Key(contentDigest: s.contentDigest, sizeBytes: s.sizeBytes)
     }
 
@@ -233,11 +244,11 @@ extension VideoScanModel {
             let offset = match.evidence.offsetSeconds
             out.strips.offsetSeconds = offset
             let startB = max(0, Int(match.spanStartInMasterSeconds.rounded(.down)))
-            let endB = min(out.strips.b.count, Int(match.spanEndInMasterSeconds.rounded(.up)))
+            let endB = min(out.strips.b?.count ?? 0, Int(match.spanEndInMasterSeconds.rounded(.up)))
             if endB > startB {
                 out.strips.matchedB = startB..<endB
                 let startA = max(0, Int((Double(startB) - offset).rounded(.down)))
-                let endA = min(out.strips.a.count, Int((Double(endB) - offset).rounded(.up)))
+                let endA = min(out.strips.a?.count ?? 0, Int((Double(endB) - offset).rounded(.up)))
                 if endA > startA { out.strips.matchedA = startA..<endA }
             }
         case .different, .inconclusive:

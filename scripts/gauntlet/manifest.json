@@ -218,6 +218,19 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QARedSilenceFloorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QARedSilenceFloorTests"
+      ],
+      "tests": [
+        "ditherIsSilence",
+        "lowHissIsSilence"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
       "stage": "unit",
       "suites": [
@@ -6134,10 +6147,12 @@
         "AudioFingerprintBackfillSilenceMediaTests"
       ],
       "tests": [
+        "ditherIsMeasuredSilenceNotARetryLoop",
         "existingZeroLandmarkStampsAreRedecided",
         "heardTooLittleIsNeverStampedSilent",
         "measuredSilenceIsStamped",
         "silenceMatrix",
+        "unmeasuredPrintIsNotJudged",
         "zeroLandmarkSidecarRowIsNotShared",
         "zeroSampleDecodeIsCouldNotCheck"
       ]
@@ -28417,11 +28432,15 @@
       ],
       "tests": [
         "compareSide",
+        "fingerprintKeyOnlyForEvidence",
         "groupAStillFires",
         "groupsBAndCAreCouldNotCheck",
+        "personCheckedPreFourStillSettles",
         "reasonWordsPerHearing",
         "streamColumn",
-        "tier3At100k"
+        "summaryKeepsCouldNotCheckBesideDecisions",
+        "tier3At100k",
+        "unmeasuredStripIsNotSilence"
       ]
     },
     {
@@ -29789,6 +29808,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QARedSilenceFloorTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -32312,7 +32335,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2782,
+      "expected_floor": 2786,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [

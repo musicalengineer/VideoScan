@@ -315,6 +315,10 @@ enum VerifyCatalogTiers {
         if !findings.isEmpty {
             t.result = .needsDecision(findings.count)
             parts.append("\(findings.count.formatted()) headers say sound the print never heard")
+            // What it could not check stays visible beside the decisions (QA P3c).
+            if couldNotCheck > 0 {
+                parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced, notEvidence: tally.notEvidence))
+            }
         } else if couldNotCheck > 0 {
             t.result = .couldNotCheck(couldNotCheck)
             parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced, notEvidence: tally.notEvidence))
@@ -352,20 +356,22 @@ enum VerifyCatalogTiers {
                 return
             }
             let hearing = stamp.hearing(headerHasAudio: !r.audioCodec.isEmpty)
+            let why = silentPrintReason(hearing)
+            // A known reason settles the row whatever the print can say —
+            // a person's "Silent — checked" above all, also on a stamp that
+            // is not evidence (QA P2 on af4be5f38).
+            if why != nil || hearing == .notEvidence {
+                if isLivePhotoMotionClip(r) { stamped += 1; livePhoto += 1; return }
+                if r.silenceCheckedByPerson { stamped += 1; checkedByPerson += 1; return }
+            }
             if hearing == .notEvidence {
                 notEvidence += 1
                 return
             }
             stamped += 1
-            guard let why = silentPrintReason(hearing) else { return }
-            if isLivePhotoMotionClip(r) {
-                livePhoto += 1
-            } else if r.silenceCheckedByPerson {
-                checkedByPerson += 1
-            } else {
-                findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
-                                                 words: "the header says Video+Audio, \(why)", needsDecision: true))
-            }
+            guard let why else { return }
+            findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
+                                             words: "the header says Video+Audio, \(why)", needsDecision: true))
         }
     }
 

@@ -71,21 +71,28 @@ private extension ShowAgainSandbox {
 
 // MARK: - Logic
 
-/// A print with no landmark and the given audible-seconds bitmap.
-private func zeroLandmarkPrint(active: [Bool], seconds: Double) -> AudioFingerprint {
+/// A print with no landmark, a (gain-relative) bitmap and the ABSOLUTE
+/// measurement `loud` (seconds above −60 dBFS at gain 1; nil = a blob).
+private func zeroLandmarkPrint(active: [Bool], seconds: Double, loud: Int?) -> AudioFingerprint {
     AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds,
-                     activeSeconds: active, hashes: [], times: [])
+                     activeSeconds: active, hashes: [], times: [], secondsAboveSilenceCeiling: loud)
 }
 
 /// Group B of 10/20 — 00085.MTS: 1.504 s of AC-3 that peaks at −0.1 dB,
 /// both seconds audible, no landmark.
 private let heardTooLittlePass: AudioFingerprintBackfillJob.Pass = { _ in
-    zeroLandmarkPrint(active: [true, true], seconds: 1.504)
+    zeroLandmarkPrint(active: [true, true], seconds: 1.504, loud: 2)
 }
 
 /// Group A of 10/20 — an iMovie theme clip: decoded, every second zero.
 private let measuredSilencePass: AudioFingerprintBackfillJob.Pass = { _ in
-    zeroLandmarkPrint(active: [false, false, false], seconds: 3)
+    zeroLandmarkPrint(active: [false, false, false], seconds: 3, loud: 0)
+}
+
+/// QA P1: −92 dBFS dither — the ×100 gain lifts it into the bitmap, yet
+/// no second peaks above −60 dBFS. Measured silence.
+private let ditherPass: AudioFingerprintBackfillJob.Pass = { _ in
+    zeroLandmarkPrint(active: [true, true, true], seconds: 3, loud: 0)
 }
 
 @Suite("Fingerprint sound — silence is measured, never inferred (2026-10-20)", .serialized)
@@ -119,6 +126,28 @@ struct AudioFingerprintBackfillSilenceTests {
         #expect(stamp.outcome == .fingerprinted && stamp.landmarks == 0 && stamp.engineVersion == 4)
         #expect(stamp.hearing(headerHasAudio: true) == .measuredSilence)
         #expect(sb.model.audioFingerprintBackfillPlan().fileCount == 0)
+        // QA P3b: a measured-silent print is never "N s of sound".
+        let detail = job.sample.first { $0.path == theme.fullPath }?.detail ?? "(no sample row)"
+        #expect(detail == "3 s, measured silent", Comment(rawValue: detail))
+    }
+
+    @Test("QA P1: dither the normalising gain lifts into the bitmap is MEASURED silence (stamped, not 'heard too little', not retried nightly)")
+    func ditherIsMeasuredSilenceNotARetryLoop() async throws {
+        let sb = try ShowAgainSandbox.make("afb_dither"); defer { sb.cleanup() }
+        let render = try sb.clip("Donna_render.mov", seconds: 3, codec: "aac")
+        let job = await runSilenceJob(sb.model, pass: ditherPass)
+        #expect(job.totals[.heardTooLittle] == 0 && job.totals[.fingerprinted] == 1, Comment(rawValue: job.totals.line))
+        #expect(render.audioFingerprint?.hearing(headerHasAudio: true) == .measuredSilence)
+        #expect(sb.model.audioFingerprintBackfillPlan().fileCount == 0, "not re-planned")
+    }
+
+    @Test("a print with no loudness measurement (a stub that skipped compute) is not judged: a named failure, never a stamp")
+    func unmeasuredPrintIsNotJudged() async throws {
+        let sb = try ShowAgainSandbox.make("afb_unmeasured"); defer { sb.cleanup() }
+        let clip = try sb.clip("x.mov", seconds: 3, codec: "aac")
+        let job = await runSilenceJob(sb.model, pass: { _ in zeroLandmarkPrint(active: [false, false, false], seconds: 3, loud: nil) })
+        #expect(job.totals[.failed] == 1 && clip.audioFingerprint == nil, Comment(rawValue: job.totals.line))
+        #expect(job.problems.first?.detail == AudioFingerprintBackfillJob.notMeasuredWords)
     }
 
     @Test("EXISTING STAMPS: a pre-4 zero-landmark print is re-printed — heard sound → stays unstamped-as-evidence (old stamp is not evidence), measured silence → replaced by a rule-4 stamp; a pre-4 print with landmarks stands")
@@ -148,7 +177,7 @@ struct AudioFingerprintBackfillSilenceTests {
         let sb = try ShowAgainSandbox.make("afb_noshare"); defer { sb.cleanup() }
         let copy = try sb.clip("copy.mts", codec: "ac3", fullHash: "e")
         let key = AudioFingerprintStore.Key(contentDigest: AudioFingerprintStamp.fullDigest(String(repeating: "e", count: 64)), sizeBytes: 2_000)
-        try sb.soundStore().put([.init(key: key, fingerprint: zeroLandmarkPrint(active: [], seconds: 1.5), sourcePath: "/elsewhere/original.mts")])
+        try sb.soundStore().put([.init(key: key, fingerprint: zeroLandmarkPrint(active: [], seconds: 1.5, loud: nil), sourcePath: "/elsewhere/original.mts")])
         let calls = SilencePassLog()
         let job = await runSilenceJob(sb.model, pass: { item in await calls.append(item.path); return try await printablePass(item) })
         #expect(await calls.paths == [copy.fullPath], "decoded, not stamped 'shared' from a zero-landmark row")
