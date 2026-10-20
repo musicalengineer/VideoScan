@@ -28428,15 +28428,19 @@
       "suites": [
         "SoundPrintSilentVerdictTier3Tests",
         "SoundPrintSilentVerdictSurfaceTests",
-        "SoundPrintSilentVerdictScaleTests"
+        "SoundPrintSilentVerdictScaleTests",
+        "QARedCompareOneSidedStripTests"
       ],
       "tests": [
         "compareSide",
         "fingerprintKeyOnlyForEvidence",
         "groupAStillFires",
         "groupsBAndCAreCouldNotCheck",
+        "heardVersusMeasuredSilentSides",
+        "measuredSideKeepsItsStrip",
         "personCheckedPreFourStillSettles",
         "reasonWordsPerHearing",
+        "stampStripPerSide",
         "streamColumn",
         "summaryKeepsCouldNotCheckBesideDecisions",
         "tier3At100k",
@@ -32335,7 +32339,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2786,
+      "expected_floor": 2789,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32740,6 +32744,7 @@
         "VideoScanTests/SoundPrintSilentVerdictTier3Tests",
         "VideoScanTests/SoundPrintSilentVerdictSurfaceTests",
         "VideoScanTests/SoundPrintSilentVerdictScaleTests",
+        "VideoScanTests/QARedCompareOneSidedStripTests",
         "VideoScanTests/VerifyCatalogReportTests",
         "VideoScanTests/VerifyCatalogScaleTests",
         "VideoScanTests/VerifyCatalogJobTests",

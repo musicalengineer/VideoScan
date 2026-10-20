@@ -152,18 +152,60 @@ struct SoundPrintSilentVerdictSurfaceTests {
         #expect(VideoScanModel.soundStrip(heard) == nil, "and not a drawn silence either")
     }
 
-    @Test("QA P3a: a zero-landmark print with no measurement (pre-bitmap, or any sidecar blob) draws NO strip — unknown, never silence; measured silence draws quiet; a print with landmarks draws its bitmap")
+    @Test("QA P3a: a LOADED print with no landmark draws NO strip — unknown, never silence (a sidecar blob carries no absolute measurement); a print with landmarks draws its bitmap")
     func unmeasuredStripIsNotSilence() {
-        func fp(_ active: [Bool], landmarks: Int = 0, loud: Int? = nil, seconds: Double = 3) -> AudioFingerprint {
+        func fp(_ active: [Bool], landmarks: Int = 0, seconds: Double = 3) -> AudioFingerprint {
             AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds, activeSeconds: active,
-                             hashes: Array(repeating: 1, count: landmarks), times: Array(repeating: 0, count: landmarks),
-                             secondsAboveSilenceCeiling: loud)
+                             hashes: Array(repeating: 1, count: landmarks), times: Array(repeating: 0, count: landmarks))
         }
         #expect(VideoScanModel.soundStrip(fp([])) == nil, "pre-bitmap, zero landmarks: unknown")
         #expect(VideoScanModel.soundStrip(fp([false, false, false])) == nil, "a sidecar blob's quiet-looking bitmap is gain-relative: unknown")
-        #expect(VideoScanModel.soundStrip(fp([true, true, true], loud: 0)) == [false, false, false], "measured silence draws quiet")
+        #expect(VideoScanModel.printAudibleSeconds(fp([false, false, false])) == nil)
         #expect(VideoScanModel.soundStrip(fp([true, false, true], landmarks: 4)) == [true, false, true])
         #expect(VideoScanModel.soundStrip(fp([], landmarks: 4)) == [true, true, true], "pre-bitmap print that heard: all audible")
+    }
+
+    @Test("QA round 2: a side with no print takes its strip from the STAMP — measured silent → quiet + 'Measured silent'; no sound track (stamp, or a video-only header) → quiet + 'No sound track'; not evidence / ffprobe failed / unprinted → unknown")
+    func stampStripPerSide() {
+        func rec(_ s: AudioFingerprintStamp?, codec: String, type: StreamType = .videoAndAudio) -> VideoRecord {
+            let r = record(s ?? stamp(version: 4, landmarks: 1), codec: codec)
+            r.audioFingerprint = s
+            r.streamTypeRaw = type.rawValue
+            r.durationSeconds = 3
+            return r
+        }
+        let silent = VideoScanModel.stampStrip(rec(stamp(version: 4, landmarks: 0), codec: "pcm_s16le"))
+        #expect(silent.active == [false, false, false] && silent.words == "Measured silent")
+        let noTrack = VideoScanModel.stampStrip(rec(stamp(version: 3, .noAudio, landmarks: 0), codec: "", type: .videoOnly))
+        #expect(noTrack.active == [false, false, false] && noTrack.words == "No sound track")
+        let videoOnlyHeader = VideoScanModel.stampStrip(rec(nil, codec: "", type: .videoOnly))
+        #expect(videoOnlyHeader.words == "No sound track")
+        let probeFailed = VideoScanModel.stampStrip(rec(nil, codec: "", type: .ffprobeFailed))
+        #expect(probeFailed.active == nil && probeFailed.words == nil, "ffprobe failed: no codec, but no fact either — unknown")
+        #expect(VideoScanModel.stampStrip(rec(stamp(version: 2, landmarks: 0), codec: "ac3")).active == nil, "not evidence: unknown")
+        #expect(VideoScanModel.stampStrip(rec(nil, codec: "aac")).active == nil, "unprinted: unknown")
+    }
+
+    @Test("QA round 2: comparing a heard-sound file with a measured-silent copy — the heard side keeps its sidecar strip, the silent side draws quiet with 'Measured silent'; neither says 'Sound not measured'")
+    func heardVersusMeasuredSilentSides() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("test_strip_pair_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try AudioFingerprintStore(directory: dir)
+        let heardStamp = AudioFingerprintStamp(computedAt: now, contentDigest: "sha256:" + String(repeating: "b", count: 64), sizeBytes: 100,
+                                               outcome: .fingerprinted, analyzedSeconds: 3, complete: true, landmarks: 4, bytes: 72)
+        let print = AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: 3,
+                                     activeSeconds: [true, false, true], hashes: [1, 2, 3, 4], times: [0, 1, 2, 3])
+        let key = AudioFingerprintStore.Key(contentDigest: heardStamp.contentDigest, sizeBytes: 100)
+        try store.put([AudioFingerprintStore.Entry(key: key, fingerprint: print, sourcePath: "/a.mov")])
+        let a = record(heardStamp, codec: "aac"); a.durationSeconds = 3
+        let b = record(stamp(version: 4, landmarks: 0, seconds: 3), codec: "pcm_s16le"); b.durationSeconds = 3
+        let keyA = VideoScanModel.fingerprintKey(a), keyB = VideoScanModel.fingerprintKey(b)
+        #expect(keyA == key && keyB == nil)
+        let sound = VideoScanModel.soundEvidence(keyA: keyA, keyB: keyB, directory: dir)
+        #expect(sound.verdict == nil, "no match without two prints")
+        let strips = VideoScanModel.completedStrips(sound.strips, a: a, b: b)
+        #expect(strips.a == [true, false, true] && strips.wordsA == nil)
+        #expect(strips.b == [false, false, false] && strips.wordsB == "Measured silent")
     }
 
     @Test("QA P3a: Compare only offers a stamp that heard sound for the match — a not-evidence or measured-silent stamp gives no sidecar key")
@@ -218,5 +260,26 @@ struct SoundPrintSilentVerdictScaleTests {
         #expect(result.tier.checked == 70_000)
         expectWithinTimingBudget("tier 3 over 100k Video+Audio rows", measured: measured,
                                  budget: PerformanceLane.debugCeiling(.seconds(2)), loadBefore: load)
+    }
+}
+
+
+// QA round 2 on 05dc172e7 (RED): Compare's strips are filled only when BOTH
+// sides have a sidecar key (VideoScanModel+RelatedEvidence.swift:232). A side
+// whose print heard sound is then shown as "Sound not measured" just because
+// the OTHER side is measured silent / has no sound track / has no print.
+@Suite("QA red — Compare: one side measured, the other not", .serialized)
+struct QARedCompareOneSidedStripTests {
+    @Test("RED: a side with a real sidecar print keeps its strip when the other side has no key")
+    func measuredSideKeepsItsStrip() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("qa-strip-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try AudioFingerprintStore(directory: dir)
+        let key = AudioFingerprintStore.Key(contentDigest: "sha256:" + String(repeating: "a", count: 64), sizeBytes: 1_000)
+        let heard = AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: 3,
+                                     activeSeconds: [true, false, true], hashes: [1, 2, 3, 4], times: [0, 1, 2, 3])
+        try store.put([AudioFingerprintStore.Entry(key: key, fingerprint: heard, sourcePath: "/x.mov", computedAt: Date())])
+        let ev = VideoScanModel.soundEvidence(keyA: key, keyB: nil, directory: dir)
+        #expect(ev.strips.a == [true, false, true], "A heard sound and has a print; Compare says 'Sound not measured' instead")
     }
 }

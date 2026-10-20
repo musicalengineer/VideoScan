@@ -39,6 +39,10 @@ struct RelatedStrips: Sendable, Equatable {
     /// never as silence.
     var a: [Bool]?
     var b: [Bool]?
+    /// Why a side's strip is quiet when it came from the STAMP, not a print:
+    /// "Measured silent" / "No sound track". nil with a nil strip = unknown.
+    var wordsA: String?
+    var wordsB: String?
     /// Where `a`'s second 0 sits in `b` (negative: `b` starts inside `a`).
     var offsetSeconds: Double = 0
     var matchedA: Range<Int>?
@@ -71,7 +75,36 @@ extension VideoScanModel {
         let verdict = RelatedLadder.judge(evidence)
         return RelatedAnswer(evidence: evidence, verdict: verdict,
                              recommendation: EventRecommendation.recommend(verdict, evidence: evidence),
-                             strips: sound.strips)
+                             strips: Self.completedStrips(sound.strips, a: a, b: b))
+    }
+
+    /// A side the sidecar gave no strip (no print to load) takes one from its
+    /// STAMP: quiet, with the reason, for measured silence or no sound track;
+    /// still nil — "Sound not measured" — when nothing is known (QA round 2).
+    static func completedStrips(_ strips: RelatedStrips, a: VideoRecord, b: VideoRecord) -> RelatedStrips {
+        var out = strips
+        if out.a == nil { (out.a, out.wordsA) = stampStrip(a) }
+        if out.b == nil { (out.b, out.wordsB) = stampStrip(b) }
+        return out
+    }
+
+    /// The strip a record's stamp (or header) can stand behind with no print
+    /// loaded: measured silence → all quiet, "Measured silent"; a real
+    /// no-sound track (the stamp, or a header with no audio codec and no
+    /// stamp) → all quiet, "No sound track"; anything else → (nil, nil).
+    static func stampStrip(_ r: VideoRecord) -> (active: [Bool]?, words: String?) {
+        let quiet = Array(repeating: false, count: max(0, Int(r.durationSeconds)))
+        let headerHasAudio = !r.audioCodec.isEmpty
+        guard let stamp = r.audioFingerprint, stamp.sizeBytes == r.sizeBytes else {
+            // Only a header that SAYS video-only is a no-sound fact; an
+            // ffprobe failure (no codec either) stays unknown.
+            return r.streamType == .videoOnly && !headerHasAudio ? (quiet, "No sound track") : (nil, nil)
+        }
+        switch stamp.hearing(headerHasAudio: headerHasAudio) {
+        case .measuredSilence: return (quiet, "Measured silent")
+        case .noAudioTrack: return (quiet, "No sound track")
+        case .heardSound, .notEvidence: return (nil, nil)
+        }
     }
 
     // MARK: One side (pure)
@@ -116,17 +149,13 @@ extension VideoScanModel {
     }
 
     /// The audible seconds a loaded print stands behind: its active-seconds
-    /// count when it has landmarks and the bitmap, else its duration
-    /// (prints made before the bitmap). With no landmark: 0 only when the
-    /// bitmap MEASURED every second quiet; nil when it heard sound too
-    /// little to print (it can say nothing, and must not say "no sound").
+    /// count when it has the bitmap, else its duration (prints made before
+    /// the bitmap). With NO landmark: nil — a sidecar blob carries no
+    /// absolute measurement, so it cannot tell silence from "too little to
+    /// print"; measured silence comes from the stamp (`stampAudibleSeconds`).
     nonisolated static func printAudibleSeconds(_ print: AudioFingerprint) -> Double? {
-        switch AudioFingerprintStamp.reading(of: print) {
-        case .silence: return 0
-        case .heardTooLittle, .notMeasured: return nil
-        case .printable:
-            return Double(print.activeSeconds.isEmpty ? Int(print.durationSeconds) : print.activeSecondCount)
-        }
+        guard print.landmarkCount > 0 else { return nil }
+        return Double(print.activeSeconds.isEmpty ? Int(print.durationSeconds) : print.activeSecondCount)
     }
 
     /// Transcript words that are a person's name on either side (case-insensitive, whole words).
@@ -191,18 +220,14 @@ extension VideoScanModel {
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
     }
 
-    /// One flag per second, or nil when unknown. With landmarks: the bitmap
-    /// (all audible for a pre-bitmap print). With NO landmark it is decided
-    /// like `printAudibleSeconds`: all quiet only for measured silence;
-    /// nil otherwise (QA P3a) — a sidecar blob carries no absolute
-    /// measurement, and the bitmap's floor moves with the gain.
+    /// One flag per second for a loaded print: the bitmap (all audible for a
+    /// pre-bitmap print). With NO landmark: nil — unknown, never drawn as
+    /// silence (QA P3a); a side's quiet strip comes from its stamp
+    /// (`stampStrip`), the only place silence is measured.
     nonisolated static func soundStrip(_ print: AudioFingerprint) -> [Bool]? {
-        let seconds = print.activeSeconds.isEmpty ? max(0, Int(print.durationSeconds)) : print.activeSeconds.count
-        guard print.landmarkCount == 0 else {
-            return print.activeSeconds.isEmpty ? Array(repeating: true, count: seconds) : print.activeSeconds
-        }
-        if case .silence = AudioFingerprintStamp.reading(of: print) { return Array(repeating: false, count: seconds) }
-        return nil
+        guard print.landmarkCount > 0 else { return nil }
+        let seconds = max(0, Int(print.durationSeconds))
+        return print.activeSeconds.isEmpty ? Array(repeating: true, count: seconds) : print.activeSeconds
     }
 
     /// The sidecar key of a stamp that is EVIDENCE of sound to match
@@ -224,18 +249,20 @@ extension VideoScanModel {
         var strips = RelatedStrips()
     }
 
-    /// Load both fingerprints from the sidecar and match `a` against `b`.
-    /// A side with no fingerprint leaves the verdict nil (the ladder says
-    /// what is missing); a store that cannot open does the same.
+    /// Load each side's fingerprint from the sidecar ON ITS OWN — a side
+    /// with a print gets its audible seconds and strip whatever the other
+    /// side has (QA round 2) — and match `a` against `b` only when both
+    /// loaded. A side with no fingerprint leaves the verdict nil (the ladder
+    /// says what is missing); a store that cannot open does the same.
     nonisolated static func soundEvidence(keyA: AudioFingerprintStore.Key?, keyB: AudioFingerprintStore.Key?,
                                           directory: URL) -> SoundEvidence {
         var out = SoundEvidence()
-        guard let keyA, let keyB, let store = try? AudioFingerprintStore(directory: directory),
-              let fa = try? store.fingerprint(for: keyA), let fb = try? store.fingerprint(for: keyB) else { return out }
-        out.audibleA = printAudibleSeconds(fa)
-        out.audibleB = printAudibleSeconds(fb)
-        out.strips.a = Self.soundStrip(fa)
-        out.strips.b = Self.soundStrip(fb)
+        guard keyA != nil || keyB != nil, let store = try? AudioFingerprintStore(directory: directory) else { return out }
+        let fa = keyA.flatMap { try? store.fingerprint(for: $0) }
+        let fb = keyB.flatMap { try? store.fingerprint(for: $0) }
+        if let fa { out.audibleA = printAudibleSeconds(fa); out.strips.a = Self.soundStrip(fa) }
+        if let fb { out.audibleB = printAudibleSeconds(fb); out.strips.b = Self.soundStrip(fb) }
+        guard let fa, let fb else { return out }
         let match = AudioFingerprintMatcher.match(query: fa, master: fb)
         out.verdict = match.verdict
         out.coverage = match.evidence.coverage

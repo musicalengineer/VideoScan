@@ -251,15 +251,16 @@ struct P0TruthRegressionTests {
         let side = VideoScanModel.relatedSide(row, isArchiveFile: false, isArchived: false, now: Date())
         #expect(side.audibleSeconds == 0, "relatedSide read a measured-silent stamp as \(side.audibleSeconds ?? -1) s of sound")
 
-        // …and a loaded print may not put the seconds back: measured silent
-        // (gain 1, every second ≤ −60 dBFS) is all quiet. "No landmark"
+        // …and the spool draws that silence from the STAMP (the one place it
+        // is measured), with its reason — never 3 s of sound.
+        let strip = VideoScanModel.stampStrip(row)
+        #expect(strip.active.map { !$0.contains(true) } == true && strip.words == "Measured silent",
+                "got \(String(describing: strip.active)) \(strip.words ?? "nil")")
+
+        // A loaded print may not put the seconds back either: "No landmark"
         // alone is not silence (2026-10-20: a 1.5 s AVCHD clip at −0.1 dB
-        // made none) — heard too little, or not measured (a sidecar blob
-        // does not carry the measurement), is nil: unknown, never "no sound".
-        let silent = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
-                                      activeSeconds: [false, false, false], hashes: [], times: [], secondsAboveSilenceCeiling: 0)
-        #expect(VideoScanModel.printAudibleSeconds(silent) == 0, "a print measured silent heard nothing")
-        #expect(VideoScanModel.soundStrip(silent) == [false, false, false], "the spool draws silence, not 3 s of sound")
+        // made none), and a sidecar blob carries no absolute measurement —
+        // so a zero-landmark print is nil: unknown, never "no sound".
         let tooLittle = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 2,
                                          activeSeconds: [true, true], hashes: [], times: [], secondsAboveSilenceCeiling: 2)
         #expect(VideoScanModel.printAudibleSeconds(tooLittle) == nil, "heard sound, too little to print: says nothing, never 'no sound'")
