@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 401,
+ "entry_count": 398,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -21,10 +21,6 @@
   "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift::AnalyzeRunner.runNow": {
    "ccn": 16,
    "nloc": 49
-  },
-  "VideoScan/VideoScan/App/BundleExporter.swift::BundleExporter.writeBundle": {
-   "ccn": 11,
-   "nloc": 91
   },
   "VideoScan/VideoScan/App/BundleImporter.swift::BundleImporter.installPOIs": {
    "ccn": 12,
@@ -61,14 +57,6 @@
   "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body": {
    "ccn": 14,
    "nloc": 238
-  },
-  "VideoScan/VideoScan/App/VideoScanModel+BundleImportExport.swift::VideoScanModel.applyBundlePayload": {
-   "ccn": 15,
-   "nloc": 83
-  },
-  "VideoScan/VideoScan/App/VideoScanModel+BundleImportExport.swift::VideoScanModel.exportBundleViaPanel": {
-   "ccn": 12,
-   "nloc": 92
   },
   "VideoScan/VideoScan/Archive/ArchiveIndexRename.swift::ArchiveIndexRename.jsonStringValues": {
    "ccn": 18,
@@ -255,7 +243,7 @@
    "nloc": 73
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body": {
-   "ccn": 12,
+   "ccn": 11,
    "nloc": 149
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.computeFiltered": {
@@ -994,6 +982,10 @@
    "ccn": 23,
    "nloc": 48
   },
+  "VideoScan/VideoScan/Media/PreviewService.swift::PreviewService.generateThumbnail": {
+   "ccn": 15,
+   "nloc": 98
+  },
   "VideoScan/VideoScan/Media/SeekingFrameProvider.swift::SeekingFrameProvider.frames": {
    "ccn": 8,
    "nloc": 82
@@ -1009,10 +1001,6 @@
   "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::VideoScanModel.runTargetProbeGroup": {
    "ccn": 15,
    "nloc": 129
-  },
-  "VideoScan/VideoScan/Media/VideoScanModel+Thumbnail.swift::VideoScanModel.generateThumbnail": {
-   "ccn": 15,
-   "nloc": 98
   },
   "VideoScan/VideoScan/MediaOps/BalanceAudioJob.swift::BalanceAudioJob.runBalance": {
    "ccn": 30,
@@ -1168,7 +1156,7 @@
   },
   "VideoScan/VideoScan/Model/VideoScanModel.swift::VideoScanModel.init": {
    "ccn": 16,
-   "nloc": 92
+   "nloc": 91
   },
   "VideoScan/VideoScan/People/ArcFaceEngine.swift::pfProcessVideoWithArcFace": {
    "ccn": 24,
@@ -1196,7 +1184,7 @@
   },
   "VideoScan/VideoScan/People/FindTagCLI.swift::FindTagCLI.run": {
    "ccn": 32,
-   "nloc": 213
+   "nloc": 210
   },
   "VideoScan/VideoScan/People/IdentityNarrowing.swift::pfExtractAgeBuckets lowered : NSString , tokens : Set < String >": {
    "ccn": 24,
