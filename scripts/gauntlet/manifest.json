@@ -28321,16 +28321,21 @@
         "catalogColumnsNameTheirEvidence",
         "compareMediaAsksForTheHashOnASampledPair",
         "everyPlayerStartChecksTheAudio",
+        "featuredPickNeverPlaysASampledMatch",
         "firstJourneyEventIsTheFilesOwnDate",
         "folderViewNeverCallsASampledPairCopies",
         "journeyNeverSaysNowAtForADeadLink",
         "journeyRendersNoPathAsPresenceWithoutAStat",
         "ladderAnswersForTheContent",
         "noSampledHashDecidesACopy",
+        "onlyWorklistSitesAskTheSampledArchivedCopy",
+        "personRowsNeverFoldIntoASampledMatch",
         "playerNoticesMP3InM4V",
         "sampledMatchIsNeverTheArchivedCopy",
         "silentHeaderIsNotHasSound",
-        "statedArchivedCopyIsProven"
+        "soundCopyNeverOffersASampledMatch",
+        "statedArchivedCopyIsProven",
+        "transcodeFolderNeverFromASampledMatch"
       ]
     },
     {
@@ -32808,7 +32813,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 226,
+      "expected_floor": 231,
       "name": "regression",
       "package_expected_floor": 190,
       "package_selectors": [

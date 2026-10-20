@@ -153,7 +153,9 @@ enum FeaturedVideos {
                 rec = model.records.first { $0.contentHash == hash && !$0.isPurged }
             }
             guard var found = rec, !found.isPurged else { missing += 1; continue }
-            if !model.isArchiveCopy(found), let copy = model.archivedCopy(of: found) { found = copy }
+            // Only a PROVEN archive copy stands in for the pick (GH #327): a
+            // sampled `v1:` match may be a different video.
+            if !model.isArchiveCopy(found), let copy = model.provenArchivedCopy(of: found) { found = copy }
             if seen.insert(found.id).inserted { out.append(found) }
         }
         return (out, missing)

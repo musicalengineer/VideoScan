@@ -34,6 +34,18 @@ enum TranscodeDestination {
         return FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
     }
 
+    /// The archive year folder a transcode of `record` defaults to: the
+    /// record's own folder when it IS an archive copy, else the folder of
+    /// its PROVEN archived copy (promote link or whole-file SHA-256 — GH
+    /// #327: a sampled `v1:` match would file this file's access copy beside
+    /// other bytes, under another year). nil = not proven archived (the
+    /// remembered folder wins).
+    static func archiveYearDirectory(for record: VideoRecord, model: VideoScanModel) -> URL? {
+        let copy = model.isArchiveCopy(record) ? record : model.provenArchivedCopy(of: record)
+        guard let copy else { return nil }
+        return URL(fileURLWithPath: copy.fullPath).deletingLastPathComponent()
+    }
+
     static func remember(directory: URL) {
         UserDefaults.standard.set(directory.path, forKey: lastDirectoryKey)
     }
