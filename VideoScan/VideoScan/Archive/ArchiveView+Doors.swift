@@ -10,6 +10,12 @@
 import AppKit
 import SwiftUI
 
+/// The alert's payload: the words, and the file for "Make Access Copy…".
+struct ArchiveSoundNotice {
+    let words: String
+    let record: VideoRecord
+}
+
 extension ArchiveView {
 
     /// Play / open `ids` (double-click, the card tap, a version chip, ⌘O
@@ -30,7 +36,18 @@ extension ArchiveView {
             }
         }
         reportArchiveDoor(verb: "Open", viaCopy: viaCopy, missing: missing)
-        if !targets.isEmpty { MediaOpener.open(targets) }
+        guard !targets.isEmpty else { return }
+        // GH #332: MediaOpener checks the sound before a QuickTime launch
+        // (PlaybackAudioMismatch.checkedChoice). Every re-route is a line
+        // through the one sink; a file no installed player can sound is
+        // also said on screen.
+        let byPath = Dictionary(targets.map { ($0.fullPath, $0) }, uniquingKeysWith: { first, _ in first })
+        MediaOpener.open(targets) { note in
+            model.log("Archive Open: \(note.words)")
+            if note.needsAttention, let rec = byPath[note.path] {
+                playSoundNotice = ArchiveSoundNotice(words: note.words, record: rec)
+            }
+        }
     }
 
     /// Reveal in Finder — the archived copy for a promotion source.

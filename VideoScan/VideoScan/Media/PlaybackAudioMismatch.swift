@@ -70,6 +70,76 @@ enum PlaybackAudioMismatch {
     }
 }
 
+// MARK: - The external-player door (GH #332, 2026-10-19)
+//
+// The Archive tab (and every other "open / play" door) hands files to
+// QuickTime Player or VLC through `MediaOpener.open`. Its choice came from
+// a codec allow-list alone, so MP3 sound in an .m4v went to QuickTime and
+// played SILENTLY. The same comparison the in-app player makes now runs
+// before a QuickTime launch: QuickTime only when AVFoundation reads the
+// audio track the catalog knows about; otherwise VLC (plays it) with a
+// line saying why, or — no VLC — the system handler plus words a person
+// must read.
+
+extension PlaybackAudioMismatch {
+
+    /// One line about a file the door re-routed or could not route to a
+    /// player with sound. `needsAttention` = no player with sound was
+    /// available; the caller must show the words, not only log them.
+    struct RouteNote: Equatable {
+        let path: String
+        let words: String
+        let needsAttention: Bool
+    }
+
+    struct RouteCheck: Equatable {
+        let choice: MediaPlayerChoice
+        let note: RouteNote?
+    }
+
+    /// MediaOpener's codec choice, verified for QuickTime: `trackCount` is
+    /// the one AVFoundation call (injectable for tests). VLC / default
+    /// choices pass through untouched — no I/O.
+    @MainActor
+    static func checkedChoice(for rec: VideoRecord, url: URL, hasVLC: Bool,
+                              trackCount: (URL) async throws -> Int = PlaybackAudioMismatch.avAudioTrackCount(url:)) async -> RouteCheck {
+        let base = MediaOpener.preferredPlayer(for: rec, hasVLC: hasVLC)
+        let codec = catalogCodec(of: rec)
+        guard base == .quickTime, !codec.isEmpty else { return RouteCheck(choice: base, note: nil) }
+        let why: String
+        do {
+            let tracks = try await trackCount(url)
+            guard words(catalogCodec: codec, avAudioTracks: tracks) != nil else {
+                return RouteCheck(choice: .quickTime, note: nil)
+            }
+            why = "QuickTime can't play its \(displayName(codec)) sound in \(containerLabel(rec))"
+        } catch {
+            why = "QuickTime can't read its sound (\(error.localizedDescription))"
+        }
+        return RouteCheck(choice: hasVLC ? .vlc : .systemDefault,
+                          note: routeNote(rec, why: why, hasVLC: hasVLC))
+    }
+
+    /// "M4V" from the record's extension, else "this container".
+    static func containerLabel(_ rec: VideoRecord) -> String {
+        let ext = rec.ext.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return ext.isEmpty ? "this container" : ext
+    }
+
+    /// The words: re-routed to VLC (heard), or no player with sound.
+    static func routeNote(_ rec: VideoRecord, why: String, hasVLC: Bool) -> RouteNote {
+        if hasVLC {
+            return RouteNote(path: rec.fullPath,
+                             words: "\(rec.filename): \(why) — opened in VLC so it plays with sound.",
+                             needsAttention: false)
+        }
+        return RouteNote(path: rec.fullPath,
+                         words: "\(rec.filename): plays in QuickTime: no — \(why). "
+                             + "Open it in IINA or VLC, or make an access copy (AAC).",
+                         needsAttention: true)
+    }
+}
+
 // MARK: - Playback identity (codex P2, 2026-10-16)
 
 /// The check is async; the player it was started for may be gone by the

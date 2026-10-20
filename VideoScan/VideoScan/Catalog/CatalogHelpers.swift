@@ -1724,6 +1724,15 @@ enum MediaOpener {
         "pcm_s8", "pcm_u8", ""
     ]
 
+    /// Audio codecs QuickTime plays in one container but IGNORES in
+    /// another. MP3 inside MPEG-4 (.mp4/.m4v): AVFoundation reads 0 audio
+    /// tracks, so QuickTime opens it silently (10/16 P0; GH #332, an
+    /// archived .m4v on the Archive tab). MP3 in .mov plays. Data, not a
+    /// branch: keyed by the normalized extension.
+    private static let qtAudioRefusedByContainer: [String: Set<String>] = [
+        "mp4": ["mp3"], "m4v": ["mp3"]
+    ]
+
     /// Pure decision function. Inputs are normalized (trimmed, lowercased)
     /// before matching. See the allow-lists above for the exact policy.
     static func preferredPlayer(container: String,
@@ -1743,6 +1752,7 @@ enum MediaOpener {
         let qtOK = qtContainers.contains(c)
             && qtVideoCodecs.contains(v)
             && qtAudioCodecs.contains(a)
+            && !(qtAudioRefusedByContainer[c]?.contains(a) ?? false)
 
         if qtOK { return .quickTime }
         return hasVLC ? .vlc : .systemDefault
@@ -1785,8 +1795,18 @@ enum MediaOpener {
     /// `@MainActor` ≈ "this must run on the UI thread": NSWorkspace launch
     /// APIs expect the main thread, and every caller is a SwiftUI
     /// primaryAction/button closure already on the main actor.
+    ///
+    /// GH #332: a QuickTime choice is CHECKED before launch — AVFoundation
+    /// (QuickTime Player's engine) must read the audio track the catalog
+    /// says is there (`PlaybackAudioMismatch.checkedChoice`). A file QT
+    /// would open silently goes to VLC instead and the words reach
+    /// `report` (the caller's console / catalog.log sink). With no VLC the
+    /// file still opens in the system handler and the note is flagged
+    /// `needsAttention` — the caller shows it; with no `report`, an alert
+    /// does. Never silence without words.
     @MainActor
-    static func open(_ records: [VideoRecord]) {
+    static func open(_ records: [VideoRecord],
+                     report: ((PlaybackAudioMismatch.RouteNote) -> Void)? = nil) {
         // Remote viewer (Phase 1): catalog paths are master-local. Resolve
         // each record to an opted-in mount, the master's stream, or an
         // honest offline state; only local resolutions continue below,
@@ -1805,22 +1825,46 @@ enum MediaOpener {
         }
         guard !reachable.isEmpty else { return }
 
-        var qtURLs: [URL] = []
-        var vlcURLs: [URL] = []
-        var defaultURLs: [URL] = []
-        for pair in reachable {
-            switch preferredPlayer(for: pair.rec, hasVLC: hasVLC) {
-            case .quickTime:     qtURLs.append(pair.url)
-            case .vlc:           vlcURLs.append(pair.url)
-            case .systemDefault: defaultURLs.append(pair.url)
+        // One AVFoundation header read per QuickTime-bound file, off the
+        // render path; VLC / default routes do no I/O.
+        Task { @MainActor in
+            var qtURLs: [URL] = []
+            var vlcURLs: [URL] = []
+            var defaultURLs: [URL] = []
+            for pair in reachable {
+                let check = await PlaybackAudioMismatch.checkedChoice(for: pair.rec, url: pair.url, hasVLC: hasVLC)
+                if let note = check.note {
+                    mediaOpenLog.info("\(note.words, privacy: .public)")
+                    deliver(note, to: report)
+                }
+                switch check.choice {
+                case .quickTime:     qtURLs.append(pair.url)
+                case .vlc:           vlcURLs.append(pair.url)
+                case .systemDefault: defaultURLs.append(pair.url)
+                }
+            }
+
+            if !qtURLs.isEmpty { launchQuickTime(qtURLs) }
+            if !vlcURLs.isEmpty { launchVLC(vlcURLs) }
+            for url in defaultURLs {
+                mediaOpenLog.info("Opening in system default handler: \(url.path, privacy: .public)")
+                NSWorkspace.shared.open(url)
             }
         }
+    }
 
-        if !qtURLs.isEmpty { launchQuickTime(qtURLs) }
-        if !vlcURLs.isEmpty { launchVLC(vlcURLs) }
-        for url in defaultURLs {
-            mediaOpenLog.info("Opening in system default handler: \(url.path, privacy: .public)")
-            NSWorkspace.shared.open(url)
+    /// The caller's sink when it gave one; otherwise an alert for a note
+    /// a person must read (no player with sound was available).
+    @MainActor
+    private static func deliver(_ note: PlaybackAudioMismatch.RouteNote,
+                                to report: ((PlaybackAudioMismatch.RouteNote) -> Void)?) {
+        if let report {
+            report(note)
+        } else if note.needsAttention {
+            let alert = NSAlert()
+            alert.messageText = "No sound in QuickTime"
+            alert.informativeText = note.words
+            alert.runModal()
         }
     }
 
