@@ -24,6 +24,23 @@ enum FootageFolderWords {
     /// The UserDefaults key the option is remembered under.
     static let settingKey = "catalog.footageFolders"
 
+    /// Show ▸ "Folders Only" (Rick 2026-10-19): the folder view with the
+    /// loose files left out. Turning it on turns the folder view on.
+    static let foldersOnlyTitle = "Folders Only"
+    static let foldersOnlySymbol = "rectangle.stack"
+    static let foldersOnlySymbolOn = "rectangle.stack.fill"
+    static let foldersOnlyHelp = "Show only your folders and what's in them — files in no folder are hidden. Click again to show everything."
+    /// The pill in the Showing box (it stands in for "As folders").
+    static let foldersOnlyPill = "Folders only"
+    /// The folder view's one pill: "Folders only" stands in for "As folders".
+    static func showingPill(foldersOnly: Bool) -> String {
+        foldersOnly ? foldersOnlyPill : showingPill
+    }
+    /// Its own UserDefaults key, read as strictly as the folder view's.
+    static let foldersOnlySettingKey = "catalog.foldersOnly"
+    /// The table's line when Folders Only is on and no folder matches.
+    static let foldersOnlyEmpty = "No folders match — make one with right-click \u{25B8} New Folder with Selection"
+
     // MARK: Glyphs (one per relation, as the design names them)
 
     static let madeFromGlyph = "\u{21B3}"      // ↳
