@@ -348,50 +348,59 @@ struct CatalogFreshnessFactsTests {
 @Suite("Catalog Status — chip, menu and door words")
 struct CatalogStatusWordsTests {
 
-    private func state(_ rows: [FreshnessRow]) -> CatalogFreshnessState {
-        CatalogFreshnessState.judged(rows: rows, now: now, wording: wording)
+    // Rick 2026-10-20: the band's colour answers "does the catalog reflect
+    // reality?" (CatalogRealityPolicy) — no longer the worst row. The rows
+    // still carry their own verdicts and the stale list.
+    private func state(_ rows: [FreshnessRow], reality: CatalogRealityFacts = CatalogRealityFacts()) -> CatalogFreshnessState {
+        CatalogFreshnessState.judged(rows: rows, reality: CatalogRealityInputs(facts: reality), now: now, wording: wording)
     }
 
-    @Test func greenChipSaysCurrent() {
+    private var validatedAnHourAgo: CatalogRealityFacts {
+        CatalogRealityFacts(validation: .completed(at: now.addingTimeInterval(-3_600)), rowsToCheck: 3)
+    }
+
+    @Test func greenChipSaysReflectsReality() {
         let s = state([
             FreshnessRow(kind: "filePresence", title: "File Presence", eligible: 3, covered: 3,
                          lastCompleted: now.addingTimeInterval(-1_800), lastOutcome: .ok, cadence: .seconds(86_400)),
             FreshnessRow(kind: "fullHashes", title: "Full Hashes", eligible: 3, covered: 3, lastOutcome: .ok),
-        ])
+        ], reality: validatedAnHourAgo)
         #expect(s.summary.colour == .green)
-        #expect(CatalogStatusWords.chipWords(s) == "current")
+        #expect(CatalogStatusWords.chipWords(s) == "reflects reality")
         #expect(CatalogStatusWords.menuTitle(s.summary.colour) == "Catalog Status…")
     }
 
     @Test func yellowAndRedChipsAreShort() {
+        var unsettled = validatedAnHourAgo
+        unsettled.unsettled = [CatalogRealityCount(count: 660, words: "tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")]
         let yellow = state([
             FreshnessRow(kind: "fullHashes", title: "Full Hashes", eligible: 700, covered: 40, lastOutcome: .ok,
                          phrases: CatalogFreshnessRows.phrases(.fullHashes)),
             FreshnessRow(kind: "soundPrints", title: "Sound Prints", eligible: 20, covered: 8, lastOutcome: .ok,
                          phrases: CatalogFreshnessRows.phrases(.soundPrints)),
-        ])
-        #expect(CatalogStatusWords.chipWords(yellow) == "needs attention")
-        #expect(yellow.summary.headline == "2 things need attention")
-        #expect(CatalogStatusWords.menuTitle(yellow.summary.colour) == "Catalog Status — needs attention…")
-        #expect(yellow.summary.items.map(\.words) == ["660 files without a full hash", "12 files without a sound print"])
+        ], reality: unsettled)
+        #expect(CatalogStatusWords.chipWords(yellow) == "can't fully vouch")
+        #expect(yellow.summary.headline == "The catalog can't fully vouch for itself: tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")
+        #expect(CatalogStatusWords.menuTitle(yellow.summary.colour) == "Catalog Status — can't fully vouch…")
+        #expect(yellow.summary.items.map(\.words) == ["660 files without a full hash", "12 files without a sound print"],
+                "the stale rows are still listed under the band")
 
-        let red = state([
-            FreshnessRow(kind: "filePresence", title: "File Presence", eligible: 3, covered: 3,
-                         lastCompleted: now, lastOutcome: .ok, needsDecision: 3, cadence: .seconds(86_400),
-                         phrases: CatalogFreshnessRows.phrases(.filePresence)),
-        ])
-        #expect(CatalogStatusWords.chipWords(red) == "needs a decision")
-        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — needs a decision…")
-        #expect(CatalogStatusWords.launchLine(red.summary).hasPrefix("Needs a decision: File Presence — File Presence: 3 files pointing at nothing"),
-                "the headline names the row once; the row's words follow once")
-        #expect(CatalogStatusWords.launchLine(red.summary).hasSuffix("Catalog ▸ Catalog Status… lists the doors."))
+        var broken = validatedAnHourAgo
+        broken.breaks = [CatalogRealityCount(count: 2, words: "2 paths have more than one live row"),
+                         CatalogRealityCount(count: 1, words: "1 duplicate groups hold files with different whole-file digests")]
+        let red = state([], reality: broken)
+        #expect(CatalogStatusWords.chipWords(red) == "something is wrong")
+        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — something is wrong…")
+        #expect(CatalogStatusWords.launchLine(red.reality)
+                == "Something is wrong: 2 paths have more than one live row · 1 more — 1 duplicate groups hold files with different whole-file digests. Catalog ▸ Catalog Status… lists the doors.")
     }
 
-    @Test func uncomputedAndGreyStayQuiet() {
+    @Test func uncomputedStaysQuietAndNothingKnownCannotVouch() {
         #expect(CatalogStatusWords.chipWords(CatalogFreshnessState()) == "checking…")
-        let grey = state([FreshnessRow(kind: "fullHashes", title: "Full Hashes", offline: 5)])
-        #expect(grey.summary.colour == .grey)
-        #expect(CatalogStatusWords.chipWords(grey) == "nothing to check")
+        // Every drive offline and no Validate on record: the catalog can't vouch (yellow), not "nothing to check".
+        let offline = state([FreshnessRow(kind: "fullHashes", title: "Full Hashes", offline: 5)])
+        #expect(offline.summary.colour == .yellow)
+        #expect(CatalogStatusWords.chipWords(offline) == "can't fully vouch")
     }
 
     /// ONE button per item (§2.1), from the reason.
@@ -744,8 +753,9 @@ struct CatalogStatusSensorTests {
         #expect(volumes.contains("CatalogAuditSheet()"), "the bookkeeping check keeps its code")
         let sheet = code(try source("CatalogAuditSheet.swift"))
         #expect(sheet.contains("Text(\"Check Totals\")"))
-        let menuItem = code(try source("CatalogAuditMenuItem.swift"))
-        #expect(menuItem.contains("Button(\"Audit Catalog…\")"), "the presence job keeps the Audit name")
+        // Rick 2026-10-20: the presence check is step 1 of the one verb.
+        let menuItem = code(try source("ValidateCatalogMenuItem.swift"))
+        #expect(menuItem.contains("Button(\"Validate Catalog…\")"), "the presence check runs as Validate Catalog")
     }
 }
 

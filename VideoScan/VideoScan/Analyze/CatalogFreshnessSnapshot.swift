@@ -134,7 +134,7 @@ enum CatalogFreshnessRows {
             return .init(unit: "file", uncovered: "without a sound print")
         case .integrity:
             return .init(unit: "finding", uncovered: "not yet verified",
-                         decision: "needing a decision — Verify Catalog's row lists them")
+                         decision: "needing a decision — Validate Catalog's row lists them")
         case .correlate:
             return .init(unit: "file", uncovered: "unpaired")
         case .dateInference:
@@ -165,7 +165,14 @@ enum CatalogFreshnessRows {
 struct CatalogFreshnessState: Equatable {
     var rows: [FreshnessRow] = []
     var verdicts: [AnalyzeCycler: FreshnessVerdict] = [:]
+    /// The band. Its COLOUR and HEADLINE are the reality verdict's (Rick
+    /// 2026-10-20: does the catalog reflect reality? — CatalogRealityPolicy);
+    /// its items and stale kinds are still the per-row ones (what is stale,
+    /// what "Update everything stale" queues).
     var summary = FreshnessSummary(colour: .grey, headline: "Nothing to check", items: [], staleKinds: [])
+    /// The band's verdict: colour, headline, reasons, the review items
+    /// ("N to review") and the information lines.
+    var reality = CatalogRealityVerdict(colour: .grey, headline: "Nothing to check", reasons: [], review: [], information: [])
     /// False until the first coverage pass has landed (the chip stays
     /// quiet rather than claiming "nothing to check" at launch).
     var isComputed = false
@@ -177,8 +184,11 @@ struct CatalogFreshnessState: Equatable {
     /// The kinds "Update everything stale" queues, in registry order.
     var staleCyclers: [AnalyzeCycler] { summary.staleKinds.compactMap(AnalyzeCycler.init(rawValue:)) }
 
-    /// Judge every row and summarize — the one place the policy is applied.
-    static func judged(rows: [FreshnessRow], now: Date, wording: FreshnessWording = .current) -> CatalogFreshnessState {
+    /// Judge every row, summarize, and take the band's colour and headline
+    /// from the reality verdict — the one place the policies are applied.
+    /// `reality` defaults to "nothing known" (never validated: yellow).
+    static func judged(rows: [FreshnessRow], reality: CatalogRealityInputs = CatalogRealityInputs(),
+                       now: Date, wording: FreshnessWording = .current) -> CatalogFreshnessState {
         var s = CatalogFreshnessState()
         s.rows = rows
         for row in rows {
@@ -186,6 +196,9 @@ struct CatalogFreshnessState: Equatable {
             s.verdicts[cycler] = FreshnessPolicy.judge(row, now: now, wording: wording)
         }
         s.summary = FreshnessPolicy.summarize(rows, now: now, wording: wording)
+        s.reality = CatalogRealityPolicy.judge(reality.facts, review: reality.review, information: reality.information, now: now)
+        s.summary.colour = s.reality.colour
+        s.summary.headline = s.reality.headline
         s.isComputed = true
         return s
     }
@@ -203,10 +216,11 @@ enum CatalogStatusWords {
     /// Content Analysis, one click away.
     static func chipWords(_ state: CatalogFreshnessState) -> String {
         guard state.isComputed else { return "checking…" }
+        // Rick 2026-10-20: the colour answers "does the catalog reflect reality?"
         switch state.summary.colour {
-        case .green: return "current"
-        case .yellow: return "needs attention"
-        case .red: return "needs a decision"
+        case .green: return "reflects reality"
+        case .yellow: return "can't fully vouch"
+        case .red: return "something is wrong"
         case .grey: return "nothing to check"
         }
     }
@@ -214,16 +228,19 @@ enum CatalogStatusWords {
     /// Catalog ▸ "Catalog Status…" carries the colour word when not green.
     static func menuTitle(_ colour: FreshnessColour) -> String {
         switch colour {
-        case .red: return "Catalog Status — needs a decision…"
-        case .yellow: return "Catalog Status — needs attention…"
+        case .red: return "Catalog Status — something is wrong…"
+        case .yellow: return "Catalog Status — can't fully vouch…"
         case .green, .grey: return "Catalog Status…"
         }
     }
 
-    /// The one console/log line at launch when the summary is red.
-    static func launchLine(_ summary: FreshnessSummary) -> String {
-        let items = summary.items.filter { $0.colour == .red }.map { "\($0.title): \($0.words)" }
-        return "\(summary.headline) — \(items.joined(separator: "; ")). Catalog ▸ Catalog Status… lists the doors."
+    /// The one console/log line at launch when the band is red: the
+    /// headline, then every red reason past the first (the headline names
+    /// the first once).
+    static func launchLine(_ reality: CatalogRealityVerdict) -> String {
+        let more = reality.reasons.dropFirst().filter { $0.colour == .red }.map(reality.words)
+        let tail = more.isEmpty ? "" : " — " + more.joined(separator: "; ")
+        return "\(reality.headline)\(tail). Catalog ▸ Catalog Status… lists the doors."
     }
 }
 
@@ -349,6 +366,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     static func jobRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
         var s: Set<AnalyzeCycler> = []
         for job in center.jobs where job.state.isActive {
+            if job is ValidateCatalogJob { s.formUnion([.filePresence, .integrity]) }   // both steps, one job
             if job is CatalogAuditJob { s.insert(.filePresence) }
             else if job is FullHashBackfillJob { s.insert(.fullHashes) }
             else if job is AudioFingerprintBackfillJob { s.insert(.soundPrints) }
@@ -378,13 +396,14 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         guard !announced, state.isComputed, report.activeRecords > 0 else { return }
         announced = true
         guard state.summary.needsAttention else { return }
-        model.catalogStatusNote(CatalogStatusWords.launchLine(state.summary))
+        model.catalogStatusNote(CatalogStatusWords.launchLine(state.reality))
     }
 
     private func rejudge(now: Date = Date()) {
         guard report.computedAt.timeIntervalSince1970 > 0 else { return }
         let rows = CatalogFreshnessRows.rows(report: report, facts: facts, running: running)
-        let new = CatalogFreshnessState.judged(rows: rows, now: now)
+        let reality = CatalogRealityFactsBuilder.inputs(facts: facts, missing: report.missingCopies)
+        let new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
         guard new != state else { return }
         publishCount += 1
         state = new

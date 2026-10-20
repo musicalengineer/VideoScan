@@ -32,8 +32,9 @@
 import Foundation
 import MachO
 
-/// What Import to SQLite drives in a phase job: start it, await its task,
-/// read its state. Both phase jobs already have these members (main-actor
+/// What Import to SQLite (and, since 2026-10-20, Validate Catalog) drives in
+/// a phase job through CatalogPhaseDriver: start it, await its task, read
+/// its state. Both phase jobs already have these members (main-actor
 /// isolated conformances, like their MediaFileOperationJob ones).
 protocol ImportPhaseJob: MediaFileOperationJob {
     func start()

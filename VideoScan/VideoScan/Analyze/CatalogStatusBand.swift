@@ -1,4 +1,11 @@
 // CatalogStatusBand.swift
+// THE COLOUR (Rick 2026-10-20, superseding 10/16's "yellow = a run fixes
+// it / red = a person must look"): does the catalog reflect reality? —
+// green / yellow (can't fully vouch) / red (lying, or the check broke),
+// from CatalogRealityPolicy (VideoScanCore). Under the headline: the
+// further reasons, then "N to review" (review items never change the
+// colour) and the information lines (CatalogRealityLines).
+//
 // The summary band at the top of the Analyze panel (Rick 2026-10-16,
 // docs/design/catalog_status_freshness_2026_10_16.md §2.1): one colour,
 // one headline, one line per non-green item with its ONE button —
@@ -58,7 +65,8 @@ enum CatalogStatusDoor: Equatable {
     /// Red, File Presence found rows pointing at nothing: Fix Links (§2b)
     /// is not built yet — the button is shown DISABLED and says so.
     case fixLinks
-    /// Red, Verify Catalog found decisions pending: run it again — its MFO
+    /// Red, the catalog check found decisions pending: run Validate Catalog
+    /// again (Rick 2026-10-20: the files first, then the catalog) — its MFO
     /// row lists every finding (the decisions themselves are taken
     /// elsewhere: Fix Links, Fingerprint Sound, the person).
     case verifyAgain
@@ -71,7 +79,7 @@ enum CatalogStatusDoor: Equatable {
         case .runAgain: return "Run again"
         case .fingerprintAgain: return "Fingerprint again"
         case .fixLinks: return "Fix Links…"
-        case .verifyAgain: return "Verify again"
+        case .verifyAgain: return "Validate again"
         case .none: return ""
         }
     }
@@ -79,8 +87,8 @@ enum CatalogStatusDoor: Equatable {
     /// False only for the door that is not built yet.
     var isEnabled: Bool { self != .fixLinks }
 
-    static let fixLinksHelp = "Fix Links is coming next: a review sheet for rows whose file is gone or changed, with relink / forget per row. Until then the Audit Catalog detail (Media File Operations) lists them."
-    static let verifyAgainHelp = "Run Verify Catalog again; its Media File Operations row lists every finding by tier, with the file and the words."
+    static let fixLinksHelp = "Fix Links is coming next: a review sheet for rows whose file is gone or changed, with relink / forget per row. Until then the Validate Catalog detail (Media File Operations) lists them."
+    static let verifyAgainHelp = "Run Validate Catalog again — the files on disk first, then the catalog itself; its Media File Operations row lists every finding by tier, with the file and the words."
 
     /// The button's help, per door.
     func help(cycler: AnalyzeCycler) -> String {
@@ -145,6 +153,9 @@ struct CatalogStatusBand: View {
                     .accessibilityIdentifier("catalog.status.band.updateAll")
                 }
             }
+            if state.isComputed {
+                CatalogRealityLines(verdict: state.reality)
+            }
             ForEach(summary.items, id: \.kind) { item in
                 if let cycler = AnalyzeCycler(rawValue: item.kind) {
                     itemRow(item, cycler: cycler)
@@ -199,6 +210,63 @@ struct CatalogStatusBand: View {
                 .help(door.help(cycler: cycler))
                 .accessibilityIdentifier("catalog.status.band.door.\(cycler.rawValue)")
         }
+    }
+}
+
+// MARK: - Reality: the reasons past the headline, the review items, information
+
+/// Under the headline (Rick 2026-10-20): every further reason the band is
+/// not green; then "N to review" with one line per review item (count,
+/// title, door) — review items NEVER change the colour; "Audio Tracks, But
+/// No Sound" is said in yellow TEXT; then the information lines. A value
+/// in, no model access, nothing O(records).
+struct CatalogRealityLines: View {
+    let verdict: CatalogRealityVerdict
+
+    /// The tint for review words a person should look at (not a band colour).
+    static let cautionText = Color(red: 0.72, green: 0.53, blue: 0.04)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(verdict.reasons.dropFirst().enumerated()), id: \.offset) { _, reason in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle().fill(reason.colour.tint).frame(width: 8, height: 8).offset(y: 1)
+                    Text(verdict.words(reason))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            if let line = verdict.reviewLine {
+                Text(line)
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.top, 2)
+                    .accessibilityIdentifier("catalog.status.band.reviewCount")
+                ForEach(verdict.review, id: \.kind) { reviewRow($0) }
+            }
+            ForEach(Array(verdict.information.enumerated()), id: \.offset) { _, words in
+                Label(words, systemImage: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func reviewRow(_ item: CatalogReviewItem) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(item.count.formatted())
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .frame(minWidth: 44, alignment: .trailing)
+            Text(item.title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(item.isCaution ? Self.cautionText : Color.primary)
+            Text("— " + item.door)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .accessibilityIdentifier("catalog.status.band.review.\(item.kind.rawValue)")
     }
 }
 

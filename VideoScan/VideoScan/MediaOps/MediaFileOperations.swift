@@ -467,6 +467,18 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let importToSQLite = Self("importToSQLite", hasDetailView: true,
         style: .init(badge: "Import", logVerb: "import to sqlite", fill: .init(0.18, 0.18, 0.42)))
 
+    // Validate Catalog (Rick 2026-10-20, one verb) — validated green: a
+    // checking verb whose only catalog writes are its audit phase's (the
+    // removal marker through the one engine, the where-seen stamps) and
+    // whose only other file is the Verify report. Δ ≥ 0.19 from every other
+    // fill (nearest: Transcode's green), contrast vs white ≈ 5.2.
+    /// "Validate Catalog…" (Rick 2026-10-20): ONE job — the disk audit
+    /// (every live row on a connected drive stat'ed; gone → Missing, back →
+    /// live), then, only when that completed, Verify Catalog's tiers 0–6
+    /// over the fresh stamps. ValidateCatalogJob.
+    static let validateCatalog = Self("validateCatalog", hasDetailView: true,
+        style: .init(badge: "Validate Catalog", logVerb: "validate catalog", fill: .init(0.00, 0.50, 0.00)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -476,7 +488,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
-        .verifyCatalog, .importToSQLite,
+        .verifyCatalog, .importToSQLite, .validateCatalog,
     ]
 
     /// Badge text — rendered in small caps by the row view.

@@ -4,6 +4,8 @@
 // the three integrity rows added 2026-10-16, Catalog Status §2):
 //
 //   File Presence         MediaFileOperationsCenter.startCatalogAudit
+//   Integrity             MediaFileOperationsCenter.startValidateCatalog
+//                         (files on disk, then the catalog — one job)
 //   Full Hashes           MediaFileOperationsCenter.startFullHashBackfill
 //   Sound Prints          MediaFileOperationsCenter.startAudioFingerprintBackfill
 //                         — the three MFO jobs; pause / resume / cancel act
@@ -145,7 +147,10 @@ struct AnalyzeRunner {
             case .soundPrints:
                 _ = c.startAudioFingerprintBackfill(model: model)
             case .integrity:
-                _ = c.startVerifyCatalog(model: model)
+                // Validate Catalog (Rick 2026-10-20, one verb): the files on
+                // disk first, then the catalog — never Verify on its own,
+                // which would grade the catalog against an old disk picture.
+                _ = c.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)
             default:
                 break
             }
@@ -282,10 +287,12 @@ struct AnalyzeRunner {
         return center.jobs.first { job in
             guard job.state.isActive else { return false }
             switch cycler {
-            case .filePresence: return job is CatalogAuditJob
+            // Validate Catalog runs the file check AND the catalog check, so
+            // it is the job behind both rows while it runs.
+            case .filePresence: return job is CatalogAuditJob || job is ValidateCatalogJob
             case .fullHashes: return job is FullHashBackfillJob
             case .soundPrints: return job is AudioFingerprintBackfillJob
-            case .integrity: return job is VerifyCatalogJob
+            case .integrity: return job is VerifyCatalogJob || job is ValidateCatalogJob
             default: return false
             }
         }

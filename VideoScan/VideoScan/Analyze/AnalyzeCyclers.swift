@@ -130,7 +130,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
         case .soundPrints:
             return "Listens to each file once and keeps a small fingerprint of its sound, so copies and clips of the same recording can be told apart. Kept in a sidecar beside the catalog."
         case .integrity:
-            return "Verify Catalog: checks the catalog itself — ids, paths, lineage, fixity digests, the removal markers, the sound prints against each file's header, the catalog file's own hash — and writes a dated report beside the catalog. Nothing on media is opened; nothing is changed."
+            return "Validate Catalog: checks every file on disk first, then — only after a complete file check — the catalog itself: ids, paths, lineage, fixity digests, the removal markers, the sound prints against each file's header, the catalog file's own hash. Writes a dated report beside the catalog. Nothing on media is opened; only the file check's Missing / back marks change a row."
         case .duplicates:
             return "Groups files that are the same bytes and elects the copy to keep. Catalog metadata only; nothing is removed here."
         case .footage:

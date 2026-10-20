@@ -109,6 +109,13 @@ struct IntegrityTier: Codable, Equatable, Sendable, Identifiable {
     var elapsedSeconds: Double = 0
     /// One short line in family words ("3 rows share a path").
     var summary: String
+    /// Tier 5 only (QA 2026-10-20): of `couldNotCheck`, the part that is
+    /// the catalog file itself — catalog.sqlite's generation could not be
+    /// read, or catalog.json could not be hashed (0 or 1). Carried
+    /// explicitly so the band never derives it from kept findings, which
+    /// the findings cap can drop. nil = not said (another tier, or a report
+    /// written before 2026-10-20 — decoded as absent; additive key).
+    var catalogFileUnchecked: Int?
 
     var id: Int { tier }
 
@@ -379,6 +386,10 @@ struct IntegrityReportFacts: Sendable, Equatable {
     /// (`CatalogFreshnessFactsReader.predatesSwitch`): it says nothing
     /// about the catalog in use — no decision, no date, every row unverified.
     var predatesSwitch = false
+    /// The report's findings and gaps sorted into break / unsettled /
+    /// review / information for the band (Rick 2026-10-20). Empty unless a
+    /// report of THIS catalog was read.
+    var reality = IntegrityRealityFacts()
 
     init(lastCompleted: Date? = nil, outcome: FreshnessRow.Outcome = .neverRan, needsDecision: Int = 0,
          unverified: Int = 0, unverifiedWords: String? = nil, note: String? = nil,
@@ -415,6 +426,7 @@ struct IntegrityReportFacts: Sendable, Equatable {
         let built = r.builtTiers
         var f = IntegrityReportFacts(needsDecision: built.reduce(0) { $0 + $1.needsDecision }, decisionWords: r.decisionWords)
         f.note = note(for: r)
+        f.reality = IntegrityRealityFacts.from(report: r)
         switch r.outcome {
         case .failed:
             f.outcome = .failed

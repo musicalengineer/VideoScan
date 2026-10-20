@@ -343,6 +343,24 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogRealityTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRealityTests"
+      ],
+      "tests": [
+        "greenBoundaries",
+        "greenReflectsReality",
+        "reasonWords",
+        "redLyingOrBroken",
+        "reviewItemsAreListed",
+        "reviewItemsNeverMoveTheBand",
+        "yellowCannotFullyVouch",
+        "zeroCountsAreNoReason"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRemountReproTests.swift",
@@ -7381,6 +7399,31 @@
         "optOutBadgeCountsAllMatches",
         "optOutIncludesUnreachable",
         "optOutStrictlyExceedsDefaultWhenUnreachableMatchesExist"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRealityBandTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRealityBucketTests",
+        "CatalogRealityBuilderTests",
+        "MissingCopyCountTests",
+        "CatalogRealityStateTests"
+      ],
+      "tests": [
+        "decidedFindingsAreBreaks",
+        "fromAReport",
+        "informationalRules",
+        "inputs",
+        "presence",
+        "reviewItemsLeaveTheBandGreen",
+        "scale",
+        "silentPrints",
+        "soundPrintsThatCouldNotJudgeAreAReviewDoor",
+        "split",
+        "validation",
+        "words"
       ]
     },
     {
@@ -21862,6 +21905,24 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QAValidateCatalogRedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QAValidateCatalogRedTests"
+      ],
+      "tests": [
+        "agedWordsAreNotEqual",
+        "cappedReportKeepsItsBreaks",
+        "cappedTier5InformationalIsNotUnsettled",
+        "corruptAuditRecordIsRed",
+        "differentDigestIsNotACopy",
+        "futureDatedRecordIsNotThisRun",
+        "groupWithoutDigestIsNotProof",
+        "tier5GenerationUnreadableIsNotGreen"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RateTrackerTests.swift",
       "stage": "unit",
       "suites": [
@@ -25111,6 +25172,32 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ValidateCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ValidateCatalogOutcomeTests",
+        "ValidateCatalogJobTests",
+        "ValidateCatalogMenuSensorTests"
+      ],
+      "tests": [
+        "aCompleteFileCheckThenVerify",
+        "aFailedFileCheckNeverRunsVerify",
+        "aGoodRunNeverReadsTheStaleRecord",
+        "aReadOnlyCatalogRefuses",
+        "aStoppedFileCheckNeverRunsVerify",
+        "bothLaunchArgumentsRunTheCombinedJob",
+        "exactlyOneVerbInTheMenu",
+        "filesFailed",
+        "filesStopped",
+        "oneCheckerAtATime",
+        "theAuditRecordGate",
+        "theDoorsPointAtValidate",
+        "theOtherEndings",
+        "validated"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VerifyArchiveCopiesTests.swift",
@@ -28161,7 +28248,7 @@
         "coverageReportCarriesTheIntegrityKinds",
         "doorRule",
         "fullHashCountingExcludesTheSampledHash",
-        "greenChipSaysCurrent",
+        "greenChipSaysReflectsReality",
         "hundredThousandRowsStayInsideTheCoverageBudget",
         "identicalCoverageAtALaterTimePublishesOnce",
         "integrityRunsGoThroughTheCenterWithTheModelsMarkers",
@@ -28180,7 +28267,7 @@
         "stateJudgesEveryRowAndSummarizes",
         "storageTabCheckIsRetitledAndKept",
         "theThreeIntegrityRowsComeFirst",
-        "uncomputedAndGreyStayQuiet",
+        "uncomputedStaysQuietAndNothingKnownCannotVouch",
         "yellowAndRedChipsAreShort"
       ]
     },
@@ -32358,9 +32445,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2797,
+      "expected_floor": 2831,
       "name": "unit",
-      "package_expected_floor": 303,
+      "package_expected_floor": 311,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -32388,7 +32475,8 @@
         "VideoScanCoreTests.CatalogRecordDTORecordTests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
         "VideoScanCoreTests.CatalogChangeDetectorTests",
-        "VideoScanCoreTests.SQLiteCatalogReaderTests"
+        "VideoScanCoreTests.SQLiteCatalogReaderTests",
+        "VideoScanCoreTests.CatalogRealityTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -32818,7 +32906,15 @@
         "VideoScanTests/IgnoredContentCatalogSensorTests",
         "VideoScanTests/PutBackStaysPutBackTests",
         "VideoScanTests/SplitUnknownDigestHoldTests",
-        "VideoScanTests/SideStoreAuthorityTests"
+        "VideoScanTests/SideStoreAuthorityTests",
+        "VideoScanTests/ValidateCatalogOutcomeTests",
+        "VideoScanTests/ValidateCatalogJobTests",
+        "VideoScanTests/ValidateCatalogMenuSensorTests",
+        "VideoScanTests/CatalogRealityBucketTests",
+        "VideoScanTests/CatalogRealityBuilderTests",
+        "VideoScanTests/MissingCopyCountTests",
+        "VideoScanTests/CatalogRealityStateTests",
+        "VideoScanTests/QAValidateCatalogRedTests"
       ]
     },
     {
