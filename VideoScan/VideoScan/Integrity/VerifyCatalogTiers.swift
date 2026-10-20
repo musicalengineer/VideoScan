@@ -465,6 +465,7 @@ enum VerifyCatalogTiers {
         var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
                               needsDecision: decided.count, couldNotCheck: couldNotCheck, summary: "")
+        t.catalogFileUnchecked = unreadable ? 1 : 0
         if !decided.isEmpty {
             t.result = .needsDecision(decided.count)
         } else if couldNotCheck > 0 {
@@ -503,6 +504,7 @@ enum VerifyCatalogTiers {
         var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
                               needsDecision: decided.count, couldNotCheck: couldNotCheck, summary: "")
+        t.catalogFileUnchecked = unreadable == nil ? 0 : 1
         if !decided.isEmpty {
             t.result = .needsDecision(decided.count)
         } else if couldNotCheck > 0 {

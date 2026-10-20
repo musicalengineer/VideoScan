@@ -195,8 +195,10 @@ public struct CatalogRealityVerdict: Sendable, Equatable {
     public var information: [String]
     /// The `now` the verdict was judged at — the words of a reason that
     /// ages ("10 days ago") are said against it, never a fresh clock read
-    /// in a view body. Deliberately outside `==` (the snapshot's publish
-    /// gate must not fire just because a minute passed).
+    /// in a view body. Not compared itself (the snapshot's publish gate must
+    /// not fire just because a minute passed) — but the reasons' WORDS said
+    /// against it are, so "10 days ago" → "11 days ago" does publish (QA
+    /// round 2).
     public var judgedAt: Date
 
     public init(colour: FreshnessColour, headline: String, reasons: [CatalogRealityReason],
@@ -211,6 +213,7 @@ public struct CatalogRealityVerdict: Sendable, Equatable {
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.colour == rhs.colour && lhs.headline == rhs.headline && lhs.reasons == rhs.reasons
+            && lhs.reasons.map(lhs.words) == rhs.reasons.map(rhs.words)
             && lhs.review == rhs.review && lhs.information == rhs.information
     }
 

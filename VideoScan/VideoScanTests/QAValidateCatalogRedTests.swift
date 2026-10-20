@@ -66,6 +66,35 @@ struct QAValidateCatalogRedTests {
         #expect(counts == MissingCopyCounts(noOtherCopy: 0, otherCopyPresent: 0, possibleCopyNotProven: 1))
     }
 
+    // Round 2, MINOR-A: CatalogReality.swift — with judgedAt out of ==, an aged reason line never refreshes.
+    @Test("a verdict whose reason words aged is not == the older one, or the 60 s re-judge never publishes it")
+    func agedWordsAreNotEqual() {
+        let t0 = Date(timeIntervalSince1970: 2_000_000_000)
+        let facts = CatalogRealityFacts(validation: .completed(at: t0.addingTimeInterval(-10 * 86_400)),
+                                        breaks: [CatalogRealityCount(count: 2, words: "2 paths have more than one live row")],
+                                        rowsToCheck: 100)
+        let a = CatalogRealityPolicy.judge(facts, now: t0)
+        let b = CatalogRealityPolicy.judge(facts, now: t0.addingTimeInterval(3 * 86_400))
+        #expect(a.reasons.map(a.words) != b.reasons.map(b.words))
+        #expect(a != b)
+    }
+
+    // Round 2, MINOR-B: IntegrityRealityFacts.swift — in a capped report, tier 5's dropped informational
+    // findings must not become a false 'unsettled'.
+    @Test("capped report: tier 5's informational findings the cap dropped are not an unsettled reason")
+    func cappedTier5InformationalIsNotUnsettled() {
+        let silent = (0..<IntegrityReport.findingsCap).map { _ in
+            IntegrityFinding(tier: 3, rule: VerifyCatalogTiers.silentPrintRule, recordID: UUID(), filename: "f.mov",
+                             words: "silent", needsDecision: true) }
+        let t3 = IntegrityTier(tier: 3, name: VerifyCatalogTiers.name(3), verifiedAt: qaNow, result: .needsDecision(silent.count),
+                               needsDecision: silent.count, summary: "silent")
+        let t5 = IntegrityTier(tier: 5, name: VerifyCatalogTiers.name(5), verifiedAt: qaNow, result: .couldNotCheck(128),
+                               checked: 100, passed: 100, couldNotCheck: 128,
+                               summary: "128 lineage links point at rows removed from the catalog — kept as history")
+        let f = IntegrityRealityFacts.from(report: qaReport(tiers: [t3, t5], findings: silent, total: silent.count + 128))
+        #expect(f.unsettled.isEmpty, "unsettled = \(f.unsettled)")
+    }
+
     // P3: CatalogFreshnessFacts.swift:108-112 — a corrupt catalog-audit.json reads as nil = "never ran" (yellow),
     // not as an unreadable record (red, per the claim "unreadable sidecar/report → RED").
     @Test("a corrupt catalog-audit.json is an unreadable record (red), not 'never validated'")

@@ -21840,7 +21840,9 @@
         "QAValidateCatalogRedTests"
       ],
       "tests": [
+        "agedWordsAreNotEqual",
         "cappedReportKeepsItsBreaks",
+        "cappedTier5InformationalIsNotUnsettled",
         "corruptAuditRecordIsRed",
         "differentDigestIsNotACopy",
         "futureDatedRecordIsNotThisRun",
@@ -32334,7 +32336,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2808,
+      "expected_floor": 2810,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [

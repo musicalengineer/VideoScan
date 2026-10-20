@@ -134,8 +134,12 @@ struct IntegrityRealityFacts: Sendable, Equatable {
         var breaks: [CatalogRealityCount] = []
         var silent = 0
         for t in r.builtTiers where t.tier != 0 {
-            if t.tier == 3 { silent = max(0, t.needsDecision - keptSilent); continue }
-            let unkept = t.needsDecision - (keptDecided[t.tier] ?? 0)
+            // Tier 3: what it counted beyond the silent prints AND its other
+            // decided findings kept is silent prints the cap dropped (review).
+            if t.tier == 3 { silent = max(0, t.needsDecision - keptSilent - (keptDecided[3] ?? 0)) }
+            // Every tier's other kept decisions are breaks already; its
+            // remainder past what was kept (silent ones excluded) is a break.
+            let unkept = t.tier == 3 ? 0 : t.needsDecision - (keptDecided[t.tier] ?? 0)
             if unkept > 0 {
                 breaks.append(CatalogRealityCount(count: unkept,
                                                   words: "\(t.label): \(unkept.formatted()) more decisions the report could not keep"))
@@ -152,20 +156,32 @@ struct IntegrityRealityFacts: Sendable, Equatable {
     /// Tier 3's gap is a review item (above).
     static func gaps(_ r: IntegrityReport) -> [CatalogRealityCount] {
         var out: [CatalogRealityCount] = []
-        let informational5 = r.findings.filter { $0.tier == 5 && !$0.needsDecision }.count
         for t in r.builtTiers where t.tier != 0 {
             if case .notRun(let why) = t.result {
                 out.append(CatalogRealityCount(count: max(1, r.rowsLive), words: "\(t.label): not run — \(why)"))
             } else if t.tier == 1, t.couldNotCheck > 0 {
                 out.append(CatalogRealityCount(count: t.couldNotCheck, words: "\(t.label): \(couldNotCheckWords(t))"))
-            } else if t.tier == 5, t.couldNotCheck > informational5 {
-                out.append(CatalogRealityCount(count: t.couldNotCheck - informational5, words: "\(t.label): \(t.summary)"))
+            } else if t.tier == 5, case let n = catalogFileUnchecked(t, report: r), n > 0 {
+                out.append(CatalogRealityCount(count: n, words: "\(t.label): \(t.summary)"))
             }
         }
         if let mismatch = r.generationMismatchWords {
             out.append(CatalogRealityCount(count: max(1, r.rowsLive), words: "the catalog changed during the last check: \(mismatch)"))
         }
         return out
+    }
+
+    /// Tier 5's catalog-file gap (generation unreadable / catalog.json
+    /// unhashable). The tier SAYS it (`catalogFileUnchecked`, QA round 2);
+    /// a report from before that field: derived from the informational
+    /// findings kept — only when nothing was capped away, since a capped
+    /// report dropped some of them and the remainder would be a false
+    /// "unsettled".
+    static func catalogFileUnchecked(_ t: IntegrityTier, report r: IntegrityReport) -> Int {
+        if let said = t.catalogFileUnchecked { return said }
+        guard r.findingsTotal <= r.findings.count else { return 0 }
+        let informational = r.findings.filter { $0.tier == 5 && !$0.needsDecision }.count
+        return max(0, t.couldNotCheck - informational)
     }
 
     /// A tier's own summary when the gap is its whole result; the count otherwise.

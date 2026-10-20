@@ -109,6 +109,13 @@ struct IntegrityTier: Codable, Equatable, Sendable, Identifiable {
     var elapsedSeconds: Double = 0
     /// One short line in family words ("3 rows share a path").
     var summary: String
+    /// Tier 5 only (QA 2026-10-20): of `couldNotCheck`, the part that is
+    /// the catalog file itself — catalog.sqlite's generation could not be
+    /// read, or catalog.json could not be hashed (0 or 1). Carried
+    /// explicitly so the band never derives it from kept findings, which
+    /// the findings cap can drop. nil = not said (another tier, or a report
+    /// written before 2026-10-20 — decoded as absent; additive key).
+    var catalogFileUnchecked: Int?
 
     var id: Int { tier }
 
