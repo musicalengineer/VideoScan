@@ -253,8 +253,10 @@ struct CatalogOpenShortcutTests {
         #expect(!primaryBody.contains("noteMissingFileForUserAction"), "no looks-moved loop of its own in primaryAction")
         let folder = try productionSource("CatalogContent+FolderTable.swift")
         let actionRange = try #require(folder.range(of: "func tablePrimaryAction(ids: Set<UUID>)"))
-        let actionBody = String(folder[actionRange.upperBound...].prefix(400))
-        #expect(actionBody.contains("openRows(ids: displayedIDs(among: ids), gesture: \"double-click\")"), "rows → the same openRows, over the rows on screen")
+        let actionBody = String(folder[actionRange.upperBound...].prefix(600))
+        // Folder rows carry alias ids (a file in two folders), so the rows
+        // are first translated to record ids (FolderRowSelection, 10/19).
+        #expect(actionBody.contains("openRows(ids: displayedIDs(among: fileIDs), gesture: \"double-click\")"), "rows → the same openRows, over the rows on screen")
         #expect(!actionBody.contains("MediaOpener"), "no launch of its own in tablePrimaryAction")
 
         // ⌘O: the table publishes a FOCUSED value (never scene-scoped, or

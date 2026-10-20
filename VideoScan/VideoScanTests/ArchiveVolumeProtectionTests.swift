@@ -521,7 +521,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         // that this run wrote, never media.
         "VideoScan/Archive/ArchivePromoteJournal.swift": 1,
         "VideoScan/Archive/ArchiveIndexRename.swift": 3,   // 2026-09-25: only 00_Index/.rename_backups/<stamp> folders (refused-rename cleanup + keep-newest-20 prune) — never media or index files. 2026-09-27 (codex review of GH #204): +1 `abandon` — a backup folder THIS process just claimed and failed to finish; prune now removes only real dirs carrying our complete marker. 2026-09-27 (codex re-review #1): −2 — the refused-rename cleanup removes only its own folder, under the lock, and never the `.rename_backups/` folder itself
-        "VideoScan/MediaOps/BalanceAudioJob.swift": 1, "VideoScan/App/BundleExporter.swift": 1,
+        // BundleExporter 1 → 2 (10/19): + its own half-made backup bundle folder on failure.
+        // CatalogBackupSeal / CatalogViewerSnapshot (10/19): each its own VACUUM INTO temp file,
+        // consumed by the rename on success — app data, never a catalog record's media.
+        "VideoScan/MediaOps/BalanceAudioJob.swift": 1, "VideoScan/App/BundleExporter.swift": 2,
+        "VideoScan/Catalog/CatalogBackupSeal.swift": 1, "VideoScan/Catalog/CatalogViewerSnapshot.swift": 1,
         "VideoScan/App/BundleImporter.swift": 2, "VideoScan/Media/CaptionRunner.swift": 2,
         "VideoScan/Catalog/CatalogStore.swift": 1, "VideoScan/Catalog/CatalogSync.swift": 3,
         "VideoScan/Catalog/CatalogWriteError.swift": 1, "VideoScan/MediaOps/CleanupJob.swift": 4,

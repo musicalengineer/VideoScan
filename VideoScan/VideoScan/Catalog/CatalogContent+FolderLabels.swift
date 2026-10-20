@@ -302,12 +302,12 @@ struct RenameFolderSheet: View {
             TextField(MakeFolderWords.namePrompt, text: $name)
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 320)
-                .onSubmit(rename)
+                .onSubmit(commitRename)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(FootageFolderWords.renameButton, action: rename)
+                Button(FootageFolderWords.renameButton, action: commitRename)
                     .keyboardShortcut(.defaultAction)
                     .disabled(trimmed.isEmpty)
             }
@@ -315,7 +315,7 @@ struct RenameFolderSheet: View {
         .padding(20)
     }
 
-    private func rename() {
+    private func commitRename() {
         guard !trimmed.isEmpty else { return }
         onRename(request.id, trimmed)
         dismiss()
