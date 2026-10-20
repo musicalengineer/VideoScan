@@ -103,7 +103,15 @@ final class EventsDecisionStore: ObservableObject {
     /// Why a write is refused right now, nil when writable.
     var writeRefusal: String? {
         guard hasLoaded else { return "decisions not loaded yet" }
-        return readOnlyReason ?? catalog?.writeRefusal()
+        return readOnlyReason ?? catalog?.writeRefusal() ?? authorityRefusal
+    }
+
+    /// catalog.cutover beside the file names catalog.sqlite the authority
+    /// and this store is not attached to it: every folder change is refused
+    /// — never written to events-decisions.json (codex #113 P1-4).
+    var authorityRefusal: String? {
+        guard catalog == nil, CatalogAuthority.latchNamesSQLite(in: directory) else { return nil }
+        return CatalogAuthority.sideStoreRefusal("folder changes", file: Self.filename)
     }
     /// What the page should say: a refusal, else the last failed save.
     var problem: String? { writeRefusal ?? lastSaveFailure }
@@ -295,7 +303,10 @@ final class EventsDecisionStore: ObservableObject {
     /// for the page). Catalog: persisted first, then applied. JSON: applied,
     /// then one coalesced save.
     private func commit(_ change: EventsDecisionChange) -> Bool {
-        guard isWritable else { return false }
+        guard isWritable else {
+            if let why = authorityRefusal, writeRefusal == why { note("🔴 \(change.what) was NOT saved — \(why)") }
+            return false
+        }
         var nextEvents = events
         for e in change.events { nextEvents[e.id] = e }
         let nextDecisions = decisions + change.decisions

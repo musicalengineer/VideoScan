@@ -33,6 +33,31 @@ extension VideoScanModel {
         }
     }
 
+    /// catalog.sqlite became the authority (CatalogAuthorityFlip): the ignore
+    /// list lives in `ignored_content` from now on. The store imports
+    /// ignored-content.json once (idempotent, verified, findings named),
+    /// reads the table, and writes every later change through `committer`;
+    /// the JSON file is never written again. Under a test host a store still
+    /// on the per-process scratch folder is re-homed beside the test's
+    /// catalog, so one test's list never leaks into another's import.
+    func attachIgnoredContentToCatalog(_ committer: CatalogCommitter) {
+        if TestEnvironment.isTestHost, ignoredContentStore.directory == IgnoredContentStore.defaultDirectory {
+            let folder = URL(fileURLWithPath: catalogStore.fileLocation).deletingLastPathComponent()
+            ignoredContentStore = IgnoredContentStore(directory: folder)
+        }
+        let store = ignoredContentStore
+        store.note = { [weak self] line in
+            self?.log(line)
+            appLog.write("[ignored-content] " + line)
+            ignoredContentLog.notice("\(line, privacy: .public)")
+        }
+        store.attachCatalog(IgnoredContentCatalogBacking(committer: committer))
+        Task { [weak self] in
+            _ = await store.load()
+            self?.ignoredContentRevision &+= 1
+        }
+    }
+
     // MARK: Writers (add) — Tidy apply, Remove from Catalog
 
     /// Remember a record's content so a rescan never catalogs another copy
@@ -78,7 +103,11 @@ extension VideoScanModel {
         let store = ignoredContentStore
         Task { @MainActor in
             if await store.save() == false {
-                ignoredContentLog.error("ignored-content.json could not be written under \(store.directory.path, privacy: .public)")
+                // A refusal (catalog.sqlite's, or the authority's) is already
+                // said by the store's note; only a failed file write is left.
+                if store.catalog == nil, store.lastSaveFailure == nil {
+                    ignoredContentLog.error("ignored-content.json could not be written under \(store.directory.path, privacy: .public)")
+                }
             }
         }
     }

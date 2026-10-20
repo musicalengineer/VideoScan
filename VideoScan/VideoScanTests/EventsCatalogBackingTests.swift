@@ -178,7 +178,7 @@ struct EventsCatalogBackingTests {
         await scene.close()
     }
 
-    @Test("IDEMPOTENCE: a second attach imports nothing; a changed file is said, never merged")
+    @Test("IDEMPOTENCE: a second attach imports nothing; a changed file is reconciled again, appending only its new marker when nothing else is new")
     func importIsIdempotent() async throws {
         let scene = try await S.make("idempotent")
         try Data(S.copyShapedJSON.utf8).write(to: scene.jsonURL)
@@ -189,11 +189,41 @@ struct EventsCatalogBackingTests {
         #expect(again == .alreadyImported(changedSince: false))
         #expect(try #require(await scene.read()).counts == before, "nothing new")
         try Data((S.copyShapedJSON + "\n").utf8).write(to: scene.jsonURL)
+        let changed = await backing.importJSONOnce(from: scene.jsonURL) { _ in }
+        #expect(changed == .imported(events: 3, newEvents: 0, decisions: 1, unreadable: 2, members: 3, verified: true))
+        let after = try #require(await scene.read()).counts
+        #expect(after.events == before.events && after.members == before.members)
+        #expect(after.decisions == before.decisions + 1, "only the new marker: no decision, no unreadable element twice")
+        let third = await backing.importJSONOnce(from: scene.jsonURL) { _ in }
+        #expect(third == .alreadyImported(changedSince: false), "the newest marker names the file now")
+        await scene.close()
+    }
+
+    @Test("RECONCILE (codex #113 P1-1): an older build's later rename in the JSON is written; a same-time difference is kept as catalog.sqlite has it and said as a FINDING — never silent")
+    func changedFileIsReconciled() async throws {
+        let scene = try await S.make("reconcile")
+        try Data(S.copyShapedJSON.utf8).write(to: scene.jsonURL)
+        let backing = EventsCatalogBacking(committer: scene.committer)
+        _ = await backing.importJSONOnce(from: scene.jsonURL) { _ in }
+        // The older build renames One an hour later and edits Three's name
+        // without moving its updatedAt (a tie).
+        let edited = S.copyShapedJSON
+            .replacingOccurrences(of: "\"name\" : \"Synthetic Thanksgiving 1990\", \"state\" : \"confirmed\", \"updatedAt\" : \"2026-10-19T16:43:30Z\"",
+                                  with: "\"name\" : \"Synthetic Thanksgiving 1991\", \"state\" : \"dismissed\", \"updatedAt\" : \"2026-10-19T19:00:00Z\"")
+            .replacingOccurrences(of: "\"name\" : \"Synthetic Christmas\"", with: "\"name\" : \"Synthetic Xmas\"")
+        #expect(edited != S.copyShapedJSON)
+        try Data(edited.utf8).write(to: scene.jsonURL)
         var said: [String] = []
-        let changed = await backing.importJSONOnce(from: scene.jsonURL) { said.append($0) }
-        #expect(changed == .alreadyImported(changedSince: true))
-        #expect(said.first?.contains("CHANGED") == true)
-        #expect(try #require(await scene.read()).counts == before, "a changed file is never merged")
+        let outcome = await backing.importJSONOnce(from: scene.jsonURL) { said.append($0) }
+        #expect(outcome == .imported(events: 3, newEvents: 0, decisions: 1, unreadable: 2, members: 3, verified: true,
+                                     updated: 1, conflicts: 1))
+        let read = try #require(await scene.read())
+        let one = try #require(read.events.first { $0.id.uuidString == S.eventOne })
+        #expect(one.name == "Synthetic Thanksgiving 1991" && one.state == .dismissed, "the newer file row is written")
+        let three = try #require(read.events.first { $0.id.uuidString == S.eventThree })
+        #expect(three.name == "Synthetic Christmas", "a tie keeps catalog.sqlite's row")
+        #expect(said.contains { $0.contains("reconciled “Synthetic Thanksgiving 1990”") && $0.contains("state confirmed → dismissed") })
+        #expect(said.contains { $0.contains("FINDING — “Synthetic Christmas”") && $0.contains("catalog.sqlite's is kept") })
         await scene.close()
     }
 

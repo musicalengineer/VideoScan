@@ -46,7 +46,23 @@ enum CatalogAuthority: Equatable, Sendable {
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
     /// Written ONLY by the explicit "Switch Catalog to SQLite…" door (B2).
-    static let latchFileName = "catalog.cutover"
+    nonisolated static let latchFileName = "catalog.cutover"
+
+    /// The latch beside `folder` names catalog.sqlite the authority. A side
+    /// store there (folders, the ignore list) that is NOT attached to a
+    /// writable committer refuses every write with `sideStoreRefusal` —
+    /// never its JSON file (codex #113 P1-4: a launch that fell back or was
+    /// refused used to leave those doors writing JSON). One stat; read at
+    /// each write so no launch path can forget it.
+    nonisolated static func latchNamesSQLite(in folder: URL) -> Bool {
+        FileManager.default.fileExists(atPath: folder.appendingPathComponent(latchFileName).path)
+    }
+
+    /// The words a refused side-store write says.
+    nonisolated static func sideStoreRefusal(_ what: String, file: String) -> String {
+        "catalog.sqlite is the catalog's authority but this session is not attached to it — \(what) refused; "
+            + "\(file) is never written (reopen the catalog, or relaunch)"
+    }
 
     /// The launch rule. Reads; writes nothing but what `open` itself does
     /// to an existing database (its schema check and high-water witness).
@@ -253,6 +269,15 @@ extension VideoScanModel {
         }
         catalogCutover.install(committer, databaseURL: url, readOnlyReason: readOnlyReason)
         catalogCutover.requestDigests(held)
+        // Rick's decisions in catalog.sqlite (schema v1.11): the footage
+        // likeness the inspector shows, and the ignore list (its one-time
+        // import of ignored-content.json, then every change through this
+        // committer). Per-model stores — safe under a test host too.
+        Task { [weak self] in
+            guard let self, let why = await self.footageLikeness.load(from: committer.repository) else { return }
+            self.catalogAuthorityNote("footage likeness could not be read from catalog.sqlite (\(why)) — the inspector shows none")
+        }
+        attachIgnoredContentToCatalog(committer)
         // Catalog folders live in catalog.sqlite (2026-10-19): the one store
         // writes through this committer from now on; its first load imports
         // events-decisions.json once. Not under a test host — a sandbox

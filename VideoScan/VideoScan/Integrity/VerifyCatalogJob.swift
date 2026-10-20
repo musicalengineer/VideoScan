@@ -406,16 +406,35 @@ extension VideoScanModel {
     func verifyCatalogSnapshot(database: URL, repository: any CatalogRepository,
                                events: [IntegrityEventFact]?) async -> Result<VerifyCatalogSnapshot, VerifyCatalogSnapshotRefusal> {
         let eventFacts = events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot())
-        let read: Result<(generation: Int, rows: [IntegrityRow]), Error> = await Task.detached(priority: .userInitiated) {
-            do { return .success(try await Self.databaseRows(repository)) } catch { return .failure(error) }
-        }.value
+        let read: Result<(generation: Int, rows: [IntegrityRow], likeness: [IntegrityLikenessFact]), Error> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    let got = try await Self.databaseRows(repository)
+                    return .success((got.generation, got.rows, try await Self.databaseLikeness(repository)))
+                } catch { return .failure(error) }
+            }.value
         switch read {
         case .failure(let error):
             return .failure(VerifyCatalogSnapshotRefusal(words: "catalog.sqlite could not be read (\(error))"))
         case .success(let got):
-            return .success(VerifyCatalogSnapshot(rows: got.rows, events: eventFacts, catalogFile: database.path,
-                                                  catalogGeneration: got.generation, mountedVolumeRoots: Self.mountedVolumeRootsNow(),
-                                                  store: .sqlite))
+            var snapshot = VerifyCatalogSnapshot(rows: got.rows, events: eventFacts, catalogFile: database.path,
+                                                 catalogGeneration: got.generation, mountedVolumeRoots: Self.mountedVolumeRootsNow(),
+                                                 store: .sqlite)
+            snapshot.likeness = got.likeness
+            return .success(snapshot)
+        }
+    }
+
+    /// catalog.sqlite's footage likeness pairs (schema v1.11), each with the
+    /// latest person's verdict between any two files of its contents.
+    nonisolated static func databaseLikeness(_ repository: any CatalogRepository) async throws -> [IntegrityLikenessFact] {
+        try await repository.read { reader in
+            var out: [IntegrityLikenessFact] = []
+            try reader.footageLikenessReviews { r in
+                out.append(IntegrityLikenessFact(digestA: r.likeness.digestA, digestB: r.likeness.digestB,
+                                                 reasons: r.likeness.reasons, strength: r.likeness.strength, verdict: r.verdict))
+            }
+            return out
         }
     }
 

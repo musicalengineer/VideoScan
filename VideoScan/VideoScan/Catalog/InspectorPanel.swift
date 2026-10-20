@@ -22,6 +22,15 @@ struct InspectorPanel: View {
     /// record's footage group whose bytes differ — resolved and memoized by
     /// the CALLER (InspectorPanelRules.sameFootageOthers), never in a body.
     var sameFootageMembers: [VideoRecord] = []
+    /// "Same footage as (possible)" (schema v1.11): one file per weak
+    /// likeness pair of this record's content nobody has answered yet —
+    /// resolved and memoized by the CALLER
+    /// (InspectorPanelRules.possibleSameFootage), never in a body.
+    var possibleSameFootage: [VideoRecord] = []
+    /// The person's answer to a possible pair (this record, the other file,
+    /// same / not the same) — the existing footage decision; the host saves
+    /// it and re-runs Find Similar Footage for the two files.
+    var onDecideFootage: ((UUID, UUID, FootageDecision.Verdict) -> Void)?
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
     var onSelectRecord: ((UUID) -> Void)?
@@ -282,10 +291,13 @@ struct InspectorPanel: View {
         add: (String, String) -> Void, section: (String) -> Void,
         appendLine: (String) -> Void
     ) {
-        guard InspectorPanelRules.showsDuplicatesOrSameFootage(rec, sameFootage: sameFootageMembers) else { return }
+        guard InspectorPanelRules.showsDuplicatesOrSameFootage(rec, sameFootage: sameFootageMembers + possibleSameFootage) else { return }
         section("Duplicates")
         for other in sameFootageMembers {
             add("Same footage as", InspectorPanelRules.sameFootageLine(other))
+        }
+        for other in possibleSameFootage {
+            add("Same footage as (possible)", InspectorPanelRules.sameFootageLine(other))
         }
         guard InspectorPanelRules.showsDuplicates(rec) else { return }
         if rec.duplicateDisposition != .none {

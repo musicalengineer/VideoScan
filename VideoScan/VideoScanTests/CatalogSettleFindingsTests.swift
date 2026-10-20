@@ -87,15 +87,17 @@ struct DuplicateDigestSplitPlanTests {
         let plan = DuplicateGroupDigestSplit.plan([keeper, mate, p1, p2, lone], elect: { $0.last }, newID: { fresh })
         let byID = Dictionary(uniqueKeysWithValues: plan.changes.map { ($0.id, $0) })
         #expect(plan.changes.count == 5)
-        #expect(byID[keeper.id] == .init(id: keeper.id, groupID: g, disposition: .keep, groupCount: 2, bestMatch: "mate.mov"),
+        #expect(byID[keeper.id] == .init(id: keeper.id, groupID: g, disposition: .keep, groupCount: 2, bestMatch: "mate.mov", oldGroupID: g),
                 "its old best match left with the other pair; the remaining copy is named")
-        #expect(byID[mate.id] == .init(id: mate.id, groupID: g, disposition: .review, groupCount: 2, bestMatch: "keep.mov"))
-        #expect(byID[p2.id] == .init(id: p2.id, groupID: fresh, disposition: .keep, groupCount: 2, bestMatch: "pair1.mov"), "elected")
-        #expect(byID[p1.id] == .init(id: p1.id, groupID: fresh, disposition: .extraCopy, groupCount: 2, bestMatch: "pair2.mov"))
-        #expect(byID[lone.id] == .init(id: lone.id, groupID: nil, disposition: .none, groupCount: 0, bestMatch: ""))
+        #expect(byID[mate.id] == .init(id: mate.id, groupID: g, disposition: .review, groupCount: 2, bestMatch: "keep.mov", oldGroupID: g))
+        #expect(byID[p2.id] == .init(id: p2.id, groupID: fresh, disposition: .keep, groupCount: 2, bestMatch: "pair1.mov", oldGroupID: g), "elected")
+        #expect(byID[p1.id] == .init(id: p1.id, groupID: fresh, disposition: .extraCopy, groupCount: 2, bestMatch: "pair2.mov", oldGroupID: g))
+        #expect(byID[lone.id] == .init(id: lone.id, groupID: nil, disposition: .none, groupCount: 0, bestMatch: "", oldGroupID: g))
         let words = try #require(plan.groups.first?.words)
         #expect(words == "group \(DuplicateGroupDigestSplit.short(g)) (5 files, 3 different whole-file SHA-256s): 2 stay with keeper keep.mov · "
-                + "2 became group \(DuplicateGroupDigestSplit.short(fresh)) (keeper pair2.mov) · lone.mov left — its whole-file SHA-256 matches no other member")
+                + "2 became group \(DuplicateGroupDigestSplit.short(fresh)) (keeper pair2.mov) · lone.mov left — its whole-file SHA-256 matches no other member · "
+                + "likeness kept: pair1.mov ~ keep.mov (possible — only the old group matched them: no reasons recorded); "
+                + "lone.mov ~ keep.mov (possible — only the old group matched them: no reasons recorded)")
         #expect(plan.recordsLeaving == 1 && plan.newGroupCount == 1)
     }
 

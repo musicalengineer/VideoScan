@@ -430,14 +430,37 @@ extension InspectorPanel {
 
     // MARK: - Duplicates
 
+    /// "Same footage as (possible): b.mov (H.264, MOV)  [Same] [Not the same]".
+    @ViewBuilder
+    func possibleSameFootageRow(_ rec: VideoRecord, other: VideoRecord) -> some View {
+        inspectorRow("Same footage as (possible)", InspectorPanelRules.sameFootageLine(other))
+        if let onDecideFootage {
+            HStack(spacing: 6) {
+                Spacer().frame(width: 86)
+                Button("Same footage") { onDecideFootage(rec.id, other.id, .same) }
+                    .help("These two files are the same recording — Find Similar Footage links them. Nothing is deleted.")
+                Button("Not the same") { onDecideFootage(rec.id, other.id, .notSame) }
+                    .help("These two files are different recordings — the possible match is no longer shown.")
+                Spacer()
+            }
+            .controlSize(.small)
+            .accessibilityIdentifier("inspector.possibleSameFootage")
+        }
+    }
+
     @ViewBuilder
     func duplicatesSection(_ rec: VideoRecord) -> some View {
-        if InspectorPanelRules.showsDuplicatesOrSameFootage(rec, sameFootage: sameFootageMembers) {
+        if InspectorPanelRules.showsDuplicatesOrSameFootage(rec, sameFootage: sameFootageMembers + possibleSameFootage) {
             inspectorSection("Duplicates", systemImage: "doc.on.doc") {
                 // Same footage, different file (2026-10-19): a re-encode or
                 // rewrap of this recording — linked, never a copy to delete.
                 ForEach(sameFootageMembers, id: \.id) { other in
                     inspectorRow("Same footage", InspectorPanelRules.sameFootageLine(other))
+                }
+                // Weak likeness the split kept (schema v1.11): a person
+                // confirms or rejects it — never a copy to delete.
+                ForEach(possibleSameFootage, id: \.id) { other in
+                    possibleSameFootageRow(rec, other: other)
                 }
                 if rec.duplicateDisposition != .none {
                     HStack(spacing: 6) {

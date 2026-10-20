@@ -171,6 +171,31 @@ struct IntegrityEventFact: Sendable, Equatable {
     }
 }
 
+/// One `footage_likeness` pair (schema v1.11) as Verify reads it: the two
+/// contents, how the duplicate check matched them, how strongly, and the
+/// latest person's verdict between any two of their files (nil = nobody
+/// has said). Evidence, never a decision.
+struct IntegrityLikenessFact: Sendable, Equatable {
+    var digestA: String
+    var digestB: String
+    var reasons: String
+    /// 'weak' | 'anchored'.
+    var strength: String
+    /// 'same' | 'notSame' | nil.
+    var verdict: String?
+
+    init(digestA: String, digestB: String, reasons: String, strength: String, verdict: String? = nil) {
+        self.digestA = digestA.lowercased()
+        self.digestB = digestB.lowercased()
+        self.reasons = reasons
+        self.strength = strength
+        self.verdict = verdict
+    }
+
+    /// A weak pair nobody has confirmed or rejected yet.
+    var awaitsAPerson: Bool { strength == "weak" && verdict == nil }
+}
+
 // MARK: - The constraints
 
 enum CatalogConstraints {
@@ -193,6 +218,7 @@ enum CatalogConstraints {
         case duplicateGroupDigestsAgree
         case referenceMovie
         case derivedStampsMatchContent
+        case possibleSameFootage
 
         /// Which tier owns the rule: the stale-stamp rule is tier 4
         /// ("is derived knowledge still about this content?"), the rest tier 5.
@@ -217,6 +243,8 @@ enum CatalogConstraints {
             .duplicateGroupDigestsAgree: ("Duplicate groups agree on the bytes", "duplicate groups hold files with different whole-file digests"),
             .referenceMovie: ("Possible reference movies", "files may be reference movies — Verify Media decides"),
             .derivedStampsMatchContent: ("Derived stamps match the content", "sound prints were made from other content"),
+            .possibleSameFootage: ("Possible same footage awaits a person",
+                                   "pairs of files may be the same footage (weak likeness the duplicate split kept) — confirm or reject each in the inspector"),
         ]
 
         /// The phrase for a rule's UNVERIFIED findings (`needsDecision ==
@@ -290,6 +318,9 @@ enum CatalogConstraints {
         var pairGroups: Set<UUID> = []
         /// Lowercase whole-file digests any row carries.
         var fullDigests: Set<String> = []
+        /// catalog.sqlite's footage likeness pairs (schema v1.11), handed in
+        /// by `check` — the one input that is not a row.
+        var likeness: [IntegrityLikenessFact] = []
     }
 
     static func index(_ rows: [IntegrityRow]) -> Index {
@@ -344,9 +375,12 @@ enum CatalogConstraints {
         reasons.split(separator: "+").contains { $0.trimmingCharacters(in: .whitespaces) == "hash" }
     }
 
-    /// Run every rule. Findings come out in rule order, then row order.
-    static func check(rows: [IntegrityRow], events: [IntegrityEventFact]) -> [Finding] {
-        let idx = index(rows)
+    /// Run every rule. Findings come out in rule order, then row order;
+    /// the likeness pairs (schema v1.11) last.
+    static func check(rows: [IntegrityRow], events: [IntegrityEventFact],
+                      likeness: [IntegrityLikenessFact] = []) -> [Finding] {
+        var idx = index(rows)
+        idx.likeness = likeness
         var out: [Finding] = []
         for rule in rules { out += rule(rows, idx, events) }
         return out
@@ -359,7 +393,7 @@ enum CatalogConstraints {
         uniqueIDs, oneLiveRowPerPath, lineageTargetsExist, promotionsHaveASource, removalMirrorsLifecycle,
         requiredFields, wholeFileDigestsAreWhole, removalRevisionNonNegative, auditStampNamesItsVolume,
         eventMembersExist, pathAliasByCase, supersessionCycle, duplicateGroupDigestsAgree, referenceMovie,
-        derivedStampsMatchContent,
+        derivedStampsMatchContent, possibleSameFootage,
     ]
 
     // MARK: Rules (one concept each)
@@ -554,6 +588,31 @@ enum CatalogConstraints {
             let formed = g.sampledHashMatch ? "formed on a sampled-hash match" : "formed on likeness alone (similar footage, not copies)"
             return Finding(.duplicateGroupDigestsAgree, recordID: g.firstID,
                            words: "duplicate group \(short(group)): \(formed), but its members carry \(g.digests.count) different whole-file digests — Split Duplicate Groups by Full Hash settles it")
+        }
+    }
+
+    /// INFORMATIONAL (yellow, never red — Rick 2026-10-19: "it can be
+    /// yellow if these are just dups that we need to verify"): a WEAK
+    /// likeness pair the duplicate split kept in `footage_likeness` that no
+    /// person has confirmed or rejected, both of whose contents are on a
+    /// live row. `needsDecision == false`, so tier 5 counts it as could not
+    /// check — the Catalog Status band's yellow — and names it. An anchored
+    /// pair, a decided pair, or a pair whose files are gone is not listed.
+    /// O(rows + pairs).
+    static func possibleSameFootage(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
+        let waiting = idx.likeness.filter(\.awaitsAPerson)
+        guard !waiting.isEmpty else { return [] }
+        var liveByDigest: [String: IntegrityRow] = [:]
+        for r in rows where r.isLive {
+            guard let d = r.fullDigest?.lowercased(), liveByDigest[d] == nil else { continue }
+            liveByDigest[d] = r
+        }
+        return waiting.compactMap { pair in
+            guard let a = liveByDigest[pair.digestA], let b = liveByDigest[pair.digestB] else { return nil }
+            let how = pair.reasons.isEmpty ? "only the old duplicate group matched them" : "the duplicate check matched \(pair.reasons)"
+            return Finding(.possibleSameFootage, recordID: a.id,
+                           words: "may be the same footage as \(b.filename) (\(how), weakly) — Same footage / Not the same in the inspector",
+                           needsDecision: false)
         }
     }
 

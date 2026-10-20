@@ -227,6 +227,9 @@ struct CatalogContent: View {
     @State private var trimDerivativesMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
     /// Same footage, different file (2026-10-19) — same memo discipline.
     @State private var sameFootageMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
+    /// "Same footage as (possible)" (schema v1.11) — same memo discipline,
+    /// keyed on the likeness store's revision too.
+    @State private var possibleSameFootageMemo = RenderMemo<PossibleSameFootageMemoKey, [VideoRecord]>()
     /// Music-triage candidates (GH #124 layer 2). The O(n) detection pass
     /// runs once per catalog change / purge / tidy event — NEVER in body
     /// (the no-O(records)-in-body rule) and, since 2026-10-04 (perf: 0.28 s
@@ -296,6 +299,12 @@ struct CatalogContent: View {
     private struct TrimDerivativesMemoKey: Equatable {
         let selectedID: UUID
         let version: RecordsVersion
+    }
+
+    private struct PossibleSameFootageMemoKey: Equatable {
+        let selectedID: UUID
+        let version: RecordsVersion
+        let likeness: Int
     }
 
     /// Composite records "version" — count catches add/remove, the model's
@@ -449,6 +458,27 @@ struct CatalogContent: View {
         let key = TrimDerivativesMemoKey(selectedID: rec.id, version: recordsVersion)
         return sameFootageMemo.value(for: key) {
             InspectorPanelRules.sameFootageOthers(of: rec, groupMembers: records.filter { $0.footage?.groupID == groupID })
+        }
+    }
+
+    /// The selected record's WEAK likeness pairs nobody has answered (the
+    /// inspector's "Same footage as (possible)"). The pair lookup is one
+    /// dictionary hit; the O(n) pass over the records of the contents
+    /// involved runs once per selection / catalog / likeness change.
+    private var possibleSameFootage: [VideoRecord] {
+        guard let rec = selectedRecord, let mine = VideoScanModel.storedFullDigest(rec)?.lowercased() else { return [] }
+        let pairs = model.footageLikeness.pairs(of: mine).filter(\.isWeak)
+        guard !pairs.isEmpty else { return [] }
+        let key = PossibleSameFootageMemoKey(selectedID: rec.id, version: recordsVersion, likeness: model.footageLikeness.revision)
+        let shown = sameFootageMembers
+        return possibleSameFootageMemo.value(for: key) {
+            let wanted = Set(pairs.map(\.otherDigest)).union([mine])
+            var byDigest: [String: [VideoRecord]] = [:]
+            for r in records where r.removal == nil {
+                guard let d = VideoScanModel.storedFullDigest(r)?.lowercased(), wanted.contains(d) else { continue }
+                byDigest[d, default: []].append(r)
+            }
+            return InspectorPanelRules.possibleSameFootage(of: rec, pairs: pairs, recordsByDigest: byDigest, shown: shown)
         }
     }
 
@@ -750,6 +780,11 @@ struct CatalogContent: View {
             onRecordEdited: { model.saveCatalogDebounced() },
             duplicateGroupMembers: duplicateGroupMembers,
             sameFootageMembers: sameFootageMembers,
+            possibleSameFootage: possibleSameFootage,
+            onDecideFootage: { [fileOpsCenter, model] a, b, verdict in
+                model.setFootageDecision(verdict, between: a, and: b)
+                _ = fileOpsCenter.startFindSimilarFootage(scope: .records([a, b]), model: model)
+            },
             previewImage: previewImage,
             previewOfflineVolumeName: previewOfflineVolumeName,
             onSelectRecord: { id in
