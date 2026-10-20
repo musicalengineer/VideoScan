@@ -32,6 +32,16 @@
 // Worst-case memory: one entry (~250 B) + two dictionary slots per
 // ignored content. At 100k entries that is ~40 MB, and the catalog has
 // ~3k set-aside records today. Loaded once; lookups are O(1).
+//
+// WHERE IT LIVES (2026-10-19: "every decision Rick makes lives in
+// catalog.sqlite"). Under catalog.sqlite the list is `ignored_content`
+// (IgnoredContentCatalogBacking.swift): `attachCatalog` imports
+// ignored-content.json once (IgnoredContentJSONImport.swift — idempotent,
+// verified, findings named) and reads the table; from then on `save()`
+// writes the DIFFERENCE since the last write through the session's
+// committer — a new row per entry ignored, a put-back row per entry
+// forgotten — and the JSON file is never written again. Under catalog.json
+// (or a test's scratch folder) the file is the store, as before.
 
 import Foundation
 import Combine
@@ -192,6 +202,18 @@ final class IgnoredContentStore: ObservableObject {
     /// published signal; the sheet re-reads `entries` on it.
     @Published private(set) var revision: Int = 0
 
+    /// catalog.sqlite's backing once attached (nil = the JSON file).
+    private(set) var catalog: IgnoredContentCatalogBacking?
+    /// The attach's import + first read; saves wait for it.
+    private var catalogLoad: Task<Void, Never>?
+    /// Entry ids LIVE in catalog.sqlite as of the last read or write — the
+    /// base `save()` writes the difference against.
+    private var persisted: Set<UUID> = []
+    /// Why the last catalog write did not land (nil = it did).
+    private(set) var lastSaveFailure: String?
+    /// What the catalog side says (console, catalog.log) — the model sets it.
+    var note: (String) -> Void = { _ in }
+
     private var byID: [UUID: IgnoredContentEntry] = [:]
     /// key → entry id. Several keys point at one entry; a later add of an
     /// already-indexed key is a no-op.
@@ -302,22 +324,90 @@ final class IgnoredContentStore: ObservableObject {
 
     // MARK: Disk
 
-    /// Load off-main and publish. Missing / malformed / wrong-version file
-    /// → the store stays empty. Returns whether anything was loaded.
+    /// Load off-main and publish. Catalog: the attach's import + read
+    /// (awaited). JSON: missing / malformed / wrong-version file → the store
+    /// stays empty. Returns whether anything was loaded.
     @discardableResult
     func load() async -> Bool {
+        if let catalogLoad {
+            await catalogLoad.value
+            return !byID.isEmpty
+        }
         let url = fileURL
         guard let loaded = await Self.loadOffMain(url) else { return false }
         replace(with: loaded)
         return true
     }
 
-    /// Save off-main (atomic replace). An EMPTY list is written too — the
-    /// last entry being put back must reach disk.
+    /// Save. Catalog: the difference since the last write, in ONE
+    /// transaction through the committer (false = refused; the change stays
+    /// in memory and the next save tries again). JSON: off-main atomic
+    /// replace — an EMPTY list is written too, the last entry being put back
+    /// must reach disk.
     @discardableResult
     func save() async -> Bool {
+        if let catalog {
+            if let catalogLoad { await catalogLoad.value }
+            return saveToCatalog(catalog)
+        }
         let file = IgnoredContentFile(entries: entries)
         return await Self.saveOffMain(file, to: fileURL)
+    }
+
+    // MARK: catalog.sqlite
+
+    /// catalog.sqlite became the authority: import the JSON file once
+    /// (idempotent), then read the table. Writes wait for that load.
+    func attachCatalog(_ backing: IgnoredContentCatalogBacking) {
+        catalog = backing
+        let file = fileURL
+        catalogLoad = Task { [weak self] in
+            let outcome = await backing.importJSON(from: file) { self?.note($0) }
+            guard let self else { return }
+            var extra: [IgnoredContentEntry] = []
+            if case .refused = outcome, let parsed = await Self.loadOffMain(file) {
+                extra = parsed.entries   // honoured in memory; never written by a refused session
+            }
+            await self.readCatalog(backing, honouring: extra)
+        }
+    }
+
+    /// The table's live rows become the list; an entry already in memory
+    /// that the table lacks (ignored before this read) stays, unwritten, so
+    /// the next save appends it.
+    private func readCatalog(_ backing: IgnoredContentCatalogBacking, honouring extra: [IgnoredContentEntry]) async {
+        switch await backing.read() {
+        case .failure(let words):
+            note("Ignored content: 🔴 the ignore list could not be read from catalog.sqlite (\(words)) — nothing will be written")
+            lastSaveFailure = words
+        case .success(let rows):
+            let live = IgnoredContentCatalogRows.live(rows)
+            let liveIDs = Set(live.entries.map(\.id))
+            // O(n): set lookups only (100k entries in the scale test).
+            let pending = byID.values.filter { !liveIDs.contains($0.id) }
+            let pendingIDs = Set(pending.map(\.id))
+            let honoured = extra.filter { !liveIDs.contains($0.id) && !pendingIDs.contains($0.id) }
+            replace(with: IgnoredContentFile(entries: live.entries + pending + honoured))
+            persisted = liveIDs
+            if live.unreadable + live.repeated > 0 {
+                note("Ignored content: \(live.unreadable) row(s) with an unreadable id and \(live.repeated) repeated id(s) in catalog.sqlite — left as they are")
+            }
+        }
+    }
+
+    /// The difference since the last write → one transaction.
+    private func saveToCatalog(_ backing: IgnoredContentCatalogBacking) -> Bool {
+        let now = Set(byID.keys)
+        let added = now.subtracting(persisted).compactMap { byID[$0] }.sorted { $0.addedAt < $1.addedAt }
+        let putBack = persisted.subtracting(now).sorted { $0.uuidString < $1.uuidString }
+        if let why = backing.write(adding: added, puttingBack: putBack) {
+            lastSaveFailure = why
+            note("Ignored content: 🔴 \(added.count) ignored / \(putBack.count) put back NOT saved to catalog.sqlite — \(why). It stays in memory; the next change tries again")
+            return false
+        }
+        persisted = now
+        lastSaveFailure = nil
+        return true
     }
 
     #if compiler(>=6.2)

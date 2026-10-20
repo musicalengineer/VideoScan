@@ -166,6 +166,38 @@ enum InspectorPanelRules {
         return facts.isEmpty ? other.filename : "\(other.filename) (\(facts))"
     }
 
+    /// "Same footage as (possible)" (schema v1.11): for each WEAK likeness
+    /// pair of `rec`'s content (footage_likeness), the other content's
+    /// first live file — unless a person already answered the pair (any
+    /// footage decision between a file of either content and a file of the
+    /// other: "not the same" suppresses it, "same" makes it a footage link)
+    /// or the file already shows as "Same footage". Pure: the caller hands
+    /// in the live records of the contents involved (memoized, never in a
+    /// view body). Evidence only — nothing here is delete eligibility.
+    static func possibleSameFootage(of rec: VideoRecord, pairs: [FootageLikenessStore.Pair],
+                                    recordsByDigest: [String: [VideoRecord]], shown: [VideoRecord]) -> [VideoRecord] {
+        guard let mine = VideoScanModel.storedFullDigest(rec)?.lowercased() else { return [] }
+        let copies = (recordsByDigest[mine] ?? []) + [rec]
+        let shownIDs = Set(shown.map(\.id))
+        var out: [VideoRecord] = []
+        for pair in pairs where pair.isWeak {
+            let others = (recordsByDigest[pair.otherDigest] ?? []).filter { $0.removal == nil }
+                .sorted { $0.fullPath < $1.fullPath }
+            guard let first = others.first, !others.contains(where: { shownIDs.contains($0.id) }) else { continue }
+            guard !answered(copies, others) else { continue }
+            out.append(first)
+        }
+        return out
+    }
+
+    /// Has a person answered "same" / "not the same" between any file of
+    /// one side and any file of the other (either direction)?
+    static func answered(_ side: [VideoRecord], _ other: [VideoRecord]) -> Bool {
+        let otherIDs = Set(other.map(\.id)), sideIDs = Set(side.map(\.id))
+        return side.contains { r in r.footageDecisions.contains { otherIDs.contains($0.otherID) } }
+            || other.contains { r in r.footageDecisions.contains { sideIDs.contains($0.otherID) } }
+    }
+
     /// The Duplicates section shows for a flagged copy OR for a file with
     /// same-footage partners (so the relationship is never hidden).
     static func showsDuplicatesOrSameFootage(_ rec: VideoRecord, sameFootage: [VideoRecord]) -> Bool {

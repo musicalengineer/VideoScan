@@ -58,6 +58,13 @@ enum FootageStem {
         let datePrefix: String?
     }
 
+    /// A camera-counter or too-short name ("MVI_0042", "Clip 3") — it names
+    /// no recording. THE rule: Find Similar Footage's generic-name links and
+    /// the duplicate split's likeness strength both ask it.
+    static func isGenericName(_ a: Analysis) -> Bool {
+        a.key.count < 6 || ArchiveNameAdvisor.isGenericStem(a.strippedStem)
+    }
+
     static func analyze(_ filename: String) -> Analysis {
         let ns = filename as NSString
         let ext = ns.pathExtension

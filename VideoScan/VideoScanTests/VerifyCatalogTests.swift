@@ -186,7 +186,7 @@ struct VerifyCatalogConstraintTests {
         #expect(red.map(\.recordID) == [otherSHA.id, otherSize.id, otherSampled.id])
         #expect(red.allSatisfy { $0.words.hasPrefix("stale derived knowledge") })
         #expect(CatalogConstraints.Rule.derivedStampsMatchContent.tier == 4)
-        #expect(CatalogConstraints.Rule.allCases.filter { $0.tier == 5 }.count == 14)
+        #expect(CatalogConstraints.Rule.allCases.filter { $0.tier == 5 }.count == 15)   // + possibleSameFootage (v1.11)
     }
 
     @Test("path alias by case: two live rows whose paths differ only by case are a finding (one file on a case-insensitive volume); a removed row, or exactly the same path, is not")

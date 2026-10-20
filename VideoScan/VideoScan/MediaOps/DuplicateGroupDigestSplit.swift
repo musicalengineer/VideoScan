@@ -28,28 +28,28 @@
 // (DuplicateLikeness) how it relates to the files it leaves behind —
 //   same footage     alike, lengths agree, different bytes (a re-encode, a
 //                    rewrap, another codec or container): the words say so
-//                    with the reasons and the two formats, and Find Similar
-//                    Footage records the link (FootageGrouping
-//                    `copyCheckLikeness`) — never delete-eligible;
+//                    with the reasons and the two formats;
 //   different length only the sampled hash matched and the lengths disagree:
 //                    the sampled-hash collision class — not the same;
 //   no likeness      today's rule no longer pairs them (a group from an older
 //                    rule) — said so, nothing invented.
-// The relationship lives in Find Similar Footage, not in these fields, so the
-// split itself destroys nothing: the evidence is the files' own metadata.
+// and every group carries the PAIRS it knew (`GroupOutcome.pairs`,
+// DuplicateGroupDigestSplit+Likeness.swift): the keeper's content to each
+// other content, as `footage_likeness` will hold them.
 //
-// HELD, NOT SPLIT (2026-10-19 evidence run on Rick's catalog): Find Similar
-// Footage gives each file ONE group whose confidence is its weakest link, so
-// it can hold anchored likeness (sampled hash, a specific timecode or name,
-// + length) but not a WEAK one between files that are already grouped (a
-// default timecode, a camera-counter name, format + length) — taking it
-// would demote byte copies to "possible". When the model passes
-// `footageGroupOf` (a simulated Find Similar Footage pass over the catalog),
-// a group is split only if its members stay CONNECTED afterwards — through
-// the new groups of copies or a footage group — or the part cut off is "a
-// different length" (evidence: not the same). Otherwise the group is HELD
-// exactly as it is, with words saying why; it waits for a place to keep weak
-// likeness (Rick's schema decision). Refuse over guess.
+// WHERE LIKENESS IS KEPT (`LikenessHome`):
+//   .pairs           catalog.sqlite is the authority (schema v1.11): the door
+//                    records every group's pairs in `footage_likeness` FIRST,
+//                    then splits — EVERY multi-digest group, none held. A
+//                    group whose pairs the store cannot take (a digest that
+//                    is not a stored content yet) is held by the door
+//                    (`Plan.holding`), with words. Refuse over guess.
+//   .footageGroups   catalog.json (no table to keep weak likeness in): a
+//                    simulated Find Similar Footage pass says which files
+//                    stay linked; a group whose members would be cut apart
+//                    (weak likeness only) is HELD exactly as it is, as
+//                    before 2026-10-19's table.
+//   .nothing         the pure rule (tests): no hold check.
 //
 // Decisions follow the keeper: the bucket holding the kept member keeps the
 // group's id and its keeper; any other bucket of ≥ 2 becomes a new group
@@ -61,7 +61,8 @@
 //
 // Pure value code — no I/O, no model, no clock. Memory: one fact per
 // grouped live record (~400 bytes with its likeness facts), the buckets,
-// the changes; the likeness check scores pairs within ONE old group.
+// the changes, one pair per non-keeper content; the likeness check scores
+// pairs within ONE old group.
 //
 // (For Rick: `partition` is a generic function template — `T` is any member
 // type, `digest` the accessor, like a std::function key extractor.)
@@ -110,6 +111,21 @@ enum DuplicateGroupDigestSplit {
         /// The duplicate check's likeness facts (codec, length, name…) —
         /// nil = unknown, and the words then say only what the digest says.
         var likeness: DuplicateLikeness.Facts?
+        /// How the old detector put this record in its group
+        /// (`duplicateReasons`, "timecode+duration") — the reasons an
+        /// 'oldGroup' pair keeps verbatim.
+        var groupReasons: String = ""
+    }
+
+    /// Where the likeness a split cuts is kept (see the file header).
+    enum LikenessHome: Sendable, Equatable {
+        /// catalog.sqlite's `footage_likeness`: nothing is held by the plan.
+        case pairs
+        /// catalog.json: record id → footage group after a simulated Find
+        /// Similar Footage pass; a group that would be cut apart is held.
+        case footageGroups([UUID: UUID])
+        /// The pure rule: no hold check.
+        case nothing
     }
 
     /// What one record becomes.
@@ -120,6 +136,8 @@ enum DuplicateGroupDigestSplit {
         var disposition: DuplicateDisposition
         var groupCount: Int
         var bestMatch: String
+        /// The group the record was in before the split.
+        var oldGroupID: UUID
     }
 
     /// How a bucket that leaves the copies relates to the files it leaves.
@@ -162,8 +180,9 @@ enum DuplicateGroupDigestSplit {
         /// How each leaver relates to the rest (same order as `left`; nil =
         /// no likeness facts were given — the digest is all that is known).
         var leftRelations: [Relation?] = []
-        /// Held: NOT split, because splitting would lose likeness nothing
-        /// else holds (see the file header). `heldWhy` says what.
+        /// The likeness the group knew, as `footage_likeness` pairs.
+        var pairs: [LikenessPair] = []
+        /// Held: NOT split. `heldWhy` says what would be lost.
         var held = false
         var heldWhy = ""
 
@@ -189,12 +208,10 @@ enum DuplicateGroupDigestSplit {
         /// stay with keeper a.mov · 2 became group 5E6F7A8B (keeper b.mov) ·
         /// c.mov left — its SHA-256 matches no other member". With likeness
         /// facts each mover says how it relates ("— same footage as a.mov,
-        /// different codec: FFV1 MKV · H.264 MOV (…)").
+        /// different codec: FFV1 MKV · H.264 MOV (…)"); then the pairs kept.
         var words: String {
-            if held {
-                return "group \(short(oldGroupID)) (\(members) files, \(digests) different whole-file SHA-256s): kept as it is — "
-                    + heldWhy
-            }
+            let head = "group \(short(oldGroupID)) (\(members) files, \(digests) different whole-file SHA-256s): "
+            if held { return head + "kept as it is — " + heldWhy }
             var parts: [String] = []
             if keptMembers > 0 {
                 parts.append("\(keptMembers) stay with keeper \(keeperFilename)")
@@ -213,7 +230,10 @@ enum DuplicateGroupDigestSplit {
                 guard let r = leftRelations[i] else { continue }
                 parts.append("\(name) left the copies — " + r.words)
             }
-            return "group \(short(oldGroupID)) (\(members) files, \(digests) different whole-file SHA-256s): " + parts.joined(separator: " · ")
+            if !pairs.isEmpty {
+                parts.append("likeness kept: " + pairs.map(\.words).joined(separator: "; "))
+            }
+            return head + parts.joined(separator: " · ")
         }
     }
 
@@ -230,18 +250,36 @@ enum DuplicateGroupDigestSplit {
         var sameFootageFiles: Int { splitGroups.reduce(0) { $0 + $1.sameFootageFiles } }
         /// Files that leave as a different length (sampled-hash collisions).
         var differentLengthFiles: Int { splitGroups.reduce(0) { $0 + $1.differentLengthFiles } }
+        /// The pairs the split groups keep (the door records them first).
+        var pairs: [LikenessPair] { splitGroups.flatMap(\.pairs) }
+
+        /// The same plan with `groupIDs` HELD — their changes dropped, the
+        /// outcome marked with `why` (the door: the store would not take
+        /// their pairs). Nothing else moves.
+        func holding(_ groupIDs: Set<UUID>, why: String) -> Plan {
+            guard !groupIDs.isEmpty else { return self }
+            var next = self
+            next.changes = changes.filter { !groupIDs.contains($0.oldGroupID) }
+            next.groups = groups.map { g in
+                guard groupIDs.contains(g.oldGroupID), !g.held else { return g }
+                var h = g
+                h.held = true
+                h.heldWhy = why
+                return h
+            }
+            return next
+        }
     }
 
     /// The plan for every group in `facts` whose members carry more than
     /// one known digest. `elect` picks a new bucket's keeper among its ids
     /// (the model passes DuplicateKeeperPolicy; nil → the first member).
     /// `newID` mints a new group id (tests pass a deterministic one).
-    /// `footageGroupOf`: record id → its footage group after a simulated
-    /// Find Similar Footage pass (nil = no hold check — the pure rule).
+    /// `keeping`: where the likeness the split cuts is kept (file header).
     static func plan(_ facts: [MemberFact],
                      elect: ([UUID]) -> UUID? = { $0.first },
                      newID: () -> UUID = { UUID() },
-                     footageGroupOf: [UUID: UUID]? = nil) -> Plan {
+                     keeping home: LikenessHome = .nothing) -> Plan {
         var byGroup: [UUID: [MemberFact]] = [:]
         var groupOrder: [UUID] = []
         for f in facts {
@@ -251,45 +289,33 @@ enum DuplicateGroupDigestSplit {
         var plan = Plan()
         for groupID in groupOrder {
             guard let members = byGroup[groupID] else { continue }
-            planGroup(groupID, members, elect: elect, newID: newID, footageGroupOf: footageGroupOf, into: &plan)
+            planGroup(groupID, members, elect: elect, newID: newID, home: home, into: &plan)
         }
         return plan
     }
 
     private static func planGroup(_ groupID: UUID, _ members: [MemberFact], elect: ([UUID]) -> UUID?,
-                                  newID: () -> UUID, footageGroupOf: [UUID: UUID]?, into plan: inout Plan) {
+                                  newID: () -> UUID, home: LikenessHome, into plan: inout Plan) {
         let digests = Set(members.compactMap { $0.digest?.lowercased() })
         guard digests.count > 1 else { return }
         let keeperIndex = members.firstIndex { $0.disposition == .keep }
-        let buckets = partition(members, keeper: keeperIndex, digest: \.digest)
         let keeper = keeperIndex.map { members[$0] }
         var outcome = GroupOutcome(oldGroupID: groupID, digests: digests.count, members: members.count, keptMembers: 0,
                                    newGroups: [], left: [], keeperFilename: keeper?.filename ?? "(none)")
-        var placed = Set<UUID>()
+        outcome.pairs = likenessPairs(members, keeper: keeper)
         var changes: [Change] = []
-        for bucket in buckets {
-            let holdsKeeper = keeper.map { k in bucket.contains { $0.id == k.id } } ?? false
-            let id = holdsKeeper ? groupID : newID()
-            let bucketKeeperID = holdsKeeper ? keeper?.id : (elect(bucket.map(\.id)) ?? bucket.first?.id)
-            let bucketKeeper = bucket.first { $0.id == bucketKeeperID } ?? bucket[0]
-            for m in bucket {
-                changes.append(change(for: m, group: id, keeper: bucketKeeper, bucket: bucket))
-                placed.insert(m.id)
-            }
-            if holdsKeeper {
-                outcome.keptMembers = bucket.count
-            } else {
-                let ids = Set(bucket.map(\.id))
-                outcome.newGroups.append(.init(id: id, keeperFilename: bucketKeeper.filename, members: bucket.count,
-                                               relation: relation(of: bucket, to: members.filter { !ids.contains($0.id) })))
-            }
+        for bucket in partition(members, keeper: keeperIndex, digest: \.digest) {
+            placeBucket(bucket, of: members, groupID: groupID, keeper: keeper, elect: elect, newID: newID,
+                        outcome: &outcome, changes: &changes)
         }
+        let placed = Set(changes.map(\.id))
         for m in members where !placed.contains(m.id) {
-            changes.append(Change(id: m.id, groupID: nil, disposition: .none, groupCount: 0, bestMatch: ""))
+            changes.append(Change(id: m.id, groupID: nil, disposition: .none, groupCount: 0, bestMatch: "", oldGroupID: groupID))
             outcome.left.append(m.filename)
             outcome.leftRelations.append(relation(of: [m], to: members.filter { $0.id != m.id }))
         }
-        if let footageGroupOf, let why = lossIfSplit(members, changes: changes, keeper: keeper, footageGroupOf: footageGroupOf) {
+        if case .footageGroups(let footageGroupOf) = home,
+           let why = lossIfSplit(members, changes: changes, keeper: keeper, footageGroupOf: footageGroupOf) {
             outcome.held = true
             outcome.heldWhy = why
             plan.groups.append(outcome)
@@ -299,12 +325,35 @@ enum DuplicateGroupDigestSplit {
         plan.groups.append(outcome)
     }
 
-    /// nil when splitting loses nothing: after the split every member is
-    /// still connected to the keeper's part — through a new group of copies
-    /// or a shared footage group — or the part cut off is a different length
-    /// (evidence: not the same footage). Otherwise, in words, what would be
-    /// lost. (For Rick: a tiny union-find over the group's members, keyed by
-    /// "same new group" and "same footage group".)
+    /// One bucket of copies: its members' changes, and its line in the
+    /// outcome (the keeper's bucket keeps the old id; any other becomes a
+    /// new group with an elected keeper).
+    private static func placeBucket(_ bucket: [MemberFact], of members: [MemberFact], groupID: UUID, keeper: MemberFact?,
+                                    elect: ([UUID]) -> UUID?, newID: () -> UUID,
+                                    outcome: inout GroupOutcome, changes: inout [Change]) {
+        let holdsKeeper = keeper.map { k in bucket.contains { $0.id == k.id } } ?? false
+        let id = holdsKeeper ? groupID : newID()
+        let bucketKeeperID = holdsKeeper ? keeper?.id : (elect(bucket.map(\.id)) ?? bucket.first?.id)
+        let bucketKeeper = bucket.first { $0.id == bucketKeeperID } ?? bucket[0]
+        for m in bucket {
+            changes.append(change(for: m, group: id, keeper: bucketKeeper, bucket: bucket, oldGroupID: groupID))
+        }
+        if holdsKeeper {
+            outcome.keptMembers = bucket.count
+        } else {
+            let ids = Set(bucket.map(\.id))
+            outcome.newGroups.append(.init(id: id, keeperFilename: bucketKeeper.filename, members: bucket.count,
+                                           relation: relation(of: bucket, to: members.filter { !ids.contains($0.id) })))
+        }
+    }
+
+    /// catalog.json only (`.footageGroups`): nil when splitting loses
+    /// nothing — after the split every member is still connected to the
+    /// keeper's part through a new group of copies or a shared footage
+    /// group, or the part cut off is a different length (evidence: not the
+    /// same footage). Otherwise, in words, what would be lost. (For Rick: a
+    /// tiny union-find over the group's members, keyed by "same new group"
+    /// and "same footage group".)
     static func lossIfSplit(_ members: [MemberFact], changes: [Change], keeper: MemberFact?,
                             footageGroupOf: [UUID: UUID]) -> String? {
         let newGroup = Dictionary(changes.map { ($0.id, $0.groupID) }, uniquingKeysWith: { a, _ in a })
@@ -336,7 +385,7 @@ enum DuplicateGroupDigestSplit {
         }
         guard !losses.isEmpty else { return nil }
         return "splitting would lose what the duplicate check knew: " + losses.joined(separator: "; ")
-            + ". It waits for a place to keep weak likeness."
+            + ". It waits for catalog.sqlite, where weak likeness is kept (footage_likeness)."
     }
 
     /// How `movers` relate to `rest` by the duplicate check's likeness: the
@@ -368,18 +417,21 @@ enum DuplicateGroupDigestSplit {
     /// that file is still beside it, else the first other member; the
     /// others name the keeper, and a former keeper takes its confidence's
     /// disposition (classifyGroup's rule).
-    private static func change(for m: MemberFact, group: UUID, keeper: MemberFact, bucket: [MemberFact]) -> Change {
+    private static func change(for m: MemberFact, group: UUID, keeper: MemberFact, bucket: [MemberFact],
+                               oldGroupID: UUID) -> Change {
         if m.id == keeper.id {
             let others = bucket.filter { $0.id != m.id }.map(\.filename)
             let best = others.contains(m.bestMatch) ? m.bestMatch : (others.first ?? "")
-            return Change(id: m.id, groupID: group, disposition: .keep, groupCount: bucket.count, bestMatch: best)
+            return Change(id: m.id, groupID: group, disposition: .keep, groupCount: bucket.count, bestMatch: best,
+                          oldGroupID: oldGroupID)
         }
         let disposition: DuplicateDisposition
         switch m.disposition {
         case .keep, .none: disposition = m.confidence == .high ? .extraCopy : .review
         case .review, .extraCopy: disposition = m.disposition
         }
-        return Change(id: m.id, groupID: group, disposition: disposition, groupCount: bucket.count, bestMatch: keeper.filename)
+        return Change(id: m.id, groupID: group, disposition: disposition, groupCount: bucket.count, bestMatch: keeper.filename,
+                      oldGroupID: oldGroupID)
     }
 
     static func short(_ id: UUID) -> String { String(id.uuidString.prefix(8)) }

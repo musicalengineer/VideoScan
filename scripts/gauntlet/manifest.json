@@ -2573,6 +2573,24 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDecisionTablesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogDecisionTablesTests"
+      ],
+      "tests": [
+        "aPairIsStoredOrderedOnceAndAMissingContentWritesNothing",
+        "aReadOnlyOpenRefusesADecisionWrite",
+        "aSchemaElevenDatabaseOpensAsTwelveWithEveryRowIntact",
+        "anIgnoreEntryRoundTripsAndAPutBackHidesItOnce",
+        "bothTablesAreAppendOnlyAndTheirChecksHold",
+        "oneHundredThousandPairsRecordAndReadInsideBudgets",
+        "theReviewReadsTheLatestPersonsVerdictEitherDirection"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SurnameVariantPropertyTests.swift",
       "stage": "unit",
       "suites": [
@@ -3271,6 +3289,19 @@
         "testHostPaths",
         "unknownKeysNamed",
         "validation"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AppSupportSideStoreInventoryTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AppSupportSideStoreInventoryTests"
+      ],
+      "tests": [
+        "everyLiteralIsClassified",
+        "noStaleEntries",
+        "openList"
       ]
     },
     {
@@ -9553,6 +9584,17 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DecisionTablesRealCopyEvidenceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DecisionTablesRealCopyEvidence"
+      ],
+      "tests": [
+        "evidence"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DeleteDuplicatesAngelHoldTests.swift",
@@ -12968,6 +13010,40 @@
         "tolerance",
         "transcoders",
         "weakestLink"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FootageLikenessSplitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FootageLikenessPairsTests",
+        "FootageLikenessInspectorTests",
+        "FootageLikenessVerifyRuleTests",
+        "FootageLikenessDoorTests",
+        "FootageLikenessScaleTests",
+        "FootageLikenessSensorTests"
+      ],
+      "tests": [
+        "anchoredAndOldGroup",
+        "answeredPairsHidden",
+        "blockedCommitterRefuses",
+        "copiesAndUnknown",
+        "deletePathsNeverReadLikeness",
+        "differentLengthNoPair",
+        "holding",
+        "idempotent",
+        "jsonStillHolds",
+        "oneWriter",
+        "onlyUndecidedWeakLivePairs",
+        "planWithPairsAt100k",
+        "readOnlyRefuses",
+        "shownAndGone",
+        "storeAndVerifyRuleAt100k",
+        "tierFiveIsYellow",
+        "weakGroupSplitsAndStaysKnown",
+        "weakShowsAnchoredDoesNot",
+        "weakTrioSplitsWithPairs"
       ]
     },
     {
@@ -17211,6 +17287,26 @@
         "theInstalledTreeHonoursARulingAlreadyOnDisk",
         "theSurnameRosterHallieReadsLeavesTheHiddenRecordOut",
         "theTabsOutcomeAndHalliesGraphAreTheSameRuledView"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/IgnoredContentCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "IgnoredContentImportPlanTests",
+        "IgnoredContentCatalogTruthTests",
+        "IgnoredContentCatalogScaleTests",
+        "IgnoredContentCatalogSensorTests"
+      ],
+      "tests": [
+        "hundredThousandEntries",
+        "importWriteRelaunch",
+        "noJSONWriteNoInferredPutBack",
+        "planSortsEveryEntry",
+        "poisonedFile",
+        "refusingSessionWritesNothing",
+        "verification"
       ]
     },
     {
@@ -29872,6 +29968,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDecisionTablesTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SurnameVariantPropertyTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -32012,7 +32112,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2737,
+      "expected_floor": 2767,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32451,7 +32551,19 @@
         "VideoScanTests/SameFootageScaleTests",
         "VideoScanTests/SameFootageMediaMatrixTests",
         "VideoScanTests/SameFootageTruthTests",
-        "VideoScanTests/SameFootageRealCopyEvidence"
+        "VideoScanTests/SameFootageRealCopyEvidence",
+        "VideoScanTests/AppSupportSideStoreInventoryTests",
+        "VideoScanTests/DecisionTablesRealCopyEvidence",
+        "VideoScanTests/FootageLikenessPairsTests",
+        "VideoScanTests/FootageLikenessInspectorTests",
+        "VideoScanTests/FootageLikenessVerifyRuleTests",
+        "VideoScanTests/FootageLikenessDoorTests",
+        "VideoScanTests/FootageLikenessScaleTests",
+        "VideoScanTests/FootageLikenessSensorTests",
+        "VideoScanTests/IgnoredContentImportPlanTests",
+        "VideoScanTests/IgnoredContentCatalogTruthTests",
+        "VideoScanTests/IgnoredContentCatalogScaleTests",
+        "VideoScanTests/IgnoredContentCatalogSensorTests"
       ]
     },
     {

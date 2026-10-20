@@ -335,18 +335,41 @@ final class CatalogCommitter {
     /// nothing was written. Records are not touched: their baseline is
     /// unaffected (the store tracks the generation itself).
     func commitFolders(_ what: String, _ body: (any CatalogTransaction) throws -> Void) -> String? {
+        commitSideTables(what, via: .folders, body)
+    }
+
+    /// The side tables a person's decision writes outside the records:
+    /// Catalog folders (2026-10-19), the footage likeness the split records
+    /// and the ignore list (schema v1.11). Each says which in the log line.
+    enum SideTable: String, Sendable {
+        case folders
+        case footageLikeness = "footage likeness"
+        case ignoredContent = "ignored content"
+
+        var change: String { self == .folders ? "a folder change" : "a \(rawValue) change" }
+    }
+
+    /// Why a side-table change cannot be written now (the same refusals
+    /// as a person's marker request) — nil when it can.
+    var sideTableWriteRefusal: String? { saveRefusal() }
+
+    /// ONE synchronous write of a side-table change, on the main actor like
+    /// every commit here. nil = committed; else the words, and nothing was
+    /// written. Records are not touched: their baseline is unaffected (the
+    /// store tracks the generation itself).
+    func commitSideTables(_ what: String, via table: SideTable, _ body: (any CatalogTransaction) throws -> Void) -> String? {
         if let why = saveRefusal() { return why }
         switch repository.writeBlocking(as: .ui, body) {
         case .committed(let generation):
-            sink("Catalog store: OUTCOME commit generation \(generation) via folders — \(what)")
+            sink("Catalog store: OUTCOME commit generation \(generation) via \(table.rawValue) — \(what)")
             return nil
         case .refused(let words):
-            sink("Catalog store: REFUSED a folder change (\(what)) — \(words). Nothing was written.")
+            sink("Catalog store: REFUSED \(table.change) (\(what)) — \(words). Nothing was written.")
             return words
         case .generationMismatch(let expected, let found):
             let words = "another writer committed generation \(found) (this session expected \(expected)) — reopen the catalog"
             blockedReason = words
-            sink("Catalog store: REFUSED a folder change (\(what)) — \(words). Nothing was written.")
+            sink("Catalog store: REFUSED \(table.change) (\(what)) — \(words). Nothing was written.")
             return words
         }
     }

@@ -124,6 +124,10 @@ struct JSONReader: CatalogReader {
     func folderRows(_ visit: (CatalogRow.Folder) throws -> Void) throws { throw unsupported }
     func folderDecisions(_ visit: (CatalogRow.FolderDecision) throws -> Void) throws { throw unsupported }
     func folderCounts() throws -> CatalogRow.FolderCounts { throw unsupported }
+    func footageLikenessReviews(_ visit: (CatalogRow.FootageLikenessReview) throws -> Void) throws { throw unsupported }
+    func footageLikenessCount() throws -> Int { throw unsupported }
+    func ignoredRows(_ visit: (CatalogRow.IgnoredReading) throws -> Void) throws { throw unsupported }
+    func ignoredCounts() throws -> CatalogRow.IgnoredCounts { throw unsupported }
 }
 
 // MARK: - Header probe

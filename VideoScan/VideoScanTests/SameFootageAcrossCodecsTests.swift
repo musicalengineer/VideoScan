@@ -305,14 +305,14 @@ struct SameFootageSplitPlanTests {
         let g = UUID()
         let fs = Trio.facts(timecode: "00:00:00:00")   // a default timecode anchors nothing
         let facts = [sfact(fs[0], group: g, .keep), sfact(fs[1], group: g), sfact(fs[2], group: g)]
-        let plan = DuplicateGroupDigestSplit.plan(facts, footageGroupOf: [:])
+        let plan = DuplicateGroupDigestSplit.plan(facts, keeping: .footageGroups([:]))
         #expect(plan.isEmpty, "no change is planned for a held group")
         #expect(plan.heldGroups.count == 1 && plan.splitGroups.isEmpty)
         #expect(plan.recordsLeaving == 0 && plan.sameFootageFiles == 0)
         let words = try #require(plan.groups.first?.words)
         #expect(words.contains("kept as it is — splitting would lose what the duplicate check knew:"), "\(words)")
         #expect(words.contains("only weakly (the duplicate check matched timecode+duration+resolution"), "\(words)")
-        #expect(words.hasSuffix("It waits for a place to keep weak likeness."))
+        #expect(words.hasSuffix("It waits for catalog.sqlite, where weak likeness is kept (footage_likeness)."))
     }
 
     @Test("NOT HELD: the same group splits when the files stay linked as the same footage, or when the part cut off is a different length")
@@ -320,12 +320,12 @@ struct SameFootageSplitPlanTests {
         let g = UUID(), footage = UUID()
         let fs = Trio.facts()
         let facts = [sfact(fs[0], group: g, .keep), sfact(fs[1], group: g), sfact(fs[2], group: g)]
-        let linked = DuplicateGroupDigestSplit.plan(facts, footageGroupOf: Dictionary(uniqueKeysWithValues: fs.map { ($0.id, footage) }))
+        let linked = DuplicateGroupDigestSplit.plan(facts, keeping: .footageGroups(Dictionary(uniqueKeysWithValues: fs.map { ($0.id, footage) })))
         #expect(linked.heldGroups.isEmpty && linked.recordsLeaving == 3)
         let a = DuplicateLikeness.Facts(filename: "test_a.mxf", partialMD5: "same", sizeBytes: 42, durationSeconds: 100, digest: sfHex(1))
         let b = DuplicateLikeness.Facts(filename: "test_b.mxf", partialMD5: "same", sizeBytes: 42, durationSeconds: 200, digest: sfHex(2))
         let h = UUID()
-        let collision = DuplicateGroupDigestSplit.plan([sfact(a, group: h, .keep), sfact(b, group: h)], footageGroupOf: [:])
+        let collision = DuplicateGroupDigestSplit.plan([sfact(a, group: h, .keep), sfact(b, group: h)], keeping: .footageGroups([:]))
         #expect(collision.heldGroups.isEmpty && collision.recordsLeaving == 2 && collision.differentLengthFiles == 2)
     }
 
@@ -851,7 +851,7 @@ struct SameFootageRealCopyEvidence {
         let multi = old.filter { SFEvidence.digests($0.value) > 1 }
         let cross = Set(multi.filter { Set($0.value.map(SFEvidence.format)).count > 1 }.keys)
         let plan = DuplicateGroupDigestSplit.plan(model.duplicateDigestSplitFacts(),
-                                                  footageGroupOf: model.duplicateDigestSplitFootageGroups())
+                                                  keeping: .footageGroups(model.duplicateDigestSplitFootageGroups()))
         let held = Set(plan.heldGroups.map(\.oldGroupID))
         let pairs = multi.values.map(SFEvidence.sampledHashPairs)
         let very = Set(multi.filter { SFEvidence.veryDifferent($0.value) }.keys)

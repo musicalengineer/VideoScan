@@ -253,6 +253,15 @@ extension VideoScanModel {
         }
         catalogCutover.install(committer, databaseURL: url, readOnlyReason: readOnlyReason)
         catalogCutover.requestDigests(held)
+        // Rick's decisions in catalog.sqlite (schema v1.11): the footage
+        // likeness the inspector shows, and the ignore list (its one-time
+        // import of ignored-content.json, then every change through this
+        // committer). Per-model stores — safe under a test host too.
+        Task { [weak self] in
+            guard let self, let why = await self.footageLikeness.load(from: committer.repository) else { return }
+            self.catalogAuthorityNote("footage likeness could not be read from catalog.sqlite (\(why)) — the inspector shows none")
+        }
+        attachIgnoredContentToCatalog(committer)
         // Catalog folders live in catalog.sqlite (2026-10-19): the one store
         // writes through this committer from now on; its first load imports
         // events-decisions.json once. Not under a test host — a sandbox

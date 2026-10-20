@@ -13,34 +13,39 @@
 //   3. the safety copy (`snapshotCatalog(prefix: "pre-dup-split")`: under
 //      catalog.sqlite a sealed VACUUM INTO copy, with what is in memory
 //      committed first); no copy → refused, nothing changed;
-//   4. the plan applied to the in-memory records (group id, disposition,
+//   4. catalog.sqlite only: the LIKENESS the split groups knew is recorded
+//      in `footage_likeness` in ONE transaction through the session's
+//      committer (`commitSideTables(via: .footageLikeness)`), BEFORE any
+//      record changes. Refused → the split is refused, nothing changed. A
+//      group whose pair the store cannot take (a digest that is not a
+//      stored content yet) is HELD, with words; the others go on;
+//   5. the plan applied to the in-memory records (group id, disposition,
 //      count, best match — never a path, a marker, a digest or a file);
-//   5. ONE synchronous save through the single writer (`saveCatalogNow` →
+//   6. ONE synchronous save through the single writer (`saveCatalogNow` →
 //      CatalogCommitter.commitNow under catalog.sqlite);
-//   6. START, one line per split group (what stayed, what became a new
-//      group, what left — by filename) and OUTCOME, through one sink:
-//      console + catalog.log, videoscan.log, the unified log.
-// Milliseconds on 15k rows (one pass + a dictionary), so not an MFO job
-// (CLAUDE.md "Long operations" starts at about a minute).
+//   7. START, one line per split group (what stayed, what became a new
+//      group, what left, the likeness kept — by filename) and OUTCOME,
+//      through one sink: console + catalog.log, videoscan.log, the unified
+//      log.
+// Milliseconds on 15k rows (one pass + a dictionary + one small write), so
+// not an MFO job (CLAUDE.md "Long operations" starts at about a minute).
 //
-// SAME FOOTAGE IS KEPT (Rick 2026-10-19: "I don't want to lose the 'same
-// event different codec' feature"). A file that leaves the copies because
-// its bytes differ is described by the duplicate check's own likeness rule
-// (DuplicateLikeness): "same footage as X, different codec: FFV1 MKV · H.264
-// MOV (the duplicate check matched filename+duration)". The link itself is
-// Find Similar Footage's to record (FootageGrouping `copyCheckLikeness`
-// derives it from the files' metadata, not from these group fields), so the
-// split destroys nothing; the menu item starts a Find Similar Footage run
-// right after a split so the links show at once. Footage links are never
-// delete-eligible.
+// NOTHING IS LOST (Rick 2026-10-19). Under catalog.sqlite every multi-digest
+// group is split: each file that leaves its copies group is still a copy in
+// a new group, or its content has a pair in footage_likeness (anchored or
+// weak, the duplicate check's reasons verbatim, or the old group's reasons
+// when only the group remembered), or the evidence says it is a different
+// length. Weak pairs show in the inspector as "Same footage as (possible)"
+// for a person to confirm or reject (footage decisions); Verify Catalog
+// counts the undecided ones as a YELLOW, informational item. The menu item
+// starts a Find Similar Footage run after a split so anchored likeness
+// shows as footage links at once. Neither footage links nor likeness pairs
+// are ever delete-eligible.
 //
-// HELD GROUPS. Before planning, a simulated Find Similar Footage pass
-// (`duplicateDigestSplitFootageGroups`) says which files will stay linked as
-// the same footage. A group whose members would be cut apart — alike only
-// weakly (a default timecode, a camera-counter name, format and length),
-// which a footage group cannot hold without demoting byte copies — is HELD
-// exactly as it is and said so, one line per group. Verify keeps listing it
-// until there is a place to keep weak likeness (Rick's schema decision).
+// catalog.json (no table): a simulated Find Similar Footage pass
+// (`duplicateDigestSplitFootageGroups`) says which files stay linked; a
+// group whose members would be cut apart is HELD exactly as it is, as
+// before (DuplicateGroupDigestSplit `.footageGroups`).
 //
 // (For Rick: `@discardableResult` lets a caller ignore the returned
 // outcome, like a C++ function whose return value may be dropped without a
@@ -58,6 +63,14 @@ enum DuplicateDigestSplitOutcome: Equatable {
     case nothingToSplit
     case split(groups: Int, newGroups: Int, left: Int, saved: Bool, safetyCopy: String)
     case refused(String)
+}
+
+/// What step 4 recorded (catalog.sqlite only).
+struct DuplicateDigestSplitLikenessWrite: Equatable {
+    var recorded = 0
+    var alreadyRecorded = 0
+    /// Groups whose pairs the store could not take — held by the door.
+    var heldGroups: Set<UUID> = []
 }
 
 extension VideoScanModel {
@@ -78,7 +91,8 @@ extension VideoScanModel {
             guard let g = r.duplicateGroupID else { continue }
             facts.append(.init(id: r.id, groupID: g, filename: r.filename, digest: Self.storedFullDigest(r),
                                disposition: r.duplicateDisposition, confidence: r.duplicateConfidence,
-                               bestMatch: r.duplicateBestMatchFilename, likeness: DuplicateLikeness.Facts(record: r)))
+                               bestMatch: r.duplicateBestMatchFilename, likeness: DuplicateLikeness.Facts(record: r),
+                               groupReasons: r.duplicateReasons))
         }
         return facts
     }
@@ -87,8 +101,8 @@ extension VideoScanModel {
     /// over the whole catalog (pure; no stat, no write): every stored whole-
     /// file digest is taken as current, because only CONNECTIVITY matters
     /// here — would the files stay linked once their old group is gone?
-    /// One main-actor snapshot pass plus the grouping (≈1 s on 11k rows in
-    /// Debug; the split is a one-off repair, not a cycler).
+    /// catalog.json only (catalog.sqlite keeps the likeness as pairs). One
+    /// main-actor snapshot pass plus the grouping (≈1 s on 11k rows, Debug).
     ///
     /// A group whose confidence is only POSSIBLE is left out: a Possible
     /// link attaches a lone file as a leaf, and WHICH leaf it takes depends
@@ -106,7 +120,13 @@ extension VideoScanModel {
             .mapValues(\.groupID)
     }
 
-    /// Plan, safety copy, apply, save, say so. See the file header.
+    /// Where this session keeps the likeness a split cuts: catalog.sqlite's
+    /// table when it is the authority, else the catalog.json hold rule.
+    func duplicateDigestSplitLikenessHome() -> DuplicateGroupDigestSplit.LikenessHome {
+        catalogCutover.isSQLiteAuthority ? .pairs : .footageGroups(duplicateDigestSplitFootageGroups())
+    }
+
+    /// Plan, safety copy, likeness, apply, save, say so. See the file header.
     @discardableResult
     func splitDuplicateGroupsByFullDigest() -> DuplicateDigestSplitOutcome {
         if isReadOnly {
@@ -117,49 +137,111 @@ extension VideoScanModel {
         let facts = duplicateDigestSplitFacts()
         let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let policy = duplicateKeeperPolicy()
-        let plan = DuplicateGroupDigestSplit.plan(facts, elect: { ids in
+        var plan = DuplicateGroupDigestSplit.plan(facts, elect: { ids in
             DuplicateDetector.electKeeper(from: ids.compactMap { byID[$0] }, policy: policy)?.id
-        }, footageGroupOf: duplicateDigestSplitFootageGroups())
+        }, keeping: duplicateDigestSplitLikenessHome())
         let groupCount = Set(facts.map(\.groupID)).count
-        let held = plan.heldGroups
-        let heldTally = "\(held.count.formatted()) group(s) held as they are — splitting would lose likeness that nothing "
-            + "else can hold yet (a default timecode, a camera-counter name, or format and length alone); they wait for a "
-            + "place to keep weak likeness"
         guard !plan.isEmpty else {
-            for (i, g) in held.enumerated() { duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)") }
-            duplicateDigestSplitNote("OUTCOME — nothing to split: "
-                                     + (held.isEmpty ? "every one of \(groupCount.formatted()) duplicate group(s) holds at most one whole-file SHA-256"
-                                                     : heldTally)
-                                     + ". Nothing was changed.")
+            noteNothingToSplit(plan, groupCount: groupCount)
             return .nothingToSplit
         }
-        let split = plan.splitGroups
-        duplicateDigestSplitNote("START — \(split.count.formatted()) of \(groupCount.formatted()) duplicate group(s) hold "
+        duplicateDigestSplitNote("START — \(plan.splitGroups.count.formatted()) of \(groupCount.formatted()) duplicate group(s) hold "
                                  + "files with different whole-file SHA-256s; each is split into groups of true copies, "
-                                 + "and a file that is the same footage in another file stays linked as SAME FOOTAGE. "
+                                 + "and what the group knew about likeness is kept (\(plan.pairs.count.formatted()) pair(s)). "
                                  + "Only the duplicate-group fields of \(plan.changes.count.formatted()) row(s) change — "
-                                 + "no file is touched." + (held.isEmpty ? "" : " " + heldTally + "."))
+                                 + "no file is touched." + heldClause(plan.heldGroups))
         guard let copy = snapshotCatalog(prefix: "pre-dup-split") else {
-            let why = "no safety copy of the catalog could be made — nothing was changed"
-            duplicateDigestSplitNote("REFUSED — \(why)")
-            return .refused(why)
+            return refuseSplit("no safety copy of the catalog could be made — nothing was changed")
         }
         duplicateDigestSplitNote("safety copy: \(copy)")
+        var likeness: DuplicateDigestSplitLikenessWrite?
+        if let committer = catalogCutover.committer {
+            switch recordSplitLikeness(plan, committer: committer) {
+            case .failure(let refusal): return refuseSplit(refusal.words)
+            case .success(let written): likeness = written
+            }
+            plan = plan.holding(likeness?.heldGroups ?? [], why: Self.contentMissingWords)
+        }
+        guard !plan.isEmpty else {
+            // Every split group's pairs were refused by the store: all held.
+            noteNothingToSplit(plan, groupCount: groupCount)
+            return .nothingToSplit
+        }
+        return applySplit(plan, byID: byID, likeness: likeness, copy: copy)
+    }
+
+    static let contentMissingWords = "a file's whole-file SHA-256 is not a stored content of catalog.sqlite yet, so the "
+        + "likeness the group knew could not be kept — Fill In Full Hashes, then split again"
+
+    private func noteNothingToSplit(_ plan: DuplicateGroupDigestSplit.Plan, groupCount: Int) {
+        let held = plan.heldGroups
+        for (i, g) in held.enumerated() { duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)") }
+        duplicateDigestSplitNote("OUTCOME — nothing to split: "
+                                 + (held.isEmpty ? "every one of \(groupCount.formatted()) duplicate group(s) holds at most one whole-file SHA-256"
+                                                 : heldClause(held).trimmingCharacters(in: .whitespaces))
+                                 + ". Nothing was changed.")
+    }
+
+    private func heldClause(_ held: [DuplicateGroupDigestSplit.GroupOutcome]) -> String {
+        guard !held.isEmpty else { return "" }
+        return " \(held.count.formatted()) group(s) held as they are — splitting would lose likeness that nothing here can "
+            + "keep (catalog.json has no footage_likeness table, or a file's content is not stored yet)."
+    }
+
+    private func refuseSplit(_ why: String) -> DuplicateDigestSplitOutcome {
+        duplicateDigestSplitNote("REFUSED — \(why)")
+        return .refused(why)
+    }
+
+    struct SplitLikenessRefusal: Error, Equatable { let words: String }
+
+    /// Step 4: every split group's pairs in ONE transaction. A group with a
+    /// pair whose content is not stored is returned in `heldGroups` (its
+    /// other pairs stay recorded — true evidence either way). The store's
+    /// refusal is the split's refusal.
+    func recordSplitLikeness(_ plan: DuplicateGroupDigestSplit.Plan,
+                             committer: CatalogCommitter) -> Result<DuplicateDigestSplitLikenessWrite, SplitLikenessRefusal> {
+        let now = Int64(Date().timeIntervalSince1970.rounded(.down))
+        let groups = plan.splitGroups.filter { !$0.pairs.isEmpty }
+        guard !groups.isEmpty else { return .success(DuplicateDigestSplitLikenessWrite()) }
+        var written = DuplicateDigestSplitLikenessWrite()
+        var landed: [CatalogRow.FootageLikeness] = []
+        let why = committer.commitSideTables("split duplicate groups: \(plan.pairs.count) likeness pair(s)",
+                                             via: .footageLikeness) { tx in
+            written = DuplicateDigestSplitLikenessWrite()
+            landed = []
+            for g in groups {
+                for pair in g.pairs {
+                    let row = pair.row(recordedAt: now)
+                    switch try tx.recordFootageLikeness(row) {
+                    case .recorded: written.recorded += 1; landed.append(row)
+                    case .alreadyRecorded: written.alreadyRecorded += 1
+                    case .contentMissing: written.heldGroups.insert(g.oldGroupID)
+                    }
+                }
+            }
+        }
+        if let why { return .failure(SplitLikenessRefusal(words: "the likeness could not be kept in catalog.sqlite (\(why)) — nothing was changed")) }
+        footageLikeness.absorb(landed)
+        return .success(written)
+    }
+
+    /// Steps 5–7: apply, save, say so.
+    private func applySplit(_ plan: DuplicateGroupDigestSplit.Plan, byID: [UUID: VideoRecord],
+                            likeness: DuplicateDigestSplitLikenessWrite?, copy: String) -> DuplicateDigestSplitOutcome {
         applyDuplicateDigestSplit(plan, byID: byID)
-        for (i, g) in split.enumerated() {
-            duplicateDigestSplitNote("\(i + 1) of \(split.count) — \(g.words)")
-        }
-        for (i, g) in held.enumerated() {
-            duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)")
-        }
+        let split = plan.splitGroups, held = plan.heldGroups
+        for (i, g) in split.enumerated() { duplicateDigestSplitNote("\(i + 1) of \(split.count) — \(g.words)") }
+        for (i, g) in held.enumerated() { duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)") }
         let saved = saveCatalogNow()
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
         let tally = "\(split.count.formatted()) group(s) split · \(plan.newGroupCount.formatted()) new group(s) of copies · "
             + "\(plan.recordsLeaving.formatted()) file(s) left their group (unique bytes) · "
             + "\(plan.sameFootageFiles.formatted()) file(s) are the same footage in a different file — kept as same footage "
-            + "(Find Similar Footage records the links; never delete-eligible) · "
+            + "(never delete-eligible) · "
             + "\(plan.differentLengthFiles.formatted()) file(s) are a different length (only the sampled hash matched) — not the same footage"
-            + (held.isEmpty ? "" : " · " + heldTally)
+            + (likeness.map { " · likeness kept in catalog.sqlite: \($0.recorded.formatted()) new pair(s), \($0.alreadyRecorded.formatted()) already there" } ?? "")
+            + (held.isEmpty ? "" : " ·" + heldClause(held))
         if saved {
             duplicateDigestSplitNote("OUTCOME — \(tally) · saved to the catalog")
         } else {
