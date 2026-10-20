@@ -85,6 +85,11 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// folders, copies and versions under their recording. Remembered by
     /// the parent (CatalogFootageFoldersSetting). Off by default.
     @Binding var showFootageFolders: Bool
+    /// Show ▸ Folders Only (2026-10-19): the folder view without the
+    /// loose files. Implies `showFootageFolders` (the parent applies
+    /// CatalogFoldersOnlyRule); remembered by the parent
+    /// (CatalogFoldersOnlySetting). Off by default.
+    @Binding var showFoldersOnly: Bool
 
     /// True when the View menu holds any non-default state — an active
     /// filter, one of the hidden-record reveals that moved into the
@@ -105,6 +110,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             showSetAside: showSetAside,
             showSuperseded: showSuperseded,
             footageFolders: showFootageFolders,
+            foldersOnly: showFoldersOnly,
             hasMasterArchive: model.masterArchive != nil)
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
@@ -396,6 +402,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // Filters, remembered per user.
                 Section("Show files — as folders") {
                     FootageFoldersShowToggle(isOn: $showFootageFolders)
+                    FoldersOnlyShowToggle(isOn: $showFoldersOnly)
                 }
                 Section("Show files — hidden records") {
                     Toggle(isOn: $showRemoved) {

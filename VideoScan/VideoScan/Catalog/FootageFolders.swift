@@ -646,13 +646,19 @@ enum FootageFolders {
     struct Display: Sendable, Equatable {
         var rows: [DisplayRow] = []
         var summaries: [UUID: Summary] = [:]
+        /// Composed under Show ▸ Folders Only (top level): the table says
+        /// "no folders match" when `rows` is empty, rather than going blank.
+        var foldersOnly = false
         static let empty = Display()
     }
 
     /// The display for the table: `visible` are the filter's survivors in
     /// the table's order; `open` the twisted folders; `scope` narrows to
-    /// one event or one family (then every folder is open).
-    static func compose(index: Index, visible: [UUID], sort: Sort, open: Set<UUID>, scope: Scope?) -> Display {
+    /// one event or one family (then every folder is open). `foldersOnly`
+    /// (Show ▸ Folders Only) drops the loose rows at the top level; a scope
+    /// is an explicit narrowing and is shown as it is.
+    static func compose(index: Index, visible: [UUID], sort: Sort, open: Set<UUID>, scope: Scope?,
+                        foldersOnly: Bool = false) -> Display {
         let visibleSet = Set(visible)
         switch scope {
         case .family(let id)?:
@@ -662,7 +668,8 @@ enum FootageFolders {
             return Display(rows: [.folder(f)] + members(of: f, index: index, visibleSet: visibleSet, sort: sort),
                            summaries: [f.id: f.summary])
         case nil:
-            var d = folderDisplay(index: index, visible: visible, visibleSet: visibleSet, sort: sort, open: open)
+            var d = folderDisplay(index: index, visible: visible, visibleSet: visibleSet, sort: sort, open: open,
+                                  foldersOnly: foldersOnly)
             d.rows = uniqueRowIDs(d.rows)
             return d
         }
@@ -691,18 +698,21 @@ enum FootageFolders {
     /// One call for tests: index + compose with every row visible and
     /// every folder open unless told otherwise.
     static func build(rows: [Row], events: [Event], sort: Sort = .byName, open: Set<UUID>? = nil,
-                      scope: Scope? = nil, visible: [UUID]? = nil) -> Display {
+                      scope: Scope? = nil, visible: [UUID]? = nil, foldersOnly: Bool = false) -> Display {
         let idx = index(rows: rows, events: events)
         return compose(index: idx, visible: visible ?? rows.map(\.id), sort: sort,
-                       open: open ?? Set(idx.folders.keys), scope: scope)
+                       open: open ?? Set(idx.folders.keys), scope: scope, foldersOnly: foldersOnly)
     }
 
     /// Loose rows (already in the table's order) merged with the folders
     /// present (sorted by the same key) — one pass, no re-sort of the
     /// loose rows. A loose file with copies or versions carries them under
     /// it, where its first visible member sits ("a family is not a folder,
-    /// it is the file"); a lone file is one plain row.
-    static func folderDisplay(index: Index, visible: [UUID], visibleSet: Set<UUID>, sort: Sort, open: Set<UUID>) -> Display {
+    /// it is the file"); a lone file is one plain row. `foldersOnly`: no
+    /// loose rows at all — a folder still shows when any visible member
+    /// matches, so search and filters keep working inside folders.
+    static func folderDisplay(index: Index, visible: [UUID], visibleSet: Set<UUID>, sort: Sort, open: Set<UUID>,
+                              foldersOnly: Bool = false) -> Display {
         var loose: [[DisplayRow]] = []
         var present: [UUID] = []
         var seenFolders = Set<UUID>()
@@ -710,6 +720,8 @@ enum FootageFolders {
         for id in visible {
             if let es = index.foldersOf[id], !es.isEmpty {
                 for e in es where seenFolders.insert(e).inserted { present.append(e) }
+            } else if foldersOnly {
+                continue   // a file in no folder: hidden under Folders Only
             } else if let fi = index.familyOf[id] {
                 if seenFamilies.insert(fi).inserted {
                     loose.append(familyRows(index.families[fi], index: index, visibleSet: visibleSet, sort: sort))
@@ -720,6 +732,7 @@ enum FootageFolders {
         }
         let folders = present.compactMap { index.folders[$0] }.sorted { sort.precedes($0.keys, $1.keys) }
         var d = Display()
+        d.foldersOnly = foldersOnly
         d.rows.reserveCapacity(visible.count + folders.count)
         var fi = 0, li = 0
         while li < loose.count || fi < folders.count {

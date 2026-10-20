@@ -36,6 +36,9 @@ final class CatalogPaneFocusMirror {
 @MainActor
 final class FootageFolderKeyMirror {
     var isOn = false
+    /// Show ▸ Folders Only, for the same reason: a compose started from
+    /// the monitor (a level change) must not bring the loose rows back.
+    var foldersOnly = false
 }
 
 /// The files table's view-owned state. A custom `DynamicProperty` ≈ a C++
@@ -107,6 +110,10 @@ struct CatalogTableState: DynamicProperty {
     @State var pendingDropSelection: FolderDropLanding?
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
+    /// Folders Only is on and its composed top level holds no folder: the
+    /// table shows "No folders match" instead of a blank area. Set in the
+    /// display / index handlers, never in a body.
+    @State var foldersOnlyFindsNothing = false
 
     // MARK: Folders as labels (2026-10-19: a file in many folders)
 

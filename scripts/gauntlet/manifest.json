@@ -28000,6 +28000,36 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FoldersOnlyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FoldersOnlyLogicTests",
+        "FoldersOnlyIsolationTests",
+        "FoldersOnlySensorTests"
+      ],
+      "tests": [
+        "aClosedFolderIsItsOneRow",
+        "aLooseDerivativeIsNotClaimedSelectedUnderFoldersOnly",
+        "composeReadsTheMirrorAndAddsNoRefreshRows",
+        "emptyNoteShowsOnlyAtTheTopWithTheFolderView",
+        "filtersAndSearchStillApplyInsideFolders",
+        "foldersOnlyImpliesTheFolderViewBothWays",
+        "launchNeedsTheFolderViewToo",
+        "looseRowsAndLooseFamiliesAreDropped",
+        "nothingMatchingIsAnEmptyFlaggedDisplay",
+        "offIsTodaysDisplayExactly",
+        "onlyAPlistBooleanReadsAsOn",
+        "pillSaysFoldersOnlyInsteadOfAsFolders",
+        "rememberedAndImpliedInTheParent",
+        "scopesAreShownAsTheyAre",
+        "snapshotCarriesTheFlagThroughTheRequest",
+        "theSearchsNoMatchesWinsOverNoFolders",
+        "toggleSitsInTheFoldersSectionAndClearAllLeavesIt"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
       "stage": "regression",
       "suites": [
@@ -31997,6 +32027,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FoldersOnlyTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

@@ -559,7 +559,10 @@ struct FootageFoldersStructureTests {
         #expect(FootageFolderWords.showOptionTitle == "Events & Copies as Folders")
         let content = try code("ContentView.swift")
         #expect(content.contains("@State private var showFootageFolders: Bool = CatalogFootageFoldersSetting.isOn()"))
-        #expect(content.contains(".onChange(of: showFootageFolders) { CatalogFootageFoldersSetting.set(showFootageFolders) }"),
+        // The handler also applies CatalogFoldersOnlyRule (2026-10-19), so
+        // it is a block now; the write itself is what is pinned.
+        #expect(content.contains(".onChange(of: showFootageFolders) {")
+                && content.contains("CatalogFootageFoldersSetting.set(showFootageFolders)"),
                 "remembered per user")
         #expect(CatalogFootageFoldersSetting.isOn(UserDefaults(suiteName: "FootageFolders-empty-\(UUID())") ?? .standard) == false
                 || UserDefaults.standard.object(forKey: CatalogFootageFoldersSetting.key) != nil)

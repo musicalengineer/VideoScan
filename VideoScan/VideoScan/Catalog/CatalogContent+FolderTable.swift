@@ -440,7 +440,25 @@ extension CatalogContent {
         model.footageFolders.compose(visible: tableData.map(\.id),
                                      sort: FootageFolderSort.sort(from: sortOrder),
                                      open: folderComposeOpenSet,
-                                     scope: tableState.folderScope)
+                                     scope: tableState.folderScope,
+                                     foldersOnly: tableState.folderKeyMirror.foldersOnly)
+    }
+
+    /// Show ▸ Folders Only flipped: mirror it for the key monitor and
+    /// recompose. The rows are the same filter survivors, so no
+    /// `refreshRows` — only the folder display changes.
+    func foldersOnlyOptionChanged() {
+        tableState.folderKeyMirror.foldersOnly = showFoldersOnly
+        refreshFolderDisplay()
+    }
+
+    /// Whether the "No folders match" line shows: the display was composed
+    /// under Folders Only, holds nothing, and the join has landed at least
+    /// once (before that an empty display only means "not built yet").
+    /// Called with each display and each new join. O(1).
+    func updateFoldersOnlyEmptyNote(_ display: FootageFolders.Display) {
+        let empty = display.foldersOnly && display.rows.isEmpty && model.footageFolders.indexPublishCount > 0
+        if tableState.foldersOnlyFindsNothing != empty { tableState.foldersOnlyFindsNothing = empty }
     }
 
     /// Every folder the join knows, at the top; nothing inside a scope.
@@ -464,6 +482,7 @@ extension CatalogContent {
     /// A folder the join no longer has (merged, dismissed) sends the
     /// table back to the top. Event handler, never body.
     func rebuildFolderRows(_ display: FootageFolders.Display) {
+        updateFoldersOnlyEmptyNote(display)
         let index = model.footageFolders.index
         if tableState.folderKeyMirror.isOn, let scope = tableState.folderScope, !FootageFolderLevel.exists(scope, in: index) {
             setFolderScope(nil)   // nothing to re-select; the top level's compose is on its way
@@ -532,6 +551,7 @@ extension CatalogContent {
     /// whether to keep the join warm, and compose or clear.
     func footageFoldersOptionChanged(on: Bool) {
         tableState.folderKeyMirror.isOn = on
+        tableState.folderKeyMirror.foldersOnly = on && showFoldersOnly
         model.setFootageFoldersWanted(on)
         if on {
             refreshFolderDisplay()
@@ -549,6 +569,7 @@ extension CatalogContent {
             tableState.folderLevel = .empty
             tableState.expandedFolderIDs = []
             tableState.folderRecordIDs = []
+            tableState.foldersOnlyFindsNothing = false
         }
     }
 
@@ -609,7 +630,8 @@ extension CatalogContent {
                                          inTable: tableData.contains { $0.id == landing.id },
                                          foldersOn: showFootageFolders,
                                          scope: tableState.folderScope,
-                                         index: model.footageFolders.index)
+                                         index: model.footageFolders.index,
+                                         foldersOnly: showFootageFolders && showFoldersOnly)
         switch plan {
         case .select, .openScopeAndSelect:
             let folder = selectDerivative(landing)
@@ -659,6 +681,55 @@ struct FootageFoldersShowToggle: View {
         }
         .help(isOn ? FootageFolderWords.showOptionHelpOn : FootageFolderWords.showOptionHelpOff)
         .accessibilityIdentifier("catalog.show.footageFolders")
+    }
+}
+
+/// Show ▸ Folders Only — its menu row (Rick 2026-10-19). Turning it on
+/// turns the folder view on; the parent applies CatalogFoldersOnlyRule.
+struct FoldersOnlyShowToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            Label(FootageFolderWords.foldersOnlyTitle,
+                  systemImage: isOn ? FootageFolderWords.foldersOnlySymbolOn : FootageFolderWords.foldersOnlySymbol)
+        }
+        .help(FootageFolderWords.foldersOnlyHelp)
+        .accessibilityIdentifier("catalog.show.foldersOnly")
+    }
+}
+
+/// Which line an empty Catalog table shows. The search emptying the table
+/// outright wins; then Folders Only finding no folder (top level, the
+/// folder view on — the caller folds those in). Pure, so tests pin it.
+/// (For Rick: an enum class returned by a tiny pure chooser.)
+enum CatalogEmptyNote: Equatable {
+    case none, noMatches, noFolders
+
+    static func pick(rowsEmpty: Bool, searching: Bool, foldersOnlyFindsNothing: Bool) -> CatalogEmptyNote {
+        if rowsEmpty && searching { return .noMatches }
+        return foldersOnlyFindsNothing ? .noFolders : .none
+    }
+}
+
+/// The calm line over the folder table when Folders Only finds no folder
+/// (the search's own "No matches" overlay wins when the search empties
+/// the table outright).
+struct FoldersOnlyEmptyNote: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: FootageFolderWords.folderSymbol)
+                .font(.system(size: 28))
+                .foregroundColor(.secondary)
+            Text(FootageFolderWords.foldersOnlyEmpty)
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .padding(.horizontal, 16)
+        }
+        .padding(40)
+        .accessibilityIdentifier("catalog.foldersOnly.empty")
     }
 }
 

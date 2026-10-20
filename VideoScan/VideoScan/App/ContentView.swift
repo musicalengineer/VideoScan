@@ -464,6 +464,10 @@ struct CatalogView: View {
     /// strictly — a poisoned value reads as off), written on every flip
     /// below, the way the view filters are.
     @State private var showFootageFolders: Bool = CatalogFootageFoldersSetting.isOn()
+    /// Show ▸ Folders Only (2026-10-19): folders and their members only.
+    /// Remembered under its own key (CatalogFoldersOnlySetting, strict
+    /// read); implies the folder view both ways (CatalogFoldersOnlyRule).
+    @State private var showFoldersOnly: Bool = CatalogFoldersOnlyRule.launchFoldersOnly()
     /// Strict-catalog policy: scan targets that have never been scanned and
     /// aren't currently doing anything are hidden from the Scan Volumes
     /// table by default. The user opts in with a small toggle near the table.
@@ -725,6 +729,7 @@ struct CatalogView: View {
             showSetAside: $showSetAside,
             showSuperseded: $showSuperseded,
             showFootageFolders: $showFootageFolders,
+            showFoldersOnly: $showFoldersOnly,
             dashboardContent: {
                 if model.isScanning || model.isCombining {
                     CompactDashboard(
@@ -761,6 +766,7 @@ struct CatalogView: View {
             showSetAside: showSetAside,
             showSuperseded: showSuperseded,
             showFootageFolders: showFootageFolders,
+            showFoldersOnly: showFoldersOnly,
             // Media-kind facet (GH #124) — persisted on the model,
             // flipped by the toolbar facet chip.
             kindFacet: model.kindFacetSetting.facet,
@@ -898,7 +904,14 @@ struct CatalogView: View {
                 guard didLoadPersistedViewFilters else { return }
                 persistedViewFilters = CatalogShowingSummary.encode(catalogViewFilters)
             }
-            .onChange(of: showFootageFolders) { CatalogFootageFoldersSetting.set(showFootageFolders) }
+            .onChange(of: showFootageFolders) {
+                CatalogFootageFoldersSetting.set(showFootageFolders)
+                showFoldersOnly = CatalogFoldersOnlyRule.foldersOnly(afterFolders: showFootageFolders, foldersOnly: showFoldersOnly)
+            }
+            .onChange(of: showFoldersOnly) {
+                CatalogFoldersOnlySetting.set(showFoldersOnly)
+                showFootageFolders = CatalogFoldersOnlyRule.folders(afterFoldersOnly: showFoldersOnly, folders: showFootageFolders)
+            }
             .onChange(of: volumeShowFilter) { volumeShowFilterDidChange() }
             // A Master Archive designated AFTER first run flips the default
             // to the to-do view once (never again — the user's choice wins).

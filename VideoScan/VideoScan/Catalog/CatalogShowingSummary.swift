@@ -60,6 +60,8 @@ enum CatalogShowingSummary {
         /// not a filter; it gets its own pill so the folder rows explain
         /// themselves from the Showing box too.
         var footageFolders = false
+        /// Show ▸ Folders Only — its pill stands in for "As folders".
+        var foldersOnly = false
         /// A Master Archive is designated — without one "archived" is
         /// meaningless and the archive pill is omitted entirely.
         var hasMasterArchive = false
@@ -124,7 +126,7 @@ enum CatalogShowingSummary {
             out.append(Pill(words(for: f)))
         }
         if s.showPairsOnly { out.append(Pill("Pairs only")) }
-        if s.footageFolders { out.append(Pill(FootageFolderWords.showingPill)) }
+        if s.footageFolders { out.append(Pill(FootageFolderWords.showingPill(foldersOnly: s.foldersOnly))) }
 
         out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives",
                         action: .toggleDrives))

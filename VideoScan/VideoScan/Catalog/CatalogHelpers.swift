@@ -79,6 +79,10 @@ struct CatalogContent: View {
     /// (CatalogContent+FolderTable.swift). Remembered per user by the
     /// parent (CatalogFootageFoldersSetting).
     var showFootageFolders: Bool = false
+    /// Show ▸ Folders Only (2026-10-19): with the folder view on, only the
+    /// folders and their members — no loose files. The parent keeps it
+    /// implying `showFootageFolders` (CatalogFoldersOnlyRule).
+    var showFoldersOnly: Bool = false
     /// Media-kind facet (GH #124): which stream shapes the table shows.
     /// Default `.videoBearing` — audio-only rows hidden until the user
     /// flips the toolbar facet chip. Applied in computeFiltered AFTER the
@@ -696,6 +700,19 @@ struct CatalogContent: View {
     /// Extracted 2026-09-09 (with `inspectorPanelView`): the body was one
     /// expression too many for the CI toolchain's type-checker — same
     /// class as the CatalogView and FamilyTreeView splits. Pure extraction.
+    /// The empty table's one line (CatalogEmptyNote): the search's "No
+    /// matches", or Folders Only's "No folders match". O(1) reads.
+    @ViewBuilder
+    private var catalogEmptyNote: some View {
+        switch CatalogEmptyNote.pick(rowsEmpty: tableData.isEmpty, searching: !searchText.isEmpty,
+                                     foldersOnlyFindsNothing: showFootageFolders && tableState.folderScope == nil
+                                         && tableState.foldersOnlyFindsNothing) {
+        case .noMatches: noMatchesOverlay
+        case .noFolders: FoldersOnlyEmptyNote()
+        case .none: EmptyView()
+        }
+    }
+
     private var noMatchesOverlay: some View {
         VStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -790,9 +807,7 @@ struct CatalogContent: View {
                     // which is ambiguous (Rick 2026-06-16).
                     ZStack {
                         catalogTable
-                        if tableData.isEmpty && !searchText.isEmpty {
-                            noMatchesOverlay
-                        }
+                        catalogEmptyNote
                     }
                     // The four glyphs, named, while the folder view is on.
                     if showFootageFolders {

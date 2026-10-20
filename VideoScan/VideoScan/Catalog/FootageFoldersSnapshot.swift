@@ -53,6 +53,8 @@ final class FootageFoldersSnapshot: ObservableObject {
         var sort: FootageFolders.Sort
         var open: Set<UUID>
         var scope: FootageFolders.Scope?
+        /// Show ▸ Folders Only: no loose rows at the top level.
+        var foldersOnly = false
     }
 
     private(set) var request: Request?
@@ -70,18 +72,21 @@ final class FootageFoldersSnapshot: ObservableObject {
     }
 
     /// From the table: what it shows now. The same request twice is free.
-    func compose(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?) {
-        let req = Request(visible: visible, sort: sort, open: open, scope: scope)
+    func compose(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?,
+                 foldersOnly: Bool = false) {
+        let req = Request(visible: visible, sort: sort, open: open, scope: scope, foldersOnly: foldersOnly)
         guard req != request else { return }
         request = req
         recompose()
     }
 
     /// Synchronous compose for tests and the reveal path (no task hop).
-    func composeNow(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?) {
-        request = Request(visible: visible, sort: sort, open: open, scope: scope)
+    func composeNow(visible: [UUID], sort: FootageFolders.Sort, open: Set<UUID>, scope: FootageFolders.Scope?,
+                    foldersOnly: Bool = false) {
+        request = Request(visible: visible, sort: sort, open: open, scope: scope, foldersOnly: foldersOnly)
         composeTask?.cancel()
-        publish(display: FootageFolders.compose(index: index, visible: visible, sort: sort, open: open, scope: scope))
+        publish(display: FootageFolders.compose(index: index, visible: visible, sort: sort, open: open, scope: scope,
+                                                foldersOnly: foldersOnly))
     }
 
     /// Follow Rick's event decisions: a confirm / dismiss / merge changes
@@ -107,7 +112,8 @@ final class FootageFoldersSnapshot: ObservableObject {
         let idx = index
         composeTask = Task { [weak self] in
             let d = await Task.detached(priority: .userInitiated) {
-                FootageFolders.compose(index: idx, visible: req.visible, sort: req.sort, open: req.open, scope: req.scope)
+                FootageFolders.compose(index: idx, visible: req.visible, sort: req.sort, open: req.open, scope: req.scope,
+                                       foldersOnly: req.foldersOnly)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.publish(display: d)

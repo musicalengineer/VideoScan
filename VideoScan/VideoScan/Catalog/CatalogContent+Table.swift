@@ -134,6 +134,8 @@ extension CatalogContent {
     private var tableWithFolderTriggers: some View {
         tableWithFilterTriggers
             .onChange(of: showFootageFolders, initial: true) { footageFoldersOptionChanged(on: showFootageFolders) }
+            // Show ▸ Folders Only: same rows, a different compose.
+            .onChange(of: showFoldersOnly) { foldersOnlyOptionChanged() }
             .onReceive(folderDisplayPublisher) { rebuildFolderRows($0) }
             // A folder's title answers the search (FootageFolderTitleSearch):
             // a join that lands AFTER the query was typed (the first index
@@ -143,6 +145,8 @@ extension CatalogContent {
             // @Published publisher replays its current value on subscribe,
             // and that one is already what the appear pass filtered with.
             .onReceive(folderIndexPublisher.dropFirst()) { _ in
+                // The first join can land after an equal (empty) display.
+                updateFoldersOnlyEmptyNote(model.footageFolders.display)
                 if showFootageFolders && !searchText.isEmpty { refreshRows() }
             }
             .onChange(of: model.lastDerivativeLanding) {

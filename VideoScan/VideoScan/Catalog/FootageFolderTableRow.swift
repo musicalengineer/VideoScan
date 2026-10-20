@@ -197,23 +197,66 @@ enum FootageFolderSort {
 
 // MARK: - The remembered Show option
 
-/// Show ▸ Events & Copies as Folders, remembered per user like the other
-/// Show options (UserDefaults). Read strictly: anything but a plist
-/// BOOLEAN under the key — a poisoned or older value — reads as OFF, never
-/// as on. `as? Bool` alone is not strict: a stored number 1 bridges to
-/// `true` through NSNumber (codex 2026-10-16 P2), so the type is checked
-/// first. (For Rick: CFGetTypeID ≈ a runtime typeid() on the plist value.)
-enum CatalogFootageFoldersSetting {
-    static let key = FootageFolderWords.settingKey
-
-    static func isOn(_ defaults: UserDefaults = .standard) -> Bool {
+/// The strict read both Show options share: anything but a plist BOOLEAN
+/// under the key — a poisoned or older value — reads as OFF, never as on.
+/// `as? Bool` alone is not strict: a stored number 1 bridges to `true`
+/// through NSNumber (codex 2026-10-16 P2), so the type is checked first.
+/// (For Rick: CFGetTypeID ≈ a runtime typeid() on the plist value.)
+enum StrictDefaultsBool {
+    static func read(_ key: String, _ defaults: UserDefaults) -> Bool {
         guard let stored = defaults.object(forKey: key) else { return false }
         guard CFGetTypeID(stored as AnyObject) == CFBooleanGetTypeID() else { return false }
         return (stored as? Bool) ?? false
     }
+}
+
+/// Show ▸ Events & Copies as Folders, remembered per user like the other
+/// Show options (UserDefaults), read strictly (StrictDefaultsBool).
+enum CatalogFootageFoldersSetting {
+    static let key = FootageFolderWords.settingKey
+
+    static func isOn(_ defaults: UserDefaults = .standard) -> Bool {
+        StrictDefaultsBool.read(key, defaults)
+    }
 
     static func set(_ on: Bool, _ defaults: UserDefaults = .standard) {
         defaults.set(on, forKey: key)
+    }
+}
+
+/// Show ▸ Folders Only, remembered under its own key with the same strict
+/// read: anything but a plist BOOLEAN reads as OFF.
+enum CatalogFoldersOnlySetting {
+    static let key = FootageFolderWords.foldersOnlySettingKey
+
+    static func isOn(_ defaults: UserDefaults = .standard) -> Bool {
+        StrictDefaultsBool.read(key, defaults)
+    }
+
+    static func set(_ on: Bool, _ defaults: UserDefaults = .standard) {
+        defaults.set(on, forKey: key)
+    }
+}
+
+/// The two Show options move together: Folders Only implies the folder
+/// view. Pure, so the rule is pinned by tests rather than by a body.
+/// (For Rick: a namespace of two free functions over plain bools.)
+enum CatalogFoldersOnlyRule {
+    /// Folders Only just flipped: on turns the folder view on; off leaves it.
+    static func folders(afterFoldersOnly foldersOnly: Bool, folders: Bool) -> Bool {
+        foldersOnly || folders
+    }
+
+    /// The folder view just flipped: off turns Folders Only off; on leaves it.
+    static func foldersOnly(afterFolders folders: Bool, foldersOnly: Bool) -> Bool {
+        folders && foldersOnly
+    }
+
+    /// At launch: a remembered Folders Only without the folder view (an
+    /// older or poisoned pair) reads as off.
+    static func launchFoldersOnly(_ defaults: UserDefaults = .standard) -> Bool {
+        foldersOnly(afterFolders: CatalogFootageFoldersSetting.isOn(defaults),
+                    foldersOnly: CatalogFoldersOnlySetting.isOn(defaults))
     }
 }
 
@@ -239,9 +282,13 @@ enum DerivativeReveal: Equatable {
     /// `inTable`: the filter's survivors hold the new row. `foldersOn` and
     /// `scope`: the folder view's state. `index`: the join as published
     /// (it may not know the new row yet — that is the openScopeAndSelect case).
+    /// `foldersOnly` (Show ▸ Folders Only): at the top, a derivative whose
+    /// source and self are in no folder is not shown, so it is hidden.
     static func plan(landing: DerivativeLanding, inTable: Bool, foldersOn: Bool,
-                     scope: FootageFolders.Scope?, index: FootageFolders.Index) -> DerivativeReveal {
+                     scope: FootageFolders.Scope?, index: FootageFolders.Index,
+                     foldersOnly: Bool = false) -> DerivativeReveal {
         guard inTable else { return .hiddenByFilter }
+        if foldersOnly, scope == nil, isLoose(landing, in: index) { return .hiddenByFilter }
         guard foldersOn, let scope else { return .select }
         switch scope {
         case .event(let eventID):
@@ -253,6 +300,11 @@ enum DerivativeReveal: Equatable {
             let sameFamily = landing.sourceID == memberID || (family != nil && index.familyOf[landing.sourceID] == family)
             return sameFamily ? .openScopeAndSelect : .outsideScope
         }
+    }
+
+    /// Neither the new row nor its source is in any folder.
+    static func isLoose(_ landing: DerivativeLanding, in index: FootageFolders.Index) -> Bool {
+        index.firstFolder(of: landing.id) == nil && index.firstFolder(of: landing.sourceID) == nil
     }
 }
 
