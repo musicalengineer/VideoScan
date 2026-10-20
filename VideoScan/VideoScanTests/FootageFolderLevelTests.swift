@@ -132,11 +132,11 @@ struct FootageFolderLevelTests {
         #expect(marks.itemsWords == "3 items · 1 copy")
         #expect(marks.totalBytes == 250)
         #expect(marks.totalSeconds == 900, "the recordings' running time, not the copy's")
-        #expect(marks.dateWords == "Apr 7, 1984 – Apr 8, 1984")
+        #expect(marks.dateWords == "07-Apr-1984 – 08-Apr-1984")
         #expect(marks.date == day(1984, 4, 7))
         let cape = try #require(f.top().folders[f.cape.id])
         #expect(cape.itemsWords == "1 item")
-        #expect(cape.dateWords == "Jul 1, 1990", "one day reads as one day")
+        #expect(cape.dateWords == "01-Jul-1990", "one day reads as one day")
     }
 
     @Test func insideLevelIsTheFlatEventScopeWithoutTheFolderRow() {
@@ -181,8 +181,8 @@ struct FootageFolderLevelTests {
     @Test func theWordsReadLikeTheFinder() {
         #expect(FootageFolderWords.itemsAndCopies(items: 12, copies: 3) == "12 items · 3 copies")
         #expect(FootageFolderWords.itemsAndCopies(items: 1, copies: 0) == "1 item")
-        #expect(FootageFolderWords.dateRange(day(1984, 4, 7), day(1984, 4, 7)) == "Apr 7, 1984")
-        #expect(FootageFolderWords.dateRange(day(1984, 4, 8), day(1984, 4, 7)) == "Apr 7, 1984 – Apr 8, 1984", "a reversed pair still reads as the span")
+        #expect(FootageFolderWords.dateRange(day(1984, 4, 7), day(1984, 4, 7)) == "07-Apr-1984")
+        #expect(FootageFolderWords.dateRange(day(1984, 4, 8), day(1984, 4, 7)) == "07-Apr-1984 – 08-Apr-1984", "a reversed pair still reads as the span")
         #expect(FootageFolderWords.crumbPath(nil) == "Catalog")
         #expect(FootageFolderWords.crumbPath("Marks Birthday 1984") == "Catalog ▸ Marks Birthday 1984")
     }

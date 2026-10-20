@@ -280,7 +280,7 @@ struct FootageFoldersLogicTests {
         #expect(s.totalSeconds == 660, "running time sums the recordings, not their copies or versions")
         #expect(s.totalBytes == 257)
         #expect(s.archivedCount == 2)
-        #expect(s.dateWords == "Nov 26, 2009", "the earliest recording's day")
+        #expect(s.dateWords == "26-Nov-2009", "the earliest recording's day")
     }
 
     @Test func eventsComeStraightFromTheDecisions() {
