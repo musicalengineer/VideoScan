@@ -13,11 +13,14 @@ import { RoomAgent } from "./room-agent.mjs";
 import { loadOrCreateAccessToken } from "./access-token.mjs";
 import { RoundtableController } from "./roundtable-controller.mjs";
 import { ControlPlane } from "./control-plane.mjs";
+import { MetricsRefresh, metricsDocument } from "./metrics-refresh.mjs";
+import { WorkBoard } from "./work-board.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const toolRoot = resolve(here, "..");
 const repoRoot = resolve(toolRoot, "../..");
 const publicRoot = join(toolRoot, "public");
+const boardMode = process.env.ENGINEERING_ROOM_MODE === "board";
 const port = parsePort(process.env.ENGINEERING_ROOM_PORT ?? "8765");
 const lanMode = process.env.ENGINEERING_ROOM_LAN === "1";
 const host = lanMode ? "0.0.0.0" : "127.0.0.1";
@@ -26,13 +29,13 @@ const allowedHosts = buildAllowedHosts();
 const sessionToken = process.env.ENGINEERING_ROOM_TOKEN || (lanMode
   ? loadOrCreateAccessToken(process.env.ENGINEERING_ROOM_TOKEN_FILE || join(toolRoot, "var", "access-token"))
   : randomBytes(24).toString("base64url"));
-const codexBin = findCodex();
-const claudeBin = findClaude();
+const codexBin = boardMode ? null : findCodex();
+const claudeBin = boardMode ? null : findClaude();
 const database = new RoomDatabase(process.env.ENGINEERING_ROOM_DB || join(toolRoot, "var", "engineering-room.sqlite3"));
 const codex = new CodexAppServerClient({ codexBin, cwd: repoRoot });
 const claude = new ClaudeCliClient({ claudeBin, cwd: repoRoot });
 const qwen = new QwenResponsesClient({
-  baseUrl: process.env.QWEN_BASE_URL || "http://ricksm5.local:11434/v1",
+  baseUrl: (!boardMode && process.env.QWEN_BASE_URL) || "http://ricksm5.local:11434/v1",
   model: process.env.QWEN_MODEL || "qwen-videoscan:64k",
   apiKey: process.env.QWEN_API_KEY || "",
 });
@@ -41,6 +44,7 @@ const agents = {
   claude: new RoomAgent({ client: claude, database, provider: "claude", displayName: "Claude" }),
   qwen: new RoomAgent({ client: qwen, database, provider: "qwen", displayName: "Qwen" }),
 };
+if (boardMode) for (const agent of Object.values(agents)) agent.connectionState = "disabled";
 const clients = new Set();
 let sequence = 0;
 const controlPlane = new ControlPlane({
@@ -48,9 +52,14 @@ const controlPlane = new ControlPlane({
   statusFeed: process.env.ENGINEERING_ROOM_STATUS_FEED,
   teamChannel: process.env.ENGINEERING_ROOM_TEAM_CHANNEL,
   reconstructionSeed: process.env.ENGINEERING_ROOM_RECONSTRUCTION_SEED,
+  channelExportsEnabled: !boardMode,
 });
-controlPlane.ingestAll();
-ensureDailyArtifacts();
+if (!boardMode) {
+  controlPlane.ingestAll();
+  ensureDailyArtifacts();
+}
+const metricsRefresh = new MetricsRefresh({ controlPlane, repoRoot });
+const workBoard = new WorkBoard({ controlPlane, repoRoot, mode: boardMode ? "board" : "room" });
 
 for (const agent of Object.values(agents)) agent.on("event", event => publish(event.type, event.data));
 const autopilot = new RoundtableController({
@@ -68,23 +77,55 @@ const server = createServer(async (request, response) => {
     if (!validHost(request.headers.host) || !validOrigin(request.headers.origin)) return json(response, 403, { error: "Local room request rejected." });
     const url = new URL(request.url, `http://${request.headers.host}`);
 
-    if (request.method === "GET" && url.pathname === "/" && url.searchParams.has("token")) {
+    if (request.method === "GET" && ["/", "/metrics", "/board"].includes(url.pathname) && url.searchParams.has("token")) {
       if (url.searchParams.get("token") !== sessionToken) return text(response, 403, "Invalid room token.");
-      response.writeHead(302, { "Set-Cookie": `engineering_room=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`, Location: "/" });
+      response.writeHead(302, { "Set-Cookie": `engineering_room=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`, Location: boardMode && url.pathname === "/" ? "/board" : url.pathname });
       return response.end();
     }
 
-    if (!authorized(request)) return text(response, 401, "Open the startup URL printed by Engineering Room.");
+    if (!authorized(request) && request.method === "GET" && url.pathname === "/metrics") {
+      // A navigation from public Pages can omit the Strict cookie. A same-origin
+      // link lets an already signed-in user continue without weakening the cookie.
+      response.writeHead(401, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      return response.end('<!doctype html><html lang="en"><meta charset="utf-8"><title>Private metrics</title><h1>Private metrics</h1><p>If you are already signed in, <a href="/metrics">continue to metrics</a>.</p><p>Otherwise sign in using the startup link printed by the work board or Engineering Room.</p></html>');
+    }
+    if (!authorized(request)) return text(response, 401, "Open the startup URL printed by the work board or Engineering Room.");
+    if (boardMode && !["GET", "HEAD"].includes(request.method)
+      && (/^\/api\/(messages|topics|turns|autopilot)(\/|$)/.test(url.pathname)
+        || ["/api/control-plane/ingest", "/api/control-plane/channel/export", "/api/control-plane/briefs", "/api/control-plane/standups"].includes(url.pathname))) {
+      throw httpError(409, "Discussion providers and retired channel ingestion/export are disabled in board mode.");
+    }
+    if (boardMode && request.method === "GET" && url.pathname === "/") {
+      response.writeHead(302, { Location: "/board" });
+      return response.end();
+    }
+    if (request.method === "GET" && url.pathname === "/board") return await staticFile("/board.html", response);
+    if (request.method === "GET" && url.pathname === "/api/work-board") return json(response, 200, await workBoard.snapshot());
+    if (request.method === "POST" && url.pathname === "/api/work-board/requests") {
+      const result = workBoard.enqueue(await readJson(request));
+      return json(response, result.reused ? 200 : 201, result);
+    }
+    if (request.method === "GET" && url.pathname === "/metrics") {
+      const page = metricsDocument(await readFile(join(repoRoot, "docs", "index.html"), "utf8"));
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Security-Policy": page.csp });
+      return response.end(page.body);
+    }
+    if (request.method === "GET" && url.pathname === "/api/metrics-refresh") return json(response, 200, metricsRefresh.snapshot());
+    if (request.method === "POST" && url.pathname === "/api/metrics-refresh") {
+      const result = metricsRefresh.enqueue(await readJson(request));
+      return json(response, result.reused ? 200 : 201, result);
+    }
     if (request.method === "GET" && url.pathname === "/healthz") return json(response, 200, {
       status: "ok",
+      mode: boardMode ? "board" : "room",
       codex: agents.codex.status.connection,
       claude: agents.claude.status.connection,
       qwen: agents.qwen.status.connection,
     });
     if (request.method === "GET" && url.pathname === "/api/bootstrap") {
-      return json(response, 200, roomSnapshot());
+      return json(response, 200, boardMode ? await workBoard.snapshot() : roomSnapshot());
     }
-    if (request.method === "GET" && url.pathname === "/api/events") return openEvents(request, response);
+    if (request.method === "GET" && url.pathname === "/api/events") return await openEvents(request, response);
     if (request.method === "GET" && url.pathname === "/api/control-plane/board") return json(response, 200, controlPlane.board());
     if (request.method === "GET" && url.pathname === "/api/control-plane/briefs/latest") return json(response, 200, controlPlane.latestBrief());
     if (request.method === "GET" && url.pathname === "/api/control-plane/standups/latest") return json(response, 200, controlPlane.latestStandup());
@@ -226,10 +267,12 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, async () => {
+  const landing = boardMode ? "/board" : "/";
   const roomUrls = lanMode
-    ? lanAddresses.map(address => `http://${address}:${port}/?token=${encodeURIComponent(sessionToken)}`)
-    : [`http://127.0.0.1:${port}/?token=${encodeURIComponent(sessionToken)}`];
-  console.log(`\nEngineering Room is ready${lanMode ? " for the household LAN" : ""}:\n${roomUrls.join("\n")}\n`);
+    ? lanAddresses.map(address => `http://${address}:${port}${landing}?token=${encodeURIComponent(sessionToken)}`)
+    : [`http://127.0.0.1:${port}${landing}?token=${encodeURIComponent(sessionToken)}`];
+  console.log(`\n${boardMode ? "VideoScan Work Board" : "Engineering Room"} is ready${lanMode ? " for the household LAN" : ""}:\n${roomUrls.join("\n")}\n`);
+  if (boardMode) return;
   try {
     const initialized = await Promise.allSettled(Object.entries(agents).map(async ([provider, agent]) => {
       await agent.initialize();
@@ -251,12 +294,13 @@ function publish(type, data) {
   for (const client of clients) client.write(line);
 }
 
-function openEvents(request, response) {
+async function openEvents(request, response) {
+  const snapshot = boardMode ? await workBoard.snapshot() : roomSnapshot();
   response.writeHead(200, {
     "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive", "X-Accel-Buffering": "no",
   });
-  response.write(`event: room\ndata: ${JSON.stringify({ version: 1, sequence, type: "snapshot", data: roomSnapshot() })}\n\n`);
+  response.write(`event: room\ndata: ${JSON.stringify({ version: 1, sequence, type: "snapshot", data: snapshot })}\n\n`);
   clients.add(response);
   const keepalive = setInterval(() => response.write(": keepalive\n\n"), 15000);
   request.on("close", () => { clearInterval(keepalive); clients.delete(response); });
@@ -435,13 +479,13 @@ function shutdown() {
   server.close(() => { database.close(); process.exit(0); });
   setTimeout(() => process.exit(1), 3000).unref();
 }
-const controlPlanePoll = setInterval(() => {
+const controlPlanePoll = boardMode ? null : setInterval(() => {
   try { controlPlane.ingestAll(); }
   catch (error) { console.error(`Control-plane ingestion failed: ${publicError(error)}`); }
 }, 5000);
-controlPlanePoll.unref();
-const dailyArtifactsPoll = setInterval(ensureDailyArtifacts, 60 * 1000);
-dailyArtifactsPoll.unref();
+controlPlanePoll?.unref();
+const dailyArtifactsPoll = boardMode ? null : setInterval(ensureDailyArtifacts, 60 * 1000);
+dailyArtifactsPoll?.unref();
 
 function ensureDailyArtifacts() {
   try {

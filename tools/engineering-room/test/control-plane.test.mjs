@@ -203,6 +203,51 @@ test("new task dispatch requires a valid explicit machine route", () => {
   rig.close();
 });
 
+test("board-only completion is durable and idempotent without retired channel exports", t => {
+  let writes = 0;
+  const rig = fixture("2026-10-20T12:00:00.000Z", { channelExportsEnabled: false,
+    writeChannelFile() { writes += 1; throw new Error("Retired channel must not be written"); } });
+  t.after(() => rig.close());
+  const created = rig.control.createDirective({ id: "board-only-task", title: "Private request",
+    objective: "Review selected folder", manager: "claude", machine: "none" });
+  const worker = rig.control.registerAgent({ manager: "claude", agent: "qa/board", sessionId: "board-worker", state: "idle" });
+  rig.control.claimTask({ taskId: created.task.id, agentId: worker.id, sessionId: "board-worker" });
+  const payload = { taskId: created.task.id, agentId: worker.id, sessionId: "board-worker", result: "Read; no findings." };
+  const completed = rig.control.completeTask(payload);
+  assert.equal(completed.task.state, "done");
+  assert.equal(completed.channelDelivery, null);
+  assert.equal(rig.control.completeTask(payload).message.id, completed.message.id);
+  assert.throws(() => rig.control.completeTask({ ...payload, result: "Different result" }), error => error.statusCode === 409);
+  assert.throws(() => rig.control.exportTeamChannel({ from: "claude", body: "Must not publish" }), error => error.statusCode === 409);
+  assert.equal(rig.control.recoverCompletionDeliveries(), 0);
+  assert.deepEqual(rig.control.flushChannelExports(), []);
+  assert.equal(rig.database.db.prepare("SELECT COUNT(*) AS n FROM cp_channel_exports").get().n, 0);
+  assert.equal(rig.database.snapshot().messages.filter(message => /Worker result/.test(message.body)).length, 1);
+  assert.equal(readdirSync(join(rig.repoRoot, "docs", "team-channel")).length, 0);
+  assert.equal(writes, 0);
+});
+
+test("board-only restart never flushes a pending legacy channel outbox", t => {
+  const rig = fixture("2026-10-20T12:00:00.000Z", {
+    writeChannelFile() { throw Object.assign(new Error("offline"), { code: "EACCES" }); },
+  });
+  const pending = rig.control.exportTeamChannel({ from: "codex", to: "claude", body: "Old pending export", deliveryKey: "old-pending" });
+  assert.equal(pending.status, "pending");
+  const databasePath = join(rig.toolRoot, "var", "room.sqlite3");
+  const before = rig.database.db.prepare("SELECT * FROM cp_channel_exports").get();
+  rig.close();
+  const database = new RoomDatabase(databasePath);
+  t.after(() => database.close());
+  let writes = 0;
+  const restarted = new ControlPlane({ database, repoRoot: rig.repoRoot, toolRoot: rig.toolRoot,
+    channelExportsEnabled: false, writeChannelFile() { writes += 1; } });
+  restarted.flushChannelExports();
+  restarted.recoverCompletionDeliveries();
+  assert.deepEqual(database.db.prepare("SELECT * FROM cp_channel_exports").get(), before);
+  assert.equal(readdirSync(join(rig.repoRoot, "docs", "team-channel")).length, 0);
+  assert.equal(writes, 0);
+});
+
 function fixture(initialIso, options = {}) {
   const root = mkdtempSync(join(tmpdir(), "engineering-room-control-plane-"));
   const repoRoot = join(root, "repo");

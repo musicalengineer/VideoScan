@@ -8,7 +8,7 @@ const TASK_MACHINES = new Set(["none", "m4", "m5", "m1"]);
 const DEFAULT_LEASE_SECONDS = 15 * 60;
 
 export class ControlPlane {
-  constructor({ database, repoRoot, toolRoot, publish = () => {}, clock = () => new Date(), statusFeed, teamChannel, reconstructionSeed, writeChannelFile = writeFileSync }) {
+  constructor({ database, repoRoot, toolRoot, publish = () => {}, clock = () => new Date(), statusFeed, teamChannel, reconstructionSeed, writeChannelFile = writeFileSync, channelExportsEnabled = true }) {
     this.database = database;
     this.db = database.db;
     this.repoRoot = repoRoot;
@@ -19,6 +19,7 @@ export class ControlPlane {
     this.teamChannel = teamChannel ?? join(repoRoot, "docs", "team-channel");
     this.reconstructionSeed = reconstructionSeed ?? join(toolRoot, "config", "control-plane-reconstruction.json");
     this.writeChannelFile = writeChannelFile;
+    this.channelExportsEnabled = channelExportsEnabled;
     this.migrate();
     this.recoverCompletionDeliveries();
     this.flushChannelExports();
@@ -450,7 +451,9 @@ export class ControlPlane {
     if (["done", "failed"].includes(task.state)) {
       const delivery = this.db.prepare("SELECT * FROM cp_channel_exports WHERE delivery_key=?").get(deliveryKey);
       const directiveMatches = !directive || directive.status === (state === "done" ? "completed" : "failed");
-      if (task.state !== state || !directiveMatches || !delivery || delivery.body !== completionBody) {
+      const event = this.db.prepare("SELECT payload_json FROM cp_events WHERE task_id=? AND kind IN ('task.completed','task.failed') ORDER BY ts DESC,id DESC LIMIT 1").get(safeTaskId);
+      const resultMatches = this.channelExportsEnabled ? delivery?.body === completionBody : event && json(event.payload_json, {}).result === safeResult;
+      if (task.state !== state || !directiveMatches || !resultMatches) {
         throw clientError(409, "Task was already completed with a different result.");
       }
       this.flushChannelExports(deliveryKey);
@@ -479,12 +482,12 @@ export class ControlPlane {
           .run(state === "done" ? "completed" : "failed", message.id, now, directive.id);
       }
       const manager = directive?.manager ?? task.manager ?? completionAuthor(safeAgentId, "codex");
-      this.#enqueueChannelExport({
+      if (this.channelExportsEnabled) this.#enqueueChannelExport({
         deliveryKey, taskId: safeTaskId, from: completionAuthor(safeAgentId, manager),
         to: manager === "codex" ? "claude" : "codex", re: `completed task: ${task.title}`,
         body: completionBody, slug: `task-result-${task.title}`, date: now,
       });
-      this.recordEvent({ ts: now, kind: state === "done" ? "task.completed" : "task.failed", source, actor: safeAgentId, agentId: safeAgentId, taskId: safeTaskId, payload: { result: safeResult, resultMessageId: message?.id ?? null, channelDeliveryKey: deliveryKey } }, { publish: false });
+      this.recordEvent({ ts: now, kind: state === "done" ? "task.completed" : "task.failed", source, actor: safeAgentId, agentId: safeAgentId, taskId: safeTaskId, payload: { result: safeResult, resultMessageId: message?.id ?? null, channelDeliveryKey: this.channelExportsEnabled ? deliveryKey : null } }, { publish: false });
       this.refreshTaskDigest(safeTaskId);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -724,6 +727,7 @@ export class ControlPlane {
   }
 
   exportTeamChannel({ from, to = "all", re = "control-plane brief", body, slug = "control-plane-brief", date = this.#now(), deliveryKey = `manual:${randomUUID()}` }) {
+    if (!this.channelExportsEnabled) throw clientError(409, "Retired team-channel exports are disabled in board mode.");
     const delivery = this.#enqueueChannelExport({ deliveryKey, from, to, re, body, slug, date });
     this.flushChannelExports(deliveryKey);
     return mapChannelExport(this.db.prepare("SELECT * FROM cp_channel_exports WHERE delivery_key=?").get(delivery.delivery_key));
@@ -756,6 +760,7 @@ export class ControlPlane {
   }
 
   flushChannelExports(deliveryKey = null) {
+    if (!this.channelExportsEnabled) return [];
     const rows = deliveryKey
       ? this.db.prepare("SELECT * FROM cp_channel_exports WHERE delivery_key=? AND status='pending'").all(deliveryKey)
       : this.db.prepare("SELECT * FROM cp_channel_exports WHERE status='pending' ORDER BY created_at,delivery_key").all();
@@ -782,6 +787,7 @@ export class ControlPlane {
   }
 
   recoverCompletionDeliveries() {
+    if (!this.channelExportsEnabled) return 0;
     const rows = this.db.prepare(`
       SELECT d.*,t.title,m.body,m.created_at AS message_created_at,e.actor
       FROM cp_directives d JOIN cp_tasks t ON t.id=d.task_id

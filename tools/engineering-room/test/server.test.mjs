@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { createInterface } from "node:readline";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -192,6 +192,68 @@ test("local server requires its token and persists a safe round trip", async t =
   assert.equal(hostile.status, 403);
 });
 
+test("metrics page and refresh API require login, reject hostile writes, and queue idempotently", async t => {
+  const qwenProvider = await startFakeQwen(t);
+  const port = 38000 + Math.floor(Math.random() * 8000);
+  const token = "isolated-metrics-refresh-token";
+  const runtime = mkdtempSync(join(tmpdir(), "engineering-room-metrics-"));
+  const child = spawn(process.execPath, [join(root, "src/server.mjs")], {
+    cwd: root, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, CODEX_BIN: join(here, "fake-codex.mjs"), CLAUDE_BIN: join(here, "fake-claude.mjs"),
+      QWEN_BASE_URL: qwenProvider.baseUrl, QWEN_MODEL: "qwen-test-local", ENGINEERING_ROOM_PORT: String(port),
+      ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(runtime, "room.sqlite3"),
+      ENGINEERING_ROOM_STATUS_FEED: join(runtime, "missing-status"), ENGINEERING_ROOM_TEAM_CHANNEL: join(runtime, "team-channel"),
+      ENGINEERING_ROOM_RECONSTRUCTION_SEED: join(runtime, "missing-seed") },
+  });
+  t.after(() => child.kill("SIGTERM"));
+  await waitForLine(child.stdout, "Engineering Room is ready:");
+  const base = `http://127.0.0.1:${port}`;
+  const unauthenticated = await fetch(`${base}/metrics`);
+  assert.equal(unauthenticated.status, 401);
+  assert.match(await unauthenticated.text(), /continue to metrics/);
+  assert.equal((await fetch(`${base}/api/metrics-refresh`)).status, 401);
+  const payload = { requestId: "server-metrics-001", machine: "m5", areas: ["tests"],
+    testScope: "selected", testSelectors: "PairTests", revision: "HEAD" };
+  assert.equal((await fetch(`${base}/api/metrics-refresh`, { method: "POST", headers: {"Content-Type": "application/json", Origin: base}, body: JSON.stringify(payload) })).status, 401);
+  const login = await fetch(`${base}/metrics?token=${token}`, {redirect: "manual"});
+  assert.equal(login.status, 302);
+  assert.equal(login.headers.get("location"), "/metrics");
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  const headers = { Cookie: cookie, Origin: base, "Content-Type": "application/json" };
+  const page = await fetch(`${base}/metrics`, {headers});
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("cache-control"), /no-store/);
+  const html = await page.text();
+  const nonce = html.match(/<script nonce="([^"]+)"/)[1];
+  assert.ok(page.headers.get("content-security-policy").includes(`'nonce-${nonce}'`));
+  assert.match(html, /Rerun tests and refresh metrics/);
+  const ordinary = await fetch(`${base}/`, {headers});
+  assert.equal(ordinary.headers.get("content-security-policy").includes("cdnjs.cloudflare.com"), false);
+  const before = await (await fetch(`${base}/api/control-plane/board`, {headers})).json();
+  for (const input of [{...payload, machine: "m5Ultra"}, {...payload, folder: "../private"}, {...payload, machine: "m4"}]) {
+    assert.equal((await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: JSON.stringify(input)})).status, 400);
+  }
+  assert.equal((await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers: {...headers, Origin: "https://evil.example"}, body: JSON.stringify(payload)})).status, 403);
+  assert.equal((await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: "{broken"})).status, 400);
+  const afterRejected = await (await fetch(`${base}/api/control-plane/board`, {headers})).json();
+  assert.equal(afterRejected.tasks.length, before.tasks.length);
+  assert.equal(afterRejected.events.length, before.events.length);
+  const createdResponse = await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: JSON.stringify(payload)});
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  assert.equal(created.queued, true);
+  assert.equal(created.task.state, "queued");
+  assert.equal(created.task.resultSummary, null);
+  const retry = await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: JSON.stringify(payload)});
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).task.id, created.task.id);
+  const snapshot = await (await fetch(`${base}/api/metrics-refresh`, {headers})).json();
+  assert.equal(snapshot.requests.length, 1);
+  assert.equal(snapshot.requests[0].request.testSelectors, "PairTests");
+  assert.equal(snapshot.capabilities.machines.find(m => m.id === "m5Ultra").available, false);
+  assert.equal(qwenProvider.inputs.length, 0, "queueing never sends work to discussion providers");
+});
+
 test("LAN mode accepts an allowed household host and rejects hostile hosts", async t => {
   const qwenProvider = await startFakeQwen(t);
   const port = 28000 + Math.floor(Math.random() * 8000);
@@ -228,6 +290,100 @@ test("LAN mode accepts an allowed household host and rejects hostile hosts", asy
   assert.equal(hostileHost.status, 403);
   const malformedHost = await rawRequest({ port, path: "/api/bootstrap", host: "[broken", cookie });
   assert.equal(malformedHost.status, 403);
+});
+
+test("board-only server authenticates requests without providers or retired feed side effects", async t => {
+  const port = 48000 + Math.floor(Math.random() * 6000);
+  const token = "isolated-work-board-token";
+  const runtime = mkdtempSync(join(tmpdir(), "engineering-work-board-server-"));
+  const providerMarker = join(runtime, "provider-launched");
+  const providerTrap = join(runtime, "fake-provider.mjs");
+  writeFileSync(providerTrap, `#!${process.execPath}\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(providerMarker)}, "Unexpected provider launch");\nprocess.exit(1);\n`, { mode: 0o755 });
+  const feed = join(runtime, "legacy-status.jsonl");
+  const seed = join(runtime, "legacy-seed.json");
+  const channel = join(runtime, "team-channel");
+  mkdirSync(channel);
+  writeFileSync(feed, JSON.stringify({ ts: new Date().toISOString(), manager: "claude", agent: "retired/worker", state: "working", task: "POISON-OLD-FEED", machine: "m5" }));
+  writeFileSync(seed, JSON.stringify({ tasks: [{ id: "retired-seed", title: "POISON-OLD-SEED", state: "working", source: "seed" }] }));
+  writeFileSync(join(channel, "2026-10-20-1200-claude-old.md"), "---\nfrom: claude\nto: codex\nre: POISON-OLD-CHANNEL\ndate: 2026-10-20T12:00:00Z\n---\n\nDo not ingest this retired transport.\n");
+  const cycles = join(runtime, "review-cycles.json");
+  writeFileSync(cycles, "[]");
+  let networkCalls = 0;
+  const fakeProvider = createServer((request, response) => { networkCalls += 1; response.writeHead(503).end(); });
+  await new Promise(resolve => fakeProvider.listen(0, "127.0.0.1", resolve));
+  t.after(() => { fakeProvider.closeAllConnections?.(); fakeProvider.close(); });
+  const child = spawn(process.execPath, [join(root, "src/server.mjs")], {
+    cwd: root, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ENGINEERING_ROOM_MODE: "board", ENGINEERING_ROOM_LAN: "0",
+      ENGINEERING_ROOM_PORT: String(port), ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(runtime, "board.sqlite3"),
+      ENGINEERING_ROOM_STATUS_FEED: feed, ENGINEERING_ROOM_RECONSTRUCTION_SEED: seed, ENGINEERING_ROOM_TEAM_CHANNEL: channel,
+      VIDEOSCAN_REVIEW_CYCLES: cycles, CODEX_BIN: providerTrap, CLAUDE_BIN: providerTrap,
+      QWEN_BASE_URL: `http://127.0.0.1:${fakeProvider.address().port}/v1` },
+  });
+  t.after(() => child.kill("SIGTERM"));
+  await waitForLine(child.stdout, "is ready:");
+  const base = `http://127.0.0.1:${port}`;
+  for (const route of ["/board", "/board.js", "/board.css", "/api/work-board"]) {
+    assert.equal((await fetch(`${base}${route}`)).status, 401, route);
+  }
+  const payload = { requestId: "1a28de48-6407-4b40-81fa-bc72742a2001", title: "Inspect selected folder", objective: "Read current branch; report findings.", manager: "claude", machine: "none" };
+  assert.equal((await fetch(`${base}/api/work-board/requests`, { method: "POST", headers: { "Content-Type": "application/json", Origin: base }, body: JSON.stringify(payload) })).status, 401);
+  assert.equal((await fetch(`${base}/board?token=wrong`, { redirect: "manual" })).status, 403);
+  const login = await fetch(`${base}/board?token=${token}`, { redirect: "manual" });
+  assert.equal(login.status, 302);
+  assert.equal(login.headers.get("location"), "/board");
+  assert.match(login.headers.get("set-cookie"), /HttpOnly; SameSite=Strict/);
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  const headers = { Cookie: cookie, Origin: base, "Content-Type": "application/json" };
+  const page = await fetch(`${base}/board`, { headers });
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("cache-control"), /no-store/);
+  assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  assert.match(await page.text(), /Work board/);
+  const bootstrap = await (await fetch(`${base}/api/bootstrap`, { headers })).json();
+  assert.equal(bootstrap.mode, "board");
+  assert.equal(bootstrap.messages, undefined, "board bootstrap must not replay retired chat");
+  const eventAbort = new AbortController();
+  const events = await fetch(`${base}/api/events`, { headers, signal: eventAbort.signal });
+  assert.equal(events.status, 200);
+  const initialEvent = await events.body.getReader().read();
+  eventAbort.abort();
+  assert.equal(new TextDecoder().decode(initialEvent.value).includes('"mode":"board"'), true);
+  for (const route of ["/api/messages", "/api/autopilot/start", "/api/control-plane/ingest", "/api/control-plane/channel/export", "/api/control-plane/briefs", "/api/control-plane/standups"]) {
+    assert.equal((await fetch(`${base}${route}`, { method: "POST", headers, body: "{}" })).status, 409, route);
+  }
+  for (const body of ["{broken", JSON.stringify({ ...payload, machine: "m5Ultra" }), JSON.stringify({ ...payload, machine: undefined })]) {
+    assert.equal((await fetch(`${base}/api/work-board/requests`, { method: "POST", headers, body })).status, 400);
+  }
+  assert.equal((await fetch(`${base}/api/work-board/requests`, { method: "POST", headers: { ...headers, Origin: "https://hostile.example" }, body: JSON.stringify(payload) })).status, 403);
+  const empty = await (await fetch(`${base}/api/work-board`, { headers })).json();
+  assert.equal(JSON.stringify(empty).includes("POISON-OLD"), false);
+  const createdResponse = await fetch(`${base}/api/work-board/requests`, { method: "POST", headers, body: JSON.stringify(payload) });
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  assert.equal(created.task.state, "queued");
+  assert.equal(created.reused, false);
+  const retryResponse = await fetch(`${base}/api/work-board/requests`, { method: "POST", headers, body: JSON.stringify(payload) });
+  assert.equal(retryResponse.status, 200);
+  assert.equal((await retryResponse.json()).task.id, created.task.id);
+  assert.equal((await fetch(`${base}/api/work-board/requests`, { method: "POST", headers, body: JSON.stringify({ ...payload, objective: "Changed scope" }) })).status, 409);
+  const queue = await (await fetch(`${base}/api/control-plane/managers/claude/queue`, { headers })).json();
+  assert.equal(queue.queue.length, 1);
+  assert.equal(queue.queue[0].taskId, created.task.id);
+  const agent = await (await fetch(`${base}/api/control-plane/agents/register`, { method: "POST", headers,
+    body: JSON.stringify({ manager: "claude", agent: "testing/board", sessionId: "board-server-session", state: "idle" }) })).json();
+  assert.equal((await fetch(`${base}/api/control-plane/tasks/${encodeURIComponent(created.task.id)}/claim`, { method: "POST", headers,
+    body: JSON.stringify({ agentId: agent.id, sessionId: "board-server-session" }) })).status, 200);
+  const completed = await fetch(`${base}/api/control-plane/tasks/${encodeURIComponent(created.task.id)}/complete`, { method: "POST", headers,
+    body: JSON.stringify({ agentId: agent.id, sessionId: "board-server-session", result: "Read, no findings." }) });
+  assert.equal(completed.status, 200);
+  assert.equal((await completed.json()).channelDelivery, null);
+  assert.equal((await fetch(`${base}/metrics`, { headers })).status, 200);
+  const after = await (await fetch(`${base}/api/work-board`, { headers })).json();
+  assert.equal(JSON.stringify(after).includes("POISON-OLD"), false);
+  assert.deepEqual(readdirSync(channel), ["2026-10-20-1200-claude-old.md"]);
+  assert.equal(existsSync(providerMarker), false, "board mode must never launch Codex or Claude providers");
+  assert.equal(networkCalls, 0, "board mode must never connect to Qwen");
 });
 
 function waitForLine(stream, expected) {

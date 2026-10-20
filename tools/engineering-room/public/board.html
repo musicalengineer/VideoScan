@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Local VideoScan work requests, decisions, and Codex review evidence.">
+  <title>VideoScan · Work board</title>
+  <link rel="stylesheet" href="/board.css">
+  <script src="/board.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <div><p class="eyebrow">LOCAL · SHARED WORK</p><h1>VideoScan · Work board</h1></div>
+    <nav aria-label="Project pages"><a href="/board" aria-current="page">Work board</a><a href="/metrics">Code metrics ↗</a><button type="button" id="theme-toggle">Theme: dark</button></nav>
+  </header>
+  <main>
+    <section class="overview" aria-label="How we work">
+      <p class="roles"><strong>You</strong> set direction <span>→</span> <strong>Claude</strong> coordinates <span>→</span> <strong>Codex</strong> reviews / tests</p>
+      <p class="muted">Keep talking to Claude in your terminal. This page shows recorded work and decisions from our existing sessions.</p>
+      <div class="connection-row"><p id="connection" role="status" aria-live="polite">Connecting…</p><button type="button" id="refresh-board">Refresh board</button></div>
+      <p id="schedule" class="muted">America/New_York · M4 is active unless Rick declares a current quiet window.</p>
+      <p id="board-warning" class="warning" hidden></p>
+    </section>
+
+    <section class="request-panel" aria-labelledby="request-heading">
+      <div class="section-heading"><div><h2 id="request-heading">Request work</h2><p class="muted">Queues a request for a manager to acknowledge. Submitting does not start an agent.</p></div><a class="button" href="/metrics#refresh-panel">Rerun tests / refresh metrics ↗</a></div>
+      <form id="request-form">
+        <fieldset id="request-fields">
+          <div class="request-grid">
+            <label class="request-title">What needs doing?<input id="request-title" name="title" maxlength="500" required placeholder="Review the catalog refactor"></label>
+            <label>Manager<select id="request-manager" name="manager"><option value="claude" selected>Claude</option><option value="codex">Codex</option></select></label>
+            <label>Machine<select id="request-machine" name="machine" required><option value="" selected>Choose a route</option><option value="none">None · headless work</option><option value="m5">M5</option><option value="m1">M1</option><option value="m4">M4 · active desktop</option><option value="m5Ultra" disabled>M5 Ultra · not here yet</option></select></label>
+          </div>
+          <label>Scope and outcome<textarea id="request-objective" name="objective" rows="2" maxlength="8000" required placeholder="Folder, branch or revision, what to check, and what a useful result looks like."></textarea></label>
+        </fieldset>
+        <div class="request-footer"><button id="request-submit" type="submit" class="primary">Queue request</button><p class="muted">Route app launches and UI tests to M5 or M1. M4 needs Rick’s current quiet window.</p></div>
+        <p id="request-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <div id="lanes" class="lanes" aria-label="Recorded work">
+      <section class="lane needs-rick" aria-labelledby="needs-heading"><h2 id="needs-heading">Needs Rick <span id="needs-count" class="count">—</span></h2><p class="lane-note">Answer in your Claude session; the worker records the decision.</p><div id="needs-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
+      <section class="lane" aria-labelledby="progress-heading"><h2 id="progress-heading">In progress <span id="progress-count" class="count">—</span></h2><p class="lane-note">Work, blockers, and missing worker updates.</p><div id="progress-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
+      <section class="lane" aria-labelledby="queued-heading"><h2 id="queued-heading">Queued <span id="queued-count" class="count">—</span></h2><p class="lane-note">Waiting for worker acknowledgement.</p><div id="queued-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
+      <section class="lane" aria-labelledby="finished-heading"><h2 id="finished-heading">Recently finished <span id="finished-count" class="count">—</span></h2><p class="lane-note">Read the outcome; completion alone is not a passing test.</p><div id="finished-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
+    </div>
+
+    <section class="review-panel" aria-labelledby="reviews-heading">
+      <div class="section-heading"><div><p class="eyebrow">CODEX REVIEW RUNNER</p><h2 id="reviews-heading">Folder and branch reviews</h2></div><a href="/metrics#area-reviews">Published review metrics ↗</a></div>
+      <p class="muted">Briefed → running → verdict → fixing → closed. A missing worker is shown as not reporting.</p>
+      <p id="review-status" class="muted" role="status">Waiting for review evidence…</p>
+      <div id="review-cards" class="review-grid"></div>
+    </section>
+    <footer>Local work board · Times in America/New_York · Refreshes every 10 seconds · <a href="/metrics">Code metrics</a></footer>
+  </main>
+</body>
+</html>

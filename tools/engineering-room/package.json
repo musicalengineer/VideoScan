@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Local shared engineering room for Rick, Codex, Claude, and Qwen.",
   "scripts": {
+    "board": "node scripts/start-board.mjs",
     "start": "node src/server.mjs",
     "lan": "ENGINEERING_ROOM_LAN=1 node src/server.mjs",
     "dev": "node --watch src/server.mjs",

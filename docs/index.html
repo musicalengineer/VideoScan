@@ -11,7 +11,7 @@
   an overview line with a twist to see more detail, but the page shows a top
   level summary that any manager can look at."
 
-  Static; everything is fetched at load from the `metrics` branch via
+  Public measurements are fetched at load from the `metrics` branch via
   raw.githubusercontent.com (public, no auth, CORS *) plus the public GitHub
   Actions API. tools/publish_metrics.py adds metrics/summary_latest.json
   (app version, GitHub counts incl. open bugs and open "High Priority" issues,
@@ -21,8 +21,10 @@
   sparkline and the weekly opened-vs-fixed bars in the Reviews twist) and
   metrics/events_latest.json (the event-recognition prototype's counts: one
   snapshot for the Event recognition line and its per-category table); the
-  page never classifies a night itself and never reads a row's free text
+  page never classifies a night itself and never reads a metric row's free text
   (names, reasons, paths).
+  The authenticated local work board /metrics route also offers its existing
+  manager queue. Private task status does not replace published measurements.
 
   Layout, top to bottom:
     1. Headline strip: version · app source lines (app only) · last night's
@@ -67,6 +69,28 @@
   #status.error { color: var(--bad); }
   .hidden { display: none !important; }
   .section-error { color: var(--bad); font-size: 13px; margin: 6px 0; }
+  .refresh-panel { margin: 18px 0; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+  .refresh-panel h2 { font-size: 20px; margin-bottom: 6px; }
+  .refresh-help, .evidence { color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .refresh-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 14px 0; }
+  .refresh-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 14px; }
+  .refresh-panel select, .refresh-panel input[type=text], .refresh-panel textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 9px; background: var(--bg); color: var(--fg); font: inherit; }
+  .refresh-panel fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+  .refresh-panel legend { padding: 0 5px; font-size: 14px; }
+  .refresh-choices { display: flex; flex-wrap: wrap; gap: 10px 20px; }
+  .refresh-choices label { font-size: 14px; }
+  .refresh-panel button, .area-refresh button { border: 1px solid var(--border); border-radius: 7px; padding: 9px 12px; background: var(--chip-bg); color: var(--fg); font: inherit; cursor: pointer; }
+  .refresh-panel button:disabled { cursor: default; opacity: .55; }
+  #refresh-submit { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .refresh-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+  #refresh-message { margin-top: 10px; font-size: 14px; }
+  .refresh-request { border-top: 1px solid var(--border); padding: 10px 0; font-size: 14px; overflow-wrap: anywhere; }
+  #refresh-requests { margin-top: 14px; }
+  .area-refresh { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 20px 0; }
+  .area-refresh button { font-size: 13px; }
+  #area-size > #area-debt { margin: 0 16px 16px; border-color: var(--border); }
+  .manual-results { margin: 16px 0; }
+  .manual-results h3 { font-size: 16px; margin-bottom: 5px; }
 
   /* ---- 1. headline strip ---- */
   .head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 20px 0 24px; }
@@ -231,9 +255,38 @@
   <h1>VideoScan health</h1>
   <span class="sub" id="asof"></span>
   <div class="spacer"></div>
-  <button id="theme-toggle" type="button" onclick="cycleTheme()">Theme: dark</button>
+  <a id="work-board-link" href="http://127.0.0.1:8766/board">Local work board ↗</a>
+  <button id="theme-toggle" type="button">Theme: dark</button>
 </div>
 <div id="status">Loading metrics&hellip;</div>
+
+<section class="refresh-panel" id="refresh-panel" aria-labelledby="refresh-title">
+  <h2 id="refresh-title">Rerun tests and refresh metrics</h2>
+  <p class="refresh-help">Check a fix now, choose a smaller test set, or request the whole set of measurements. Published results below keep their own date and revision.</p>
+  <p class="refresh-help" id="refresh-public">To queue work, <a href="http://127.0.0.1:8766/metrics">open metrics in the local work board</a>. Use the local sign-in link if prompted. This public page only reads published measurements.</p>
+  <form id="refresh-form" class="hidden">
+    <fieldset><legend>What to refresh</legend><div class="refresh-choices">
+      <label><input type="checkbox" id="refresh-tests" checked> Tests</label>
+      <label><input type="checkbox" id="refresh-code" checked> Code size, complexity &amp; debt</label>
+      <label><input type="checkbox" id="refresh-hallie"> Hallie eval</label>
+      <label><input type="checkbox" id="refresh-reviews"> Folder review</label>
+    </div></fieldset>
+    <div class="refresh-grid">
+      <label>System<select id="refresh-machine"><option value="m5" selected>M5</option><option value="m4">M4</option><option value="m5Ultra" disabled>M5 Ultra — not yet available</option></select></label>
+      <label>Manager<select id="refresh-manager"><option value="claude" selected>Claude</option><option value="codex">Codex</option></select></label>
+      <label>Source folder<select id="refresh-folder"><option value="">Whole repository</option></select></label>
+      <label>Revision<input type="text" id="refresh-revision" value="working-tree" maxlength="160" required aria-describedby="refresh-scope-help"></label>
+      <label id="refresh-test-scope-label">Tests to run<select id="refresh-test-scope"><option value="all">All tests</option><option value="selected">Selected stages or suites</option></select></label>
+    </div>
+    <div class="hidden" id="refresh-selectors-wrap"><label for="refresh-selectors">Stages or suite IDs, separated by commas or new lines</label><textarea id="refresh-selectors" rows="3" maxlength="2000" placeholder="regression, integration&#10;VideoScanTests/CatalogSearchTests"></textarea><p class="refresh-help">Stages: unit, regression, integration, performance, hallie, stress. Use exact suite IDs for a smaller run; the manager checks the selection and records what actually ran.</p></div>
+    <p class="refresh-help" id="refresh-scope-help">Working tree means the selected machine’s checkout; a branch, tag or commit can be requested instead. Folder scope guides code measurements and reviews. Test scope is explicit above. Reviews inspect that folder at the requested revision, with no PR required.</p>
+    <label class="hidden" id="refresh-quiet-wrap"><input type="checkbox" id="refresh-quiet"> I have declared a quiet window on M4 for app tests or Hallie eval.</label>
+    <p class="refresh-help">Queues work for the selected manager; status updates after a worker claims it.</p>
+    <div class="refresh-actions"><button type="submit" id="refresh-submit" disabled>Rerun tests and refresh metrics on M5</button><button type="button" id="refresh-reload">Reload published results</button></div>
+  </form>
+  <p id="refresh-message" role="status" aria-live="polite"></p>
+  <div id="refresh-requests" aria-live="polite"></div>
+</section>
 
 <!-- 1 ============ HEADLINE STRIP ============ -->
 <div class="head" id="head"></div>
@@ -259,15 +312,16 @@
 </div>
 
 <!-- 3 ============ ONE LINE PER AREA ============ -->
-<div class="legend" style="margin:0 0 8px"><span>One line per area: status · what is going on · the one number · trend vs 7 days ago. Open a line for the detail that used to be the section.</span><span><a href="#all" onclick="openAll(true);return false">Open all</a> · <a href="#" onclick="openAll(false);return false">Close all</a></span></div>
+<div class="legend" style="margin:0 0 8px"><span>One line per area: status · what is going on · the one number · trend vs 7 days ago. Open a line for the detail that used to be the section.</span><span><a href="#all" id="open-all">Open all</a> · <a href="#" id="close-all">Close all</a></span></div>
 <div id="areas">
-  <details class="area" id="area-tests"><summary id="sum-tests"></summary><div class="body" id="body-tests"></div><div class="section-error hidden" id="tests-error"></div></details>
-  <details class="area" id="area-size"><summary id="sum-size"></summary><div class="body" id="body-size"></div><div class="section-error hidden" id="size-error"></div></details>
-  <details class="area" id="area-debt"><summary id="sum-debt"></summary><div class="body" id="body-debt"></div><div class="section-error hidden" id="debt-error"></div></details>
+  <details class="area" id="area-tests"><summary id="sum-tests"></summary><div class="area-refresh"><button type="button" id="focus-refresh-tests">Rerun tests…</button><div class="evidence" id="evidence-tests"></div></div><div class="body" id="body-tests"></div><div class="section-error hidden" id="tests-error"></div></details>
+  <details class="area" id="area-size"><summary id="sum-size"></summary><div class="area-refresh"><button type="button" id="focus-refresh-code">Refresh code health…</button><div class="evidence" id="evidence-size"></div></div><div class="body" id="body-size"></div><div class="section-error hidden" id="size-error"></div>
+    <details class="area" id="area-debt"><summary id="sum-debt"></summary><div class="area-refresh"><div class="evidence" id="evidence-debt"></div></div><div class="body" id="body-debt"></div><div class="section-error hidden" id="debt-error"></div></details>
+  </details>
   <details class="area" id="area-san"><summary id="sum-san"></summary><div class="body" id="body-san"></div><div class="section-error hidden" id="san-error"></div></details>
-  <details class="area" id="area-hallie"><summary id="sum-hallie"></summary><div class="body" id="body-hallie"></div><div class="section-error hidden" id="hallie-error"></div></details>
+  <details class="area" id="area-hallie"><summary id="sum-hallie"></summary><div class="area-refresh"><button type="button" id="focus-refresh-hallie">Rerun Hallie eval…</button><div class="evidence" id="evidence-hallie"></div></div><div class="body" id="body-hallie"></div><div class="section-error hidden" id="hallie-error"></div></details>
   <details class="area" id="area-events"><summary id="sum-events"></summary><div class="body" id="body-events"></div><div class="section-error hidden" id="events-error"></div></details>
-  <details class="area" id="area-reviews"><summary id="sum-reviews"></summary><div class="body" id="body-reviews"></div><div class="section-error hidden" id="reviews-error"></div></details>
+  <details class="area" id="area-reviews"><summary id="sum-reviews"></summary><div class="area-refresh"><button type="button" id="focus-refresh-reviews">Review a folder…</button><div class="evidence" id="evidence-reviews"></div></div><div class="body" id="body-reviews"></div><div class="section-error hidden" id="reviews-error"></div></details>
   <details class="area" id="area-speed"><summary id="sum-speed"></summary><div class="body" id="body-speed"></div><div class="section-error hidden" id="speed-error"></div></details>
 </div>
 
@@ -559,6 +613,205 @@ async function latestMainRun(workflowFile) {
 }
 const parseJson = text => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
 
+// The public page never mutates the local work board. Only its authenticated /metrics route
+// may use this same-origin queue; there is deliberately no configurable API URL.
+const REFRESH_TRUSTED = typeof location !== "undefined" && /^\/metrics\/?$/.test(location.pathname || "");
+const REFRESH_AREAS = ["tests", "code", "hallie", "reviews"];
+const REFRESH_MACHINES = { m4: "M4", m5: "M5", m5Ultra: "M5 Ultra" };
+let refreshCapabilities = null, refreshConfigured = false, refreshSending = false, refreshPoll = null;
+let refreshPending = null;
+const refreshEl = id => document.getElementById(`refresh-${id}`);
+let controlsBound = false;
+function bindPageControls() {
+  if (controlsBound) return;
+  controlsBound = true;
+  const boardLink = document.getElementById("work-board-link");
+  if (REFRESH_TRUSTED && boardLink) { boardLink.href = "/board"; boardLink.textContent = "Work board ↗"; }
+  const listen = (id, kind, callback) => {
+    const el = document.getElementById(id);
+    if (el && el.addEventListener) el.addEventListener(kind, callback);
+  };
+  listen("theme-toggle", "click", cycleTheme);
+  listen("open-all", "click", event => { event.preventDefault(); openAll(true); });
+  listen("close-all", "click", event => { event.preventDefault(); openAll(false); });
+  listen("refresh-form", "submit", submitMetricsRefresh);
+  listen("refresh-reload", "click", reloadPublishedMetrics);
+  for (const id of [...REFRESH_AREAS, "machine", "test-scope"]) listen(`refresh-${id}`, "change", updateRefreshForm);
+  for (const area of REFRESH_AREAS) listen(`focus-refresh-${area}`, "click", () => focusRefresh(area));
+  // The module table is redrawn when sorted. Delegate from its stable parent;
+  // inline event attributes would be blocked by the local server's script policy.
+  const moduleAction = event => {
+    if (!event.target || !event.target.closest) return;
+    const sort = event.target.closest("[data-mod-sort]");
+    if (sort) { modSort(sort.getAttribute("data-mod-sort")); return; }
+    const toggle = event.target.closest("[data-mod-toggle]");
+    if (toggle) modToggle(toggle.getAttribute("data-mod-toggle"));
+  };
+  listen("body-size", "click", moduleAction);
+  listen("body-size", "keydown", event => {
+    if (event.key === "Enter" || event.key === " ") { if (event.target && event.target.closest && event.target.closest("[data-mod-toggle]")) { event.preventDefault(); moduleAction(event); } }
+  });
+}
+function refreshAreas() { return REFRESH_AREAS.filter(a => refreshEl(a).checked); }
+function refreshMessage(message) { refreshEl("message").textContent = message; }
+function updateRefreshForm() {
+  const areas = refreshAreas(), machine = refreshEl("machine").value || "m5";
+  const tests = areas.includes("tests"), selected = refreshEl("test-scope").value === "selected";
+  refreshEl("test-scope-label").classList[tests ? "remove" : "add"]("hidden");
+  refreshEl("selectors-wrap").classList[tests && selected ? "remove" : "add"]("hidden");
+  refreshEl("quiet-wrap").classList[machine === "m4" && (tests || areas.includes("hallie")) ? "remove" : "add"]("hidden");
+  refreshEl("submit").textContent = `Rerun tests and refresh metrics on ${REFRESH_MACHINES[machine] || "selected system"}`;
+  const available = refreshCapabilities && refreshCapabilities.machines.some(m => m.id === machine && m.available && m.id !== "m5Ultra");
+  refreshEl("submit").disabled = !REFRESH_TRUSTED || !available || !areas.length || refreshSending;
+}
+function focusRefresh(area) {
+  if (REFRESH_AREAS.includes(area)) for (const a of REFRESH_AREAS) refreshEl(a).checked = a === area;
+  updateRefreshForm();
+  const panel = document.getElementById("refresh-panel");
+  if (panel.scrollIntoView) panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  if (REFRESH_TRUSTED && refreshEl("machine").focus) refreshEl("machine").focus();
+  if (!REFRESH_TRUSTED) refreshMessage("Open the local work board link above to queue this refresh. Use the local sign-in link if prompted.");
+}
+function reloadPublishedMetrics() {
+  // Reloading creates fresh chart instances only after the old document ends.
+  if (typeof location !== "undefined" && typeof location.reload === "function") location.reload();
+}
+function renderRefreshRequests(requests) {
+  const rows = Array.isArray(requests) ? requests.slice(0, 15) : [];
+  const states = { queued: "Queued", working: "Running", running: "Running", blocked: "Blocked", "waiting-on-human": "Waiting for input", "not-reporting": "Not reporting", done: "Handled", failed: "Failed", cancelled: "Cancelled" };
+  refreshEl("requests").innerHTML = rows.length ? `<h3>Requested refreshes</h3>` + rows.map(row => {
+    const state = states[row.state] || "Status unknown";
+    const machine = REFRESH_MACHINES[row.machine] || "Unknown system";
+    const manager = row.manager === "claude" ? "Claude" : row.manager === "codex" ? "Codex" : "Manager";
+    const stamp = row.updatedAt || row.createdAt;
+    const progress = typeof row.progress === "string" ? row.progress : "";
+    const blocked = typeof row.blockedOn === "string" ? row.blockedOn : "";
+    const completed = row.state === "done" ? " Work marked done; reload published results and check their evidence date and SHA below." : "";
+    return `<div class="refresh-request"><strong>${esc(state)} · ${esc(machine)} · ${manager}</strong> — ${esc(row.title || "Metrics refresh")}<div class="refresh-help">${esc(stamp || "Time not recorded")}${progress ? " · " + esc(progress) : ""}${blocked ? " · Blocked: " + esc(blocked) : ""}${esc(completed)}</div></div>`;
+  }).join("") : `<p class="refresh-help">No refresh requests yet. Published results are unchanged until new evidence is collected and published.</p>`;
+}
+async function pollMetricsRefresh(initial = false) {
+  if (!REFRESH_TRUSTED) return;
+  try {
+    const response = await fetch("/api/metrics-refresh", { cache: "no-store", credentials: "same-origin", redirect: "error" });
+    if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "Local sign-in is required. Open the work board with its sign-in link, then reload this page." : "The refresh queue is unavailable. Published metrics remain readable.");
+    const data = await response.json(), caps = data.capabilities;
+    if (!caps || !Array.isArray(caps.machines) || !Array.isArray(caps.folders) || !Array.isArray(caps.areas)) throw new Error("The local server returned an unsupported refresh response.");
+    const first = !refreshConfigured;
+    refreshCapabilities = caps;
+    if (first) {
+      const machineOptions = ["m5", "m4", "m5Ultra"].map(id => {
+        const available = id !== "m5Ultra" && caps.machines.some(m => m.id === id && m.available);
+        return `<option value="${id}"${available ? "" : " disabled"}${id === "m5" ? " selected" : ""}>${REFRESH_MACHINES[id]}${id === "m5Ultra" ? " — not yet available" : available ? "" : " — unavailable"}</option>`;
+      });
+      refreshEl("machine").innerHTML = machineOptions.join("");
+      refreshEl("folder").innerHTML = `<option value="">Whole repository</option>` + caps.folders.filter(f => typeof f === "string").map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+      for (const area of REFRESH_AREAS) {
+        refreshEl(area).disabled = !caps.areas.includes(area);
+        if (!caps.areas.includes(area)) refreshEl(area).checked = false;
+      }
+      refreshConfigured = true;
+    }
+    refreshEl("form").classList.remove("hidden");
+    refreshEl("public").classList.add("hidden");
+    renderRefreshRequests(data.requests);
+    updateRefreshForm();
+    if (initial) refreshMessage("Ready to queue a refresh. Choosing a system does not start work until you submit.");
+  } catch (error) {
+    refreshCapabilities = null;
+    refreshEl("submit").disabled = true;
+    refreshMessage(error.message || "Cannot reach the local refresh queue.");
+  }
+}
+function metricsRefreshPayload() {
+  const machine = refreshEl("machine").value, areas = refreshAreas();
+  const caps = refreshCapabilities;
+  if (!REFRESH_TRUSTED || !caps) throw new Error("Open the authenticated local work board metrics page first.");
+  if (!["m4", "m5"].includes(machine) || !caps.machines.some(m => m.id === machine && m.available)) throw new Error("Choose an available system. M5 Ultra is not configured yet.");
+  if (!areas.length || areas.some(a => !caps.areas.includes(a))) throw new Error("Select at least one available measurement.");
+  const testScope = areas.includes("tests") ? refreshEl("test-scope").value : "all";
+  if (!["all", "selected"].includes(testScope)) throw new Error("Choose all tests or selected tests.");
+  const testSelectors = testScope === "selected" ? String(refreshEl("selectors").value || "").trim() : "";
+  const selectors = testSelectors.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+  if (testScope === "selected" && (!selectors.length || selectors.length > 40 || testSelectors.length > 2000)) throw new Error("Enter between 1 and 40 stages or suite IDs (up to 2,000 characters).");
+  if (selectors.some(value => !/^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$/.test(value) || value.split(/[/:]/).includes(".."))) throw new Error("Use stage names, exact suite IDs or test file paths, without shell commands.");
+  const folder = refreshEl("folder").value || "";
+  if (folder && !caps.folders.includes(folder)) throw new Error("Choose a folder from the available source folders.");
+  const revision = String(refreshEl("revision").value || "").trim();
+  if (!revision || revision.length > 160 || !/^[A-Za-z0-9][A-Za-z0-9._/~^-]*$/.test(revision) || revision.includes("..")) throw new Error("Enter working-tree, HEAD, or a branch, tag or commit identifier.");
+  const manager = refreshEl("manager").value;
+  if (!["codex", "claude"].includes(manager)) throw new Error("Choose Codex or Claude as the manager.");
+  const quietWindow = machine === "m4" && !!refreshEl("quiet").checked;
+  if (machine === "m4" && (areas.includes("tests") || areas.includes("hallie")) && !quietWindow) throw new Error("M4 app tests and Hallie need a declared quiet window. Select M5 or confirm the M4 quiet window.");
+  return { machine, areas, testScope, testSelectors, folder, revision, manager, quietWindow };
+}
+async function submitMetricsRefresh(event) {
+  if (event && event.preventDefault) event.preventDefault();
+  if (refreshSending) return;
+  try {
+    const payload = metricsRefreshPayload(), fingerprint = JSON.stringify(payload);
+    // Preserve the key after uncertain network failures; retry cannot create a
+    // duplicate task. A changed request or a successful submission starts anew.
+    if (!refreshPending || refreshPending.fingerprint !== fingerprint) {
+      const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `metrics-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+      refreshPending = { fingerprint, id };
+    }
+    refreshSending = true; updateRefreshForm();
+    refreshMessage("Submitting refresh request…");
+    const response = await fetch("/api/metrics-refresh", { method: "POST", credentials: "same-origin", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, requestId: refreshPending.id }) });
+    const data = await response.json();
+    if (!response.ok || (data.accepted !== true && data.queued !== true)) throw new Error(typeof data.error === "string" ? data.error : "The request could not be queued. Retry keeps the same request ID.");
+    refreshPending = null;
+    const state = data.task && typeof data.task.state === "string" ? data.task.state : "queued";
+    refreshMessage(`${data.reused ? "Existing request found" : "Queued"} for ${payload.manager === "codex" ? "Codex" : "Claude"} on ${REFRESH_MACHINES[payload.machine]}. ${state === "queued" ? "Waiting for a worker to claim it" : "Current task state: " + state}; check the published evidence below for measurement dates and revisions.`);
+    await pollMetricsRefresh();
+  } catch (error) { refreshMessage(error.message || "Request status is uncertain. Retry safely with the same selection."); }
+  finally { refreshSending = false; updateRefreshForm(); }
+}
+async function initMetricsRefresh() {
+  if (!REFRESH_TRUSTED) return;
+  await pollMetricsRefresh(true);
+  if (refreshPoll === null && typeof setInterval === "function") refreshPoll = setInterval(() => { void pollMetricsRefresh(); }, 10000);
+}
+
+function evidenceText(label, row, revision) {
+  if (!row) return `${label}: no published evidence yet`;
+  const stamp = row.ts || row.date;
+  const validTime = typeof stamp === "string" && /^\d{4}-\d{2}-\d{2}(?:T[0-9:.+-]+Z?)?$/.test(stamp) && Number.isFinite(Date.parse(stamp));
+  const sha = revision || row.sha || row.commit;
+  const validSha = typeof sha === "string" && /^[a-f0-9]{7,40}$/i.test(sha);
+  const old = validTime && hoursSince(stamp) > STALE_HOURS;
+  const checkout = row.dirty === true ? " · uncommitted changes" : row.dirty === false ? " · clean checkout" : "";
+  return `${label}: ${validTime ? stamp : "date not recorded"}${old ? " · stale (>36h)" : ""} · ${validSha ? "SHA " + sha.slice(0, 12) : "revision not recorded"}${checkout}`;
+}
+function renderEvidence(d) {
+  const last = rows => rows.length ? rows[rows.length - 1] : null;
+  const pairs = {
+    tests: [["Nightly tests", last(d.tdRows.filter(r => r.source === "nightly-local"))], ["Coverage", last(d.covRows)]],
+    size: [["Code size", last(d.history)], ["Complexity", last(d.cxRows)]],
+    debt: [["Debt", d.cxDebt || last(d.cxRows)], ["Exposure", last(d.exRows)]],
+    hallie: [["Hallie replay", last(hallieRows(d).rows)]],
+    reviews: [["Adversarial reviews", last(d.advRows)], ["Codex reviews", last(d.codexRows)]],
+  };
+  for (const [area, streams] of Object.entries(pairs)) document.getElementById(`evidence-${area}`).textContent = streams.map(([label, row]) => evidenceText(label, row, area === "hallie" && row ? row.hallie_replay_git_sha : undefined)).join(" · ");
+}
+function manualTestResults(d) {
+  const rows = d.allTdRows.filter(r => r.source === "gauntlet" && r.schemaVersion === 1);
+  const latest = new Map();
+  for (const row of rows) latest.set(row.machine, row);
+  const knownStages = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"];
+  const states = { passed: "passed", failed: "failed", not_run: "not run", blocked: "blocked", incomplete: "incomplete" };
+  const body = [...latest.values()].map(row => {
+    const machine = REFRESH_MACHINES[row.machine] || (row.machine === "m1" ? "M1" : "Unknown system");
+    const stages = Array.isArray(row.stages) ? row.stages : [];
+    return `<p><b>${machine}</b> · ${esc(evidenceText("Stage run", row))}</p>` + table(["Stage", "Outcome", "Passed", "Failed", "Skipped"], knownStages.map(name => {
+      const stage = stages.find(s => s.name === name);
+      return [esc(name), stage ? esc(states[stage.status] || "unknown") : "not run", stage && isNum(stage.passed) ? n(stage.passed) : null, stage && isNum(stage.failed) ? n(stage.failed) : null, stage && isNum(stage.skipped) ? n(stage.skipped) : null];
+    }));
+  }).join("");
+  return `<section class="manual-results"><h3>Scoped test runs</h3><p class="refresh-help">These stage results are separate from the nightly trend. A passing subset does not verify the whole repository. UI tests are not run by the current gauntlet.</p>${body || `<p class="refresh-help">No scoped test run has been published yet.</p>`}</section>`;
+}
+
 // ---------------------------------------------------------------- the nights (from summary_latest.json)
 // The publisher classified each night: green / watch / red / did_not_run. The page
 // only reads the result. Missing summary -> every helper returns "no data".
@@ -787,7 +1040,7 @@ function renderTimeline(d) {
 // Each area: state, one sentence, the one number, trend vs 7 days ago, sparkline, then the detail body.
 const AREAS = [
   { id: "tests", name: "Tests & nightly", sub: "2 AM Release run on each Mac · coverage 4 AM" },
-  { id: "size", name: "Code size & complexity", sub: "lizard over app Swift · wc -l" },
+  { id: "size", name: "Code health", sub: "Code size · complexity · technical debt" },
   { id: "debt", name: "Debt trend", sub: "CCN > 15 ratchet · over-exposure · problem files" },
   { id: "san", name: "Sanitizers & static checks", sub: "GitHub nightly analysis" },
   { id: "hallie", name: "Hallie eval", sub: "nightly replay of the frozen suite" },
@@ -1007,6 +1260,14 @@ function renderSummaryLine(area, s) {
     `<span class="num"><span class="big">${s.number}</span>${s.trend}</span>`;
 }
 
+function combinedAreaSummary(id, d) {
+  const own = SUMMARY[id](d);
+  if (id !== "size") return own;
+  const debt = SUMMARY.debt(d), severity = { green: 0, grey: 1, amber: 2, watch: 2, red: 3 };
+  return { ...own, state: severity[debt.state] > severity[own.state] ? debt.state : own.state,
+    sentence: own.sentence + (debt.number !== DASH ? ` Debt: ${esc(debt.number)}; open the debt trend below for new, worse and fixed findings.` : "") };
+}
+
 // ---------------------------------------------------------------- detail bodies (the old sections, moved here)
 const BODIES = {
   tests(d) {
@@ -1040,7 +1301,7 @@ const BODIES = {
     }
     const hist = d.history, last = hist.length ? hist[hist.length - 1] : {};
     cards.push(card("Test functions in source", isNum(last.test_count) ? n(last.test_count) : null, null, null, false, isNum(last.regression_count) ? `${n(last.regression_count)} regression markers` : ""));
-    body.innerHTML = moved("Moved here unchanged: the Tests cards and charts, and the whole Coverage section. The old passed/failed chart used two y-axes; it is two charts now.") +
+    body.innerHTML = manualTestResults(d) + moved("Nightly test results and coverage. Scoped runs above retain their own scope, date and revision.") +
       `<div class="cards">${cards.join("")}</div><div class="charts">` +
       chartBox("Passed per nightly run", "c-tests-passed") + chartBox("Failed per nightly run", "c-tests-failed") +
       chartBox("Nightly duration (minutes)", "c-tests-duration") + chartBox("Coverage trend (%)", "c-cov-trend") +
@@ -1587,11 +1848,11 @@ function modCells(r) {
 function drawModuleTable() {
   const el = document.getElementById("mod-health");
   const rows = sortModules(MOD_STATE.rows, MOD_STATE.key, MOD_STATE.dir);
-  const head = MOD_COLS.map(([k, label]) => `<th class="sortable" onclick="modSort('${k}')" title="Sort by ${esc(label)}">${esc(label)}${MOD_STATE.key === k ? `<span class="arrow">${MOD_STATE.dir > 0 ? "▼" : "▲"}</span>` : ""}</th>`).join("");
+  const head = MOD_COLS.map(([k, label]) => `<th class="sortable" data-mod-sort="${k}" title="Sort by ${esc(label)}">${esc(label)}${MOD_STATE.key === k ? `<span class="arrow">${MOD_STATE.dir > 0 ? "▼" : "▲"}</span>` : ""}</th>`).join("");
   const body = rows.map((r, i) => {
     const cells = modCells(r).map((v, j) => `<td${j === 12 ? ' class="deps"' : j === 13 ? ' class="trendcell"' : ""}>${v == null ? DASH : v}</td>`).join("");
     const open = MOD_STATE.open.has(r.name);
-    return `<tr class="mod-row" onclick="modToggle('${esc(r.name)}')" aria-expanded="${open}">${cells}</tr>` +
+    return `<tr class="mod-row" data-mod-toggle="${esc(r.name)}" tabindex="0" role="button" aria-expanded="${open}">${cells}</tr>` +
       `<tr class="mod-detail${open ? "" : " hidden"}"><td colspan="${MOD_COLS.length}">${modDetail(r)}</td></tr>`;
   }).join("");
   const counts = ["A", "B", "C", "D"].map(g => `${rows.filter(r => r.grade === g).length} ${g}`).join(" · ");
@@ -1761,6 +2022,8 @@ function watchTwists() {
 
 // ---------------------------------------------------------------- load
 async function loadData() {
+  bindPageControls();
+  await initMetricsRefresh();
   try { applyTheme(savedTheme()); } catch {}
   try {
     if (Chart.defaults) {
@@ -1824,8 +2087,9 @@ async function loadData() {
     try { BODIES[a.id](d); } catch (err) { showError(a.id, err); }
   }
   for (const a of AREAS) {
-    try { renderSummaryLine(a, SUMMARY[a.id](d)); } catch (err) { renderSummaryLine(a, { ...NO_LINE, sentence: "This line failed to render." }); showError(a.id, err); }
+    try { renderSummaryLine(a, combinedAreaSummary(a.id, d)); } catch (err) { renderSummaryLine(a, { ...NO_LINE, sentence: "This line failed to render." }); showError(a.id, err); }
   }
+  renderEvidence(d);
   watchTwists();
   if (wantAll()) openAll(true);
 
