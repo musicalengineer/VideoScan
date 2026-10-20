@@ -596,7 +596,7 @@ enum FootageGrouping {
         mutating func isGeneric(_ i: Int) -> Bool {
             let key = p.analyses[i].key
             if let g = genericCache[key] { return g }
-            let g = key.count < 6 || ArchiveNameAdvisor.isGenericStem(p.analyses[i].strippedStem)
+            let g = FootageStem.isGenericName(p.analyses[i])
             genericCache[key] = g
             return g
         }

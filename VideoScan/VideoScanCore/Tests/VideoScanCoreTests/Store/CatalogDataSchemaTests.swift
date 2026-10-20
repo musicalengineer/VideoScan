@@ -68,10 +68,10 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
-        #expect(inventory.tables.count == 53)                  // 3 bookkeeping + 47 data + 1 live (v1.7 row_knowledge) + 1 pending (v1.8) + 1 pending purges (v1.9)
+        #expect(inventory.tables.count == 55)                  // 3 bookkeeping + 47 data + 1 live (v1.7 row_knowledge) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11)
         #expect(inventory.virtualTables == ["content_text_fts"])
-        #expect(inventory.triggers.count == 74)                // 12 bookkeeping + 58 data (v1.5: +5, +8 for codex C′ #1/#2) + 3 live + 1 pending
-        #expect(inventory.indexes.count == 35)                 // 8 UNIQUE + 25 plain + 1 live + 1 read-back (v1.9), all named in the DDL
+        #expect(inventory.triggers.count == 78)                // 12 bookkeeping + 58 data (v1.5: +5, +8 for codex C′ #1/#2) + 3 live + 1 pending + 4 append-only (v1.11)
+        #expect(inventory.indexes.count == 36)                 // 8 UNIQUE + 25 plain + 1 live + 1 read-back (v1.9) + footage_likeness_by_b (v1.11), all named in the DDL
         #expect(inventory.views.sorted() == ["byte_copies", "duplicate_hash_groups_disagree"])
         #expect(inventory.shadowTables.count == 5)             // FTS5's _config _content _data _docsize _idx
         let migrations = try rawQueue(fixture).inDatabase { db in
@@ -79,15 +79,15 @@ struct CatalogDataSchemaTests {
         }
         #expect(migrations == [CatalogBookkeepingSchema.migrationID, CatalogDataSchema.migrationID, CatalogLiveWritesSchema.migrationID,
                                CatalogPendingRowsSchema.migrationID, CatalogCommitB22Schema.migrationID,
-                               CatalogFolderKindSchema.migrationID])
+                               CatalogFolderKindSchema.migrationID, CatalogDecisionTablesSchema.migrationID])
         let version = try count(try rawQueue(fixture), "SELECT schema_version FROM catalog_state")
-        #expect(version == CatalogFolderKindSchema.schemaVersion)
+        #expect(version == CatalogDecisionTablesSchema.schemaVersion)
     }
 
     @Test func theSwiftSchemaIsSplitByTableInDocumentOrder() throws {
         let documented = try SchemaDocument.ddl().tableNames.filter { !["catalog_state", "generations", "generation_history"].contains($0) }
         let swiftOrder = (CatalogDataSchema.statements + CatalogLiveWritesSchema.statements + CatalogPendingRowsSchema.statements
-                         + CatalogCommitB22Schema.statements).compactMap { sql in
+                         + CatalogCommitB22Schema.statements + CatalogDecisionTablesSchema.statements).compactMap { sql in
             sql.firstMatch(of: #/^CREATE (?:VIRTUAL )?TABLE (\w+)/#).map { String($0.1) }
         }
         #expect(swiftOrder == documented)
@@ -112,7 +112,7 @@ struct CatalogDataSchemaTests {
         #expect(outcome == .readWrite)
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
         #expect(inventory.tables.contains("files"))
-        #expect(inventory.tables.count == 53)                  // + pending_rows (v1.8), pending_purges (v1.9)
+        #expect(inventory.tables.count == 55)                  // + pending_rows (v1.8), pending_purges (v1.9), the two decision tables (v1.11)
         let generation = try count(try rawQueue(fixture), "SELECT generation FROM generations WHERE id = 1")
         #expect(generation == 0)
     }
@@ -162,7 +162,7 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let documented = try SchemaDocument.ddl().statements.filter { $0.hasPrefix("CREATE") }
-        #expect(documented.count == 165)                       // 54 tables + 74 triggers + 35 indexes + 2 views
+        #expect(documented.count == 172)                       // 56 tables + 78 triggers + 36 indexes + 2 views
         let created = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }.normalizedSQL
         let createdText = Set(created.values)
         for statement in documented {

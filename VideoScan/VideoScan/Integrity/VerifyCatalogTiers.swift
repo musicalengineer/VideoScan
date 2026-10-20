@@ -42,6 +42,11 @@ enum VerifyCatalogStore: String, Sendable, Equatable {
 struct VerifyCatalogSnapshot: Sendable {
     var rows: [IntegrityRow]
     var events: [IntegrityEventFact]
+    /// catalog.sqlite's `footage_likeness` pairs with the latest person's
+    /// verdict (schema v1.11) — read in the snapshot's pass; empty for
+    /// catalog.json (no table). Tier 5 lists the undecided weak ones as
+    /// informational (yellow).
+    var likeness: [IntegrityLikenessFact] = []
     /// The catalog file the rows came from — catalog.sqlite under the
     /// SQLite authority, else catalog.json (the marker and the report live
     /// beside it; both are in the same folder).
@@ -409,7 +414,7 @@ enum VerifyCatalogTiers {
     // MARK: Tier 4 — derived knowledge (and the constraints pass, once)
 
     static func derivedKnowledge(_ input: TierInput) -> TierOutcome {
-        let all = CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
+        let all = CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
         let stale = all.filter { $0.rule.tier == 4 }
         let stamped = input.snapshot.rows.reduce(0) { $0 + ($1.audioFingerprint == nil ? 0 : 1) }
         var t = IntegrityTier(tier: 4, name: name(4), verifiedAt: input.now, runID: input.runID, result: .ok,
@@ -443,7 +448,7 @@ enum VerifyCatalogTiers {
     static func constraints(_ input: TierInput) -> TierOutcome {
         if input.snapshot.store == .sqlite { return databaseConstraints(input) }
         let all = input.constraintFindings
-            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
+            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
         var found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
         let file = catalogFile(input.snapshot.catalogURL)
         let comparison = CatalogFileHash.compare(previousSHA: input.previous?.catalogSHA256,
@@ -483,7 +488,7 @@ enum VerifyCatalogTiers {
     /// checked.
     static func databaseConstraints(_ input: TierInput) -> TierOutcome {
         let all = input.constraintFindings
-            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
+            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
         let found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
         let decided = found.filter(\.needsDecision)
         let rows = input.snapshot.rows.count

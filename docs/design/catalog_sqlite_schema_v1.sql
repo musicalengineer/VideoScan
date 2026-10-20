@@ -59,6 +59,13 @@
 -- CatalogFolderKindSchema.swift, migration `v6_folder_kind`, which raises
 -- catalog_state.schema_version to 11). ADDITIVE: one column with a default; no row rewritten, no
 -- earlier table, trigger, index or CHECK changed.
+-- Revision 12 (v1.11, 2026-10-19, "every decision Rick makes lives in catalog.sqlite"): §16 —
+-- `footage_likeness` (pairs of contents the duplicate check found alike, bytes differ; Rick
+-- approved the table 2026-10-19) and `ignored_content_put_back` (the ignore list's override,
+-- never a DELETE of `ignored_content`) (VideoScanCore/Store/CatalogDecisionTablesSchema.swift,
+-- migration `v7_decision_tables`, which raises catalog_state.schema_version to 12). ADDITIVE: two
+-- new tables, one index, four append-only triggers; no earlier table, trigger, index or CHECK
+-- changed.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1664,3 +1671,50 @@ CREATE INDEX import_items_landed_files ON import_items(landed_ref)
 --       ALTER TABLE events ADD COLUMN kind TEXT NOT NULL DEFAULT 'event' CHECK (kind IN ('event','person','other'));
 --       UPDATE catalog_state SET schema_version = 11 WHERE singleton = 1; PRAGMA user_version = 11.
 -- ---------------------------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------------------------
+-- 16. DECISION TABLES (v1.11, 2026-10-19, migration `v7_decision_tables`). Two of Rick's
+--     decisions that had no place in catalog.sqlite.
+--     FOOTAGE LIKENESS: a PAIR of contents the duplicate check found alike although their bytes
+--     differ (a re-encode, a rewrap, an Avid render or channel file), its reasons verbatim. A
+--     duplicate group holds copies only (same SHA-256); Find Similar Footage gives each file ONE
+--     group whose confidence is its weakest link, so WEAK likeness (a default timecode, a
+--     camera-counter name, format + length) between files already grouped had nowhere to live and
+--     Split Duplicate Groups by Full Hash held 403 of 466 multi-digest groups. The split records
+--     every pair here BEFORE it splits. strength 'anchored' = the sampled hash, a specific timecode
+--     or a specific name, + length; 'weak' = anything less. source 'duplicateCheck' = today's
+--     likeness rule scored the pair; 'oldGroup' = only the old duplicate group remembered they
+--     matched. EVIDENCE, never a decision and never delete eligibility: a person confirms or
+--     rejects a pair with footage_decisions (same / notSame, keyed by the two files' digests);
+--     an undecided weak pair is Verify Catalog's yellow, informational item.
+--     IGNORED CONTENT PUT BACK: the ignore list's override ("catalog this content again") is a
+--     row here naming the ignored row; the live list is `ignored_content` minus these. An imported
+--     ignored row is the import's evidence (import_items, the run's counters), so it is never
+--     deleted; ignoring the content again is a NEW ignored_content row.
+--     The migration then runs: UPDATE catalog_state SET schema_version = 12; PRAGMA user_version = 12.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE footage_likeness (            -- v1.11: two contents the duplicate check found alike, bytes differ
+  likeness_id  INTEGER PRIMARY KEY,
+  digest_a     TEXT    NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
+  digest_b     TEXT    NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
+  reasons      TEXT    NOT NULL,           -- the duplicate check's reasons, verbatim ("timecode+duration")
+  strength     TEXT    NOT NULL CHECK (strength IN ('weak','anchored')),
+  source       TEXT    NOT NULL CHECK (source IN ('duplicateCheck','oldGroup')),
+  recorded_at  INTEGER NOT NULL,
+  CHECK (digest_a < digest_b),             -- one row per unordered pair
+  UNIQUE (digest_a, digest_b)
+) STRICT;
+CREATE INDEX footage_likeness_by_b ON footage_likeness(digest_b);
+CREATE TRIGGER footage_likeness_no_update BEFORE UPDATE ON footage_likeness
+BEGIN SELECT RAISE(ABORT, 'footage_likeness is append-only evidence'); END;
+CREATE TRIGGER footage_likeness_no_delete BEFORE DELETE ON footage_likeness
+BEGIN SELECT RAISE(ABORT, 'footage_likeness is append-only evidence'); END;
+CREATE TABLE ignored_content_put_back (    -- v1.11: the ignore list's override, never a DELETE of ignored_content
+  put_back_seq INTEGER PRIMARY KEY,
+  ignored_seq  INTEGER NOT NULL UNIQUE REFERENCES ignored_content(ignored_seq) ON DELETE RESTRICT,
+  put_back_at  INTEGER NOT NULL
+) STRICT;
+CREATE TRIGGER ignored_content_put_back_no_update BEFORE UPDATE ON ignored_content_put_back
+BEGIN SELECT RAISE(ABORT, 'ignored_content_put_back is append-only evidence'); END;
+CREATE TRIGGER ignored_content_put_back_no_delete BEFORE DELETE ON ignored_content_put_back
+BEGIN SELECT RAISE(ABORT, 'ignored_content_put_back is append-only evidence'); END;

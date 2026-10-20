@@ -173,7 +173,7 @@ struct CatalogFolderDoorsTests {
         let schema = try DatabaseQueue(path: fixture.url.path).inDatabase { db in
             try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state")
         }
-        #expect(schema == CatalogFolderKindSchema.schemaVersion)
+        #expect(schema == GRDBCatalogRepository.currentSchemaVersion)   // every later migration ran too
     }
 
     // MARK: - Backup: the sealed copy carries the folders
