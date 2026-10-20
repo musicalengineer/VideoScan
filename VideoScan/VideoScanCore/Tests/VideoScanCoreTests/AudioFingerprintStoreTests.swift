@@ -149,11 +149,12 @@ struct AudioFingerprintStampTests {
         #expect(stamp.engineVersion == AudioFingerprintStamp.currentEngineVersion, "never hard-coded")
     }
 
-    @Test("version 2 (2026-10-17): a no-sound stamp on a row whose header has sound was a decode failure and is redone; one on a row with no audio codec stands, and every fingerprinted v2 stamp stands; version 1 never does")
+    @Test("version 2 (2026-10-17): a no-sound stamp on a row whose header has sound was a decode failure and is redone; one on a row with no audio codec stands, and every fingerprinted v2 stamp WITH landmarks stands; version 1 never does")
     func versionTwoNoSoundStampsAreSuspect() {
         func v2(_ outcome: AudioFingerprintStamp.Outcome) -> AudioFingerprintStamp {
             AudioFingerprintStamp(engineVersion: 2, contentDigest: "v1:a", sizeBytes: 1_000, outcome: outcome,
-                                  analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
+                                  analyzedSeconds: outcome == .fingerprinted ? 5 : 0, complete: true,
+                                  landmarks: outcome == .fingerprinted ? 40 : 0, bytes: outcome == .fingerprinted ? 400 : 0)
         }
         #expect(!v2(.noAudio).describes(sizeBytes: 1_000, digests: ["v1:a"], headerHasAudio: true), "the suspect stamp")
         #expect(v2(.noAudio).describes(sizeBytes: 1_000, digests: ["v1:a"], headerHasAudio: false), "the header agrees")
@@ -163,7 +164,7 @@ struct AudioFingerprintStampTests {
                                        analyzedSeconds: 1, complete: true, landmarks: 1, bytes: 1)
         #expect(!v1.describes(sizeBytes: 1_000, digests: ["v1:a"], headerHasAudio: false), "only version 2 is grandfathered")
         #expect(AudioFingerprintStamp.noAudioOnDecodeFailureVersion == 2)
-        #expect(AudioFingerprintStamp.currentEngineVersion == 3)
+        #expect(AudioFingerprintStamp.currentEngineVersion == 4)
     }
 
     @Test("analyzedSeconds and complete come from the engine's fingerprint, never recomputed")
@@ -172,8 +173,8 @@ struct AudioFingerprintStampTests {
         #expect(whole.complete && whole.analyzedSeconds == 599.2)
         let partial = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 1, seconds: 14_400, complete: false), contentDigest: "v1:a", sizeBytes: 1)
         #expect(!partial.complete && partial.analyzedSeconds == 14_400 && partial.outcome == .fingerprinted)
-        #expect(whole.engineVersion == AudioFingerprintStamp.currentEngineVersion && whole.engineVersion == 3,
-                "stamp rule version 3 (no-sound needs the header's agreement); the sidecar FORMAT stays 2")
+        #expect(whole.engineVersion == AudioFingerprintStamp.currentEngineVersion && whole.engineVersion == 4,
+                "stamp rule version 4 (zero landmarks = measured silence only); the sidecar FORMAT stays 2")
         #expect(Int(AudioFingerprint.currentVersion) == 2, "the blob format did not change")
         let silent = AudioFingerprintStamp.noAudio(contentDigest: "v1:a", sizeBytes: 1)
         #expect(silent.outcome == .noAudio && silent.complete && silent.landmarks == 0 && silent.bytes == 0)

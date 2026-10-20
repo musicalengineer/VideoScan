@@ -32,7 +32,14 @@
 //     no new file starts. A QUIT cuts the decodes (ProcessRunner kills
 //     ffmpeg), records them "cut off", then saves what was done.
 //   • A decode that fails is recorded on the item with ffmpeg's stderr tail;
-//     the lane goes on. A drive that goes away: that lane stops, its files
+//     the lane goes on. Zero samples from a file whose header names a codec
+//     is a failed decode too — never "no sound", never "silent".
+//   • SILENCE IS MEASURED (stamp rule 4, 2026-10-20): a print with no
+//     landmark is stamped only when its audible-seconds bitmap says every
+//     second was quiet (`AudioFingerprintStamp.reading(of:)` = `.silence`).
+//     A print that heard sound but too little to make one landmark (a 1.5 s
+//     AVCHD clip peaking at −0.1 dB) is "heard too little" — listed, not
+//     stamped, not kept in the sidecar, retried next run. A drive that goes away: that lane stops, its files
 //     count "drive not connected", the other lanes go on. Offline drives are
 //     skipped with a count at the start — never an error.
 //   • The decoder's deadline is sized by the file (300 s + 1 s per 10 MB), a
@@ -73,7 +80,11 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
 
     /// What one file's pass produced (pure value; `record` interprets it).
     enum Outcome: Equatable, Sendable {
+        /// A printable print, or one that MEASURED silence (stamped).
         case fingerprint(AudioFingerprint)
+        /// Decoded, heard sound (`audibleSeconds` audible), made no landmark:
+        /// not stamped — "too little to print" is never "silent".
+        case heardTooLittle(AudioFingerprint, audibleSeconds: Int)
         /// Found under `key` — the stamp names THAT key, never another digest.
         case shared(key: AudioFingerprintStore.Key, AudioFingerprintStore.Summary)
         case noAudio(fromCatalog: Bool)
@@ -359,6 +370,12 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// "v1:" hash is never an identity (QA P1-a: 10 of 836 v1-equal pairs
     /// had different bytes), so a row with only a sampled digest is always
     /// decoded itself. Returns the key the row was found under.
+    ///
+    /// A sidecar row with NO landmark is never shared: it may have been
+    /// written before stamp rule 4, when silence and "too little to print"
+    /// were not told apart, and its summary cannot say which — the file is
+    /// decoded and decided again. This run's own pending entries are all
+    /// rule-4 decisions (printable or measured silence), so they share.
     private func sharedFingerprint(for item: AudioFingerprintBackfillItem)
         -> (AudioFingerprintStore.Key, AudioFingerprintStore.Summary)? {
         for digest in item.digests where AudioFingerprintStamp.isFullDigest(digest) {
@@ -369,7 +386,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                                                            analyzedSeconds: pending.fingerprint.analyzedSeconds, complete: pending.fingerprint.complete,
                                                            landmarks: pending.fingerprint.landmarkCount, bytes: pending.fingerprint.estimatedBytes))
             }
-            if let found = try? store?.summary(for: key) { return (key, found) }
+            if let found = try? store?.summary(for: key), found.landmarks > 0 { return (key, found) }
         }
         return nil
     }
@@ -377,7 +394,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     private func decodeOne(_ item: AudioFingerprintBackfillItem) async -> Outcome {
         do {
             let fingerprint = try await runPass(item)
-            return .fingerprint(fingerprint)
+            return Self.classify(fingerprint)
         } catch AudioPCMDecoder.Failure.noAudioStream {
             // Zero samples (or "does not contain any stream") is a verdict
             // only when the header agrees. 98 real files with pcm/aac/ac3
@@ -406,6 +423,35 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         return try await Self.fingerprintOffMain(path: item.path, ffmpegPath: ffmpegPath, parameters: parameters,
                                                  maxSeconds: decoderMaxSeconds,
                                                  deadlineSeconds: Self.decodeDeadline(sizeBytes: item.sizeBytes))
+    }
+
+    /// A decoded print → what the job does with it: stamp it (printable, or
+    /// measured silence) or list it as "heard too little" (pure; tests pin it).
+    nonisolated static func classify(_ fingerprint: AudioFingerprint) -> Outcome {
+        switch AudioFingerprintStamp.reading(of: fingerprint) {
+        case .printable, .silence: return .fingerprint(fingerprint)
+        case .heardTooLittle(let audible): return .heardTooLittle(fingerprint, audibleSeconds: audible)
+        // Only a pass that skipped `AudioFingerprint.compute` (a test stub)
+        // can get here: no loudness measurement, so no verdict either way.
+        case .notMeasured: return .failed(notMeasuredWords)
+        }
+    }
+
+    nonisolated static let notMeasuredWords =
+        "the print carries no loudness measurement (0 landmarks) — not judged silent or heard; retried next run"
+
+    /// The detail row for a stamped print: "12 s of sound · 340 landmarks ·
+    /// 3 KB", or for measured silence "3 s, measured silent" (QA P3b — a
+    /// silent print is never "N s of sound").
+    nonisolated static func fingerprintedWords(_ stamp: AudioFingerprintStamp) -> String {
+        if stamp.landmarks == 0 { return "\(seconds(stamp.analyzedSeconds)), measured silent" }
+        return "\(seconds(stamp.analyzedSeconds)) of sound · \(stamp.landmarks.formatted()) landmarks · \(MediaBytes.display(Int64(stamp.bytes)))"
+    }
+
+    /// The words for a print that heard sound but made no landmark.
+    nonisolated static func heardTooLittleWords(analyzedSeconds: Double, audibleSeconds: Int) -> String {
+        "heard sound (\(audibleSeconds) audible second\(audibleSeconds == 1 ? "" : "s") of \(seconds(analyzedSeconds))) "
+            + "but too little to fingerprint (0 landmarks) — not silent; retried next run"
     }
 
     /// The FAILED words for a decode that produced no samples from a file
@@ -512,7 +558,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                                                                    computedAt: stamp.computedAt)
             totals.landmarks += stamp.landmarks
             totals.sidecarBytes += Int64(stamp.bytes)
-            let detail = "\(Self.seconds(stamp.analyzedSeconds)) of sound · \(stamp.landmarks.formatted()) landmarks · \(MediaBytes.display(Int64(stamp.bytes)))"
+            let detail = Self.fingerprintedWords(stamp)
             if stamp.complete {
                 totals.add(.fingerprinted, bytes: item.sizeBytes)
                 addSample(item, lane: lane, .fingerprinted, detail)
@@ -521,6 +567,17 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                 addProblem(filename: item.filename, path: item.path, drive: lane.label, archived: item.isArchived, .partial,
                            "only the first \(Self.seconds(stamp.analyzedSeconds)) of \(Self.seconds(item.durationSeconds)) were fingerprinted (the decoder's cap) — kept as partial; not retried")
             }
+        case .heardTooLittle(let fingerprint, let audible):
+            // FOLLOW-UP (pending Rick: additive `sound_prints.audible_s REAL
+            // NULL`): stamp here instead — `.fingerprinted`, 0 landmarks,
+            // audibleSeconds = `audible` — and teach `hearing`/`describes`
+            // that a rule-5 stamp with audible_s > 0 is "heard too little"
+            // (stands, not retried). Until then: listed, never stamped.
+            totals.readBytes += item.sizeBytes
+            totals.add(.heardTooLittle, bytes: item.sizeBytes)
+            let why = Self.heardTooLittleWords(analyzedSeconds: fingerprint.analyzedSeconds, audibleSeconds: audible)
+            addProblem(filename: item.filename, path: item.path, drive: lane.label, archived: item.isArchived, .heardTooLittle, why)
+            model.audioFingerprintNote("HEARD TOO LITTLE \(item.path) — \(why)")
         case .shared(let key, let summary):
             let stamp = AudioFingerprintStamp(computedAt: summary.computedAt, engineVersion: AudioFingerprintStamp.currentEngineVersion,
                                               contentDigest: key.contentDigest, sizeBytes: key.sizeBytes, outcome: .fingerprinted,

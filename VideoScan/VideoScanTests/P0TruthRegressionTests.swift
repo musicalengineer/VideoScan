@@ -229,7 +229,7 @@ struct P0TruthRegressionTests {
 
     // MARK: 7. Sound (the fingerprint stamp)
 
-    @Test("Sound (AudioFingerprintStamp: analyzedSeconds > 0, landmarks == 0; Compare Media's relatedSide + the sidecar print): a silent header is not 'has sound'")
+    @Test("Sound (AudioFingerprintStamp rule 4: 0 landmarks AND measured silent at gain 1; Compare Media's relatedSide + the sidecar print): a silent header is not 'has sound'")
     func silentHeaderIsNotHasSound() throws {
         let catalog = try P0TruthFixtureCatalog.build("silent")
         defer { catalog.cleanup() }
@@ -237,24 +237,37 @@ struct P0TruthRegressionTests {
         let stamp = try #require(row.audioFingerprint)
 
         // The pure facts: the header says Video+Audio; the sound print
-        // analysed seconds and heard nothing.
+        // (stamp rule 4) decoded the sound and MEASURED it silent — a
+        // rule-4 stamp has 0 landmarks only for measured silence.
         #expect(row.streamTypeRaw == "Video+Audio")
         #expect(stamp.outcome == .fingerprinted)
         #expect(stamp.analyzedSeconds > 0)
-        #expect(stamp.landmarks == 0, "no landmark = nothing was heard")
+        #expect(stamp.landmarks == 0 && stamp.engineVersion >= AudioFingerprintStamp.silenceMeasuredVersion)
+        #expect(stamp.hearing(headerHasAudio: true) == .measuredSilence)
 
-        // Compare Media's side reads the stamp: no landmark = nothing heard
-        // = 0 audible seconds, so its line says "no sound" (fixed
-        // 2026-10-19; before, it read 3 s of sound).
+        // Compare Media's side reads the stamp: measured silence = 0
+        // audible seconds, so its line says "no sound" (fixed 2026-10-19;
+        // before, it read 3 s of sound).
         let side = VideoScanModel.relatedSide(row, isArchiveFile: false, isArchived: false, now: Date())
-        #expect(side.audibleSeconds == 0, "relatedSide read a fingerprinted stamp with 0 landmarks as \(side.audibleSeconds ?? -1) s of sound")
+        #expect(side.audibleSeconds == 0, "relatedSide read a measured-silent stamp as \(side.audibleSeconds ?? -1) s of sound")
 
-        // …and the sidecar's print, when it is loaded for the match, may not
-        // put the seconds back: a print with no landmark is all quiet.
-        let silent = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
-                                      activeSeconds: [], hashes: [], times: [])
-        #expect(VideoScanModel.printAudibleSeconds(silent) == 0, "a print with no landmark heard nothing")
-        #expect(VideoScanModel.soundStrip(silent) == [false, false, false], "the spool draws silence, not 3 s of sound")
+        // …and the spool draws that silence from the STAMP (the one place it
+        // is measured), with its reason — never 3 s of sound.
+        let strip = VideoScanModel.stampStrip(row)
+        #expect(strip.active.map { !$0.contains(true) } == true && strip.words == "Measured silent",
+                "got \(String(describing: strip.active)) \(strip.words ?? "nil")")
+
+        // A loaded print may not put the seconds back either: "No landmark"
+        // alone is not silence (2026-10-20: a 1.5 s AVCHD clip at −0.1 dB
+        // made none), and a sidecar blob carries no absolute measurement —
+        // so a zero-landmark print is nil: unknown, never "no sound".
+        let tooLittle = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 2,
+                                         activeSeconds: [true, true], hashes: [], times: [], secondsAboveSilenceCeiling: 2)
+        #expect(VideoScanModel.printAudibleSeconds(tooLittle) == nil, "heard sound, too little to print: says nothing, never 'no sound'")
+        let fromBlob = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
+                                        activeSeconds: [false, false, false], hashes: [], times: [])
+        #expect(VideoScanModel.printAudibleSeconds(fromBlob) == nil && VideoScanModel.soundStrip(fromBlob) == nil,
+                "a sidecar blob with no landmark carries no measurement: unknown")
         let heard = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
                                      activeSeconds: [true, false, true], hashes: [1], times: [0])
         #expect(VideoScanModel.printAudibleSeconds(heard) == 2, "a print that heard sound keeps its bitmap's count")

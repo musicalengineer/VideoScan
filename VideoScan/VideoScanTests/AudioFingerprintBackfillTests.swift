@@ -230,7 +230,8 @@ struct AudioFingerprintBackfillLogicTests {
         #expect(why.contains("pcm_s16le"), Comment(rawValue: why))
         #expect(sb.catalogLogText().contains("FAILED \(hasSound.fullPath)"))
         #expect(noCodec.audioFingerprint?.outcome == .noAudio)
-        #expect(noCodec.audioFingerprint?.engineVersion == 3, "stamp rule version 3: the header agreed")
+        #expect(noCodec.audioFingerprint?.engineVersion == AudioFingerprintStamp.currentEngineVersion,
+                "the current stamp rule (≥ 3: the header agreed)")
         #expect(sb.model.audioFingerprintBackfillPlan().fileCount == 1, "the failed file is planned again; the stamped one is not")
         // The words name the evidence on both sides.
         #expect(AudioFingerprintBackfillJob.noSoundWords(fromCatalog: false).contains("the header agrees (no audio codec on the row)"))

@@ -199,6 +199,38 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundPrintSilenceVerdictTests"
+      ],
+      "tests": [
+        "describesRedoesWhatIsNotEvidence",
+        "emptyBitmapIsNotSilence",
+        "engineShortToneVersusZeros",
+        "hearingNoAudio",
+        "hearingZeroLandmarks",
+        "mediaMatrix",
+        "readingOfAFreshPrint",
+        "silentOnlyForMeasuredSilence"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QARedSilenceFloorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QARedSilenceFloorTests"
+      ],
+      "tests": [
+        "ditherIsSilence",
+        "lowHissIsSilence"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
       "stage": "unit",
       "suites": [
@@ -6103,6 +6135,26 @@
         "stampsSurviveAReload",
         "stopAndPause",
         "words"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioFingerprintBackfillSilenceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioFingerprintBackfillSilenceTests",
+        "AudioFingerprintBackfillSilenceMediaTests"
+      ],
+      "tests": [
+        "ditherIsMeasuredSilenceNotARetryLoop",
+        "existingZeroLandmarkStampsAreRedecided",
+        "heardTooLittleIsNeverStampedSilent",
+        "measuredSilenceIsStamped",
+        "silenceMatrix",
+        "unmeasuredPrintIsNotJudged",
+        "zeroLandmarkSidecarRowIsNotShared",
+        "zeroSampleDecodeIsCouldNotCheck"
       ]
     },
     {
@@ -28390,6 +28442,32 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundPrintSilentVerdictTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundPrintSilentVerdictTier3Tests",
+        "SoundPrintSilentVerdictSurfaceTests",
+        "SoundPrintSilentVerdictScaleTests",
+        "QARedCompareOneSidedStripTests"
+      ],
+      "tests": [
+        "compareSide",
+        "fingerprintKeyOnlyForEvidence",
+        "groupAStillFires",
+        "groupsBAndCAreCouldNotCheck",
+        "heardVersusMeasuredSilentSides",
+        "measuredSideKeepsItsStrip",
+        "personCheckedPreFourStillSettles",
+        "reasonWordsPerHearing",
+        "stampStripPerSide",
+        "streamColumn",
+        "summaryKeepsCouldNotCheckBesideDecisions",
+        "tier3At100k",
+        "unmeasuredStripIsNotSilence"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
       "stage": "unit",
       "suites": [
@@ -29752,6 +29830,14 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QARedSilenceFloorTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -30473,6 +30559,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillSilenceTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -32268,7 +32358,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2784,
+      "expected_floor": 2797,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32672,6 +32762,10 @@
         "VideoScanTests/CatalogStatusStructureTests",
         "VideoScanTests/VerifyCatalogConstraintTests",
         "VideoScanTests/VerifyCatalogTierTests",
+        "VideoScanTests/SoundPrintSilentVerdictTier3Tests",
+        "VideoScanTests/SoundPrintSilentVerdictSurfaceTests",
+        "VideoScanTests/SoundPrintSilentVerdictScaleTests",
+        "VideoScanTests/QARedCompareOneSidedStripTests",
         "VideoScanTests/VerifyCatalogReportTests",
         "VideoScanTests/VerifyCatalogScaleTests",
         "VideoScanTests/VerifyCatalogJobTests",

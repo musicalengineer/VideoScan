@@ -58,8 +58,8 @@ struct CompareMediaView: View {
             if let answer = store.answer {
                 verdictCard(answer)
                 HStack(alignment: .top, spacing: 12) {
-                    spool(recordA, side: answer.evidence.a, other: answer.evidence.b, active: answer.strips.a, matched: answer.strips.matchedA)
-                    spool(recordB, side: answer.evidence.b, other: answer.evidence.a, active: answer.strips.b, matched: answer.strips.matchedB)
+                    spool(recordA, side: answer.evidence.a, other: answer.evidence.b, active: answer.strips.a, words: answer.strips.wordsA, matched: answer.strips.matchedA)
+                    spool(recordB, side: answer.evidence.b, other: answer.evidence.a, active: answer.strips.b, words: answer.strips.wordsB, matched: answer.strips.matchedB)
                 }
             } else {
                 HStack(spacing: 8) {
@@ -117,7 +117,7 @@ struct CompareMediaView: View {
     // MARK: One spool: the facts, then the sound
 
     private func spool(_ r: VideoRecord, side: RelatedEvidence.Side, other: RelatedEvidence.Side,
-                       active: [Bool], matched: Range<Int>?) -> some View {
+                       active: [Bool]?, words: String?, matched: Range<Int>?) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(r.filename).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
             Text(r.volumeName.isEmpty ? r.directory : r.volumeName).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
@@ -131,8 +131,16 @@ struct CompareMediaView: View {
                     }
                 }
             }
-            SoundStrip(active: active, matched: matched, durationSeconds: side.durationSeconds)
-                .frame(height: 44)
+            // nil = not measured: say so — an empty strip would draw silence.
+            if let active {
+                SoundStrip(active: active, matched: matched, durationSeconds: side.durationSeconds)
+                    .frame(height: 44)
+                // A quiet strip from the stamp says why it is quiet.
+                if let words { Text(words).font(.system(size: 11)).foregroundStyle(.secondary) }
+            } else {
+                Text("Sound not measured").font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(height: 44, alignment: .leading)
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -97,6 +97,7 @@ struct AudioFingerprintBackfillDetailView: View {
         case .shared: return "doc.on.doc.fill"
         case .noAudio: return "speaker.slash.circle"
         case .partial: return "waveform.badge.exclamationmark"
+        case .heardTooLittle: return "waveform"
         case .failed: return "xmark.octagon.fill"
         case .driveNotConnected: return "externaldrive.badge.xmark"
         case .missing: return "questionmark.folder"
@@ -108,7 +109,7 @@ struct AudioFingerprintBackfillDetailView: View {
         switch result {
         case .fingerprinted, .shared: return Color(red: 0.10, green: 0.45, blue: 0.25)
         case .failed: return Color(red: 0.80, green: 0.10, blue: 0.10)
-        case .partial: return Color(red: 0.75, green: 0.42, blue: 0.00)
+        case .partial, .heardTooLittle: return Color(red: 0.75, green: 0.42, blue: 0.00)
         default: return .secondary
         }
     }

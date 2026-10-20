@@ -190,6 +190,9 @@ enum AudioFingerprintBackfillResult: String, Sendable, Equatable, CaseIterable {
     /// Longer than the decoder's cap: a prefix was fingerprinted and the
     /// stamp says so; listed, not retried.
     case partial
+    /// Decoded and heard sound, but too little to make one landmark (stamp
+    /// rule 4): not stamped, never "silent"; retried next run.
+    case heardTooLittle
     case driveNotConnected
     case missing
     case failed
@@ -204,6 +207,7 @@ enum AudioFingerprintBackfillResult: String, Sendable, Equatable, CaseIterable {
         case .shared: return "shared with a copy"
         case .noAudio: return "no sound"
         case .partial: return "partial (longer than 4 h)"
+        case .heardTooLittle: return "heard sound, too little to fingerprint"
         case .driveNotConnected: return "drive not connected"
         case .missing: return "missing at its path"
         case .failed: return "failed"
@@ -216,7 +220,7 @@ enum AudioFingerprintBackfillResult: String, Sendable, Equatable, CaseIterable {
     var isStamped: Bool {
         switch self {
         case .fingerprinted, .shared, .noAudio, .partial: return true
-        case .driveNotConnected, .missing, .failed, .recordChanged, .cancelled: return false
+        case .heardTooLittle, .driveNotConnected, .missing, .failed, .recordChanged, .cancelled: return false
         }
     }
 }

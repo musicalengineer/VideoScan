@@ -58,11 +58,18 @@ struct CompareMediaTests {
         r.fullPath = "/Volumes/LaCie/Test Event 10th Bday/Part-1.mov"; r.filename = "Part-1.mov"; r.directory = "/Volumes/LaCie/Test Event 10th Bday"
         r.durationSeconds = 78; r.sizeBytes = 92_000_000; r.videoCodec = "h264"; r.audioCodec = "aac"; r.resolution = "640x480"; r.totalBitrate = "9 Mb/s"
         r.userDate = "1996-03-15"
+        // 2026-10-20: a VERSION-2 no-sound stamp on an AAC header was written
+        // on decode failures (0 samples) — it is not evidence, so the side
+        // has no fingerprint ("no fingerprint yet"), never "no sound".
         r.audioFingerprint = AudioFingerprintStamp(computedAt: Date(), engineVersion: 2, contentDigest: "sha256:abc", sizeBytes: 92_000_000,
+                                                   outcome: .noAudio, analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
+        let v2 = VideoScanModel.relatedSide(r, isArchiveFile: false, isArchived: true, now: Date())
+        #expect(v2.audibleSeconds == nil && !v2.isSilent && !v2.hasFingerprint)
+        r.audioFingerprint = AudioFingerprintStamp(computedAt: Date(), contentDigest: "sha256:abc", sizeBytes: 92_000_000,
                                                    outcome: .noAudio, analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
         let s = VideoScanModel.relatedSide(r, isArchiveFile: false, isArchived: true, now: Date())
         #expect(s.day == EventDay(year: 1996, month: 3, day: 15) && s.dayIsReliable)
-        #expect(s.audibleSeconds == 0 && s.isSilent)
+        #expect(s.audibleSeconds == 0 && s.isSilent, "a current-rule no-sound stamp is 0 audible seconds")
         #expect(s.codec == .delivery && s.frameHeight == 480 && s.bitRate == 9_000_000)
         #expect(s.folderLabel == "test event 10th bday" && !s.isArchiveFile && s.isArchived)
         #expect(s.digest == nil, "no stored full hash → not checked")

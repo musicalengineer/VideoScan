@@ -293,13 +293,21 @@ enum VerifyCatalogTiers {
     ///     on the content (`IntegrityRow.silenceCheckedByPerson`), stored in
     ///     catalog.sqlite's workflow_tags like every other tag.
     /// Everything else silent still needs a decision.
+    ///
+    /// SILENT MEANS MEASURED (2026-10-20): the stamp is read through
+    /// `AudioFingerprintStamp.hearing` — "silent" only for a print that
+    /// decoded the sound and measured every second quiet (stamp rule 4).
+    /// A stamp that is not evidence — a version-2 "no sound" written on a
+    /// decode failure (0 samples; 6 rows on 10/20), or a pre-4 zero-landmark
+    /// print (8 AVCHD clips with real sound read as "silent") — is counted
+    /// under could-not-check, never as a decision.
     static func sound(_ input: TierInput) -> TierOutcome {
         var tally = SoundTally()
         for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
             tally.judge(r)
         }
         let findings = tally.findings
-        let couldNotCheck = tally.unstamped + tally.referenced
+        let couldNotCheck = tally.unstamped + tally.referenced + tally.notEvidence
         var t = IntegrityTier(tier: 3, name: name(3), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: tally.stamped, passed: tally.stamped - findings.count, needsDecision: findings.count,
                               couldNotCheck: couldNotCheck, summary: "")
@@ -307,9 +315,13 @@ enum VerifyCatalogTiers {
         if !findings.isEmpty {
             t.result = .needsDecision(findings.count)
             parts.append("\(findings.count.formatted()) headers say sound the print never heard")
+            // What it could not check stays visible beside the decisions (QA P3c).
+            if couldNotCheck > 0 {
+                parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced, notEvidence: tally.notEvidence))
+            }
         } else if couldNotCheck > 0 {
             t.result = .couldNotCheck(couldNotCheck)
-            parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced))
+            parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced, notEvidence: tally.notEvidence))
         } else if tally.livePhoto + tally.checkedByPerson == 0 {
             parts.append("every Video+Audio file's print heard sound (\(tally.stamped.formatted()))")
         } else {
@@ -326,6 +338,9 @@ enum VerifyCatalogTiers {
         var stamped = 0
         var unstamped = 0
         var referenced = 0
+        /// A current stamp that is not evidence about the sound (a decode
+        /// failure, or a print from before silence was measured).
+        var notEvidence = 0
         /// Silent and passed: a Live Photo's motion clip.
         var livePhoto = 0
         /// Silent and passed: a person tagged it "Silent — checked".
@@ -340,16 +355,23 @@ enum VerifyCatalogTiers {
                 referenced += 1
                 return
             }
-            stamped += 1
-            guard let why = silentPrintReason(stamp) else { return }
-            if isLivePhotoMotionClip(r) {
-                livePhoto += 1
-            } else if r.silenceCheckedByPerson {
-                checkedByPerson += 1
-            } else {
-                findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
-                                                 words: "the header says Video+Audio, \(why)", needsDecision: true))
+            let hearing = stamp.hearing(headerHasAudio: !r.audioCodec.isEmpty)
+            let why = silentPrintReason(hearing)
+            // A known reason settles the row whatever the print can say —
+            // a person's "Silent — checked" above all, also on a stamp that
+            // is not evidence (QA P2 on af4be5f38).
+            if why != nil || hearing == .notEvidence {
+                if isLivePhotoMotionClip(r) { stamped += 1; livePhoto += 1; return }
+                if r.silenceCheckedByPerson { stamped += 1; checkedByPerson += 1; return }
             }
+            if hearing == .notEvidence {
+                notEvidence += 1
+                return
+            }
+            stamped += 1
+            guard let why else { return }
+            findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
+                                             words: "the header says Video+Audio, \(why)", needsDecision: true))
         }
     }
 
@@ -388,10 +410,13 @@ enum VerifyCatalogTiers {
 
     /// What tier 3 could not check, each with its door: no current print
     /// (Fingerprint Sound), a reference movie (Verify Media decides).
-    static func soundGapWords(unstamped: Int, referenced: Int) -> String {
+    static func soundGapWords(unstamped: Int, referenced: Int, notEvidence: Int = 0) -> String {
         var parts: [String] = []
         if unstamped > 0 {
             parts.append("\(unstamped.formatted()) Video+Audio files have no current sound print yet — Fingerprint Sound")
+        }
+        if notEvidence > 0 {
+            parts.append("\(notEvidence.formatted()) sound prints could not tell sound from silence (a failed decode, or made before silence was measured) — Fingerprint Sound looks again")
         }
         if referenced > 0 {
             parts.append("\(referenced.formatted()) possible reference movies — their sound lives in other files; Verify Media decides")
@@ -399,15 +424,15 @@ enum VerifyCatalogTiers {
         return parts.joined(separator: " · ")
     }
 
-    /// Why a stamp contradicts a Video+Audio header; nil when it does not.
-    /// The evidence is the sound-print STAMP (what Fingerprint Sound
-    /// recorded), never a fresh ffmpeg read — the words say so.
-    static func silentPrintReason(_ stamp: AudioFingerprintStamp) -> String? {
-        switch stamp.outcome {
-        case .noAudio:
-            return "but the sound print recorded no audio — Fingerprint Sound again"
-        case .fingerprinted:
-            return stamp.analyzedSeconds > 0 && stamp.landmarks == 0 ? "but the sound print heard nothing (silent)" : nil
+    /// Why a stamp's reading contradicts a Video+Audio header; nil when it
+    /// does not (or is not evidence — the caller counts that apart). The
+    /// evidence is the sound-print STAMP (what Fingerprint Sound recorded),
+    /// never a fresh ffmpeg read — the words say so.
+    static func silentPrintReason(_ hearing: AudioFingerprintStamp.Hearing) -> String? {
+        switch hearing {
+        case .noAudioTrack: return "but the sound print recorded no audio — Fingerprint Sound again"
+        case .measuredSilence: return "but the sound print heard nothing (silent)"
+        case .heardSound, .notEvidence: return nil
         }
     }
 
