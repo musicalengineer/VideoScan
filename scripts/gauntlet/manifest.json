@@ -9415,6 +9415,26 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CurationAuthorityCodex113Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "PutBackStaysPutBackTests",
+        "SplitUnknownDigestHoldTests",
+        "SideStoreAuthorityTests"
+      ],
+      "tests": [
+        "folderStoreRefuses",
+        "folderStoreWithoutLatchWrites",
+        "ignoredStoreRefuses",
+        "ignoredStoreWithoutLatchWrites",
+        "knownKeeperSplits",
+        "putBackNeverReturns",
+        "unknownKeeperHolds",
+        "unknownStayingMemberIsFine"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DateInferenceSensorTests.swift",
@@ -29497,6 +29517,7 @@
       ],
       "tests": [
         "aSealedBackupContainsTheFolders",
+        "changedFileIsReconciled",
         "editsPersistToTheCatalogOnly",
         "importCarriesEverythingAndVerifies",
         "importIsIdempotent",
@@ -32112,7 +32133,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2767,
+      "expected_floor": 2776,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32563,7 +32584,10 @@
         "VideoScanTests/IgnoredContentImportPlanTests",
         "VideoScanTests/IgnoredContentCatalogTruthTests",
         "VideoScanTests/IgnoredContentCatalogScaleTests",
-        "VideoScanTests/IgnoredContentCatalogSensorTests"
+        "VideoScanTests/IgnoredContentCatalogSensorTests",
+        "VideoScanTests/PutBackStaysPutBackTests",
+        "VideoScanTests/SplitUnknownDigestHoldTests",
+        "VideoScanTests/SideStoreAuthorityTests"
       ]
     },
     {

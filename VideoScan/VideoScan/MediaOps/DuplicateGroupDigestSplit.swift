@@ -40,9 +40,12 @@
 // WHERE LIKENESS IS KEPT (`LikenessHome`):
 //   .pairs           catalog.sqlite is the authority (schema v1.11): the door
 //                    records every group's pairs in `footage_likeness` FIRST,
-//                    then splits — EVERY multi-digest group, none held. A
-//                    group whose pairs the store cannot take (a digest that
-//                    is not a stored content yet) is held by the door
+//                    then splits every multi-digest group whose departing
+//                    members all keep a relationship (a copy, a pair, or a
+//                    different length); a departing member with no whole-
+//                    file SHA-256 holds its group (`unkeptRelationship`,
+//                    codex #113). A group whose pairs the store cannot take
+//                    (a digest that is not a stored content yet) is held by the door
 //                    (`Plan.holding`), with words. Refuse over guess.
 //   .footageGroups   catalog.json (no table to keep weak likeness in): a
 //                    simulated Find Similar Footage pass says which files
@@ -314,8 +317,7 @@ enum DuplicateGroupDigestSplit {
             outcome.left.append(m.filename)
             outcome.leftRelations.append(relation(of: [m], to: members.filter { $0.id != m.id }))
         }
-        if case .footageGroups(let footageGroupOf) = home,
-           let why = lossIfSplit(members, changes: changes, keeper: keeper, footageGroupOf: footageGroupOf) {
+        if let why = holdReason(home, members, changes: changes, keeper: keeper, pairs: outcome.pairs) {
             outcome.held = true
             outcome.heldWhy = why
             plan.groups.append(outcome)
@@ -344,6 +346,19 @@ enum DuplicateGroupDigestSplit {
             let ids = Set(bucket.map(\.id))
             outcome.newGroups.append(.init(id: id, keeperFilename: bucketKeeper.filename, members: bucket.count,
                                            relation: relation(of: bucket, to: members.filter { !ids.contains($0.id) })))
+        }
+    }
+
+    /// Why a group must be held where its likeness is kept; nil = split it.
+    /// `.pairs`: every departing member must keep a durable relationship
+    /// (`unkeptRelationship`); `.footageGroups`: the connectivity rule
+    /// (`lossIfSplit`); `.nothing`: the pure rule, never held.
+    private static func holdReason(_ home: LikenessHome, _ members: [MemberFact], changes: [Change], keeper: MemberFact?,
+                                   pairs: [LikenessPair]) -> String? {
+        switch home {
+        case .pairs: return unkeptRelationship(members, changes: changes, pairs: pairs)
+        case .footageGroups(let map): return lossIfSplit(members, changes: changes, keeper: keeper, footageGroupOf: map)
+        case .nothing: return nil
         }
     }
 

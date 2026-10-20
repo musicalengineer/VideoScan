@@ -103,8 +103,9 @@ extension VideoScanModel {
         let store = ignoredContentStore
         Task { @MainActor in
             if await store.save() == false {
-                // catalog.sqlite's refusal is already said by the store's note.
-                if store.catalog == nil {
+                // A refusal (catalog.sqlite's, or the authority's) is already
+                // said by the store's note; only a failed file write is left.
+                if store.catalog == nil, store.lastSaveFailure == nil {
                     ignoredContentLog.error("ignored-content.json could not be written under \(store.directory.path, privacy: .public)")
                 }
             }

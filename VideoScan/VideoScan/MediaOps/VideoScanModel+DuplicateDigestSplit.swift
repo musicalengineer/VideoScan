@@ -185,7 +185,7 @@ extension VideoScanModel {
     private func heldClause(_ held: [DuplicateGroupDigestSplit.GroupOutcome]) -> String {
         guard !held.isEmpty else { return "" }
         return " \(held.count.formatted()) group(s) held as they are — splitting would lose likeness that nothing here can "
-            + "keep (catalog.json has no footage_likeness table, or a file's content is not stored yet)."
+            + "keep (catalog.json has no footage_likeness table, a file has no whole-file SHA-256 yet, or its content is not stored yet)."
     }
 
     private func refuseSplit(_ why: String) -> DuplicateDigestSplitOutcome {

@@ -46,7 +46,23 @@ enum CatalogAuthority: Equatable, Sendable {
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
     /// Written ONLY by the explicit "Switch Catalog to SQLite…" door (B2).
-    static let latchFileName = "catalog.cutover"
+    nonisolated static let latchFileName = "catalog.cutover"
+
+    /// The latch beside `folder` names catalog.sqlite the authority. A side
+    /// store there (folders, the ignore list) that is NOT attached to a
+    /// writable committer refuses every write with `sideStoreRefusal` —
+    /// never its JSON file (codex #113 P1-4: a launch that fell back or was
+    /// refused used to leave those doors writing JSON). One stat; read at
+    /// each write so no launch path can forget it.
+    nonisolated static func latchNamesSQLite(in folder: URL) -> Bool {
+        FileManager.default.fileExists(atPath: folder.appendingPathComponent(latchFileName).path)
+    }
+
+    /// The words a refused side-store write says.
+    nonisolated static func sideStoreRefusal(_ what: String, file: String) -> String {
+        "catalog.sqlite is the catalog's authority but this session is not attached to it — \(what) refused; "
+            + "\(file) is never written (reopen the catalog, or relaunch)"
+    }
 
     /// The launch rule. Reads; writes nothing but what `open` itself does
     /// to an existing database (its schema check and high-water witness).

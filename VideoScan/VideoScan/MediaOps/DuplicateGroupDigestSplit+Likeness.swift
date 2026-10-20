@@ -88,6 +88,31 @@ extension DuplicateGroupDigestSplit {
         }
     }
 
+    /// `.pairs` only (codex #113 P1-3): nil when every member that LEAVES
+    /// the copies (no group after the split) keeps a durable relationship —
+    /// its content is in one of the group's recorded pairs, or the evidence
+    /// says it is a different length from the rest (not the same). A member
+    /// whose whole-file SHA-256 is not known yet cannot be paired and is not
+    /// known to be anything: the group is HELD, in words. Refuse over guess.
+    static func unkeptRelationship(_ members: [MemberFact], changes: [Change], pairs: [LikenessPair]) -> String? {
+        let leaving = Set(changes.filter { $0.groupID == nil }.map(\.id))
+        var paired = Set<String>()
+        for p in pairs { paired.insert(p.digest); paired.insert(p.hubDigest) }
+        var gaps: [String] = []
+        for m in members where leaving.contains(m.id) {
+            guard let d = m.digest?.lowercased() else {
+                gaps.append("\(m.filename) has no whole-file SHA-256 yet, so no likeness can be kept for it")
+                continue
+            }
+            if paired.contains(d) { continue }
+            if relation(of: [m], to: members.filter { $0.id != m.id })?.kind == .differentLength { continue }
+            gaps.append("\(m.filename) would leave with no copy, no recorded likeness and no evidence it differs")
+        }
+        guard !gaps.isEmpty else { return nil }
+        return "splitting would lose what the group knew: " + gaps.joined(separator: "; ")
+            + ". Fill In Full Hashes, then split again."
+    }
+
     /// One content against the hub: the best-scoring member pair decides.
     private static func pair(_ side: [MemberFact], digest: String, hub: [MemberFact], hubDigest: String,
                              isGenericName: (String) -> Bool) -> LikenessPair? {

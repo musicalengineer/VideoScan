@@ -1,25 +1,34 @@
 // EventsJSONImport.swift
-// The ONE-TIME import of events-decisions.json into catalog.sqlite
-// (2026-10-19). Rick keeps making folders in the build he runs today, so
-// the first launch of a build whose folders live in catalog.sqlite imports
-// whatever the file holds then. After that the file is frozen history —
-// left in place, never written again (like catalog.json).
+// The import of events-decisions.json into catalog.sqlite (2026-10-19).
+// Rick keeps making folders in the build he runs today, so the first launch
+// of a build whose folders live in catalog.sqlite imports whatever the file
+// holds then. After that this build never writes the file (like
+// catalog.json).
 //
-// Idempotent, twice over:
+// Idempotent, and a later change is never hidden (codex #113 P1-1):
 //   * the import appends a `jsonImported` decision (file, SHA-256, counts)
-//     to the stream; a stream that has one is never imported into again —
-//     a later launch only says so (and says if the file changed since);
-//   * a folder already in the catalog is not rewritten, and a decision
-//     already in the stream (the cutover importer may have carried some) is
-//     not appended twice (multiset difference on the decoded values).
+//     to the stream. While the file's SHA-256 is the one the LATEST marker
+//     recorded, a later launch only says so. When the file CHANGED after an
+//     import — an older build kept writing it — it is reconciled AGAIN and
+//     a new marker is appended;
+//   * a decision already in the stream (the cutover importer may have
+//     carried some, or an earlier import) is not appended twice (multiset
+//     difference on the decoded values);
+//   * a folder already in the catalog is compared field by field (name,
+//     state, kind, categories, note): the NEWER `updatedAt` wins — the
+//     file's row is written over the catalog's and said by name — and a tie
+//     or an older file row keeps the catalog's, said as a FINDING. Never a
+//     silent keep of stale values, never a silent overwrite.
 // Nothing in the file is dropped: an element this build cannot read (a
 // damaged folder, a damaged decision) rides into the stream verbatim as an
 // `unreadable` entry with its index.
 //
 // After the write the catalog is read back and the counts are VERIFIED —
 // every folder of the file is there, the stream grew by exactly what was
-// appended, the members are the fold — and one line says them (console,
-// catalog.log, videoscan.log through the store's note).
+// appended, the members are the fold, every reconciled row reads back with
+// the file's values — and one line says them (console, catalog.log,
+// videoscan.log through the store's note), plus one line per reconciled or
+// conflicting folder.
 //
 // Memory: the file is a few KB to a few MB (thousands of decisions); it is
 // read whole, once.
@@ -31,7 +40,7 @@ import Foundation
 import VideoScanCore
 
 /// The import as a value: what the file holds, what the catalog already
-/// has, and what one transaction appends. Pure.
+/// has, and what one transaction writes. Pure.
 struct EventsJSONImportPlan: Sendable {
 
     /// The file read element by element.
@@ -43,15 +52,38 @@ struct EventsJSONImportPlan: Sendable {
         var unreadable: [EventDecision] = []
     }
 
+    /// One folder the catalog and the file hold with other values.
+    struct FolderDifference: Sendable, Equatable {
+        var catalog: EventRecord
+        var file: EventRecord
+        /// The file's row is newer (`updatedAt`) — it is written.
+        var fileWins: Bool { file.updatedAt > catalog.updatedAt }
+
+        /// nil when the two agree on every field a person sets.
+        static func of(_ catalog: EventRecord, _ file: EventRecord) -> FolderDifference? {
+            let same = catalog.name == file.name && catalog.state == file.state && catalog.kind == file.kind
+                && catalog.categories == file.categories && catalog.note == file.note
+            return same ? nil : FolderDifference(catalog: catalog, file: file)
+        }
+    }
+
     let parsed: Parsed
     /// Folders of the file the catalog does not have yet.
     let newEvents: [EventRecord]
+    /// Folders both hold with other values — the reconciliation.
+    let differing: [FolderDifference]
     /// The file's decisions the stream does not hold yet, in file order;
     /// then the unreadable elements; then the marker.
     let appended: [EventDecision]
     let marker: EventsJSONImport
-    /// The catalog's folders ∪ the file's, folded with the whole stream.
+    /// The catalog's folders (reconciled) ∪ the file's new ones, folded
+    /// with the whole stream.
     let folded: EventsDecisionSnapshot
+
+    /// The file's rows that win the reconciliation (written).
+    var updatedEvents: [EventRecord] { differing.filter(\.fileWins).map(\.file) }
+    /// Rows whose catalog values are kept (findings).
+    var conflicts: [FolderDifference] { differing.filter { !$0.fileWins } }
 
     // MARK: Parse
 
@@ -94,21 +126,29 @@ struct EventsJSONImportPlan: Sendable {
     init(parsed: Parsed, existingEvents: [EventRecord], existingDecisions: [EventDecision],
          file: String, sha256: String, at: Date) {
         self.parsed = parsed
-        let have = Set(existingEvents.map(\.id))
-        var seenNew = Set<UUID>()
-        newEvents = parsed.events.filter { !have.contains($0.id) && seenNew.insert($0.id).inserted }
-        // Multiset difference: a decision the stream already holds n times
-        // is skipped n times, in file order.
+        let have = Dictionary(existingEvents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seenNew = Set<UUID>(), seenOld = Set<UUID>()
+        newEvents = parsed.events.filter { have[$0.id] == nil && seenNew.insert($0.id).inserted }
+        differing = parsed.events.compactMap { e in
+            guard let mine = have[e.id], seenOld.insert(e.id).inserted else { return nil }
+            return FolderDifference.of(mine, e)
+        }
+        // Multiset difference: a decision (or an unreadable element, kept
+        // verbatim by an earlier import) the stream already holds n times is
+        // skipped n times, in file order — so a re-import appends only what
+        // is new.
         var held: [EventDecision: Int] = [:]
         for d in existingDecisions { held[d, default: 0] += 1 }
         var fresh: [EventDecision] = []
-        for d in parsed.decisions {
+        for d in parsed.decisions + parsed.unreadable {
             if let n = held[d], n > 0 { held[d] = n - 1 } else { fresh.append(d) }
         }
         marker = EventsJSONImport(file: file, sha256: sha256, events: parsed.events.count, decisions: parsed.decisions.count,
                                   unreadable: parsed.unreadable.count, at: at)
-        appended = fresh + parsed.unreadable + [.jsonImported(marker)]
-        folded = EventsDecisionSnapshot(events: existingEvents + newEvents, decisions: existingDecisions + appended)
+        appended = fresh + [.jsonImported(marker)]
+        let winners = Dictionary(differing.filter(\.fileWins).map { ($0.file.id, $0.file) }, uniquingKeysWith: { first, _ in first })
+        folded = EventsDecisionSnapshot(events: existingEvents.map { winners[$0.id] ?? $0 } + newEvents,
+                                        decisions: existingDecisions + appended)
     }
 
     /// Every folder the import must leave with its fold written.
@@ -124,44 +164,53 @@ struct EventsJSONImportPlan: Sendable {
 /// What the import did, for the one line and the tests.
 enum EventsJSONImportOutcome: Sendable, Equatable {
     case noFile
+    /// The file is the one the latest marker recorded (`changedSince` is
+    /// kept for the words; a changed file is reconciled, never just said).
     case alreadyImported(changedSince: Bool)
     case notJSON
     case refused(String)
     /// Written and read back. `verified` false = a count did not match.
-    case imported(events: Int, newEvents: Int, decisions: Int, unreadable: Int, members: Int, verified: Bool)
+    /// `updated` = folders reconciled from the file; `conflicts` = folders
+    /// whose catalog values were kept (findings).
+    case imported(events: Int, newEvents: Int, decisions: Int, unreadable: Int, members: Int, verified: Bool,
+                  updated: Int = 0, conflicts: Int = 0)
 }
 
 extension EventsCatalogBacking {
 
-    /// Import events-decisions.json once (see the header); every outcome is
-    /// said through `note`.
+    /// Import events-decisions.json (see the header); every outcome is said
+    /// through `note`, and every reconciled or conflicting folder by name.
     @discardableResult
     func importJSONOnce(from url: URL, note: (String) -> Void) async -> EventsJSONImportOutcome {
-        let outcome = await importJSON(from: url)
+        let (outcome, plan) = await importJSON(from: url)
         note(EventsJSONImportWords.line(outcome, file: url.lastPathComponent))
+        for line in EventsJSONImportWords.reconciliation(plan) { note(line) }
         return outcome
     }
 
-    private func importJSON(from url: URL) async -> EventsJSONImportOutcome {
-        guard case .success(let before) = await read() else { return .refused("catalog.sqlite's folders could not be read") }
+    private func importJSON(from url: URL) async -> (EventsJSONImportOutcome, EventsJSONImportPlan?) {
+        guard case .success(let before) = await read() else { return (.refused("catalog.sqlite's folders could not be read"), nil) }
         let file = await Self.fileFacts(url)
-        if let marker = before.decisions.lazy.compactMap(Self.marker).last {
-            return .alreadyImported(changedSince: file.map { $0.sha256 != marker.sha256 } ?? false)
+        // The LATEST marker decides: an unchanged file is done; a changed
+        // one (or one never imported) is reconciled.
+        if let marker = before.decisions.lazy.compactMap(Self.marker).last, file.map({ $0.sha256 == marker.sha256 }) ?? true {
+            return (.alreadyImported(changedSince: false), nil)
         }
-        guard let file else { return .noFile }
-        if let why = writeRefusal() { return .refused(why) }
-        guard let parsed = EventsJSONImportPlan.parse(file.data) else { return .notJSON }
+        guard let file else { return (.noFile, nil) }
+        if let why = writeRefusal() { return (.refused(why), nil) }
+        guard let parsed = EventsJSONImportPlan.parse(file.data) else { return (.notJSON, nil) }
         let plan = EventsJSONImportPlan(parsed: parsed, existingEvents: before.events, existingDecisions: before.decisions,
                                         file: url.lastPathComponent, sha256: file.sha256, at: Date())
-        if let why = write(plan) { return .refused(why) }
-        guard case .success(let after) = await read() else { return .refused("written, but the folders could not be read back") }
+        if let why = write(plan) { return (.refused(why), plan) }
+        guard case .success(let after) = await read() else { return (.refused("written, but the folders could not be read back"), plan) }
         let verified = Self.verify(plan, before: before, after: after)
-        return .imported(events: parsed.events.count, newEvents: plan.newEvents.count, decisions: plan.appended.count,
-                         unreadable: parsed.unreadable.count, members: after.counts.members, verified: verified)
+        return (.imported(events: parsed.events.count, newEvents: plan.newEvents.count, decisions: plan.appended.count,
+                          unreadable: parsed.unreadable.count, members: after.counts.members, verified: verified,
+                          updated: plan.updatedEvents.count, conflicts: plan.conflicts.count), plan)
     }
 
     private func write(_ plan: EventsJSONImportPlan) -> String? {
-        let rows = plan.newEvents.map(EventsCatalogRows.folder)
+        let rows = (plan.newEvents + plan.updatedEvents).map(EventsCatalogRows.folder)
         let decisions: [(kind: String, json: String)]
         do { decisions = try plan.appended.map { ($0.kind, try EventsCatalogRows.json($0)) } } catch {
             return "a decision could not be encoded: \(error.localizedDescription)"
@@ -173,16 +222,20 @@ extension EventsCatalogBacking {
     }
 
     /// Counts in = counts out: every folder of the file is in the catalog,
-    /// the stream grew by exactly what was appended, and the members the
+    /// the stream grew by exactly what was appended, the members the
     /// catalog holds are no more than the fold names (a "pair:" key stays
-    /// in the stream only).
+    /// in the stream only), and every reconciled row reads back with the
+    /// file's values.
     static func verify(_ plan: EventsJSONImportPlan, before: Read, after: Read) -> Bool {
-        let ids = Set(after.events.map(\.id))
-        let everyFolder = plan.parsed.events.allSatisfy { ids.contains($0.id) }
+        let byID = Dictionary(after.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let everyFolder = plan.parsed.events.allSatisfy { byID[$0.id] != nil }
         let streamGrew = after.counts.decisions == before.counts.decisions + plan.appended.count
         let folders = after.counts.events == before.counts.events + plan.newEvents.count
         let members = after.counts.members <= plan.foldedMemberKeys
-        return everyFolder && streamGrew && folders && members
+        let reconciled = plan.updatedEvents.allSatisfy { want in
+            byID[want.id].map { EventsJSONImportPlan.FolderDifference.of($0, want) == nil } ?? false
+        }
+        return everyFolder && streamGrew && folders && members && reconciled
     }
 
     private static func marker(_ d: EventDecision) -> EventsJSONImport? {
@@ -215,18 +268,43 @@ enum EventsJSONImportWords {
             return "Folders: catalog.sqlite holds the folders (there is no \(file) to import)"
         case .alreadyImported(let changed):
             return changed
-                ? "Folders: \(file) CHANGED after it was imported into catalog.sqlite — it is not imported again; catalog.sqlite holds the folders (the file is kept as it is)"
-                : "Folders: catalog.sqlite holds the folders (\(file) was imported earlier and is kept as frozen history)"
+                ? "Folders: \(file) CHANGED after it was imported into catalog.sqlite — catalog.sqlite holds the folders (the file is kept as it is)"
+                : "Folders: catalog.sqlite holds the folders (\(file) was imported earlier and has not changed since)"
         case .notJSON:
             return "Folders: \(file) is not readable JSON — NOT imported; the file is left as it is"
         case .refused(let why):
             return "Folders: \(file) NOT imported into catalog.sqlite — \(why). The file is left as it is; the next launch tries again"
-        case .imported(let events, let new, let decisions, let unreadable, let members, let verified):
-            let counts = "\(events) folder\(events == 1 ? "" : "s") (\(new) new), \(decisions) decision\(decisions == 1 ? "" : "s") appended "
+        case .imported(let events, let new, let decisions, let unreadable, let members, let verified, let updated, let conflicts):
+            let counts = "\(events) folder\(events == 1 ? "" : "s") (\(new) new, \(updated) reconciled from the file, "
+                + "\(conflicts) kept as catalog.sqlite has them), \(decisions) decision\(decisions == 1 ? "" : "s") appended "
                 + "(\(unreadable) unreadable kept verbatim), \(members) member\(members == 1 ? "" : "s") in the catalog"
             return verified
                 ? "Folders: OUTCOME imported \(file) into catalog.sqlite — \(counts); verified (counts in = counts out). The file is frozen history from now on"
                 : "Folders: 🔴 imported \(file) into catalog.sqlite but the read-back did NOT match — \(counts). Nothing was deleted; check Catalog Status"
         }
+    }
+
+    /// One line per folder the reconciliation touched: written (the file's
+    /// row was newer) or a FINDING (catalog.sqlite's newer or same-time
+    /// values kept). A person can always see which.
+    static func reconciliation(_ plan: EventsJSONImportPlan?) -> [String] {
+        guard let plan else { return [] }
+        let written = plan.differing.filter(\.fileWins).map {
+            "Folders: reconciled “\($0.catalog.name)” from events-decisions.json — its row there is newer (\(fields($0))); written to catalog.sqlite"
+        }
+        let kept = plan.conflicts.map {
+            "Folders: FINDING — “\($0.catalog.name)” differs in events-decisions.json (\(fields($0))) but catalog.sqlite's row is as new or newer; catalog.sqlite's is kept — change it by hand if the file's was meant"
+        }
+        return written + kept
+    }
+
+    private static func fields(_ d: EventsJSONImportPlan.FolderDifference) -> String {
+        var out: [String] = []
+        if d.catalog.name != d.file.name { out.append("name “\(d.catalog.name)” → “\(d.file.name)”") }
+        if d.catalog.state != d.file.state { out.append("state \(d.catalog.state.rawValue) → \(d.file.state.rawValue)") }
+        if d.catalog.kind != d.file.kind { out.append("kind \(d.catalog.kind.rawValue) → \(d.file.kind.rawValue)") }
+        if d.catalog.categories != d.file.categories { out.append("categories") }
+        if d.catalog.note != d.file.note { out.append("note") }
+        return out.joined(separator: ", ")
     }
 }

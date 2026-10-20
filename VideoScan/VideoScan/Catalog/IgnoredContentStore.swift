@@ -212,7 +212,7 @@ final class IgnoredContentStore: ObservableObject {
     /// Why the last catalog write did not land (nil = it did).
     private(set) var lastSaveFailure: String?
     /// What the catalog side says (console, catalog.log) — the model sets it.
-    var note: (String) -> Void = { _ in }
+    var note: (String) -> Void = { line in appLog.write("[ignored-content] " + line) }
 
     private var byID: [UUID: IgnoredContentEntry] = [:]
     /// key → entry id. Several keys point at one entry; a later add of an
@@ -350,6 +350,15 @@ final class IgnoredContentStore: ObservableObject {
             if let catalogLoad { await catalogLoad.value }
             return saveToCatalog(catalog)
         }
+        // catalog.cutover beside the file names catalog.sqlite the authority
+        // and this store is not attached: refused, never the JSON file
+        // (codex #113 P1-4).
+        if CatalogAuthority.latchNamesSQLite(in: directory) {
+            let why = CatalogAuthority.sideStoreRefusal("ignore-list changes", file: Self.filename)
+            lastSaveFailure = why
+            note("Ignored content: 🔴 " + why)
+            return false
+        }
         let file = IgnoredContentFile(entries: entries)
         return await Self.saveOffMain(file, to: fileURL)
     }
@@ -383,10 +392,14 @@ final class IgnoredContentStore: ObservableObject {
         case .success(let rows):
             let live = IgnoredContentCatalogRows.live(rows)
             let liveIDs = Set(live.entries.map(\.id))
+            // An id with a put-back row was PUT BACK by a person: it never
+            // comes back into memory from the file or a stale entry, or the
+            // next save would ignore it again (codex #113 P1-2).
+            let putBackIDs = Set(rows.filter(\.putBack).compactMap { UUID(uuidString: $0.entry.entryID) }).subtracting(liveIDs)
             // O(n): set lookups only (100k entries in the scale test).
-            let pending = byID.values.filter { !liveIDs.contains($0.id) }
+            let pending = byID.values.filter { !liveIDs.contains($0.id) && !putBackIDs.contains($0.id) }
             let pendingIDs = Set(pending.map(\.id))
-            let honoured = extra.filter { !liveIDs.contains($0.id) && !pendingIDs.contains($0.id) }
+            let honoured = extra.filter { !liveIDs.contains($0.id) && !pendingIDs.contains($0.id) && !putBackIDs.contains($0.id) }
             replace(with: IgnoredContentFile(entries: live.entries + pending + honoured))
             persisted = liveIDs
             if live.unreadable + live.repeated > 0 {
