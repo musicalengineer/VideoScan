@@ -114,12 +114,20 @@ enum PersonVideos {
         for path in paths {
             guard let rec = model.record(forPath: path), !rec.isPurged, !rec.isSetAside,
                   let tier = tier(of: rec, keys: keys) else { continue }
-            if !model.isArchiveCopy(rec), let copy = model.archivedCopy(of: rec), paths.contains(copy.fullPath) {
-                continue   // its archive copy carries the row
-            }
+            if foldsIntoArchiveCopy(rec, listed: paths, in: model) { continue }   // its archive copy carries the row
             out.append(row(rec, tier: tier, in: model, now: now))
         }
         return sorted(out)
+    }
+
+    /// True when `rec` is a source whose archived copy is also in this
+    /// person's list, so the copy's row stands for both. PROVEN copies only
+    /// (GH #327): folding into a sampled `v1:` match would hide a different
+    /// video behind it.
+    @MainActor
+    static func foldsIntoArchiveCopy(_ rec: VideoRecord, listed paths: Set<String>, in model: VideoScanModel) -> Bool {
+        guard !model.isArchiveCopy(rec), let copy = model.provenArchivedCopy(of: rec) else { return false }
+        return paths.contains(copy.fullPath)
     }
 
     /// One row for `rec` (the shared date + archive rules).

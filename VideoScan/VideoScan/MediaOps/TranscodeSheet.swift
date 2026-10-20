@@ -36,10 +36,8 @@ struct TranscodeSheet: View {
     /// folder still wins for anything not in the archive, and the user can
     /// always Choose… elsewhere.
     private func defaultToArchiveYearFolder() {
-        let rec = request.record
-        let copy = model.isArchiveCopy(rec) ? rec : model.archivedCopy(of: rec)
-        guard let copy else { return }
-        outputFolder = URL(fileURLWithPath: copy.fullPath).deletingLastPathComponent()
+        guard let folder = TranscodeDestination.archiveYearDirectory(for: request.record, model: model) else { return }
+        outputFolder = folder
     }
 
     var body: some View {

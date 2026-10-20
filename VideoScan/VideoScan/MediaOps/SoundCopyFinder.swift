@@ -8,8 +8,9 @@
 // existing engines already decided, nothing weaker:
 //   exact copies ....... the duplicate engine's group (duplicateGroupID)
 //   same footage ....... Find Similar Footage's group (footage.groupID)
-//   the archive copy ... VideoScanModel.archivedCopy(of:) (promote link /
-//                        digest index)
+//   the archive copy ... VideoScanModel.provenArchivedCopy(of:) (promote
+//                        link / whole-file SHA-256 — never a sampled v1:
+//                        match, GH #327)
 // A same-length file elsewhere is NOT a copy (Rick: duration alone is too
 // weak).
 //
@@ -266,7 +267,7 @@ enum SoundCopyFinder {
         }
         let members = members(of: rec, in: model.records)
         var copies = members.sameContent.map { candidate($0.record, $0.relation) }
-        if let archived = model.archivedCopy(of: rec), archived !== rec, hasSound(archived),
+        if let archived = model.provenArchivedCopy(of: rec), archived !== rec, hasSound(archived),
            !copies.contains(where: { $0.id == archived.id }) {
             copies.append(candidate(archived, "archive copy"))
         }

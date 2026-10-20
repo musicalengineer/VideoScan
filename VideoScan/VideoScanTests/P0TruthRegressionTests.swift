@@ -16,6 +16,8 @@
 //      (Compare Media's sides; the Catalog Stream column / inspector chip)
 //   8. Archived copy — a sampled `v1:` match is never "the archived copy"
 //      (journey, ladder, inspector banner, Archive doors) — 2026-10-19
+//   9. No surface ACTS on a sampled match: Transcode's default folder,
+//      People-tab picks and rows, "Watch the copy with sound" — 2026-10-19
 //   + source sensors pinning the one door each surface goes through.
 //
 // RED RUNS (docs/reviews/p0-regression-2026-10-17.md). The suite is run at
@@ -328,7 +330,107 @@ struct P0TruthRegressionTests {
         #expect(model.provenArchivedCopy(of: linked)?.id == linkedCopy.id)
     }
 
+    // MARK: 9. No surface ACTS on a sampled match (2026-10-19, #327 follow-up)
+    //
+    // Each test first proves the fixture reaches the sampled leg —
+    // `archivedCopy(of:)` DOES return the other bytes — so a site that still
+    // asks it goes red; then the promote-linked pair is the positive control.
+
+    @Test("Transcode (TranscodeDestination.archiveYearDirectory): the default output folder never comes from a sampled match")
+    func transcodeFolderNeverFromASampledMatch() throws {
+        let catalog = try P0TruthFixtureCatalog.build("act_transcode")
+        defer { catalog.cleanup() }
+        let (source, copy) = try Self.sampledPair(catalog)
+        let model = catalog.model
+
+        let folder = TranscodeDestination.archiveYearDirectory(for: source, model: model)
+        #expect(folder == nil, "an access copy of \(source.filename) would be filed beside \(copy.filename), other bytes: \(folder?.path ?? "nil")")
+
+        let linkedCopy = try catalog.require(.deadLinkArchivedCopy)
+        let linkedFolder = TranscodeDestination.archiveYearDirectory(for: try catalog.require(.deadLinkSource), model: model)
+        #expect(linkedFolder?.path == linkedCopy.directory, "the promote link still files it in the archive year folder")
+    }
+
+    @Test("People tab picks (FeaturedVideos.resolve): a pick plays its own file, never a sampled match's")
+    func featuredPickNeverPlaysASampledMatch() throws {
+        let catalog = try P0TruthFixtureCatalog.build("act_featured")
+        defer { catalog.cleanup() }
+        let (source, copy) = try Self.sampledPair(catalog)
+        let linked = try catalog.require(.deadLinkSource)
+        let linkedCopy = try catalog.require(.deadLinkArchivedCopy)
+
+        let resolved = FeaturedVideos.resolve([Self.pick(source), Self.pick(linked)], in: catalog.model)
+        let names = resolved.videos.map(\.filename)
+        #expect(!resolved.videos.contains { $0.id == copy.id }, "the pick played \(copy.filename), other bytes: \(names)")
+        #expect(resolved.videos.map(\.id) == [source.id, linkedCopy.id], "own file; the promoted pick shows its archive copy: \(names)")
+    }
+
+    @Test("People tab rows (PersonVideos.rows): a source is folded only into its PROVEN archive copy")
+    func personRowsNeverFoldIntoASampledMatch() throws {
+        let catalog = try P0TruthFixtureCatalog.build("act_person_rows")
+        defer { catalog.cleanup() }
+        let (source, copy) = try Self.sampledPair(catalog)
+        let linked = try catalog.require(.deadLinkSource)
+        let linkedCopy = try catalog.require(.deadLinkArchivedCopy)
+        for row in [source, copy, linked, linkedCopy] {
+            row.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: P0TruthFixtureCatalog.cataloguedDate)]
+        }
+        catalog.model.searchIndex.rebuild(records: catalog.model.records)
+
+        let paths = Set(PersonVideos.rows(for: POIProfile(name: "Donna", referencePath: ""), in: catalog.model).map(\.path))
+        #expect(paths.contains(source.fullPath), "\(source.filename) vanished into \(copy.filename), other bytes: \(paths.sorted())")
+        #expect(paths.contains(copy.fullPath))
+        #expect(paths.contains(linkedCopy.fullPath) && !paths.contains(linked.fullPath),
+                "the promoted source folds into its archive copy: \(paths.sorted())")
+    }
+
+    @Test("Sound copy (SoundCopyFinder.gather): 'Watch the copy with sound' never names a sampled match")
+    func soundCopyNeverOffersASampledMatch() throws {
+        let catalog = try P0TruthFixtureCatalog.build("act_sound")
+        defer { catalog.cleanup() }
+        let (source, copy) = try Self.sampledPair(catalog)
+        let linked = try catalog.require(.deadLinkSource)
+        let linkedCopy = try catalog.require(.deadLinkArchivedCopy)
+
+        let offered = SoundCopyFinder.gather(for: source, model: catalog.model).copiesWithSound
+        #expect(!offered.contains { $0.id == copy.id }, "offered \(copy.filename) as this footage with sound: \(offered.map(\.filename))")
+
+        let control = SoundCopyFinder.gather(for: linked, model: catalog.model).copiesWithSound
+        #expect(control.contains { $0.id == linkedCopy.id && $0.relation == "archive copy" },
+                "the promote link is still offered: \(control.map(\.filename))")
+    }
+
     // MARK: Source sensors
+
+    @Test("Source sensor (every app .swift file): archivedCopy(of:) — whose third leg is a SAMPLED match — is called only by the allowlisted worklist/badge/advice sites; every other site asks provenArchivedCopy(of:)")
+    func onlyWorklistSitesAskTheSampledArchivedCopy() throws {
+        // Rick's rulings keep the sampled leg here (Promote worklist, Tidy
+        // badges); Copies & Advice lists the link but grades every copy's
+        // bytes itself (CopiesAdviceAssessor: sampled = "check first").
+        let allowed: [(file: String, signature: String)] = [
+            ("VideoScan/Archive/VideoScanModel+MasterArchive.swift", "func archivedCopy(of record"),
+            ("VideoScan/Catalog/CatalogContent+Promote.swift", "func isArchived(_ rec"),
+            ("VideoScan/Catalog/CatalogContent+Promote.swift", "func isArchivedExceptPath(_ rec"),
+            ("VideoScan/Catalog/CatalogContent+Promote.swift", "func pfHasMasterCopy(_ rec"),
+            ("VideoScan/Catalog/VideoScanModel+TidyCatalog.swift", "hasArchivedCopy: !archiveSelf && archivedCopy(of: rec)"),
+            ("VideoScan/Catalog/CopiesAdvice+Projection.swift", "static func archiveLink(of rec"),
+        ]
+        var allowedLines: [String: Set<Int>] = [:]
+        for site in allowed {
+            let range = try Self.bodyRange(of: site.signature, in: site.file)
+            try #require(range != nil, "\(site.signature) moved out of \(site.file) — update the sensor")
+            allowedLines[site.file, default: []].formUnion(range.map { Set($0) } ?? [])
+        }
+        let files = try Self.swiftFilesRecursive(in: "VideoScan")
+        try #require(files.count > 100, "the app source folder moved — update the sensor (\(files.count) files)")
+        var stray: [String] = []
+        for file in files {
+            for (index, line) in try Self.code(file).enumerated() where Self.asksSampledArchivedCopy(line) {
+                if !(allowedLines[file]?.contains(index) ?? false) { stray.append("\(file): \(line.trimmingCharacters(in: .whitespaces))") }
+            }
+        }
+        #expect(stray.isEmpty, "these sites act on archivedCopy(of:) (may be a sampled match) — use provenArchivedCopy(of:): \(stray)")
+    }
 
     @Test("Source sensor (Catalog Stream/Size cells, the inspector's stream chip): each renders a FileFact and shows its help")
     func catalogCellsRenderFileFacts() throws {
@@ -523,6 +625,48 @@ extension P0TruthRegressionTests {
         let indent = lines[start].prefix { $0 == " " }
         let end = lines[(start + 1)...].firstIndex { $0 == String(indent) + "}" } ?? lines.count - 1
         return Array(lines[start...end])
+    }
+
+    /// Indices (into `code(relative)`) of one declaration — `body(of:)`'s
+    /// span. nil when the signature is not in the file.
+    static func bodyRange(of signature: String, in relative: String) throws -> ClosedRange<Int>? {
+        let lines = try code(relative)
+        guard let start = lines.firstIndex(where: { $0.contains(signature) }) else { return nil }
+        let indent = lines[start].prefix { $0 == " " }
+        guard lines[start].contains("{") else { return start...start }   // a single-line site
+        let end = lines[(start + 1)...].firstIndex { $0 == String(indent) + "}" } ?? lines.count - 1
+        return start...end
+    }
+
+    /// Every .swift file under `relative`, recursively, as relative paths.
+    static func swiftFilesRecursive(in relative: String) throws -> [String] {
+        let base = project.appendingPathComponent(relative).path
+        let all = FileManager.default.enumerator(atPath: base)?.allObjects as? [String] ?? []
+        return all.filter { $0.hasSuffix(".swift") }.sorted().map { relative + "/" + $0 }
+    }
+
+    /// A code line that calls `archivedCopy(of:)` itself — not the proven
+    /// or the full-digest lookups that share its name.
+    static func asksSampledArchivedCopy(_ line: String) -> Bool {
+        line.replacingOccurrences(of: "provenArchivedCopy(of:", with: "")
+            .replacingOccurrences(of: "identicalArchivedCopy(of:", with: "")
+            .contains("archivedCopy(of:")
+    }
+
+    /// The sampled-collision pair, after proving the fixture reaches
+    /// `archivedCopy(of:)`'s sampled leg (else a site test proves nothing).
+    static func sampledPair(_ catalog: P0TruthFixtureCatalog) throws -> (source: VideoRecord, copy: VideoRecord) {
+        let source = try catalog.require(.sampledMatchSource)
+        let copy = try catalog.require(.sampledMatchArchiveCopy)
+        try #require(catalog.model.archivedCopy(of: source)?.id == copy.id,
+                     "fixture: archivedCopy(of:) must reach the sampled match, or these tests cannot go red")
+        try #require(catalog.model.provenArchivedCopy(of: source) == nil)
+        return (source, copy)
+    }
+
+    static func pick(_ rec: VideoRecord) -> FeaturedVideo {
+        FeaturedVideo(recordID: rec.id, path: rec.fullPath, filename: rec.filename,
+                      contentHash: rec.contentHash, addedAt: P0TruthFixtureCatalog.cataloguedDate)
     }
 
     static func swiftFiles(in relative: String) throws -> [String] {
