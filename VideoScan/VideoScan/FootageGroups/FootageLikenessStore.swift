@@ -41,6 +41,7 @@ final class FootageLikenessStore {
     private var byDigest: [String: [Pair]] = [:]
     /// Pairs held (each counted once).
     private(set) var count = 0
+    var isEmpty: Bool { byDigest.isEmpty }
     /// Bumped on every change — a memo key, never observed by a body.
     private(set) var revision = 0
 

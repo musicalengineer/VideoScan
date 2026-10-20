@@ -39,7 +39,7 @@ import VideoScanCore
 private let icNow = Date(timeIntervalSince1970: 1_760_850_000)   // 2026-10-19
 
 private func entry(_ n: Int, reason: String = "removed-by-user") -> IgnoredContentEntry {
-    IgnoredContentEntry(id: UUID(uuidString: String(format: "CCCCCCCC-0000-4000-8000-%012d", n))!, partialMD5: "md5-\(n)",
+    IgnoredContentEntry(id: UUID(uuidString: String(format: "CCCCCCCC-0000-4000-8000-%012d", n)) ?? UUID(), partialMD5: "md5-\(n)",
                         sizeBytes: Int64(1_000 + n), filename: "test_synthetic_junk_\(n).mov", reason: reason,
                         addedAt: icNow.addingTimeInterval(Double(n)), samplePath: "/Volumes/Synthetic/test_synthetic_junk_\(n).mov")
 }

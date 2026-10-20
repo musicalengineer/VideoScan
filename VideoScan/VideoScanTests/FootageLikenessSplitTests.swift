@@ -378,7 +378,7 @@ struct FootageLikenessDoorTests {
         }
         #expect(refusal.words.contains("the likeness could not be kept in catalog.sqlite"))
         #expect(try await storedPairs(model).isEmpty)
-        #expect(model.footageLikeness.count == 0)
+        #expect(model.footageLikeness.isEmpty)
     }
 
     @Test("ISOLATION: a read-only session refuses and records nothing")
@@ -392,7 +392,7 @@ struct FootageLikenessDoorTests {
         guard case .refused = model.splitDuplicateGroupsByFullDigest() else { Issue.record("expected refused"); return }
         #expect(members.allSatisfy { $0.duplicateGroupID == g })
         #expect(try await storedPairs(model).isEmpty)
-        #expect(model.footageLikeness.count == 0)
+        #expect(model.footageLikeness.isEmpty)
     }
 }
 
