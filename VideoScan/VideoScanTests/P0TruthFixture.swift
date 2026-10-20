@@ -55,6 +55,13 @@ enum P0TruthRowKind: String, CaseIterable, Sendable {
     case silentHeader
     /// A file whose mtime (2024-02-22) is years before it was catalogued (2026-08-12).
     case mtimeYearsBeforeCatalogue
+    /// A working file with only a sampled `v1:` hash that EQUALS an archive
+    /// copy's — but whose bytes differ (the windows agree, the rest does
+    /// not). No promote link, no whole-file SHA-256 (GH #327, 2026-10-19).
+    case sampledMatchSource
+    /// That archive copy: promoted from some other row (not in this
+    /// catalog), SHA-256 fixity of ITS bytes, the same `v1:` signature.
+    case sampledMatchArchiveCopy
 }
 
 /// Which folder of the tree a row's file sits in.
@@ -111,6 +118,11 @@ struct P0TruthRowSpec: Sendable {
     var silentStamp = false
     /// The catalog's duration (Compare Media's sides read it).
     var durationSeconds = 3.0
+    /// An archive copy (Promote's derivation kind + the SHA-256 fixity of
+    /// its bytes) whose source row is NOT in the catalog.
+    var orphanArchiveCopy = false
+    /// Carry this row's sampled `v1:` hash (a sampled collision).
+    var sharesSampledHashWith: P0TruthRowKind?
 }
 
 // MARK: - The catalog
@@ -143,6 +155,10 @@ struct P0TruthFixtureCatalog {
                        silentStamp: true),
         P0TruthRowSpec(kind: .mtimeYearsBeforeCatalogue, folder: .workspace, filename: "Birthday-1993.mov",
                        disk: .bytes(seed: 1993)),
+        P0TruthRowSpec(kind: .sampledMatchSource, folder: .workspace, filename: "Picnic-1992.mov",
+                       disk: .bytes(seed: 1992), sampledHashOnly: true),
+        P0TruthRowSpec(kind: .sampledMatchArchiveCopy, folder: .archiveYear, filename: "1992_Picnic-1992.mov",
+                       disk: .bytes(seed: 2992), orphanArchiveCopy: true, sharesSampledHashWith: .sampledMatchSource),
     ]
 
     /// The file's own clock and the catalog's, for every row (2024-02-22
@@ -184,6 +200,9 @@ struct P0TruthFixtureCatalog {
         for spec in table {
             if let source = spec.archivedCopyOf, let copy = rows[spec.kind], let original = rows[source] {
                 linkArchivedCopy(copy, to: original)
+            }
+            if let other = spec.sharesSampledHashWith, let row = rows[spec.kind], let twin = rows[other] {
+                row.contentHash = twin.contentHash
             }
         }
         sandbox.model.records = table.compactMap { rows[$0.kind] }
@@ -250,6 +269,7 @@ struct P0TruthFixtureCatalog {
         if spec.isPromotionSource { markPromotionSource(r) }
         if spec.sampledHashOnly { r.contentHash = sampledHash(path) }
         if spec.silentStamp { r.audioFingerprint = silentStamp(sizeBytes: r.sizeBytes) }
+        if spec.orphanArchiveCopy { markOrphanArchiveCopy(r) }
         return r
     }
 
@@ -264,6 +284,15 @@ struct P0TruthFixtureCatalog {
         copy.derivedFrom = source.id
         copy.derivationKind = ArchivePromotion.derivationKind
         let digest = sha256(ofFile: copy.fullPath) ?? String(repeating: "ab", count: 32)
+        copy.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: cataloguedDate, sizeBytes: copy.sizeBytes)
+    }
+
+    /// An archive copy whose source row is not in this catalog: Promote's
+    /// kind, a source id nobody has, the SHA-256 of its own bytes.
+    private static func markOrphanArchiveCopy(_ copy: VideoRecord) {
+        copy.derivedFrom = UUID()
+        copy.derivationKind = ArchivePromotion.derivationKind
+        let digest = sha256(ofFile: copy.fullPath) ?? String(repeating: "cd", count: 32)
         copy.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: cataloguedDate, sizeBytes: copy.sizeBytes)
     }
 
@@ -369,6 +398,21 @@ struct P0TruthFixtureTests {
         #expect(mtime == P0TruthFixtureCatalog.fileDate)
         #expect(row.dateModifiedRaw == P0TruthFixtureCatalog.fileDate)
         #expect(row.scanContext.scannedAt == P0TruthFixtureCatalog.cataloguedDate)
+    }
+
+    @Test("the sampled collision: the same v1: hash, different bytes; the copy has a SHA-256 fixity and no source row")
+    func sampledMatchIsACollisionNotACopy() throws {
+        let catalog = try P0TruthFixtureCatalog.build("collision")
+        defer { catalog.cleanup() }
+        let source = try catalog.require(.sampledMatchSource)
+        let copy = try catalog.require(.sampledMatchArchiveCopy)
+        #expect(source.contentHash.hasPrefix("v1:"))
+        #expect(source.contentHash == copy.contentHash, "the sampled signatures agree")
+        #expect(!FileManager.default.contentsEqual(atPath: source.fullPath, andPath: copy.fullPath), "the bytes do not")
+        #expect(source.contentFixity == nil, "no whole-file SHA-256 on the source")
+        #expect(copy.derivationKind == ArchivePromotion.derivationKind)
+        #expect(copy.derivedFrom != source.id)
+        #expect(copy.archiveFixity?.digest == P0TruthFixtureCatalog.sha256(ofFile: copy.fullPath))
     }
 
     @Test("the silent header: Video+Audio in the catalog, a stamp with seconds analysed and no landmarks")

@@ -120,7 +120,7 @@ struct InspectorPanel: View {
 
         // Header
         lines.append(rec.filename)
-        lines.append("  Stream Type: \(rec.streamTypeRaw)")
+        lines.append("  Stream Type: \(CatalogFileFacts.stream(rec).help)")
         lines.append("  Volume: \(VolumeReachability.displayLabel(forPath: rec.fullPath))")
         if rec.starRating > 0 {
             lines.append("  Rating: \(String(repeating: "★", count: rec.starRating))")

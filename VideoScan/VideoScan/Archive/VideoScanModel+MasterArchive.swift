@@ -659,6 +659,23 @@ extension VideoScanModel {
                                           version: promotionIndexVersion)
     }
 
+    /// The archive copy PROVEN to hold this record's content — for the
+    /// surfaces that STATE it (GH #327, integrity_first §2 rule 4 / §5):
+    /// the File Journey and its preservation ladder, the inspector's
+    /// "Archived on … ✓" banner, the Archive doors. Two proofs only:
+    ///   1. the promote link (the job read every byte and recorded the
+    ///      copy's digest), or
+    ///   2. this row's whole-file SHA-256 equals an archive copy's
+    ///      verified digest (`identicalArchivedCopy`).
+    /// `archivedCopy(of:)`'s third leg — an equal SAMPLED `v1:` signature
+    /// or a "hash" duplicate group — is a worklist hint, never a copy
+    /// verdict: three 1 MiB windows can agree on files that differ
+    /// everywhere else. nil = not proven, which the surface says as
+    /// "not archived / unknown", never as a guess. O(1).
+    func provenArchivedCopy(of record: VideoRecord) -> VideoRecord? {
+        masterArchiveCopy(of: record) ?? identicalArchivedCopy(of: record)
+    }
+
     /// Sidebar totals: verified (fixity-recorded) archive copies + bytes,
     /// and any copies lacking fixity. O(1) after the per-mutation rebuild.
     var masterArchiveTotals: ArchivePromotionIndex.Totals {

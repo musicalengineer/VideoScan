@@ -45,8 +45,10 @@ extension CatalogContent {
     var masterCopyOfSelected: VideoRecord? {
         guard let rec = selectedRecord else { return nil }
         // Content-level (Rick 2026-08-25): an identical original on another
-        // volume shows the same "Archived on … to …" line as the promote source.
-        return model.archivedCopy(of: rec)
+        // volume shows the same "Archived on … to …" line as the promote source
+        // — when IDENTICAL is proven by a whole-file SHA-256 (GH #327). A
+        // sampled-signature match never earns the green "Archived on … ✓".
+        return model.provenArchivedCopy(of: rec)
     }
 
     /// Inspector: the source the selected archive copy was promoted from.

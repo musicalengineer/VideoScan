@@ -28301,6 +28301,7 @@
         "deadLinkAndArchivedCopyAreWhatTheySay",
         "everyRowOfTheTableIsBuilt",
         "mtimeRowCarriesBothClocks",
+        "sampledMatchIsACollisionNotACopy",
         "sampledPairIsByteIdenticalWithOnlyAV1Hash",
         "silentHeaderStampSaysNothingWasHeard"
       ]
@@ -28316,6 +28317,8 @@
         "archiveDoorsGoOnlyThroughTheResolver",
         "archivePlayResolvesToTheArchivedCopy",
         "auditListsALinkRowForFixLinksAndMarksNothing",
+        "catalogCellsRenderFileFacts",
+        "catalogColumnsNameTheirEvidence",
         "compareMediaAsksForTheHashOnASampledPair",
         "everyPlayerStartChecksTheAudio",
         "firstJourneyEventIsTheFilesOwnDate",
@@ -28325,7 +28328,9 @@
         "ladderAnswersForTheContent",
         "noSampledHashDecidesACopy",
         "playerNoticesMP3InM4V",
-        "silentHeaderIsNotHasSound"
+        "sampledMatchIsNeverTheArchivedCopy",
+        "silentHeaderIsNotHasSound",
+        "statedArchivedCopyIsProven"
       ]
     },
     {
@@ -32803,7 +32808,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 221,
+      "expected_floor": 226,
       "name": "regression",
       "package_expected_floor": 190,
       "package_selectors": [

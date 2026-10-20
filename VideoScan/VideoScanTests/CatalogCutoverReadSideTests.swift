@@ -569,16 +569,18 @@ struct P0TruthThroughSQLiteTests {
         }
     }
 
-    @Test("P0 TRUTH: the rows that cannot prove their bytes (dead link, sampled-only pair, missing pair) are quarantined — never records")
+    @Test("P0 TRUTH: the rows that cannot prove their bytes (dead link, sampled-only pair, missing pair, sampled collision) are quarantined — never records")
     func unprovenRowsAreNotRecords() async throws {
         let catalog = try P0TruthFixtureCatalog.build("sqlite_quarantine")
         defer { catalog.cleanup() }
         let loaded = try await Self.importAndLoad(catalog)
         let ids = Set(loaded.records.map(\.id))
-        for kind in [P0TruthRowKind.deadLinkSource, .sampledOnlyA, .sampledOnlyB, .sourceWithoutCopy, .sourceWithoutCopyArchivedCopy] {
+        let unproven: [P0TruthRowKind] = [.deadLinkSource, .sampledOnlyA, .sampledOnlyB, .sourceWithoutCopy, .sourceWithoutCopyArchivedCopy,
+                                          .sampledMatchSource, .sampledMatchArchiveCopy]
+        for kind in unproven {
             #expect(!ids.contains(try catalog.require(kind).id), Comment(rawValue: kind.rawValue))
         }
-        #expect(loaded.quarantineCount == 5)
+        #expect(loaded.quarantineCount == unproven.count)
     }
 
     @Test("P0 TRUTH (File Journey): the mtime row's first event says the same words loaded from SQLite — the file's own date, never 'Scanned on'")
