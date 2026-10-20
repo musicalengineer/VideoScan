@@ -8102,6 +8102,7 @@
         "publishSealsAVerifiableSnapshot",
         "publishWithoutLatchRefuses",
         "publisherCommitsFirstAndThrottlesOnGeneration",
+        "publisherWaitsForARunningJobThenPublishesOnce",
         "sealedOpenRefusesAWALDatabase",
         "unchangedSnapshotIsNotReloaded",
         "viewerOpenNeverModifiesTheSnapshot"
@@ -13097,6 +13098,29 @@
         "theTopComposesEveryFolderOpenAndTheTriangleIsViewState",
         "theWordsReadLikeTheFinder",
         "topLevelListsFoldersByDateThenNameThenTheLooseFiles"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FootageFolderTableGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FootageFolderTableGateTests"
+      ],
+      "tests": [
+        "aFolderMembershipChangeIsANewRow",
+        "aJobEndingBringsTheQuietPaceBack",
+        "aRecordReplacedByAFreshObjectWithTheSameIDIsANewRow",
+        "aVisibleSortFactChangeIsANewRow",
+        "everyPaintInputMovesThePaintValue",
+        "quietCatalogPaintsAtOnceThenCoalescesInsideAQuarterSecond",
+        "rowsRebuiltFromTheSameCatalogAreEqualAndNotRepublished",
+        "tenThousandRecordsAndFiftyDigestOnlyChangesRepublishNothing",
+        "theClocksTrailingPaintLands",
+        "theFolderTableIsDrawnBehindThePaintGate",
+        "theHostComparesOnlyItsPaintValue",
+        "whileAJobWritesAtMostOnePaintPerTenSeconds",
+        "writerWords"
       ]
     },
     {
@@ -32445,7 +32469,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2831,
+      "expected_floor": 2844,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [
@@ -32914,7 +32938,8 @@
         "VideoScanTests/CatalogRealityBuilderTests",
         "VideoScanTests/MissingCopyCountTests",
         "VideoScanTests/CatalogRealityStateTests",
-        "VideoScanTests/QAValidateCatalogRedTests"
+        "VideoScanTests/QAValidateCatalogRedTests",
+        "VideoScanTests/FootageFolderTableGateTests"
       ]
     },
     {
@@ -33212,7 +33237,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 231,
+      "expected_floor": 232,
       "name": "regression",
       "package_expected_floor": 190,
       "package_selectors": [

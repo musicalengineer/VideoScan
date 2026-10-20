@@ -131,6 +131,14 @@ struct CatalogTableState: DynamicProperty {
     /// The selected folder's inspector facts — computed once per selection
     /// and per folder or catalog revision, never in a body.
     @State var folderInspector: FolderInspectorFacts?
+
+    // MARK: Paint gate (GH #350, FootageFolderTableGate.swift)
+
+    /// Coalesces the model's publishes into repaints of the folder Table's
+    /// cells (≤ 1 per 0.25 s quiet, ≤ 1 per 10 s while a job or scan writes).
+    @State var folderPaintClock = CatalogPaintClock()
+    /// The clock's revision as the Table's paint value reads it.
+    @State var folderPaintRevision: UInt64 = 0
 }
 
 extension CatalogContent {

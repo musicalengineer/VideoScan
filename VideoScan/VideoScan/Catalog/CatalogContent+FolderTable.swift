@@ -48,7 +48,41 @@ extension CatalogContent {
 
     // MARK: - The Table
 
+    /// The Table behind its paint gate (GH #350, FootageFolderTableGate.swift):
+    /// a model or MFO publish that changes nothing the Table draws no longer
+    /// walks every row. The rename / delete presentations sit OUTSIDE the
+    /// gate — their requests are not paint inputs.
     var footageFolderTable: some View {
+        FootageFolderTableHost(paint: folderTablePaint) { footageFolderTableCore }
+            .equatable()
+            .modifier(FolderLabelPresentations(rename: tableState.$folderRenameRequest, delete: tableState.$folderDeleteRequest,
+                                               onRename: { renameFolder($0, to: $1) }, onDelete: { deleteFolder($0) }))
+    }
+
+    /// Everything `footageFolderTableCore` draws from besides the record
+    /// objects. O(1) to build — no O(rows) work (the rows array is the same
+    /// buffer until a display lands with different rows).
+    private var folderTablePaint: FootageFolderTablePaint {
+        FootageFolderTablePaint(rows: tableState.folderRows,
+                                selectedIDs: selectedIDs,
+                                rowSelection: tableState.folderRowSelection,
+                                expanded: tableState.expandedFolderIDs,
+                                sort: FootageFolderSort.rowComparators(from: sortOrder),
+                                pairTint: showPairsOnly,
+                                angelBadgeRevision: angelBadgeRevision,
+                                paintRevision: tableState.folderPaintRevision)
+    }
+
+    /// The model said something changed: ask the clock for a repaint of
+    /// the cells (coalesced; slower while a job or a scan writes).
+    func requestFolderPaint() {
+        guard tableState.folderKeyMirror.isOn else { return }
+        let busy = CatalogWriteActivity.words(runningJobTitle: fileOpsCenter.firstRunningJobTitle,
+                                              scanning: model.isScanning) != nil
+        tableState.folderPaintClock.request(busy: busy)
+    }
+
+    private var footageFolderTableCore: some View {
         Table(of: FootageFolderTableRow.self, selection: folderSelectionBinding, sortOrder: folderSortBinding) {
             folderColumns
         } rows: {
@@ -73,8 +107,6 @@ extension CatalogContent {
             }
         }
         .background(FolderChevronStyle(revision: tableState.folderRows.count &+ tableState.expandedFolderIDs.count))
-        .modifier(FolderLabelPresentations(rename: tableState.$folderRenameRequest, delete: tableState.$folderDeleteRequest,
-                                           onRename: { renameFolder($0, to: $1) }, onDelete: { deleteFolder($0) }))
     }
 
     /// A record row's drag payload: its record, and the folder it is shown
@@ -493,8 +525,15 @@ extension CatalogContent {
         if tableState.folderKeyMirror.isOn, folderRequestIsStale { refreshFolderDisplay() }   // its display follows
         let level = FootageFolderLevel.level(scope: tableState.folderScope, index: index, display: display)
         tableState.folderLevel = level
-        tableState.folderRows = folderTableRows(level, index: index)
-        tableState.folderRowRefs = Self.rowRefs(tableState.folderRows)
+        // Published only when the Table would draw something different
+        // (GH #350): an equal array keeps the old buffer, so the paint gate
+        // sees no change.
+        let rows = FootageFolderTableRows.build(level, index: index, record: { model.record(forID: $0) },
+                                                keys: { model.footageFolderRow($0).keys })
+        if FootageFolderTableRows.shouldPublish(rows, over: tableState.folderRows) {
+            tableState.folderRows = rows
+            tableState.folderRowRefs = Self.rowRefs(rows)
+        }
         tableState.folderIDs = level.folderIDs
         refreshFolderInspector()
         let revealedFolder = takePendingFolderReveal(in: level)   // opens its triangle before the count below
@@ -508,34 +547,6 @@ extension CatalogContent {
         completePendingReveal()
         completePendingDrop(in: level)
         if revealedFolder { CatalogTableReveal.scrollSelectionIntoView() }
-    }
-
-    private func folderTableRows(_ level: FootageFolderLevel.Level, index: FootageFolders.Index) -> [FootageFolderTableRow] {
-        var rows: [FootageFolderTableRow] = []
-        rows.reserveCapacity(level.rows.count)
-        // Inside a folder, every row is seen inside it.
-        var scopeFolder: UUID?
-        if case .event(let id)? = level.scope { scopeFolder = id }
-        for d in level.rows {
-            if let e = d.eventID {
-                let members = (level.children[e] ?? []).compactMap { recordTableRow($0, index: index, inFolder: e) }
-                rows.append(FootageFolderTableRow(display: d, record: nil, folder: level.folders[e],
-                                                  keys: index.folders[e]?.keys ?? FootageFolders.SortKeys(),
-                                                  children: members.isEmpty ? nil : members))
-            } else if let row = recordTableRow(d, index: index, inFolder: scopeFolder) {
-                rows.append(row)
-            }
-        }
-        return rows
-    }
-
-    /// A record's row; nil when the record has left the catalog.
-    private func recordTableRow(_ d: FootageFolders.DisplayRow, index: FootageFolders.Index, inFolder: UUID?) -> FootageFolderTableRow? {
-        guard let id = d.recordID, let rec = model.record(forID: id) else { return nil }
-        // A row the index has not seen yet (a derivative that just
-        // landed) still needs its sort facts: one projection.
-        return FootageFolderTableRow(display: d, record: rec, keys: index.keysOf[id] ?? model.footageFolderRow(rec).keys,
-                                     inFolder: inFolder)
     }
 
     /// Every row id (members included) → its file id and folder. O(rows).

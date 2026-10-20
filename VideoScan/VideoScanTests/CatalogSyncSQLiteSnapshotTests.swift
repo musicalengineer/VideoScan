@@ -260,6 +260,51 @@ struct CatalogSyncSQLiteSnapshotPublishTests {
         }
     }
 
+    @Test("publisher (GH #350): while a job writes, a tick seals nothing and commits nothing (said once); the first tick after it ends publishes once")
+    func publisherWaitsForARunningJobThenPublishesOnce() async throws {
+        try await SnapshotWorld.with("busy") { world in
+            var commits = 0
+            var published = 0
+            var lines: [String] = []
+            var writer: String? = "Fill In Full Hashes is running"
+            let store = CatalogSnapshotPublisher.Store(repository: world.repository, commitFirst: { commits += 1; return nil })
+            let publisher = CatalogSnapshotPublisher(
+                liveDir: world.masterLive,
+                source: .init(store: { store }, latchURL: world.scene.latchURL, busy: { writer }),
+                log: { lines.append($0) }, onPublished: { published += 1 })
+
+            // The job commits between ticks: the generation moves every time.
+            for tick in 0..<3 {
+                guard case .committed = await world.repository.write(as: .ui, { _ in }) else {
+                    Issue.record("the test commit did not land"); return
+                }
+                guard case .skipped(let words) = await publisher.publishIfChanged() else {
+                    Issue.record("tick \(tick): a running job must hold the publish: \(String(describing: publisher.lastOutcome))"); return
+                }
+                #expect(words.contains("Fill In Full Hashes is running"), Comment(rawValue: words))
+                #expect(publisher.isHeldForWriter)
+            }
+            #expect(commits == 0, "commit-first never runs on the main actor while the job writes")
+            #expect(published == 0, "nothing sealed, nothing integrity-checked")
+            #expect(!FileManager.default.fileExists(atPath: CatalogViewerSnapshot.databaseURL(in: world.masterLive).path))
+            #expect(lines.filter { $0.contains("published once it ends") }.count == 1, "the reason is said once: \(lines)")
+
+            writer = nil
+            guard case .published(let after) = await publisher.publishIfChanged() else {
+                Issue.record("the first tick after the job must publish: \(String(describing: publisher.lastOutcome))"); return
+            }
+            #expect(commits == 1 && published == 1)
+            #expect(!publisher.isHeldForWriter)
+            let sealed = try await CatalogViewerSnapshot.validate(CatalogViewerSnapshot.databaseURL(in: world.masterLive))
+            #expect(sealed.generation == after.generation, "the copy holds what the job wrote")
+            #expect(await publisher.publishIfChanged() == .unchanged(generation: after.generation), "published once, not again")
+
+            writer = "Fill In Full Hashes is running"
+            _ = await publisher.publishIfChanged()
+            #expect(lines.filter { $0.contains("published once it ends") }.count == 2, "a new hold says why again")
+        }
+    }
+
     @Test("scope: production syncs the sealed snapshot + latch, never catalog.json")
     func productionScopeCarriesTheSnapshotNotTheJSON() {
         let scope = CatalogSyncScope.sqliteCatalog
