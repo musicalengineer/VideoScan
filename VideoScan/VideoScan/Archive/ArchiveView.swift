@@ -77,6 +77,9 @@ struct ArchiveView: View {
     /// A door found neither the row's file nor its archived copy on disk
     /// (ArchiveView+Doors) — the words name the archive path.
     @State var playRefusal: String?
+    /// A door opened a file in a player that cannot play its sound (no VLC
+    /// installed — GH #332). The words say so; never silence without words.
+    @State var playSoundNotice: ArchiveSoundNotice?
     /// Year header ▸ Audit <year>… (Rick 2026-10-07) — the sheet driver.
     @State var auditYearRequest: ArchiveAuditRequest?
 
@@ -161,6 +164,17 @@ struct ArchiveView: View {
             Button("OK", role: .cancel) { playRefusal = nil }
         } message: {
             Text(playRefusal ?? "")
+        }
+        .alert("No sound in QuickTime", isPresented: Binding(get: { playSoundNotice != nil }, set: { if !$0 { playSoundNotice = nil } })) {
+            Button("Make Access Copy…") {
+                if let rec = playSoundNotice?.record {
+                    transcodeRequest = TranscodeRequest(record: rec, initialPreset: .archival)
+                }
+                playSoundNotice = nil
+            }
+            Button("OK", role: .cancel) { playSoundNotice = nil }
+        } message: {
+            Text(playSoundNotice?.words ?? "")
         }
         // Archive Angel batches are read from the buffer OUTSIDE body (disk
         // I/O) — refreshed on entry and when the MFO job list changes (the
