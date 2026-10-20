@@ -6,9 +6,10 @@
 // the parent row mirror its line and bar scaled into the parent's share.
 //
 // Users:
-//   • ImportToSQLiteJob — audit (0–40 %), Verify (40–50 %), then the importer.
 //   • ValidateCatalogJob — the audit (0–80 %), then Verify (80–100 %).
-// Both hand it the existing CatalogAuditJob / VerifyCatalogJob unchanged
+//   (ImportToSQLiteJob — audit, Verify, then the importer — was the first
+//   user; retired 2026-10-20.)
+// It hands it the existing CatalogAuditJob / VerifyCatalogJob unchanged
 // (ImportPhaseJob); the phase job is never added to the center — it is the
 // parent row's phase, not a row of its own.
 //

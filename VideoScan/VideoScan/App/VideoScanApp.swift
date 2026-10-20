@@ -175,12 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///      blocking the main thread on the drain would deadlock it.
     ///      `.terminateLater` keeps the runloop alive while the drain
     ///      awaits; the reply is guaranteed within `vlmDrainDeadline`.
-    ///   3. If Import to SQLite is running it holds every catalog save, so
-    ///      the quit Stops it, awaits its end (bounded,
-    ///      `ImportToSQLiteQuit.deadline`), and saves the held edits
-    ///      durably before replying (codex 2026-10-17 P1). A save that
-    ///      cannot land becomes a recovery copy; if that fails too the reply
-    ///      is NO unless the person chooses to lose the changes (round 2 P1).
+    ///   (Import to SQLite, which held every catalog save while it ran, was
+    ///   retired 2026-10-20 with its quit settle; willTerminate's checked
+    ///   save is the quit's catalog save.)
     /// Extends — doesn't replace — the existing willTerminate cleanup.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // UI-test target (VS_UI_TEST=1): quit immediately, no alerts —
@@ -227,10 +224,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appLog.write("quit requested with \(running) file operation(s) running — asking"
                              + (midPair ? " (Delete Duplicates mid-file)" : ""))
                 let response = alert.runModal()
-                // Import to SQLite holds every catalog save while it runs:
-                // each terminateLater path below settles it and saves the
-                // held edits before replying (codex 2026-10-17 P1).
-                let (importJob, model) = (center.activeImportToSQLite, catalogModel)
                 if midPair, response == .alertFirstButtonReturn {
                     appLog.write("quit dialog: user chose Finish this file, then quit — waiting up to \(Int(Self.deleteDuplicatesFinishDeadline))s")
                     center.finishInFlightThenSuspendForQuit()
@@ -243,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             ? "quit: Delete Duplicates finished its file and suspended (plan kept for resume)"
                             : "quit: Delete Duplicates did not finish in time — finish revoked, put-back requested")
                         for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
-                        let reply = await self?.finishQuit(importJob: importJob, model: model) ?? .terminateNow
+                        let reply = await self?.finishQuit() ?? .terminateNow
                         NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)
                     }
                     return .terminateLater
@@ -259,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Move to Trash: a file past its guard is mid-trashItem
                     // on a detached task; its purgedAt + ledger line land
                     // only when the job's task returns.
-                    if suspending || center.mustSettleBeforeQuit {
+                    if suspending || center.hasActivePruneApply {
                         Task { @MainActor [weak self] in
                             if suspending {
                                 let stopped = await center.waitForDeleteDuplicatesToStop(deadline: Self.deleteDuplicatesStopDeadline)
@@ -273,7 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 let settled = await center.waitForPruneApplyToSettle(deadline: Self.pruneApplySettleDeadline)
                                 appLog.write(settled ? "quit: Move to Trash settled" : "quit: Move to Trash did not settle in time — proceeding")
                             }
-                            let reply = await self?.finishQuit(importJob: importJob, model: model) ?? .terminateNow
+                            let reply = await self?.finishQuit() ?? .terminateNow
                             NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)
                         }
                         return .terminateLater
@@ -329,19 +322,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let deleteDuplicatesStopDeadline: TimeInterval = 60
 
     /// The common end of the two file-operation `.terminateLater` paths,
-    /// once their jobs have settled: Import to SQLite stopped and its held
-    /// catalog edits saved (codex 2026-10-17 P1; no-op when none ran), then
-    /// the dossier/VLM shutdown latch and drain. Returns the reply the
-    /// caller gives AppKit: `.terminateCancel` when the held edits could
-    /// not be saved nor copied and the person kept the app open (round 2
-    /// P1) — then nothing is shut down.
+    /// once their jobs have settled: the dossier/VLM shutdown latch and
+    /// drain. Always `.terminateNow` since Import to SQLite's quit settle was
+    /// retired (2026-10-20); the catalog's save is willTerminate's checked save.
     @MainActor
-    private func finishQuit(importJob: ImportToSQLiteJob?, model: VideoScanModel?) async -> NSApplication.TerminateReply {
-        let reply = await ImportToSQLiteQuit.settleForAppQuit(job: importJob, model: model)
-        guard reply == .terminateNow else { return reply }
+    private func finishQuit() async -> NSApplication.TerminateReply {
         captionOrchestrator?.beginShutdown()
         await drainVLMForShutdownIfActive()
-        return reply
+        return .terminateNow
     }
 
     /// The VLM drain, shared by the immediate quit path and the
@@ -389,17 +377,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // F_FULLFSYNC, then a full streaming SHA-256 re-read. Any of
             // those can block forever on a stalling volume.
             appLog.write("shutdown step: saving catalog")
-            // A path that skipped applicationShouldTerminate's settle could
-            // still find Import to SQLite running: Stop it first (its publish
-            // gate closes — catalog.sqlite cannot appear), then release a hold
-            // still up; the held edits outrank an import the exit abandons
-            // (codex 2026-10-17 P1, round 2 P1). The save is CHECKED: a
-            // stalled writer or a failed save becomes a recovery copy, and
-            // every branch is logged (round 2 P1/P2).
+            // The save is CHECKED: a stalled writer or a failed save becomes
+            // a recovery copy, and every branch is logged (codex 2026-10-17
+            // round 2 P1/P2).
             if let model = catalogModel {
-                let importJob = fileOpsCenter?.activeImportToSQLite
-                importJob?.cancel()
-                ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0, job: importJob)
                 let outcome = CatalogQuitRecovery.saveAtTermination(model: model)
                 appLog.write("shutdown step: catalog — \(outcome)")
             }
@@ -656,13 +637,8 @@ struct VideoScanApp: App {
                             // marker is read (one small JSON); a run that
                             // found files gone, or did not finish, is one
                             // console/log line. Nothing starts.
-                            // Import to SQLite (2026-10-17): the dry-run
-                            // marker beside the catalog decides whether the
-                            // real import is offered. One small JSON read
-                            // in the same hop; nothing starts.
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 catalogModel?.catalogAuditRunMarker.announceLastRun(to: catalogModel)
-                                catalogModel?.attachImportDryRunMarker()
                                 // A quit that could not save left a recovery
                                 // copy beside the catalog: say so (never merged).
                                 catalogModel?.announceCatalogRecoveryCopies()
@@ -916,29 +892,16 @@ struct VideoScanApp: App {
                 // runs through --validate-catalog / --audit-catalog.
                 ValidateCatalogMenuItem(model: catalogModel, center: fileOpsCenter,
                                         marker: catalogModel.catalogAuditRunMarker, isReadOnly: catalogModel.isReadOnly)
-                // Split Duplicate Groups by Full Hash (2026-10-19): settles
-                // Verify's duplicateGroupDigestsAgree findings — the machine
-                // has the digests. Safety copy first; one commit; logged.
-                // A file that leaves the copies but is the same footage (a
-                // re-encode, a rewrap) stays linked as the same footage:
-                // Find Similar Footage runs right after to record the links.
-                Button(VideoScanModel.duplicateDigestSplitTitle) {
-                    fileOpsCenter.splitDuplicateGroupsKeepingSameFootage(model: catalogModel)
-                }
-                    .disabled(catalogModel.isReadOnly)
-                    .help("Every duplicate group whose files carry different whole-file SHA-256s is split into groups of true copies; a file whose bytes match no other member leaves its group. A file that is the same footage in another codec or container stays linked as SAME FOOTAGE (Find Similar Footage runs next to record it) — never as a copy to delete. Only the duplicate-group fields change — no file is touched. A safety copy of the catalog is made first.")
+                // "Split Duplicate Groups by Full Hash" left this menu on
+                // 2026-10-20 (JSON gone); its engine
+                // (splitDuplicateGroupsKeepingSameFootage) stays for a future
+                // red Catalog Status item to offer.
                 Divider()
-                // Import to SQLite (2026-10-17, catalog_sqlite_migration
-                // §10c; one action verb): audit + verify + import in one
-                // job inside one write hold. The dry run first — the same
-                // flow, rolled back — then the real import, offered once a
-                // dry run passed on this build (the marker beside the catalog).
-                ImportToSQLiteMenuItems(model: catalogModel, center: fileOpsCenter, marker: catalogModel.importDryRunMarker,
-                                        isReadOnly: catalogModel.isReadOnly)
-                // Cutover B2: the switch itself (re-import, then the latch),
-                // and Reopen when saving to catalog.sqlite was refused.
-                CatalogSwitchMenuItems(model: catalogModel, cutover: catalogModel.catalogCutover,
-                                       isReadOnly: catalogModel.isReadOnly)
+                // Reopen when saving to catalog.sqlite was refused (and Adopt
+                // for a restore below the high-water). Import to SQLite and
+                // Switch Catalog to SQLite were retired 2026-10-20: the
+                // cutover is done, catalog.sqlite is the only catalog.
+                CatalogReopenMenuItems(cutover: catalogModel.catalogCutover)
                 Divider()
                 // Catalog Status (2026-10-16): opens Content Analysis with
                 // the summary band; the title carries the colour word.

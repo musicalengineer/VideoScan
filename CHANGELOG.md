@@ -6,6 +6,11 @@ then what changed underneath. A version is bumped when it ships to Rick's daily 
 ## Unreleased — 5.3 (the SQLite cutover)
 
 **For the catalog**
+- Retired (10/20, the cutover is done): Catalog ▸ Import to SQLite (Dry Run)…, Import to
+  SQLite… and Switch Catalog to SQLite…; Catalog ▸ Split Duplicate Groups by Full Hash (its
+  engine stays, for a future Catalog Status item); and the per-drive right-click Verify
+  Catalog (Validate Catalog… is the one verb). Reopen SQLite Catalog, Adopt, Rescan and
+  Update Catalog… are unchanged.
 - Catalog ▸ Validate Catalog… — ONE verb (10/20) in place of Audit Catalog… and Verify
   Catalog…: every file on disk first, then, only after a complete file check, the catalog
   against itself, as one Media File Operations row. A stopped or failed file check never

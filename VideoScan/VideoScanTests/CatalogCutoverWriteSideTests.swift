@@ -1,8 +1,8 @@
 // CatalogCutoverWriteSideTests.swift
 // Cutover B2 — the WRITE SIDE in the app (docs/design/
 // catalog_cutover_f_prime_2026_10_17.md §3, §7, §10): the three save funnels
-// commit into catalog.sqlite once it is the authority, and "Switch Catalog to
-// SQLite…" writes the latch only after a finished import.
+// commit into catalog.sqlite once it is the authority. (The "Switch Catalog to
+// SQLite…" suite, CatalogSwitchTests, was retired with that menu item 2026-10-20.)
 //   LOGIC     an edit + saveCatalogNow is in catalog.sqlite after a reload;
 //             the debounced funnel commits on its own; the other copy of the
 //             same content shows the new star at once;
@@ -19,7 +19,7 @@
 //   MEDIA     N/A — no media is opened.
 // Every case runs in a sandbox folder (CutoverScene), never Application Support.
 //
-// Suites (filter by SUITE): CatalogCommitterTests · CatalogSwitchTests
+// Suites (filter by SUITE): CatalogCommitterTests
 
 import Foundation
 import Testing
@@ -147,104 +147,5 @@ struct CatalogCommitterTests {
         try scene.record(.healthy).starRating = 3
         #expect(scene.model.saveCatalogNow())
         #expect(try await scene.reloaded(.healthy).starRating == 3)
-    }
-}
-
-// MARK: - Switch Catalog to SQLite…
-
-@Suite("Switch Catalog to SQLite — the latch only after .imported; the rehearsal moved, never deleted", .serialized)
-@MainActor
-struct CatalogSwitchTests {
-
-    final class Freezes {
-        var calls: [Bool] = []
-    }
-
-    static func environment(_ scene: CutoverScene, freezes: Freezes,
-                            runImport: @escaping @MainActor () async -> CatalogSwitchImportResult) -> CatalogSwitchEnvironment {
-        CatalogSwitchEnvironment(folder: scene.folder, catalogURL: scene.catalogURL, runImport: runImport,
-                                 freezeJSON: { freezes.calls.append($0) },
-                                 sink: { scene.model.catalogAuthorityNote($0) })
-    }
-
-    private static func rehearsalFolders(_ scene: CutoverScene) throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(at: scene.folder, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix(CatalogSwitch.rehearsalPrefix) }
-    }
-
-    @Test("an import that does not finish: no latch; the rehearsal is MOVED into a dated folder, not deleted")
-    func noLatchWithoutImport() async throws {
-        let scene = try CutoverScene.make("switch_fail"); defer { scene.cleanup() }
-        try await scene.importCatalog()
-        let rehearsalBytes = try Data(contentsOf: scene.databaseURL).count
-        let freezes = Freezes()
-        let phase = await CatalogSwitchRun.run(Self.environment(scene, freezes: freezes) { .notImported("stopped in a test") })
-        #expect(phase == .failed("the import did not finish: stopped in a test. The rehearsal is in \(try Self.rehearsalFolders(scene).first?.path ?? "?"); nothing was switched"))
-        #expect(FileManager.default.fileExists(atPath: scene.latchURL.path) == false)
-        let aside = try #require(try Self.rehearsalFolders(scene).first)
-        let moved = aside.appendingPathComponent(CatalogAuthority.databaseFileName)
-        #expect(try Data(contentsOf: moved).count == rehearsalBytes)
-        #expect(FileManager.default.fileExists(atPath: aside.appendingPathComponent(CatalogHighWater.fileName).path))
-        #expect(freezes.calls.isEmpty)
-    }
-
-    @Test("an import that finishes: the latch is written, catalog.json frozen, the designation catalog.json carries moved into catalog_state")
-    func latchAfterImport() async throws {
-        let scene = try CutoverScene.make("switch_ok"); defer { scene.cleanup() }
-        let designation = try scene.writeDesignation(rootPath: "/Volumes/Archive/Breen_Family_Archive")
-        try await scene.importCatalog()
-        let freezes = Freezes()
-        let phase = await CatalogSwitchRun.run(Self.environment(scene, freezes: freezes) {
-            do { try await scene.importCatalog(); return .imported } catch { return .notImported("\(error)") }
-        })
-        guard case .done = phase else { Issue.record("expected .done, got \(phase)"); return }
-        #expect(FileManager.default.fileExists(atPath: scene.latchURL.path))
-        #expect(freezes.calls == [true])
-        let launch = try #require(try? await SQLiteLaunchRead.read(scene.databaseURL).get())
-        await launch.repository.close()
-        #expect(CatalogCommitter.designation(fromJSON: launch.designationJSON) == designation)
-        #expect(try Self.rehearsalFolders(scene).count == 1)
-    }
-
-    @Test("catalog.json changed after the import: no latch, and the freeze is undone")
-    func jsonChangedMeanwhile() async throws {
-        let scene = try CutoverScene.make("switch_changed"); defer { scene.cleanup() }
-        try await scene.importCatalog()
-        let freezes = Freezes()
-        let phase = await CatalogSwitchRun.run(Self.environment(scene, freezes: freezes) {
-            do {
-                try await scene.importCatalog()
-                let handle = try FileHandle(forWritingTo: scene.catalogURL)
-                try handle.seekToEnd()
-                try handle.write(contentsOf: Data(" ".utf8))
-                try handle.close()
-                return .imported
-            } catch { return .notImported("\(error)") }
-        })
-        #expect(phase == .failed("catalog.json changed after the import (an edit was saved meanwhile) — run Switch again; nothing was switched"))
-        #expect(FileManager.default.fileExists(atPath: scene.latchURL.path) == false)
-        #expect(freezes.calls == [true, false])
-    }
-
-    @Test("a job running (or a read-only session): refused in words BEFORE anything moves")
-    func busyRefusesFirst() async throws {
-        let scene = try CutoverScene.make("switch_busy"); defer { scene.cleanup() }
-        try await scene.importCatalog()
-        var env = Self.environment(scene, freezes: Freezes()) { .imported }
-        env.busyWords = { "Verify Catalog is running" }
-        let phase = await CatalogSwitchRun.run(env)
-        #expect(phase == .failed("Verify Catalog is running"))
-        #expect(FileManager.default.fileExists(atPath: scene.databaseURL.path))
-        #expect(try Self.rehearsalFolders(scene).isEmpty)
-    }
-
-    @Test("not ready (no catalog.sqlite): refused in words, nothing moved")
-    func notReady() async throws {
-        let scene = try CutoverScene.make("switch_notready"); defer { scene.cleanup() }
-        let freezes = Freezes()
-        let phase = await CatalogSwitchRun.run(Self.environment(scene, freezes: freezes) { .imported })
-        #expect(phase == .failed("there is no \(CatalogAuthority.databaseFileName) beside the catalog — run Import to SQLite… first"))
-        #expect(try Self.rehearsalFolders(scene).isEmpty)
-        #expect(FileManager.default.fileExists(atPath: scene.latchURL.path) == false)
     }
 }

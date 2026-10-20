@@ -1,0 +1,320 @@
+// CatalogPhaseHoldAndQuitTests.swift
+// The tests that ImportToSQLiteTests.swift / ImportToSQLiteQuitTests.swift
+// held for code that OUTLIVES Import to SQLite (retired 2026-10-20, "JSON
+// gone"). Moved here unchanged in what they assert; only the suite names, the
+// scene helper and the quit sensor (which pinned the retired import settle)
+// changed. The removed tests covered only the retired job, marker, preflight,
+// menu and quit settle.
+//   • CatalogPhaseLogicTests — ImportPhaseVerdict and ImportToSQLiteTiming,
+//     which Validate Catalog drives between its two phases.
+//   • CatalogStoreHoldTests — the store's MOPS-16 owner-token hold (still in
+//     CatalogStore and read by the committer; slice 2 decides its fate).
+//   • CatalogQuitRecoveryTests — willTerminate's CHECKED save, the recovery
+//     copy, the launch notice, the bounded hold.
+//   • CatalogQuitRecoverySensorTests — the delegate's quit wiring after the
+//     retirement: no import settle, the checked save, the launch notice.
+// Suites (filter by SUITE): CatalogPhaseLogicTests · CatalogStoreHoldTests ·
+// CatalogQuitRecoveryTests · CatalogQuitRecoverySensorTests
+
+import AppKit
+import CryptoKit
+import Foundation
+import Testing
+@testable import VideoScan
+@testable import VideoScanCore
+
+// MARK: - Logic: the verdicts, the wait
+
+@Suite("Catalog phase jobs — verdicts and the wait before Verify")
+struct CatalogPhaseLogicTests {
+
+    @Test("a phase job's terminal state: finished goes on, Stop stops, a failure stops the run with the phase's own words")
+    func phaseVerdicts() {
+        #expect(ImportPhaseVerdict.of(.finished(summary: "ok"), step: "the audit") == .proceed)
+        #expect(ImportPhaseVerdict.of(.cancelled, step: "the audit") == .stopped)
+        #expect(ImportPhaseVerdict.of(.cancelling, step: "the audit") == .stopped)
+        #expect(ImportPhaseVerdict.of(.failed(message: "Refused — read-only"), step: "the audit")
+                == .couldNotComplete("the audit could not complete: Refused — read-only"))
+        #expect(ImportPhaseVerdict.of(.running, step: "Verify Catalog") == .couldNotComplete("Verify Catalog did not finish"))
+    }
+
+    @Test("Verify starts no earlier than the audit's finishing second + 1.5 s (the gate refuses finishedAt >= report start, whole seconds)")
+    func theWaitBeforeVerify() {
+        let finished = Date(timeIntervalSince1970: 1_000.2)
+        #expect(abs(ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: finished, now: Date(timeIntervalSince1970: 1_000.3)) - 1.2) < 1e-6)
+        #expect(ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: finished, now: Date(timeIntervalSince1970: 1_001.5)) == 0)
+        #expect(ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: finished, now: Date(timeIntervalSince1970: 1_005)) == 0)
+        let lateInSecond = Date(timeIntervalSince1970: 1_000.99)
+        #expect(ImportToSQLiteTiming.verifyStartDelay(auditFinishedAt: lateInSecond, now: lateInSecond) < 0.52)
+    }
+
+    /// An injected wall clock: each read returns the next value (then the last, forever).
+    @MainActor
+    private final class SteppedClock {
+        var readings: [TimeInterval]
+        var sleeps: [TimeInterval] = []
+        init(_ readings: [TimeInterval]) { self.readings = readings }
+        func now() -> Date { Date(timeIntervalSince1970: readings.count > 1 ? readings.removeFirst() : readings[0]) }
+    }
+
+    @Test("P3 (codex 2026-10-17): the wall clock steps BACK 0.7 s during the wait — re-read after waking and waited again (0.7 s) until the audit's second + 1.5 s has truly passed")
+    @MainActor
+    func aBackwardClockStepWaitsAgain() async {
+        let clock = SteppedClock([100.9, 100.8, 101.6])        // audit ended 100.9; slept 0.6; woke at 100.8
+        let ready = await ImportToSQLiteTiming.waitForVerifyStart(auditFinishedAt: Date(timeIntervalSince1970: 100.9),
+                                                                  now: clock.now, sleep: { clock.sleeps.append($0) })
+        #expect(ready)
+        #expect(clock.sleeps.count == 2)
+        #expect(abs((clock.sleeps.first ?? 0) - 0.6) < 1e-6)
+        #expect(abs((clock.sleeps.last ?? 0) - 0.7) < 1e-6)
+    }
+
+    @Test("P3: a clock that keeps stepping back is waited out a bounded number of times, then the wait says no")
+    @MainActor
+    func aClockThatKeepsSteppingBackGivesUp() async {
+        let clock = SteppedClock([100.0])                      // never moves forward
+        let ready = await ImportToSQLiteTiming.waitForVerifyStart(auditFinishedAt: Date(timeIntervalSince1970: 100.0),
+                                                                  now: clock.now, sleep: { clock.sleeps.append($0) })
+        #expect(!ready)
+        #expect(clock.sleeps.count == ImportToSQLiteTiming.verifyWaitRounds)
+    }
+}
+
+// MARK: - The store's hold with an owner token
+
+@Suite("Catalog store — the hold (owner token)", .serialized)
+@MainActor
+struct CatalogStoreHoldTests {
+
+    @Test("every write door refuses with .heldByJob and its words, nothing lands; releasing returns the count; the next save lands")
+    func theStoreHoldRefusesEveryDoor() async throws {
+        let sb = try ShowAgainSandbox.make("import_doors"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        let file = store.fileLocation
+        #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
+        #expect(store.saveNow(records: []) == false)
+        #expect(await store.saveAcknowledged(records: []) == false)
+        #expect(store.lastWriteError == .heldByJob("a test job"))
+        #expect(store.lastWriteError?.userFacingDescription == "Catalog saving is paused while a test job. The change is kept in memory and saved when the job finishes.")
+        #expect(!FileManager.default.fileExists(atPath: file), "nothing landed while held")
+        #expect(store.writeHold == "a test job")
+        #expect(store.releaseWriteHold() == 2)
+        #expect(store.writeHold == nil)
+        #expect(store.saveNow(records: []) == true)
+        #expect(FileManager.default.fileExists(atPath: file))
+    }
+
+    @Test("the owner's acknowledged save passes the hold and moves the generation by one; the hold stays; it is not counted as held")
+    func theOwnersSavePasses() async throws {
+        let sb = try ShowAgainSandbox.make("import_owner"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        #expect(store.saveNow(records: []))
+        let before = store.currentGeneration
+        let owner = CatalogWriteHoldOwner()
+        #expect(await store.holdWrites(reason: "a test job", owner: owner) == .taken)
+        #expect(await store.saveAcknowledged(records: [], as: owner))
+        #expect(store.currentGeneration == before + 1)
+        #expect(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: store.fileLocation))?.generation == before + 1)
+        #expect(store.writeHold == "a test job")
+        #expect(store.releaseWriteHold() == 0)
+    }
+
+    @Test("a save presenting ANOTHER token, or none, is held while the owner's passes")
+    func anotherTokenIsHeld() async throws {
+        let sb = try ShowAgainSandbox.make("import_token"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        #expect(store.saveNow(records: []))
+        let before = store.currentGeneration
+        #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
+        #expect(await store.saveAcknowledged(records: [], as: CatalogWriteHoldOwner()) == false)
+        #expect(await store.saveAcknowledged(records: [], as: nil) == false)
+        #expect(store.currentGeneration == before)
+        #expect(store.releaseWriteHold() == 2)
+    }
+
+    @Test("P2 (codex 2026-10-17): taking the hold drains a save already admitted — it lands BEFORE holdWrites returns")
+    func theHoldDrainsAnAdmittedSave() async throws {
+        let sb = try ShowAgainSandbox.make("import_drain"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        #expect(store.saveNow(records: []))
+        let before = store.currentGeneration
+        store.testWriteDelay = 0.3
+        store.saveAsync(records: [])                                     // admitted: on the write queue, in flight
+        #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
+        #expect(!store.hasUnsavedChanges)
+        #expect(store.currentGeneration == before + 1)
+        #expect(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: store.fileLocation))?.generation == before + 1)
+        #expect(store.releaseWriteHold() == 0, "the admitted save was not refused — it landed")
+    }
+
+    @Test("P2: an acknowledged save in flight is an unsaved change (hasUnsavedChanges is truthful) until it lands")
+    func anAcknowledgedSaveInFlightIsUnsaved() async throws {
+        let sb = try ShowAgainSandbox.make("import_ackflight"); defer { sb.cleanup() }
+        let store = sb.model.catalogStore
+        store.testAfterWriteBeforeVerify = { _ in Thread.sleep(forTimeInterval: 0.3) }
+        let saving = Task { @MainActor in await store.saveAcknowledged(records: []) }
+        var sawInFlight = false
+        for _ in 0..<20 where !sawInFlight {
+            try await Task.sleep(for: .milliseconds(5))
+            sawInFlight = store.hasUnsavedChanges
+        }
+        #expect(sawInFlight)
+        #expect(await saving.value)
+        #expect(!store.hasUnsavedChanges)
+    }
+
+    @Test("the audit's acknowledged save presents its owner token; the store lets ONLY that token past the hold, before the lock; saveNow and saveAsync present none")
+    func theOwnerTokenPath() throws {
+        let audit = try CatalogQuitRecoverySensorTests.code("MediaOps/CatalogAuditJob.swift")
+        #expect(audit.contains("model.saveCatalogAcknowledged(asHoldOwner: writeHoldOwner)"))
+        let store = try CatalogQuitRecoverySensorTests.code("Catalog/CatalogStore.swift")
+        let hold = try #require(store.range(of: "if let hold = writeHold, owner != writeHoldOwner {"))
+        let lock = try #require(store.range(of: "switch lock.acquire() {"))
+        #expect(hold.lowerBound < lock.lowerBound)
+        #expect(store.components(separatedBy: "writePrecondition(as: owner)").count == 2, "only saveAcknowledged presents a token")
+        #expect(store.components(separatedBy: "if writePrecondition() != nil").count == 3, "saveNow and saveAsync present none")
+    }
+}
+
+// MARK: - The quit's checked save and recovery copy
+
+/// A sandboxed catalog folder with real small files and a SAVED catalog.json
+/// (the store's generation = the file's), as in a live JSON-store session.
+@MainActor
+struct QuitScene {
+    let sandbox: ShowAgainSandbox
+
+    var catalogURL: URL { URL(fileURLWithPath: sandbox.model.catalogStore.fileLocation) }
+    var folder: URL { catalogURL.deletingLastPathComponent() }
+
+    static func make(_ label: String, rows: Int = 3) throws -> QuitScene {
+        let sb = try ShowAgainSandbox.make("import_\(label)")
+        try FileManager.default.createDirectory(at: sb.catalogDir, withIntermediateDirectories: true)
+        for i in 0..<rows { try sb.live("clip\(i).mov", bytes: 2_000 + i) }
+        guard sb.model.saveCatalogNow() else { throw CocoaError(.fileWriteUnknown) }
+        return QuitScene(sandbox: sb)
+    }
+
+    func cleanup() { sandbox.cleanup() }
+    func log() -> String { sandbox.catalogLogText() }
+}
+
+@Suite("Catalog quit — the checked save and the recovery copy", .serialized)
+@MainActor
+struct CatalogQuitRecoveryTests {
+
+    private static let corrupt: @Sendable (URL) -> Void = { url in
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data("tamper".utf8))
+        try? handle.close()
+    }
+
+    @Test("P1: willTerminate's save is CHECKED — a refused save becomes a recovery copy and the branch is logged")
+    func theTerminalSaveIsChecked() async throws {
+        let scene = try QuitScene.make("terminal"); defer { scene.cleanup() }
+        let model = scene.sandbox.model
+        model.records.first?.userNotes = "saved at exit"
+        model.catalogStore.testAfterWriteBeforeVerify = Self.corrupt
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: model, writerDeadline: 5)
+        guard case .recoveryCopy(let url) = outcome else { Issue.record("expected a recovery copy, got \(outcome)"); return }
+        #expect(url.lastPathComponent.hasPrefix(CatalogQuitRecovery.filePrefix))
+        #expect(url.deletingLastPathComponent().path == scene.folder.path)
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("saved at exit"))
+        #expect(CatalogSnapshot.headerProbe(at: url) != nil)
+        #expect(scene.log().contains("Catalog quit: app exit — the catalog could not be saved"))
+        #expect(scene.log().contains("Catalog quit: START recovery copy"))
+        #expect(scene.log().contains("Catalog quit: OUTCOME recovery copy written"))
+        model.catalogStore.testAfterWriteBeforeVerify = nil
+        #expect(CatalogQuitRecovery.saveAtTermination(model: model, writerDeadline: 5) == .saved)
+    }
+
+    @Test("P1: the next launch says a recovery copy is beside the catalog — console + catalog.log — and merges nothing")
+    func theNextLaunchSaysACopyIsThere() async throws {
+        let scene = try QuitScene.make("launch"); defer { scene.cleanup() }
+        let model = scene.sandbox.model
+        #expect(CatalogQuitRecovery.launchNotice(catalogURL: scene.catalogURL) == nil)
+        try Data("{}".utf8).write(to: scene.folder.appendingPathComponent("catalog.recovery-20261017-230000.json"))
+        let before = model.records.map(\.userNotes)
+        model.announceCatalogRecoveryCopies()
+        #expect(scene.log().contains("Catalog quit: 1 catalog recovery copy from a quit that could not save is beside the catalog: catalog.recovery-20261017-230000.json. Nothing was merged."),
+                Comment(rawValue: scene.log()))
+        #expect(model.records.map(\.userNotes) == before)
+    }
+
+    @Test("P2: holdWrites is BOUNDED — an admitted save that does not drain gives the hold back within the bound (.writerStalled)")
+    func theHoldGivesUpOnAStalledSave() async throws {
+        let scene = try QuitScene.make("stallhold"); defer { scene.cleanup() }
+        let store = scene.sandbox.model.catalogStore
+        store.testWriteDelay = 2
+        store.saveAsync(records: scene.sandbox.model.records)
+        let started = Date()
+        let result = await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner(), within: 0.3)
+        #expect(Date().timeIntervalSince(started) < 1.5)
+        #expect(result == .writerStalled(heldSaves: 0))
+        #expect(store.writeHold == nil)
+        for _ in 0..<1_000 where store.hasUnsavedChanges { try await Task.sleep(for: .milliseconds(10)) }
+        store.testWriteDelay = 0
+    }
+}
+
+@Suite("Catalog quit — delegate wiring sensors")
+struct CatalogQuitRecoverySensorTests {
+
+    static func code(_ name: String) throws -> String {
+        try SourceTree.appSource(named: name).split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+    }
+
+    @Test("both terminateLater paths reply through finishQuit; willTerminate makes the CHECKED save; launch announces recovery copies; no Import to SQLite settle is left")
+    func theDelegateQuitWiring() throws {
+        let app = try Self.code("App/VideoScanApp.swift")
+        #expect(app.components(separatedBy: "NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)").count == 3)
+        #expect(app.components(separatedBy: "await self?.finishQuit() ?? .terminateNow").count == 3, "both terminateLater paths")
+        #expect(app.contains("if suspending || center.hasActivePruneApply {"))
+        #expect(app.contains("CatalogQuitRecovery.saveAtTermination(model: model)"))
+        #expect(!app.contains("catalogModel?.saveCatalogNow()"))
+        #expect(app.contains("catalogModel?.announceCatalogRecoveryCopies()"))
+        for retired in ["ImportToSQLiteQuit", "activeImportToSQLite", "ImportToSQLiteJob"] {
+            #expect(!app.contains(retired), "VideoScanApp still names \(retired)")
+        }
+    }
+
+    @Test("the retired Catalog menu items are gone; Reopen SQLite Catalog stays; the Split engine stays without a menu item")
+    func theRetiredMenuItemsAreGone() throws {
+        let app = try Self.code("App/VideoScanApp.swift")
+        #expect(app.contains("CatalogReopenMenuItems(cutover: catalogModel.catalogCutover)"))
+        #expect(!app.contains("ImportToSQLiteMenuItems"))
+        #expect(!app.contains("CatalogSwitchMenuItems"))
+        #expect(!app.contains("duplicateDigestSplitTitle"))
+        #expect(!app.contains("attachImportDryRunMarker"))
+        let reopen = try Self.code("Catalog/CatalogReopenMenuItems.swift")
+        #expect(reopen.contains("Button(\"Reopen SQLite Catalog\")"))
+        #expect(!reopen.contains("Switch Catalog to SQLite"))
+        #expect(!MediaFileOperationKind.all.map(\.rawValue).contains("importToSQLite"))
+        let split = try Self.code("MediaOps/VideoScanModel+DuplicateDigestSplit.swift")
+        #expect(split.contains("func splitDuplicateGroupsKeepingSameFootage("))
+    }
+
+    @Test("the per-drive right-click no longer offers Verify Catalog; Rescan and Update Catalog… stay")
+    func theVolumeMenuKeepsRescanAndUpdate() throws {
+        let table = try Self.code("Catalog/CatalogView+VolumeTable.swift")
+        #expect(!table.contains("model.verifyCatalog(for:"))
+        #expect(!table.contains("Label(\"Verify Catalog\""))
+        #expect(table.contains("Rescan"))
+        #expect(table.contains("Update Catalog…"))
+    }
+}
+
+// MARK: - Fixture: the catalog.cutover latch's bytes
+
+/// The latch Switch Catalog to SQLite… wrote (CatalogSwitch.latchData,
+/// retired 2026-10-20) — byte-for-byte the same shape, for tests that need a
+/// real latch with a `switchedAt` (Catalog Status reads it).
+enum CatalogLatchFixture {
+    static func data(_ run: CatalogRow.FinishedImport, at date: Date) -> Data {
+        let iso = ISO8601DateFormatter().string(from: date)
+        let text = #"{"switchedAt":"\#(iso)","importRun":"\#(run.runID)","sourceSHA256":"\#(run.sourceSHA256)","sourceGeneration":\#(run.sourceGeneration)}"#
+        return Data((text + "\n").utf8)
+    }
+}

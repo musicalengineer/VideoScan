@@ -498,7 +498,7 @@ extension MediaFileOperationsCenter {
             job.refuseToStart(reason: "Verify Catalog is already running — wait for it to finish (or stop it). Nothing was started.")
             return job
         }
-        if let words = importRunsItsOwn("Verify Catalog") ?? validateRunsItsOwn("catalog check") {
+        if let words = validateRunsItsOwn("catalog check") {
             job.refuseToStart(reason: words)
             return job
         }

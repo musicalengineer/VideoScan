@@ -18,8 +18,9 @@
 //                  and catalog.json opens READ-ONLY (two writable
 //                  authorities is the lost-update class the generation
 //                  guard exists for).
-// Only "Switch Catalog to SQLite…" (CatalogSwitchToSQLite.swift, B2) writes
-// the latch; nothing here writes catalog.json. B2: under `.sqlite` the
+// Only "Switch Catalog to SQLite…" (B2; retired 2026-10-20 once the switch
+// was done) wrote the latch; nothing in the app writes it now, and nothing
+// here writes catalog.json. B2: under `.sqlite` the
 // repository stays OPEN for the session and the save funnels commit
 // through it (CatalogCommitter); the Master Archive designation is read
 // from `catalog_state` (catalog.json's only while the store has none yet —

@@ -215,7 +215,7 @@ struct CatalogFreshnessFactsTests {
         let dir = try scratch()
         let catalog = dir.appendingPathComponent("catalog.json").path
         let switched = now.addingTimeInterval(-600)
-        try CatalogSwitch.latchData(CatalogRow.FinishedImport(runID: "R", finishedAt: 0, sourceSHA256: "ab", sourceGeneration: 4_900),
+        try CatalogLatchFixture.data(CatalogRow.FinishedImport(runID: "R", finishedAt: 0, sourceSHA256: "ab", sourceGeneration: 4_900),
                                     at: switched)
             .write(to: dir.appendingPathComponent(CatalogFreshnessFactsReader.cutoverLatchFileName))
         #expect(CatalogFreshnessFactsReader.read(catalogFile: catalog).switchedAt == switched)

@@ -374,8 +374,8 @@ extension VideoScanModel {
 extension MediaFileOperationsCenter {
 
     /// Start "Validate Catalog" over the whole catalog. Refused (nothing
-    /// started) while another Validate, a bare audit or Verify, or an
-    /// Import to SQLite is active — one checker of the catalog at a time.
+    /// started) while another Validate, or a bare audit or Verify, is
+    /// active — one checker of the catalog at a time.
     @discardableResult
     func startValidateCatalog(model: VideoScanModel, marker: CatalogAuditRunMarker) -> ValidateCatalogJob {
         let job = ValidateCatalogJob(model: model, marker: marker)
@@ -383,10 +383,6 @@ extension MediaFileOperationsCenter {
         guard add(job) else { return job }
         if let busy {
             job.refuseToStart(reason: "\(busy.title) is already running — wait for it to finish (or stop it)")
-            return job
-        }
-        if let words = importRunsItsOwn("Audit Catalog and Verify Catalog") {
-            job.refuseToStart(reason: words)
             return job
         }
         job.start()

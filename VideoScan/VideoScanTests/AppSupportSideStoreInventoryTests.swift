@@ -61,7 +61,6 @@ struct AppSupportSideStoreInventoryTests {
         "catalog-audit.json": .logOrReport,                   // Audit Catalog's marker; results also land in audit_results
         "catalog-write-errors.jsonl": .logOrReport,
         "catalog.highwater.log": .logOrReport,                // the high-water's second witness
-        "import-dryrun.json": .logOrReport,
         "plan.json": .logOrReport,                            // delete-duplicates/<job>/ and Angel Prepare job memory
         "findtagd.log": .logOrReport,
         "previewsweepd.log": .logOrReport,

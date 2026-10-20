@@ -1,12 +1,13 @@
 // ImportToSQLitePhases.swift
-// The pieces of Import to SQLite's three phases that are not the job's
-// lifecycle (Rick 2026-10-17: "in future this should be one action verb").
-// One sentence: Import to SQLite holds every catalog save from its first
-// step to its last, and inside that hold runs Audit Catalog, then Verify
-// Catalog, then the import — so the three describe one generation by
-// construction.
+// The phase pieces Import to SQLite introduced (Rick 2026-10-17: "in future
+// this should be one action verb") that Validate Catalog still drives. The
+// import job itself, its dry-run marker and build identity were retired
+// 2026-10-20 ("JSON gone": the cutover is done); what is left here is used by
+// ValidateCatalogJob / CatalogPhaseDriver and the audit's owner-token save.
+// (The names keep their "Import" prefix to keep this retirement a pure
+// removal; a rename is a separate, mechanical change.)
 //
-//   • ImportPhaseJob — what the import needs from the two jobs it runs as
+//   • ImportPhaseJob — what a driver needs from the two jobs it runs as
 //     phases 1 and 2 (the existing CatalogAuditJob and VerifyCatalogJob,
 //     unchanged in what they do; they are simply not added to the center).
 //   • ImportPhaseVerdict — PURE: what a finished phase job's state means
@@ -17,22 +18,14 @@
 //     job waits out that second before it makes the verify job, re-reading
 //     the wall clock after each wake (`waitForVerifyStart`, bounded — a
 //     backward clock step is waited out again, codex 2026-10-17 P3).
-//   • ImportBuildIdentity — "this build" for the dry-run marker: the
-//     bundle's CFBundleVersion plus the Mach-O UUID of the image this code
-//     is linked into (a fresh UUID every link; the git SHA is not baked
-//     into the binary, and reading .git at run time would name the checkout,
-//     not the build).
-//   • MediaFileOperationsCenter.importRunsItsOwn — the standalone Audit /
-//     Verify starts refuse while an import runs (it runs its own; a second
-//     audit would write the same marker under it).
+//     Validate Catalog keeps the same rule between its two phases.
 //
 // (For Rick: a protocol here ≈ a C++ abstract interface the two concrete
 // job classes already satisfy; `extension X: P {}` declares that they do.)
 
 import Foundation
-import MachO
 
-/// What Import to SQLite (and, since 2026-10-20, Validate Catalog) drives in
+/// What Validate Catalog (and, until 2026-10-20, Import to SQLite) drives in
 /// a phase job through CatalogPhaseDriver: start it, await its task, read
 /// its state. Both phase jobs already have these members (main-actor
 /// isolated conformances, like their MediaFileOperationJob ones).
@@ -100,32 +93,6 @@ enum ImportToSQLiteTiming {
     }
 }
 
-enum ImportBuildIdentity {
-    /// "<CFBundleVersion> · <Mach-O UUID>" of the running build.
-    static let current: String = {
-        let bundle = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "\(bundle) · \(imageUUID() ?? "no-image-uuid")"
-    }()
-
-    /// The LC_UUID of the image this code is linked into (`#dsohandle` =
-    /// its mach header — the app binary in Release, the debug dylib in
-    /// Debug), so a rebuild is a new identity even when CFBundleVersion is
-    /// not bumped. (For Rick: walking the load commands of our own Mach-O
-    /// header, the same thing `dwarfdump --uuid` prints.)
-    private static func imageUUID() -> String? {
-        let header = #dsohandle.assumingMemoryBound(to: mach_header_64.self)
-        var cursor = UnsafeRawPointer(header).advanced(by: MemoryLayout<mach_header_64>.size)
-        for _ in 0..<header.pointee.ncmds {
-            let command = cursor.loadUnaligned(as: load_command.self)
-            if command.cmd == UInt32(LC_UUID) {
-                return UUID(uuid: cursor.loadUnaligned(as: uuid_command.self).uuid).uuidString
-            }
-            cursor = cursor.advanced(by: Int(command.cmdsize))
-        }
-        return nil
-    }
-}
-
 extension VideoScanModel {
     /// The acknowledged durable save (codex #1659), presenting the token of
     /// a MOPS-16 write hold — the holder's own writer (the audit inside
@@ -137,14 +104,5 @@ extension VideoScanModel {
         // OWN owner passes, as with the JSON store — B2.1 compares the token).
         if let committer = catalogCutover.committer { return await committer.commitAcknowledged(owner: owner) }
         return await catalogStore.saveAcknowledged(records: records, as: owner)
-    }
-}
-
-extension MediaFileOperationsCenter {
-    /// The refusal words when an Import to SQLite is running — it runs its
-    /// own Audit Catalog and Verify Catalog inside its hold; nil otherwise.
-    func importRunsItsOwn(_ what: String) -> String? {
-        guard jobs.contains(where: { $0.state.isActive && $0 is ImportToSQLiteJob }) else { return nil }
-        return "Import to SQLite is running and runs its own \(what) — wait for it to finish (or stop it). Nothing was started."
     }
 }

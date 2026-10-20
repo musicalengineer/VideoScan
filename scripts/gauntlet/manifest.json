@@ -28555,87 +28555,6 @@
     },
     {
       "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
-      "stage": "unit",
-      "suites": [
-        "ImportToSQLitePreflightTests",
-        "ImportDryRunMarkerTests",
-        "ImportToSQLiteHoldTests",
-        "ImportToSQLiteJobTests",
-        "ImportToSQLiteSensorTests"
-      ],
-      "tests": [
-        "aBackgroundSaveInEachPhaseIsHeld",
-        "aBackwardClockStepWaitsAgain",
-        "aClockThatKeepsSteppingBackGivesUp",
-        "aDamagedMarkerReadsAsNone",
-        "aRealImportAfterTheCatalogMovedOn",
-        "aSaveQueuedBeforeTheHoldLandsBeforeIt",
-        "aVerifyThatCannotCompleteStopsTheJob",
-        "allClearHasNoRefusal",
-        "anAcknowledgedSaveInFlightIsUnsaved",
-        "anAuditThatCannotCompleteStopsTheJob",
-        "anExistingTargetRefusesInCommitModeOnly",
-        "anOlderMarkerDecodesWithoutABuild",
-        "anotherBuildDisablesCommit",
-        "anotherJobRefuses",
-        "anotherJobRunningRefusesAndNamesIt",
-        "anotherTokenIsHeld",
-        "everyRefusalIsListedInFixOrder",
-        "existingTargetRefuses",
-        "noMarkerOrNoBuildDisablesCommit",
-        "phaseVerdicts",
-        "quitDuringAHeldRunSavesTheHeldEdit",
-        "quitPastTheBoundStillSavesTheHeldEdit",
-        "shapeOfTheWiring",
-        "standaloneAuditAndVerifyWaitForTheImport",
-        "stopAtTheImport",
-        "stopBeforeAnyWork",
-        "stopDuringTheAudit",
-        "stopDuringTheTransaction",
-        "stopDuringVerify",
-        "theAuditsOwnSavePassesTheHold",
-        "theBuildIdentityNamesTheImage",
-        "theHoldDrainsAnAdmittedSave",
-        "theJobHoldsAndReleasesTheOneWriter",
-        "theMarkerNeverTouchesUserDefaults",
-        "theMarkerRoundTripsBesideTheCatalogAndNowhereElse",
-        "theOwnerTokenPath",
-        "theOwnersSavePasses",
-        "theQuitPathSettlesTheImport",
-        "theRowsLineBecomesTheSubtitle",
-        "theStoreHoldRefusesEveryDoor",
-        "theWaitBeforeVerify",
-        "thisBuildEnablesCommitAtAnyGeneration",
-        "threePhasesInOrderAtOneGeneration",
-        "unsavedChangesRefuse",
-        "unsavedChangesRefuseTheJob",
-        "verifyReadsTheAuditedFileNotMemory"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ImportToSQLiteQuitTests.swift",
-      "stage": "unit",
-      "suites": [
-        "ImportToSQLiteQuitPathTests",
-        "ImportToSQLiteQuitSensorTests"
-      ],
-      "tests": [
-        "aLateCommitNeverReachesCatalogSQLite",
-        "aQuitBehindAStalledWriterWritesTheCopy",
-        "aRefusedSaveAtQuitLeavesARecoveryCopy",
-        "bothFailingKeepsTheAppOpen",
-        "theDelegateHonoursTheSaveOutcome",
-        "theHoldGivesUpOnAStalledSave",
-        "theJobRefusesOnAStalledWriter",
-        "theNextLaunchSaysACopyIsThere",
-        "theQuitDetectsAStalledWriterFirst",
-        "theTerminalSaveIsChecked"
-      ]
-    },
-    {
-      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/P0TruthFixture.swift",
       "stage": "regression",
       "suites": [
@@ -29309,20 +29228,14 @@
       "path": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
       "stage": "regression",
       "suites": [
-        "CatalogCommitterTests",
-        "CatalogSwitchTests"
+        "CatalogCommitterTests"
       ],
       "tests": [
-        "busyRefusesFirst",
         "copiesFollow",
         "debouncedCommits",
         "funnelSourceOrder",
         "funnelsNeverTouchJSON",
         "holdWaits",
-        "jsonChangedMeanwhile",
-        "latchAfterImport",
-        "noLatchWithoutImport",
-        "notReady",
         "readOnlyKeepsChanges",
         "saveNowCommits"
       ]
@@ -29356,22 +29269,18 @@
         "CatalogMarkerRevisionTests",
         "CatalogPurgeMarkerTests",
         "CatalogDirectSaveSensorTests",
-        "CatalogAdoptTests",
-        "CatalogSwitchB21Tests"
+        "CatalogAdoptTests"
       ],
       "tests": [
         "adoptRestoredCatalog",
         "deleteAllStaysEmpty",
-        "designationFromImportedBytes",
         "dirtySiblingKeepsEdit",
-        "editDuringImportStops",
         "hashLandsThenStored",
         "heldRowsOfferedToTheJob",
         "holdOwnerCompared",
         "newRowSurvivesRelaunch",
         "noDirectStoreSaves",
         "notOfferedWhenWritable",
-        "pendingEditIsFlushedFirst",
         "propagationKeepsLaterEdit",
         "purgedStaysGone",
         "quitAfterAcknowledged",
@@ -29468,7 +29377,6 @@
         "promotedCopySurvives",
         "purgedRowStaysGone",
         "restoreThenAdopt",
-        "switchCarriesPendingEdit",
         "trashUndoEmptied"
       ]
     },
@@ -29888,6 +29796,35 @@
         "trioOneGroup",
         "verifyIgnoresFootage",
         "words"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPhaseHoldAndQuitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPhaseLogicTests",
+        "CatalogStoreHoldTests",
+        "CatalogQuitRecoveryTests",
+        "CatalogQuitRecoverySensorTests"
+      ],
+      "tests": [
+        "aBackwardClockStepWaitsAgain",
+        "aClockThatKeepsSteppingBackGivesUp",
+        "anAcknowledgedSaveInFlightIsUnsaved",
+        "anotherTokenIsHeld",
+        "phaseVerdicts",
+        "theDelegateQuitWiring",
+        "theHoldDrainsAnAdmittedSave",
+        "theHoldGivesUpOnAStalledSave",
+        "theNextLaunchSaysACopyIsThere",
+        "theOwnerTokenPath",
+        "theOwnersSavePasses",
+        "theRetiredMenuItemsAreGone",
+        "theStoreHoldRefusesEveryDoor",
+        "theTerminalSaveIsChecked",
+        "theVolumeMenuKeepsRescanAndUpdate",
+        "theWaitBeforeVerify"
       ]
     }
   ],
@@ -32445,7 +32382,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2831,
+      "expected_floor": 2791,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [
@@ -32859,13 +32796,6 @@
         "VideoScanTests/VerifyCatalogJobTests",
         "VideoScanTests/VerifyCatalogStatusTests",
         "VideoScanTests/VerifyCatalogSensorTests",
-        "VideoScanTests/ImportToSQLitePreflightTests",
-        "VideoScanTests/ImportDryRunMarkerTests",
-        "VideoScanTests/ImportToSQLiteHoldTests",
-        "VideoScanTests/ImportToSQLiteJobTests",
-        "VideoScanTests/ImportToSQLiteSensorTests",
-        "VideoScanTests/ImportToSQLiteQuitPathTests",
-        "VideoScanTests/ImportToSQLiteQuitSensorTests",
         "VideoScanTests/DuplicateDigestPartitionTests",
         "VideoScanTests/DuplicateDigestSplitPlanTests",
         "VideoScanTests/DuplicateDetectorDigestTests",
@@ -32914,7 +32844,11 @@
         "VideoScanTests/CatalogRealityBuilderTests",
         "VideoScanTests/MissingCopyCountTests",
         "VideoScanTests/CatalogRealityStateTests",
-        "VideoScanTests/QAValidateCatalogRedTests"
+        "VideoScanTests/QAValidateCatalogRedTests",
+        "VideoScanTests/CatalogPhaseLogicTests",
+        "VideoScanTests/CatalogStoreHoldTests",
+        "VideoScanTests/CatalogQuitRecoveryTests",
+        "VideoScanTests/CatalogQuitRecoverySensorTests"
       ]
     },
     {
@@ -33212,7 +33146,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 231,
+      "expected_floor": 222,
       "name": "regression",
       "package_expected_floor": 190,
       "package_selectors": [
@@ -33268,14 +33202,12 @@
         "VideoScanTests/CatalogAuthorityFlipTests",
         "VideoScanTests/P0TruthThroughSQLiteTests",
         "VideoScanTests/CatalogCommitterTests",
-        "VideoScanTests/CatalogSwitchTests",
         "VideoScanTests/CatalogCommitterSerialTests",
         "VideoScanTests/CatalogPendingRowsTests",
         "VideoScanTests/CatalogMarkerRevisionTests",
         "VideoScanTests/CatalogPurgeMarkerTests",
         "VideoScanTests/CatalogDirectSaveSensorTests",
         "VideoScanTests/CatalogAdoptTests",
-        "VideoScanTests/CatalogSwitchB21Tests",
         "VideoScanTests/CatalogCommitSyncTests",
         "VideoScanTests/CatalogCommitterSyncSensorTests",
         "VideoScanTests/CatalogMarkerVetoTests",
