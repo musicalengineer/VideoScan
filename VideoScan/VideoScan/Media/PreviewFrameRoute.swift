@@ -7,7 +7,7 @@
 // which is app-only state (not part of the route decision).
 //
 // The I/O side (the actual AVFoundation / ffmpeg frame rips) stays in
-// VideoScanModel+Thumbnail.swift.
+// PreviewFrameRenderer.swift.
 
 import Foundation
 

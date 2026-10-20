@@ -1,13 +1,14 @@
-// VideoScanModel+Filmstrip.swift
+// PreviewService+Filmstrip.swift (was VideoScanModel+Filmstrip.swift; GH #337 slice 1)
 // Filmstrip preview for AVPlayer-unplayable formats (2026-07-27).
 //
 // The orchestration layer between the pure plan (PreviewFilmstripPlan),
-// the renderer (renderPreviewFilmstrip in VideoScanModel+Thumbnail),
+// the renderer (renderPreviewFilmstrip in PreviewFrameRenderer),
 // the persistent cache (PreviewDiskCache filmstrip payloads), and the
 // preview pane's filmstrip branch (CatalogHelpers / FilmstripPreview).
 //
 // Lifecycle rules (all enforced here, on the main actor):
-//   - At most ONE filmstrip generation in flight per model instance.
+//   - At most ONE filmstrip generation in flight per model instance
+//     (the model owns exactly one PreviewService).
 //   - A play click on the row a prewarm is already ripping PROMOTES
 //     that prewarm to interactive (coalesce on path — never rip the
 //     same master twice). A play click on any other row replaces
@@ -60,7 +61,7 @@ enum PreviewFilmstripState {
     }
 }
 
-extension VideoScanModel {
+extension PreviewService {
 
     /// Sendable value snapshot of the record fields a filmstrip
     /// generation needs — VideoRecord instances never cross into the
@@ -114,7 +115,7 @@ extension VideoScanModel {
         // MissingDependency alert and leave the pane exactly as it was
         // (thumbnail + play overlay).
         if let missing = dependencyCheck() {
-            missingDependency = missing
+            host.reportMissingDependency(missing)
             return
         }
 
@@ -296,7 +297,7 @@ extension VideoScanModel {
             }
 
             do {
-                let strip = try await VideoScanModel.renderPreviewFilmstrip(
+                let strip = try await PreviewFrameRenderer.renderPreviewFilmstrip(
                     path: item.path,
                     container: item.container,
                     videoCodec: item.videoCodec,

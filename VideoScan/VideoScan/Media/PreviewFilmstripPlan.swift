@@ -13,7 +13,7 @@
 // and which ripped frames to keep after near-solid scoring. No I/O,
 // no CoreGraphics beyond the score struct — trivially unit-testable
 // without media files. The I/O side (renderPreviewFilmstrip) lives in
-// VideoScanModel+Thumbnail.swift with the other frame generators.
+// PreviewFrameRenderer.swift with the other frame generators.
 
 import Foundation
 

@@ -16,7 +16,7 @@
 //     duration (never ffprobe at preview time), the 25% fallback rule,
 //     and the pick-the-winner decision.
 // The I/O side (actually ripping candidates) lives in
-// VideoScanModel+Thumbnail.swift with the other frame generators.
+// PreviewFrameRenderer.swift with the other frame generators.
 //
 // How static is told apart from scenes (calibrated 2026-07-26 after the
 // testing agent FALSIFIED the first design's claim — see the measured

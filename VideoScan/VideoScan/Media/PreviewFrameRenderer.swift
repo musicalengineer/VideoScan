@@ -5,13 +5,13 @@ import CoreMedia
 import ImageIO
 import os
 
-// MARK: - Thumbnail Preview + ffprobe convenience
+// MARK: - Preview frame rendering (was VideoScanModel+Thumbnail.swift)
 //
-// generateThumbnail caches an NSImage per fullPath in the model's
-// thumbnailCache. The cache stays in the main class because extensions
-// can't add stored properties. The cache invalidation entry-point also
-// stays in main (invalidateThumbnailCacheEntry) since it's called from
-// the rename extension on a per-record basis.
+// GH #337 slice 1 (2026-10-19): the static frame-rip cores moved here
+// verbatim; the preview pane's state and entry points (generateThumbnail,
+// the caches, the debounce) moved to PreviewService. VideoScanModel keeps
+// static forwarders (VideoScanModel.renderThumbnailCGImage etc.) so every
+// caller compiles unchanged.
 //
 // Perf batch 2026-06-10:
 //   - requestThumbnailDebounced is the selection-driven entry point.
@@ -24,7 +24,8 @@ import os
 //   - The cache has a byte-cost limit (ThumbnailCachePolicy, 8 GB) and
 //     each setObject carries an estimated bitmap cost.
 //   - renderThumbnailCGImage is the shared single-frame generator core,
-//     also used by ThumbnailPrecacher (Part 3 prewarm).
+//     also used by ThumbnailPrecacher (Part 3 prewarm). (The debounce,
+//     cache-cost and no-flash notes now head PreviewService.swift.)
 //
 // Preview routing (2026-07-26):
 //   - renderThumbnailCGImage is now ROUTED: the pure
@@ -38,7 +39,7 @@ import os
 //   - The AVFoundation path carries a hard deadline (a watchdog task
 //     calls cancelAllCGImageGeneration) and falls back to ONE ffmpeg
 //     attempt before giving up, so surprise-hostile files can't hang.
-//   - Failures land in the model's ThumbnailFailureStore (negative
+//   - Failures land in PreviewService's ThumbnailFailureStore (negative
 //     cache) and publish previewUnavailable so the pane shows "NO
 //     PREVIEW" instead of an eternal spinner.
 //
@@ -73,14 +74,13 @@ import os
 //     ripped via the same routed tiers as above (bounded-concurrency
 //     ffmpeg for ffmpegDirect, one-asset batch for avFoundation),
 //     near-solid frames dropped by PreviewFrameScorer. Orchestration
-//     lives in VideoScanModel+Filmstrip.swift; persistent strips in
+//     lives in PreviewService+Filmstrip.swift; persistent strips in
 //     PreviewDiskCache's -strip- payloads.
 //
-// runFFProbe is a thin convenience that any extension may want — kept
-// nearby because both generateThumbnail and ffprobe live in the "preview /
-// quick peek at one file" mental bucket.
+// runFFProbe (the ffprobe convenience that used to sit here) moved into
+// VideoScanModel.swift beside `ffprobePath`, the state it reads.
 
-/// File-scope (not a static on the @MainActor model) so the detached
+/// File-scope (a holdover from when these were statics on the @MainActor model) so the detached
 /// generation tasks can log without touching main-actor-isolated state —
 /// same fix class as precacheLog in ThumbnailPrecache.swift.
 private let previewLog = Logger(subsystem: "Rick-Breen.VideoScan",
@@ -172,24 +172,11 @@ private final class AVFCandidateCollector: @unchecked Sendable {
     }
 }
 
-extension VideoScanModel {
-
-    nonisolated func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
-        await CombineVerifier.runFFProbe(url: url, ffprobePath: ffprobePath)
-    }
-
-    /// Factory for the model's thumbnail cache — split out so the cost
-    /// limit is set in exactly one place and unit tests can assert it
-    /// without instantiating the whole model.
-    nonisolated static func makeThumbnailCache() -> NSCache<NSString, NSImage> {
-        let cache = NSCache<NSString, NSImage>()
-        cache.name = "Rick-Breen.VideoScan.thumbnailCache"
-        // Byte-cost ceiling (8 GB). Every setObject below passes an
-        // estimated bitmap cost, so NSCache can actually enforce this.
-        // NSCache also evicts on its own under system memory pressure.
-        cache.totalCostLimit = ThumbnailCachePolicy.costLimitBytes
-        return cache
-    }
+/// The nonisolated frame-rip cores behind the preview pane, the
+/// volume-click precacher and the background sweep (GH #337 slice 1:
+/// moved verbatim off VideoScanModel, which keeps static forwarders).
+/// A caseless enum ≈ a C++ namespace: statics only, never instantiated.
+enum PreviewFrameRenderer {
 
     // MARK: - Routed single-frame core
 
@@ -682,271 +669,5 @@ extension VideoScanModel {
             }
         }
         return collected
-    }
-
-    /// Store a prewarmed/generated CGImage into the cache with its byte
-    /// cost. Main-actor because the NSCache + NSImage types live there in
-    /// this codebase's threading model (matches the pre-existing
-    /// generateThumbnail completion hop).
-    func storePrecachedThumbnail(_ cgImage: CGImage, forPath path: String) {
-        // autoreleasepool around the bitmap-handling sync work — standing
-        // rule for media loops (feedback_memory_pressure): don't let
-        // NSImage/CG temporaries pile up across a long prewarm run.
-        autoreleasepool {
-            let nsImage = NSImage(cgImage: cgImage,
-                                  size: NSSize(width: cgImage.width, height: cgImage.height))
-            thumbnailCache.setObject(
-                nsImage,
-                forKey: path as NSString,
-                cost: ThumbnailCachePolicy.estimatedCost(pixelsWide: cgImage.width,
-                                                         pixelsHigh: cgImage.height)
-            )
-        }
-    }
-
-    /// Selection-driven entry point — debounces thumbnail generation by
-    /// 200 ms so holding an arrow key doesn't open one media file per
-    /// traversed row. Cache hits bypass the debounce (instant swap, no
-    /// I/O). While waiting, the PREVIOUS preview image stays visible; it
-    /// is only replaced when the new frame is ready.
-    func requestThumbnailDebounced(for record: VideoRecord) {
-        thumbnailDebounceTask?.cancel()
-        thumbnailDebounceTask = nil
-
-        // Background sweep yields to the user: one timestamp write —
-        // the sweep pauses dispatch until ~10 s of interactive quiet
-        // (PreviewSweepService, 2026-07-27).
-        previewSweep.noteUserInteraction()
-
-        previewFilename = record.filename
-
-        // Selection moved: filmstrip state for another row is stale
-        // (frames must never outlive their row); a same-row prewarm
-        // survives inside resetFilmstrip (filmstrip preview, 2026-07-27).
-        resetFilmstrip(forNewPath: record.fullPath)
-
-        // Cache hit → immediate, no debounce, no file I/O.
-        let cacheKey = record.fullPath as NSString
-        if let cached = thumbnailCache.object(forKey: cacheKey) {
-            previewRequestPath = record.fullPath
-            previewImage = cached
-            previewOfflineVolumeName = nil
-            previewUnavailable = false
-            // Fast thumbnail is up — background-prewarm the strip for
-            // ffmpegDirect rows (all guards inside; no-op otherwise).
-            prewarmFilmstripIfNeeded(item: FilmstripWorkItem(record: record))
-            return
-        }
-
-        // Mark this as the current request so a slower, earlier generation
-        // that lands later can't overwrite the newer selection's preview.
-        previewRequestPath = record.fullPath
-
-        // New selection: drop a previous row's "NO PREVIEW" verdict — if
-        // THIS row is a known failure too, generateThumbnail republishes
-        // it (instantly, via the negative cache) after the debounce.
-        previewUnavailable = false
-
-        // `Task` + cancel-on-next-keystroke ≈ a debounce timer; Swift's
-        // cooperative cancellation replaces invalidating an NSTimer.
-        thumbnailDebounceTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled, let self else { return }
-            self.generateThumbnail(for: record)
-        }
-    }
-
-    /// Clear the preview pane AND any pending debounced generation.
-    /// Without the cancel, a debounce scheduled for the previous (video)
-    /// row fires up to 200 ms after the selection moved to a row with no
-    /// thumbnail and repopulates the pane with the wrong file. (QA 🟠,
-    /// 2026-06-10 perf batch.)
-    func clearPreview() {
-        thumbnailDebounceTask?.cancel()
-        thumbnailDebounceTask = nil
-        previewRequestPath = nil
-        previewImage = nil
-        previewFilename = ""
-        previewOfflineVolumeName = nil
-        previewUnavailable = false
-        resetFilmstrip(forNewPath: nil)
-    }
-
-    /// Immediate (non-debounced) generation — used by deliberate one-shot
-    /// navigation (Archive → Catalog deep links) and as the debounce
-    /// landing point. Does NOT clear the existing preview while working;
-    /// the swap happens only when the replacement frame is ready.
-    func generateThumbnail(for record: VideoRecord) {
-        // A deliberate immediate request supersedes any pending debounce —
-        // otherwise selectAndReveal's instant path can race a stale
-        // debounce that fires 200 ms later for a different row.
-        thumbnailDebounceTask?.cancel()
-        thumbnailDebounceTask = nil
-
-        // Interactive request — pause the background sweep (also pinged
-        // by the debounced entry point; double pings are harmless).
-        previewSweep.noteUserInteraction()
-
-        previewFilename = record.filename
-        previewRequestPath = record.fullPath
-
-        // Same selection-change reset as requestThumbnailDebounced
-        // (this is also a direct entry point for deep links).
-        resetFilmstrip(forNewPath: record.fullPath)
-
-        // Check cache first — works even when the source volume is offline.
-        let cacheKey = record.fullPath as NSString
-        if let cached = thumbnailCache.object(forKey: cacheKey) {
-            previewImage = cached
-            previewOfflineVolumeName = nil
-            previewUnavailable = false
-            // Prewarm the strip for ffmpegDirect rows (guards inside —
-            // including reachability, since an L1 hit works offline).
-            prewarmFilmstripIfNeeded(item: FilmstripWorkItem(record: record))
-            return
-        }
-
-        // If the source volume isn't mounted, don't try to read the file —
-        // surface a clean "Volume Offline" placeholder instead of stalling.
-        // (This selection has no thumbnail at all, so clearing is correct.)
-        if !VolumeReachability.isReachable(path: record.fullPath) {
-            previewImage = nil
-            previewUnavailable = false
-            previewOfflineVolumeName = VolumeReachability.volumeName(forPath: record.fullPath)
-            return
-        }
-        previewOfflineVolumeName = nil
-
-        // Negative cache: this file already failed and is unchanged on
-        // disk (mtime + size) — publish "NO PREVIEW" immediately. No
-        // spinner, no media I/O (one stat, already gated behind the
-        // reachability check above). A repaired/replaced file falls
-        // through and retries normally.
-        if thumbnailFailureStore.isKnownFailure(atPath: record.fullPath) {
-            previewImage = nil
-            previewUnavailable = true
-            return
-        }
-        previewUnavailable = false
-
-        // Capture the cache key as Sendable String, not NSString. Re-bridge
-        // inside the MainActor block where the NSCache lives. Routing
-        // fields ride along the same way (all Sendable value types).
-        // isLikelyUnanalyzable (not raw needsReformat) so routing shares
-        // the canonical legacy-codec list with the red `!` badge.
-        let cacheKeyString = record.fullPath
-        let container = record.container
-        let videoCodec = record.videoCodec
-        let likelyUnanalyzable = record.isLikelyUnanalyzable
-        // Rides along for the filmstrip prewarm kick below — the strip
-        // plan is built from the CATALOG duration, never ffprobe.
-        let durationSeconds = record.durationSeconds
-        let failureStore = thumbnailFailureStore
-        let diskCache = previewDiskCache
-        Task.detached { [weak self] in
-            // L2 disk cache probe (Phase B piece 1) — one stat + JPEG
-            // decode, deliberately OFF the main actor. Signature nil
-            // (file vanished between reachability check and here) just
-            // skips L2 both ways; generation below reports the truth.
-            let signature = PreviewDiskCache.fileSignature(atPath: cacheKeyString)
-            if let signature,
-               let diskHit = diskCache.lookup(path: cacheKeyString,
-                                              mtime: signature.mtime,
-                                              size: signature.size) {
-                // Disk hits populate L1, then publish through it — same
-                // single storage path as a fresh generation.
-                await MainActor.run {
-                    guard let self else { return }
-                    self.storePrecachedThumbnail(diskHit, forPath: cacheKeyString)
-                    if self.previewRequestPath == cacheKeyString {
-                        self.previewImage = self.thumbnailCache.object(forKey: cacheKeyString as NSString)
-                        self.previewUnavailable = false
-                    }
-                    // Fast thumbnail is up — kick the filmstrip prewarm
-                    // for ffmpegDirect rows (all guards inside).
-                    self.prewarmFilmstripIfNeeded(item: FilmstripWorkItem(
-                        path: cacheKeyString, container: container,
-                        videoCodec: videoCodec,
-                        likelyUnanalyzable: likelyUnanalyzable,
-                        durationSeconds: durationSeconds))
-                }
-                return
-            }
-            do {
-                let cgImage = try await VideoScanModel.renderThumbnailCGImage(
-                    path: cacheKeyString,
-                    container: container,
-                    videoCodec: videoCodec,
-                    likelyUnanalyzable: likelyUnanalyzable)
-                // Publish to L1/UI FIRST, L2 after (QA 🟡, 2026-07-26):
-                // diskCache.store blocks on the cache lock (and JPEG-
-                // encodes under it), and the init-scheduled background
-                // prune can hold that lock mid-reap right at launch —
-                // the user's first preview must not wait behind a reap
-                // loop. (The prewarm path keeps store-then-L1: it's
-                // background work whose per-file order gates nothing
-                // visible.)
-                // CGImage is Sendable; NSImage and NSString aren't. Build
-                // both on the main actor so we never cross actor boundaries
-                // with them.
-                await MainActor.run {
-                    guard let self else { return }
-                    self.storePrecachedThumbnail(cgImage, forPath: cacheKeyString)
-                    // Publish only if this is still the current selection's
-                    // request — a stale completion must not clobber a newer
-                    // preview (the cache write above is still worthwhile).
-                    if self.previewRequestPath == cacheKeyString {
-                        self.previewImage = self.thumbnailCache.object(forKey: cacheKeyString as NSString)
-                        self.previewUnavailable = false
-                    }
-                    // Fast thumbnail landed — kick the filmstrip prewarm
-                    // for ffmpegDirect rows (all guards inside).
-                    self.prewarmFilmstripIfNeeded(item: FilmstripWorkItem(
-                        path: cacheKeyString, container: container,
-                        videoCodec: videoCodec,
-                        likelyUnanalyzable: likelyUnanalyzable,
-                        durationSeconds: durationSeconds))
-                }
-                // Write-through L2 (still off-main here). Tier "fast":
-                // this is the interactive single 0.5 s frame — the
-                // background pass may later upgrade it to "best".
-                // Signature from BEFORE generation is correct: the key
-                // must describe the file we just decoded.
-                if let signature {
-                    diskCache.store(cgImage,
-                                    path: cacheKeyString,
-                                    mtime: signature.mtime,
-                                    size: signature.size,
-                                    tier: .fast)
-                }
-            } catch {
-                // Remember the failure (stat happens here, off-main) so
-                // the next selection of this row skips straight to the
-                // "NO PREVIEW" state. Two exclusions (QA 2026-07-26):
-                //   - CancellationError says nothing about the file —
-                //     recording it would stamp a good file "bad" for the
-                //     rest of the session (defensive here; the precacher
-                //     path is where cancellation actually happens today).
-                //   - ffmpegUnavailable is an ENVIRONMENT failure (no
-                //     ffmpeg binary), also not a fact about this file.
-                if !(error is CancellationError),
-                   !Task.isCancelled,
-                   (error as? PreviewFrameError) != .ffmpegUnavailable {
-                    failureStore.recordFailure(forPath: cacheKeyString)
-                }
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    // Generation failed for the CURRENT selection → showing
-                    // the previous file's frame would be wrong; clear it and
-                    // publish the failure so the pane doesn't spin forever
-                    // (respects the stale-completion guard — an old failure
-                    // must not stamp "NO PREVIEW" on a newer selection).
-                    if self.previewRequestPath == cacheKeyString {
-                        self.previewImage = nil
-                        self.previewUnavailable = true
-                    }
-                }
-            }
-        }
     }
 }

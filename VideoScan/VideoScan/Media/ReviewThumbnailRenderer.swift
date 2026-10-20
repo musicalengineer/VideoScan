@@ -9,7 +9,7 @@
 // gigabytes of container sniffing with no way to bail, and asking for
 // the MIDPOINT of a 20 GB moov-at-end file is the most expensive
 // possible AVF request. The catalog side already cured this disease
-// (VideoScanModel+Thumbnail.swift, preview routing 2026-07-26); this
+// (PreviewFrameRenderer.swift, preview routing 2026-07-26); this
 // file brings the review sheet onto the same two-tier design.
 //
 // Why the midpoint tiers are DUPLICATED here rather than added to
@@ -59,7 +59,7 @@ struct HoldoutMediaMeta: Equatable, Sendable {
 
 // MARK: - AVF deadline box
 //
-// Duplicated from VideoScanModel+Thumbnail.swift's private AVFDeadlineBox
+// Duplicated from PreviewFrameRenderer.swift's private AVFDeadlineBox
 // (that file is off-limits to this branch — see header). Lock-guarded
 // @unchecked Sendable tiny box per the repo convention
 // (ProcessRunner.DeadlineFlag). For Rick: a mutex-guarded bool riding

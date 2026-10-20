@@ -1,20 +1,21 @@
-// VideoScanModel+PreviewSweep.swift
-// Background preview sweep, Phase 1 (2026-07-27) — the model glue.
+// PreviewService+Sweep.swift (was VideoScanModel+PreviewSweep.swift; GH #337 slice 1)
+// Background preview sweep, Phase 1 (2026-07-27) — the glue.
 //
-// Owns nothing itself (stored properties live in VideoScanModel.swift:
-// `previewSweep` + `previewSweepSettings`); this file wires the service's
-// injected closures to the model and hosts the settings toggle handler.
+// Owns nothing itself (stored properties live in PreviewService.swift:
+// `previewSweep` + `previewSweepSettings`); this file wires the sweep's
+// injected closures to the preview service (and, through `host.records`,
+// to the model's catalog) and hosts the settings toggle handler.
 // The sweep machinery proper is PreviewSweepService/PreviewSweepPlan.
 
 import Foundation
 import VideoScanCore
 
-extension VideoScanModel {
+extension PreviewService {
 
-    /// Wire the sweep service to this model. Called once at the end of
-    /// init; also the launch-resume path — when the persisted setting is
+    /// Wire the sweep service to this preview service. Called once at the
+    /// end of the model's init; also the launch-resume path — when the persisted setting is
     /// ON, the catalog signal below starts the sweep (debounced) without
-    /// any re-checking. All model captures are weak: the model owns the
+    /// any re-checking. All self captures are weak: self owns the sweep
     /// service, so a strong closure capture would be a retain cycle
     /// (for Rick: shared_ptr cycle through the callback).
     func configurePreviewSweep() {
@@ -140,7 +141,7 @@ extension VideoScanModel {
     /// — a few ms at 17k, never in a view body. Failure-store filtering
     /// happens off-main in the service (it stats per check).
     func previewSweepCandidates() -> [PreviewSweepCandidate] {
-        records.compactMap { rec in
+        host.records().compactMap { rec in
             guard rec.streamType == .videoOnly || rec.streamType == .videoAndAudio,
                   VolumeReachability.isReachable(path: rec.fullPath) else {
                 return nil
