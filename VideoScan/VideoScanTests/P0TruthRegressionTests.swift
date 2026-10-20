@@ -250,11 +250,16 @@ struct P0TruthRegressionTests {
         #expect(side.audibleSeconds == 0, "relatedSide read a fingerprinted stamp with 0 landmarks as \(side.audibleSeconds ?? -1) s of sound")
 
         // …and the sidecar's print, when it is loaded for the match, may not
-        // put the seconds back: a print with no landmark is all quiet.
+        // put the seconds back: a print that MEASURED every second quiet is
+        // all quiet. (2026-10-20: "no landmark" alone is not silence — a
+        // 1.5 s AVCHD clip at −0.1 dB made none; that print is nil, not 0.)
         let silent = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
-                                      activeSeconds: [], hashes: [], times: [])
-        #expect(VideoScanModel.printAudibleSeconds(silent) == 0, "a print with no landmark heard nothing")
+                                      activeSeconds: [false, false, false], hashes: [], times: [])
+        #expect(VideoScanModel.printAudibleSeconds(silent) == 0, "a print that measured every second quiet heard nothing")
         #expect(VideoScanModel.soundStrip(silent) == [false, false, false], "the spool draws silence, not 3 s of sound")
+        let tooLittle = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 2,
+                                         activeSeconds: [true, true], hashes: [], times: [])
+        #expect(VideoScanModel.printAudibleSeconds(tooLittle) == nil, "heard sound, too little to print: says nothing, never 'no sound'")
         let heard = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
                                      activeSeconds: [true, false, true], hashes: [1], times: [0])
         #expect(VideoScanModel.printAudibleSeconds(heard) == 2, "a print that heard sound keeps its bitmap's count")

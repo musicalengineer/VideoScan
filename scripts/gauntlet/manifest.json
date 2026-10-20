@@ -199,6 +199,25 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundPrintSilenceVerdictTests"
+      ],
+      "tests": [
+        "describesRedoesWhatIsNotEvidence",
+        "emptyBitmapIsNotSilence",
+        "engineShortToneVersusZeros",
+        "hearingNoAudio",
+        "hearingZeroLandmarks",
+        "mediaMatrix",
+        "readingOfAFreshPrint",
+        "silentOnlyForMeasuredSilence"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
       "stage": "unit",
       "suites": [
@@ -6103,6 +6122,24 @@
         "stampsSurviveAReload",
         "stopAndPause",
         "words"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioFingerprintBackfillSilenceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioFingerprintBackfillSilenceTests",
+        "AudioFingerprintBackfillSilenceMediaTests"
+      ],
+      "tests": [
+        "existingZeroLandmarkStampsAreRedecided",
+        "heardTooLittleIsNeverStampedSilent",
+        "measuredSilenceIsStamped",
+        "silenceMatrix",
+        "zeroLandmarkSidecarRowIsNotShared",
+        "zeroSampleDecodeIsCouldNotCheck"
       ]
     },
     {
@@ -28371,6 +28408,24 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundPrintSilentVerdictTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundPrintSilentVerdictTier3Tests",
+        "SoundPrintSilentVerdictSurfaceTests",
+        "SoundPrintSilentVerdictScaleTests"
+      ],
+      "tests": [
+        "compareSide",
+        "groupAStillFires",
+        "groupsBAndCAreCouldNotCheck",
+        "reasonWordsPerHearing",
+        "streamColumn",
+        "tier3At100k"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
       "stage": "unit",
       "suites": [
@@ -29733,6 +29788,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -30454,6 +30513,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillSilenceTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -32249,7 +32312,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2776,
+      "expected_floor": 2782,
       "name": "unit",
       "package_expected_floor": 303,
       "package_selectors": [
@@ -32651,6 +32714,9 @@
         "VideoScanTests/CatalogStatusStructureTests",
         "VideoScanTests/VerifyCatalogConstraintTests",
         "VideoScanTests/VerifyCatalogTierTests",
+        "VideoScanTests/SoundPrintSilentVerdictTier3Tests",
+        "VideoScanTests/SoundPrintSilentVerdictSurfaceTests",
+        "VideoScanTests/SoundPrintSilentVerdictScaleTests",
         "VideoScanTests/VerifyCatalogReportTests",
         "VideoScanTests/VerifyCatalogScaleTests",
         "VideoScanTests/VerifyCatalogJobTests",

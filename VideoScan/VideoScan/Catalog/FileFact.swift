@@ -86,12 +86,14 @@ enum CatalogFileFacts {
     }
 
     /// What the stamp heard, when it contradicts an audio header; nil when
-    /// it heard sound or cannot say. Only a print that analysed seconds and
-    /// found no landmark is "silent". A `.noAudio` stamp on an audio header
-    /// is NOT read as silence: from engine 3 it is never written there, and
-    /// an engine-2 one may be a failed decode (AudioFingerprintStamp).
+    /// it heard sound or cannot say. Only MEASURED silence is "silent"
+    /// (`AudioFingerprintStamp.Hearing.measuredSilence`: stamp rule 4, every
+    /// analysed second quiet). A pre-4 zero-landmark print may have heard
+    /// real sound too short to print (8 AVCHD clips, 2026-10-20), and a
+    /// `.noAudio` stamp on an audio header is never read as silence either
+    /// (an engine-2 one may be a failed decode) — both say nothing here.
     static func silenceWords(_ stamp: AudioFingerprintStamp) -> String? {
-        guard stamp.outcome == .fingerprinted, stamp.analyzedSeconds > 0, stamp.landmarks == 0 else { return nil }
-        return "silent"
+        // Only reached for an audio header (see `stream`), so headerHasAudio.
+        stamp.hearing(headerHasAudio: true) == .measuredSilence ? "silent" : nil
     }
 }

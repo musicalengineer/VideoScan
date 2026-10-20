@@ -84,7 +84,7 @@ extension VideoScanModel {
         var day: EventDay?
         if let y = date.year, let m = date.month, let d = date.day { day = EventDay(year: y, month: m, day: d) }
         let reliable = day != nil && (date.source == .you || (date.source == .camera && date.trusted))
-        let audible: Double? = r.audioFingerprint.map(Self.stampAudibleSeconds)
+        let audible: Double? = r.audioFingerprint.flatMap { Self.stampAudibleSeconds($0, headerHasAudio: !r.audioCodec.isEmpty) }
         return RelatedEvidence.Side(
             digest: storedFullDigest(r), sizeBytes: r.sizeBytes, durationSeconds: r.durationSeconds,
             audibleSeconds: audible, day: day, dayIsReliable: reliable,
@@ -96,24 +96,34 @@ extension VideoScanModel {
             year: date.year)
     }
 
-    /// What a sound-print STAMP says was audible (GH #327 case 5): a
-    /// no-sound stamp, or a print that analysed seconds and found not one
-    /// landmark, heard nothing = 0 — never "analysed seconds of sound".
-    /// Otherwise the analysed seconds (an upper bound; the sidecar's
-    /// active-seconds bitmap refines it in `relatedAnswer`).
-    nonisolated static func stampAudibleSeconds(_ stamp: AudioFingerprintStamp) -> Double {
-        switch stamp.outcome {
-        case .noAudio: return 0
-        case .fingerprinted: return stamp.landmarks == 0 ? 0 : stamp.analyzedSeconds
+    /// What a sound-print STAMP says was audible (GH #327 case 5), read
+    /// through `AudioFingerprintStamp.hearing`: no sound track, or measured
+    /// silence = 0 — never "analysed seconds of sound"; a print with
+    /// landmarks = the analysed seconds (an upper bound; the sidecar's
+    /// active-seconds bitmap refines it in `relatedAnswer`). A stamp that
+    /// is not evidence (a failed decode, a pre-rule-4 zero-landmark print
+    /// that may have heard real sound) = nil: "no fingerprint yet", never
+    /// "no sound".
+    nonisolated static func stampAudibleSeconds(_ stamp: AudioFingerprintStamp, headerHasAudio: Bool) -> Double? {
+        switch stamp.hearing(headerHasAudio: headerHasAudio) {
+        case .noAudioTrack, .measuredSilence: return 0
+        case .heardSound: return stamp.analyzedSeconds
+        case .notEvidence: return nil
         }
     }
 
-    /// The audible seconds a loaded print stands behind: none when it
-    /// holds no landmark (silence), its active-seconds count when it has
-    /// the bitmap, else its duration (prints made before the bitmap).
-    nonisolated static func printAudibleSeconds(_ print: AudioFingerprint) -> Double {
-        if print.landmarkCount == 0 { return 0 }
-        return Double(print.activeSeconds.isEmpty ? Int(print.durationSeconds) : print.activeSecondCount)
+    /// The audible seconds a loaded print stands behind: its active-seconds
+    /// count when it has landmarks and the bitmap, else its duration
+    /// (prints made before the bitmap). With no landmark: 0 only when the
+    /// bitmap MEASURED every second quiet; nil when it heard sound too
+    /// little to print (it can say nothing, and must not say "no sound").
+    nonisolated static func printAudibleSeconds(_ print: AudioFingerprint) -> Double? {
+        switch AudioFingerprintStamp.reading(of: print) {
+        case .silence: return 0
+        case .heardTooLittle: return nil
+        case .printable:
+            return Double(print.activeSeconds.isEmpty ? Int(print.durationSeconds) : print.activeSecondCount)
+        }
     }
 
     /// Transcript words that are a person's name on either side (case-insensitive, whole words).
@@ -178,12 +188,14 @@ extension VideoScanModel {
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
     }
 
-    /// One flag per second: all quiet for a print with no landmark; else
-    /// the bitmap; all audible for a pre-bitmap print that heard something.
+    /// One flag per second: the bitmap whenever the print has one (it is
+    /// the measurement — a no-landmark print that heard sound draws that
+    /// sound); without a bitmap, all quiet for a print with no landmark and
+    /// all audible for a pre-bitmap print that heard something.
     nonisolated static func soundStrip(_ print: AudioFingerprint) -> [Bool] {
-        let seconds = print.activeSeconds.isEmpty ? max(0, Int(print.durationSeconds)) : print.activeSeconds.count
-        if print.landmarkCount == 0 { return Array(repeating: false, count: seconds) }
-        return print.activeSeconds.isEmpty ? Array(repeating: true, count: seconds) : print.activeSeconds
+        if !print.activeSeconds.isEmpty { return print.activeSeconds }
+        let seconds = max(0, Int(print.durationSeconds))
+        return Array(repeating: print.landmarkCount > 0, count: seconds)
     }
 
     nonisolated static func fingerprintKey(_ r: VideoRecord) -> AudioFingerprintStore.Key? {

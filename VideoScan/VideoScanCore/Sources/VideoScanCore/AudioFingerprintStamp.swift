@@ -55,9 +55,23 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     ///      row); zero samples from a file whose header has sound is a
     ///      failed decode, retried next run (design: integrity_first §2 —
     ///      no verdict from unverified evidence).
-    public static let currentEngineVersion = 3
+    ///   4: a `.fingerprinted` stamp with ZERO landmarks is written only
+    ///      when the engine MEASURED silence — every second of its
+    ///      audible-seconds bitmap below the floor (`Reading.silence`).
+    ///      A print that heard sound but found too few spectral peaks to
+    ///      pair into one landmark (8 AVCHD clips of 1–10 s on 2026-10-20,
+    ///      up to −0.1 dB peak) is NOT stamped: it is "heard too little to
+    ///      print", retried next run, never "silent". Before 4, zero
+    ///      landmarks meant either, so such stamps are redone (`describes`)
+    ///      and read as `Hearing.notEvidence` until they are.
+    public static let currentEngineVersion = 4
     /// The version whose `.noAudio` stamps may be decode failures.
     public static let noAudioOnDecodeFailureVersion = 2
+    /// The first version whose zero-landmark stamp means measured silence.
+    public static let silenceMeasuredVersion = 4
+    /// The oldest stamp version this build still reads (selectively — see
+    /// `describes`).
+    public static let oldestTrustedVersion = 2
 
     /// Decoder cap the engine applies (AudioPCMDecoder.defaultMaxSeconds):
     /// a recording longer than this is analysed as a prefix only.
@@ -93,9 +107,72 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
         self.bytes = bytes
     }
 
+    // MARK: What a print heard (the one classification)
+
+    /// What a freshly computed print says about the sound — decided from
+    /// the engine's OWN measurements, never from the landmark count alone.
+    /// (For Rick: a three-way tagged result, like an enum class in C++.)
+    public enum Reading: Equatable, Sendable {
+        /// At least one landmark: a usable fingerprint.
+        case printable
+        /// No landmark AND every analysed second measured below the
+        /// audible floor (`AudioFingerprintParameters.activeFloorDB`):
+        /// decoded, measured digital silence (or near it).
+        case silence
+        /// No landmark, yet the audio was heard — at least one audible
+        /// second (or no bitmap to say otherwise): too short or too sparse
+        /// for the peak picker (it needs two peaks, each the loudest of a
+        /// ±3-frame × ±15-bin patch, ≥ 1 frame apart; the first and last
+        /// 3 frames are never centres). Never "silent".
+        case heardTooLittle(audibleSeconds: Int)
+    }
+
+    public static func reading(of fingerprint: AudioFingerprint) -> Reading {
+        if fingerprint.landmarkCount > 0 { return .printable }
+        // An empty bitmap is "unknown" (AudioFingerprint.activeSeconds):
+        // the conservative side is "heard", never "silent".
+        guard fingerprint.analyzedSeconds > 0, !fingerprint.activeSeconds.isEmpty else {
+            return .heardTooLittle(audibleSeconds: fingerprint.activeSeconds.isEmpty ? 0 : fingerprint.activeSecondCount)
+        }
+        let audible = fingerprint.activeSecondCount
+        return audible == 0 ? .silence : .heardTooLittle(audibleSeconds: audible)
+    }
+
+    /// What a STAMP says about the sound, judged against the row's header
+    /// (`headerHasAudio`: its probe names an audio codec). Every surface
+    /// that turns a stamp into words — Verify Catalog tier 3, the Stream
+    /// column, Compare's sound line — reads THIS, so "silent" has one
+    /// meaning: decoded and measured.
+    public enum Hearing: Equatable, Sendable {
+        /// The print holds landmarks: sound was heard and printed.
+        case heardSound
+        /// Decoded and measured silent (stamp version ≥ 4, zero landmarks).
+        case measuredSilence
+        /// The file has no sound track, and the header agrees (or the stamp
+        /// rule never wrote this on a decode failure).
+        case noAudioTrack
+        /// Not evidence either way: a version-2 "no sound" stamp on a row
+        /// whose header has sound (written on decode failures — 0 samples),
+        /// or a pre-4 zero-landmark print (silence and "too little to print"
+        /// were not told apart). Could not check; the backfill redoes it.
+        case notEvidence
+    }
+
+    public func hearing(headerHasAudio: Bool) -> Hearing {
+        switch outcome {
+        case .noAudio:
+            return headerHasAudio && engineVersion <= Self.noAudioOnDecodeFailureVersion ? .notEvidence : .noAudioTrack
+        case .fingerprinted:
+            if landmarks > 0 { return .heardSound }
+            return engineVersion >= Self.silenceMeasuredVersion && analyzedSeconds > 0 ? .measuredSilence : .notEvidence
+        }
+    }
+
     /// Stamp for a stored fingerprint. `analyzedSeconds` and `complete`
     /// come FROM the engine (`AudioFingerprint.analyzedSeconds` /
     /// `.complete` — false when the decoder hit its cap), never recomputed.
+    /// From version 4 the job asks only for a `.printable` or `.silence`
+    /// reading (`reading(of:)`); a print that heard too little is not stamped.
     public static func fingerprinted(_ fingerprint: AudioFingerprint, contentDigest: String, sizeBytes: Int64,
                                      computedAt: Date = Date()) -> AudioFingerprintStamp {
         AudioFingerprintStamp(computedAt: computedAt, engineVersion: Self.currentEngineVersion,
@@ -119,18 +196,22 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     /// hash — one extra decode, and from then on a real identity (QA P1-a).
     ///
     /// `headerHasAudio` is the row's own evidence (its probe reports an
-    /// audio codec). A version-2 stamp stands EXCEPT a `.noAudio` one on a
-    /// row whose header has sound: version 2 wrote that on decode failures
-    /// too, so it is a verdict from unverified evidence and is redone. A
-    /// version-2 `.noAudio` stamp on a row with no audio codec, and every
-    /// version-2 `.fingerprinted` stamp (same engine, same bytes), stay.
+    /// audio codec). An OLDER stamp (versions 2–3) stands when this build
+    /// would read it as evidence (`hearing` is not `.notEvidence`): a
+    /// fingerprint with landmarks (same engine, same bytes), or a "no
+    /// sound" stamp the header agrees with. It is REDONE when it is not
+    /// evidence: a version-2 "no sound" stamp on a row whose header has
+    /// sound (decode failures), and any pre-4 zero-landmark print (it may
+    /// be "too little to print", 8 AVCHD clips with real sound on
+    /// 2026-10-20) — re-decided from the sidecar's audible bitmap, or by a
+    /// fresh decode.
     public func describes(sizeBytes: Int64, digests: [String], headerHasAudio: Bool,
                           engineVersion: Int = AudioFingerprintStamp.currentEngineVersion) -> Bool {
         guard self.sizeBytes == sizeBytes, sizeBytes > 0, digests.first == contentDigest else { return false }
         if self.engineVersion == engineVersion { return true }
-        guard self.engineVersion == Self.noAudioOnDecodeFailureVersion,
-              engineVersion == Self.currentEngineVersion else { return false }
-        return outcome == .fingerprinted || !headerHasAudio
+        guard engineVersion == Self.currentEngineVersion,
+              (Self.oldestTrustedVersion..<Self.currentEngineVersion).contains(self.engineVersion) else { return false }
+        return hearing(headerHasAudio: headerHasAudio) != .notEvidence
     }
 
     // MARK: Digest spelling
