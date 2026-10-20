@@ -18,7 +18,7 @@ A macOS app that finds every family media file on every drive, says truthfully w
 
 **Quality goals:** integrity > reliability at scale (tens of thousands of rows, 8 TB) > responsiveness. **Constraints:** macOS 15+, macOS-native frameworks first (Vision, AVFoundation); CI on Xcode 26, fleet on 27; ffmpeg/ffprobe from Homebrew as a hard dependency; one developer plus agents.
 
-**Where the catalog lives.** The catalog is `catalog.sqlite` (since 2026-10-18), written by one committer. The old `catalog.json` is a frozen read-only copy, kept only as history. How the switch was made: `docs/design/catalog_sqlite_migration_2026_10_16.md` §10.
+**Where the catalog lives.** The catalog is `catalog.sqlite` (since 2026-10-18), written by one committer. The old `catalog.json` is a frozen read-only copy, kept only as history.
 
 ## 2. The big picture
 
@@ -58,7 +58,7 @@ In code (`App/ContentView.swift`): **People · Catalog · Storage · Triage · A
 - **Capabilities:** resumable checkpointed scan; per-volume dashboard; drive health; roles and tiers; Migrate/Relocate; Retire.
 - **Data:** reads disks and the catalog; writes scan results through the commit door; checkpoints and jobs in App Support. Relocate moves media (MFO, data-risk).
 - **Dependencies:** ffprobe, commit door, MFO, `VolumeStatusCache`.
-- **Implementation:** walker → probe → merge; after the cutover the merge reconciles by whole-file digest (`ReconcileByDigest`), not path; "gone" belongs to the audit. *(Rick: the digest fast path by stat stamp was the open risk in the cutover plan §8; in and proven?)*
+- **Implementation:** walker → probe → merge; the merge reconciles by whole-file digest (`ReconcileByDigest`), not path; "gone" belongs to the audit.
 - **Testability:** walker, checkpoints, reconcile are pure and tested; the merge lives in `VideoScanModel+ScanMerge` and needs the whole model.
 - **Strays:** 14 model extensions; Relocate split between here and MediaOps; the ⌘⇧V Volumes window still exists beside the tab.
 
@@ -188,7 +188,7 @@ In code (`App/ContentView.swift`): **People · Catalog · Storage · Triage · A
 3. **Family Tree coupling.** Separate package with its own UI, separate app, or in-process? Hallie and People need a read model either way.
 4. **Dedup/pruning.** Fold Excess copies and PrunePlan into Cleanup's rules and delete PrunePlan, or redo it with a typed verdict?
 5. **The quarantine door.** Rows that can never rejoin are listed with their words; "Rejoin" is designed, not built. Manual rejoin, or history only?
-6. **Import code removal timing.** Core `Import/` (7.5k lines), the JSON read path and `JSONCatalogRepository` served a one-time port. Delete after the first clean rescan and step G, or keep the v1–v6 importer forever?
+6. ~~Import code removal timing.~~ **Decided (Rick 10/20):** the cutover is done and proven by several nights of scans and Validate, plus a catalog backup. Remove Core `Import/`, the JSON read path and `JSONCatalogRepository` with step G. The frozen JSON copy stays as history, and git keeps the importer.
 7. **Hallie's shape.** Detach as planned, or stay in-process and shed voice/web/shell until the family viewer is real?
 8. **The Archive Angel.** Keep as recommender, shrink to "Ready for archive" badges, or cut?
 9. **People engines.** Keep both matchers and the Python helper, or freeze at Vision + native Find & Tag?
@@ -215,7 +215,7 @@ MediaOps (63,200) serves Catalog, Triage, Archive and Storage and is the largest
 
 ## 7. Further reading, and docs to write
 
-**Existing:** `docs/project_goals.md` · `docs/design/tab_charters.md` · `docs/guides/source_layout.md` · `docs/guides/architecture-overview.md` *(Rick: pre-dates the cutover; retire or merge into this doc?)* · `docs/design/integrity_first_2026_10_16.md` · `docs/design/catalog_sqlite_migration_2026_10_16.md` · `docs/design/catalog_cutover_f_prime_2026_10_17.md` · `docs/design/catalog_status_freshness_2026_10_16.md` · `docs/design/one_removal_marker_and_trash_engine.md` · `docs/design/cleanup_kiss_2026_10_12.md` · `docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md` (MFO vs cyclers) · `docs/guides/media-archive.md` · `docs/guides/hallie.md` · `docs/guides/gedcom.md` · `docs/guides/facial-recognition.md` · `docs/guides/testing.md` · `docs/guides/gauntlet.md` · `docs/practices/swift_playbook.md` · `docs/reviews/swift-expert/2026-10-18-reading-guide-best-vs-worst.md` · `docs/reviews/tab_charter_audit_2026_10_11.md`.
+**Existing:** `docs/project_goals.md` · `docs/design/tab_charters.md` · `docs/guides/source_layout.md` · `docs/guides/architecture-overview.md` *(pre-dates the cutover; this doc replaces it, so retire it)* · `docs/design/integrity_first_2026_10_16.md` · `docs/design/catalog_sqlite_migration_2026_10_16.md` · `docs/design/catalog_cutover_f_prime_2026_10_17.md` · `docs/design/catalog_status_freshness_2026_10_16.md` · `docs/design/one_removal_marker_and_trash_engine.md` · `docs/design/cleanup_kiss_2026_10_12.md` · `docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md` (MFO vs cyclers) · `docs/guides/media-archive.md` · `docs/guides/hallie.md` · `docs/guides/gedcom.md` · `docs/guides/facial-recognition.md` · `docs/guides/testing.md` · `docs/guides/gauntlet.md` · `docs/practices/swift_playbook.md` · `docs/reviews/swift-expert/2026-10-18-reading-guide-best-vs-worst.md` · `docs/reviews/tab_charter_audit_2026_10_11.md`.
 
 **Docs to write:**
 - (doc to write: catalog schema and commit model for readers, one page over `catalog_sqlite_schema_v1.sql`: digest identity, generation CAS, high-water, quarantine)
