@@ -148,8 +148,7 @@ final class VideoScanModel: ObservableObject {
     /// link into the editor without a separate routing layer.
     @Published var pendingVolumesSelectionID: UUID?
     @Published var outputCSVPath: String = ""
-    @Published var previewImage: NSImage?
-    @Published var previewFilename: String = ""
+    // previewImage / previewFilename: PreviewService (forwarders below).
     /// Set by Archive tab to navigate the Catalog tab to a specific record.
     @Published var pendingCatalogSelection: UUID?
     /// When true, Show Pair mode: filter catalog to show the selected file
@@ -176,22 +175,8 @@ final class VideoScanModel: ObservableObject {
     /// and hands it to the after-make reveal (`pendingFolderReveal`),
     /// which selects the folder and opens its triangle. Consumed once.
     @Published var pendingCatalogFolderReveal: UUID?
-    /// Set when the user selects a record whose source volume isn't currently
-    /// mounted. CatalogContent renders an "Volume Offline" placeholder
-    /// instead of trying to load a thumbnail.
-    @Published var previewOfflineVolumeName: String?
-    /// True when preview generation FAILED (or negative-cache hit) for the
-    /// CURRENT selection. CatalogContent renders a "NO PREVIEW" placeholder
-    /// instead of an eternal spinner (preview routing, 2026-07-26). Reset
-    /// by clearPreview and on every new selection request.
-    @Published var previewUnavailable: Bool = false
-
-    /// Filmstrip mode for AVPlayer-unplayable formats (filmstrip preview,
-    /// 2026-07-27): what the preview pane's filmstrip branch renders.
-    /// Carries its record's fullPath so a stale publish can never show
-    /// another row's frames. Driven by requestFilmstrip / stopFilmstrip /
-    /// resetFilmstrip in VideoScanModel+Filmstrip.swift.
-    @Published var filmstripState: PreviewFilmstripState = .idle
+    // previewOfflineVolumeName / previewUnavailable / filmstripState:
+    // PreviewService (GH #337 slice 1; forwarders in the Preview section).
 
     /// Set by an operation that can't proceed because an external tool
     /// is missing (e.g. ffmpeg not installed). The view binds an alert to
@@ -600,79 +585,118 @@ final class VideoScanModel: ObservableObject {
     /// dossier text was the bottleneck behind sluggish typing.
     let searchIndex = CatalogSearchIndex()
 
-    /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click.
-    /// Internal so VideoScanModel+Thumbnail.generateThumbnail can read/write it.
-    /// Byte-cost-limited (8 GB — see ThumbnailCachePolicy) so the volume-click
-    /// prewarm can fill it aggressively without unbounded growth; NSCache also
-    /// evicts under system memory pressure, and the .memoryPressureAutoPause
-    /// observer in init clears it outright when scans hit the RAM floor.
-    let thumbnailCache: NSCache<NSString, NSImage> = VideoScanModel.makeThumbnailCache()
+    // MARK: - Preview pane → PreviewService (GH #337 slice 1, 2026-10-19)
+    //
+    // Thumbnail / filmstrip / preview-sweep state and logic live in
+    // PreviewService (Media/PreviewService*.swift). The names below are
+    // computed forwarders so every existing caller compiles unchanged —
+    // a pimpl with inline forwarding accessors, in C++ terms. The six
+    // formerly-@Published properties still fire this model's
+    // objectWillChange (PreviewService.Host.willChange, wired in init), so
+    // views observing the model refresh exactly as before. Only names that
+    // something outside PreviewService uses are forwarded.
 
-    /// Negative cache for preview generation (preview routing, 2026-07-26):
-    /// files that failed to yield a frame, keyed by fullPath with their
-    /// (mtime, size) at failure time — consulted by generateThumbnail and
-    /// the precacher BEFORE attempting, so a known-bad file costs one stat
-    /// instead of a deadline-bounded decode failure every selection. A
-    /// repaired/replaced file (signature mismatch) retries automatically.
-    /// Capped at 10k entries (~2–3 MB worst case) — see ThumbnailFailureStore.
-    let thumbnailFailureStore = ThumbnailFailureStore()
+    /// The preview pane's store. One per model; owned here.
+    let previewService = PreviewService()
 
-    /// Persistent on-disk preview cache — L2 behind `thumbnailCache`
-    /// (Phase B piece 1, 2026-07-26). Keyed on (path, mtime, size) so a
-    /// changed file misses automatically; 2 GB cap pruned at background
-    /// QoS on launch. Lookup order everywhere: L1 NSCache → this →
-    /// generate, write-through to both. See PreviewDiskCache.swift.
-    /// (The production root self-redirects to a temp sandbox under a
-    /// unit-test host — same gate as MetadataCache.defaultPath.)
-    let previewDiskCache = PreviewDiskCache(rootURL: PreviewDiskCache.productionRootURL)
+    var previewImage: NSImage? { get { previewService.previewImage } set { previewService.previewImage = newValue } }
+    var previewFilename: String { get { previewService.previewFilename } set { previewService.previewFilename = newValue } }
+    var previewOfflineVolumeName: String? { get { previewService.previewOfflineVolumeName } set { previewService.previewOfflineVolumeName = newValue } }
+    var previewUnavailable: Bool { get { previewService.previewUnavailable } set { previewService.previewUnavailable = newValue } }
+    var filmstripState: PreviewFilmstripState { get { previewService.filmstripState } set { previewService.filmstripState = newValue } }
+    var previewSweepSettings: PreviewSweepSettings { get { previewService.previewSweepSettings } set { previewService.previewSweepSettings = newValue } }
+    func savePreviewSweepSettings() { previewService.savePreviewSweepSettings() }
 
-    /// Pending debounced thumbnail generation (see requestThumbnailDebounced
-    /// in VideoScanModel+Thumbnail). Cancelled and replaced on every
-    /// selection step; only the row the user rests on pays for generation.
-    var thumbnailDebounceTask: Task<Void, Never>?
+    var thumbnailCache: NSCache<NSString, NSImage> { previewService.thumbnailCache }
+    var thumbnailFailureStore: ThumbnailFailureStore { previewService.thumbnailFailureStore }
+    var previewDiskCache: PreviewDiskCache { previewService.previewDiskCache }
+    var thumbnailPrecacher: ThumbnailPrecacher { previewService.thumbnailPrecacher }
+    var previewSweep: PreviewSweepService { previewService.previewSweep }
 
-    /// fullPath of the most recent preview request. Guards against a slow,
-    /// stale generation completing AFTER a newer selection and clobbering
-    /// its preview. Set by requestThumbnailDebounced/generateThumbnail.
-    var previewRequestPath: String?
+    var previewRequestPath: String? { get { previewService.previewRequestPath } set { previewService.previewRequestPath = newValue } }
+    var filmstripTask: Task<Void, Never>? { get { previewService.filmstripTask } set { previewService.filmstripTask = newValue } }
+    var filmstripTaskPath: String? { get { previewService.filmstripTaskPath } set { previewService.filmstripTaskPath = newValue } }
+    var filmstripTaskIsInteractive: Bool { get { previewService.filmstripTaskIsInteractive } set { previewService.filmstripTaskIsInteractive = newValue } }
+    var filmstripLatestProgress: (done: Int, total: Int) { get { previewService.filmstripLatestProgress } set { previewService.filmstripLatestProgress = newValue } }
+    var filmstripRunID: UUID { get { previewService.filmstripRunID } set { previewService.filmstripRunID = newValue } }
+    var filmstripFailedPaths: Set<String> { get { previewService.filmstripFailedPaths } set { previewService.filmstripFailedPaths = newValue } }
 
-    // MARK: Filmstrip bookkeeping (filmstrip preview, 2026-07-27)
-    // Stored here because extensions can't add stored properties; all
-    // logic lives in VideoScanModel+Filmstrip.swift. Main-actor only
-    // (the model is @MainActor) — no locks needed. For Rick: these five
-    // are the members a C++ class would guard with "only touch on the
-    // UI thread" comments; @MainActor makes the compiler enforce it.
+    func invalidateThumbnailCacheEntry(forPath path: String) {
+        previewService.invalidateThumbnailCacheEntry(forPath: path)
+    }
+    func storePrecachedThumbnail(_ cgImage: CGImage, forPath path: String) {
+        previewService.storePrecachedThumbnail(cgImage, forPath: path)
+    }
+    func requestThumbnailDebounced(for record: VideoRecord) {
+        previewService.requestThumbnailDebounced(for: record)
+    }
+    func clearPreview() { previewService.clearPreview() }
+    func generateThumbnail(for record: VideoRecord) {
+        previewService.generateThumbnail(for: record)
+    }
 
-    /// The single in-flight filmstrip generation (interactive OR
-    /// prewarm) — at most ONE per model instance by design, so an
-    /// interactive play click and a background prewarm can never rip
-    /// the same 20 GB master twice concurrently.
-    var filmstripTask: Task<Void, Never>?
-    /// fullPath the in-flight task is generating for (coalescing key).
-    var filmstripTaskPath: String?
-    /// True when the in-flight task's result should publish to the UI.
-    /// A prewarm flips to true ("promoted") if the user clicks play on
-    /// the same row mid-generation.
-    var filmstripTaskIsInteractive = false
-    /// Latest (done, total) the in-flight task reported — lets a
-    /// promoted prewarm publish honest progress immediately.
-    var filmstripLatestProgress: (done: Int, total: Int) = (0, 0)
-    /// Identifies the latest filmstrip task so a superseded run's
-    /// completion can't clear a newer run's bookkeeping (same pattern
-    /// as ThumbnailPrecacher.currentRunID).
-    var filmstripRunID = UUID()
-    /// Paths whose filmstrip generation genuinely failed this session —
-    /// keeps the prewarm from re-ripping hopeless files on every
-    /// selection. Deliberately NOT ThumbnailFailureStore: the fast
-    /// thumbnail SUCCEEDED for these files, and poisoning the shared
-    /// negative cache would blank their previews entirely. Capped at
-    /// 10k inserts (~2 MB worst case) per the memory discipline rule.
-    var filmstripFailedPaths: Set<String> = []
+    typealias FilmstripWorkItem = PreviewService.FilmstripWorkItem
+    func requestFilmstrip(for record: VideoRecord,
+                          dependencyCheck: () -> MissingDependency? = { DependencyChecker.checkFilmstripPreview() }) {
+        previewService.requestFilmstrip(for: record, dependencyCheck: dependencyCheck)
+    }
+    func prewarmFilmstripIfNeeded(item: FilmstripWorkItem,
+                                  dependencyCheck: () -> MissingDependency? = { DependencyChecker.checkFilmstripPreview() }) {
+        previewService.prewarmFilmstripIfNeeded(item: item, dependencyCheck: dependencyCheck)
+    }
+    func stopFilmstrip() { previewService.stopFilmstrip() }
+    func resetFilmstrip(forNewPath newPath: String?) {
+        previewService.resetFilmstrip(forNewPath: newPath)
+    }
 
-    /// Volume-click thumbnail prewarmer (Part 3 of the 2026-06-10 perf
-    /// batch). Owned here so the catalog view and scan lifecycle share one
-    /// instance — a new volume selection or a scan start cancels the run.
-    let thumbnailPrecacher = ThumbnailPrecacher()
+    func setPreviewSweepEnabled(_ on: Bool) { previewService.setPreviewSweepEnabled(on) }
+    var isPreviewHelperRunning: Bool { previewService.isPreviewHelperRunning }
+
+    // Static forwarders to the frame-rip cores. Each callee is itself
+    // `@concurrent` where the original was, so the work still runs on the
+    // global pool whatever actor the caller is on.
+    nonisolated static func makeThumbnailCache() -> NSCache<NSString, NSImage> {
+        PreviewService.makeThumbnailCache()
+    }
+    nonisolated static var avfPreviewDeadlineSeconds: Double { PreviewFrameRenderer.avfPreviewDeadlineSeconds }
+    nonisolated static var ffmpegPreviewDeadlineSeconds: Double { PreviewFrameRenderer.ffmpegPreviewDeadlineSeconds }
+    nonisolated static func renderThumbnailCGImage(path: String,
+                                                   container: String,
+                                                   videoCodec: String,
+                                                   likelyUnanalyzable: Bool) async throws -> CGImage {
+        try await PreviewFrameRenderer.renderThumbnailCGImage(path: path, container: container,
+                                                              videoCodec: videoCodec,
+                                                              likelyUnanalyzable: likelyUnanalyzable)
+    }
+    nonisolated static func renderBestPreviewCGImage(path: String,
+                                                     container: String,
+                                                     videoCodec: String,
+                                                     likelyUnanalyzable: Bool,
+                                                     durationSeconds: Double) async throws -> CGImage {
+        try await PreviewFrameRenderer.renderBestPreviewCGImage(path: path, container: container,
+                                                                videoCodec: videoCodec,
+                                                                likelyUnanalyzable: likelyUnanalyzable,
+                                                                durationSeconds: durationSeconds)
+    }
+    nonisolated static func dedupedCandidateTimes(offsets: [Double]) -> [NSValue] {
+        PreviewFrameRenderer.dedupedCandidateTimes(offsets: offsets)
+    }
+    nonisolated static func renderPreviewFilmstrip(path: String,
+                                                   container: String,
+                                                   videoCodec: String,
+                                                   likelyUnanalyzable: Bool,
+                                                   durationSeconds: Double,
+                                                   frameCount: Int = PreviewFilmstripPlan.defaultFrameCount,
+                                                   ffmpegPath: String = ToolLocator.ffmpegPath,
+                                                   onFrameProgress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> PreviewFilmstrip {
+        try await PreviewFrameRenderer.renderPreviewFilmstrip(path: path, container: container,
+                                                              videoCodec: videoCodec,
+                                                              likelyUnanalyzable: likelyUnanalyzable,
+                                                              durationSeconds: durationSeconds,
+                                                              frameCount: frameCount,
+                                                              ffmpegPath: ffmpegPath,
+                                                              onFrameProgress: onFrameProgress)
+    }
 
     /// O(1) id → record lookup over `records`. Lazily rebuilt when the
     /// array changes; see RecordIDIndex (CatalogPerfMemo.swift) for the
@@ -713,20 +737,19 @@ final class VideoScanModel: ObservableObject {
                                revision: volumeAggregatesRevision)
     }
 
-    /// Drop any cached thumbnail under `path`. Called from the rename path
-    /// (VideoScanModel+Rename) so a renamed record doesn't leak a stale
-    /// entry under its old `fullPath` key. Internal to the model so the
-    /// NSCache itself stays private.
-    func invalidateThumbnailCacheEntry(forPath path: String) {
-        thumbnailCache.removeObject(forKey: path as NSString)
-    }
-
     /// Resolved ffprobe path. `var` (not `let`) purely as a test seam so the
     /// probe-timeout regression tests can inject a fake stuck ffprobe;
     /// production code never reassigns it. nonisolated(unsafe) because
     /// nonisolated probe code reads it and writes only happen before probing
     /// starts (tests).
     nonisolated(unsafe) var ffprobePath = ToolLocator.ffprobePath
+
+    /// One ffprobe of `url` with this model's `ffprobePath`. (Moved here
+    /// from VideoScanModel+Thumbnail.swift with GH #337 slice 1 — it sits
+    /// beside the state it reads.)
+    nonisolated func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
+        await CombineVerifier.runFFProbe(url: url, ffprobePath: ffprobePath)
+    }
 
     /// Test seam (GH #163 scale tests): when set, `probeFileOutcome` /
     /// `probeFileWithTimeoutOutcome` return `stub(url)` instead of running
@@ -864,29 +887,6 @@ final class VideoScanModel: ObservableObject {
         kindFacetSetting.save(to: .standard)
     }
 
-    /// Background preview sweep opt-in ("Keep previews fresh in the
-    /// background", 2026-07-27). DEFAULT OFF — sensor-pinned. Same
-    /// explicit-save + test-host-pristine discipline as the settings
-    /// above. Wiring lives in VideoScanModel+PreviewSweep.swift.
-    @Published var previewSweepSettings: PreviewSweepSettings =
-        TestEnvironment.isTestHost
-            ? PreviewSweepSettings()
-            : PreviewSweepSettings.restored(from: .standard)
-
-    /// Explicit save for the sweep setting — @Published kills didSet,
-    /// so every UI mutation of `previewSweepSettings` must call this.
-    func savePreviewSweepSettings() {
-        guard !TestEnvironment.isTestHost else { return }
-        previewSweepSettings.save(to: .standard)
-    }
-
-    /// The background preview sweep service (2026-07-27). Stored here
-    /// because extensions can't add stored properties; configured at the
-    /// end of init (configurePreviewSweep), catalog-change signal comes
-    /// from records.didSet, interaction pings from the thumbnail /
-    /// filmstrip request sites.
-    let previewSweep = PreviewSweepService()
-
     /// The Archive Angel — its ONE property on the model (consolidation S2,
     /// 2026-09-22). The façade owns the evidence sidecar, the background
     /// scoring sweep, the attention memory, the settings and the prepared
@@ -913,18 +913,11 @@ final class VideoScanModel: ObservableObject {
     /// timeline memo keys on it, so a tag re-colours the cue and strip.
     @Published var archiveAuditRevision: Int = 0
 
-    /// Stage 2 (2026-07-29): manages the DETACHED out-of-process helper
-    /// (videoscan-preview-sweep) so preview prewarming survives app quit.
-    /// Built in configurePreviewSweep with the real posix_spawn launcher +
-    /// bundle/dev binary locator. nil under a test host (never spawns a real
-    /// process). See PreviewHelperSupervisor.swift for the pure lifecycle.
-    var previewHelperCoordinator: PreviewHelperCoordinator?
-
     // MARK: Detached Find and Tag daemon (2026-08-06)
 
     /// Background Find and Tag opt-in ("survives app quit"). DEFAULT
     /// OFF. Same explicit-save + test-host-pristine discipline as the
-    /// preview sweep above. Wiring: VideoScanModel+FindTagHelper.swift.
+    /// preview sweep (PreviewService). Wiring: VideoScanModel+FindTagHelper.swift.
     @Published var findTagBackgroundSetting: FindTagBackgroundSetting =
         TestEnvironment.isTestHost
             ? FindTagBackgroundSetting()
@@ -1172,6 +1165,9 @@ final class VideoScanModel: ObservableObject {
     ///   read their own catalog.log lines back pass a scratch dir (GH #211).
     init(logDirectory: URL? = nil) {
         dashboard = DashboardState(logDirectory: logDirectory)
+        // GH #337 slice 1: connect the preview store FIRST, before anything
+        // can touch preview state.
+        connectPreviewService()
         installLifecycleObservers()
         restoreScanTargets()
         // GH #167: designation START / OUTCOME / REFUSED lines reach the
@@ -1352,7 +1348,7 @@ final class VideoScanModel: ObservableObject {
         // catalog as its first change signal (records.didSet doesn't
         // fire inside init). Test hosts get the pristine OFF default,
         // so the ~200 model-constructing tests never start a sweep.
-        configurePreviewSweep()
+        previewService.configurePreviewSweep()
         // Archive Angel phase 2: evidence sidecar + background scoring sweep
         // (the façade owns both since consolidation S2).
         archiveAngel.launch()
@@ -1370,6 +1366,17 @@ final class VideoScanModel: ObservableObject {
         // never spawn or ingest; codex QA #277 blocker B). No-op under
         // a test host.
         configureFindTagHelper()
+    }
+
+    /// Wire PreviewService's owner hooks. Its formerly-@Published
+    /// properties announce through this model's objectWillChange, exactly
+    /// as they did when they lived here. Weak captures: the model owns the
+    /// store (a strong capture would be a shared_ptr cycle, for Rick).
+    private func connectPreviewService() {
+        previewService.host = PreviewService.Host(
+            willChange: { [weak self] in self?.objectWillChange.send() },
+            records: { [weak self] in self?.records ?? [] },
+            reportMissingDependency: { [weak self] in self?.missingDependency = $0 })
     }
 
     /// The two NotificationCenter observers installed at init. Extracted

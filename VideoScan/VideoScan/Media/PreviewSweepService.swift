@@ -26,7 +26,7 @@
 //     failures go to ThumbnailFailureStore; cancellation, unreachable
 //     volumes, and a missing ffmpeg NEVER do (the 2026-07-26
 //     cache-poison class). Strip-only failures also never touch the
-//     store (the still succeeded — same rule as VideoScanModel+Filmstrip).
+//     store (the still succeeded — same rule as PreviewService+Filmstrip).
 //   - Catalog changes (scan commit, import, purge) re-plan via a
 //     debounced restart — the diff against the cache index makes a
 //     restart cheap (completed work is never redone).

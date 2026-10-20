@@ -35,11 +35,13 @@ struct VideoScanModelSplitSensorTests {
     // CEILINGS — numbers may only fall. Measured on main @ 354a5aefa
     // (2026-10-19, slice 0): 141 declarations in 136 files, 82 @Published
     // (code only, comments stripped; the plan's 134 / ~90 were file counts
-    // and a grep that included comments). NEXT SLICE: lower these to the
-    // new measured values in the same commit that moves the members.
-    static let extensionDeclarationCeiling = 141
-    static let extensionFileCeiling = 136
-    static let publishedCeiling = 82
+    // and a grep that included comments). Slice 1 (PreviewService) moved
+    // three extension files and six @Published: 138 / 133 / 76.
+    // NEXT SLICE: lower these to the new measured values in the same
+    // commit that moves the members.
+    static let extensionDeclarationCeiling = 138
+    static let extensionFileCeiling = 133
+    static let publishedCeiling = 76
 
     /// `extension VideoScanModel` — but not `extension VideoScanModel.Nested`
     /// (that extends a nested type, not the model).
