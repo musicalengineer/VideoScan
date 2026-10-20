@@ -15,6 +15,7 @@ import { RoundtableController } from "./roundtable-controller.mjs";
 import { ControlPlane } from "./control-plane.mjs";
 import { MetricsRefresh, metricsDocument } from "./metrics-refresh.mjs";
 import { WorkBoard } from "./work-board.mjs";
+import { readOnDemandComplexity } from "./on-demand-complexity.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const toolRoot = resolve(here, "..");
@@ -110,6 +111,7 @@ const server = createServer(async (request, response) => {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Security-Policy": page.csp });
       return response.end(page.body);
     }
+    if (request.method === "GET" && url.pathname === "/api/metrics-refresh/results") return json(response, 200, await readOnDemandComplexity({ toolRoot }));
     if (request.method === "GET" && url.pathname === "/api/metrics-refresh") return json(response, 200, metricsRefresh.snapshot());
     if (request.method === "POST" && url.pathname === "/api/metrics-refresh") {
       const result = metricsRefresh.enqueue(await readJson(request));

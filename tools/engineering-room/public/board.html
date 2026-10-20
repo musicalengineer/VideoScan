@@ -17,14 +17,14 @@
   <main>
     <section class="overview" aria-label="How we work">
       <p class="roles"><strong>You</strong> set direction <span>→</span> <strong>Claude</strong> coordinates <span>→</span> <strong>Codex</strong> reviews / tests</p>
-      <p class="muted">Keep talking to Claude in your terminal. This page shows recorded work and decisions from our existing sessions.</p>
+      <p class="muted">Keep talking to Claude or Codex in your existing session. This page shows their recorded work and decisions.</p>
       <div class="connection-row"><p id="connection" role="status" aria-live="polite">Connecting…</p><button type="button" id="refresh-board">Refresh board</button></div>
       <p id="schedule" class="muted">America/New_York · M4 is active unless Rick declares a current quiet window.</p>
       <p id="board-warning" class="warning" hidden></p>
     </section>
 
     <section class="request-panel" aria-labelledby="request-heading">
-      <div class="section-heading"><div><h2 id="request-heading">Request work</h2><p class="muted">Queues a request for a manager to acknowledge. Submitting does not start an agent.</p></div><a class="button" href="/metrics#refresh-panel">Rerun tests / refresh metrics ↗</a></div>
+      <div class="section-heading"><div><h2 id="request-heading">Request work</h2><p class="muted">Queues a request for the selected manager to claim. Submitting does not start an agent.</p></div><a class="button" href="/metrics#refresh-panel">Rerun tests / refresh metrics ↗</a></div>
       <form id="request-form">
         <fieldset id="request-fields">
           <div class="request-grid">
@@ -40,9 +40,9 @@
     </section>
 
     <div id="lanes" class="lanes" aria-label="Recorded work">
-      <section class="lane needs-rick" aria-labelledby="needs-heading"><h2 id="needs-heading">Needs Rick <span id="needs-count" class="count">—</span></h2><p class="lane-note">Answer in your Claude session; the worker records the decision.</p><div id="needs-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
+      <section class="lane needs-rick" aria-labelledby="needs-heading"><h2 id="needs-heading">Needs Rick <span id="needs-count" class="count">—</span></h2><p class="lane-note">Answer in the assigned manager’s session; the worker records the decision.</p><div id="needs-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
       <section class="lane" aria-labelledby="progress-heading"><h2 id="progress-heading">In progress <span id="progress-count" class="count">—</span></h2><p class="lane-note">Work, blockers, and missing worker updates.</p><div id="progress-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
-      <section class="lane" aria-labelledby="queued-heading"><h2 id="queued-heading">Queued <span id="queued-count" class="count">—</span></h2><p class="lane-note">Waiting for worker acknowledgement.</p><div id="queued-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
+      <section class="lane" aria-labelledby="queued-heading"><h2 id="queued-heading">Queued <span id="queued-count" class="count">—</span></h2><p class="lane-note">Each request waits for its selected manager to claim it.</p><div id="queued-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
       <section class="lane" aria-labelledby="finished-heading"><h2 id="finished-heading">Recently finished <span id="finished-count" class="count">—</span></h2><p class="lane-note">Read the outcome; completion alone is not a passing test.</p><div id="finished-cards" class="cards"><p class="empty">Waiting for board data…</p></div></section>
     </div>
 

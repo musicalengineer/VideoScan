@@ -24,7 +24,8 @@
   page never classifies a night itself and never reads a metric row's free text
   (names, reasons, paths).
   The authenticated local work board /metrics route also offers its existing
-  manager queue. Private task status does not replace published measurements.
+  manager queue and a separate scoped complexity snapshot with escaped private
+  source/function evidence. Neither replaces published historical measurements.
 
   Layout, top to bottom:
     1. Headline strip: version · app source lines (app only) · last night's
@@ -91,6 +92,8 @@
   #area-size > #area-debt { margin: 0 16px 16px; border-color: var(--border); }
   .manual-results { margin: 16px 0; }
   .manual-results h3 { font-size: 16px; margin-bottom: 5px; }
+  .on-demand-complexity { border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-wrap: anywhere; }
+  .on-demand-complexity .evidence { margin: 7px 0; }
 
   /* ---- 1. headline strip ---- */
   .head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 20px 0 24px; }
@@ -282,7 +285,7 @@
     <p class="refresh-help" id="refresh-scope-help">Working tree means the selected machine’s checkout; a branch, tag or commit can be requested instead. Folder scope guides code measurements and reviews. Test scope is explicit above. Reviews inspect that folder at the requested revision, with no PR required.</p>
     <label class="hidden" id="refresh-quiet-wrap"><input type="checkbox" id="refresh-quiet"> I have declared a quiet window on M4 for app tests or Hallie eval.</label>
     <p class="refresh-help">Queues work for the selected manager; status updates after a worker claims it.</p>
-    <div class="refresh-actions"><button type="submit" id="refresh-submit" disabled>Rerun tests and refresh metrics on M5</button><button type="button" id="refresh-reload">Reload published results</button></div>
+    <div class="refresh-actions"><button type="submit" id="refresh-submit" disabled>Rerun tests and refresh metrics on M5</button><button type="button" id="refresh-reload">Reload results</button></div>
   </form>
   <p id="refresh-message" role="status" aria-live="polite"></p>
   <div id="refresh-requests" aria-live="polite"></div>
@@ -763,7 +766,7 @@ async function submitMetricsRefresh(event) {
     if (!response.ok || (data.accepted !== true && data.queued !== true)) throw new Error(typeof data.error === "string" ? data.error : "The request could not be queued. Retry keeps the same request ID.");
     refreshPending = null;
     const state = data.task && typeof data.task.state === "string" ? data.task.state : "queued";
-    refreshMessage(`${data.reused ? "Existing request found" : "Queued"} for ${payload.manager === "codex" ? "Codex" : "Claude"} on ${REFRESH_MACHINES[payload.machine]}. ${state === "queued" ? "Waiting for a worker to claim it" : "Current task state: " + state}; check the published evidence below for measurement dates and revisions.`);
+    refreshMessage(`${data.reused ? "Existing request found" : "Queued"} for ${payload.manager === "codex" ? "Codex" : "Claude"} on ${REFRESH_MACHINES[payload.machine]}. ${state === "queued" ? `Waiting for ${payload.manager === "codex" ? "Codex" : "Claude"} to claim this request` : "Current task state: " + state}; check the published evidence below for measurement dates and revisions.`);
     await pollMetricsRefresh();
   } catch (error) { refreshMessage(error.message || "Request status is uncertain. Retry safely with the same selection."); }
   finally { refreshSending = false; updateRefreshForm(); }
@@ -772,6 +775,59 @@ async function initMetricsRefresh() {
   if (!REFRESH_TRUSTED) return;
   await pollMetricsRefresh(true);
   if (refreshPoll === null && typeof setInterval === "function") refreshPoll = setInterval(() => { void pollMetricsRefresh(); }, 10000);
+}
+
+async function fetchOnDemandComplexity() {
+  // Private worker output is served only by the authenticated local page.
+  if (!REFRESH_TRUSTED) return null;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 8000) : null;
+  try {
+    const response = await fetch("/api/metrics-refresh/results", { cache: "no-store", credentials: "same-origin", redirect: "error", ...(controller ? { signal: controller.signal } : {}) });
+    if (!response.ok) throw new Error("unavailable");
+    const data = await response.json();
+    if (!data || !["ok", "missing", "error"].includes(data.status)) throw new Error("unsupported");
+    return data;
+  } catch {
+    return { status: "error", result: null, error: "Local results are unavailable. Check local sign-in and reload to retry." };
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+  }
+}
+function onDemandComplexityCard(snapshot) {
+  if (!REFRESH_TRUSTED) return "";
+  const heading = `<section class="manual-results on-demand-complexity" id="on-demand-complexity"><h3>Latest on-demand complexity</h3>`;
+  const result = snapshot && snapshot.status === "ok" ? snapshot.result : null;
+  if (!result || !result.metrics || typeof result.ts !== "string" || !Number.isFinite(Date.parse(result.ts)) || !Array.isArray(result.topFunctions)) {
+    return heading + `<p class="evidence">Unavailable · ${esc(snapshot && typeof snapshot.error === "string" ? snapshot.error : "No usable on-demand complexity result is available.")} Historical measurements remain below.</p></section>`;
+  }
+  const metrics = result.metrics;
+  const machine = REFRESH_MACHINES[result.machine] || (result.machine === "m1" ? "M1" : "Unknown system");
+  const measured = new Date(result.ts).toISOString().replace("T", " ").replace(/\.000Z$/, " UTC").replace(/Z$/, " UTC");
+  const old = snapshot.stale === true || hoursSince(result.ts) > 24;
+  const checkout = result.sourceDirty === false ? "clean source snapshot" : result.sourceDirty === true ? "source has uncommitted changes" : "source cleanliness unknown";
+  const rows = result.topFunctions.slice(0, 20).filter(fn => fn && typeof fn === "object").map(fn => [
+    esc(fn.function || "Function not recorded"), esc(fn.file || "File not recorded"), esc(n(fn.line)), esc(n(fn.ccn)), esc(n(fn.nloc)),
+  ]);
+  const cards = [
+    card("Files", n(metrics.files), null, null, false, ""),
+    card("Functions", n(metrics.functions), null, null, false, ""),
+    card("Source lines", n(metrics.lines), null, null, false, ""),
+    card("Mean CCN", n(metrics.mean_ccn), null, null, false, ""),
+    card("Maximum CCN", n(metrics.max_ccn), null, null, false, ""),
+    card("Functions with CCN > 15", n(metrics.ccn_over_15), null, null, false, ""),
+    card("Functions with CCN > 30", n(metrics.ccn_over_30), null, null, false, ""),
+    card("CCN overflow debt", n(result.ccn15Excess), null, null, false, "Sum of max(CCN − 15, 0)"),
+  ];
+  return heading + `<p><strong>${esc(result.folder || result.scope || "Scope not recorded")}</strong> · ${esc(machine)}</p>` +
+    `<p class="evidence">Displayed scope: ${esc(result.scope || "not recorded")} · Measured ${esc(measured)}${old ? " · stale (>24h)" : ""}<br>` +
+    `SHA ${esc(result.sha || "not recorded")} · ${esc(checkout)}<br>Source: ${esc(result.sourceRef || "not recorded")} · Lizard ${esc(result.lizardVersion || "not recorded")}` +
+    `${result.measurementScope ? "<br>Run scope: " + esc(result.measurementScope) : ""}` +
+    `${Array.isArray(result.measuredRoots) ? " · Measured roots: " + result.measuredRoots.map(esc).join(", ") : ""}` +
+    `${Array.isArray(result.measuredLanguages) ? " · Languages: " + result.measuredLanguages.map(esc).join(", ") : ""}</p>` +
+    `<p class="evidence">This is a scoped measurement snapshot. Nightly history, module grades, and test status retain their own evidence dates. Reload results after a worker publishes a new measurement.</p>` +
+    `<div class="cards">${cards.join("")}</div><h3>Most complex functions in this snapshot</h3><div class="table-wrap">` +
+    (rows.length ? table(["Function", "File", "Line", "CCN", "Function lines"], rows) : `<p class="evidence">No function rows recorded.</p>`) + "</div></section>";
 }
 
 function evidenceText(label, row, revision) {
@@ -1363,7 +1419,7 @@ const BODIES = {
       card("Measured", cx ? fmtWhen(cx.ts) : null, null, null, false, ""),
     ];
     const top = (Array.isArray(lastNightly.top15) ? lastNightly.top15 : []).filter(f => (f.lang || "swift") === "swift");
-    body.innerHTML = moved("App source = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches; tests and tooling are counted apart. The Module health table replaced the two \"Swift lines / files by folder\" bar charts (they repeated the cards, and Tests was the biggest bar).") +
+    body.innerHTML = onDemandComplexityCard(d.onDemandComplexity) + moved("App source = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches; tests and tooling are counted apart. The Module health table replaced the two \"Swift lines / files by folder\" bar charts (they repeated the cards, and Tests was the biggest bar).") +
       `<div class="cards">${cards.join("")}</div><div class="charts">` +
       tableBox("Module health · one row per app source folder (tests and tooling excluded)", "mod-health") +
       chartBox("Lines: app source vs all Swift (app + tests + CLI)", "c-size-trend") + chartBox("Files over 1,000 lines", "c-size-f1000") +
@@ -2033,7 +2089,7 @@ async function loadData() {
   } catch {}
 
   METRICS_SHA = LOCAL_ONLY ? null : await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, eventsText, searchText, modText, ciRun, naRun] = await Promise.all([
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, eventsText, searchText, modText, ciRun, naRun, onDemandComplexity] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
@@ -2052,6 +2108,7 @@ async function loadData() {
     fetchText(rawUrl("modules.jsonl"), local("modules.jsonl")),
     latestMainRun("ci.yml"),
     latestMainRun("nightly-analysis.yml"),
+    fetchOnDemandComplexity(),
   ]);
 
   const allTdRows = sortByTs(parseJsonl(tdText));
@@ -2077,7 +2134,7 @@ async function loadData() {
     // One publisher row per UTC day; only well-formed timestamps are kept so day/week keys never throw.
     ghDaily: sortByTs(parseJsonl(ghDailyText).filter(r => typeof r.ts === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(r.ts) && !Number.isNaN(toTime(r.ts)))),
     searchText, searchLatest: null,
-    ciRun, naRun,
+    ciRun, naRun, onDemandComplexity,
   };
 
   try { renderHead(d); } catch (err) { showError("head", err); }

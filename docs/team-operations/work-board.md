@@ -91,6 +91,23 @@ is the default coordinator. A queued request is not an execution claim; a
 completed subset is not whole-suite evidence. Publish only supported sanitized
 streams, and distinguish measurement failure from publication failure.
 
+A manual complexity refresh can also publish a private local result to
+`tools/engineering-room/var/on-demand-complexity-latest.json`. Collect against
+the requested revision on the requested machine, retain the original artifact,
+then atomically replace this latest snapshot with the measured folder summary.
+Include the actual measurement timestamp, full SHA, machine, source reference,
+clean/dirty state, measurement scope, folder counts, and top functions. Never
+substitute publication time for measurement time. The authenticated
+`/api/metrics-refresh/results` endpoint exposes the bounded, validated summary;
+Code health displays it as **Latest on-demand complexity** on page reload.
+Nightly histories retain their own measurements. A request is complete only
+after checking both collection and the displayed local result.
+
+Submitting a board request queues it for its selected manager. It does not
+wake an existing Claude or Codex conversation automatically; the manager must
+check the queue and claim the task. A Codex assignment needs Codex to claim it,
+not Claude's approval.
+
 Rick's schedule is documented in `rick-availability.local.md`, timezone
 America/New_York: the morning review starts at 11, with interactive development
 and spot-testing continuing through the afternoon and evening. M5/M1 are

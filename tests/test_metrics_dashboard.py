@@ -764,7 +764,8 @@ def test_public_page_never_reads_or_writes_private_queue_even_with_poisoned_sett
 
 
 @needs_node
-def test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly_results(tmp_path):
+@pytest.mark.parametrize("manager, label", [("claude", "Claude"), ("codex", "Codex")])
+def test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly_results(tmp_path, manager, label):
     now = datetime.now(timezone.utc)
     fixtures = full_fixtures(now)
     fixtures["/api/metrics-refresh"] = refresh_fixture()
@@ -772,14 +773,14 @@ def test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly
         "accepted": True, "queued": True, "task": {"state": "queued"}}}]}
     before = run_page(tmp_path, fixtures)
     out = run_page(tmp_path, fixtures, {"pathname": "/metrics"}, actions=[submit_refresh(
-        machine={"value": "m5"}, manager={"value": "claude"}, code={"checked": False},
+        machine={"value": "m5"}, manager={"value": manager}, code={"checked": False},
         reviews={"checked": True}, folder={"value": "VideoScan/VideoScan/Hallie"},
         revision={"value": "feature/metrics"}, **{"test-scope": {"value": "selected"},
         "selectors": {"value": "PairTests, tests/test_metrics_dashboard.py"}})])
     posts = [r for r in out["requests"] if r["method"] == "POST"]
     assert len(posts) == 1
     payload = posts[0]["body"]
-    assert payload["machine"] == "m5" and payload["manager"] == "claude"
+    assert payload["machine"] == "m5" and payload["manager"] == manager
     assert payload["areas"] == ["tests", "reviews"]
     assert payload["testScope"] == "selected"
     assert payload["testSelectors"] == "PairTests, tests/test_metrics_dashboard.py"
@@ -789,7 +790,8 @@ def test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly
     assert posts[0]["options"]["credentials"] == "same-origin"
     for section in ["head", "tl", "sum-tests", "evidence-tests"]:
         assert out["sections"][section] == before["sections"][section], section
-    assert "Waiting for a worker to claim it" in out["sections"]["refresh-message"]
+    # regression: the selected manager claims the request; a Codex request does not wait for Claude.
+    assert f"Waiting for {label} to claim this request" in out["sections"]["refresh-message"]
     assert "measurement dates and revisions" in out["sections"]["refresh-message"]
     assert 'value="m5Ultra" disabled' in out["sections"]["refresh-machine"]
 
@@ -906,3 +908,101 @@ def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path)
 def test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes():
     page = PAGE.read_text()
     assert not re.search(r"\bon(?:click|change|submit|keydown)\s*=", page)
+
+
+def on_demand_complexity_fixture(**overrides):
+    result = {
+        "schemaVersion": 1, "scope": "VideoScan/VideoScan/Catalog", "folder": "Catalog", "machine": "m5",
+        "ts": "2026-10-18T12:34:56Z", "sha": "0123456789abcdef0123456789abcdef01234567",
+        "sourceRef": "refs/heads/main", "sourceDirty": False, "lizardVersion": "1.22.1",
+        "measurementScope": "whole-repository", "presentationScope": "VideoScan/VideoScan/Catalog",
+        "metrics": {"lines": 4321, "files": 42, "functions": 123, "max_ccn": 31,
+                    "ccn_over_15": 4, "ccn_over_30": 1, "mean_ccn": 3.1},
+        "ccn15Excess": 25,
+        "topFunctions": [{"file": "VideoScan/VideoScan/Catalog/Fixture.swift", "function": "Fixture.inspect",
+                          "line": 42, "ccn": 31, "nloc": 100}],
+    }
+    result.update(overrides)
+    return {"status": "ok", "observedAt": "2026-10-20T23:00:00Z", "stale": True, "result": result, "error": None}
+
+
+def on_demand_card(out):
+    match = re.search(r'<section class="manual-results on-demand-complexity".*?</section>',
+                      out["sections"]["body-size"], re.S)
+    assert match, out["sections"]["body-size"]
+    return match.group(0)
+
+
+@needs_node
+def test_on_demand_ccn_is_separate_measurement_and_never_replaces_history_or_nightly_status(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["/api/metrics-refresh"] = refresh_fixture()
+    before = run_page(tmp_path, fixtures)
+    fixtures["__responses"] = {"GET /api/metrics-refresh/results": [{"status": 200, "body": on_demand_complexity_fixture()}]}
+    out = run_page(tmp_path, fixtures, {"pathname": "/metrics"})
+    card = on_demand_card(out)
+    assert "Latest on-demand complexity" in card
+    assert "Catalog" in card and "M5" in card
+    assert "2026-10-18 12:34:56 UTC" in card and "stale (>24h)" in card
+    assert "2026-10-20 23:00:00" not in card, "observation time cannot replace measurement time"
+    assert "0123456789abcdef0123456789abcdef01234567" in card
+    assert "refs/heads/main" in card and "clean source snapshot" in card
+    assert "Displayed scope: VideoScan/VideoScan/Catalog" in card and "Run scope: whole-repository" in card
+    assert "CCN overflow debt" in card and "Fixture.inspect" in card
+    assert not re.search(r'class="[^"]*\bgreen\b', card), "a partial measurement cannot award a passing grade"
+    for section in ["head", "tl", "sum-tests", "evidence-tests", "sum-size", "evidence-size", "sum-debt", "body-debt"]:
+        assert out["sections"][section] == before["sections"][section], section
+    assert out["sections"]["body-size"].replace(card, "", 1) == before["sections"]["body-size"]
+    assert out["chartData"] == before["chartData"], "manual results must not append to historical chart series"
+    result_requests = [r for r in out["requests"] if r["url"] == "/api/metrics-refresh/results"]
+    assert len(result_requests) == 1
+    assert result_requests[0]["method"] == "GET"
+    assert result_requests[0]["options"]["credentials"] == "same-origin"
+
+
+@needs_node
+def test_on_demand_ccn_escapes_metadata_and_function_names_and_bounds_rows(tmp_path):
+    poison = '<img src=x onerror="bad()">'
+    result = on_demand_complexity_fixture(folder=poison, scope=poison, sourceRef=poison,
+        lizardVersion=poison, measurementScope=poison, sourceDirty=True,
+        topFunctions=[{"file": poison, "function": poison, "line": i, "ccn": 31, "nloc": 100} for i in range(1, 41)])
+    fixtures = {"/api/metrics-refresh": refresh_fixture(), "__responses": {
+        "GET /api/metrics-refresh/results": [{"status": 200, "body": result}]}}
+    out = run_page(tmp_path, fixtures, {"pathname": "/metrics"})
+    card = on_demand_card(out)
+    assert poison not in card and "<img" not in card
+    assert "&lt;img" in card
+    assert "source has uncommitted changes" in card
+    assert card.count("<tbody>") == 1
+    body_rows = re.search(r"<tbody>(.*?)</tbody>", card, re.S).group(1)
+    assert body_rows.count("<tr>") == 20
+
+
+@needs_node
+@pytest.mark.parametrize("response", [
+    {"status": 200, "body": {"status": "missing", "result": None, "error": "No result yet."}},
+    {"status": 200, "body": {"status": "error", "result": None, "error": '<script>bad()</script>'}},
+    {"status": 200, "body": {"status": "ok", "result": {"ts": "invalid"}}},
+    {"status": 503, "body": {}},
+    {"error": "offline"},
+])
+def test_on_demand_ccn_missing_and_unusable_results_remain_unavailable_not_zero(tmp_path, response):
+    fixtures = {"/api/metrics-refresh": refresh_fixture(), "__responses": {"GET /api/metrics-refresh/results": [response]}}
+    out = run_page(tmp_path, fixtures, {"pathname": "/metrics"})
+    card = on_demand_card(out)
+    assert "Unavailable" in card
+    assert "Maximum CCN" not in card
+    assert "<script>" not in card
+    assert not out["errors"]
+
+
+@needs_node
+def test_public_metrics_page_does_not_request_or_render_private_on_demand_results(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["/api/metrics-refresh"] = refresh_fixture()
+    fixtures["__responses"] = {"GET /api/metrics-refresh/results": [{"status": 200, "body": on_demand_complexity_fixture()}]}
+    out = run_page(tmp_path, fixtures, {"pathname": "/VideoScan/", "search": "?api=http://127.0.0.1:8766&results=1"},
+                   {"metrics-api": "http://127.0.0.1:8766", "on-demand-complexity": "enabled"})
+    assert not [r for r in out["requests"] if "/api/metrics-refresh" in r["url"]]
+    assert "Latest on-demand complexity" not in out["sections"]["body-size"]
+    assert "0123456789abcdef0123456789abcdef01234567" not in json.dumps(out["sections"])

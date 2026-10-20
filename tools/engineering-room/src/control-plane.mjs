@@ -406,7 +406,8 @@ export class ControlPlane {
     const taskId = input.id ?? `directive:${randomUUID()}`;
     const task = existingTask ?? this.createTask({
       id: taskId, title, objective, manager, machine, state: "queued", priority: input.priority ?? 0,
-      progress: "Queued from an authenticated Engineering Room directive.",
+      progress: this.channelExportsEnabled ? "Queued from an authenticated Engineering Room directive."
+        : `Queued on the local work board for ${manager === "codex" ? "Codex" : "Claude"} to claim.`,
       source: "engineering-room-directive", evidence: "authenticated directive control", actor: input.actor ?? "rick",
     });
     const message = this.database.createMessage({

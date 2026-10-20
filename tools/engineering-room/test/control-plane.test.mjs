@@ -7,6 +7,20 @@ import { join } from "node:path";
 import { RoomDatabase } from "../src/database.mjs";
 import { ControlPlane } from "../src/control-plane.mjs";
 
+// regression: board requests keep their selected manager without referring to the retired Room.
+test("board directives describe the selected manager's local queue", () => {
+  const rig = fixture("2026-10-20T12:00:00.000Z", { channelExportsEnabled: false });
+  try {
+    for (const manager of ["codex", "claude"]) {
+      const { task } = rig.control.createDirective({ id: `board-copy-${manager}`, title: "Refresh Catalog CCN",
+        objective: "Refresh only Catalog complexity", manager, machine: "m5" });
+      assert.match(task.progress, /local work board/);
+      assert.match(task.progress, new RegExp(`${manager === "codex" ? "Codex" : "Claude"} to claim`));
+      assert.doesNotMatch(task.progress, /Engineering Room/);
+    }
+  } finally { rig.close(); }
+});
+
 test("transport ingestion reconstructs honest board state idempotently", () => {
   const rig = fixture("2026-07-17T16:00:00.000Z");
   writeFileSync(join(rig.toolRoot, "config", "control-plane-reconstruction.json"), JSON.stringify({

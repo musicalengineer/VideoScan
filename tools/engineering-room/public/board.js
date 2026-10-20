@@ -11,6 +11,8 @@ const dateFormat = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_Yor
 function text(value, limit = 4000) { return typeof value === "string" ? value.slice(0, limit) : ""; }
 function stamp(value) { const date = value ? new Date(value) : null; return date && Number.isFinite(date.getTime()) ? dateFormat.format(date) : "Time not recorded"; }
 function person(value) { return ({ claude: "Claude", codex: "Codex", rick: "Rick" })[value] || text(value, 160) || "Unassigned"; }
+function taskManager(value) { return value ? person(value) : "the assigned manager"; }
+function waitingForClaim(manager) { return `Waiting for ${taskManager(manager)} to claim this request. Submitting does not start an agent.`; }
 function machine(value) { return ({ none: "Headless", m4: "M4", m5: "M5", m1: "M1", m5Ultra: "M5 Ultra" })[value] || "Machine not recorded"; }
 function node(tag, className, content) { const element = document.createElement(tag); if (className) element.className = className; if (content !== undefined) element.textContent = content; return element; }
 function badge(state, label) { const known = Object.hasOwn(stateLabels, state); return node("span", `badge${known ? ` ${state}` : ""}`, label || stateLabels[state] || "Status unknown"); }
@@ -47,7 +49,7 @@ function taskCard(task) {
   top.append(badge(effective), node("span", "card-meta", machine(task.machine)));
   card.append(top, node("h3", "", text(task.title, 500) || "Untitled request"));
   card.append(node("p", "card-meta", `${person(task.manager)} coordinates · ${task.ownerAgentId ? person(task.ownerAgentId) : "No worker assigned"}`));
-  const progress = effective === "queued" ? "Waiting for worker acknowledgement." : text(task.progress, 1600) || "No progress reported.";
+  const progress = effective === "queued" ? waitingForClaim(task.manager) : text(task.progress, 1600) || "No progress reported.";
   card.append(node("p", "card-detail", progress));
   const hasResult = typeof task.result === "string" && task.result.length > 0;
   if (hasResult) card.append(node("p", "card-meta", "Progress preview. Expand the reported outcome for the evidence."));
@@ -59,9 +61,9 @@ function taskCard(task) {
     const outcome = node("details", "reported-outcome");
     outcome.append(node("summary", "", truncated ? "Reported outcome (truncated)" : "Full reported outcome"), node("p", "card-result", text(task.result, MAX_RESULT_CHARACTERS)));
     card.append(outcome);
-    if (truncated) card.append(node("p", "card-blocker", "The reported outcome is truncated. Ask Claude for the complete result before assessing it."));
+    if (truncated) card.append(node("p", "card-blocker", `The reported outcome is truncated. Ask ${taskManager(task.manager)} for the complete result before assessing it.`));
   } else if (task.resultOmitted) {
-    card.append(node("p", "card-blocker", "Full outcome omitted from this older record. Ask Claude for the complete result."));
+    card.append(node("p", "card-blocker", `Full outcome omitted from this older record. Ask ${taskManager(task.manager)} for the complete result.`));
   } else if (["done", "failed"].includes(effective)) {
     card.append(node("p", "card-blocker", "Full outcome not recorded. The progress preview may be incomplete."));
   }
@@ -202,7 +204,7 @@ async function submitRequest(event) {
     boardState.pending = null;
     savePending();
     $("request-form").reset();
-    $("request-message").textContent = `Request recorded for ${person(submitted.manager)}: ${text(data.task.id, 240)}. ${["done", "failed", "cancelled"].includes(data.task.state) ? "It already has an outcome; check its card." : data.task.state === "working" ? "A worker has acknowledged it; check its card." : "Waiting for worker acknowledgement."}`;
+    $("request-message").textContent = `Request recorded for ${person(submitted.manager)}: ${text(data.task.id, 240)}. ${["done", "failed", "cancelled"].includes(data.task.state) ? "It already has an outcome; check its card." : data.task.state === "working" ? `${person(submitted.manager)} has claimed it; check its card.` : waitingForClaim(submitted.manager)}`;
     await refreshBoard();
   } catch (error) {
     // Retain the exact payload after any uncertain response. A retry reconciles

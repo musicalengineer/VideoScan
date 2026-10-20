@@ -97,7 +97,7 @@ test("uncertain submission and reload preserve exact payload and idempotency ide
   assert.equal(reloaded.state().pending, null);
   assert.equal(reloaded.session.getItem(PENDING_KEY), null);
   assert.equal(reloaded.el("request-fields").disabled, false);
-  assert.match(reloaded.el("request-message").textContent, /Request recorded for Claude.*Waiting for worker acknowledgement/);
+  assert.match(reloaded.el("request-message").textContent, /Request recorded for Claude.*Waiting for Claude to claim this request/);
   assert.equal(reloaded.el("request-title").value, "");
 });
 
@@ -112,7 +112,7 @@ test("double submit while awaiting receipt produces one POST and displays queue 
   assert.equal(rig.el("request-submit").disabled, true);
   accept(response({ task: { id: "queued-once", state: "queued" }, directive: { id: "one" } }, 201));
   await sending;
-  assert.match(rig.el("request-message").textContent, /Waiting for worker acknowledgement/);
+  assert.match(rig.el("request-message").textContent, /Waiting for Claude to claim this request/);
   assert.doesNotMatch(rig.el("request-message").textContent, /completed|running|passed/i);
 });
 
@@ -215,4 +215,33 @@ test("result capacity boundary remains readable and truncated, omitted or absent
   assert.match(omitted.textContent, /Full outcome omitted/);
   const absent = rig.context.taskCard({ id: "absent", state: "done" });
   assert.match(absent.textContent, /Full outcome not recorded/);
+});
+
+// regression: a Codex request must identify Codex, rather than imply Claude's approval is needed.
+for (const [manager, label, other] of [["codex", "Codex", "Claude"], ["claude", "Claude", "Codex"]]) {
+  test(`queued cards and submission receipts identify ${label} as the manager to claim work`, async () => {
+    const rig = await harness();
+    const card = rig.context.taskCard({ id: "queued", state: "queued", manager });
+    assert.match(card.textContent, new RegExp(`Waiting for ${label} to claim this request`));
+    assert.match(card.textContent, /does not start an agent/);
+    assert.ok(!card.textContent.includes(other));
+    rig.typeRequest();
+    rig.el("request-manager").value = manager;
+    rig.handler = (_path, options) => options.method === "POST"
+      ? response({ task: { id: "queued", state: "queued", manager }, directive: { id: "directive" } }, 201) : response(snapshot());
+    await rig.context.submitRequest(submitEvent);
+    const receipt = rig.el("request-message").textContent;
+    assert.match(receipt, new RegExp(`Waiting for ${label} to claim this request`));
+    assert.match(receipt, /does not start an agent/);
+    assert.ok(!receipt.includes(other));
+  });
+}
+
+test("Codex outcomes refer back to Codex when evidence is incomplete", async () => {
+  const rig = await harness();
+  for (const result of [{ result: "partial", resultTruncated: true }, { resultOmitted: true }]) {
+    const card = rig.context.taskCard({ id: "codex-result", state: "done", manager: "codex", ...result });
+    assert.match(card.textContent, /Ask Codex for the complete result/);
+    assert.doesNotMatch(card.textContent, /Claude/);
+  }
 });
