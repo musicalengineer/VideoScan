@@ -186,8 +186,11 @@ struct SameFootageDetectorTests {
         let rs = Trio.records(digests: [sfHex(1), sfHex(1), sfHex(3)])
         let summary = DuplicateDetector.analyze(records: rs)
         #expect(summary.groups == 1)
-        #expect(rs[0].duplicateGroupID != nil && rs[0].duplicateGroupID == rs[1].duplicateGroupID)
-        #expect([rs[0], rs[1]].filter { $0.duplicateDisposition == .keep }.count == 1)
+        let group: UUID? = rs[0].duplicateGroupID
+        #expect(group != nil)
+        #expect(group == rs[1].duplicateGroupID)
+        let keepers = [rs[0], rs[1]].filter { $0.duplicateDisposition == .keep }
+        #expect(keepers.count == 1)
         #expect(rs[2].duplicateGroupID == nil, "the DV transfer is not a copy")
         #expect(summary.sameFootageLinks >= 1)
     }
