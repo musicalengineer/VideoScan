@@ -64,7 +64,7 @@ struct CatalogStatusChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Is what the catalog knows current? \(freshness.state.summary.headline). Click to open Content Analysis — the band at the top lists what needs what.")
+        .help("Does the catalog reflect reality? \(freshness.state.summary.headline). Click to open Content Analysis — the band at the top lists what needs what.")
         .accessibilityIdentifier("catalog.statusChip")
         .accessibilityLabel("Catalog status: \(words)")
     }

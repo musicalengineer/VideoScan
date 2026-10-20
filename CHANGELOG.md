@@ -11,6 +11,13 @@ then what changed underneath. A version is bumped when it ships to Rick's daily 
   against itself, as one Media File Operations row. A stopped or failed file check never
   runs the catalog check, and the row says so. The nightly's `--audit-catalog` (and the new
   `--validate-catalog`) run the same job.
+- Catalog Status band, new meaning (10/20): green = the catalog reflects reality (integrity
+  holds, the last Validate completed within 7 days, presence matches the disk — a file marked
+  Missing that is missing is fine); yellow = it can't fully vouch (Validate overdue or never
+  run, a large share not checked, unsettled rows); red = it is lying or the check broke.
+  Under the band, "N to review" — Audio Tracks, But No Sound; sound prints to hear again;
+  possible same footage; possible reference movies; missing with no other copy / another copy
+  present — never changes the colour. Lineage links to removed rows are said as history.
 - The catalog moves from one JSON file to a SQLite database (GRDB, behind a plugin seam).
   Every save is one transaction; the database refuses invalid writes itself; a restored older
   copy opens read-only until a person adopts it. The JSON catalog stays on disk, frozen

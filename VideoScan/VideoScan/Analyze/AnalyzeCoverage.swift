@@ -256,6 +256,9 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     var correlate = AnalyzeCorrelateCounts()
     /// Active (non-hidden) records seen.
     var activeRecords = 0
+    /// Rows marked Missing, split by whether another copy is present (the
+    /// Catalog Status band's review items, Rick 2026-10-20).
+    var missingCopies = MissingCopyCounts()
     /// When these counts were computed — a CAPTION ("counts as of …"),
     /// deliberately outside `==` below.
     var computedAt: Date = Date(timeIntervalSince1970: 0)
@@ -271,6 +274,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.byVolume == rhs.byVolume
             && lhs.correlate == rhs.correlate
             && lhs.activeRecords == rhs.activeRecords
+            && lhs.missingCopies == rhs.missingCopies
     }
 
     /// Cyclers whose per-record stamp does not exist today, so the

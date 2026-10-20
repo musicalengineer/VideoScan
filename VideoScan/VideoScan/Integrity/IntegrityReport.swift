@@ -379,6 +379,10 @@ struct IntegrityReportFacts: Sendable, Equatable {
     /// (`CatalogFreshnessFactsReader.predatesSwitch`): it says nothing
     /// about the catalog in use — no decision, no date, every row unverified.
     var predatesSwitch = false
+    /// The report's findings and gaps sorted into break / unsettled /
+    /// review / information for the band (Rick 2026-10-20). Empty unless a
+    /// report of THIS catalog was read.
+    var reality = IntegrityRealityFacts()
 
     init(lastCompleted: Date? = nil, outcome: FreshnessRow.Outcome = .neverRan, needsDecision: Int = 0,
          unverified: Int = 0, unverifiedWords: String? = nil, note: String? = nil,
@@ -415,6 +419,7 @@ struct IntegrityReportFacts: Sendable, Equatable {
         let built = r.builtTiers
         var f = IntegrityReportFacts(needsDecision: built.reduce(0) { $0 + $1.needsDecision }, decisionWords: r.decisionWords)
         f.note = note(for: r)
+        f.reality = IntegrityRealityFacts.from(report: r)
         switch r.outcome {
         case .failed:
             f.outcome = .failed

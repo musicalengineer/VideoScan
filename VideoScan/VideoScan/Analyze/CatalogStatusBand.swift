@@ -1,4 +1,11 @@
 // CatalogStatusBand.swift
+// THE COLOUR (Rick 2026-10-20, superseding 10/16's "yellow = a run fixes
+// it / red = a person must look"): does the catalog reflect reality? —
+// green / yellow (can't fully vouch) / red (lying, or the check broke),
+// from CatalogRealityPolicy (VideoScanCore). Under the headline: the
+// further reasons, then "N to review" (review items never change the
+// colour) and the information lines (CatalogRealityLines).
+//
 // The summary band at the top of the Analyze panel (Rick 2026-10-16,
 // docs/design/catalog_status_freshness_2026_10_16.md §2.1): one colour,
 // one headline, one line per non-green item with its ONE button —
@@ -146,6 +153,9 @@ struct CatalogStatusBand: View {
                     .accessibilityIdentifier("catalog.status.band.updateAll")
                 }
             }
+            if state.isComputed {
+                CatalogRealityLines(verdict: state.reality)
+            }
             ForEach(summary.items, id: \.kind) { item in
                 if let cycler = AnalyzeCycler(rawValue: item.kind) {
                     itemRow(item, cycler: cycler)
@@ -200,6 +210,63 @@ struct CatalogStatusBand: View {
                 .help(door.help(cycler: cycler))
                 .accessibilityIdentifier("catalog.status.band.door.\(cycler.rawValue)")
         }
+    }
+}
+
+// MARK: - Reality: the reasons past the headline, the review items, information
+
+/// Under the headline (Rick 2026-10-20): every further reason the band is
+/// not green; then "N to review" with one line per review item (count,
+/// title, door) — review items NEVER change the colour; "Audio Tracks, But
+/// No Sound" is said in yellow TEXT; then the information lines. A value
+/// in, no model access, nothing O(records).
+struct CatalogRealityLines: View {
+    let verdict: CatalogRealityVerdict
+
+    /// The tint for review words a person should look at (not a band colour).
+    static let cautionText = Color(red: 0.72, green: 0.53, blue: 0.04)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(verdict.reasons.dropFirst().enumerated()), id: \.offset) { _, reason in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle().fill(reason.colour.tint).frame(width: 8, height: 8).offset(y: 1)
+                    Text(CatalogRealityPolicy.words(reason, now: Date()))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            if let line = verdict.reviewLine {
+                Text(line)
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.top, 2)
+                    .accessibilityIdentifier("catalog.status.band.reviewCount")
+                ForEach(verdict.review, id: \.kind) { reviewRow($0) }
+            }
+            ForEach(Array(verdict.information.enumerated()), id: \.offset) { _, words in
+                Label(words, systemImage: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func reviewRow(_ item: CatalogReviewItem) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(item.count.formatted())
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .frame(minWidth: 44, alignment: .trailing)
+            Text(item.title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(item.isCaution ? Self.cautionText : Color.primary)
+            Text("— " + item.door)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .accessibilityIdentifier("catalog.status.band.review.\(item.kind.rawValue)")
     }
 }
 

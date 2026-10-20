@@ -17,7 +17,7 @@ struct CatalogStatusMenuItem: View {
         Button(title) {
             AnalyzeWindowOpener.open(using: openWindow, source: "catalog-menu")
         }
-        .help("Is what the catalog knows current? \(freshness.state.summary.headline). Opens Content Analysis with the summary band at the top — one button per item.")
+        .help("Does the catalog reflect reality? \(freshness.state.summary.headline). Opens Content Analysis with the summary band at the top — one button per item.")
         .accessibilityIdentifier("catalog.menu.catalogStatus")
     }
 

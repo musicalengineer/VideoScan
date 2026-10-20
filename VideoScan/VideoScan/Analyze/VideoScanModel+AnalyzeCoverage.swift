@@ -45,15 +45,17 @@ extension VideoScanModel {
     func scheduleAnalyzeCoverageRefresh() {
         analyzeCoverageTask?.cancel()
         let inputs = AnalyzeCoverageCalculator.project(records)
+        let missing = MissingCopyCalculator.project(records)
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let scope = analyzeCoverageScope
         let catalogFile = catalogStore.fileLocation
         analyzeCoverageTask = Task { [weak self] in
             let (report, facts) = await Task.detached(priority: .utility) {
-                let report = AnalyzeCoverageCalculator.compute(inputs: inputs,
+                var report = AnalyzeCoverageCalculator.compute(inputs: inputs,
                                                                volumes: volumes,
                                                                mountedRoots: VolumeReachability.currentMountedRoots(),
                                                                scope: scope)
+                report.missingCopies = MissingCopyCalculator.count(missing)
                 let facts = CatalogFreshnessFactsReader.read(catalogFile: catalogFile)
                 return (report, facts)
             }.value

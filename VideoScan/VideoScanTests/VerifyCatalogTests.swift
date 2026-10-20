@@ -904,7 +904,10 @@ struct VerifyCatalogJobTests {
         let coverage = AnalyzeCoverageCalculator.compute(inputs: AnalyzeCoverageCalculator.project(sb.model.records), volumes: [],
                                                          mountedRoots: ["/"], scope: AnalysisScope(), now: Date())
         let rows = CatalogFreshnessRows.rows(report: coverage, facts: facts, running: [])
-        let state = CatalogFreshnessState.judged(rows: rows, now: Date())
+        // Rick 2026-10-20: the band's colour comes from the reality verdict —
+        // these findings are integrity BREAKS, so it is red.
+        let state = CatalogFreshnessState.judged(rows: rows, reality: CatalogRealityFactsBuilder.inputs(facts: facts, missing: coverage.missingCopies),
+                                                 now: Date())
         let verdict = try #require(state.verdict(.integrity))
         #expect(verdict.colour == .red)
         #expect(verdict.words == "4 findings — 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history · 1 headers say sound the print never heard · tiers 2 and 6 not built")
