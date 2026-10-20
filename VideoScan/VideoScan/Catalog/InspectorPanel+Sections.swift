@@ -62,16 +62,21 @@ extension InspectorPanel {
 
     @ViewBuilder
     private func streamBadges(_ rec: VideoRecord) -> some View {
+        // A FileFact (GH #327): ffprobe's layout, or "· silent" from this
+        // file's sound print; the tooltip names the evidence.
+        let fact = CatalogFileFacts.stream(rec)
+        let tint = CatalogFileFacts.isSilent(fact) ? Color.orange : streamTypeColor(rec.streamType)
         HStack(spacing: 8) {
-            Text(InspectorPanelRules.streamBadgeText(rec))
+            Text(fact.value)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(streamTypeColor(rec.streamType))
+                .foregroundColor(tint)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(streamTypeColor(rec.streamType).opacity(0.12))
+                        .fill(tint.opacity(0.12))
                 )
+                .help(fact.help)
             // "NO AUDIO" on an unpaired video-only file, "NO VIDEO" on an
             // unpaired audio-only one (the two cannot both apply).
             if let missing = InspectorPanelRules.missingStreamBadge(rec) {

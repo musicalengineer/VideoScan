@@ -60,7 +60,9 @@ extension VideoScanModel {
     /// Resolve the record an Archive door should open for `rec`.
     func archivePlayableRecord(for rec: VideoRecord,
                                fileExists: FileExistsProbe = { FileManager.default.fileExists(atPath: $0) }) -> ArchivePlayable {
-        let copy = isArchiveCopy(rec) ? rec : archivedCopy(of: rec)
+        // PROVEN copy only (GH #327): a sampled-signature match may be
+        // other bytes, so the door never opens it in this row's place.
+        let copy = isArchiveCopy(rec) ? rec : provenArchivedCopy(of: rec)
         guard let copy else { return .record(rec) }
         if fileExists(copy.fullPath) { return .record(copy) }
         if copy.id != rec.id, fileExists(rec.fullPath) { return .record(rec) }

@@ -13,6 +13,9 @@
 //   5. Footage folders — a sampled `v1:` hash must never make two files copies
 //   6. Audit Catalog — a link row is listed for Fix Links, never marked
 //   7. Sound — a Video+Audio header whose sound print heard nothing
+//      (Compare Media's sides; the Catalog Stream column / inspector chip)
+//   8. Archived copy — a sampled `v1:` match is never "the archived copy"
+//      (journey, ladder, inspector banner, Archive doors) — 2026-10-19
 //   + source sensors pinning the one door each surface goes through.
 //
 // RED RUNS (docs/reviews/p0-regression-2026-10-17.md). The suite is run at
@@ -224,7 +227,7 @@ struct P0TruthRegressionTests {
 
     // MARK: 7. Sound (the fingerprint stamp)
 
-    @Test("Sound (AudioFingerprintStamp: analyzedSeconds > 0, landmarks == 0; Compare Media's relatedSide): a silent header is not 'has sound'")
+    @Test("Sound (AudioFingerprintStamp: analyzedSeconds > 0, landmarks == 0; Compare Media's relatedSide + the sidecar print): a silent header is not 'has sound'")
     func silentHeaderIsNotHasSound() throws {
         let catalog = try P0TruthFixtureCatalog.build("silent")
         defer { catalog.cleanup() }
@@ -238,17 +241,127 @@ struct P0TruthRegressionTests {
         #expect(stamp.analyzedSeconds > 0)
         #expect(stamp.landmarks == 0, "no landmark = nothing was heard")
 
-        // The one surface that reads the stamp today (Compare Media's side)
-        // still counts analysed seconds as audible ones. The surface that
-        // says "silent" is TO BUILD (GH #327 case 5); when it lands this
-        // known issue stops reproducing and the test fails — update it then.
+        // Compare Media's side reads the stamp: no landmark = nothing heard
+        // = 0 audible seconds, so its line says "no sound" (fixed
+        // 2026-10-19; before, it read 3 s of sound).
         let side = VideoScanModel.relatedSide(row, isArchiveFile: false, isArchived: false, now: Date())
-        withKnownIssue("relatedSide reads a fingerprinted stamp with 0 landmarks as \(stamp.analyzedSeconds) s of sound") {
-            #expect(side.audibleSeconds == 0)
+        #expect(side.audibleSeconds == 0, "relatedSide read a fingerprinted stamp with 0 landmarks as \(side.audibleSeconds ?? -1) s of sound")
+
+        // …and the sidecar's print, when it is loaded for the match, may not
+        // put the seconds back: a print with no landmark is all quiet.
+        let silent = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
+                                      activeSeconds: [], hashes: [], times: [])
+        #expect(VideoScanModel.printAudibleSeconds(silent) == 0, "a print with no landmark heard nothing")
+        #expect(VideoScanModel.soundStrip(silent) == [false, false, false], "the spool draws silence, not 3 s of sound")
+        let heard = AudioFingerprint(sampleRate: 11_025, hopSamples: 256, frameSize: 1_024, durationSeconds: 3,
+                                     activeSeconds: [true, false, true], hashes: [1], times: [0])
+        #expect(VideoScanModel.printAudibleSeconds(heard) == 2, "a print that heard sound keeps its bitmap's count")
+    }
+
+    @Test("Catalog Stream / Size columns + inspector chip (CatalogFileFacts → FileFact): a silent print says 'silent'; every fact names its evidence")
+    func catalogColumnsNameTheirEvidence() throws {
+        let catalog = try P0TruthFixtureCatalog.build("columns")
+        defer { catalog.cleanup() }
+        let silent = try catalog.require(.silentHeader)
+        let plain = try catalog.require(.mtimeYearsBeforeCatalogue)
+
+        let silentFact = CatalogFileFacts.stream(silent)
+        #expect(silentFact.value == "Video+Audio · silent", "the header is not 'has sound' when the print heard nothing: \(silentFact.value)")
+        #expect(silentFact.evidence == .soundPrint)
+        #expect(silentFact.help.contains("the sound print"), Comment(rawValue: silentFact.help))
+
+        let plainFact = CatalogFileFacts.stream(plain)
+        #expect(plainFact.value == "Video+Audio")
+        #expect(plainFact.evidence == .ffprobe)
+        #expect(plainFact.asOf == P0TruthFixtureCatalog.cataloguedDate)
+
+        // A stamp made from other bytes (another size) says nothing about this file.
+        silent.sizeBytes += 1
+        #expect(CatalogFileFacts.stream(silent).evidence == .ffprobe, "a stale print is not this file's evidence")
+        silent.sizeBytes -= 1
+
+        let size = CatalogFileFacts.size(plain)
+        #expect(size.evidence == .catalogField, "the Size column is the scan's number, not a stat now")
+        #expect(size.help.contains("not re-checked on disk"), Comment(rawValue: size.help))
+
+        for row in catalog.model.records {
+            for fact in [CatalogFileFacts.stream(row), CatalogFileFacts.size(row)] {
+                #expect(fact.help.contains(fact.evidence.word), "\(row.filename): '\(fact.help)' does not name its evidence")
+            }
         }
     }
 
+    // MARK: 8. A sampled match is not the archived copy (2026-10-19)
+
+    @Test("Archived copy (provenArchivedCopy: promote link or whole-file SHA-256; a v1: match refused): journey, ladder, inspector banner and doors never call a sampled match this file's archived copy")
+    func sampledMatchIsNeverTheArchivedCopy() throws {
+        let catalog = try P0TruthFixtureCatalog.build("sampled_match")
+        defer { catalog.cleanup() }
+        let source = try catalog.require(.sampledMatchSource)
+        let copy = try catalog.require(.sampledMatchArchiveCopy)
+        let model = catalog.model
+
+        // The proof: a v1: equality is not one.
+        #expect(model.provenArchivedCopy(of: source) == nil, "an equal sampled signature proves nothing — the bytes differ")
+
+        // Journey + ladder (the model's own wrapper, as the sheet builds it).
+        let journey = model.makeFileJourney(for: source)
+        let ladder = journey.preservation.map { "\($0.title)=\($0.done)" }
+        let local = try #require(journey.preservation.first { $0.kind == .archivedLocally })
+        let last = try #require(journey.events.last)
+        #expect(!local.done, "Archived locally from a sampled match: \(ladder)")
+        #expect(!last.sentence.contains(copy.fullPath), "the journey names another file as this one's archived copy: \(last.sentence)")
+        #expect(last.sentence.hasPrefix("Now at \(source.fullPath)"), "the source's own file is there: \(last.sentence)")
+
+        // Inspector banner, fed what the catalog's inspector is fed.
+        let banner = InspectorPanel.archivedBanner(record: source, masterCopy: model.provenArchivedCopy(of: source),
+                                                   promotionSource: model.promotionSource(of: source))
+        #expect(banner == nil, "no 'Archived on … (identical copy)' from a sampled match: \(banner?.text ?? "nil")")
+
+        // The Archive door opens the row's own file, never the other bytes.
+        let door = model.archivePlayableRecord(for: source)
+        #expect(door.record?.id == source.id, "the door opened \(door.path)")
+
+        // Positive control: the promote link is still proof.
+        let linked = try catalog.require(.deadLinkSource)
+        let linkedCopy = try catalog.require(.deadLinkArchivedCopy)
+        #expect(model.provenArchivedCopy(of: linked)?.id == linkedCopy.id)
+    }
+
     // MARK: Source sensors
+
+    @Test("Source sensor (Catalog Stream/Size cells, the inspector's stream chip): each renders a FileFact and shows its help")
+    func catalogCellsRenderFileFacts() throws {
+        let sites: [(file: String, function: String, fact: String)] = [
+            ("VideoScan/Catalog/CatalogContent+Table.swift", "func streamCell(", "CatalogFileFacts.stream("),
+            ("VideoScan/Catalog/CatalogContent+Table.swift", "func sizeCell(", "CatalogFileFacts.size("),
+            ("VideoScan/Catalog/InspectorPanel+Sections.swift", "private func streamBadges(", "CatalogFileFacts.stream("),
+        ]
+        for site in sites {
+            let body = try Self.body(of: site.function, in: site.file)
+            try #require(!body.isEmpty, "\(site.function) moved out of \(site.file) — update the sensor")
+            #expect(body.contains { $0.contains(site.fact) }, "\(site.function) must render \(site.fact)…)")
+            #expect(body.contains { $0.contains("fact.help") }, "\(site.function) must show the fact's evidence (fact.help)")
+            #expect(!body.contains { $0.contains("rec.streamTypeRaw") || $0.contains("\"File size on disk\"") },
+                    "\(site.function) states a raw field as a fact: \(body)")
+        }
+    }
+
+    @Test("Source sensor (the File Journey wrapper, the Archive door, the inspector's master copy): a stated archived copy comes from provenArchivedCopy, never archivedCopy(of:)")
+    func statedArchivedCopyIsProven() throws {
+        let sites: [(file: String, function: String)] = [
+            ("VideoScan/Catalog/VideoScanModel+Provenance.swift", "func makeFileJourney("),
+            ("VideoScan/Archive/VideoScanModel+ArchivePlayable.swift", "func archivePlayableRecord("),
+            ("VideoScan/Catalog/CatalogContent+Promote.swift", "var masterCopyOfSelected"),
+        ]
+        for site in sites {
+            let body = try Self.body(of: site.function, in: site.file)
+            try #require(!body.isEmpty, "\(site.function) moved out of \(site.file) — update the sensor")
+            let sampled = body.filter { $0.contains("archivedCopy(of:") && !$0.contains("provenArchivedCopy(of:") }
+            #expect(sampled.isEmpty, "\(site.file) states a copy that may be a sampled match: \(sampled)")
+            #expect(body.contains { $0.contains("provenArchivedCopy(of:") }, "\(site.function) must resolve through provenArchivedCopy(of:)")
+        }
+    }
 
     @Test("Source sensor (FileJourneySheet.swift, VideoScanModel+Provenance.swift): no path is rendered as presence without a stat")
     func journeyRendersNoPathAsPresenceWithoutAStat() throws {
@@ -399,6 +512,17 @@ extension P0TruthRegressionTests {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { String($0) }
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+    }
+
+    /// The code lines of one declaration: from the line holding `signature`
+    /// to the first line that closes it at the opening line's indentation.
+    /// Empty when the signature is not in the file.
+    static func body(of signature: String, in relative: String) throws -> [String] {
+        let lines = try code(relative)
+        guard let start = lines.firstIndex(where: { $0.contains(signature) }) else { return [] }
+        let indent = lines[start].prefix { $0 == " " }
+        let end = lines[(start + 1)...].firstIndex { $0 == String(indent) + "}" } ?? lines.count - 1
+        return Array(lines[start...end])
     }
 
     static func swiftFiles(in relative: String) throws -> [String] {

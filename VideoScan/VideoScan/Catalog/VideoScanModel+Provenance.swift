@@ -749,7 +749,10 @@ extension VideoScanModel {
             for: rec,
             allRecords: records,
             resolveVolumeSafety: makeVolumeSafetyResolver(),
-            archivedCopy: archivedCopy(of: rec)
+            // PROVEN copy only (GH #327): a sampled-signature match is
+            // not this file's archived copy, so it never ticks the ladder
+            // or names "the archived copy is at …".
+            archivedCopy: provenArchivedCopy(of: rec)
         )
     }
 

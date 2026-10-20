@@ -84,7 +84,7 @@ extension VideoScanModel {
         var day: EventDay?
         if let y = date.year, let m = date.month, let d = date.day { day = EventDay(year: y, month: m, day: d) }
         let reliable = day != nil && (date.source == .you || (date.source == .camera && date.trusted))
-        let audible: Double? = r.audioFingerprint.map { $0.outcome == .noAudio ? 0 : $0.analyzedSeconds }
+        let audible: Double? = r.audioFingerprint.map(Self.stampAudibleSeconds)
         return RelatedEvidence.Side(
             digest: storedFullDigest(r), sizeBytes: r.sizeBytes, durationSeconds: r.durationSeconds,
             audibleSeconds: audible, day: day, dayIsReliable: reliable,
@@ -94,6 +94,26 @@ extension VideoScanModel {
             codec: codecGeneration(video: r.videoCodec, audio: r.audioCodec),
             frameHeight: frameHeight(fromResolution: r.resolution), bitRate: bitRate(from: r.totalBitrate),
             year: date.year)
+    }
+
+    /// What a sound-print STAMP says was audible (GH #327 case 5): a
+    /// no-sound stamp, or a print that analysed seconds and found not one
+    /// landmark, heard nothing = 0 — never "analysed seconds of sound".
+    /// Otherwise the analysed seconds (an upper bound; the sidecar's
+    /// active-seconds bitmap refines it in `relatedAnswer`).
+    nonisolated static func stampAudibleSeconds(_ stamp: AudioFingerprintStamp) -> Double {
+        switch stamp.outcome {
+        case .noAudio: return 0
+        case .fingerprinted: return stamp.landmarks == 0 ? 0 : stamp.analyzedSeconds
+        }
+    }
+
+    /// The audible seconds a loaded print stands behind: none when it
+    /// holds no landmark (silence), its active-seconds count when it has
+    /// the bitmap, else its duration (prints made before the bitmap).
+    nonisolated static func printAudibleSeconds(_ print: AudioFingerprint) -> Double {
+        if print.landmarkCount == 0 { return 0 }
+        return Double(print.activeSeconds.isEmpty ? Int(print.durationSeconds) : print.activeSecondCount)
     }
 
     /// Transcript words that are a person's name on either side (case-insensitive, whole words).
@@ -158,6 +178,14 @@ extension VideoScanModel {
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
     }
 
+    /// One flag per second: all quiet for a print with no landmark; else
+    /// the bitmap; all audible for a pre-bitmap print that heard something.
+    nonisolated static func soundStrip(_ print: AudioFingerprint) -> [Bool] {
+        let seconds = print.activeSeconds.isEmpty ? max(0, Int(print.durationSeconds)) : print.activeSeconds.count
+        if print.landmarkCount == 0 { return Array(repeating: false, count: seconds) }
+        return print.activeSeconds.isEmpty ? Array(repeating: true, count: seconds) : print.activeSeconds
+    }
+
     nonisolated static func fingerprintKey(_ r: VideoRecord) -> AudioFingerprintStore.Key? {
         guard let s = r.audioFingerprint, s.outcome == .fingerprinted else { return nil }
         return AudioFingerprintStore.Key(contentDigest: s.contentDigest, sizeBytes: s.sizeBytes)
@@ -181,10 +209,10 @@ extension VideoScanModel {
         var out = SoundEvidence()
         guard let keyA, let keyB, let store = try? AudioFingerprintStore(directory: directory),
               let fa = try? store.fingerprint(for: keyA), let fb = try? store.fingerprint(for: keyB) else { return out }
-        out.audibleA = Double(fa.activeSeconds.isEmpty ? Int(fa.durationSeconds) : fa.activeSecondCount)
-        out.audibleB = Double(fb.activeSeconds.isEmpty ? Int(fb.durationSeconds) : fb.activeSecondCount)
-        out.strips.a = fa.activeSeconds.isEmpty ? Array(repeating: true, count: Int(fa.durationSeconds)) : fa.activeSeconds
-        out.strips.b = fb.activeSeconds.isEmpty ? Array(repeating: true, count: Int(fb.durationSeconds)) : fb.activeSeconds
+        out.audibleA = printAudibleSeconds(fa)
+        out.audibleB = printAudibleSeconds(fb)
+        out.strips.a = Self.soundStrip(fa)
+        out.strips.b = Self.soundStrip(fb)
         let match = AudioFingerprintMatcher.match(query: fa, master: fb)
         out.verdict = match.verdict
         out.coverage = match.evidence.coverage

@@ -440,17 +440,19 @@ extension CatalogContent {
             .help(rec.fullPath)
     }
 
+    /// A FileFact (GH #327): the header's layout from ffprobe, or — when
+    /// this file's sound print heard nothing — "· silent" from the print.
+    /// The tooltip names the evidence.
     func streamCell(_ rec: VideoRecord) -> some View {
         let unpaired = rec.streamType.needsCorrelation && rec.pairedWith == nil
-        let display = rec.streamType == .ffprobeFailed
-            ? rec.isPlayable
-            : rec.streamTypeRaw
-        return Text(display)
-            .foregroundColor(unpaired ? .orange : streamTypeColor(rec.streamType))
+        let fact = CatalogFileFacts.stream(rec)
+        let warn = unpaired || CatalogFileFacts.isSilent(fact)
+        return Text(fact.value)
+            .foregroundColor(warn ? .orange : streamTypeColor(rec.streamType))
             .bold(rec.streamType.needsCorrelation)
             .help(unpaired
-                  ? (rec.streamType == .videoOnly ? "No audio pair found" : "No video pair found")
-                  : "V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
+                  ? (rec.streamType == .videoOnly ? "No audio pair found" : "No video pair found") + " · " + fact.help
+                  : fact.help)
     }
 
     func durationCell(_ rec: VideoRecord) -> some View {
@@ -476,9 +478,12 @@ extension CatalogContent {
 
     /// Formatted from bytes, not the persisted string (Rick 2026-08-18:
     /// decimal units, consistent across rows).
+    /// The scan's recorded size — a catalog field, not a stat now; the
+    /// tooltip says so (GH #327).
     func sizeCell(_ rec: VideoRecord) -> some View {
-        Text(rec.sizeDisplay)
-            .help("File size on disk")
+        let fact = CatalogFileFacts.size(rec)
+        return Text(fact.value)
+            .help(fact.help)
     }
 
     func dateCell(_ rec: VideoRecord) -> some View {
