@@ -43,6 +43,7 @@ enum CatalogRealityFactsBuilder {
         var out = CatalogRealityFacts(validation: validation(audit: f.audit, integrity: f.integrity, switchedAt: f.switchedAt))
         if let why = f.soundStoreProblem { out.unreadable.append("the sound print sidecar can't be opened: \(why)") }
         if let why = f.integrity.problem { out.unreadable.append(why) }
+        if let why = f.auditProblem { out.unreadable.append(why) }
         out.breaks = f.integrity.reality.breaks
         out.unsettled = f.integrity.reality.unsettled
         let presence = PresenceTally(f.audit, switchedAt: f.switchedAt)
@@ -73,6 +74,7 @@ enum CatalogRealityFactsBuilder {
         integrity.reality.review + [
             CatalogReviewItem(kind: .missingNoOtherCopy, count: missing.noOtherCopy),
             CatalogReviewItem(kind: .missingOtherCopyPresent, count: missing.otherCopyPresent),
+            CatalogReviewItem(kind: .missingPossibleCopy, count: missing.possibleCopyNotProven),
         ]
     }
 

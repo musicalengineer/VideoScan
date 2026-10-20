@@ -237,8 +237,8 @@ enum CatalogStatusWords {
     /// The one console/log line at launch when the band is red: the
     /// headline, then every red reason past the first (the headline names
     /// the first once).
-    static func launchLine(_ reality: CatalogRealityVerdict, now: Date = Date()) -> String {
-        let more = reality.reasons.dropFirst().filter { $0.colour == .red }.map { CatalogRealityPolicy.words($0, now: now) }
+    static func launchLine(_ reality: CatalogRealityVerdict) -> String {
+        let more = reality.reasons.dropFirst().filter { $0.colour == .red }.map(reality.words)
         let tail = more.isEmpty ? "" : " — " + more.joined(separator: "; ")
         return "\(reality.headline)\(tail). Catalog ▸ Catalog Status… lists the doors."
     }

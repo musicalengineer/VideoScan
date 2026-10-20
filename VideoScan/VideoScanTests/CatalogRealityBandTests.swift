@@ -99,6 +99,12 @@ struct CatalogRealityBucketTests {
         #expect(f.information == ["128 lineage links point at rows removed from the catalog — kept as history"])
         #expect(f.unsettled == [CatalogRealityCount(count: 660, words: "tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")])
         #expect(!f.findingsCapped)
+        // QA P2-a: tier 5's "could not check" is its 1,469 informational findings here; ONE more (the store's
+        // generation unreadable) is unsettled in tier 5's own words.
+        var plusOne = r
+        plusOne.tiers[4] = okTier(5, couldNotCheck: 1_470, summary: "catalog.sqlite's generation could not be read — run again")
+        #expect(IntegrityRealityFacts.from(report: plusOne).unsettled.last
+                == CatalogRealityCount(count: 1, words: "tier 5 \(VerifyCatalogTiers.name(5)): catalog.sqlite's generation could not be read — run again"))
         #expect(IntegrityRealityFacts.from(report: report(findings: [], total: 9_000)).findingsCapped)
     }
 }
@@ -160,7 +166,8 @@ struct CatalogRealityBuilderTests {
         #expect(i.facts.unreadable == ["the sound print sidecar can't be opened: not a database"])
         #expect(i.review == [CatalogReviewItem(kind: .possibleSameFootage, count: 1_312),
                              CatalogReviewItem(kind: .missingNoOtherCopy, count: 2),
-                             CatalogReviewItem(kind: .missingOtherCopyPresent, count: 10)])
+                             CatalogReviewItem(kind: .missingOtherCopyPresent, count: 10),
+                             CatalogReviewItem(kind: .missingPossibleCopy, count: 0)])
         #expect(CatalogRealityPolicy.colour(i.facts, now: now) == .red)
     }
 }
@@ -170,21 +177,26 @@ struct CatalogRealityBuilderTests {
 @Suite("Catalog reality — Missing rows and their copies")
 struct MissingCopyCountTests {
 
-    @Test("a Missing row with a live row in its duplicate group, or with the same whole-file digest, has another copy; otherwise none")
+    // QA 2026-10-20 P2-b: a copy is PROVEN only by the same stored full SHA-256 on a live row; a group mate
+    // whose bytes cannot be compared is "a possible copy, not proven"; one with a different digest is no copy.
+    @Test("proven copy = a live row with the same full SHA-256; a live group mate without a digest on one side = possible, not proven; a different digest = no copy")
     func split() {
-        let g = UUID()
+        let g = UUID(), h = UUID()
         let inputs = [
-            MissingCopyInput(group: g, digest: nil, isMissing: true),          // group has a live member → other copy
+            MissingCopyInput(group: g, digest: nil, isMissing: true),          // live mate, no digest → possible, not proven
             MissingCopyInput(group: g, digest: nil, isMissing: false),
-            MissingCopyInput(group: nil, digest: "abc", isMissing: true),      // same bytes live → other copy
+            MissingCopyInput(group: nil, digest: "abc", isMissing: true),      // same bytes live → proven copy
             MissingCopyInput(group: nil, digest: "abc", isMissing: false),
+            MissingCopyInput(group: h, digest: "ddd", isMissing: true),        // the only live mate has other bytes → no copy
+            MissingCopyInput(group: h, digest: "eee", isMissing: false),
             MissingCopyInput(group: UUID(), digest: "zzz", isMissing: true),   // alone → no other copy (CROSSROADS_1.m4v)
             MissingCopyInput(group: nil, digest: nil, isMissing: true),        // no group, no digest → no other copy
         ]
-        #expect(MissingCopyCalculator.count(inputs) == MissingCopyCounts(noOtherCopy: 2, otherCopyPresent: 2))
+        #expect(MissingCopyCalculator.count(inputs) == MissingCopyCounts(noOtherCopy: 3, otherCopyPresent: 1, possibleCopyNotProven: 1))
         #expect(MissingCopyCalculator.count([MissingCopyInput(group: g, digest: nil, isMissing: true),
                                              MissingCopyInput(group: g, digest: nil, isMissing: true)])
-                == MissingCopyCounts(noOtherCopy: 2, otherCopyPresent: 0), "two Missing copies of each other are not a present copy")
+                == MissingCopyCounts(noOtherCopy: 2), "two Missing copies of each other are not a present copy")
+        #expect(CatalogReviewItem(kind: .missingPossibleCopy, count: 1).door == "Fill In Full Hashes, then Validate Catalog")
     }
 
     @Test("SCALE: 100k projected rows count inside a 0.5 s budget")
@@ -199,7 +211,7 @@ struct MissingCopyCountTests {
         let start = ContinuousClock.now
         let counts = MissingCopyCalculator.count(inputs)
         let elapsed = ContinuousClock.now - start
-        #expect(counts.noOtherCopy + counts.otherCopyPresent == 2_000)
+        #expect(counts.noOtherCopy + counts.otherCopyPresent + counts.possibleCopyNotProven == 2_000)
         #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(500)), "took \(elapsed)")
     }
 }

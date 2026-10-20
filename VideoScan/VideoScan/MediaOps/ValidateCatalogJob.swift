@@ -174,8 +174,19 @@ final class ValidateCatalogJob: @MainActor MediaFileOperationJob, MediaFileOpera
         guard audited == .proceed else { return .filesNotChecked(audited) }
         let files = audit.subtitle
         if stopRequested { return .stoppedBetween(files: files) }
-        if let problem = Self.auditRecordProblem(readAuditRecord(), auditStartedAt: audit.startedAt) {
+        if let problem = Self.auditRecordProblem(readAuditRecord(), auditStartedAt: audit.startedAt, written: marker.lastRun) {
             return .auditRecordNotThisRun(problem, files: files)
+        }
+        // Import's second-boundary rule (ImportToSQLiteTiming, QA P3-c): the
+        // report's start is a whole second after the file check's end, so
+        // any reader that orders the two by their ISO-8601 seconds (Import's
+        // gate does) sees the report as AFTER the audit it stands on.
+        let ready = await ImportToSQLiteTiming.waitForVerifyStart(auditFinishedAt: audit.finishedAt ?? Date(), now: { Date() },
+                                                                  sleep: { try? await Task.sleep(for: .seconds($0)) })
+        if stopRequested { return .stoppedBetween(files: files) }
+        guard ready else {
+            return .auditRecordNotThisRun("the wall clock kept stepping back — the catalog check could not start a whole second after the file check ended",
+                                          files: files)
         }
         let verify = VerifyCatalogJob(model: model)
         configureVerifyForTesting?(verify)
@@ -219,12 +230,23 @@ final class ValidateCatalogJob: @MainActor MediaFileOperationJob, MediaFileOpera
     /// why Verify must not run. The record's dates are ISO-8601 whole
     /// seconds (truncated), so "this run" = started no earlier than the
     /// whole second the audit job was made in.
-    nonisolated static func auditRecordProblem(_ record: CatalogAuditRunRecord?, auditStartedAt: Date) -> String? {
+    /// `now` bounds it from above (QA P3-b: a record dated in the future —
+    /// a copied marker, a clock that stepped back — is no proof of this
+    /// run); `written` is the record the run's marker holds in memory, and
+    /// the file must be that one (same start, to the whole second).
+    nonisolated static func auditRecordProblem(_ record: CatalogAuditRunRecord?, auditStartedAt: Date, now: Date = Date(),
+                                               written: CatalogAuditRunRecord? = nil) -> String? {
         guard let record else {
             return "the file check's record beside the catalog (\(CatalogFreshnessFactsReader.auditMarkerFileName)) could not be read back"
         }
         guard record.startedAt.timeIntervalSince1970 >= auditStartedAt.timeIntervalSince1970.rounded(.down) else {
             return "the file check's record beside the catalog is an older run's, not this one's"
+        }
+        guard record.startedAt <= now, (record.finishedAt ?? now) <= now else {
+            return "the file check's record beside the catalog is dated after now — not this run's"
+        }
+        if let written, abs(record.startedAt.timeIntervalSince(written.startedAt)) >= 1 {
+            return "the file check's record beside the catalog is not the one this run wrote"
         }
         guard record.outcome == .completed, record.finishedAt != nil else {
             return "the file check's record beside the catalog says \(record.outcome.rawValue), not completed"

@@ -231,7 +231,7 @@ struct CatalogRealityLines: View {
             ForEach(Array(verdict.reasons.dropFirst().enumerated()), id: \.offset) { _, reason in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Circle().fill(reason.colour.tint).frame(width: 8, height: 8).offset(y: 1)
-                    Text(CatalogRealityPolicy.words(reason, now: Date()))
+                    Text(verdict.words(reason))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)

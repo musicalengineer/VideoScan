@@ -10,7 +10,9 @@
 //   break        every needs-a-decision finding of tiers 4 and 5 (two rows
 //                at one path, duplicate groups whose digests differ, a sound
 //                print made from other content, catalog.json changed with no
-//                new generation …).
+//                new generation …) — and every decision a tier COUNTED but
+//                the report could not keep under its findings cap
+//                (`unkeptDecisions`, QA P1).
 //   review       tier 3's `headerSaysSoundPrintHeardNone` findings, as the
 //                report states them → "Audio Tracks, But No Sound"; tier 3's
 //                "could not check" (no current print, a print that could
@@ -20,8 +22,10 @@
 //                2026-10-20); possible same footage; possible reference
 //                movies.
 //   unsettled    any informational finding without a table entry; tier 1
-//                "could not check" (sampled-only hashes); a built tier not
-//                run; the catalog changed during the run.
+//                "could not check" (sampled-only hashes); tier 5 "could not
+//                check" beyond its informational findings (the store's
+//                generation unreadable, catalog.json unhashable — QA P2); a
+//                built tier not run; the catalog changed during the run.
 //   information  lineage links to rows removed from the catalog — kept as
 //                history.
 // Tier 0 is NOT read here: the file check's own record
@@ -78,8 +82,10 @@ struct IntegrityRealityFacts: Sendable, Equatable {
         var tally = Tally()
         for f in r.findings { tally.add(f) }
         if let sound = r.tier(3), sound.couldNotCheck > 0 { tally.review[.soundPrintsToHearAgain, default: 0] += sound.couldNotCheck }
+        let unkept = unkeptDecisions(r)
+        if unkept.silent > 0 { tally.review[.audioTracksButNoSound, default: 0] += unkept.silent }
         var out = IntegrityRealityFacts()
-        out.breaks = tally.words(tally.breaks, decided: true)
+        out.breaks = tally.words(tally.breaks, decided: true) + unkept.breaks
         out.unsettled = tally.words(tally.unsettled, decided: false) + gaps(r)
         out.review = tally.review.map { CatalogReviewItem(kind: $0.key, count: $0.value) }
         out.information = tally.information.sorted { $0.key < $1.key }
@@ -112,18 +118,48 @@ struct IntegrityRealityFacts: Sendable, Equatable {
         }
     }
 
+    /// Decisions a tier COUNTED that the report could not KEEP (QA
+    /// 2026-10-20, P1): the 5,000-finding cap is first come in tier order,
+    /// so tier 3's silent prints can push every tier 4 / 5 break out of the
+    /// kept list. Each tier's own `needsDecision` is the truth: what it
+    /// counted beyond the decided findings kept for it is a break of its
+    /// own ("tier 5 Relations: 2 more decisions the report could not
+    /// keep"); tier 3's are silent prints — review items.
+    static func unkeptDecisions(_ r: IntegrityReport) -> (breaks: [CatalogRealityCount], silent: Int) {
+        var keptDecided: [Int: Int] = [:]
+        var keptSilent = 0
+        for f in r.findings where f.needsDecision {
+            if f.rule == VerifyCatalogTiers.silentPrintRule { keptSilent += 1 } else { keptDecided[f.tier, default: 0] += 1 }
+        }
+        var breaks: [CatalogRealityCount] = []
+        var silent = 0
+        for t in r.builtTiers where t.tier != 0 {
+            if t.tier == 3 { silent = max(0, t.needsDecision - keptSilent); continue }
+            let unkept = t.needsDecision - (keptDecided[t.tier] ?? 0)
+            if unkept > 0 {
+                breaks.append(CatalogRealityCount(count: unkept,
+                                                  words: "\(t.label): \(unkept.formatted()) more decisions the report could not keep"))
+            }
+        }
+        return (breaks, silent)
+    }
+
     /// What the report leaves unsettled beyond its findings: tier 1's
-    /// "could not check" (sampled-only hashes), any built tier past 0 that
-    /// did not run, and a catalog that changed during the run. Tier 3's gap
-    /// is a review item (above); tier 5's is its informational findings,
-    /// already bucketed.
+    /// "could not check" (sampled-only hashes); tier 5's "could not check"
+    /// beyond its informational findings kept (the store's generation
+    /// unreadable, catalog.json unhashable — QA 2026-10-20, P2); any built
+    /// tier past 0 that did not run; a catalog that changed during the run.
+    /// Tier 3's gap is a review item (above).
     static func gaps(_ r: IntegrityReport) -> [CatalogRealityCount] {
         var out: [CatalogRealityCount] = []
+        let informational5 = r.findings.filter { $0.tier == 5 && !$0.needsDecision }.count
         for t in r.builtTiers where t.tier != 0 {
             if case .notRun(let why) = t.result {
                 out.append(CatalogRealityCount(count: max(1, r.rowsLive), words: "\(t.label): not run — \(why)"))
             } else if t.tier == 1, t.couldNotCheck > 0 {
                 out.append(CatalogRealityCount(count: t.couldNotCheck, words: "\(t.label): \(couldNotCheckWords(t))"))
+            } else if t.tier == 5, t.couldNotCheck > informational5 {
+                out.append(CatalogRealityCount(count: t.couldNotCheck - informational5, words: "\(t.label): \(t.summary)"))
             }
         }
         if let mismatch = r.generationMismatchWords {

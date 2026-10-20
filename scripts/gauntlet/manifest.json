@@ -21834,6 +21834,22 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QAValidateCatalogRedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QAValidateCatalogRedTests"
+      ],
+      "tests": [
+        "cappedReportKeepsItsBreaks",
+        "corruptAuditRecordIsRed",
+        "differentDigestIsNotACopy",
+        "futureDatedRecordIsNotThisRun",
+        "groupWithoutDigestIsNotProof",
+        "tier5GenerationUnreadableIsNotGreen"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RateTrackerTests.swift",
       "stage": "unit",
       "suites": [
@@ -32318,7 +32334,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2802,
+      "expected_floor": 2808,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [
@@ -32780,7 +32796,8 @@
         "VideoScanTests/CatalogRealityBucketTests",
         "VideoScanTests/CatalogRealityBuilderTests",
         "VideoScanTests/MissingCopyCountTests",
-        "VideoScanTests/CatalogRealityStateTests"
+        "VideoScanTests/CatalogRealityStateTests",
+        "VideoScanTests/QAValidateCatalogRedTests"
       ]
     },
     {

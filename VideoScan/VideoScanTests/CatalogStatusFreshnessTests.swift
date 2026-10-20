@@ -391,7 +391,7 @@ struct CatalogStatusWordsTests {
         let red = state([], reality: broken)
         #expect(CatalogStatusWords.chipWords(red) == "something is wrong")
         #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — something is wrong…")
-        #expect(CatalogStatusWords.launchLine(red.reality, now: now)
+        #expect(CatalogStatusWords.launchLine(red.reality)
                 == "Something is wrong: 2 paths have more than one live row · 1 more — 1 duplicate groups hold files with different whole-file digests. Catalog ▸ Catalog Status… lists the doors.")
     }
 

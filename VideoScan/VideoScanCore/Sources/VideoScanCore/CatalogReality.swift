@@ -131,8 +131,13 @@ public struct CatalogReviewItem: Sendable, Hashable {
         case possibleReferenceMovies
         /// Marked Missing, and no other copy is in the catalog.
         case missingNoOtherCopy
-        /// Marked Missing; another copy is present.
+        /// Marked Missing; another copy is PROVEN present — a live row with
+        /// the same stored whole-file SHA-256 (10/19 ruling: a copy = the
+        /// same full SHA-256).
         case missingOtherCopyPresent
+        /// Marked Missing; a duplicate-group mate is live but the copy is
+        /// not proven (a full SHA-256 is missing on one side) (QA 2026-10-20).
+        case missingPossibleCopy
     }
 
     public var kind: Kind
@@ -165,6 +170,9 @@ public struct CatalogReviewItem: Sendable, Hashable {
         .missingOtherCopyPresent: Words(
             title: "Missing, another copy is present",
             door: "the other copy stands; Remove from Catalog when you're sure", caution: false),
+        .missingPossibleCopy: Words(
+            title: "Missing — a possible copy, not proven",
+            door: "Fill In Full Hashes, then Validate Catalog", caution: false),
     ]
 
     public var title: String { Self.table[kind]?.title ?? kind.rawValue }
@@ -185,15 +193,29 @@ public struct CatalogRealityVerdict: Sendable, Equatable {
     public var review: [CatalogReviewItem]
     /// Said under the band, never counted ("128 lineage links … kept as history").
     public var information: [String]
+    /// The `now` the verdict was judged at — the words of a reason that
+    /// ages ("10 days ago") are said against it, never a fresh clock read
+    /// in a view body. Deliberately outside `==` (the snapshot's publish
+    /// gate must not fire just because a minute passed).
+    public var judgedAt: Date
 
     public init(colour: FreshnessColour, headline: String, reasons: [CatalogRealityReason],
-                review: [CatalogReviewItem], information: [String]) {
+                review: [CatalogReviewItem], information: [String], judgedAt: Date = .distantPast) {
         self.colour = colour
         self.headline = headline
         self.reasons = reasons
         self.review = review
         self.information = information
+        self.judgedAt = judgedAt
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.colour == rhs.colour && lhs.headline == rhs.headline && lhs.reasons == rhs.reasons
+            && lhs.review == rhs.review && lhs.information == rhs.information
+    }
+
+    /// A reason's words, said against `judgedAt`.
+    public func words(_ reason: CatalogRealityReason) -> String { CatalogRealityPolicy.words(reason, now: judgedAt) }
 
     /// The sum of the review counts.
     public var reviewCount: Int { review.reduce(0) { $0 + $1.count } }
@@ -265,7 +287,7 @@ public enum CatalogRealityPolicy {
         let shown = review.filter { $0.count >= 1 }
             .sorted { (order.firstIndex(of: $0.kind) ?? 0) < (order.firstIndex(of: $1.kind) ?? 0) }
         return CatalogRealityVerdict(colour: colour, headline: headline(colour, reasons, now: now), reasons: reasons,
-                                     review: shown, information: information)
+                                     review: shown, information: information, judgedAt: now)
     }
 
     // MARK: Words

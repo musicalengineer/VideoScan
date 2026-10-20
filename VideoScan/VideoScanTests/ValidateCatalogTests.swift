@@ -82,21 +82,28 @@ struct ValidateCatalogOutcomeTests {
     @Test("ISOLATION (pure): the audit-record gate — none, an older run's, a stopped one → a reason; this run's completed record → nil")
     func theAuditRecordGate() {
         let started = Date(timeIntervalSince1970: 2_000_000_000.7)
-        #expect(ValidateCatalogJob.auditRecordProblem(nil, auditStartedAt: started)?.contains("could not be read back") == true)
+        let later = started.addingTimeInterval(60)          // the gate's `now`: after the run ended
+        #expect(ValidateCatalogJob.auditRecordProblem(nil, auditStartedAt: started, now: later)?.contains("could not be read back") == true)
         var stale = CatalogAuditRunRecord(startedAt: Date(timeIntervalSince1970: 1_600_000_000))
         stale.outcome = .completed
         stale.finishedAt = Date(timeIntervalSince1970: 1_600_000_010)
-        #expect(ValidateCatalogJob.auditRecordProblem(stale, auditStartedAt: started)?.contains("an older run's") == true,
+        #expect(ValidateCatalogJob.auditRecordProblem(stale, auditStartedAt: started, now: later)?.contains("an older run's") == true,
                 "a completed record from 2020 is not this run's")
         // ISO-8601 whole seconds: the marker's start is truncated to the second the job was made in.
         var mine = CatalogAuditRunRecord(startedAt: Date(timeIntervalSince1970: 2_000_000_000))
         mine.outcome = .stopped
         mine.finishedAt = Date(timeIntervalSince1970: 2_000_000_003)
-        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started)?.contains("says stopped") == true)
+        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started, now: later)?.contains("says stopped") == true)
         mine.outcome = .completed
-        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started) == nil)
+        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started, now: later) == nil)
         mine.finishedAt = nil
-        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started) != nil, "no finish time = not completed")
+        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started, now: later) != nil, "no finish time = not completed")
+        // QA P3-b: the file must be the record THIS run's marker wrote (same start, to the second).
+        mine.finishedAt = Date(timeIntervalSince1970: 2_000_000_003)
+        var other = mine
+        other.startedAt = mine.startedAt.addingTimeInterval(5)
+        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started, now: later, written: other)?.contains("not the one this run wrote") == true)
+        #expect(ValidateCatalogJob.auditRecordProblem(mine, auditStartedAt: started, now: later, written: mine) == nil)
     }
 }
 

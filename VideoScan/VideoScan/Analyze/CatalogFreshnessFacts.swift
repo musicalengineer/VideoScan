@@ -7,8 +7,9 @@
 // one small JSON and one SQLite open per debounced catalog change, never
 // per record and never in a view body.
 //
-// Read-only: a missing, damaged or newer-schema marker reads as "never
-// ran"; a sidecar that refuses to open reads as a red row with the
+// Read-only: a missing marker reads as "never ran"; a damaged or
+// newer-schema one also leaves `audit` nil but carries `auditProblem`, which
+// the Catalog Status band reads as red (QA 2026-10-20 P3-a); a sidecar that refuses to open reads as a red row with the
 // store's own words. Nothing here writes, starts or marks anything.
 //
 // (For Rick: `nonisolated static` functions on an enum ≈ free functions
@@ -32,13 +33,18 @@ struct CatalogFreshnessFacts: Sendable, Equatable {
     /// judges the audit marker against it (the Integrity facts already
     /// were, when they were read).
     var switchedAt: Date?
+    /// `catalog-audit.json` EXISTS but cannot be decoded — its words (QA
+    /// 2026-10-20 P3-a: an unreadable record is red, never "never ran").
+    /// nil when it is absent or reads fine. `audit` stays nil either way.
+    var auditProblem: String?
 
     init(audit: CatalogAuditRunRecord? = nil, soundStoreProblem: String? = nil,
-         integrity: IntegrityReportFacts = IntegrityReportFacts(), switchedAt: Date? = nil) {
+         integrity: IntegrityReportFacts = IntegrityReportFacts(), switchedAt: Date? = nil, auditProblem: String? = nil) {
         self.audit = audit
         self.soundStoreProblem = soundStoreProblem
         self.integrity = integrity
         self.switchedAt = switchedAt
+        self.auditProblem = auditProblem
     }
 }
 
@@ -50,10 +56,11 @@ enum CatalogFreshnessFactsReader {
     nonisolated static func read(catalogFile: String) -> CatalogFreshnessFacts {
         let folder = URL(fileURLWithPath: catalogFile).deletingLastPathComponent()
         let switchedAt = cutoverSwitchedAt(in: folder)
-        return CatalogFreshnessFacts(audit: auditRecord(in: folder),
+        let audit = auditRead(in: folder)
+        return CatalogFreshnessFacts(audit: audit.record,
                                      soundStoreProblem: soundStoreProblem(in: folder),
                                      integrity: integrityFacts(catalogFile: catalogFile, switchedAt: switchedAt),
-                                     switchedAt: switchedAt)
+                                     switchedAt: switchedAt, auditProblem: audit.problem)
     }
 
     // MARK: Integrity report
@@ -106,9 +113,19 @@ enum CatalogFreshnessFactsReader {
     /// Decode `catalog-audit.json` beside the catalog. Garbage, a missing
     /// file or a newer schema → nil (never ran), never a crash.
     nonisolated static func auditRecord(in folder: URL) -> CatalogAuditRunRecord? {
+        auditRead(in: folder).record
+    }
+
+    /// The same read, telling ABSENT (nil, nil — never ran) from PRESENT
+    /// BUT UNDECODABLE (nil, words — the band's red "can't be read").
+    nonisolated static func auditRead(in folder: URL) -> (record: CatalogAuditRunRecord?, problem: String?) {
         let url = folder.appendingPathComponent(auditMarkerFileName)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? decoder.decode(CatalogAuditRunRecord.self, from: data)
+        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil) }
+        do {
+            return (try decoder.decode(CatalogAuditRunRecord.self, from: Data(contentsOf: url)), nil)
+        } catch {
+            return (nil, "\(auditMarkerFileName) can't be read: \(error.localizedDescription)")
+        }
     }
 
     /// Same decoder shape as CatalogAuditRunMarker's (ISO-8601 dates).
