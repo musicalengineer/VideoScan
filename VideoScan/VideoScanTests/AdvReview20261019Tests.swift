@@ -1,6 +1,6 @@
 // AdvReview20261019Tests.swift
 //
-// Adversarial review 2026-10-19 (cycle #110), docs/reviews/adversarial/2026-10-19-run.md.
+// Adversarial review 2026-10-19 (cycle #110), docs/reviews/adversarial/2026-10-19.md.
 //
 //   F-snapshot  AdvRelocateSnapshotUnderSQLiteTests — Migrate's "Pre-migrate
 //               snapshot" copied catalog.json, which is frozen once

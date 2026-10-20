@@ -142,7 +142,7 @@ final class HardKillChild: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO)
         let argv = [helper.path, "commit-loop", database.path].map { strdup($0) }
         defer { argv.forEach { free($0) } }
-        var cArgs = argv + [nil]
+        var cArgs: [UnsafeMutablePointer<CChar>?] = argv + [nil]
         var pid: pid_t = 0
         let rc = posix_spawn(&pid, helper.path, &actions, nil, &cArgs, environ)
         guard rc == 0 else { throw FixtureFailure(words: "posix_spawn: \(String(cString: strerror(rc)))") }
