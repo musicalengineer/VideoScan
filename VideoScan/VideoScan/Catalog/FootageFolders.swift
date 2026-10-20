@@ -586,18 +586,11 @@ enum FootageFolders {
         }
         s.date = earliest
         s.latestDate = latest
-        s.dateWords = e.dateWords ?? earliest.map { dateFormatter.string(from: $0) } ?? ""
+        s.dateWords = e.dateWords ?? earliest.map(CatalogTableDate.day) ?? ""
         f.summary = s
         f.keys = SortKeys(filename: e.title, duration: s.totalSeconds, size: s.totalBytes, date: earliest ?? .distantPast)
         return f
     }
-
-    static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "MMM d, yyyy"
-        return f
-    }()
 
     // MARK: - The display (per filter / sort / open set / scope)
 

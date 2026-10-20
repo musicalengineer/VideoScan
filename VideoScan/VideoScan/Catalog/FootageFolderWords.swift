@@ -114,12 +114,11 @@ enum FootageFolderWords {
         count > 0 ? "\(count) archived" : ""
     }
 
-    /// "Nov 26, 2009" for one day; "Nov 26, 2009 – Nov 28, 2009" for a
-    /// span (whichever order the two days come in).
+    /// "26-Nov-2009" for one day; "26-Nov-2009 – 28-Nov-2009" for a span
+    /// (whichever order the two days come in) — the Catalog table's one
+    /// date spelling (CatalogTableDate.swift).
     static func dateRange(_ a: Date, _ b: Date) -> String {
-        let from = FootageFolders.dateFormatter.string(from: min(a, b))
-        let to = FootageFolders.dateFormatter.string(from: max(a, b))
-        return from == to ? from : "\(from) \u{2013} \(to)"
+        CatalogTableDate.range(a, b)
     }
 
     // MARK: The breadcrumb bar, the Back button and the legend
@@ -229,7 +228,6 @@ enum FootageFolderWords {
     static let folderSymbolFont = Font.system(size: 17.3)
     static let folderTitleFont = Font.system(.body).weight(.semibold)
     static let relationFont = Font.system(size: 11)
-    static let summaryFont = Font.system(size: 11, design: .monospaced)
     static let legendFont = Font.system(size: 11)
     static let glyphFont = Font.system(size: 12, design: .monospaced)
     /// Back and the path: big and bold enough to find on the dark theme (Rick 2026-10-19).

@@ -434,7 +434,7 @@ extension CatalogContent {
 
     func volumeCell(_ rec: VideoRecord) -> some View {
         Text(rec.displayVolumeLabel)
-            .font(.system(.body, design: .monospaced))
+            .font(CatalogTableFonts.volume)
             .foregroundColor(.secondary)
             .lineLimit(1)
             .help(rec.fullPath)
@@ -486,19 +486,23 @@ extension CatalogContent {
             .help(fact.help)
     }
 
+    /// One spelling for every date in this table, `25-Dec-1995`, at the
+    /// date's own precision (CatalogTableDate.swift). A date that came with
+    /// a time of day shows the day; the tooltip adds the full date and time.
     func dateCell(_ rec: VideoRecord) -> some View {
-        let display = rec.resolvedDateDisplay
-        return Text(display.isEmpty ? "—" : display)
-            .foregroundColor(display.isEmpty ? .secondary : .primary)
-            .font(.system(size: 11))
-            .help(rec.resolvedDateHelp)
+        let cell = CatalogTableDate.cell(forResolved: rec.resolvedDateDisplay)
+        let help = rec.resolvedDateHelp
+        return Text(cell.text.isEmpty ? "—" : cell.text)
+            .foregroundColor(cell.text.isEmpty ? .secondary : .primary)
+            .font(CatalogTableFonts.compact)
+            .help(cell.dateAndTime.map { "\(help)\n\nDate and time: \($0)" } ?? help)
     }
 
     func placeCell(_ rec: VideoRecord) -> some View {
         let display = rec.resolvedPlaceDisplay
         return Text(display.isEmpty ? "—" : display)
             .foregroundColor(display.isEmpty ? .secondary : .primary)
-            .font(.system(size: 11))
+            .font(CatalogTableFonts.compact)
             .lineLimit(1)
             .help(rec.resolvedPlaceHelp)
     }
@@ -639,7 +643,7 @@ extension CatalogContent {
                 .foregroundColor(rec.mediaDisposition.color)
             if rec.mediaDisposition != .unreviewed {
                 Text(rec.mediaDisposition.rawValue)
-                    .font(.system(size: 11))
+                    .font(CatalogTableFonts.compact)
                     .foregroundColor(rec.mediaDisposition.color)
             }
             // Workflow tags (2026-07-23) — subtle teal chips, capped at

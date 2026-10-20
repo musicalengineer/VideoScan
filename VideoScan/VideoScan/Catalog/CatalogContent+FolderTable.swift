@@ -8,12 +8,12 @@
 // option is on; the linear table is untouched when it is off.
 //
 //   ‹ Back   Catalog                                   (the breadcrumb bar)
-//   ▾ 📁 Marks Birthday 1984        12 items · 3 copies   1:12:30  12.4 GB  Apr 7, 1984 – Apr 8, 1984   3 archived
+//   ▾ 📁 Marks Birthday 1984        12 items · 3 copies   1:12:30  12.4 GB  07-Apr-1984 – 08-Apr-1984   3 archived
 //        Birthday_1984.dv          LaCie     V+A  0:41:02 …        (the triangle / → reveals in place)
 //          ↳ Birthday_1984.mkv     LaCie     V+A  0:41:02 …   made from it · preservation master
 //          = Birthday_1984.dv      SanDisk   V+A  0:41:02 …   copy · byte for byte, SanDisk   (grey)
 //        ≈ Cake.mov                LaCie     V+A  0:08:11 …   same event · different footage
-//   ▸ 📁 Cape 1990                   4 items              0:41:02   6.1 GB  Jul 1990
+//   ▸ 📁 Cape 1990                   4 items              0:41:02   6.1 GB  01-Jul-1990
 //     loose_file.mov                LaCie     V+A  0:08:11 …
 //       = loose_file.mov            SanDisk   V+A  0:08:11 …   copy · byte for byte, SanDisk   (grey)
 //
@@ -145,7 +145,7 @@ extension CatalogContent {
             .width(min: 60, ideal: 75)
 
             TableColumn("Date", value: \.date) { row in
-                if let rec = row.record { dateCell(rec) } else { folderSummaryText(row.folder?.dateWords ?? "") }
+                if let rec = row.record { dateCell(rec) } else { folderSummaryText(row.folder?.dateWords ?? "", font: CatalogTableFonts.compact) }
             }
             .width(min: 80, ideal: 100)
 
@@ -163,7 +163,7 @@ extension CatalogContent {
                 .width(min: 90, ideal: 140)
 
                 TableColumn("Tag") { row in
-                    if let rec = row.record { tagColumnCell(for: rec) } else { folderSummaryText(folderArchivedWords(row)) }
+                    if let rec = row.record { tagColumnCell(for: rec) } else { folderSummaryText(folderArchivedWords(row), font: CatalogTableFonts.compact) }
                 }
                 .width(min: 70, ideal: 120)
 
@@ -263,9 +263,11 @@ extension CatalogContent {
                                    dimmed: dimmed)
     }
 
-    private func folderSummaryText(_ text: String) -> some View {
+    /// A folder row's words in a column, in THAT column's file-row font
+    /// (CatalogTableFonts) — a folder row is never smaller than its files.
+    private func folderSummaryText(_ text: String, font: Font = CatalogTableFonts.standard) -> some View {
         Text(text)
-            .font(FootageFolderWords.summaryFont)
+            .font(font)
             .foregroundColor(FootageFolderWords.summaryColor)
             .lineLimit(1)
     }

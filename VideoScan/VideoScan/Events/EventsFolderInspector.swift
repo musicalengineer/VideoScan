@@ -93,7 +93,8 @@ struct FolderInspectorFacts: Sendable, Equatable {
 
     var volumesWords: String { volumes.isEmpty ? "—" : volumes.joined(separator: ", ") }
 
-    /// "Nov 26, 2009 – Nov 28, 2009", one day alone, "undated".
+    /// "26-Nov-2009 – 28-Nov-2009", one day alone, "undated" — the Catalog
+    /// table's date spelling (CatalogTableDate.swift).
     var dateRangeWords: String {
         guard let earliest else { return "undated" }
         return FootageFolderWords.dateRange(earliest, latest ?? earliest)
