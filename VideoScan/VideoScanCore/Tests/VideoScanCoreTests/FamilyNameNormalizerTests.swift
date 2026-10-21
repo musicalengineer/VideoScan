@@ -161,4 +161,66 @@ struct FamilyNameNormalizerTests {
         #expect(again.people["@I1@"]?.name == person.name)
         #expect(again.people["@I1@"]?.surname == person.surname)
     }
+    /// QA r1 (2026-10-21), pins FamilyNameNormalizer.swift:41-51 and
+    /// GedcomFamilyGraph.swift:1192-1198. The display must be a fixed point
+    /// of normalizeName, or the person cannot be found by their own name.
+    /// (a) two particles before the slash: parts gives "John Mc FitzRoger",
+    ///     which normalizeName refuses as "John McFitzRoger".
+    /// (b) a bare-particle surname followed by a capitalised suffix:
+    ///     "John /Fitz/ Roger" displays "John Fitz Roger" (pre-existing).
+    @Test func qaR1DisplayIsAFixedPointForEveryParticleShape() {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME John Mc Fitz /Roger/
+        0 @I2@ INDI
+        1 NAME John /Fitz/ Roger
+        0 TRLR
+        """)
+        for id in ["@I1@", "@I2@"] {
+            let name = graph.people[id]?.name ?? ""
+            #expect(FamilyNameNormalizer.normalizeName(name) == name, Comment(rawValue: "\(id) \(name)"))
+            #expect(graph.people(matching: name).contains { $0.id == id }, Comment(rawValue: "\(id) \(name)"))
+        }
+    }
+
+    /// The exact answers for QA r1's two shapes, plus a slash on each side
+    /// of a particle run. The display is fused as ONE run, the way
+    /// `normalizeName` fuses typed text; a fused word is surname when
+    /// either half was.
+    @Test func particleRunsAcrossTheSlashResolveToOneDisplayAndSurname() throws {
+        let graph = GedcomFamilyGraph(gedcomText: """
+        0 HEAD
+        0 @I1@ INDI
+        1 NAME John Mc Fitz /Roger/
+        0 @I2@ INDI
+        1 NAME John /Fitz/ Roger
+        0 @I3@ INDI
+        1 NAME /Mac Donald/
+        0 @I4@ INDI
+        1 NAME John /Smith/ Mc Gill
+        0 @I5@ INDI
+        1 NAME Mac /Mac Donald/
+        0 TRLR
+        """)
+        func pair(_ id: String) -> [String?] { [graph.people[id]?.name, graph.people[id]?.surname] }
+        // "Mc" fuses with the capitalised "Fitz" exactly as typed text does;
+        // the surname is untouched.
+        #expect(pair("@I1@") == ["John McFitz Roger", "Roger"])
+        #expect(pair("@I2@") == ["John FitzRoger", "FitzRoger"])
+        // A bare surname's leading "Mac" still fuses (normalizeSurname rule).
+        #expect(pair("@I3@") == ["MacDonald", "MacDonald"])
+        #expect(pair("@I4@") == ["John Smith McGill", "Smith"])
+        // A leading given "Mac" is a name; the surname's "Mac" fuses.
+        #expect(pair("@I5@") == ["Mac MacDonald", "MacDonald"])
+        for person in graph.people.values {
+            #expect(FamilyNameNormalizer.normalizeName(person.name) == person.name, Comment(rawValue: person.name))
+            #expect(graph.people(matching: person.name).contains { $0.id == person.id }, Comment(rawValue: person.name))
+            let surname = try #require(person.surname)
+            let written = GedcomFamilyGraph.gedcomName(person.name, surnames: [surname])
+            let again = GedcomFamilyGraph(gedcomText: "0 HEAD\n0 @I1@ INDI\n1 NAME \(written)\n0 TRLR")
+            #expect(again.people["@I1@"]?.name == person.name, Comment(rawValue: written))
+            #expect(again.people["@I1@"]?.surname == person.surname, Comment(rawValue: written))
+        }
+    }
 }

@@ -29,25 +29,38 @@ public enum FamilyNameNormalizer {
         fuse(name, leadingMacFuses: false)
     }
 
-    /// A GEDCOM NAME split at its slashes, with a particle that sits on the
-    /// GIVEN side of the slash moved into the surname (2026-10-21):
-    /// "John Fitz /Roger/" → given "John", surname "FitzRoger" — the same
-    /// person "John /Fitz Roger/" describes. Without this the display read
-    /// "John Fitz Roger" while every lookup fuses typed text to
-    /// "john fitzroger", so the person could not be found by their own
-    /// displayed name. Same fusion rule as `normalizeName`: a leading "Mac"
-    /// is a given name ("Mac /Breen/"), and a particle only fuses with a
-    /// capitalised word ("Fitz /de Wyndon/" is left alone).
-    public static func normalizeNameParts(given: String, surname: String) -> (given: String, surname: String) {
-        var words = given.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-        guard let particle = words.last,
-              isParticle(particle, atIndex: words.count - 1, leadingMacFuses: false),
-              let next = surname.first, next.isLetter, next.isUppercase else {
-            return (normalizeName(words.joined(separator: " ")),
-                    surname.isEmpty ? surname : normalizeSurname(surname))
+    /// The display name and surname of a GEDCOM NAME split at its slashes
+    /// ("given /surname/ after"), fused as ONE run of words (2026-10-21).
+    ///
+    /// The invariant: `normalizeName(display) == display`. Every lookup
+    /// runs typed text through `normalizeName`, so a display that is not a
+    /// fixed point cannot find its own person. The nightly found
+    /// "John Fitz /Roger/" displayed as "John Fitz Roger" (the given part
+    /// and the surname were fused separately, so the particle on the given
+    /// side never met the word it belongs to); QA r1 added
+    /// "John Mc Fitz /Roger/" and "John /Fitz/ Roger".
+    ///
+    /// How: the surname is first fused on its own with the bare-surname
+    /// rule (a leading "Mac" fuses there — "/Mac Donald/"), then given,
+    /// surname and after words are fused together with the full-name rule
+    /// — the same loop `normalizeName` runs. Each word carries an
+    /// "is surname" flag; a fused word is surname if either half was, so
+    /// "John Fitz /Roger/" → display "John FitzRoger", surname "FitzRoger"
+    /// — the same person "John /Fitz Roger/" describes. A leading "Mac" is
+    /// still a given name ("Mac /Breen/"), and a particle only fuses with
+    /// a capitalised word ("Fitz /de Wyndon/" is left alone).
+    public static func normalizeNameParts(given: String, surname: String, after: String)
+        -> (display: String, surname: String?) {
+        func words(_ text: String, surname flag: Bool) -> [(String, Bool)] {
+            text.split(separator: " ", omittingEmptySubsequences: true).map { (String($0), flag) }
         }
-        words.removeLast()
-        return (normalizeName(words.joined(separator: " ")), normalizeSurname(particle + " " + surname))
+        let fusedSurname = surname.isEmpty ? surname : normalizeSurname(surname)
+        let out = fuseWords(words(given, surname: false) + words(fusedSurname, surname: true)
+                                + words(after, surname: false),
+                            leadingMacFuses: false)
+        let surnameWords = out.filter(\.1).map(\.0)
+        return (out.map(\.0).joined(separator: " "),
+                surnameWords.isEmpty ? nil : surnameWords.joined(separator: " "))
     }
 
     private static func isParticle(_ word: String, atIndex index: Int, leadingMacFuses: Bool) -> Bool {
@@ -57,21 +70,29 @@ public enum FamilyNameNormalizer {
     }
 
     private static func fuse(_ text: String, leadingMacFuses: Bool) -> String {
-        let words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let words = text.split(separator: " ", omittingEmptySubsequences: true).map { (String($0), false) }
         guard words.count > 1 else { return text }
-        var out: [String] = []
+        return fuseWords(words, leadingMacFuses: leadingMacFuses).map(\.0).joined(separator: " ")
+    }
+
+    /// The one fusion loop, shared by `normalizeName`, `normalizeSurname`
+    /// and `normalizeNameParts` so the parser and every lookup cannot
+    /// drift apart. Words are (text, flag); a fused word's flag is the OR
+    /// of its halves (C++: a pair<string,bool> carried through the merge).
+    private static func fuseWords(_ words: [(String, Bool)], leadingMacFuses: Bool) -> [(String, Bool)] {
+        var out: [(String, Bool)] = []
         var index = 0
         while index < words.count {
-            let word = words[index]
+            let (word, flag) = words[index]
             if isParticle(word, atIndex: index, leadingMacFuses: leadingMacFuses), index + 1 < words.count,
-               let next = words[index + 1].first, next.isLetter, next.isUppercase {
-                out.append(word + words[index + 1])
+               let next = words[index + 1].0.first, next.isLetter, next.isUppercase {
+                out.append((word + words[index + 1].0, flag || words[index + 1].1))
                 index += 2
             } else {
-                out.append(word)
+                out.append((word, flag))
                 index += 1
             }
         }
-        return out.joined(separator: " ")
+        return out
     }
 }

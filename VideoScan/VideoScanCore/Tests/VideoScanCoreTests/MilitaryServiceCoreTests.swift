@@ -331,9 +331,10 @@ struct MilitaryServiceCoreTests {
         ])
     }
 
-    @Test("codec 7 carries military facts through the compiled tree, and verify notices a lost one")
+    @Test("codec 7+ carries military facts through the compiled tree, and verify notices a lost one")
     func codecRoundTrip() throws {
-        #expect(GedcomCompiledTree.codecVersion >= 7)
+        // Codec 8 (2026-10-21) changed NAME parsing; military facts are unchanged since 7.
+        #expect(GedcomCompiledTree.codecVersion == 8)
         let graph = GedcomFamilyGraph(gedcomText: Self.tree)
         let decoded = try GedcomCompiledTree.decode(GedcomCompiledTree.encode(graph))
         for id in ["@I1@", "@I2@", "@I3@"] {

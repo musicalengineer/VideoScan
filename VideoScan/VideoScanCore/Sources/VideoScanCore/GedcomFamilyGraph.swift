@@ -1187,16 +1187,14 @@ public struct GedcomFamilyGraph: Sendable {
         }
         let raw = value[value.index(after: open)..<close]
             .trimmingCharacters(in: .whitespaces)
-        // A particle written before the slash ("John Fitz /Roger/") is
-        // half of the surname (2026-10-21) — see normalizeNameParts.
-        let parts = FamilyNameNormalizer.normalizeNameParts(given: String(value[..<open]), surname: raw)
-        let surname = parts.surname.isEmpty ? nil : parts.surname
-        // Rebuild the display from the three GEDCOM parts so the fused
-        // surname lands in it whether or not the given name is normalized.
-        let after = value[value.index(after: close)...].split(separator: " ").joined(separator: " ")
-        let display = [parts.given, surname ?? "", after]
-            .filter { !$0.isEmpty }.joined(separator: " ")
-        return (display, surname)
+        // The three GEDCOM parts are fused as one run of words, so the
+        // display is a fixed point of normalizeName and a particle on either
+        // side of a slash lands in the surname ("John Fitz /Roger/" →
+        // "John FitzRoger" / "FitzRoger"; 2026-10-21, see
+        // normalizeNameParts).
+        let parts = FamilyNameNormalizer.normalizeNameParts(
+            given: String(value[..<open]), surname: raw, after: String(value[value.index(after: close)...]))
+        return (parts.display, parts.surname)
     }
 
     public static func isFamilySearchID(_ value: String) -> Bool {
