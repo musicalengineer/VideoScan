@@ -10,6 +10,7 @@
 
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - Fixture helpers (private per-file, mirroring ScanMergeMoveIdentityTests)
@@ -602,18 +603,27 @@ struct UpdateCatalogScaleTests {
         let model = VideoScanModel()
         model.records = (0..<n).map { makeRecord(path: vids.appendingPathComponent("old/clip\($0).mov").path, md5: "h\($0)", sizeBytes: Int64(1000 + $0)) }
         let fresh = (0..<n).map { makeRecord(path: vids.appendingPathComponent("new/clip\($0).mov").path, md5: "h\($0)", sizeBytes: Int64(1000 + $0)) }
-        let t1 = Date()
+        // Judged the house way (GH #208): strict when quiet, a listed known
+        // issue up to 3× when busy. Wall time on purpose — the merge fans out
+        // off the main actor, so thread CPU time would miss work.
+        // 2026-10-21 nightly-flake hunt: the commit read 30.4 s against 30 s
+        // in a full parallel battery; the whole test takes ~15 s at load 8.
+        let loadBefore = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
+        let t1 = clock.now
         let preview = await model.previewScanMerge(root: vids.path, targetRecords: fresh, scanWasComplete: true)
-        let previewSecs = Date().timeIntervalSince(t1)
+        let previewTime = clock.now - t1
         #expect(preview.moved == n && preview.missing == 0 && preview.new == 0)
         #expect(preview.relinks.count == VideoScanModel.ScanMergePreview.relinkListCap, "Display list is capped")
-        let t2 = Date()
+        let t2 = clock.now
         let outcome = await model.commitScanResults(root: vids.path, volName: "X", targetRecords: fresh, scanWasComplete: true)
-        let commitSecs = Date().timeIntervalSince(t2)
+        let commitTime = clock.now - t2
         #expect(outcome.moved == n && outcome.pruned == 0 && !outcome.tripwireFired)
         #expect(model.records.count == n)
-        #expect(previewSecs < PerformanceLane.debugCeiling(seconds: 30) && commitSecs < PerformanceLane.debugCeiling(seconds: 30),
-                "100k relink: preview \(previewSecs)s, commit \(commitSecs)s (budget 30 s each)")
+        expectWithinTimingBudget("100k relink preview", measured: previewTime,
+                                 budget: PerformanceLane.debugCeiling(.seconds(30)), loadBefore: loadBefore)
+        expectWithinTimingBudget("100k relink commit", measured: commitTime,
+                                 budget: PerformanceLane.debugCeiling(.seconds(30)), loadBefore: loadBefore)
     }
 
     // Poisoned state: a stale entry in the deferred-roots set (no live
