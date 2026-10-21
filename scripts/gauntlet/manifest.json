@@ -29273,7 +29273,8 @@
         "quickCheckPassesOnAHealthyFile",
         "readsTheSchemaVersion",
         "theRealProbeRunsQuickCheckThroughThisReader",
-        "theRealQuickCheckHonoursAnInterruptMidWalk"
+        "theRealQuickCheckHonoursAnInterruptMidWalk",
+        "theRealQuickCheckStopsAtItsBudgetMidWalk"
       ]
     },
     {
@@ -32758,7 +32759,7 @@
       ],
       "expected_floor": 2845,
       "name": "unit",
-      "package_expected_floor": 404,
+      "package_expected_floor": 405,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
