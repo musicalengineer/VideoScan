@@ -107,3 +107,7 @@ Each finding was reproduced by a RED test first (`b163fb8f8`, `CatalogCodexSlice
 | 3 | P2 — side-table commits left `knownGeneration` stale | `sideTableCommitMovesKnownGeneration` (an ignore-list commit; `knownGeneration` and `catalogGenerationForStamp` equal catalog.sqlite's generation) | `98201a02d`: `commitSideTables` sets `knownGeneration` on every successful commit. |
 
 Evidence after the fixes (Debug): 239 app suites — 1244 Swift Testing tests in 236 suites + 46 XCTest, all passing (13 known issues, all pre-declared: #356, Keep Open, slice 2b, #354 mid-session); VideoScanCore run separately.
+
+## Closed
+
+Closed by `98201a02d` at 2026-10-21T21:07:32Z. All 3 findings closed: red b163fb8f8 (CatalogCodexSlice2Tests, 5/6 red) → fix 98201a02d (6/6 green); F2 via the init extraction d4a359c9b. None declined. See Findings closed.
