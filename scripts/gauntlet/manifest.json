@@ -8097,7 +8097,7 @@
         "CatalogSyncSQLiteSnapshotLegacyTests"
       ],
       "tests": [
-        "jsonOnlyFolderShowsTheLegacyLabel",
+        "jsonOnlyFolderShowsNothingSynced",
         "manifestMismatchKeepsTheOldSnapshot",
         "olderMasterIsRefusedWithWords",
         "productionScopeCarriesTheSnapshotNotTheJSON",

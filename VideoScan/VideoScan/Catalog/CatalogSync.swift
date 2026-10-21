@@ -67,7 +67,8 @@
 // published by CatalogSnapshotPublisher). catalog.json is no longer
 // published. A viewer opens the snapshot READ-ONLY and swaps its records
 // in (`viewerCatalogLoader`); a viewer that has only the old catalog.json
-// keeps showing it, read-only, labelled "older catalog". A master whose
+// never reads it and says "nothing synced from the master yet" (JSON gone,
+// slice 2b, 2026-10-21). A master whose
 // manifest does not name the snapshot (an older build) is refused with
 // those words and the viewer keeps what it had.
 

@@ -174,8 +174,8 @@ struct CatalogSyncBanner: View {
         }
     }
 
-    /// The failure (if any), then what catalog is on screen — the "older
-    /// catalog" label always shows while only the frozen catalog.json is here.
+    /// The failure (if any), then what catalog is on screen — "nothing synced
+    /// from the master yet" until a snapshot with its latch arrives.
     private var subText: String? {
         var lines: [String] = []
         if case .failed(let reason) = sync.state.phase { lines.append(reason) }
