@@ -248,14 +248,15 @@ struct ValidateCatalogJobTests {
         #expect(CatalogAuditCLI.exitCode(for: job) == 4)
     }
 
-    @Test("a read-only (viewer) catalog: the file check refuses, so Validate refuses and Verify never runs (CLI exit 3)")
+    @Test("a viewer: Validate refuses before the file check — validate on the master — and Verify never runs (CLI exit 3)")
     func aReadOnlyCatalogRefuses() async throws {
         let scene = try ValidateScene.make("viewer"); defer { scene.cleanup() }
         scene.sandbox.model.applyReadOnlyMode(true)
         let job = await scene.run()
         #expect(job.wasRefused)
         #expect(job.verifyJob == nil)
-        #expect(job.subtitle.hasPrefix("Refused — the file check could not complete"), Comment(rawValue: job.subtitle))
+        // QA r1 F5 (2026-10-21): a session with no catalog.sqlite open refuses up front.
+        #expect(job.subtitle.hasPrefix("Refused — this Mac is a viewer — validate on the master"), Comment(rawValue: job.subtitle))
         #expect(CatalogAuditCLI.exitCode(for: job) == 3)
     }
 

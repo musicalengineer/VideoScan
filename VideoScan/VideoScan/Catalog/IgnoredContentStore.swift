@@ -198,6 +198,12 @@ final class IgnoredContentStore: ObservableObject {
     let directory: URL
     nonisolated var fileURL: URL { directory.appendingPathComponent(Self.filename) }
 
+    /// Why this SESSION may not write the JSON file (QA r1 F5, 2026-10-21):
+    /// set by the model from its read-only facts — a viewer, or a launch
+    /// that opened no catalog (no latch, or catalog.sqlite refused). nil =
+    /// no session reason. Only the unattached (JSON) path consults it.
+    var sessionRefusal: String?
+
     /// Bumped on every mutation (add / remove / replace / load) — the ONE
     /// published signal; the sheet re-reads `entries` on it.
     @Published private(set) var revision: Int = 0
@@ -349,6 +355,12 @@ final class IgnoredContentStore: ObservableObject {
         if let catalog {
             if let catalogLoad { await catalogLoad.value }
             return saveToCatalog(catalog)
+        }
+        if let session = sessionRefusal {
+            let why = "ignore-list changes refused — \(session); \(Self.filename) is never written"
+            lastSaveFailure = why
+            note("Ignored content: 🔴 " + why)
+            return false
         }
         // catalog.cutover beside the file names catalog.sqlite the authority
         // and this store is not attached: refused, never the JSON file

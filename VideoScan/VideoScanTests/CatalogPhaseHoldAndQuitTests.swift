@@ -284,6 +284,82 @@ struct CatalogQuitRecoveryTests {
         #expect(model.records.map(\.userNotes) == before)
     }
 
+    // MARK: - A read-only session writes no copy (M5 viewer, 2026-10-21)
+    //
+    // The M5 viewer's every quit wrote an 80 MB catalog.recovery-*.json and
+    // told the person to make it catalog.json: its read-only commit refused
+    // (correctly), and the quit read the refusal as "could not be saved:
+    // unknown". A viewer saves nothing by design — nothing is at risk.
+
+    private static func recoveryCopies(in folder: URL) -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasPrefix(CatalogQuitRecovery.filePrefix) }
+    }
+
+    @Test("ISOLATION: a viewer's quit (its synced catalog on screen) writes NO recovery copy, and says why")
+    func aViewerUnderSQLiteWritesNoCopy() async throws {
+        let scene = try CutoverScene.make("quit_viewer_sqlite"); defer { scene.cleanup() }
+        try await scene.importCatalog()
+        try scene.writeLatch()
+        _ = try await scene.sqliteLoad()               // a writer's first load fills the display tables (as the master's did)
+        scene.model.applyReadOnlyMode(true)            // the role is known before the launch, as on the M5
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        #expect(scene.model.catalogCutover.committer == nil, "a viewer never opens its own catalog.sqlite (QA r1 F2)")
+        scene.model.records = try await scene.sqliteLoad().records   // what the synced snapshot shows
+        #expect(scene.model.saveCatalogNow() == false, "the viewer's save is refused — what the quit used to read as data at risk")
+        try scene.record(.healthy).userNotes = "a viewer's launch-time change"
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5)
+        guard case .readOnlySession(let words) = outcome else { Issue.record("expected no copy, got \(outcome)"); return }
+        #expect(words.contains("viewer"), Comment(rawValue: words))
+        #expect(Self.recoveryCopies(in: scene.folder).isEmpty)
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("Catalog quit: app exit — this Mac is a viewer"), Comment(rawValue: log))
+        #expect(log.contains("no recovery copy is written"))
+        #expect(!log.contains("START recovery copy"))
+    }
+
+    @Test("ISOLATION: a viewer on the JSON store writes NO recovery copy either")
+    func aViewerOnJSONWritesNoCopy() async throws {
+        let scene = try QuitScene.make("quit_viewer_json"); defer { scene.cleanup() }
+        let model = scene.sandbox.model
+        model.records.first?.userNotes = "a viewer edit"
+        model.applyReadOnlyMode(true)
+        #expect(CatalogQuitRecovery.saveAtTermination(model: model, writerDeadline: 5)
+                == .readOnlySession(words: CatalogReadOnlyFacts(viewerRole: true).readOnlyWords ?? ""))
+        #expect(Self.recoveryCopies(in: scene.folder).isEmpty)
+        #expect(!scene.log().contains("START recovery copy"))
+    }
+
+    @Test("under catalog.sqlite a failed quit commit still writes the copy, with the committer's reason, and never says rename it to catalog.json")
+    func theMasterUnderSQLiteNeverSaysRenameToCatalogJSON() async throws {
+        let scene = try CutoverScene.make("quit_master_sqlite"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let committer = try #require(scene.model.catalogCutover.committer)
+        try scene.record(.healthy).userNotes = "not committed at quit"
+        committer.block("a test refusal")
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5)
+        guard case .recoveryCopy(let url) = outcome else { Issue.record("expected a recovery copy, got \(outcome)"); return }
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("not committed at quit"))
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("could not be saved: the catalog can't save (a test refusal)"), Comment(rawValue: log))
+        #expect(!log.contains("could not be saved: unknown"))
+        #expect(log.contains("beside catalog.sqlite (the older JSON catalog format"))
+        #expect(log.contains("do NOT rename it to catalog.json"))
+        #expect(!log.contains("rename the copy to catalog.json"))
+        let notice = try #require(CatalogQuitRecovery.launchNotice(catalogURL: scene.catalogURL))
+        #expect(notice.contains("catalog.sqlite is the catalog"))
+        #expect(!notice.contains("rename the copy to catalog.json"))
+    }
+
+    @Test("SENSOR: the quit's one copy writer sits behind the read-only gate")
+    func theCopyWriterIsBehindTheGate() throws {
+        let code = try CatalogQuitRecoverySensorTests.code("App/CatalogQuitRecovery.swift")
+        #expect(code.contains("private static func writeCopyBlocking("))
+        let gate = try #require(code.range(of: "if let readOnly = model.readOnlyFacts.readOnlyWords {"))
+        let firstWrite = try #require(code.range(of: "return writeCopyBlocking("))
+        #expect(gate.lowerBound < firstWrite.lowerBound, "the read-only gate comes before any copy")
+    }
+
     @Test("P2: holdWrites is BOUNDED — an admitted save that does not drain gives the hold back within the bound (.writerStalled)")
     func theHoldGivesUpOnAStalledSave() async throws {
         let scene = try QuitScene.make("stallhold"); defer { scene.cleanup() }

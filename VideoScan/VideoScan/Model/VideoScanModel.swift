@@ -52,6 +52,10 @@ final class VideoScanModel: ObservableObject {
     /// Why the session is read-only, one fact per owner (launch, role,
     /// Switch). See CatalogReadOnlyFacts.swift.
     private(set) var readOnlyFacts = CatalogReadOnlyFacts()
+    /// Edits accepted while this session was writable did not reach
+    /// catalog.sqlite when it became read-only (codex cycle #116 F1): the
+    /// quit must still rescue them. nil = nothing at risk from that switch.
+    private(set) var unsavedFromWritableSession: String?
 
     /// Relocate Bucket E: is a witness an independent copy, off the drive
     /// being emptied? Production compares devices + inodes. Test seam only:
@@ -1068,19 +1072,8 @@ final class VideoScanModel: ObservableObject {
 
     /// Cutover B2: set once catalog.sqlite is the authority — its committer
     /// then takes every save funnel below (CatalogCommitter.swift); the
-    /// JSON store above is frozen. Also the Switch sheet's state.
+    /// JSON store above is frozen.
     let catalogCutover = CatalogCutoverState()
-
-    /// Live-reload polling task — set by `startLiveDossierReload()` in
-    /// VideoScanModel+LiveReload.swift, cancelled by
-    /// `stopLiveDossierReload()`. nil when the live reload is not
-    /// active (e.g. tests, viewer mode).
-    var liveReloadTask: Task<Void, Never>?
-
-    /// Mtime watermark for the live-reload polling loop. Set to the
-    /// catalog file's mtime at launch (so the first tick doesn't
-    /// re-merge what we just loaded) and on every successful merge.
-    var lastLiveReloadMtime: Date?
 
     /// Date-inference pass memory (VideoScanModel+DateInference, codex
     /// #1415): record id → fingerprint of the stored evidence that a
@@ -1174,96 +1167,9 @@ final class VideoScanModel: ObservableObject {
         // Signatures / Embedded Dates pass reads "running" on every surface
         // and stays out of "Update everything stale".
         catalogFreshness.observeEngines(of: self)
-        // Restore previously-scanned records so the user can browse the
-        // catalog even when source volumes are offline. Cutover B1: the
-        // launch rule picks catalog.json (today's path, unchanged) unless
-        // the SQLite switch was made — CatalogAuthorityFlip.swift.
-        let restored = loadCatalogAtLaunch()
-        // Master Archive designation rides the same snapshot (additive
-        // key) — adopt it before anything else reads `masterArchive`.
-        // Test hosts: the shared store never loads, and its `masterArchive`
-        // slot is a process-wide mirror that an earlier test's model may
-        // have written — a fresh model must not inherit it (same narrow
-        // gate as CatalogStore.load()).
-        if !(Self.isRunningTests && catalogStore === CatalogStore.shared) {
-            masterArchive = catalogStore.masterArchive
-        }
-        reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
-        publishFamilyAssetConfiguration()
-        if !restored.isEmpty {
-            records = restored
-            log("Restored \(restored.count) records from previous session.")
-            // One UUID = one record. Repairs the 8/17 duplicate-id incident
-            // and any future re-append; see +RecordIdentityRepair.
-            repairDuplicateRecordIDs()
-            // Migrate: backfill lifecycleStage for records that predate the field.
-            var migrated = 0
-            for rec in records where rec.lifecycleStage == .cataloged {
-                if rec.archiveStage >= .masterAssigned {
-                    rec.lifecycleStage = .archived
-                    migrated += 1
-                } else if rec.mediaDisposition != .unreviewed {
-                    rec.lifecycleStage = .reviewing
-                    migrated += 1
-                }
-            }
-            // Phase 0 (Rick 2026-06-15): backfill dossier propagation
-            // across MD5-identical duplicate records. Different scans of
-            // the same physical file (Whisper non-determinism) produce
-            // divergent transcripts; this harmonizes them by picking the
-            // longest/best result per MD5 group and applying to all
-            // members. Idempotent — re-running on an already-harmonized
-            // catalog is a no-op (0 records mutated, no save).
-            //
-            // First, one-shot cleanup of the pre-2026-06-30 smear
-            // corruption: unreadable/ffprobe-failed records that earlier
-            // builds smeared hallucinated dossier content onto (no
-            // dossierProcessedAt stamp). Gated so it runs exactly once;
-            // prior content is quarantined to a JSON sidecar for undo.
-            cleanupSmearedDossiersOnUnreadableRecords()
-            backfillDossierAcrossDuplicates()
-            // Rick 2026-09-12 (NV12): the backfill above carries OCR /
-            // transcript / captions between copies but never the DATE
-            // they imply, and nothing re-derived it — so one copy of the
-            // same bytes showed 1991 and the other 2026. Catch up every
-            // record that has evidence but no conclusion, then share
-            // dates across each content group. Bounded, one log line.
-            //
-            // codex #1413 (2026-09-12 evening): the first version of that
-            // pass keyed groups on duplicateGroupID and persisted 558
-            // dates onto heuristic siblings whose bytes differ. Unwind
-            // them first — reversible (sidecar under App Support/VideoScan/
-            // date-inference/), idempotent, machine data only — so the
-            // verified pass below re-dates only what it can prove.
-            unwindUnverifiedPropagatedDates(trigger: "load")
-            catchUpInferredDates(trigger: "load")
-            if migrated > 0 {
-                log("Migrated \(migrated) records to lifecycleStage.")
-                saveCatalogDebounced()   // one funnel (B2.1)
-            }
-        }
-        // Backfill: for any scan target that has zero records in the restored
-        // snapshot, pull whatever the SQLite metadata cache has under that
-        // path. This covers volumes scanned by builds older than catalog.json
-        // persistence — without this, View Catalog shows (0) for offline
-        // volumes even though the ffprobe cache is full of their files.
-        var backfilled = 0
-        for t in scanTargets where !t.searchPath.isEmpty {
-            // Don't backfill volumes whose catalog was explicitly deleted
-            if t.phase == .noCatalog { continue }
-            let already = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
-            if already { continue }
-            let cached = metadataCache.allRecordsWithPrefix(t.searchPath)
-            if !cached.isEmpty {
-                records.append(contentsOf: cached)
-                backfilled += cached.count
-                log("Backfilled \(cached.count) records for \(URL(fileURLWithPath: t.searchPath).lastPathComponent) from metadata cache.")
-            }
-        }
-        if backfilled > 0 {
-            // Persist the merged set so subsequent launches skip the backfill.
-            saveCatalogDebounced()   // one funnel (B2.1)
-        }
+        // The launch restore (moved out of init unchanged, 2026-10-21, so a
+        // test drives the exact code init runs — codex review of slice 2).
+        restoreCatalogAtLaunch()
         // One-time notes → userNotes split (2026-07-23): move legacy
         // human text out of the machine `notes` field. Runs over the
         // FULL assembled set (restored + backfilled) and BEFORE the
@@ -1478,13 +1384,129 @@ final class VideoScanModel: ObservableObject {
         log("Deleted all \(count) catalog record(s).")
     }
 
+    /// What init restores at launch: the catalog (the launch rule,
+    /// CatalogAuthorityFlip), the designation, the restored records' launch
+    /// migrations, and the metadata-cache backfill. Called once, from init;
+    /// internal so tests run the same code init runs.
+    func restoreCatalogAtLaunch() {
+        // Restore previously-scanned records so the user can browse the
+        // catalog even when source volumes are offline. Cutover B1: the
+        // launch rule picks catalog.json (today's path, unchanged) unless
+        // the SQLite switch was made — CatalogAuthorityFlip.swift.
+        let restored = loadCatalogAtLaunch()
+        // Master Archive designation rides the same snapshot (additive
+        // key) — adopt it before anything else reads `masterArchive`.
+        // Test hosts: the shared store never loads, and its `masterArchive`
+        // slot is a process-wide mirror that an earlier test's model may
+        // have written — a fresh model must not inherit it (same narrow
+        // gate as CatalogStore.load()).
+        if !(Self.isRunningTests && catalogStore === CatalogStore.shared) {
+            masterArchive = catalogStore.masterArchive
+        }
+        reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
+        publishFamilyAssetConfiguration()
+        if !restored.isEmpty {
+            records = restored
+            log("Restored \(restored.count) records from previous session.")
+            // One UUID = one record. Repairs the 8/17 duplicate-id incident
+            // and any future re-append; see +RecordIdentityRepair.
+            repairDuplicateRecordIDs()
+            // Migrate: backfill lifecycleStage for records that predate the field.
+            var migrated = 0
+            for rec in records where rec.lifecycleStage == .cataloged {
+                if rec.archiveStage >= .masterAssigned {
+                    rec.lifecycleStage = .archived
+                    migrated += 1
+                } else if rec.mediaDisposition != .unreviewed {
+                    rec.lifecycleStage = .reviewing
+                    migrated += 1
+                }
+            }
+            // Phase 0 (Rick 2026-06-15): backfill dossier propagation
+            // across MD5-identical duplicate records. Different scans of
+            // the same physical file (Whisper non-determinism) produce
+            // divergent transcripts; this harmonizes them by picking the
+            // longest/best result per MD5 group and applying to all
+            // members. Idempotent — re-running on an already-harmonized
+            // catalog is a no-op (0 records mutated, no save).
+            //
+            // First, one-shot cleanup of the pre-2026-06-30 smear
+            // corruption: unreadable/ffprobe-failed records that earlier
+            // builds smeared hallucinated dossier content onto (no
+            // dossierProcessedAt stamp). Gated so it runs exactly once;
+            // prior content is quarantined to a JSON sidecar for undo.
+            cleanupSmearedDossiersOnUnreadableRecords()
+            backfillDossierAcrossDuplicates()
+            // Rick 2026-09-12 (NV12): the backfill above carries OCR /
+            // transcript / captions between copies but never the DATE
+            // they imply, and nothing re-derived it — so one copy of the
+            // same bytes showed 1991 and the other 2026. Catch up every
+            // record that has evidence but no conclusion, then share
+            // dates across each content group. Bounded, one log line.
+            //
+            // codex #1413 (2026-09-12 evening): the first version of that
+            // pass keyed groups on duplicateGroupID and persisted 558
+            // dates onto heuristic siblings whose bytes differ. Unwind
+            // them first — reversible (sidecar under App Support/VideoScan/
+            // date-inference/), idempotent, machine data only — so the
+            // verified pass below re-dates only what it can prove.
+            unwindUnverifiedPropagatedDates(trigger: "load")
+            catchUpInferredDates(trigger: "load")
+            if migrated > 0 {
+                log("Migrated \(migrated) records to lifecycleStage.")
+                saveCatalogDebounced()   // one funnel (B2.1)
+            }
+        }
+        // Backfill: for any scan target that has zero records in the restored
+        // snapshot, pull whatever the SQLite metadata cache has under that
+        // path. This covers volumes scanned by builds older than catalog.json
+        // persistence — without this, View Catalog shows (0) for offline
+        // volumes even though the ffprobe cache is full of their files.
+        // Codex cycle #116 F2: only a writable catalog.sqlite session
+        // backfills. A launch that opened no catalog (a viewer with nothing
+        // synced, no latch, refused) must not show stale cache rows as its
+        // catalog, and a read-only one could not keep them.
+        let mayBackfill = catalogCutover.committer != nil && readOnlyFacts.readOnlyWords == nil
+        var backfilled = 0
+        for t in scanTargets where mayBackfill && !t.searchPath.isEmpty {
+            // Don't backfill volumes whose catalog was explicitly deleted
+            if t.phase == .noCatalog { continue }
+            let already = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
+            if already { continue }
+            let cached = metadataCache.allRecordsWithPrefix(t.searchPath)
+            if !cached.isEmpty {
+                records.append(contentsOf: cached)
+                backfilled += cached.count
+                log("Backfilled \(cached.count) records for \(URL(fileURLWithPath: t.searchPath).lastPathComponent) from metadata cache.")
+            }
+        }
+        if backfilled > 0 {
+            // Persist the merged set so subsequent launches skip the backfill.
+            saveCatalogDebounced()   // one funnel (B2.1)
+        }
+    }
+
     /// Apply the viewer/master ROLE. Called by VideoScanApp (and the
     /// audit CLI) once CatalogSync has decided the mode — after the
     /// launch already decided. The role only ADDS read-only: `false`
     /// (master) never clears what the launch or a Switch decided. Idempotent.
     func applyReadOnlyMode(_ viewer: Bool) {
+        if viewer { settleEditsBeforeTheSessionTurnsReadOnly() }
         updateReadOnlyFacts { $0.viewerRole = viewer }
         publishFamilyAssetConfiguration()
+    }
+
+    /// Codex cycle #116 F1: a WRITABLE session about to become read-only
+    /// commits what it accepted first; if that commit fails, the quit's
+    /// rescue stays armed (`unsavedFromWritableSession`). A session that is
+    /// already read-only, or has no committer, has nothing of this kind.
+    private func settleEditsBeforeTheSessionTurnsReadOnly() {
+        guard readOnlyFacts.readOnlyWords == nil, let committer = catalogCutover.committer else { return }
+        if committer.commitNow() { return }
+        let why = committer.saveRefusal() ?? "catalog.sqlite did not take the commit"
+        unsavedFromWritableSession = why
+        catalogAuthorityNote("the session turned read-only with changes not in catalog.sqlite — \(why); "
+                             + "the quit will write a recovery copy")
     }
 
     /// THE one writer of `isReadOnly` and `catalogStore.isReadOnly`: the
@@ -1495,6 +1517,11 @@ final class VideoScanModel: ObservableObject {
         change(&readOnlyFacts)
         isReadOnly = readOnlyFacts.modelReadOnly
         catalogStore.isReadOnly = readOnlyFacts.storeReadOnly
+        // QA r1 F5: the side stores' JSON files follow the same facts — a
+        // read-only session (a viewer, a launch with no catalog) writes none.
+        // The shared Events store only outside a test host (one per app).
+        ignoredContentStore.sessionRefusal = readOnlyFacts.readOnlyWords
+        if !Self.isRunningTests { EventsDecisionStore.shared.sessionRefusal = readOnlyFacts.readOnlyWords }
     }
 
     /// Persist the current records array. Debounced; bursts of mutations

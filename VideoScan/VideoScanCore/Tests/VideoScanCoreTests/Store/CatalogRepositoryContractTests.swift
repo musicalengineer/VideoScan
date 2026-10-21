@@ -1,6 +1,7 @@
 // CatalogRepositoryContractTests.swift
-// The SAME tests against both CatalogRepository implementations (GRDB and
-// the read-only JSON stub), wherever the operation is defined for both:
+// The CatalogRepository contract, parameterized over the store kinds (GRDB
+// alone since the read-only JSON stub was retired 2026-10-20), wherever the
+// operation is defined for every kind:
 // open outcomes, generation, read, verify, close. Write / adopt /
 // high-water are GRDB-only and live in GRDBCatalogRepositoryTests.
 //

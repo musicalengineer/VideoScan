@@ -28,8 +28,9 @@ import VideoScanCore
 //              until it consults the seam or is justified
 //   media      Link Repaired Copy over a real probed mov (ffmpeg fixture)
 //
-// The two QA pins (P3-b LiveReload, P3-c DuplicateEnrichment) live in
-// QADossierAdmissionRedTests and are now ordinary passing tests.
+// The QA pin P3-c (DuplicateEnrichment) lives in QADossierAdmissionRedTests
+// and is an ordinary passing test. (P3-b, LiveReload, left with the JSON
+// live dossier reload, 2026-10-20.)
 
 @MainActor
 @Suite("Archived dates are read-only in every writer (2026-10-11)", .serialized)
@@ -227,20 +228,6 @@ struct ArchivedDateReadOnlyTests {
 
     // MARK: - Controls for the two QA pins (the guard is not over-broad)
 
-    @Test func liveReloadStillDatesACatalogedRow() throws {
-        let sb = try F.Sandbox("livereload-control")
-        defer { sb.cleanup() }
-        let t = sb.record("test_live.mov", stage: .cataloged, onDisk: false)
-        t.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
-        sb.model.records = [t]
-        let fresh = VideoRecord()
-        fresh.fullPath = t.fullPath; fresh.filename = t.filename
-        fresh.inferredRecordDate = F.utc(1991); fresh.inferredDateConfidence = 0.95
-        fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_800_000_000)
-        _ = sb.model.mergeDossierFields(from: [fresh])
-        #expect(t.inferredRecordDate == F.utc(1991))
-    }
-
     @Test func duplicateEnrichmentStillDatesACatalogedKeeper() throws {
         let sb = try F.Sandbox("dupenrich-control")
         defer { sb.cleanup() }
@@ -375,12 +362,7 @@ struct ArchivedDateReadOnlyTests {
         sb.model.applyDossier(DossierExtraction(scenes: [SceneCaption(timestamp: 1, text: "Christmas 1991")],
                                                 dates: [], texts: []),
                               to: t.fullPath, vlmModel: "stub-sensor", transcript: "it is 1991", whisperModel: "w")
-        // External merger (live reload).
-        let fresh = VideoRecord()
-        fresh.fullPath = t.fullPath; fresh.filename = t.filename
-        fresh.inferredRecordDate = F.utc(1992); fresh.inferredDateConfidence = 0.95
-        fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_900_000_000)
-        _ = sb.model.mergeDossierFields(from: [fresh])
+        // (The external merger — JSON live reload — was retired 2026-10-20.)
         // Duplicate delete folds (machine + human).
         _ = sb.model.applyEnrichmentInheritance(from: twin, to: t)
         _ = sb.model.applyHumanMetadataInheritance(from: twin, to: t)
@@ -403,7 +385,6 @@ struct ArchivedDateReadOnlyTests {
     static let reviewedDateWriters: [String: String] = [
         // Routed through the seam.
         "Catalog/VideoScanModel+DateInference.swift": "catch-up pass (pass.archived), #1413 unwind + re-anchor, reapply — all isDateReadOnly",
-        "Catalog/VideoScanModel+LiveReload.swift": "external merger — isDateReadOnly (QA P3-b)",
         "MediaOps/VideoScanModel+DuplicateEnrichment.swift": "duplicate-delete enrichment — isDateReadOnly (QA P3-c)",
         "Archive/VideoScanModel+DateReadOnly.swift": "carryHandEnteredDate — the seam's own carry rule",
         "ArchiveAngel/Promote/ArchiveAngelFamilyStamp.swift": "stampDateIfMissing — called only via ArchiveAngelFamilyFacts.stampDate, which consults the seam",

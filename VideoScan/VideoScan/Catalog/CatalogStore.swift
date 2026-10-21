@@ -632,26 +632,6 @@ final class CatalogStore {
         lock.release()
     }
 
-    /// Adopt the on-disk generation after in-memory state has been
-    /// RECONCILED with the file — i.e. the live dossier reload decoded the
-    /// current catalog.json and merged its fields onto our records. This
-    /// is the design doc's "reconcile-then-save" path: a cooperating
-    /// external writer (merge_dossier_jsonl) bumps `generation`; without
-    /// this call the OCC guard would then refuse every save for the rest
-    /// of the session. Only ever moves forward. Callers MUST have merged
-    /// first — adopting without merging is exactly the lost update the
-    /// guard exists to prevent.
-    func adoptOnDiskGenerationAfterReconcile() {
-        let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
-        if onDisk > loadedGeneration {
-            catalogStoreLog.info("catalog OCC: adopting on-disk generation \(onDisk) after live reconcile (was \(self.loadedGeneration))")
-            loadedGeneration = onDisk
-            if onDisk > generationFloor {
-                generationFloor = CatalogGenerationSidecar.recordMax(onDisk, besideCatalogAt: fileURL)
-            }
-        }
-    }
-
     /// Release ownership on orderly shutdown. The kernel releases it anyway
     /// if we die without getting here — that is the point of flock.
     func relinquishLock() {
@@ -718,7 +698,12 @@ final class CatalogStore {
         // known even if decode falls back to .prev — and even if there is
         // no catalog.json at all: a catalog that carried generation N
         // before must not restart at 1 just because the file was removed.
-        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL)
+        // Defence in depth (QA r1 F1, 2026-10-21): a READ-ONLY store writes
+        // nothing beside the catalog — no sidecar bootstrap or advance, no
+        // .prev rotation — whoever calls load().
+        generationFloor = isReadOnly
+            ? (CatalogGenerationSidecar.read(besideCatalogAt: fileURL) ?? 0)
+            : CatalogGenerationSidecar.load(besideCatalogAt: fileURL)
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             NSLog("VideoScan: CatalogStore.load() — no catalog file at %@", fileURL.path)
             lastLoadOutcome = .missing
@@ -750,8 +735,9 @@ final class CatalogStore {
                                       probed: lastPrimaryProbe,
                                       source: fileURL.lastPathComponent)
             // Rotate primary → .prev on every successful load. Copy (not move)
-            // so primary stays in place; replace any stale .prev.
-            rotateBackup()
+            // so primary stays in place; replace any stale .prev. Never from
+            // a read-only store (see above).
+            if !isReadOnly { rotateBackup() }
             masterArchive = master
             persistedMasterArchive = master
             acceptedMasterArchive = master
@@ -886,7 +872,7 @@ final class CatalogStore {
             lastGenerationAnomaly = msg
             NSLog("VideoScan: %@", msg)
             catalogStoreLog.fault("\(msg, privacy: .public)")
-        } else if loadedGeneration > generationFloor {
+        } else if loadedGeneration > generationFloor, !isReadOnly {
             generationFloor = CatalogGenerationSidecar.recordMax(loadedGeneration, besideCatalogAt: fileURL)
         }
     }
@@ -941,33 +927,6 @@ final class CatalogStore {
         guard let (records, version, _, _) = decode(url: URL(fileURLWithPath: path)),
               version <= CatalogSnapshot.currentVersion else { return nil }
         return records
-    }
-
-    /// The records currently in catalog.json (or .prev when the primary is
-    /// unreadable) for a READ-ONLY query, WITHOUT adopting the file as this
-    /// session's state (GH #167).
-    ///
-    /// `load()` is the SESSION load: it replaces the designation slot the
-    /// next save serialises, re-baselines the OCC generation and rotates
-    /// catalog.json → .prev. Person Finder used to call it at every job
-    /// start just to build a skip set, which nulled a designation set
-    /// inside the save debounce, reverted a rehomed one, adopted a foreign
-    /// writer's generation without merging (so our next save clobbered
-    /// it) and overwrote the one-generation-back backup. This read touches
-    /// none of that. Same test-host gate as `load()` for the shared store.
-    /// (≈ a const member function: it only reads the file.)
-    func readRecordsWithoutAdopting() -> [VideoRecord] {
-        if Self.isRunningTests && self === CatalogStore.shared { return [] }
-        let fm = FileManager.default
-        if fm.fileExists(atPath: fileURL.path),
-           let records = loadRecords(fromSnapshotAtPath: fileURL.path) {
-            return records
-        }
-        if fm.fileExists(atPath: backupURL.path),
-           let records = loadRecords(fromSnapshotAtPath: backupURL.path) {
-            return records
-        }
-        return []
     }
 
     /// Copy primary → .prev so the previous-good snapshot is preserved one
@@ -1773,8 +1732,11 @@ extension CatalogStore {
     /// `writeQueue`, so a stalled catalog save cannot hold it. The closure
     /// returns nil when the copy is durable, else the words. Not a catalog
     /// save: no hold, lock or generation check — it never touches catalog.json.
-    func recoveryCopyWriter(records: [VideoRecord]) -> @Sendable (URL) -> String? {
-        let payload = Self.makePayload(records: records, generation: currentGeneration, masterArchive: masterArchive)
+    /// `generation`: the header's stamp — the caller's catalog generation
+    /// (catalog.sqlite's under the SQLite authority, QA r1 F3); nil = this
+    /// store's own.
+    func recoveryCopyWriter(records: [VideoRecord], generation: Int? = nil) -> @Sendable (URL) -> String? {
+        let payload = Self.makePayload(records: records, generation: generation ?? currentGeneration, masterArchive: masterArchive)
         return { url in
             do {
                 let encoder = JSONEncoder()

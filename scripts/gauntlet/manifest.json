@@ -5335,7 +5335,6 @@
         "everyBackgroundWriterLeavesAnArchivedStageRowsDates",
         "humanMarkCarryLeavesAnArchivedKeepersDate",
         "linkRepairedCopyKeepsAnArchivedRowsDate",
-        "liveReloadStillDatesACatalogedRow",
         "reanchorSkipsArchivedStage",
         "reapplyNeverRestoresOntoAnArchivedStageRow",
         "repairOfAnArchivedOriginalStillTakesTheDate",
@@ -7110,7 +7109,6 @@
       "tests": [
         "testAcquireIsReentrantForSameInstance",
         "testAcquireSucceedsOnFreeLock",
-        "testAdoptOnDiskGenerationAfterReconcileUnblocksSaves",
         "testCatalogWithDuplicateRecordIDsStillLoads_keepingTheCurrentHome",
         "testChecksumOfA100kRecordSizedPayloadIsFast",
         "testErrorCodesAreStableAndDistinct",
@@ -9684,7 +9682,6 @@
         "folderYearPlaceholderGainingEvidenceSettles",
         "hundredThousand",
         "inferredSummary",
-        "liveReloadCarriesRangeAndReason",
         "logLineBreakdownSums",
         "modelUnderTestNeverReadsRealPeople",
         "noEvidenceIsNil",
@@ -17579,8 +17576,6 @@
         "identity_recipientTakesTheBestVERIFIEDDonorInABucket",
         "inferredDateSource_roundTripsThroughTheDTO_andIsOmittedWhenNil",
         "invariantStillCountsAGenuineGap",
-        "liveReload_carriesTheProvenanceField",
-        "liveReload_mergedRowSharesItsDateWithSiblingsInMemory",
         "ordinaryCopyIsDatedAndLeavesNothingBehind",
         "passNeverWritesOutsideTheScratchStore",
         "perf_allAlreadyDatedBucketIsLinear",
@@ -18066,38 +18061,6 @@
         "verifierKnowsTheSubjectsShortAndBridgedNames",
         "verifierLeavesTheDepartedAndUnknownAlone",
         "verifierRejectsAFinishedLifeForALivingSubject"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/LiveDossierReloadTests.swift",
-      "stage": "unit",
-      "suites": [
-        "LiveDossierReloadTests",
-        "CatalogCoverageTests",
-        "FleetStatsTests"
-      ],
-      "tests": [
-        "activeLabel",
-        "brandNewRecordsAppended",
-        "dossierFieldsCopyOver",
-        "emptyCatalog",
-        "emptyDir",
-        "emptyTranscriptDoesNotCount",
-        "hostStatEmpty",
-        "identityPreservedOnMergePass",
-        "lineCounts",
-        "missingPathAppendedAsNew",
-        "mixedChannels",
-        "multiRecordMatch",
-        "partialFiles",
-        "relinkedRecordIsMatchedByID",
-        "repairKeepsCurrentHome",
-        "sameVintageSkipped",
-        "skipUndossieredSnapshot",
-        "strongDatesThreshold",
-        "userFieldsPreserved"
       ]
     },
     {
@@ -21956,7 +21919,6 @@
       "tests": [
         "carryOverNeverSkipsARecipientWhoseAudioTheDonorNeverHad",
         "duplicateEnrichmentDoesNotDateAnArchivedStageKeeper",
-        "liveReloadMergeLeavesAnArchivedStageRowsDateAlone",
         "notSameDecisionSurvivesASameBytesHop",
         "perVolumeCoverageLineDoesNotCallOtherVolumesOffline",
         "pipelinedZeroSceneArchivedRowIsNotFlagged"
@@ -28859,7 +28821,6 @@
         "fileContentAndVolumeDoorsWriteTheirRowsAndTheCommitCountsThem",
         "finishingARunWithLyingCountersIsRefusedByTheTrigger",
         "quarantineKnowledgeAndDerivedDoorsWriteOneRowEach",
-        "theJSONReaderRefusesRecordReadingsByName",
         "theRelationDoorAnswersLandedAlreadyPresentAndRefused"
       ]
     },
@@ -29405,17 +29366,18 @@
         "databaseWithoutLatchIsInert",
         "displayStringsAndPairs",
         "journeyWordsAreUnchanged",
-        "jsonLaunchFollowsTheRole",
         "landedRowsKeepTheirFacts",
+        "latchLaunchesOnSQLite",
         "latchWithDamagedDatabaseRefuses",
         "latchWithGoodImportIsSQLite",
         "latchWithUnfinishedImportRefuses",
         "latchWithoutDatabaseRefuses",
-        "modelLoadsJSONWithoutLatch",
         "modelLoadsSQLiteWithLatch",
-        "modelRefusedIsJSONReadOnly",
+        "modelRefusedOpensNoCatalog",
+        "modelRefusesWithoutLatch",
+        "noLatchLaunchStaysReadOnlyBothWays",
         "normalSQLiteLaunchFollowsTheRole",
-        "nothingIsJSON",
+        "nothingIsNoLatch",
         "pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives",
         "quarantineAndCounts",
         "readOnlyHasOneWriter",
@@ -29424,7 +29386,9 @@
         "sqliteRecordsEqualJSONRecords",
         "theSeamIsOneLine",
         "unprovenRowsAreNotRecords",
-        "viewerLaunchOpensCatalogSQLiteReadOnly"
+        "viewerLaunchNeverOpensItsOwnCatalogSQLite",
+        "viewerWithNothingSynced",
+        "viewerWithSyncedSnapshotShowsIt"
       ]
     },
     {
@@ -30070,13 +30034,17 @@
       "tests": [
         "aBackwardClockStepWaitsAgain",
         "aClockThatKeepsSteppingBackGivesUp",
+        "aViewerOnJSONWritesNoCopy",
+        "aViewerUnderSQLiteWritesNoCopy",
         "anAcknowledgedSaveInFlightIsUnsaved",
         "anotherTokenIsHeld",
         "digestFindingNamesALiveDoor",
         "phaseVerdicts",
+        "theCopyWriterIsBehindTheGate",
         "theDelegateQuitWiring",
         "theHoldDrainsAnAdmittedSave",
         "theHoldGivesUpOnAStalledSave",
+        "theMasterUnderSQLiteNeverSaysRenameToCatalogJSON",
         "theNextLaunchSaysACopyIsThere",
         "theOwnerTokenPath",
         "theOwnersSavePasses",
@@ -30167,6 +30135,67 @@
       "tests": [
         "interruptedSealPublishesNothing",
         "writerHoldsThePublishThenPublishesOnce"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogJSONReadSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogJSONReadSensorTests"
+      ],
+      "tests": [
+        "theLiveReloadIsGone",
+        "theReadersAreReviewed",
+        "theSQLiteLaunchNeverLoadsTheJSON"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSQLiteLaunchNoJSONTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogSQLiteLaunchNoJSONTests",
+        "CatalogNoCatalogDoorsTests"
+      ],
+      "tests": [
+        "aClearedDesignationStaysCleared",
+        "aMissingDesignationIsSaid",
+        "eventsStoreRefusesInAReadOnlySession",
+        "ignoredContentRefusesInANoCatalogSession",
+        "theSQLiteLaunchNeedsNoCatalogJSON",
+        "theSQLiteLaunchTouchesNoJSONFile",
+        "validateWithoutLatchRefuses",
+        "verifyOnAViewerRefuses"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QASlice2RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QASlice2RedTests"
+      ],
+      "tests": [
+        "auditGenerationUnderSQLiteIsTheDatabases",
+        "refusedLaunchWritesNoJSONSideFile",
+        "viewerWithOwnLatchAndNoDatabaseNeverReadsJSON"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCodexSlice2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogCodexSlice2Tests"
+      ],
+      "tests": [
+        "noLatchLaunchDoesNotBackfillFromTheCache",
+        "roleSwitchCommitsPendingEdits",
+        "roleSwitchWithFailedCommitKeepsTheRescue",
+        "sideTableCommitMovesKnownGeneration",
+        "sqliteMasterStillBackfills",
+        "viewerLaunchDoesNotBackfillFromTheCache"
       ]
     }
   ],
@@ -31712,10 +31741,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/LiveDossierReloadTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanTests/LocalProbeGroupCatalogGateTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -32728,7 +32753,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2823,
+      "expected_floor": 2845,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [
@@ -33202,7 +33227,12 @@
         "VideoScanTests/CatalogPhaseLogicTests",
         "VideoScanTests/CatalogStoreHoldTests",
         "VideoScanTests/CatalogQuitRecoveryTests",
-        "VideoScanTests/CatalogQuitRecoverySensorTests"
+        "VideoScanTests/CatalogQuitRecoverySensorTests",
+        "VideoScanTests/CatalogJSONReadSensorTests",
+        "VideoScanTests/CatalogSQLiteLaunchNoJSONTests",
+        "VideoScanTests/CatalogNoCatalogDoorsTests",
+        "VideoScanTests/QASlice2RedTests",
+        "VideoScanTests/CatalogCodexSlice2Tests"
       ]
     },
     {
@@ -33504,9 +33534,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 235,
+      "expected_floor": 238,
       "name": "regression",
-      "package_expected_floor": 199,
+      "package_expected_floor": 198,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

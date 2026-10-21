@@ -8,14 +8,14 @@
 //           mark — the store flags the session for reopen). TODAY (pinned): a
 //           recovery copy of the WHOLE in-memory catalog is written beside
 //           catalog.json; catalog.sqlite is untouched; the committer stays
-//           blocked (no silent retry). PENDING (known issues): the quit's
-//           words carry the store's refusal (today "unknown"); the rescue
-//           holds only the delta; the person gets a Keep Open / Quit-and-keep-
+//           blocked (no silent retry); the quit's words carry the store's
+//           refusal, never "unknown" (slice 2, 2026-10-21). PENDING (known
+//           issues): the rescue holds only the delta (GH #356); the person gets a Keep Open / Quit-and-keep-
 //           rescue choice, which needs the commit tried in
 //           applicationShouldTerminate (willTerminate is too late to ask).
-//   Case 4  viewer quit: nothing is saved (pinned: catalog.sqlite is byte-
-//           identical). PENDING (slice 2, another branch): no recovery copy,
-//           no "could not be saved" alert lines — a viewer has nothing to save.
+//   Case 4  viewer quit: nothing is saved (catalog.sqlite is byte-identical),
+//           no recovery copy, no "could not be saved" lines — a viewer has
+//           nothing to save (slice 2, 2026-10-21).
 //
 // Five dimensions: LOGIC (above) · SCALE N/A (the quit's cost is pinned by
 // CatalogQuitRecoveryTests' bound) · MEDIA N/A · ISOLATION (CutoverScene
@@ -58,12 +58,12 @@ struct CatalogQuitCornerTests {
 
         let quitLine = log.components(separatedBy: "\n").first { $0.contains("app exit — the catalog could not be saved") } ?? ""
         #expect(!quitLine.isEmpty, Comment(rawValue: log))
-        withKnownIssue("pending (draft issue): under catalog.sqlite the quit's words read the frozen JSON store's lastWriteError — 'unknown' — not the committer's refusal") {
-            #expect(quitLine.contains("another writer published generation 99"), Comment(rawValue: quitLine))
-        }
+        // Slice 2: the words are the committer's refusal, not the frozen JSON store's "unknown".
+        #expect(quitLine.contains("another writer published generation 99"), Comment(rawValue: quitLine))
+        #expect(!quitLine.contains("could not be saved: unknown"), Comment(rawValue: quitLine))
         let rescued = try Self.recordCount(copy)
         print("[corner-quit] recovery copy holds \(rescued) of \(total) records; 1 changed")
-        withKnownIssue("pending: the rescue holds only the delta (the changed records), not the whole catalog") {
+        withKnownIssue("GH #356: the rescue holds only the delta (the changed records), not the whole catalog") {
             #expect(rescued == 1, "the rescue holds \(rescued) records; 1 was changed")
         }
     }
@@ -80,7 +80,7 @@ struct CatalogQuitCornerTests {
         }
     }
 
-    @Test("case 4: viewer quit — nothing saved (pinned); no recovery copy and no 'could not be saved' alert (pending, slice 2)")
+    @Test("case 4: viewer quit — nothing saved, no recovery copy, no 'could not be saved' line")
     func viewerQuitSavesNothingAndSaysNothing() async throws {
         let scene = try CutoverScene.make("corner_quit_viewer"); defer { scene.cleanup() }
         try await scene.importCatalog()
@@ -88,7 +88,8 @@ struct CatalogQuitCornerTests {
         _ = try await scene.sqliteLoad()                        // the master's display pass
         scene.model.applyReadOnlyMode(true)
         scene.model.records = scene.model.loadCatalogAtLaunch()
-        _ = try #require(scene.model.catalogCutover.committer)
+        #expect(scene.model.catalogCutover.committer == nil, "a viewer never opens its own catalog.sqlite (QA r1 F2)")
+        scene.model.records = try await scene.sqliteLoad().records   // what the synced snapshot shows
         let before = CornerFiles.catalogFingerprint(scene.databaseURL)
         let jsonBefore = try CornerFiles.sha256(scene.catalogURL)
 
@@ -98,11 +99,9 @@ struct CatalogQuitCornerTests {
         #expect(CornerFiles.catalogFingerprint(scene.databaseURL) == before, "a viewer's quit wrote to catalog.sqlite or a witness")
         #expect(try CornerFiles.sha256(scene.catalogURL) == jsonBefore, "a viewer's quit wrote catalog.json")
         let copies = CornerFiles.names(in: scene.folder, prefix: CatalogQuitRecovery.filePrefix)
-        withKnownIssue("slice 2 (other branch): a viewer's quit writes a recovery copy and says the catalog could not be saved") {
-            #expect(copies.isEmpty, "recovery copies on a viewer: \(copies)")
-            #expect(!log.contains("could not be saved"), "a viewer's quit raised the not-saved alert")
-            if case .recoveryCopy = outcome { Issue.record("a viewer's quit produced \(outcome)") }
-        }
+        #expect(copies.isEmpty, "recovery copies on a viewer: \(copies)")
+        #expect(!log.contains("could not be saved"), "a viewer's quit raised the not-saved alert")
+        guard case .readOnlySession = outcome else { Issue.record("a viewer's quit produced \(outcome)"); return }
     }
 
     /// `records` in a recovery copy (the catalog's own JSON format).

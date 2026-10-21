@@ -696,16 +696,11 @@ struct VideoScanApp: App {
                             }
                             catalogSync.startViewerAutoRefresh()
                         }
-                        // Live dossier reload — picks up new dossier
-                        // results written to catalog.json by external
-                        // workers (scripts/dossier_batch.py + merger)
-                        // without quitting the app. Polls every 30s.
-                        // On viewers, this composes with the auto-
-                        // refresh above: the rsync pulls a fresh
-                        // catalog.json, then this poll picks up the
-                        // dossier-channel changes from disk into
-                        // in-memory records.
-                        catalogModel.startLiveDossierReload()
+                        // (The live dossier reload — a 30 s poll that merged
+                        // catalog.json written by external workers into the
+                        // records — was retired 2026-10-20, JSON gone. It was
+                        // already off under catalog.sqlite; viewers no longer
+                        // receive catalog.json, and no script writes it.)
 
                         if !TestEnvironment.isTestHost,
                            !catalogSync.isReadOnly,

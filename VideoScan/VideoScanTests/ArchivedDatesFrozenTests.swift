@@ -132,8 +132,6 @@ struct ArchivedDatesFrozenTests {
         case rule3FolderYear
         /// applyDossier's own triangulation.
         case applyDossier
-        /// LiveReload.mergeDossierFields — an external merger's date.
-        case liveReloadMerge
         /// DuplicateEnrichment — the removed twin's inferred date.
         case duplicateEnrichment
         /// codex #1413 unwind of an unverified propagated date.
@@ -188,16 +186,6 @@ struct ArchivedDatesFrozenTests {
                                           dates: [ocr1991], texts: [])
                 _ = m.applyDossier(x, to: path, vlmModel: "vlm", transcript: nil, whisperModel: nil)
             }
-        case .liveReloadMerge:
-            t.inferredRecordDate = utc(1985); t.inferredDateConfidence = 0.9
-            t.inferredDateReason = "filed as 1985"
-            t.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
-            let fresh = record(t.directory, t.filename)   // matched by path
-            fresh.ocrDateCandidates = [ocr1991]
-            fresh.inferredRecordDate = utc(1991, 6, 21); fresh.inferredDateConfidence = 0.95
-            fresh.inferredDateReason = "on-screen date 1991-06-21 ×3"
-            fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_800_000_000)
-            action = { _ = m.mergeDossierFields(from: [fresh]) }
         case .duplicateEnrichment:
             let extra = record("/Volumes/Extra/tapes", "clip.mov")
             extra.inferredRecordDate = utc(1991, 6, 21); extra.inferredDateConfidence = 0.8
@@ -237,7 +225,7 @@ struct ArchivedDatesFrozenTests {
 
     /// The channels are metadata notes (Rick: "the system may add metadata
     /// notes"): they still land on an archived file; only the date is frozen.
-    @Test("dossier channels still land on an archived record", arguments: [Writer.applyDossier, .liveReloadMerge])
+    @Test("dossier channels still land on an archived record", arguments: [Writer.applyDossier])
     func channelsStillLandOnAnArchivedRecord(_ w: Writer) throws {
         let frozen = try Self.run(w, archived: true)
         #expect(frozen.rec.ocrDateCandidates == [Self.ocr1991])

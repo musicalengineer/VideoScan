@@ -110,8 +110,17 @@ final class EventsDecisionStore: ObservableObject {
     /// and this store is not attached to it: every folder change is refused
     /// — never written to events-decisions.json (codex #113 P1-4).
     var authorityRefusal: String? {
-        guard catalog == nil, CatalogAuthority.latchNamesSQLite(in: directory) else { return nil }
+        guard catalog == nil else { return nil }
+        if let session = sessionRefusal { return "folder changes refused — \(session); \(Self.filename) is never written" }
+        guard CatalogAuthority.latchNamesSQLite(in: directory) else { return nil }
         return CatalogAuthority.sideStoreRefusal("folder changes", file: Self.filename)
+    }
+
+    /// Why this SESSION may not write the JSON file (QA r1 F5, 2026-10-21):
+    /// set by the app's model from its read-only facts — a viewer, or a
+    /// launch that opened no catalog. Only the unattached (JSON) path.
+    var sessionRefusal: String? {
+        didSet { if sessionRefusal != oldValue { revision &+= 1 } }
     }
     /// What the page should say: a refusal, else the last failed save.
     var problem: String? { writeRefusal ?? lastSaveFailure }

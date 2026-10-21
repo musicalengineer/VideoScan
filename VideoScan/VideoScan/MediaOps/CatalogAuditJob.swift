@@ -529,7 +529,7 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         }
         let partial = totals.done < totals.planned
         // After `persist` above: the generation the run's own last save produced.
-        let generation = model.catalogStore.currentGeneration
+        let generation = await model.catalogGenerationNow()
         var line = totals.line
         let folders = totals.goneFoldersClause
         if !folders.isEmpty { line += " — " + folders }
