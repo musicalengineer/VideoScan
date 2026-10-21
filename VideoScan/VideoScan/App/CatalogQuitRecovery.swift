@@ -176,12 +176,19 @@ enum CatalogQuitRecovery {
                                   writerDeadline: TimeInterval = CatalogQuitRecovery.writerDeadline) -> SaveOutcome {
         // A read-only session saves nothing by design — no copy (a viewer
         // never writes one). Its refused commit is not data at risk.
+        let store = model.catalogStore
+        let pending = store.savesNotLanded
         if let readOnly = model.readOnlyFacts.readOnlyWords {
+            // Codex cycle #116 F1: a session that turned read-only after
+            // accepting edits it could not commit still rescues them.
+            if let why = model.unsavedFromWritableSession, (model.catalogCutover.committer?.changedRecordCount() ?? 1) > 0 {
+                let words = "changes accepted while this session was writable did not reach catalog.sqlite (\(why)); now \(readOnly)"
+                model.catalogQuitNote("app exit — \(words) — writing a recovery copy")
+                return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline)
+            }
             model.catalogQuitNote("app exit — \(readOnly); nothing is saved this session, so no recovery copy is written")
             return .readOnlySession(words: readOnly)
         }
-        let store = model.catalogStore
-        let pending = store.savesNotLanded
         guard store.writeQueueDrainsBlocking(within: writerDeadline) else {
             let words = "a catalog save has not finished within \(writerDeadline.quitWords) s (the writer is stalled)"
             model.catalogQuitNote("app exit — \(words); the synchronous save is SKIPPED — writing a recovery copy instead")

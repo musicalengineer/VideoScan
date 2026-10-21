@@ -52,6 +52,10 @@ final class VideoScanModel: ObservableObject {
     /// Why the session is read-only, one fact per owner (launch, role,
     /// Switch). See CatalogReadOnlyFacts.swift.
     private(set) var readOnlyFacts = CatalogReadOnlyFacts()
+    /// Edits accepted while this session was writable did not reach
+    /// catalog.sqlite when it became read-only (codex cycle #116 F1): the
+    /// quit must still rescue them. nil = nothing at risk from that switch.
+    private(set) var unsavedFromWritableSession: String?
 
     /// Relocate Bucket E: is a witness an independent copy, off the drive
     /// being emptied? Production compares devices + inodes. Test seam only:
@@ -1458,8 +1462,13 @@ final class VideoScanModel: ObservableObject {
         // path. This covers volumes scanned by builds older than catalog.json
         // persistence — without this, View Catalog shows (0) for offline
         // volumes even though the ffprobe cache is full of their files.
+        // Codex cycle #116 F2: only a writable catalog.sqlite session
+        // backfills. A launch that opened no catalog (a viewer with nothing
+        // synced, no latch, refused) must not show stale cache rows as its
+        // catalog, and a read-only one could not keep them.
+        let mayBackfill = catalogCutover.committer != nil && readOnlyFacts.readOnlyWords == nil
         var backfilled = 0
-        for t in scanTargets where !t.searchPath.isEmpty {
+        for t in scanTargets where mayBackfill && !t.searchPath.isEmpty {
             // Don't backfill volumes whose catalog was explicitly deleted
             if t.phase == .noCatalog { continue }
             let already = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
@@ -1482,8 +1491,22 @@ final class VideoScanModel: ObservableObject {
     /// launch already decided. The role only ADDS read-only: `false`
     /// (master) never clears what the launch or a Switch decided. Idempotent.
     func applyReadOnlyMode(_ viewer: Bool) {
+        if viewer { settleEditsBeforeTheSessionTurnsReadOnly() }
         updateReadOnlyFacts { $0.viewerRole = viewer }
         publishFamilyAssetConfiguration()
+    }
+
+    /// Codex cycle #116 F1: a WRITABLE session about to become read-only
+    /// commits what it accepted first; if that commit fails, the quit's
+    /// rescue stays armed (`unsavedFromWritableSession`). A session that is
+    /// already read-only, or has no committer, has nothing of this kind.
+    private func settleEditsBeforeTheSessionTurnsReadOnly() {
+        guard readOnlyFacts.readOnlyWords == nil, let committer = catalogCutover.committer else { return }
+        if committer.commitNow() { return }
+        let why = committer.saveRefusal() ?? "catalog.sqlite did not take the commit"
+        unsavedFromWritableSession = why
+        catalogAuthorityNote("the session turned read-only with changes not in catalog.sqlite — \(why); "
+                             + "the quit will write a recovery copy")
     }
 
     /// THE one writer of `isReadOnly` and `catalogStore.isReadOnly`: the

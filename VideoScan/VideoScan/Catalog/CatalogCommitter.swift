@@ -368,6 +368,7 @@ final class CatalogCommitter {
         if let why = saveRefusal() { return why }
         switch repository.writeBlocking(as: .ui, body) {
         case .committed(let generation):
+            knownGeneration = generation   // codex cycle #116 F3: the quit copy's header stamp
             sink("Catalog store: OUTCOME commit generation \(generation) via \(table.rawValue) — \(what)")
             return nil
         case .refused(let words):
