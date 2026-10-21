@@ -1080,7 +1080,11 @@
         "fullNamesFuseButALeadingMacIsAGivenName",
         "gedcomDisplayAndSurnameAreFusedWhileLookupsAcceptEitherSpelling",
         "lowercaseParticlesAreLeftAlone",
-        "spacedParticlesFuseInSurnames"
+        "spacedParticlesFuseInSurnames",
+        "fusedParticleSurnameSurvivesTheWriterRoundTrip",
+        "particleBeforeTheSlashFusesIntoTheSurnameSoTheDisplayedNameFindsThePerson",
+        "particleRunsAcrossTheSlashResolveToOneDisplayAndSurname",
+        "qaR1DisplayIsAFixedPointForEveryParticleShape"
       ]
     },
     {
@@ -27472,7 +27476,17 @@
         "test_theme_defaults_dark_and_respects_saved_choice",
         "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
         "test_without_a_summary_the_page_says_so_and_still_renders",
-        "test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone"
+        "test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone",
+        "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
+        "test_hallie_replay_revision_is_distinct_from_nightly_test_revision",
+        "test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly_results",
+        "test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes",
+        "test_passing_scoped_run_cannot_replace_full_suite_failure_or_freshness",
+        "test_poll_outage_preserves_machine_folder_and_uncertain_retry_identity",
+        "test_public_page_never_reads_or_writes_private_queue_even_with_poisoned_settings",
+        "test_refresh_invalid_or_unavailable_choices_cannot_submit",
+        "test_refresh_statuses_are_queue_evidence_and_escape_private_progress",
+        "test_refresh_uncertain_retry_reuses_key_and_accepts_already_running_request"
       ]
     },
     {
