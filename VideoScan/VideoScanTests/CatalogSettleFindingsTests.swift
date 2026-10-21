@@ -255,7 +255,7 @@ struct VerifyCatalogSQLiteTierTests {
     func sameGeneration() {
         let out = tier5(.read(7))
         #expect(out.tier.result == .ok)
-        #expect(out.catalogHash == nil)
+        #expect(out.tier.catalogFileUnchecked == 0)
         #expect(out.tier.summary.contains("catalog.sqlite at generation 7 — the findings describe it"), Comment(rawValue: out.tier.summary))
         #expect(!out.tier.summary.contains("catalog.json"))
     }

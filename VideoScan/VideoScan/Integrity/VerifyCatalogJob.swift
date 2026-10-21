@@ -28,8 +28,9 @@
 //   • Refused before any work: the shared catalog from a test host.
 //
 // Memory: the snapshot (~400 bytes per row → ~6 MB at 14k, ~40 MB at 100k,
-// freed at the end), at most IntegrityReport.findingsCap findings, one 1 MiB
-// buffer while the catalog file is hashed. Nothing grows with file size.
+// freed at the end), at most IntegrityReport.findingsCap findings. Nothing
+// grows with file size (the catalog.json hash, and its 1 MiB buffer, left
+// 2026-10-21).
 //
 // (For Rick: `Task.detached` ≈ handing a value to a worker thread and
 // awaiting its result; everything else in this class runs on the UI thread,
@@ -78,10 +79,9 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
     private(set) var task: Task<Void, Never>?
     private var stopRequested = false
     private var keptFindings = 0
-    /// Tier 5's hash of catalog.json (hashed once; the report carries it).
-    private var catalogHash: CatalogFileHash?
     /// Under catalog.sqlite: the store's generation when tier 5 ran (the
-    /// report's `catalogGeneration`; a WAL database is not byte-hashed).
+    /// report's `catalogGeneration`; a WAL database is not byte-hashed, and
+    /// catalog.json is never hashed — its tier-5 hash left 2026-10-21).
     private var sqliteGenerationAtTier5: Int?
 
     var title: String { Self.title }
@@ -177,7 +177,6 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
                 VerifyCatalogTiers.evaluate(tier, input: input)
             }.value
             if let found = outcome.constraintFindings { input.constraintFindings = found }
-            if let hash = outcome.catalogHash { catalogHash = hash }
             record(outcome, model: model)
         }
         await conclude(snapshot: snapshot, model: model)
@@ -280,21 +279,21 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
         }
     }
 
-    /// The hash is CERTIFIED only when the hashed file carries exactly the
-    /// snapshot's generation; a different one is `catalogChangedDuringRun`
-    /// (the run still completes — the findings stand for the snapshot's
-    /// generation, and the words say to run again).
+    /// catalog.sqlite's generation at tier 5 is the report's
+    /// `catalogGeneration`; a different one from the snapshot's is
+    /// `catalogChangedDuringRun` (the run still completes — the findings
+    /// stand for the snapshot's generation, and the words say to run
+    /// again). No file hash: `catalogSHA256` / `catalogByteCount` stay nil
+    /// and `catalogHashCertified` false (the report's schema keeps the keys
+    /// so older reports still read).
     private func buildReport(snapshot: VerifyCatalogSnapshot, outcome: IntegrityReport.Outcome) -> IntegrityReport {
         let now = Date()
-        let hash = catalogHash
-        let fileGeneration = snapshot.store == .sqlite ? sqliteGenerationAtTier5 : hash?.generation
+        let fileGeneration = snapshot.store == .sqlite ? sqliteGenerationAtTier5 : nil
         let changed = VerifyCatalogTiers.generationMismatch(snapshot: snapshot.catalogGeneration, file: fileGeneration) != nil
         return IntegrityReport(runID: id, startedAt: startedAt, verifiedAt: outcome == .completed ? now : nil,
                                outcome: outcome, catalogFile: snapshot.catalogFile,
                                snapshotGeneration: snapshot.catalogGeneration, catalogGeneration: fileGeneration,
-                               catalogSHA256: hash?.sha256, catalogByteCount: hash?.byteCount,
                                catalogChangedDuringRun: changed,
-                               catalogHashCertified: hash != nil && fileGeneration == snapshot.catalogGeneration,
                                rowsTotal: snapshot.rows.count, rowsLive: snapshot.liveCount,
                                elapsedSeconds: now.timeIntervalSince(startedAt),
                                tiers: tiers.sorted { $0.tier < $1.tier }, findings: findings, findingsTotal: findingsTotal)

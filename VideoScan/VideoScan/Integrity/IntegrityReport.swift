@@ -111,7 +111,8 @@ struct IntegrityTier: Codable, Equatable, Sendable, Identifiable {
     var summary: String
     /// Tier 5 only (QA 2026-10-20): of `couldNotCheck`, the part that is
     /// the catalog file itself — catalog.sqlite's generation could not be
-    /// read, or catalog.json could not be hashed (0 or 1). Carried
+    /// read (or, in reports before 2026-10-21, catalog.json could not be
+    /// hashed) (0 or 1). Carried
     /// explicitly so the band never derives it from kept findings, which
     /// the findings cap can drop. nil = not said (another tier, or a report
     /// written before 2026-10-20 — decoded as absent; additive key).
@@ -166,8 +167,12 @@ struct IntegrityReport: Codable, Equatable, Sendable {
     var catalogFile: String
     /// The generation the ROWS came from — what the findings describe.
     var snapshotGeneration: Int?
-    /// The generation in the FILE that was hashed.
+    /// catalog.sqlite's generation when tier 5 ran (before 2026-10-21 also:
+    /// the generation in a hashed catalog.json).
     var catalogGeneration: Int?
+    /// catalog.json's SHA-256 and size — written by no run since the hash
+    /// left (JSON gone, slice 2b, 2026-10-21); the keys stay so older
+    /// reports still read.
     var catalogSHA256: String?
     var catalogByteCount: Int64?
     /// The file's generation is not the snapshot's: a save landed during

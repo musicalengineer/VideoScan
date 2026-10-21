@@ -4,7 +4,9 @@
 // plus TRUTH:
 //   LOGIC     — every constraint rule red and green on synthetic rows (one
 //               test per rule); the tier evaluators from the stamps; the
-//               report's Codable shape; the catalog-file hash words.
+//               report's Codable shape. (The catalog.json hash and its
+//               words left with JSON gone, slice 2b, 2026-10-21; tier 5 and
+//               the job are pinned never to read catalog.json.)
 //   SCALE     — 100k rows + 2k events through `CatalogConstraints.check`
 //               inside a budget (the measured number is in the handoff).
 //   ISOLATION — a poisoned integrity-latest.json (garbage, a future schema)
@@ -14,8 +16,7 @@
 //   SENSOR    — the job's sources never call stampRemoval / clearRemoval /
 //               removeItem / trashItem / moveItem / write(to:) / Process(),
 //               never open a media file; the one writer is AtomicFilePublish
-//               in IntegrityReport.swift; the one FileHandle read is the
-//               catalog file's hash.
+//               in IntegrityReport.swift; no source opens a FileHandle.
 //   TRUTH     — the P0 shapes produce findings: a dangling derivedFrom, a
 //               `v1:` value in a sha256 fixity field, two live rows at one
 //               path, a Video+Audio row with a silent print, a promotion
@@ -526,7 +527,7 @@ struct VerifyCatalogTierTests {
         #expect(five.tier.result == .couldNotCheck(1))
         #expect(five.tier.couldNotCheck == 1)
         #expect(five.tier.needsDecision == 0)
-        #expect(five.tier.summary == "1 lineage links point at rows removed from the catalog — kept as history · every other relation holds (2 rows) · catalog.json is not on disk — nothing to hash")
+        #expect(five.tier.summary == "1 lineage links point at rows removed from the catalog — kept as history · every other relation holds (2 rows)")
     }
 
     @Test("tier 5: a supersededByID to a row removed from the catalog is a DECISION (the replacement may be lost) while a derivedFrom to a removed row stays UNVERIFIED — one rule, two phrases")
@@ -552,7 +553,7 @@ struct VerifyCatalogTierTests {
         #expect(five.tier.result == .couldNotCheck(1), "RED 2026-10-17 (codex P2): a reference-movie guess was a decision")
         #expect(five.tier.needsDecision == 0)
         #expect(five.findings.first?.needsDecision == false)
-        #expect(five.tier.summary == "1 files may be reference movies — Verify Media decides · every other relation holds (2 rows) · catalog.json is not on disk — nothing to hash")
+        #expect(five.tier.summary == "1 files may be reference movies — Verify Media decides · every other relation holds (2 rows)")
     }
 
     @Test("tiers 2 and 6 say not built; a stopped tier says so; every tier has a name")
@@ -591,30 +592,40 @@ struct VerifyCatalogTierTests {
         #expect(alone.summary == "1 Video+Audio files have no current sound print yet — Fingerprint Sound")
     }
 
-    @Test("ISOLATION: a catalog file that EXISTS but cannot be read is tier 5 'could not check' with the errno words — never ok, never 'not on disk'")
-    func unreadableCatalogFileIsCouldNotCheck() throws {
-        guard getuid() != 0 else { return }                           // root reads anything
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vc_unreadable_\(UUID().uuidString.prefix(8))", isDirectory: true)
+    /// JSON gone, slice 2b (2026-10-21): tier 5's catalog.json hash is gone.
+    /// A catalog.json beside the snapshot — readable or not, changed since
+    /// the last report or not — is never opened: no finding, no "could not
+    /// check", no words about it.
+    @Test("SENSOR: tier 5 never reads catalog.json — one beside the snapshot (unreadable, or changed since the last report) adds no finding, no gap and no words")
+    func tierFiveNeverReadsCatalogJSON() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vc_nojson_\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("catalog.json")
         try Data(#"{"version": 4, "generation": 5, "records": []}"#.utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
-        let inp = VerifyCatalogTiers.TierInput(snapshot: VerifyCatalogSnapshot(rows: [row()], events: [], catalogFile: url.path),
-                                               previous: nil, constraintFindings: nil, runID: UUID(), now: now)
+        // The last report hashed a DIFFERENT catalog.json at the SAME generation
+        // — the old hash comparison's "look" finding.
+        let previous = IntegrityReport(runID: UUID(), startedAt: now, outcome: .completed, catalogFile: url.path,
+                                       catalogGeneration: 5, catalogSHA256: String(repeating: "0", count: 64),
+                                       rowsTotal: 1, rowsLive: 1, elapsedSeconds: 1, tiers: [], findings: [], findingsTotal: 0)
+        let inp = VerifyCatalogTiers.TierInput(snapshot: VerifyCatalogSnapshot(rows: [row()], events: [], catalogFile: url.path,
+                                                                               catalogGeneration: 5),
+                                               previous: previous, constraintFindings: nil, runID: UUID(), now: now)
         let five = VerifyCatalogTiers.evaluate(5, input: inp)
-        #expect(five.tier.result == .couldNotCheck(1))
-        #expect(five.tier.couldNotCheck == 1)
-        #expect(five.tier.summary.contains("Permission denied"), Comment(rawValue: five.tier.summary))
-        #expect(!five.tier.summary.contains("not on disk"))
-        #expect(five.catalogHash == nil)
+        #expect(five.tier.result == .ok)
+        #expect(five.tier.couldNotCheck == 0)
+        #expect(five.tier.catalogFileUnchecked == 0)
+        #expect(five.findings.isEmpty, "\(five.findings)")
+        #expect(five.tier.summary == "every relation holds (1 rows)")
+        #expect(!five.tier.summary.contains("catalog.json"))
     }
 }
 
-// MARK: - Logic: the report and the catalog-file hash
+// MARK: - Logic: the report
 
-@Suite("Verify Catalog — the report file and the catalog hash")
+@Suite("Verify Catalog — the report file")
 struct VerifyCatalogReportTests {
 
     private func sampleReport(outcome: IntegrityReport.Outcome = .completed) -> IntegrityReport {
@@ -696,38 +707,6 @@ struct VerifyCatalogReportTests {
         #expect(IntegrityReportStore.read(besideCatalogAt: catalog).report?.findingsTotal == 522)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter(AtomicFilePublish.isTemporaryPublishArtifact)
         #expect(leftovers.isEmpty)
-    }
-
-    @Test("the catalog file's SHA-256 is streamed and equals a one-shot digest; the generation is read from the header")
-    func catalogFileHashStreams() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vc_hash_\(UUID().uuidString.prefix(8))", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("catalog.json")
-        var body = Data(#"{"version": 4, "generation": 1234, "savedAt": 0, "records": ["#.utf8)
-        body.append(Data(repeating: 0x20, count: 3 * CatalogFileHash.chunkBytes + 17))   // three chunks and a tail
-        body.append(Data("]}".utf8))
-        try body.write(to: url)
-        let h = try CatalogFileHash.of(fileAt: url)
-        #expect(h.sha256 == SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined())
-        #expect(h.byteCount == Int64(body.count))
-        #expect(h.generation == 1234)
-        #expect(CatalogFileHash.generation(inHeader: Data("{\"records\": []}".utf8)) == nil)
-    }
-
-    @Test("run to run: first run, unchanged, changed with a new generation (expected), changed with the same generation (a finding), unknown, not on disk")
-    func hashComparisonWords() {
-        let current = CatalogFileHash(sha256: "b", byteCount: 1, generation: 42)
-        #expect(CatalogFileHash.compare(previousSHA: nil, previousGeneration: nil, current: current) == .firstRun)
-        #expect(CatalogFileHash.compare(previousSHA: "b", previousGeneration: 42, current: current) == .unchanged)
-        #expect(CatalogFileHash.compare(previousSHA: "a", previousGeneration: 41, current: current) == .changedExpected(from: 41, to: 42))
-        #expect(CatalogFileHash.compare(previousSHA: "a", previousGeneration: 42, current: current) == .changedSameGeneration(42))
-        #expect(CatalogFileHash.compare(previousSHA: "a", previousGeneration: nil, current: current) == .changedGenerationUnknown)
-        #expect(CatalogFileHash.compare(previousSHA: "a", previousGeneration: 1, current: nil) == .notOnDisk)
-        #expect(CatalogFileHash.Comparison.changedSameGeneration(42).needsDecision)
-        #expect(!CatalogFileHash.Comparison.changedExpected(from: 41, to: 42).needsDecision)
-        #expect(CatalogFileHash.Comparison.changedExpected(from: 41, to: 42).words == "catalog.json changed (generation 41 → 42, expected)")
-        #expect(CatalogFileHash.Comparison.changedSameGeneration(42).words.contains("SAME generation (42) — look"))
     }
 
     @Test("publication order: the dated copy lands FIRST; when it cannot (its path is a directory) the write throws and the previous latest is untouched")
@@ -919,26 +898,29 @@ struct VerifyCatalogJobTests {
         #expect(!FileManager.default.fileExists(atPath: sb.model.catalogStore.fileLocation), "the job never saves the catalog")
     }
 
-    @Test("the second run compares the catalog file's hash: unchanged, then changed with a new generation (expected), then changed with the SAME generation — a finding")
-    func theSecondRunComparesTheCatalogHash() async throws {
+    /// JSON gone, slice 2b (2026-10-21): the job's catalog.json hash is gone.
+    /// It used to compare the file run to run and raise "changed with the
+    /// SAME generation"; now a catalog.json beside the catalog — even one
+    /// rewritten at the same generation between runs — is never read, and
+    /// the report carries no hash.
+    @Test("SENSOR: the job never hashes catalog.json — a file rewritten at the SAME generation between runs is no finding, and the report carries no hash")
+    func theJobNeverHashesCatalogJSON() async throws {
         let sb = try ShowAgainSandbox.make("vc_hash"); defer { sb.cleanup() }
         try sb.live("a.mov")
         let catalog = URL(fileURLWithPath: sb.model.catalogStore.fileLocation)
-        try Data(#"{"version": 4, "generation": 10, "records": []}"#.utf8).write(to: catalog)
+        try Data(#"{"version": 4, "generation": 11, "records": []}"#.utf8).write(to: catalog)
         let first = await runVerify(sb)
-        #expect(first.report?.catalogGeneration == 10)
-        #expect(first.report?.tier(5)?.summary.contains("first run") == true)
-        let second = await runVerify(sb)
-        #expect(second.report?.tier(5)?.summary.contains("unchanged") == true)
-        try Data(#"{"version": 4, "generation": 11, "records": [ ]}"#.utf8).write(to: catalog)
-        let third = await runVerify(sb)
-        #expect(third.report?.tier(5)?.summary.contains("generation 10 → 11, expected") == true)
-        #expect(third.report?.tier(5)?.result == .ok)
         try Data(#"{"version": 4, "generation": 11, "records": [  ]}"#.utf8).write(to: catalog)
-        let fourth = await runVerify(sb)
-        #expect(fourth.report?.tier(5)?.result == .needsDecision(1))
-        #expect(fourth.findingsByTier[5]?.first?.rule == VerifyCatalogTiers.catalogFileRule)
-        #expect(fourth.findingsByTier[5]?.first?.words.contains("SAME generation (11) — look") == true)
+        let second = await runVerify(sb)
+        for job in [first, second] {
+            let report = try #require(job.report)
+            #expect(report.tier(5)?.result == .ok)
+            #expect(job.findingsByTier[5]?.isEmpty ?? true, "\(job.findingsByTier[5] ?? [])")
+            #expect(report.tier(5)?.summary.contains("catalog.json") == false, Comment(rawValue: report.tier(5)?.summary ?? ""))
+            #expect(report.catalogSHA256 == nil && report.catalogByteCount == nil)
+            #expect(report.catalogGeneration == nil, "no file generation is read beside a catalog.json store")
+            #expect(!report.catalogHashCertified && !report.catalogChangedDuringRun)
+        }
     }
 
     @Test("ISOLATION: a read-only catalog folder — the run finishes its tiers, says 'report could not be written', still logs OUTCOME, ends Failed with the findings in hand")
@@ -973,7 +955,7 @@ struct VerifyCatalogJobTests {
         #expect(poisoned.problem == "integrity-latest.json can't be read: written by a newer VideoScan (schema 7) — not read")
         let job = await runVerify(sb)
         #expect(job.state == .finished(summary: job.subtitle))
-        #expect(job.report?.tier(5)?.summary.contains("first run") == true, "a poisoned report is no previous hash")
+        #expect(job.report?.tier(5)?.result == .ok, "a poisoned report is no previous report")
         #expect(IntegrityReportStore.read(besideCatalogAt: catalog).report?.runID == job.id, "the poisoned file was replaced")
         #expect(CatalogFreshnessFactsReader.read(catalogFile: catalog.path).integrity.problem == nil)
     }
@@ -1028,44 +1010,6 @@ struct VerifyCatalogJobTests {
         let facts = VideoScanModel.confirmedEventFacts(snapshot)
         #expect(facts.map(\.name) == ["Christmas"])
         #expect(facts.first?.memberKeys.count == 2, "the merged event's member now belongs to Christmas; the rejected one does not")
-    }
-
-    @Test("the findings and the catalog hash describe ONE generation: the snapshot carries the catalog's generation; a save between the snapshot and the hash tier (Pause, save, Resume — the snapshot is not retaken) is said out loud, the run completes, and the hash is not certified")
-    func findingsAndHashDescribeOneGeneration() async throws {
-        let sb = try ShowAgainSandbox.make("vc_generation"); defer { sb.cleanup() }
-        let catalog = URL(fileURLWithPath: sb.model.catalogStore.fileLocation)
-        try Data(#"{"version": 4, "generation": 10, "records": []}"#.utf8).write(to: catalog)
-        _ = sb.model.catalogStore.load()
-        #expect(sb.model.catalogStore.currentGeneration == 10)
-        try sb.live("a.mov")
-        let same = await runVerify(sb)
-        #expect(same.report?.outcome == .completed)
-        #expect(same.report?.tier(5)?.summary.contains("run again") == false)
-        #expect(same.report?.snapshotGeneration == 10)
-        #expect(same.report?.catalogHashCertified == true)
-        #expect(same.report?.catalogChangedDuringRun == false)
-        let job = VerifyCatalogJob(model: sb.model)
-        job.eventsForTesting = []
-        job.start()
-        job.pause()
-        try await Task.sleep(for: .milliseconds(200))               // the snapshot is taken; the job waits at the first tier boundary
-        try Data(#"{"version": 4, "generation": 11, "records": [ ]}"#.utf8).write(to: catalog)
-        job.resume()
-        await job.task?.value
-        let report = try #require(job.report)
-        #expect(report.outcome == .completed)
-        #expect(report.catalogGeneration == 11)
-        #expect(report.snapshotGeneration == 10)
-        #expect(report.catalogChangedDuringRun)
-        #expect(!report.catalogHashCertified)
-        #expect(report.catalogSHA256 != nil, "the hash is recorded, not certified")
-        #expect(report.tier(5)?.summary.contains("findings describe generation 10; the file on disk is generation 11 — run again") == true, Comment(rawValue: report.tier(5)?.summary ?? ""))
-        #expect(report.outcomeLine.contains("run again"), Comment(rawValue: report.outcomeLine))
-        #expect(sb.catalogLogText().contains("findings describe generation 10; the file on disk is generation 11"))
-        // Catalog Status reads it as yellow: the findings stand for generation 10, the file is 11.
-        let facts = IntegrityReportFacts.from(report: report)
-        #expect(facts.outcome == .ok)
-        #expect(facts.unverifiedWords?.contains("the catalog changed during the run: findings describe generation 10") == true)
     }
 
     @Test("ISOLATION: the dated copy cannot land (its path is a directory) — the job ends Failed, OUTCOME says so, and the previous latest is untouched")
@@ -1290,9 +1234,8 @@ struct VerifyCatalogStatusTests {
 struct VerifyCatalogSensorTests {
 
     static let reportFile = "IntegrityReport.swift"
-    static let hashFile = "CatalogFileHash.swift"
     static let sources = [
-        "CatalogConstraints.swift", hashFile, reportFile, "VerifyCatalogTiers.swift",
+        "CatalogConstraints.swift", reportFile, "VerifyCatalogTiers.swift",
         "VerifyCatalogJob.swift", "VerifyCatalogDetailView.swift",
     ]
 
@@ -1323,21 +1266,21 @@ struct VerifyCatalogSensorTests {
         }
     }
 
-    @Test("the ONE writer is AtomicFilePublish in IntegrityReport.swift (the latest and the dated copy); the ONE FileHandle read is the catalog file's hash")
-    func oneWriterOneRead() throws {
+    /// JSON gone, slice 2b (2026-10-21): the one FileHandle read was the
+    /// catalog.json hash (CatalogFileHash.swift); it is gone, and no Verify
+    /// source opens a file handle at all.
+    @Test("the ONE writer is AtomicFilePublish in IntegrityReport.swift (the latest and the dated copy); no Verify source opens a file handle — the catalog.json hash is gone")
+    func oneWriterNoFileHandle() throws {
         for name in Self.sources where name != Self.reportFile {
             #expect(!(try Self.code(name)).contains("AtomicFilePublish"), "\(name) writes a file")
         }
         let report = try Self.code(Self.reportFile)
         #expect(report.components(separatedBy: "AtomicFilePublish.write(").count == 3, "exactly two publishes: the latest and the dated copy")
         #expect(report.contains("to: latest, durability: .fullFsync"), "the latest survives a forced reboot")
-        for name in Self.sources where name != Self.hashFile {
+        for name in Self.sources {
             #expect(!(try Self.code(name)).contains("FileHandle("), "\(name) opens a file handle")
         }
-        let hash = try Self.code(Self.hashFile)
-        #expect(hash.components(separatedBy: "FileHandle(forReadingFrom:").count == 2, "one read handle, on the catalog file")
-        #expect(hash.contains("while let chunk = try handle.read(upToCount: chunkBytes)"), "streamed, never slurped")
-        #expect(!hash.contains("Data(contentsOf:"), "never the whole file in memory")
+        #expect(!SourceTree.appSources.contains { $0.relative.hasSuffix("CatalogFileHash.swift") }, "the catalog.json hasher is retired")
     }
 
     @Test("the job runs the tiers off the main actor on Sendable values, snapshots the rows in ONE pass, and logs through the one sink; the registry and the runner know the kind")
