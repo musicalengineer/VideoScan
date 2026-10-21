@@ -540,12 +540,13 @@ struct CutoverHoldTests {
         #expect(try scene.committer().changedRecordCount() == 0)
         #expect(try await scene.reloaded(.healthy).userNotes == "typed while Verify ran")
 
-        // 2. Another hold, an edit, then Quit: the quit path releases a hold
-        //    still up and saves (or writes a recovery copy).
-        _ = await model.catalogStore.holdWrites(reason: "Import to SQLite is reading the catalog", owner: CatalogWriteHoldOwner())
+        // 2. Another hold, an edit, the hold released, then Quit: the quit's
+        //    checked save lands it. (The quit's forced release of a hold left
+        //    with Import to SQLite, 2026-10-20 — no production job holds now.)
+        _ = await model.catalogStore.holdWrites(reason: "a test job is reading the catalog", owner: CatalogWriteHoldOwner())
         try scene.record(.stalePrint).starRating = 3
         model.saveCatalogDebounced()
-        ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0)
+        _ = model.catalogStore.releaseWriteHold()
         let outcome = CatalogQuitRecovery.saveAtTermination(model: model)
         #expect(outcome == .saved, Comment(rawValue: "\(outcome)"))
         try await scene.relaunch()
@@ -554,68 +555,11 @@ struct CutoverHoldTests {
     }
 }
 
-// MARK: - 8, 9: the Switch itself, and a restore + Adopt
+// MARK: - 9: a restore + Adopt (8, the Switch itself, retired with it 2026-10-20)
 
 @Suite("Cutover Switch and restore — the Switch carries the last edit; a restored catalog.sqlite is read-only until adopted", .serialized)
 @MainActor
 struct CutoverSwitchRestoreTests {
-
-    @Test("Switch with a rehearsal catalog.sqlite and an unsaved edit: the edit is in the new catalog, the rehearsal moved aside (all five files), catalog.json frozen, the designation carried, the latch written")
-    func switchCarriesPendingEdit() async throws {
-        let scene = try CutoverScene.make("reg_switch"); defer { scene.cleanup() }
-        let designation = try scene.writeDesignation(rootPath: "/Volumes/Archive/Breen_Family_Archive")
-        try await scene.importCatalog()                            // the rehearsal
-        let rehearsal = CatalogSwitch.rehearsalFiles(in: scene.folder).map(\.lastPathComponent).sorted()
-        #expect(rehearsal.count == 5, Comment(rawValue: rehearsal.joined(separator: ", ")))
-        let model = scene.model
-        model.records = model.loadCatalogAtLaunch()                // still on catalog.json (no latch)
-        #expect(model.catalogCutover.isSQLiteAuthority == false)
-        // The last edit before the switch, still in the JSON store's debounce.
-        let healthy = try scene.record(.healthy)
-        model.setUserNotes("typed just before Switch", for: healthy)
-        #expect(model.catalogStore.hasUnsavedChanges)
-
-        // The app's own switch environment; only the import is scripted (the
-        // fixture has no media for Audit/Verify to read): Verify and Audit
-        // "ran again" on the flushed bytes, then the real importer.
-        var env = model.catalogSwitchEnvironment(center: MediaFileOperationsCenter())
-        env.runImport = {
-            do { try scene.recertify(); try await scene.importCatalog(); return .imported } catch { return .notImported("\(error)") }
-        }
-        let phase = await CatalogSwitchRun.run(env)
-        guard case .done = phase else { Issue.record("expected .done, got \(phase)"); return }
-
-        // The rehearsal: moved, all five, into one dated folder.
-        let asides = try FileManager.default.contentsOfDirectory(at: scene.folder, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix(CatalogSwitch.rehearsalPrefix) }
-        #expect(asides.count == 1)
-        let aside = try #require(asides.first)
-        let moved = try FileManager.default.contentsOfDirectory(atPath: aside.path).sorted()
-        #expect(moved == rehearsal)
-        // catalog.json frozen: a save after the switch does not reach it.
-        #expect(model.catalogStore.isReadOnly)
-        let frozen = try scene.sha256(scene.catalogURL)
-        let late = try scene.record(.stalePrint)
-        model.setUserNotes("typed after Switch, before the quit", for: late)
-        #expect(model.saveCatalogNow() == false)
-        #expect(try scene.sha256(scene.catalogURL) == frozen)
-        // The latch, and the designation catalog.json carried.
-        #expect(FileManager.default.fileExists(atPath: scene.latchURL.path))
-        let launch = try #require(try? await SQLiteLaunchRead.read(scene.databaseURL).get())
-        await launch.repository.close()
-        #expect(CatalogCommitter.designation(fromJSON: launch.designationJSON) == designation)
-
-        // Quit, relaunch: on catalog.sqlite, with the edit.
-        try await scene.relaunch()
-        #expect(model.catalogCutover.isSQLiteAuthority)
-        #expect(try scene.record(.healthy).userNotes == "typed just before Switch")
-        // ADAPTED: a real launch is VideoScanModel.init — loadCatalogAtLaunch(),
-        // THEN `masterArchive = catalogStore.masterArchive` (VideoScanModel.swift:
-        // 1161-1169). The scene's relaunch re-runs only the first half, so assert
-        // the value init adopts: catalog_state's, set by adoptSQLiteAuthority
-        // (CatalogAuthorityFlip.swift:196).
-        #expect(model.catalogStore.masterArchive == designation)
-    }
 
     @Test("Restore an older catalog.sqlite backup: it opens read-only and says so; Adopt makes it writable; no edit made after the backup comes back")
     func restoreThenAdopt() async throws {

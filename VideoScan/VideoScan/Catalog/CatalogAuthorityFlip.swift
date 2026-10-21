@@ -18,8 +18,9 @@
 //                  and catalog.json opens READ-ONLY (two writable
 //                  authorities is the lost-update class the generation
 //                  guard exists for).
-// Only "Switch Catalog to SQLite…" (CatalogSwitchToSQLite.swift, B2) writes
-// the latch; nothing here writes catalog.json. B2: under `.sqlite` the
+// Only "Switch Catalog to SQLite…" (B2; retired 2026-10-20 once the switch
+// was done) wrote the latch; nothing in the app writes it now, and nothing
+// here writes catalog.json. B2: under `.sqlite` the
 // repository stays OPEN for the session and the save funnels commit
 // through it (CatalogCommitter); the Master Archive designation is read
 // from `catalog_state` (catalog.json's only while the store has none yet —
@@ -45,7 +46,8 @@ enum CatalogAuthority: Equatable, Sendable {
     case refused(String)
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
-    /// Written ONLY by the explicit "Switch Catalog to SQLite…" door (B2).
+    /// Written once, by the explicit "Switch Catalog to SQLite…" door (B2,
+    /// retired 2026-10-20 after the switch); nothing in the app writes it now.
     nonisolated static let latchFileName = "catalog.cutover"
 
     /// The latch beside `folder` names catalog.sqlite the authority. A side
@@ -90,7 +92,7 @@ enum CatalogAuthority: Equatable, Sendable {
         }
         await repository.close()
         guard finished > 0 else {
-            return .refused("\(databaseFileName) holds no finished import checked by the comparator — run Import to SQLite again")
+            return .refused("\(databaseFileName) holds no finished import checked by the comparator")
         }
         return .sqlite(db)
     }

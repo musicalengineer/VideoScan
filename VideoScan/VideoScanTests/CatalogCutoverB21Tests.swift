@@ -310,9 +310,9 @@ struct CatalogDirectSaveSensorTests {
     func noDirectStoreSaves() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("VideoScan")
-        // The three funnels, and the Switch's flush (the JSON path on purpose:
-        // before the switch catalog.json IS the catalog).
-        let allowed: [String: Int] = ["VideoScanModel.swift": 2, "ImportToSQLitePhases.swift": 1, "CatalogSwitchToSQLite.swift": 1]
+        // The three funnels. (The Switch's flush left with Switch Catalog to
+        // SQLite…, 2026-10-20.)
+        let allowed: [String: Int] = ["VideoScanModel.swift": 2, "ImportToSQLitePhases.swift": 1]
         var offenders: [String] = []
         let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
@@ -360,80 +360,5 @@ struct CatalogAdoptTests {
         try await scene.launchOnSQLite()
         #expect(scene.model.catalogCutover.canAdopt == false)
         #expect(await scene.model.catalogCutover.adoptRequestIfAdoptable() == nil)
-    }
-}
-
-// MARK: - Codex P1-4 / P1-5: the Switch door
-
-@Suite("Switch Catalog to SQLite B2.1 — every accepted edit is in the import; the designation comes from the imported bytes", .serialized)
-@MainActor
-struct CatalogSwitchB21Tests {
-
-    private static func jsonEnvironment(_ scene: CutoverScene, store: CatalogStore, records: [VideoRecord],
-                                        freezes: CatalogSwitchTests.Freezes,
-                                        runImport: @escaping @MainActor () async -> CatalogSwitchImportResult) -> CatalogSwitchEnvironment {
-        var env = CatalogSwitchTests.environment(scene, freezes: freezes, runImport: runImport)
-        env.flushJSON = { store.saveNow(records: records) }
-        env.hasUnsavedJSON = { store.hasUnsavedChanges }
-        return env
-    }
-
-    @Test("P1-4: an edit waiting in the JSON store's debounce BEFORE the switch is flushed, so the import carries it")
-    func pendingEditIsFlushedFirst() async throws {
-        let scene = try CutoverScene.make("b21_switch_flush"); defer { scene.cleanup() }
-        try await scene.importCatalog()
-        let store = CatalogStore(directory: scene.folder)
-        let records = store.load()
-        let healthy = try #require(records.first { $0.id.uuidString == PoisonedCatalogFixture.id(.healthy) })
-        healthy.userNotes = "typed just before Switch"
-        store.scheduleSave(records: records)
-        let phase = await CatalogSwitchRun.run(Self.jsonEnvironment(scene, store: store, records: records, freezes: .init()) {
-            do { try scene.recertify(); try await scene.importCatalog(); return .imported } catch { return .notImported("\(error)") }
-        })
-        guard case .done = phase else { Issue.record("expected .done, got \(phase)"); return }
-        #expect(try await scene.reloaded(.healthy).userNotes == "typed just before Switch")
-    }
-
-    @Test("P1-4: an edit accepted while the import ran stops the switch — saved to catalog.json, no latch, nothing frozen")
-    func editDuringImportStops() async throws {
-        let scene = try CutoverScene.make("b21_switch_during"); defer { scene.cleanup() }
-        try await scene.importCatalog()
-        let store = CatalogStore(directory: scene.folder)
-        let records = store.load()
-        let healthy = try #require(records.first { $0.id.uuidString == PoisonedCatalogFixture.id(.healthy) })
-        let freezes = CatalogSwitchTests.Freezes()
-        let phase = await CatalogSwitchRun.run(Self.jsonEnvironment(scene, store: store, records: records, freezes: freezes) {
-            do {
-                try scene.recertify(); try await scene.importCatalog()
-                healthy.userNotes = "typed while the import ran"
-                store.scheduleSave(records: records)
-                return .imported
-            } catch { return .notImported("\(error)") }
-        })
-        #expect(phase == .failed("an edit was made while the import ran (it is saved in catalog.json) — run Switch again; nothing was switched"))
-        #expect(FileManager.default.fileExists(atPath: scene.latchURL.path) == false)
-        #expect(freezes.calls.isEmpty)
-        let json = CatalogStore(directory: scene.folder).load()
-        #expect(json.first { $0.id == healthy.id }?.userNotes == "typed while the import ran")
-    }
-
-    @Test("P1-5: the designation moved into catalog_state is the one in the imported catalog.json, not one captured before")
-    func designationFromImportedBytes() async throws {
-        let scene = try CutoverScene.make("b21_switch_designation"); defer { scene.cleanup() }
-        try scene.writeDesignation(rootPath: "/Volumes/Archive/OLD")
-        try await scene.importCatalog()
-        var latest: MasterArchiveDesignation?
-        let phase = await CatalogSwitchRun.run(CatalogSwitchTests.environment(scene, freezes: .init()) {
-            do {
-                latest = try scene.writeDesignation(rootPath: "/Volumes/Archive/NEW")
-                try await scene.importCatalog()
-                return .imported
-            } catch { return .notImported("\(error)") }
-        })
-        guard case .done = phase else { Issue.record("expected .done, got \(phase)"); return }
-        let launch = try #require(try? await SQLiteLaunchRead.read(scene.databaseURL).get())
-        await launch.repository.close()
-        #expect(CatalogCommitter.designation(fromJSON: launch.designationJSON)?.rootPath == "/Volumes/Archive/NEW")
-        #expect(CatalogCommitter.designation(fromJSON: launch.designationJSON) == latest)
     }
 }

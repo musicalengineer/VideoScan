@@ -10,10 +10,10 @@
 // coverage snapshot), runs every tier OFF the main actor, and the only file
 // it writes is the report, through AtomicFilePublish. It never writes a row,
 // never saves the catalog, never opens a media file. Seconds, not minutes,
-// on 14k rows. Inside Import to SQLite (phase 2) the rows come instead from
-// catalog.json as the import's audit saved it, decoded read-only off the
-// main actor (`snapshotSource = .auditedFile(generation:)`, codex
-// 2026-10-17 P2) — the report then certifies the file the importer reads.
+// on 14k rows. (Inside Import to SQLite — retired 2026-10-20 — the rows came
+// instead from catalog.json as the import's audit saved it, decoded
+// read-only off the main actor: `snapshotSource = .auditedFile(generation:)`,
+// codex 2026-10-17 P2. No production caller sets that source now.)
 //
 // Shape = CatalogAuditJob's (START / one line per tier / OUTCOME through one
 // sink; chip; detail view; Stop) without the lanes and without the marks:
@@ -65,7 +65,8 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
         /// and generation together (GH #342); never memory, never
         /// catalog.json. Before the switch: the model's records, as always.
         case liveRecords
-        /// Import to SQLite's phase 2: catalog.json exactly as its audit
+        /// Import to SQLite's phase 2 (retired 2026-10-20; no production
+        /// caller now): catalog.json exactly as its audit
         /// saved it, decoded read-only, which must carry this generation —
         /// so the report certifies the bytes the importer reads, never an
         /// edit made in memory after the audit's save.
@@ -373,7 +374,8 @@ extension VideoScanModel {
                                      mountedVolumeRoots: Self.mountedVolumeRootsNow())
     }
 
-    /// Import to SQLite's Verify phase (codex 2026-10-17 P2): the rows of
+    /// Import to SQLite's Verify phase (codex 2026-10-17 P2; the import was
+    /// retired 2026-10-20 — kept for `.auditedFile`): the rows of
     /// catalog.json AS THE AUDIT SAVED IT, decoded read-only off the main
     /// actor with `load()`'s own decoder (`CatalogStore.decodeCatalogFile`)
     /// — never `records`, which may already hold an edit made after that
@@ -498,7 +500,7 @@ extension MediaFileOperationsCenter {
             job.refuseToStart(reason: "Verify Catalog is already running — wait for it to finish (or stop it). Nothing was started.")
             return job
         }
-        if let words = importRunsItsOwn("Verify Catalog") ?? validateRunsItsOwn("catalog check") {
+        if let words = validateRunsItsOwn("catalog check") {
             job.refuseToStart(reason: words)
             return job
         }

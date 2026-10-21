@@ -588,11 +588,12 @@ final class ArchiveAngel: ObservableObject {
         }
     }
 
-    /// What a whole-catalog writer (Import to SQLite) must know before it
-    /// copies rows: the words for every open batch, or for a buffer that
-    /// could not be read — empty when the buffer holds nothing. The public
-    /// door to the same fresh read Delete Duplicates uses, so the importer
-    /// never names the plan store (boundary sensor, 2026-10-18).
+    /// What a whole-catalog writer must know before it copies rows: the
+    /// words for every open batch, or for a buffer that could not be read —
+    /// empty when the buffer holds nothing. The public door to the same
+    /// fresh read Delete Duplicates uses, so a writer never names the plan
+    /// store (boundary sensor, 2026-10-18). Its first caller, Import to
+    /// SQLite, was retired 2026-10-20; no production code calls it now.
     /// Read-only. DISK I/O: never call the returned probe on the main thread.
     func openBatchesProbe() -> @Sendable () -> [String] {
         let root = environment.bufferRoot

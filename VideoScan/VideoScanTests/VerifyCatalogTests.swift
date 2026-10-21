@@ -1224,7 +1224,7 @@ struct VerifyCatalogStatusTests {
         #expect(FreshnessPolicy.judge(rowFor(unlatched.integrity), now: now, wording: wording).colour == .red)
 
         // The switch lands after the report.
-        try CatalogSwitch.latchData(CatalogRow.FinishedImport(runID: "R", finishedAt: 0, sourceSHA256: "ab", sourceGeneration: 4_900),
+        try CatalogLatchFixture.data(CatalogRow.FinishedImport(runID: "R", finishedAt: 0, sourceSHA256: "ab", sourceGeneration: 4_900),
                                     at: now).write(to: latch)
         let facts = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
         #expect(facts.switchedAt == now)

@@ -39,9 +39,9 @@ struct VideoScanModelSplitSensorTests {
     // three extension files and six @Published: 138 / 133 / 76.
     // NEXT SLICE: lower these to the new measured values in the same
     // commit that moves the members.
-    static let extensionDeclarationCeiling = 138
-    static let extensionFileCeiling = 133
-    static let publishedCeiling = 76
+    static let extensionDeclarationCeiling = 136
+    static let extensionFileCeiling = 131
+    static let publishedCeiling = 75
 
     /// `extension VideoScanModel` — but not `extension VideoScanModel.Nested`
     /// (that extends a nested type, not the model).

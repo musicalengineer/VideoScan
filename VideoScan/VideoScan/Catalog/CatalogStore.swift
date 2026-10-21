@@ -269,7 +269,9 @@ final class CatalogStore {
     /// `saveInFlight` and `pendingRecords` it answers `hasUnsavedChanges`.
     private var debouncedSavePending = false
 
-    /// MOPS-16 (Import to SQLite, 2026-10-17): a named HOLD on every write
+    /// MOPS-16 (Import to SQLite, 2026-10-17; that job was retired
+    /// 2026-10-20 and no production code takes the hold now — the
+    /// machinery stays until CatalogStore goes): a named HOLD on every write
     /// to catalog.json, taken WITH AN OWNER TOKEN. While set, saveNow /
     /// scheduleSave → saveAsync / saveAcknowledged refuse with
     /// `.heldByJob(reason)` — journalled like every other refusal — and

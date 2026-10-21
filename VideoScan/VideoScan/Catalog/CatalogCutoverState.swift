@@ -1,13 +1,14 @@
 // CatalogCutoverState.swift
 // The model's one stored slot for the SQLite cutover (B2): the committer
-// once catalog.sqlite is the authority, the store's blocked words for the
-// Reopen item, and the "Switch Catalog to SQLite…" sheet's request and
-// progress. One object so VideoScanModel gains ONE stored property.
+// once catalog.sqlite is the authority, and the store's blocked words for the
+// Reopen item. (The "Switch Catalog to SQLite…" sheet's request and progress
+// left with that menu item, 2026-10-20.) One object so VideoScanModel gains
+// ONE stored property.
 //
 // B2.1 adds:
 //   * `awaitingDigest` — new rows held in `pending_rows` with no whole-file
 //     hash yet (gap 1). They are handed to the scoped Fill In Full Hashes job
-//     as soon as a job starter is attached (CatalogSwitchSheetHost attaches
+//     as soon as a job starter is attached (CatalogCutoverSheetHost attaches
 //     one — it has the Media File Operations center); ids the job could not
 //     take (one already running) stay here and are offered again on the
 //     next request. The hash lands → the next save stores the row → it
@@ -37,10 +38,6 @@ final class CatalogCutoverState: ObservableObject {
     /// or once a person adopted or reopened it writable).
     @Published private(set) var readOnlyReason: String?
 
-    /// The Switch sheet (`.sheet(item:)` in ContentView).
-    @Published var switchRequest: CatalogSwitchRequest?
-    /// Where the switch is (the sheet shows it).
-    @Published var switchPhase: CatalogSwitchPhase = .confirming
     /// The Adopt sheet (gap 5).
     @Published var adoptRequest: CatalogAdoptRequest?
 

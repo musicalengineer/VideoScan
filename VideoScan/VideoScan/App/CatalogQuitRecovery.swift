@@ -69,6 +69,22 @@ final class OnceResume<Value: Sendable>: @unchecked Sendable {
 @MainActor
 enum CatalogQuitRecovery {
 
+    /// How long the quit waits for saves already admitted to drain before it
+    /// calls the writer stalled and skips the synchronous save. (Moved here
+    /// from ImportToSQLiteQuit, retired 2026-10-20.)
+    static let writerDeadline: TimeInterval = 30
+
+    /// What the quit's save came to. (Moved here from ImportToSQLiteQuit,
+    /// retired 2026-10-20.)
+    enum SaveOutcome: Equatable {
+        /// The catalog is durable with everything in memory.
+        case saved
+        /// It is not, but this copy beside it is.
+        case recoveryCopy(URL)
+        /// Neither landed: `words` say why; `changes` saves had not landed.
+        case unsaved(words: String, changes: Int)
+    }
+
     nonisolated static let filePrefix = "catalog.recovery-"
 
     /// `catalog.recovery-<stamp>.json` beside `catalogURL`.
@@ -79,24 +95,14 @@ enum CatalogQuitRecovery {
         return catalogURL.deletingLastPathComponent().appendingPathComponent(filePrefix + formatter.string(from: now) + ".json")
     }
 
-    /// The quit path's last resort (awaited, bounded). `because` is why the
-    /// normal save did not happen; `changes` is how many saves had not
-    /// landed (the alert's N).
-    static func writeCopy(model: VideoScanModel, because: String, changes: Int,
-                          within seconds: TimeInterval) async -> ImportToSQLiteQuit.SaveOutcome {
-        let target = url(besideCatalog: URL(fileURLWithPath: model.catalogStore.fileLocation))
-        model.catalogQuitNote(startLine(model, because: because, target: target))
-        let write = model.catalogStore.recoveryCopyWriter(records: model.records)
-        let failure = await OnceResume<String?>.race(within: seconds, timeout: "it did not finish within \(seconds.quitWords) s") { once in
-            DispatchQueue.global(qos: .userInitiated).async { once.resume(write(target)) }
-        }
-        return outcome(model, failure: failure, target: target, because: because, changes: changes)
-    }
-
-    /// The same, for `applicationWillTerminate` (synchronous; the wait is
-    /// bounded by a semaphore so a stalled volume cannot hold the exit).
+    /// The quit path's last resort, for `applicationWillTerminate`
+    /// (synchronous; the wait is bounded by a semaphore so a stalled volume
+    /// cannot hold the exit). `because` is why the normal save did not
+    /// happen; `changes` is how many saves had not landed. (The awaited
+    /// twin, used only by Import to SQLite's quit settle, was retired with
+    /// it 2026-10-20.)
     static func writeCopyBlocking(model: VideoScanModel, because: String, changes: Int,
-                                  within seconds: TimeInterval) -> ImportToSQLiteQuit.SaveOutcome {
+                                  within seconds: TimeInterval) -> SaveOutcome {
         let target = url(besideCatalog: URL(fileURLWithPath: model.catalogStore.fileLocation))
         model.catalogQuitNote(startLine(model, because: because, target: target))
         let write = model.catalogStore.recoveryCopyWriter(records: model.records)
@@ -117,7 +123,7 @@ enum CatalogQuitRecovery {
     }
 
     private static func outcome(_ model: VideoScanModel, failure: String?, target: URL, because: String,
-                                changes: Int) -> ImportToSQLiteQuit.SaveOutcome {
+                                changes: Int) -> SaveOutcome {
         if let failure {
             model.catalogQuitNote("OUTCOME recovery copy FAILED — \(failure); catalog.json does not carry the last "
                 + "\(changes) unsaved change(s)")
@@ -135,7 +141,7 @@ enum CatalogQuitRecovery {
     /// block the main thread behind the stalled writer); a save that fails
     /// is followed by the recovery copy. Every branch is logged.
     static func saveAtTermination(model: VideoScanModel,
-                                  writerDeadline: TimeInterval = ImportToSQLiteQuit.writerDeadline) -> ImportToSQLiteQuit.SaveOutcome {
+                                  writerDeadline: TimeInterval = CatalogQuitRecovery.writerDeadline) -> SaveOutcome {
         let store = model.catalogStore
         let pending = store.savesNotLanded
         guard store.writeQueueDrainsBlocking(within: writerDeadline) else {

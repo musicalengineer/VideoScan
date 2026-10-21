@@ -54,8 +54,9 @@ def preflight(db_path: Path) -> None:
     latch = db_path.parent / LATCH_FILE_NAME
     if not latch.exists():
         raise CatalogUnavailable(
-            f"no {LATCH_FILE_NAME} beside {db_path}: this catalog was never switched to SQLite. "
-            "Open VideoScan and use Catalog > Switch Catalog to SQLite... first "
+            f"no {LATCH_FILE_NAME} beside {db_path}: this folder holds no switched {DATABASE_FILE_NAME}. "
+            "Read the catalog folder VideoScan uses (or restore it from the catalog backup); "
+            "if VideoScan says saving stopped, use Catalog > Reopen SQLite Catalog "
             "(catalog.json is not read as a fallback)")
     if not db_path.exists():
         raise CatalogUnavailable(

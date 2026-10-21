@@ -190,8 +190,7 @@ extension VideoScanModel {
         guard let committer = catalogCutover.committer, let databaseURL = catalogCutover.databaseURL else {
             let words = ViewerModeCenter.shared.isViewer
                 ? "this Mac is a viewer — back up on the master, where catalog.sqlite lives"
-                : "this Mac's catalog is still catalog.json, and backups now hold catalog.sqlite only — "
-                  + "switch first (Catalog ▸ Switch Catalog to SQLite…)"
+                : "this Mac's catalog is still catalog.json, and backups now hold catalog.sqlite only"
             return .failure(BackupRefusal(words: words))
         }
         if let why = committer.commitBeforeSafetyCopy() {

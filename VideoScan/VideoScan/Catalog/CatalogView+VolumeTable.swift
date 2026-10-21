@@ -519,12 +519,8 @@ extension CatalogView {
             .help("Re-read, in full, every file on this volume whose stored whole-file digest predates volume identity, and bind it to this volume's UUID so it survives remounts. Reads a lot — can run overnight; Pause frees the disk.")
         }
 
-        if single {
-            Button(action: { model.verifyCatalog(for: first) }) {
-                Label("Verify Catalog", systemImage: "checkmark.shield")
-            }
-            .disabled(!first.status.isIdle)
-        }
+        // The per-drive "Verify Catalog" item left this menu 2026-10-20
+        // (Catalog ▸ Validate Catalog… is the one verb).
         // Show Migrated — offline/retired volumes only: the verb
         // answers "this disk is gone/parked; is its content safe
         // somewhere else?" An online volume's files ARE the online
