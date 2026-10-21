@@ -133,10 +133,25 @@ final class GedcomIndexEquivalenceTests: XCTestCase {
             XCTAssertEqual(rows.map { index.ids[Int(index.sidebarOrder[Int($0)])] },
                            Self.linearSidebar(sorted, n), "\(label) sidebar '\(n)'", file: file, line: line)
         }
-        // Every person is reachable through their own exact name and pointer.
-        for person in graph.people.values.prefix(500) {
-            XCTAssertTrue(graph.people(matching: person.name).contains { $0.id == person.id } ||
-                          Self.linearMatching(graph, person.name).isEmpty, "\(label) self-lookup \(person.name)")
+        // Every person is reachable through their own displayed name.
+        // Deterministic and exhaustive (2026-10-21): this used to check
+        // `people.values.prefix(500)` — a different, hash-seeded sample
+        // every process — and excused any miss the linear scan also
+        // missed. "John Fitz /Roger/" escaped for two months that way and
+        // then failed one nightly in ~30. The only names that may not find
+        // themselves are those with no name tokens, shaped like an FSID,
+        // or hidden by an identity ruling (their traffic is redirected).
+        // Real-size trees (≤ 20k) are checked in full; the 100k synthetic
+        // takes a fixed stride of ~5k so the suite keeps its time budget.
+        let everyone = graph.people.values.sorted(by: { $0.id < $1.id })
+        let step = everyone.count > 20_000 ? everyone.count / 5_000 : 1
+        for person in stride(from: 0, to: everyone.count, by: step).map({ everyone[$0] }) {
+            let typed = person.name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            if graph.suppressedPersonIDs.contains(person.id)
+                || FamilyIdentityText.tokens(FamilyNameNormalizer.normalizeName(person.name)).isEmpty
+                || GedcomFamilyGraph.isFamilySearchID(typed) { continue }
+            XCTAssertTrue(graph.people(matching: person.name).contains { $0.id == person.id },
+                          "\(label) self-lookup \(person.id) \(person.name)", file: file, line: line)
         }
         // Given-name index agrees with a token-0 scan.
         for given in ["John", "mary", "Elizabeth", "zzz"] {

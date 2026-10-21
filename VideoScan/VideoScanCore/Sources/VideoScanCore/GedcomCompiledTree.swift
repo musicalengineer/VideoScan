@@ -41,7 +41,11 @@ public enum GedcomCompiledTree {
     /// carries its military facts (`Person.militaryFacts`) as a flat list,
     /// six strings per fact (tag, value, type, date, place, note; "" = nil).
     /// A codec-6 blob has none and would hide every one of them.
-    public static let codecVersion: UInt32 = 7
+    /// 8 (2026-10-21, nightly self-lookup failure): "John Fitz /Roger/"
+    /// parses to display "John FitzRoger", surname "FitzRoger" (the
+    /// particle before the slash is fused into the surname). A codec-7
+    /// blob keeps "John Fitz Roger", which no lookup can find.
+    public static let codecVersion: UInt32 = 8
     /// Strings per military fact in the codec-7 people section.
     static let militaryFactWidth = 6
     static let magic: [UInt8] = Array("VSFT".utf8)

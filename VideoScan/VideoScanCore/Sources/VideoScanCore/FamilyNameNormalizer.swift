@@ -29,6 +29,33 @@ public enum FamilyNameNormalizer {
         fuse(name, leadingMacFuses: false)
     }
 
+    /// A GEDCOM NAME split at its slashes, with a particle that sits on the
+    /// GIVEN side of the slash moved into the surname (2026-10-21):
+    /// "John Fitz /Roger/" → given "John", surname "FitzRoger" — the same
+    /// person "John /Fitz Roger/" describes. Without this the display read
+    /// "John Fitz Roger" while every lookup fuses typed text to
+    /// "john fitzroger", so the person could not be found by their own
+    /// displayed name. Same fusion rule as `normalizeName`: a leading "Mac"
+    /// is a given name ("Mac /Breen/"), and a particle only fuses with a
+    /// capitalised word ("Fitz /de Wyndon/" is left alone).
+    public static func normalizeNameParts(given: String, surname: String) -> (given: String, surname: String) {
+        var words = given.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard let particle = words.last,
+              isParticle(particle, atIndex: words.count - 1, leadingMacFuses: false),
+              let next = surname.first, next.isLetter, next.isUppercase else {
+            return (normalizeName(words.joined(separator: " ")),
+                    surname.isEmpty ? surname : normalizeSurname(surname))
+        }
+        words.removeLast()
+        return (normalizeName(words.joined(separator: " ")), normalizeSurname(particle + " " + surname))
+    }
+
+    private static func isParticle(_ word: String, atIndex index: Int, leadingMacFuses: Bool) -> Bool {
+        let key = word.lowercased()
+        return alwaysFused.contains(key)
+            || (fusedWhenNotLeading.contains(key) && (leadingMacFuses || index > 0))
+    }
+
     private static func fuse(_ text: String, leadingMacFuses: Bool) -> String {
         let words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         guard words.count > 1 else { return text }
@@ -36,10 +63,7 @@ public enum FamilyNameNormalizer {
         var index = 0
         while index < words.count {
             let word = words[index]
-            let key = word.lowercased()
-            let isParticle = alwaysFused.contains(key)
-                || (fusedWhenNotLeading.contains(key) && (leadingMacFuses || index > 0))
-            if isParticle, index + 1 < words.count,
+            if isParticle(word, atIndex: index, leadingMacFuses: leadingMacFuses), index + 1 < words.count,
                let next = words[index + 1].first, next.isLetter, next.isUppercase {
                 out.append(word + words[index + 1])
                 index += 2
