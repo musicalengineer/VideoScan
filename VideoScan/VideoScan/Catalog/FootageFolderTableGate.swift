@@ -175,7 +175,7 @@ enum CatalogWriteActivity {
 }
 
 /// "Did Rick just do something?" — the urgency rule. A model publish that
-/// arrives within `window` of the last mouse or key event is treated as his
+/// arrives within `window` of his last key press or click is treated as his
 /// (an inspector commit, a row-menu Tag or Disposition, a typed date or
 /// place) and paints at the quiet pace even while a job writes; the job's
 /// own churn arrives with no recent event and keeps the 10 s gap. ONE rule
@@ -190,10 +190,20 @@ enum CatalogUserEditRecency {
         return age >= 0 && age <= window
     }
 
-    /// The live answer (main thread: the event being handled, if any).
+    /// Only a discrete action is an edit: a key press or a click's release
+    /// (a menu choice, a button, a field commit). NSApp.currentEvent
+    /// OUTLIVES its dispatch (QA r2), so a hover, a drag, a scroll or a
+    /// modifier change would otherwise make every job commit inside the next
+    /// second "urgent" while Rick merely browses.
+    static let editTypes: Set<NSEvent.EventType> = [.keyDown, .leftMouseUp, .rightMouseUp, .otherMouseUp]
+
+    static func isEdit(_ type: NSEvent.EventType) -> Bool { editTypes.contains(type) }
+
+    /// The live answer (main thread: the last event AppKit dispatched).
     @MainActor
     static func now() -> Bool {
-        isRecent(eventTimestamp: NSApp.currentEvent?.timestamp, now: ProcessInfo.processInfo.systemUptime)
+        guard let event = NSApp.currentEvent, isEdit(event.type) else { return false }
+        return isRecent(eventTimestamp: event.timestamp, now: ProcessInfo.processInfo.systemUptime)
     }
 }
 

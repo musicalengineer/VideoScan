@@ -18,6 +18,7 @@
 //
 // No app launch, no real paths: everything is in memory.
 
+import AppKit
 import Foundation
 import SwiftUI
 import Testing
@@ -225,20 +226,40 @@ struct FootageFolderTableGateTests {
         #expect(!CatalogUserEditRecency.isRecent(eventTimestamp: 105.0, now: 100.0), "an event from the future is not trusted")
     }
 
-    /// QA r1 item 4, adapted to the monotonic clock: a `now` before the
-    /// last paint (what a wall-clock step back looked like) paints at once;
-    /// it never schedules a paint later than `now + gap`.
-    @Test func aWallClockStepBackNeverPushesTheTrailingPaintIntoTheFuture() {
+    /// QA r1 item 4 on the monotonic clock: a `now` earlier than the last
+    /// paint (what a wall-clock step back used to look like) paints at once
+    /// and becomes the new last paint — it never waits on the later instant.
+    @Test func aRequestBeforeTheLastPaintPaintsAtOnce() {
         var t = CatalogPaintThrottle()
         let t0 = ContinuousClock.now
         #expect(t.request(now: t0, busy: true) == .paintNow)
         let back = t0 - .seconds(3_600)
-        let decision = t.request(now: back, busy: true)
-        if case .paintAt(let due) = decision {
-            #expect(due <= back + CatalogPaintThrottle.busyGap, "never an hour into the future")
-        }
-        #expect(decision == .paintNow)
+        #expect(t.request(now: back, busy: true) == .paintNow)
         #expect(t.lastPaint == back)
+    }
+
+    /// QA r2: NSApp.currentEvent outlives its dispatch, so a hover, a
+    /// scroll or a modifier change must not make a job's commit "Rick's".
+    @Test func aMouseMoveIsNotAnEdit() throws {
+        let moved = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+                                                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                                                    context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        NSApp.postEvent(moved, atStart: true)
+        let got = NSApp.nextEvent(matching: .mouseMoved, until: Date().addingTimeInterval(1), inMode: .default, dequeue: true)
+        #expect(got?.type == .mouseMoved)
+        #expect(NSApp.currentEvent?.type == .mouseMoved, "the precondition: the hover is the current event")
+        #expect(!CatalogUserEditRecency.now(), "a hover is not an edit")
+    }
+
+    @Test func onlyDiscreteActionsCountAsEdits() {
+        for type in [NSEvent.EventType.keyDown, .leftMouseUp, .rightMouseUp, .otherMouseUp] {
+            #expect(CatalogUserEditRecency.isEdit(type), "\(type.rawValue)")
+        }
+        for type in [NSEvent.EventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                     .scrollWheel, .flagsChanged, .appKitDefined, .systemDefined, .periodic,
+                     .leftMouseDown, .keyUp, .mouseEntered, .mouseExited] {
+            #expect(!CatalogUserEditRecency.isEdit(type), "\(type.rawValue)")
+        }
     }
 
     @Test func theClocksTrailingPaintLands() async throws {
@@ -318,6 +339,24 @@ struct FootageFolderTableGateTests {
         #expect(viewer.contains("CatalogWriteActivity.words(catalogWriterTitle: catalogWriterTitle(), scanning: self?.isScanning ?? false)"))
         let app = try SourceTree.strippingComments(SourceTree.appSource(named: "VideoScanApp.swift"))
         #expect(app.contains("catalogWriterTitle: { [weak center] in center?.runningCatalogWriterTitle }"))
+    }
+
+    /// QA r2: the paint bump repaints the visible cells only because every
+    /// column closure calls a CatalogContent METHOD (so it captures `self`,
+    /// whose paint state changed). Measured in the harness: closures that
+    /// capture nothing that changed re-run 0 cells on a bump. A refactor into
+    /// stored-field cell structs built inline would silently break repaints.
+    @Test func everyFolderColumnClosureCallsACatalogContentMethod() throws {
+        let src = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogContent+FolderTable.swift"))
+        let start = try #require(src.range(of: "private var folderColumns: some TableColumnContent"))
+        let end = try #require(src.range(of: "private func folderExpansion(", range: start.upperBound..<src.endIndex))
+        let block = String(src[start.upperBound..<end.lowerBound])
+        let columns = block.components(separatedBy: "TableColumn(").dropFirst()
+        #expect(columns.count == 13, "the folder table's 13 columns")
+        let method = try Regex(#"(^|[^A-Za-z])[a-z][A-Za-z]*(Cell|Text)\("#)
+        for (i, column) in columns.enumerated() {
+            #expect(column.contains(method), "column \(i) draws without a CatalogContent method: \(column.prefix(80))")
+        }
     }
 
     // MARK: Logic — which jobs write the catalog
