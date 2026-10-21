@@ -30031,13 +30031,17 @@
       "tests": [
         "aBackwardClockStepWaitsAgain",
         "aClockThatKeepsSteppingBackGivesUp",
+        "aViewerOnJSONWritesNoCopy",
+        "aViewerUnderSQLiteWritesNoCopy",
         "anAcknowledgedSaveInFlightIsUnsaved",
         "anotherTokenIsHeld",
         "digestFindingNamesALiveDoor",
         "phaseVerdicts",
+        "theCopyWriterIsBehindTheGate",
         "theDelegateQuitWiring",
         "theHoldDrainsAnAdmittedSave",
         "theHoldGivesUpOnAStalledSave",
+        "theMasterUnderSQLiteNeverSaysRenameToCatalogJSON",
         "theNextLaunchSaysACopyIsThere",
         "theOwnerTokenPath",
         "theOwnersSavePasses",
@@ -32698,7 +32702,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2824,
+      "expected_floor": 2828,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [

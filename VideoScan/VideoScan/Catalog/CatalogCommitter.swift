@@ -228,8 +228,8 @@ final class CatalogCommitter {
     }
 
     /// Why no commit can be written right now, in the person's words; nil
-    /// when one can.
-    private func saveRefusal() -> String? {
+    /// when one can. (Internal: the quit's recovery-copy words use it.)
+    func saveRefusal() -> String? {
         if reopening { return Self.cantSave("it is being reopened", until: "the reopen finishes") }
         if let blockedReason { return Self.cantSave(blockedReason, until: "you choose Catalog ▸ Reopen SQLite Catalog") }
         let now = input()
