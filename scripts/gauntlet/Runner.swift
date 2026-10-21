@@ -298,10 +298,21 @@ struct GauntletRunner {
         result = ["schema": 1, "run_id": runID, "ts": stamp, "commit": capture(["git", "-C", repo.path, "rev-parse", "HEAD"]), "branch": capture(["git", "-C", repo.path, "branch", "--show-current"]), "dirty": !capture(["git", "-C", repo.path, "status", "--porcelain"]).isEmpty, "machine": machine, "configuration": "Release", "binary_sha256": NSNull(), "status": "failed", "build_s": 0.0, "roots": roots, "inventory_errors": validationErrors]
     }
 
+    /// Builds see the real HOME: since Xcode 27.1 the Metal Toolchain is a
+    /// per-user downloaded component, and a build under the confined HOME fails
+    /// with "missing Metal Toolchain" (M5, 2026-10-21). Confinement exists to
+    /// keep TESTS away from real stores, so the test commands keep `environment`.
+    var buildEnvironment: [String: String] {
+        var env = environment
+        let real = ProcessInfo.processInfo.environment
+        for key in ["HOME", "CFFIXED_USER_HOME"] { env[key] = real[key] ?? NSHomeDirectory() }
+        return env
+    }
+
     mutating func build() throws {
         if fatalReason == nil {
             let cmd = ["xcodebuild", "build-for-testing", "-project", repo.appendingPathComponent("VideoScan/VideoScan.xcodeproj").path, "-scheme", "VideoScan", "-testPlan", "VideoScan-CI", "-configuration", "Release", "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", roots["DerivedData"]!, "-skip-testing:VideoScanUITests", "ENABLE_TESTABILITY=YES", "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS="]
-            let build = try command(cmd, log: run.appendingPathComponent("build.log"), timeout: 3600, environment: environment)
+            let build = try command(cmd, log: run.appendingPathComponent("build.log"), timeout: 3600, environment: buildEnvironment)
             result["build_s"] = build.elapsed; result["build_exit_code"] = build.code
             buildOK = build.code == 0; contaminated = build.contaminated
             if !buildOK { fatalReason = build.timedOut ? "build watchdog timeout" : "build exit \(build.code)" }
@@ -328,7 +339,7 @@ struct GauntletRunner {
         }
         guard wanted, fatalReason == nil, !contaminated else { return }
         let cmd = ["swift", "build", "--build-tests", "-c", "release", "-Xswiftc", "-enable-testing", "--package-path", packagePath.path, "--scratch-path", packageScratch]
-        let build = try command(cmd, log: run.appendingPathComponent("package-build.log"), timeout: 3600, environment: environment)
+        let build = try command(cmd, log: run.appendingPathComponent("package-build.log"), timeout: 3600, environment: buildEnvironment)
         result["package_build_s"] = build.elapsed; result["package_build_exit_code"] = build.code
         if build.contaminated { contaminated = true }
         packageBuildOK = build.code == 0
