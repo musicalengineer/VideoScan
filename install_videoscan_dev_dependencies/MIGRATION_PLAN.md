@@ -26,7 +26,7 @@ rather than from memory.
 ## Phase 0 — now, before it arrives
 
 - [ ] Merge `feat/dev-env-installer` (this folder, revised Brewfile, requirements).
-- [ ] **Dress rehearsal on the M1:** make a temporary macOS user, clone, run
+- [ ] **Dress rehearsal on the M5** (Thu 10/22 16:00; the M1 is on battery with little disk): make a temporary macOS user, clone, run
       `install.sh`, fix whatever breaks, delete the user. That's the only real
       fresh-machine test; the M4 run only proves "already installed" is detected.
 - [ ] Save the custom Ollama model `qwen-videoscan:64k` (engineering room) into
@@ -34,7 +34,7 @@ rather than from memory.
       → `tools/engineering-room/Modelfile`.
 - [ ] Hostname changes in code (separate small branch). These hard-code the
       current fleet and need the new name:
-      - `Catalog/CatalogSync.swift:88`: default master `RicksM4.local`
+      - `Catalog/CatalogSync.swift:99`: default master `RicksM4.local` (see "Catalog on SQLite" below; exactly one master)
       - `Hallie/LLM/OllamaEndpoints.swift:43`: default Ollama hosts
       - `People/DossierDashboardView+FleetStats.swift:24-26`: worker hosts
       - `scripts/install_nightly.sh`: slot table
@@ -75,6 +75,35 @@ about 8 minutes vs. however fast your internet is.
    any file it replaces is kept as `*.pre-migrate-<stamp>`.
 4. Don't run VideoScan on the M4 again until Phase 6 is decided. Two Macs
    editing two copies of the catalog is the one real way to lose work here.
+
+### Catalog on SQLite (added 2026-10-21)
+
+Since the 10/18 switch, the catalog is `catalog.sqlite`, with
+`catalog.cutover` (the marker) and a frozen `catalog.json` beside it. Under the
+#354 ruling, a Mac without the marker refuses to open the catalog. So the three
+must travel together, and step 3 must be followed by the checks below.
+
+- [ ] **Before `--go`, on the Ultra:** if `catalog.sqlite-wal` or `-shm`
+      exists from an earlier launch or rehearsal, move it aside. A WAL left
+      beside a *different* `catalog.sqlite` is how SQLite files get corrupted.
+      `migrate_data.sh` should refuse in that case (code TODO).
+- [ ] **After `--go`, on the Ultra:**
+      - `sqlite3 -readonly catalog.sqlite "pragma quick_check; pragma user_version"`
+        gives `ok` and `12` (or newer).
+      - `catalog.cutover` is byte-identical to the M4's.
+      - The file-row count matches the M4's.
+      `migrate_data.sh` should run these itself (code TODO).
+- [ ] **Exactly one master.** The master is chosen per Mac by hostname:
+      `defaultMasterHostname` (`Catalog/CatalogSync.swift:99`), overridden
+      by `defaults write Rick-Breen.VideoScan CatalogSyncMasterHostname <host>`.
+      An M4 still running an old build would still think *it* is the master,
+      so there would be two masters and two catalogs drifting apart. Set the
+      override on BOTH Macs **before** either app is launched again:
+      `defaults write Rick-Breen.VideoScan CatalogSyncMasterHostname RicksUltra.local`
+      (on the Ultra and on the M4). Then the M4 becomes a viewer and syncs the
+      Ultra's sealed copy, as the M5 has done since 10/21.
+- [ ] On the M4, move its `catalog.sqlite` (+ `-wal`, `-shm`) aside once it is
+      a viewer, so a viewer never opens a writable-looking copy that has gone stale.
 
 ## Phase 4 — hardware and permissions (Rick)
 
