@@ -29302,6 +29302,30 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "qaR2_interruptWithNoStatementRunningIsDropped"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR2RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests",
+        "PreflightCancellationQAR2Tests"
+      ],
+      "tests": [
+        "qaR2_alreadyCancelledTokenDoesNotRunTheBody",
+        "qaR2_fastOnlyRecheckMustNotLiftALaunchQuickCheckFault"
+      ]
+    },
+    {
       "blocked_reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
@@ -32587,7 +32611,7 @@
       ],
       "expected_floor": 2817,
       "name": "unit",
-      "package_expected_floor": 395,
+      "package_expected_floor": 398,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -32619,6 +32643,7 @@
         "VideoScanCoreTests.LaunchPreflightTests",
         "VideoScanCoreTests.PreflightGateTests",
         "VideoScanCoreTests.CatalogPreflightReaderTests",
+        "VideoScanCoreTests.PreflightCancellationQAR2Tests",
         "VideoScanCoreTests.CatalogRealityTests"
       ],
       "selectors": [
