@@ -1,7 +1,9 @@
 // PreflightGateTests.swift
-// What a full disk may stop (Rick's ruling (b), 2026-10-21), at every edge,
-// to the byte: exactly at 90% / 95%, each floor ± 1 byte, a 0-byte volume,
-// an unreadable volume, a huge WAL, and each operation sized to its need.
+// What the preflight may stop (Rick's rulings, 2026-10-21, and QA r1), at
+// every edge, to the byte: exactly at 90% / 95%, each floor ± 1 byte, a
+// 0-byte volume, an unreadable volume or destination, a huge WAL, a red
+// catalog check, and each operation sized to its need — the WHOLE shortfall,
+// with the disk left out of red by BOTH halves of the red line.
 // Plus the cost of each real probe question ("if it is expensive, tell me").
 
 import Foundation
@@ -17,6 +19,11 @@ struct PreflightGateTests {
 
     private func volume(free: Int64, total: Int64, id: String = "/", name: String = "Macintosh HD") -> PreflightVolume {
         PreflightVolume(id: id, name: name, availableBytes: free, totalBytes: total)
+    }
+
+    private func shortfall(_ verdict: PreflightGateVerdict) -> Int64? {
+        if case .refused(_, _, let short) = verdict { return short }
+        return nil
     }
 
     // MARK: The disk rule, to the byte
@@ -53,18 +60,37 @@ struct PreflightGateTests {
         #expect(PreflightDiskRule.judge(volume(free: 30 * Self.gb, total: total), catalogBytes: catalog, thresholds: limits).0 == .warn)
     }
 
-    @Test func zeroByteVolumeIsRedAndHoldsEdits() {
-        let empty = volume(free: 0, total: 0)
-        #expect(empty.usedFraction == 1)
-        #expect(PreflightDiskRule.judge(empty, catalogBytes: 0, thresholds: limits).0 == .red)
-        #expect(PreflightGate.hold(catalogVolume: empty, catalogBytes: 0) == .edits)
-        #expect(PreflightGate.decide(.edit, catalogVolume: empty, catalogBytes: 0) != .go)
+    @Test func leastFreeOutOfRedIsExactToTheByte() {
+        // 1 TB at exactly 95% is red; one byte more free is not.
+        let disk = volume(free: 0, total: Self.tb)
+        let line = limits.leastFreeOutOfRed(disk, catalogBytes: 0)
+        #expect(line == 50 * Self.gb + 1)
+        #expect(PreflightDiskRule.judge(volume(free: line, total: Self.tb), catalogBytes: 0, thresholds: limits).0 != .red)
+        #expect(PreflightDiskRule.judge(volume(free: line - 1, total: Self.tb), catalogBytes: 0, thresholds: limits).0 == .red)
+        // A small disk: the byte floor (20 GB) is the higher half.
+        #expect(limits.leastFreeOutOfRed(volume(free: 0, total: 100 * Self.gb), catalogBytes: 0) == 20 * Self.gb)
     }
 
-    @Test func negativeOrOverfullReadingsNeverCrash() {
+    @Test func zeroByteVolumeIsUnmeasurableNeverHoldsEditsButRefusesLongOperations() {
+        let empty = volume(free: 0, total: 0)
+        #expect(!empty.isMeasurable)
+        #expect(empty.usedFraction == 1)
+        #expect(PreflightGate.hold(catalogVolume: empty, catalogBytes: 0) == .none)
+        #expect(PreflightGate.decide(.edit, catalogVolume: empty, catalogBytes: 0) == .go)
+        #expect(PreflightGate.decide(.backup, catalogVolume: empty, catalogBytes: 0) != .go)
+    }
+
+    @Test func negativeOrOverfullReadingsNeverCrashOrOverflow() {
         // A confused filesystem: more free than total, or negative free.
         #expect(volume(free: 2 * Self.tb, total: Self.tb).usedFraction == 0)
+        #expect(volume(free: 2 * Self.tb, total: Self.tb).freeBytes == Self.tb)
         #expect(volume(free: -5, total: Self.tb).usedFraction == 1)
+        #expect(volume(free: .min, total: Self.tb).freeBytes == 0)
+        let negative = volume(free: .min, total: Self.tb)
+        #expect(PreflightGate.hold(catalogVolume: negative, catalogBytes: .max) == .edits)
+        #expect(shortfall(PreflightGate.decide(.edit, catalogVolume: negative, catalogBytes: .max)) == .max)
+        #expect(shortfall(PreflightGate.decide(.longJob(name: "x", estimatedBytes: .max), catalogVolume: negative,
+                                               catalogBytes: 0)) == .max)
     }
 
     // MARK: The hard edit floor: 2 × (catalog + WAL), never under 1 GB
@@ -79,7 +105,7 @@ struct PreflightGateTests {
         let at = volume(free: 30 * Self.gb, total: total)
         #expect(PreflightGate.hold(catalogVolume: below, catalogBytes: catalog) == .edits)
         #expect(PreflightGate.hold(catalogVolume: at, catalogBytes: catalog) == .longOperations)
-        #expect(PreflightGate.decide(.edit, catalogVolume: below, catalogBytes: catalog) != .go)
+        #expect(shortfall(PreflightGate.decide(.edit, catalogVolume: below, catalogBytes: catalog)) == 1)
         #expect(PreflightGate.decide(.edit, catalogVolume: at, catalogBytes: catalog) == .go)
         // And the red line above it: 45 GB ± 1 byte.
         #expect(PreflightGate.hold(catalogVolume: volume(free: 45 * Self.gb - 1, total: total), catalogBytes: catalog) == .longOperations)
@@ -112,33 +138,51 @@ struct PreflightGateTests {
         #expect(PreflightGate.decide(.backup, catalogVolume: big, catalogBytes: .max) != .go)
     }
 
-    // MARK: Red holds long operations, not editing (ruling b)
+    // MARK: Red disk holds long operations, not editing (ruling b), with the WHOLE shortfall
 
     @Test func redDiskRefusesLongOperationsButNotEdits() {
         let red = volume(free: 50 * Self.gb, total: Self.tb)   // exactly 95%
         let catalog: UInt64 = 275_000_000
         #expect(PreflightGate.decide(.edit, catalogVolume: red, catalogBytes: catalog) == .go)
-        for operation in [PreflightOperation.backup, .viewerPublish, .longJob(name: "Transcode", estimatedBytes: 1)] {
-            guard case .refused(let words, let detail, let short) = PreflightGate.decide(operation, catalogVolume: red,
-                                                                                          catalogBytes: catalog) else {
+        let operations: [(PreflightOperation, Int64)] = [
+            (.backup, 275_000_000), (.viewerPublish, 275_000_000), (.longJob(name: "Transcode", estimatedBytes: 1), 1),
+        ]
+        for (operation, need) in operations {
+            guard case .refused(let words, _, let short) = PreflightGate.decide(operation, catalogVolume: red,
+                                                                                 catalogBytes: catalog) else {
                 Issue.record("\(operation) started on a red disk")
                 continue
             }
-            #expect(short == 1, "one byte more free takes 1 TB at exactly 95% out of red")
+            // To start, it must fit AND leave the disk one byte out of red.
+            #expect(short == need + 1, "\(operation): short \(short)")
             #expect(words.contains("can't start"))
-            #expect(detail.contains("red"))
+        }
+    }
+
+    @Test func freeingTheStatedShortfallLetsTheOperationStart() {
+        // The refusal never lies: free exactly `short` more and it goes.
+        let catalog: UInt64 = 275_000_000
+        for free in [40 * Self.gb, 50 * Self.gb, 120 * Self.gb, 199 * Self.gb] {
+            let disk = volume(free: free, total: Self.tb)
+            let job = PreflightOperation.longJob(name: "Transcode", estimatedBytes: 100 * Self.gb)
+            guard let short = shortfall(PreflightGate.decide(job, catalogVolume: disk, catalogBytes: catalog)) else { continue }
+            let freed = volume(free: free + short, total: Self.tb)
+            #expect(PreflightGate.decide(job, catalogVolume: freed, catalogBytes: catalog) == .go, "free \(free)")
+            let almost = volume(free: free + short - 1, total: Self.tb)
+            #expect(PreflightGate.decide(job, catalogVolume: almost, catalogBytes: catalog) != .go, "free \(free)")
         }
     }
 
     // MARK: Sized to the operation
 
-    @Test func longJobMustFitAndLeaveTheRedFloorBehind() {
-        // 1 TB disk, 200 GB free (80%): a small catalog's red floor is 20 GB.
+    @Test func longJobMustFitAndLeaveTheDiskOutOfRed() {
+        // 1 TB disk, 200 GB free (80%): out of red needs 50 GB + 1 byte left (the percent half).
         let disk = volume(free: 200 * Self.gb, total: Self.tb)
         let catalog: UInt64 = 275_000_000
-        #expect(PreflightGate.decide(.longJob(name: "Transcode", estimatedBytes: 180 * Self.gb),
+        let fits = 150 * Self.gb - 1
+        #expect(PreflightGate.decide(.longJob(name: "Transcode", estimatedBytes: fits),
                                      catalogVolume: disk, catalogBytes: catalog) == .go)
-        let verdict = PreflightGate.decide(.longJob(name: "Transcode", estimatedBytes: 180 * Self.gb + 1),
+        let verdict = PreflightGate.decide(.longJob(name: "Transcode", estimatedBytes: fits + 1),
                                            catalogVolume: disk, catalogBytes: catalog)
         guard case .refused(let words, _, let short) = verdict else {
             Issue.record("expected refused, got \(verdict)")
@@ -150,27 +194,52 @@ struct PreflightGateTests {
 
     @Test func backupAndPublishNeedOneCatalog() {
         let catalog: UInt64 = 5_000_000_000
-        // Red floor = max(20 GB, 15 GB) = 20 GB; a backup needs 5 GB + 20 GB = 25 GB.
+        // 300 GB disk: out of red needs max(15 GB + 1, 20 GB) = 20 GB left; a backup needs 5 GB + 20 GB.
         let total = 300 * Self.gb
-        // 25 GB free is 91.7% used: warn, not red — the size rule decides.
         #expect(PreflightGate.decide(.backup, catalogVolume: volume(free: 25 * Self.gb, total: total), catalogBytes: catalog) == .go)
         #expect(PreflightGate.decide(.viewerPublish, catalogVolume: volume(free: 25 * Self.gb, total: total), catalogBytes: catalog) == .go)
-        #expect(PreflightGate.decide(.backup, catalogVolume: volume(free: 25 * Self.gb - 1, total: total), catalogBytes: catalog) != .go)
+        #expect(shortfall(PreflightGate.decide(.backup, catalogVolume: volume(free: 25 * Self.gb - 1, total: total),
+                                               catalogBytes: catalog)) == 1)
     }
+
+    // MARK: Destinations (QA r1 minor 1)
 
     @Test func otherDestinationNeedsNoCatalogReserve() {
         let catalog: UInt64 = 5_000_000_000
         let home = volume(free: 400 * Self.gb, total: Self.tb)
         let backupDrive = volume(free: 5 * Self.gb, total: 100 * Self.gb, id: "/Volumes/Backup", name: "Backup")
-        #expect(PreflightGate.decide(.backup, catalogVolume: home, catalogBytes: catalog, destination: backupDrive) == .go)
+        #expect(PreflightGate.decide(.backup, catalogVolume: home, catalogBytes: catalog,
+                                     destination: .volume(backupDrive)) == .go)
         let tooSmall = volume(free: 5 * Self.gb - 1, total: 100 * Self.gb, id: "/Volumes/Backup", name: "Backup")
         guard case .refused(let words, _, let short) = PreflightGate.decide(.backup, catalogVolume: home, catalogBytes: catalog,
-                                                                            destination: tooSmall) else {
+                                                                            destination: .volume(tooSmall)) else {
             Issue.record("a backup that doesn't fit started")
             return
         }
         #expect(short == 1)
         #expect(words.contains("Backup has only"))
+    }
+
+    @Test func destinationThatIsTheCatalogDiskGetsTheCatalogReserve() {
+        let home = volume(free: 200 * Self.gb, total: Self.tb)
+        let job = PreflightOperation.longJob(name: "Transcode", estimatedBytes: 150 * Self.gb)
+        #expect(PreflightGate.decide(job, catalogVolume: home, catalogBytes: 0, destination: .volume(home))
+                == PreflightGate.decide(job, catalogVolume: home, catalogBytes: 0, destination: .catalogDisk))
+        #expect(PreflightGate.decide(job, catalogVolume: home, catalogBytes: 0, destination: .volume(home)) != .go)
+    }
+
+    @Test func unreadableDestinationRefusesLongOperations() {
+        let home = volume(free: 400 * Self.gb, total: Self.tb)
+        guard case .refused(let words, _, _) = PreflightGate.decide(.backup, catalogVolume: home, catalogBytes: 0,
+                                                                    destination: .unreadable) else {
+            Issue.record("a backup started to a disk nobody could read")
+            return
+        }
+        #expect(words.contains("couldn't check how much free space the disk it writes to has"))
+        let noSize = volume(free: 0, total: 0, id: "/Volumes/Odd", name: "Odd")
+        #expect(PreflightGate.decide(.backup, catalogVolume: home, catalogBytes: 0, destination: .volume(noSize)) != .go)
+        #expect(PreflightGate.decide(.edit, catalogVolume: home, catalogBytes: 0, destination: .unreadable) == .go,
+                "edits write the catalog disk, never the destination")
     }
 
     @Test func unreadableDiskNeverHoldsEditsButRefusesLongOperations() {
@@ -187,12 +256,51 @@ struct PreflightGateTests {
         #expect(PreflightOperation.longJob(name: "x", estimatedBytes: -5).bytesNeeded(catalogBytes: 0) == 0)
     }
 
+    // MARK: A red catalog check holds everything, with its words (QA r1 M3)
+
+    @Test func catalogFaultRefusesEditsAndLongOperationsWithTheChecksWords() {
+        let fault = PreflightCheck(.catalogQuickCheck, .red,
+                                   words: "The catalog failed its health check — please don't edit until it's sorted out",
+                                   detail: "quick_check: Page 7 …")
+        let situation = PreflightSituation(catalogVolume: volume(free: 500 * Self.gb, total: Self.tb),
+                                           catalogBytes: 275_000_000, catalogFault: fault)
+        #expect(PreflightGate.hold(situation) == .edits)
+        #expect(PreflightGate.decide(.edit, in: situation)
+                == .refused(words: fault.words, detail: "catalog check catalog-quick-check is red: quick_check: Page 7 …",
+                            shortBytes: 0))
+        guard case .refused(let words, _, _) = PreflightGate.decide(.backup, in: situation) else {
+            Issue.record("a backup started on a damaged catalog")
+            return
+        }
+        #expect(words == "The catalog backup can't start: " + fault.words)
+    }
+
+    @Test func onlyRedCatalogChecksAreFaults() {
+        let checks = [
+            PreflightCheck(.systemDisk, .red, words: "disk", detail: ""),
+            PreflightCheck(.catalogSchema, .warn, words: "older", detail: ""),
+            PreflightCheck(.catalogQuickCheck, .warn, words: "ran out of time", detail: ""),
+            PreflightCheck(.tools, .warn, words: "tools", detail: ""),
+        ]
+        #expect(PreflightSituation.catalogFault(in: checks) == nil, "a red disk or a catalog warn is not a catalog fault")
+        let switched = PreflightCheck(.catalogSwitched, .red, words: "marker", detail: "")
+        #expect(PreflightSituation.catalogFault(in: checks + [switched])?.id == .catalogSwitched)
+    }
+
+    @Test func freshDiskReadingKeepsTheCatalogFault() {
+        let fault = PreflightCheck(.catalogSwitched, .red, words: "marker", detail: "")
+        let situation = PreflightSituation(catalogVolume: nil, catalogBytes: 1, catalogFault: fault)
+        let fresh = situation.with(catalogVolume: volume(free: 500 * Self.gb, total: Self.tb))
+        #expect(fresh.catalogFault == fault)
+        #expect(fresh.catalogVolume?.freeBytes == 500 * Self.gb)
+    }
+
     // MARK: Launch report: the hard floor in words
 
-    @Test func launchReportBelowEditFloorSaysEditsAreHeld() async {
+    @Test func launchReportBelowEditFloorSaysEditsAreHeld() async throws {
         var probe = FakePreflightProbe.healthy().disk(free: 0.5, of: 10_000)   // 500 MB free, floor 1 GB
         probe.files[LaunchPreflightTests.context.walURL.path] = 0
-        let report = await LaunchPreflight.run(LaunchPreflightTests.context, probe: probe)
+        let report = try await LaunchPreflight.run(LaunchPreflightTests.context, probe: probe)
         #expect(report.hold == .edits)
         let disk = report.checks.first { $0.id == .systemDisk }
         #expect(disk?.level == .red)
@@ -201,10 +309,10 @@ struct PreflightGateTests {
         #expect(report.outcomeLine.contains("hold edits"))
     }
 
-    @Test func launchReportHugeWALIsWarnAndHoldsEdits() async {
+    @Test func launchReportHugeWALIsWarnAndHoldsEdits() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.files[LaunchPreflightTests.context.walURL.path] = .max
-        let report = await LaunchPreflight.run(LaunchPreflightTests.context, probe: probe)
+        let report = try await LaunchPreflight.run(LaunchPreflightTests.context, probe: probe)
         #expect(report.checks.first { $0.id == .catalogJournal }?.level == .warn)
         #expect(report.hold == .edits, "a WAL bigger than any disk: no room to checkpoint it")
         #expect(report.level == .red)

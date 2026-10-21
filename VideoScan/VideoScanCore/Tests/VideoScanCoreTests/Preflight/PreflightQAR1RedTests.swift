@@ -62,19 +62,19 @@ extension LaunchPreflightTests {
     /// computed from the disk alone. A catalog that FAILED quick_check gets the
     /// words "please don't edit until it's sorted out", but hold stays .none and
     /// PreflightGate.decide(.edit) says .go: the words promise a hold nothing enforces.
-    @Test func qaR1_catalogThatFailedQuickCheckHoldsEdits() async {
+    @Test func qaR1_catalogThatFailedQuickCheckHoldsEdits() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.quickCheck = .problems(["Page 7: btreeInitPage() returns error code 11"], elapsed: .milliseconds(5))
-        let report = await LaunchPreflight.run(Self.context, probe: probe)
+        let report = try await LaunchPreflight.run(Self.context, probe: probe)
         #expect(report.checks.first { $0.id == .catalogQuickCheck }?.level == .red)
         #expect(report.hold == .edits, "red catalog words say don't edit; hold is \(report.hold)")
     }
 
     /// Same seam, the cutover marker (#354 "refuse loudly").
-    @Test func qaR1_missingCutoverMarkerHoldsEdits() async {
+    @Test func qaR1_missingCutoverMarkerHoldsEdits() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.files.removeValue(forKey: Self.context.latchURL.path)
-        let report = await LaunchPreflight.run(Self.context, probe: probe)
+        let report = try await LaunchPreflight.run(Self.context, probe: probe)
         #expect(report.hold == .edits, "missing catalog.cutover; hold is \(report.hold)")
     }
 }

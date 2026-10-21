@@ -9,33 +9,40 @@
 //   * `PreflightProbe` (PreflightProbe.swift) asks the machine; it is
 //     injected, so tests can feed any machine state.
 //   * `PreflightRules` (PreflightRules.swift) turns one answer into one
-//     `PreflightCheck`. Pure functions, one per check; thresholds are the
-//     named constants in `PreflightThresholds`.
+//     `PreflightCheck`. One function per check; the numbers are the named
+//     constants in `PreflightThresholds` (PreflightThresholds.swift).
 //   * `LaunchPreflight` (this file) runs the rules in a fixed order and
 //     folds them into a `PreflightReport`: the worst level wins, one
-//     sentence for a banner, START/OUTCOME lines for the log sink.
+//     sentence for a banner, START/OUTCOME lines for the log sink, and the
+//     `PreflightSituation` the gate decides from.
+//   * `PreflightGate` (PreflightGate.swift) says what is held: a red catalog
+//     check holds edits; a red disk holds long jobs, backups and publishes;
+//     below the hard floor (2 × catalog + WAL) edits are held too.
 //
 // Rick's rulings (2026-10-21): launch runs quick_check only — the full
 // integrity_check + foreign_key_check belongs to backup, Validate Catalog
-// and an idle-time background run. A red disk lets the person keep editing
-// but holds long jobs, backups and viewer publishes; below the hard floor
-// (2 × catalog + WAL) edits are held too. `PreflightGate` (PreflightGate.swift)
-// owns that decision and the per-operation space checks.
+// and an idle-time background run.
 //
 // Two phases, because they cost different amounts:
-//   fast  — everything but quick_check. Budget < 200 ms (each probe call is
-//           a stat, a sysctl or a one-row read).
+//   fast  — everything but quick_check. Budget < 200 ms; measured 50–90 ms
+//           on the M4 under load. The one costly question is the disk
+//           capacity read (≈ 7–20 ms, asked once per volume).
 //   quick — `PRAGMA quick_check`, O(database size). Measured 2026-10-21 on a
-//           .backup copy of the live 275 MB catalog: quick_check ≈ 125–190 ms
-//           warm (2.67 s cold), integrity_check ≈ 325–560 ms, foreign_key_check
-//           ≈ 75–120 ms (warm cache,
-//           M4 Max). Interrupted at `PreflightContext.quickCheckBudget`.
+//           .backup copy of the live 275 MB catalog: ≈ 125–190 ms warm,
+//           2.67 s with a cold file cache (integrity_check ≈ 325–560 ms,
+//           foreign_key_check ≈ 75–120 ms, warm). Interrupted at
+//           `PreflightContext.quickCheckBudget`.
+//
+// Cancellation: `run` checks for Task cancellation between checks, and a
+// cancel during quick_check interrupts SQLite at once (PreflightCancellation
+// explains the quit-path hook). A cancelled run throws CancellationError —
+// no partial verdict is ever reported.
 //
 // Memory: O(number of checks) — a dozen small structs. Nothing is cached;
 // quick_check runs inside SQLite's own page cache.
 //
-// Nothing here touches the main actor. `run` is `@concurrent`, so it runs on
-// the shared thread pool even when called from SwiftUI code.
+// Nothing here touches the main actor: `run` is `@concurrent`, the only way
+// in, so it runs on the shared thread pool even when called from SwiftUI.
 // (For Rick: `@concurrent` ≈ "always post this to a worker thread", never
 // the UI thread; `Comparable` on an enum ≈ defining operator< on it.)
 
@@ -51,7 +58,7 @@ public enum PreflightLevel: Int, Sendable, Comparable, CaseIterable, CustomStrin
     case note = 1
     /// Do something soon (the disk is 90% full).
     case warn = 2
-    /// Do something before editing (the disk is 95% full).
+    /// Something is held until it's fixed (the disk is 95% full).
     case red = 3
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -141,18 +148,23 @@ public struct PreflightCheck: Sendable, Equatable, Identifiable {
 public struct PreflightReport: Sendable, Equatable {
     /// In the fixed order the checklist runs them.
     public var checks: [PreflightCheck]
+    /// What the gate knows: the catalog disk as read, the catalog's size, and
+    /// the first red catalog check. Before an operation the app swaps in a
+    /// fresh disk reading and asks `PreflightGate.decide(_:in:)`.
+    public var situation: PreflightSituation
     /// Wall time of the fast phase and of quick_check (nil when not run).
     public var fastElapsed: Duration
     public var quickCheckElapsed: Duration?
-    /// What the catalog disk holds back right now (PreflightGate.hold).
+    /// What is held right now.
     public var hold: PreflightHold
 
-    public init(checks: [PreflightCheck], fastElapsed: Duration, quickCheckElapsed: Duration? = nil,
-                hold: PreflightHold = .none) {
+    public init(checks: [PreflightCheck], situation: PreflightSituation, fastElapsed: Duration,
+                quickCheckElapsed: Duration? = nil, thresholds: PreflightThresholds = PreflightThresholds()) {
         self.checks = checks
+        self.situation = situation
         self.fastElapsed = fastElapsed
         self.quickCheckElapsed = quickCheckElapsed
-        self.hold = hold
+        self.hold = PreflightGate.hold(situation, thresholds: thresholds)
     }
 
     /// The worst level wins; an empty report is ok.
@@ -258,55 +270,67 @@ public struct PreflightContext: Sendable {
 
 public enum LaunchPreflight {
 
-    /// The fast phase: every check but quick_check, in checklist order.
-    /// Synchronous and cheap (< 200 ms); call it from `run`, or directly
-    /// before an MFO job starts (the disk checks are the first two).
-    public static func fastChecks(_ context: PreflightContext, probe: some PreflightProbe) -> [PreflightCheck] {
-        let rules = PreflightRules(context: context, probe: probe)
-        return head(rules) + tail(rules)
-    }
-
-    /// Disks, memory and the catalog: quick_check, when it runs, goes right after these.
-    private static func head<P: PreflightProbe>(_ rules: PreflightRules<P>) -> [PreflightCheck] {
-        rules.diskChecks() + [rules.memory(), rules.swap()] + rules.catalogChecks()
-    }
-
-    private static func tail<P: PreflightProbe>(_ rules: PreflightRules<P>) -> [PreflightCheck] {
-        [rules.tools(), rules.logFolder(), rules.thermal(), rules.power(), rules.masterArchive()]
-    }
-
-    /// The quick_check phase alone.
-    public static func quickCheck(_ context: PreflightContext, probe: some PreflightProbe) -> PreflightCheck {
-        PreflightRules(context: context, probe: probe).quickCheck()
-    }
-
-    /// The whole checklist, off the main actor. `includeQuickCheck: false`
-    /// gives the fast phase only (the 10-minute re-check).
+    /// The whole checklist, off the main actor — the only way in.
+    /// `includeQuickCheck: false` gives the fast phase only (the 10-minute
+    /// re-check). Throws CancellationError if the Task is cancelled; a cancel
+    /// during quick_check interrupts SQLite at once.
     @concurrent
     public static func run(_ context: PreflightContext, probe: some PreflightProbe,
-                           includeQuickCheck: Bool = true) async -> PreflightReport {
+                           includeQuickCheck: Bool = true) async throws -> PreflightReport {
         let clock = ContinuousClock()
         let start = clock.now
+        try Task.checkCancellation()
         let rules = PreflightRules(context: context, probe: probe)   // reads the catalog disk once
-        let front = head(rules)
-        let back = tail(rules)
-        let hold = PreflightGate.hold(catalogVolume: rules.systemVolume(), catalogBytes: rules.catalogBytes(),
-                                      thresholds: context.thresholds)
+        let front = try runSteps(frontSteps(rules))
+        let back = try runSteps(backSteps(rules))
         let fastElapsed = clock.now - start
-        guard includeQuickCheck else {
-            return PreflightReport(checks: front + back, fastElapsed: fastElapsed, hold: hold)
+        var quick: [PreflightCheck] = []
+        var quickElapsed: Duration?
+        if includeQuickCheck {
+            let quickStart = clock.now
+            let cancellation = PreflightCancellation()
+            let check = await withTaskCancellationHandler {
+                rules.quickCheck(cancellation: cancellation)
+            } onCancel: {
+                cancellation.cancel()
+            }
+            try Task.checkCancellation()
+            quick = [check]
+            quickElapsed = clock.now - quickStart
         }
-        let quickStart = clock.now
-        let quick = rules.quickCheck()
-        let quickElapsed = clock.now - quickStart
-        return PreflightReport(checks: front + [quick] + back, fastElapsed: fastElapsed,
-                               quickCheckElapsed: quickElapsed, hold: hold)
+        let checks = front + quick + back
+        let situation = PreflightSituation(catalogVolume: rules.systemVolume(), catalogBytes: rules.catalogBytes(),
+                                           catalogFault: PreflightSituation.catalogFault(in: checks))
+        return PreflightReport(checks: checks, situation: situation, fastElapsed: fastElapsed,
+                               quickCheckElapsed: quickElapsed, thresholds: context.thresholds)
     }
 
     /// The START line, logged by the caller just before `run`.
     public static func startLine(_ context: PreflightContext, includeQuickCheck: Bool = true) -> String {
         "[preflight] START catalog \(context.databaseURL.path)"
             + (includeQuickCheck ? ", quick_check budget \(PreflightWords.milliseconds(context.quickCheckBudget))" : ", fast checks only")
+    }
+
+    private typealias Step = () -> [PreflightCheck]
+
+    /// Disks, memory and the catalog: quick_check, when it runs, goes right after these.
+    private static func frontSteps<P: PreflightProbe>(_ rules: PreflightRules<P>) -> [Step] {
+        [rules.diskChecks, { [rules.memory()] }, { [rules.swap()] }, rules.catalogChecks]
+    }
+
+    private static func backSteps<P: PreflightProbe>(_ rules: PreflightRules<P>) -> [Step] {
+        [{ [rules.tools()] }, { [rules.logFolder()] }, { [rules.thermal()] }, { [rules.power()] },
+         { [rules.masterArchive()] }]
+    }
+
+    /// Each step, with a cancellation check before it.
+    private static func runSteps(_ steps: [Step]) throws -> [PreflightCheck] {
+        var checks: [PreflightCheck] = []
+        for step in steps {
+            try Task.checkCancellation()
+            checks += step()
+        }
+        return checks
     }
 }
 
@@ -329,8 +353,8 @@ enum PreflightWords {
     }
 
     static func percent(_ fraction: Double) -> String {
-        // Floor, so 94.9% never reads as "95% full" next to a warn-only banner.
-        // The epsilon keeps a 0.95 that multiplies out to 94.999… at "95%".
+        // Floor, so 94.9% never reads as "95% full" next to a warn-only
+        // banner; the epsilon keeps a 0.95 that multiplies out to 94.999… at "95%".
         "\(Int((fraction * 100 + 1e-9).rounded(.down)))%"
     }
 

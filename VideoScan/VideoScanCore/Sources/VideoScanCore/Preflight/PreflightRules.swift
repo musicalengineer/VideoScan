@@ -1,118 +1,18 @@
 // PreflightRules.swift (VideoScanCore/Preflight)
 // One rule per check: ask the probe one question, turn the answer into one
 // `PreflightCheck` with words for the person and detail for the log. The
-// thresholds are the named constants in `PreflightThresholds`.
+// numbers are the named constants in `PreflightThresholds`.
 //
-// The "couldn't check" rule: a probe that throws or answers nil gives a
-// check at `PreflightThresholds.unknownLevel(for:)` — warn for the disks
-// and the catalog (the things that guard data), note for the rest. Never ok:
-// a broken probe must not read as a green light.
+// The "couldn't check" rule: a probe that throws or answers nil — or a disk
+// that reports no size — gives a check at `PreflightThresholds.unknownLevel`:
+// warn for the disks and the catalog (the things that guard data), note for
+// the rest. Never ok: a broken probe must not read as a green light.
 //
-// (For Rick: `Result<T, E>` ≈ std::expected<T, E>; `some PreflightProbe` ≈ a
-// template parameter constrained to the interface — static dispatch, no vtable.)
+// (For Rick: `Result<T, E>` ≈ std::expected<T, E>; a generic struct over
+// `Probe: PreflightProbe` ≈ a template constrained to the interface — static
+// dispatch, no vtable.)
 
 import Foundation
-
-// MARK: - Thresholds
-
-/// The checklist's numbers. Defaults are Rick's 2026-10-21 brief.
-/// Disk sizes are decimal GB (as Finder shows them); memory and journal
-/// sizes are binary (as the hardware and SQLite count them).
-public struct PreflightThresholds: Sendable, Equatable {
-    public static let gigabyte: Int64 = 1_000_000_000
-    public static let gibibyte: UInt64 = 1 << 30
-    public static let mebibyte: UInt64 = 1 << 20
-
-    /// Disk: warn at ≥ 90% used …
-    public static let defaultDiskWarnUsedFraction = 0.90
-    /// … or under 50 GB free.
-    public static let defaultDiskWarnFreeBytes: Int64 = 50 * gigabyte
-    /// Disk: red at ≥ 95% used …
-    public static let defaultDiskRedUsedFraction = 0.95
-    /// … or under max(20 GB, 3 × (catalog.sqlite + WAL)) free: a commit,
-    /// a safety copy and a VACUUM INTO each need about a catalog's worth.
-    public static let defaultDiskRedFloorBytes: Int64 = 20 * gigabyte
-    public static let defaultDiskRedCatalogMultiple: Int64 = 3
-    /// Hard floor (Rick, 2026-10-21): below 2 × (catalog + WAL) free on the
-    /// catalog's disk, edits are held — a commit may not fit …
-    public static let defaultEditHoldCatalogMultiple: Int64 = 2
-    /// … and never below 1 GB, so a tiny or missing catalog can't make an
-    /// empty disk look editable.
-    public static let defaultEditHoldFloorBytes: Int64 = 1 * gigabyte
-    /// RAM: warn under 16 GB of physical memory.
-    public static let defaultMemoryWarnBelowBytes: UInt64 = 16 * gibibyte
-    /// Swap: note over 4 GB in use (UI slowness is often swap / MLX helpers).
-    public static let defaultSwapNoteAboveBytes: UInt64 = 4 * gibibyte
-    /// WAL: warn over 256 MB — the journal is not being checkpointed.
-    public static let defaultJournalWarnAboveBytes: UInt64 = 256 * mebibyte
-    /// quick_check is interrupted after this long. Measured 2026-10-21 on a
-    /// .backup copy of the 275 MB live catalog (M4 Max, through GRDB):
-    /// 125–190 ms warm, 2.67 s with a cold file cache. 5 s covers a cold
-    /// launch with room to spare; it runs off the main actor, so the person
-    /// never waits on it, and running out of time is only a note.
-    public static let quickCheckBudget: Duration = .seconds(5)
-
-    public var diskWarnUsedFraction = defaultDiskWarnUsedFraction
-    public var diskWarnFreeBytes = defaultDiskWarnFreeBytes
-    public var diskRedUsedFraction = defaultDiskRedUsedFraction
-    public var diskRedFloorBytes = defaultDiskRedFloorBytes
-    public var diskRedCatalogMultiple = defaultDiskRedCatalogMultiple
-    public var editHoldCatalogMultiple = defaultEditHoldCatalogMultiple
-    public var editHoldFloorBytes = defaultEditHoldFloorBytes
-    public var memoryWarnBelowBytes = defaultMemoryWarnBelowBytes
-    public var swapNoteAboveBytes = defaultSwapNoteAboveBytes
-    public var journalWarnAboveBytes = defaultJournalWarnAboveBytes
-
-    public init() {}
-
-    /// The free space below which a disk is red, for a catalog of this size.
-    public func diskRedFreeBytes(catalogBytes: UInt64) -> Int64 {
-        max(diskRedFloorBytes, Int64(clamping: catalogBytes).multipliedClamped(by: diskRedCatalogMultiple))
-    }
-
-    /// The level a check takes when its probe couldn't answer.
-    public static func unknownLevel(for id: PreflightCheck.ID) -> PreflightLevel {
-        switch id {
-        case .systemDisk, .tempDisk, .catalogSwitched, .catalogSchema, .catalogJournal, .catalogQuickCheck:
-            return .warn
-        case .memory, .swap, .tools, .logFolder, .thermal, .power, .masterArchive:
-            return .note
-        }
-    }
-}
-
-// MARK: - The disk rule (pure)
-
-/// How full a disk may be. Pure: a volume reading and a catalog size in,
-/// a level and the reason out.
-public enum PreflightDiskRule {
-    public enum Reason: Sendable, Equatable, CustomStringConvertible {
-        case fine
-        case percentFull(Double)
-        case lowFree(Int64)
-
-        public var description: String {
-            switch self {
-            case .fine: return "within limits"
-            case .percentFull(let used): return String(format: "%.1f%% used", used * 100)
-            case .lowFree(let free): return "\(PreflightWords.gigabytes(free)) free"
-            }
-        }
-    }
-
-    public static func judge(_ volume: PreflightVolume, catalogBytes: UInt64,
-                             thresholds: PreflightThresholds) -> (PreflightLevel, Reason) {
-        let used = volume.usedFraction
-        let free = volume.availableBytes
-        if used >= thresholds.diskRedUsedFraction { return (.red, .percentFull(used)) }
-        if free < thresholds.diskRedFreeBytes(catalogBytes: catalogBytes) { return (.red, .lowFree(free)) }
-        if used >= thresholds.diskWarnUsedFraction { return (.warn, .percentFull(used)) }
-        if free < thresholds.diskWarnFreeBytes { return (.warn, .lowFree(free)) }
-        return (.ok, .fine)
-    }
-}
-
-// MARK: - The rules
 
 /// What a probe question gave: the answer, or why there isn't one.
 typealias PreflightAnswer<T> = Result<T, PreflightGap>
@@ -125,27 +25,35 @@ struct PreflightRules<Probe: PreflightProbe> {
     let context: PreflightContext
     let probe: Probe
     /// The catalog's disk, asked ONCE per run: the capacity read is the one
-    /// costly probe question (≈ 8–9 ms — macOS totals purgeable space), and
-    /// both the disk check and the hold need it.
+    /// costly probe question (≈ 7–20 ms — macOS totals purgeable space), and
+    /// the disk check, the hold and the gate all need it.
     let system: PreflightAnswer<PreflightVolume>
 
     init(context: PreflightContext, probe: Probe) {
         self.context = context
         self.probe = probe
-        self.system = Self.ask { try probe.volume(containing: context.supportFolder) }
+        self.system = Self.askVolume(probe, containing: context.supportFolder)
     }
 
     private var limits: PreflightThresholds { context.thresholds }
 
     /// Ask the probe; a throw or a nil becomes a gap with the reason.
-    private func ask<T>(_ question: () throws -> T?) -> PreflightAnswer<T> { Self.ask(question) }
-
     private static func ask<T>(_ question: () throws -> T?) -> PreflightAnswer<T> {
         do {
             guard let value = try question() else { return .failure(PreflightGap(why: "the Mac gave no answer")) }
             return .success(value)
         } catch {
             return .failure(PreflightGap(why: String(describing: error)))
+        }
+    }
+
+    private func ask<T>(_ question: () throws -> T?) -> PreflightAnswer<T> { Self.ask(question) }
+
+    /// A volume that reports no size is a gap, not "100% full" (QA r1 nit).
+    private static func askVolume(_ probe: Probe, containing url: URL) -> PreflightAnswer<PreflightVolume> {
+        ask { try probe.volume(containing: url) }.flatMap { volume in
+            volume.isMeasurable ? .success(volume)
+                : .failure(PreflightGap(why: "\(volume.name) reported a size of \(volume.totalBytes) bytes"))
         }
     }
 
@@ -164,7 +72,7 @@ struct PreflightRules<Probe: PreflightProbe> {
         return overflow ? .max : sum
     }
 
-    /// The disk holding the catalog, or nil when the probe couldn't say.
+    /// The disk holding the catalog, or nil when it couldn't be read.
     func systemVolume() -> PreflightVolume? {
         try? system.get()
     }
@@ -175,7 +83,7 @@ struct PreflightRules<Probe: PreflightProbe> {
         var checks = [disk(.systemDisk, system, label: "Your Mac's main disk",
                            unknownWhat: "how full your Mac's main disk is",
                            folder: context.supportFolder, catalogBytes: catalogBytes)]
-        let temp = ask { try probe.volume(containing: context.temporaryFolder) }
+        let temp = Self.askVolume(probe, containing: context.temporaryFolder)
         if case .success(let tempVolume) = temp, case .success(let systemVolume) = system,
            tempVolume.id == systemVolume.id {
             return checks   // same volume: one check covers both
@@ -195,24 +103,28 @@ struct PreflightRules<Probe: PreflightProbe> {
         case .success(let found): volume = found
         }
         let (level, reason) = PreflightDiskRule.judge(volume, catalogBytes: catalogBytes, thresholds: limits)
-        let redFloor = limits.diskRedFreeBytes(catalogBytes: catalogBytes)
-        let readings = [
-            PreflightReading("free", Double(volume.availableBytes), .bytes),
+        let free = volume.freeBytes
+        let editFloor = limits.editHoldFreeBytes(catalogBytes: catalogBytes)
+        var readings = [
+            PreflightReading("free", Double(free), .bytes),
             PreflightReading("total", Double(volume.totalBytes), .bytes),
             PreflightReading("used", volume.usedFraction, .fraction),
-            PreflightReading("redBelow", Double(redFloor), .bytes),
+            PreflightReading("redBelow", Double(limits.diskRedFreeBytes(catalogBytes: catalogBytes)), .bytes),
+            PreflightReading("editHoldBelow", Double(editFloor), .bytes),
             PreflightReading("catalog", Double(catalogBytes), .bytes),
         ]
+        if let purgeable = volume.freeIncludingPurgeableBytes {
+            readings.append(PreflightReading("freeIncludingPurgeable", Double(purgeable), .bytes))
+        }
         let detail = "\(volume.name) (\(volume.id)) holding \(folder.path): \(reason)"
-        let editFloor = limits.editHoldFreeBytes(catalogBytes: catalogBytes)
-        if id == .systemDisk, volume.availableBytes < editFloor {
+        if id == .systemDisk, free < editFloor {
             // The hard floor: the person's edits are held, so say exactly that.
-            let more = PreflightWords.gigabytesRoundedUp(editFloor - volume.availableBytes)
+            let more = PreflightWords.gigabytesRoundedUp(editFloor - free)
             return PreflightCheck(id, .red,
                                   words: "\(label) is too full to save changes safely — free at least \(more) more; "
                                       + "your edits are on hold until then",
                                   detail: detail + "; below the edit floor \(PreflightWords.gigabytes(editFloor))",
-                                  readings: readings + [PreflightReading("editHoldBelow", Double(editFloor), .bytes)])
+                                  readings: readings)
         }
         return PreflightCheck(id, level, words: diskWords(label, level, reason, volume), detail: detail,
                               readings: readings)
@@ -222,12 +134,13 @@ struct PreflightRules<Probe: PreflightProbe> {
                            _ volume: PreflightVolume) -> String {
         let state: String
         switch reason {
-        case .fine: return "\(label) has \(PreflightWords.gigabytes(volume.availableBytes)) free"
+        case .fine: return "\(label) has \(PreflightWords.gigabytes(volume.freeBytes)) free"
         case .percentFull(let used): state = "is \(PreflightWords.percent(used)) full"
         case .lowFree(let free): state = "has only \(PreflightWords.gigabytes(free)) free"
         }
-        // Red holds long jobs and backups, not editing (Rick's ruling (b), 2026-10-21).
-        let advice = level == .red ? "free some space; long jobs and backups wait until you do"
+        // Red holds long jobs, backups and viewer publishes — not editing
+        // (Rick's ruling (b), 2026-10-21).
+        let advice = level == .red ? "free some space; long jobs, backups and copies to other Macs wait until you do"
                                    : "consider freeing some space soon"
         return "\(label) \(state) — \(advice)"
     }
@@ -330,9 +243,9 @@ struct PreflightRules<Probe: PreflightProbe> {
                               readings: readings)
     }
 
-    func quickCheck() -> PreflightCheck {
+    func quickCheck(cancellation: PreflightCancellation) -> PreflightCheck {
         let budget = context.quickCheckBudget
-        switch ask({ try probe.catalogQuickCheck(at: context.databaseURL, budget: budget) }) {
+        switch ask({ try probe.catalogQuickCheck(at: context.databaseURL, budget: budget, cancellation: cancellation) }) {
         case .failure(let gap):
             return unknown(.catalogQuickCheck, "the catalog's health", gap)
         case .success(.passed(let elapsed)):
@@ -346,10 +259,15 @@ struct PreflightRules<Probe: PreflightProbe> {
                                   readings: [milliseconds("elapsed", elapsed),
                                              PreflightReading("problems", Double(lines.count), .count)])
         case .success(.ranOutOfTime(let budget)):
-            return PreflightCheck(.catalogQuickCheck, .note,
-                                  words: "The catalog's quick health check didn't finish in time — Validate Catalog does the full check",
+            // WARN, not a note (QA r1 minor 2): no verdict is never a quiet green.
+            return PreflightCheck(.catalogQuickCheck, .warn,
+                                  words: "The catalog's quick health check didn't finish in time — run Validate Catalog for the full check",
                                   detail: "quick_check interrupted at its \(PreflightWords.milliseconds(budget)) budget",
                                   readings: [milliseconds("budget", budget)])
+        case .success(.cancelled):
+            return PreflightCheck(.catalogQuickCheck, .warn,
+                                  words: "The catalog's quick health check was stopped before it finished",
+                                  detail: "quick_check cancelled")
         }
     }
 

@@ -29175,7 +29175,10 @@
       ],
       "tests": [
         "aGapIsNeverOKForAnyCheck",
+        "alreadyCancelledRunThrowsAndReportsNothing",
         "batteryIsANote",
+        "cancelDuringQuickCheckStopsItAtOnce",
+        "cancellationTokenRunsItsHandlerOnceAndLateRegistrationFiresAtOnce",
         "defaultsAreRicksNumbers",
         "diskAt90PercentWarnsAndJustUnderIsOK",
         "diskAt95PercentIsRedAndJustUnderWarns",
@@ -29187,14 +29190,15 @@
         "journalOver256MBWarns",
         "masterArchiveOfflineIsOnlyANote",
         "memoryUnder16GBWarns",
-        "missingCatalogFileIsRed",
-        "missingCutoverMarkerIsRed",
+        "missingCatalogFileIsRedAndHoldsEdits",
+        "missingCutoverMarkerIsRedAndHoldsEdits",
         "missingFFprobeWarnsAndNamesIt",
         "missingTempVolumeIsCheckedSeparatelyAndNotGreen",
         "notesAloneShowNoBanner",
+        "purgeableInclusiveFreeIsShownButNeverJudged",
         "quickCheckOutcomes",
         "realProbeFastPhaseFitsIn200ms",
-        "redDiskSummaryIsRicksSentence",
+        "redDiskSummaryHoldsLongOperationsNotEdits",
         "redFloorIsThreeTimesCatalogPlusJournal",
         "redFloorNeverOverflows",
         "schemaVersionEqualOKNewerRedOlderWarn",
@@ -29206,7 +29210,8 @@
         "under50GBFreeWarnsOnASmallDisk",
         "unwritableLogFolderWarns",
         "usedFractionOfAZeroSizedVolumeReadsFull",
-        "worstLevelWinsAndSummaryCountsTheRest"
+        "worstLevelWinsAndSummaryCountsTheRest",
+        "zeroSizedVolumeIsCouldntCheckNotFull"
       ]
     },
     {
@@ -29218,25 +29223,32 @@
       ],
       "tests": [
         "backupAndPublishNeedOneCatalog",
+        "catalogFaultRefusesEditsAndLongOperationsWithTheChecksWords",
+        "destinationThatIsTheCatalogDiskGetsTheCatalogReserve",
         "eachRealProbeQuestionIsCheap",
         "editFloorNeverUnder1GB",
         "editFloorPlusMinusOneByte",
         "exactly90PercentWarnsOneByteLessUsedIsOK",
         "exactly95PercentIsRedOneByteLessUsedWarns",
+        "freeingTheStatedShortfallLetsTheOperationStart",
+        "freshDiskReadingKeepsTheCatalogFault",
         "heldEditSaysHowMuchToFreeRoundedUp",
         "hugeWALClampsInsteadOfOverflowing",
         "launchReportBelowEditFloorSaysEditsAreHeld",
         "launchReportHugeWALIsWarnAndHoldsEdits",
-        "longJobMustFitAndLeaveTheRedFloorBehind",
+        "leastFreeOutOfRedIsExactToTheByte",
+        "longJobMustFitAndLeaveTheDiskOutOfRed",
         "negativeJobEstimateCountsAsZero",
-        "negativeOrOverfullReadingsNeverCrash",
+        "negativeOrOverfullReadingsNeverCrashOrOverflow",
+        "onlyRedCatalogChecksAreFaults",
         "otherDestinationNeedsNoCatalogReserve",
         "redCatalogFloorPlusMinusOneByte",
         "redDiskRefusesLongOperationsButNotEdits",
         "redFloor20GBPlusMinusOneByte",
+        "unreadableDestinationRefusesLongOperations",
         "unreadableDiskNeverHoldsEditsButRefusesLongOperations",
         "warnFreeLine50GBPlusMinusOneByte",
-        "zeroByteVolumeIsRedAndHoldsEdits"
+        "zeroByteVolumeIsUnmeasurableNeverHoldsEditsButRefusesLongOperations"
       ]
     },
     {
@@ -29247,9 +29259,11 @@
         "CatalogPreflightReaderTests"
       ],
       "tests": [
+        "cancelDuringQuickCheckInterruptsItAndSaysCancelled",
+        "cancelledBeforeStartNeverOpensTheFile",
         "damagedFileIsNeverAPass",
         "expectedVersionIsTheStoresCurrentVersion",
-        "measureOnACatalogCopy",
+        "lateWatchdogsAndCancelsAfterCloseAreHarmless",
         "missingFileThrows",
         "noCatalogStateTableIsNil",
         "quickCheckIsInterruptedAtItsBudget",
@@ -29285,6 +29299,18 @@
       "tests": [
         "qaR1_quickCheckBesideALiveWALWriterPassesAndNeverBlocksACommit",
         "qaR1_readerOnAClosedWALCatalogLeavesNoSidecars"
+      ]
+    },
+    {
+      "blocked_reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightMeasureTests"
+      ],
+      "tests": [
+        "measureOnACatalogCopy"
       ]
     },
     {
@@ -30006,6 +30032,10 @@
   "stages": [
     {
       "blocked": [
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
+          "reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog"
+        },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ArchivistBiographyPolicyStateCodeTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
@@ -32557,7 +32587,7 @@
       ],
       "expected_floor": 2817,
       "name": "unit",
-      "package_expected_floor": 381,
+      "package_expected_floor": 395,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",

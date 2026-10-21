@@ -126,30 +126,42 @@ struct CatalogPreflightReaderTests {
         #expect(!FileManager.default.fileExists(atPath: url.path), "a read-only open never creates the file")
     }
 
-    /// MEASUREMENT, opt-in: point VIDEOSCAN_PREFLIGHT_DB at a `.backup` COPY
-    /// of a real catalog (never the live file) to time each launch question
-    /// against the full open checks. Without it the test does nothing — it
-    /// returns rather than skips, because the gauntlet counts a skip as not passing.
-    @Test func measureOnACatalogCopy() throws {
-        guard let path = ProcessInfo.processInfo.environment["VIDEOSCAN_PREFLIGHT_DB"] else { return }
-        let url = URL(fileURLWithPath: path)
-        let clock = ContinuousClock()
-        func ms(_ d: Duration) -> String { String(format: "%.1f ms", TimingBudget.seconds(d) * 1_000) }
-        var lines: [String] = []
-        for round in 1...3 {
-            let schema = clock.measure { _ = try? CatalogPreflightReader.schemaVersion(at: url) }
-            var outcome: PreflightQuickCheckOutcome?
-            let quick = clock.measure { outcome = try? CatalogPreflightReader.quickCheck(at: url, budget: .seconds(10)) }
-            var configuration = Configuration()
-            configuration.readonly = true
-            let queue = try DatabaseQueue(path: url.path, configuration: configuration)
-            let integrity = try clock.measure { _ = try queue.read { try String.fetchAll($0, sql: "PRAGMA integrity_check") } }
-            let foreignKeys = try clock.measure { _ = try queue.read { try Row.fetchAll($0, sql: "PRAGMA foreign_key_check") } }
-            try queue.close()
-            lines.append("round \(round): schema \(ms(schema)), quick_check \(ms(quick)) [\(outcome.map { "\($0)" } ?? "threw")], "
-                         + "integrity_check \(ms(integrity)), foreign_key_check \(ms(foreignKeys))")
+    @Test func cancelledBeforeStartNeverOpensTheFile() throws {
+        let scratch = try Scratch()
+        let url = scratch.url("catalog.sqlite")
+        try makeFixture(at: url, schemaVersion: 12)
+        let token = PreflightCancellation()
+        token.cancel()
+        #expect(try CatalogPreflightReader.quickCheck(at: url, budget: .seconds(5), cancellation: token) == .cancelled)
+    }
+
+    @Test func cancelDuringQuickCheckInterruptsItAndSaysCancelled() throws {
+        // ~60 MB of filler: quick_check takes tens of ms; the cancel lands mid-walk.
+        let scratch = try Scratch()
+        let url = scratch.url("catalog.sqlite")
+        try makeFixture(at: url, schemaVersion: 12, rows: 250_000)
+        let token = PreflightCancellation()
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(2)) { token.cancel() }
+        let outcome = try CatalogPreflightReader.quickCheck(at: url, budget: .seconds(30), cancellation: token)
+        #expect(outcome == .cancelled, "\(outcome)")
+    }
+
+    @Test func lateWatchdogsAndCancelsAfterCloseAreHarmless() throws {
+        // QA r1 minor 3: an interrupt racing close. Budgets of 0–2 ms on a
+        // small file make the watchdog fire around the end of the check; a
+        // cancel lands after return. Nothing may crash or hang.
+        let scratch = try Scratch()
+        let url = scratch.url("catalog.sqlite")
+        try makeFixture(at: url, schemaVersion: 12, rows: 2_000)
+        for round in 0..<60 {
+            let token = PreflightCancellation()
+            let outcome = try CatalogPreflightReader.quickCheck(at: url, budget: .milliseconds(round % 3), cancellation: token)
+            token.cancel()
+            switch outcome {
+            case .passed, .ranOutOfTime: break
+            case .problems, .cancelled: Issue.record("round \(round): \(outcome)")
+            }
         }
-        print("[preflight-measure] \(url.lastPathComponent):\n" + lines.joined(separator: "\n"))
     }
 
     @Test func theRealProbeRunsQuickCheckThroughThisReader() async throws {
@@ -162,12 +174,13 @@ struct CatalogPreflightReaderTests {
                                        temporaryFolder: scratch.folder, logFolder: scratch.folder,
                                        masterArchiveVolume: nil,
                                        expectedSchemaVersion: CatalogPreflightReader.expectedSchemaVersion)
-        let report = await LaunchPreflight.run(context, probe: SystemPreflightProbe())
+        let report = try await LaunchPreflight.run(context, probe: SystemPreflightProbe())
         let byID = Dictionary(uniqueKeysWithValues: report.checks.map { ($0.id, $0) })
         #expect(byID[.catalogSwitched]?.level == .ok)
         #expect(byID[.catalogSchema]?.level == .ok, "\(byID[.catalogSchema]?.logLine ?? "")")
         #expect(byID[.catalogJournal]?.level == .ok)
         #expect(byID[.catalogQuickCheck]?.level == .ok, "\(byID[.catalogQuickCheck]?.logLine ?? "")")
         #expect(report.quickCheckElapsed != nil)
+        #expect(report.hold == .none)
     }
 }

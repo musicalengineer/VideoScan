@@ -5,9 +5,12 @@
 // 200 ms fast-phase budget (quick_check, the one O(N) question, is separate).
 //
 // Sources:
-//   disk     URLResourceValues .volumeAvailableCapacityForImportantUsageKey
-//            (what macOS will actually free for a real write) and
-//            .volumeTotalCapacityKey; the volume's mount point is its id.
+//   disk     URLResourceValues: min(.volumeAvailableCapacityKey,
+//            .volumeAvailableCapacityForImportantUsageKey) — bytes free now,
+//            purgeable space NOT counted (QA r1 M4); the important-usage
+//            figure is kept for the log only. .volumeTotalCapacityKey; the
+//            volume's mount point is its id. ≈ 7–20 ms per call (macOS
+//            totals purgeable space) — the one costly question.
 //   memory   ProcessInfo.physicalMemory
 //   swap     sysctl vm.swapusage → xsw_usage.xsu_used
 //   thermal  ProcessInfo.thermalState
@@ -30,14 +33,21 @@ public struct SystemPreflightProbe: PreflightProbe {
     public func volume(containing url: URL) throws -> PreflightVolume? {
         let existing = Self.nearestExisting(url)
         let values = try existing.resourceValues(forKeys: [
-            .volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey,
-            .volumeURLKey, .volumeNameKey,
+            .volumeAvailableCapacityKey, .volumeAvailableCapacityForImportantUsageKey,
+            .volumeTotalCapacityKey, .volumeURLKey, .volumeNameKey,
         ])
-        guard let available = values.volumeAvailableCapacityForImportantUsage,
-              let total = values.volumeTotalCapacity else { return nil }
+        guard let total = values.volumeTotalCapacity else { return nil }
+        let freeNow = values.volumeAvailableCapacity.map(Int64.init)
+        let important = values.volumeAvailableCapacityForImportantUsage
+        // QA r1 (M4): the rules use bytes free RIGHT NOW. The important-usage
+        // figure counts purgeable files macOS hasn't freed (8.2 GB more than
+        // free on the M4, 2026-10-21); a commit's write() won't wait for the
+        // purge. Take the smaller of the two; either alone if only one answers.
+        guard let available = [freeNow, important].compactMap({ $0 }).min() else { return nil }
         return PreflightVolume(id: values.volume?.path ?? existing.path,
                                name: values.volumeName ?? "the disk",
-                               availableBytes: available, totalBytes: Int64(total))
+                               availableBytes: available, totalBytes: Int64(total),
+                               freeIncludingPurgeableBytes: important)
     }
 
     public func isVolumeMounted(at url: URL) -> Bool {
@@ -133,7 +143,8 @@ public struct SystemPreflightProbe: PreflightProbe {
         try CatalogPreflightReader.schemaVersion(at: databaseURL)
     }
 
-    public func catalogQuickCheck(at databaseURL: URL, budget: Duration) throws -> PreflightQuickCheckOutcome {
-        try CatalogPreflightReader.quickCheck(at: databaseURL, budget: budget)
+    public func catalogQuickCheck(at databaseURL: URL, budget: Duration,
+                                  cancellation: PreflightCancellation) throws -> PreflightQuickCheckOutcome {
+        try CatalogPreflightReader.quickCheck(at: databaseURL, budget: budget, cancellation: cancellation)
     }
 }

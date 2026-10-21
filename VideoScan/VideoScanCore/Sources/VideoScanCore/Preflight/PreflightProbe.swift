@@ -14,30 +14,46 @@
 
 import Foundation
 
-/// How full one volume is. Bytes are decimal-free raw counts.
+/// How full one volume is.
 public struct PreflightVolume: Sendable, Equatable {
     /// Something that names the volume uniquely on this Mac (the real probe
     /// uses its mount point). Two folders on the same volume give the same id.
     public var id: String
     /// The volume's name for the person ("Macintosh HD").
     public var name: String
-    /// `volumeAvailableCapacityForImportantUsage`: what macOS will free up
-    /// for a real write, purgeable space included.
+    /// Bytes free RIGHT NOW — what a write can use without waiting for macOS
+    /// to purge caches. Every rule (red line, edit floor, job sizing) uses
+    /// this. QA r1 (M4): purgeable space is not free until macOS frees it, and
+    /// a SQLite commit's write() does not wait for the purge.
     public var availableBytes: Int64
     public var totalBytes: Int64
+    /// `volumeAvailableCapacityForImportantUsage`: free space COUNTING
+    /// purgeable files. Information only (the log shows it); no rule reads it.
+    public var freeIncludingPurgeableBytes: Int64?
 
-    public init(id: String, name: String, availableBytes: Int64, totalBytes: Int64) {
+    public init(id: String, name: String, availableBytes: Int64, totalBytes: Int64,
+                freeIncludingPurgeableBytes: Int64? = nil) {
         self.id = id
         self.name = name
         self.availableBytes = availableBytes
         self.totalBytes = totalBytes
+        self.freeIncludingPurgeableBytes = freeIncludingPurgeableBytes
     }
 
-    /// 0…1. A volume reporting zero size reads as full, never as empty.
+    /// `availableBytes`, never negative and never more than the volume —
+    /// the number every subtraction uses, so a confused probe can't overflow.
+    public var freeBytes: Int64 {
+        min(max(availableBytes, 0), max(totalBytes, 0))
+    }
+
+    /// A volume that reports no size can't be judged ("Couldn't check").
+    public var isMeasurable: Bool { totalBytes > 0 }
+
+    /// 0…1. A volume reporting zero size reads as full, never as empty
+    /// (the rules treat it as unmeasurable before they get here).
     public var usedFraction: Double {
         guard totalBytes > 0 else { return 1 }
-        let used = Double(totalBytes - min(max(availableBytes, 0), totalBytes))
-        return used / Double(totalBytes)
+        return Double(totalBytes - freeBytes) / Double(totalBytes)
     }
 }
 
@@ -63,6 +79,8 @@ public enum PreflightQuickCheckOutcome: Sendable, Equatable {
     case problems([String], elapsed: Duration)
     /// The budget ran out and the check was interrupted — no verdict.
     case ranOutOfTime(budget: Duration)
+    /// Stopped on purpose (the app is quitting) — no verdict.
+    case cancelled
 }
 
 public protocol PreflightProbe: Sendable {
@@ -90,6 +108,8 @@ public protocol PreflightProbe: Sendable {
     /// `catalog_state.schema_version` of the catalog at `databaseURL`
     /// (read-only, cheap). nil when the file has no such row.
     func catalogSchemaVersion(at databaseURL: URL) throws -> Int?
-    /// `PRAGMA quick_check` on a read-only connection, interrupted at `budget`.
-    func catalogQuickCheck(at databaseURL: URL, budget: Duration) throws -> PreflightQuickCheckOutcome
+    /// `PRAGMA quick_check` on a read-only connection, interrupted at
+    /// `budget` or as soon as `cancellation` is cancelled.
+    func catalogQuickCheck(at databaseURL: URL, budget: Duration,
+                           cancellation: PreflightCancellation) throws -> PreflightQuickCheckOutcome
 }

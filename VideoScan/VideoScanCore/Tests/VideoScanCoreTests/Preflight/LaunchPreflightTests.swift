@@ -5,10 +5,12 @@
 //   2. Scale     — 1,000 whole runs with a fake probe inside a time budget,
 //                  and the REAL probe's fast phase inside its 200 ms budget.
 //   3. Media     — n/a (opens no media).
-//   4. Isolation — a poisoned probe (throws / nil / missing volume) gives
-//                  "Couldn't check …", never a crash and never a green.
+//   4. Isolation — a poisoned probe (throws / nil / missing volume / a volume
+//                  with no size) gives "Couldn't check …", never a crash and
+//                  never a green.
 //   5. Sensor    — `unknownLevel` is never ok for any check id; the
 //                  healthy machine's summary is exactly "All set".
+// Plus cancellation: a cancelled run throws and never reports a verdict.
 // The quick_check on a real (tiny, generated) SQLite file is in
 // Store/CatalogPreflightReaderTests.swift — the SQLite toolkit is confined
 // to Store/ folders (CatalogStoreSensorTests).
@@ -47,6 +49,8 @@ struct FakePreflightProbe: PreflightProbe {
     var schemaThrows = false
     var quickCheck: PreflightQuickCheckOutcome? = .passed(elapsed: .milliseconds(100))
     var quickCheckThrows = false
+    /// quick_check that only ends when cancelled (or after 5 s) — the quit-path shape.
+    var quickCheckWaitsForCancel = false
 
     func volume(containing url: URL) throws -> PreflightVolume? {
         if volumesThrow { throw Poisoned() }
@@ -69,8 +73,14 @@ struct FakePreflightProbe: PreflightProbe {
         if schemaThrows { throw Poisoned() }
         return schemaVersion
     }
-    func catalogQuickCheck(at databaseURL: URL, budget: Duration) throws -> PreflightQuickCheckOutcome {
+    func catalogQuickCheck(at databaseURL: URL, budget: Duration,
+                           cancellation: PreflightCancellation) throws -> PreflightQuickCheckOutcome {
         if quickCheckThrows { throw Poisoned() }
+        if quickCheckWaitsForCancel {
+            let deadline = Date().addingTimeInterval(5)
+            while !cancellation.isCancelled, Date() < deadline { usleep(1_000) }
+            return cancellation.isCancelled ? .cancelled : .ranOutOfTime(budget: budget)
+        }
         guard let quickCheck else { throw Poisoned() }
         return quickCheck
     }
@@ -108,28 +118,33 @@ struct LaunchPreflightTests {
         masterArchiveVolume: nil,
         expectedSchemaVersion: expectedSchema)
 
-    private func run(_ probe: FakePreflightProbe, context: PreflightContext = Self.context) async -> PreflightReport {
-        await LaunchPreflight.run(context, probe: probe)
+    static let redWords = "free some space; long jobs, backups and copies to other Macs wait until you do"
+
+    private func run(_ probe: FakePreflightProbe, context: PreflightContext = Self.context) async throws -> PreflightReport {
+        try await LaunchPreflight.run(context, probe: probe)
     }
 
     private func check(_ id: PreflightCheck.ID, _ probe: FakePreflightProbe,
-                       context: PreflightContext = Self.context) async -> PreflightCheck? {
-        await run(probe, context: context).checks.first { $0.id == id }
+                       context: PreflightContext = Self.context) async throws -> PreflightCheck? {
+        try await run(probe, context: context).checks.first { $0.id == id }
     }
 
     private func level(_ id: PreflightCheck.ID, _ probe: FakePreflightProbe,
-                       context: PreflightContext = Self.context) async -> PreflightLevel? {
-        await check(id, probe, context: context)?.level
+                       context: PreflightContext = Self.context) async throws -> PreflightLevel? {
+        try await check(id, probe, context: context)?.level
     }
 
     // MARK: The whole run
 
-    @Test func healthyMacIsAllSetWithNoBanner() async {
-        let report = await run(.healthy())
+    @Test func healthyMacIsAllSetWithNoBanner() async throws {
+        let report = try await run(.healthy())
         #expect(report.level == .ok, "\(report.checks.filter { $0.level != .ok }.map(\.logLine))")
         #expect(report.summary == "All set")
         #expect(!report.showsBanner)
         #expect(report.problems.isEmpty)
+        #expect(report.hold == .none)
+        #expect(report.situation.catalogFault == nil)
+        #expect(report.situation.catalogBytes == 275_000_000)
         #expect(report.quickCheckElapsed != nil)
         // Same volume for temp and system: one disk check, not two.
         #expect(report.checks.map(\.id) == [.systemDisk, .memory, .swap, .catalogSwitched, .catalogSchema,
@@ -138,40 +153,40 @@ struct LaunchPreflightTests {
         #expect(report.outcomeLine.hasPrefix("[preflight] OUTCOME ok: All set"))
     }
 
-    @Test func fastOnlyRunLeavesQuickCheckOut() async {
-        let report = await LaunchPreflight.run(Self.context, probe: FakePreflightProbe.healthy(), includeQuickCheck: false)
-        #expect(!report.checks.contains { $0.id == .catalogQuickCheck })
-        #expect(report.quickCheckElapsed == nil)
-        #expect(LaunchPreflight.fastChecks(Self.context, probe: FakePreflightProbe.healthy()).map(\.id)
-                == report.checks.map(\.id))
+    @Test func fastOnlyRunLeavesQuickCheckOut() async throws {
+        let full = try await run(.healthy())
+        let fast = try await LaunchPreflight.run(Self.context, probe: FakePreflightProbe.healthy(), includeQuickCheck: false)
+        #expect(!fast.checks.contains { $0.id == .catalogQuickCheck })
+        #expect(fast.quickCheckElapsed == nil)
+        #expect(fast.checks.map(\.id) == full.checks.map(\.id).filter { $0 != .catalogQuickCheck })
     }
 
-    @Test func redDiskSummaryIsRicksSentence() async {
-        let report = await run(FakePreflightProbe.healthy().disk(free: 50, of: 1_000))
+    @Test func redDiskSummaryHoldsLongOperationsNotEdits() async throws {
+        let report = try await run(FakePreflightProbe.healthy().disk(free: 50, of: 1_000))
         #expect(report.level == .red)
         #expect(report.showsBanner)
-        #expect(report.summary == "Your Mac's main disk is 95% full — free some space; long jobs and backups wait until you do")
+        #expect(report.summary == "Your Mac's main disk is 95% full — " + Self.redWords)
         #expect(report.hold == .longOperations, "red holds long jobs, not editing (ruling b)")
         #expect(report.logLines.last == report.outcomeLine)
         #expect(report.logLines.contains { $0.hasPrefix("[preflight] system-disk red:") })
     }
 
-    @Test func worstLevelWinsAndSummaryCountsTheRest() async {
+    @Test func worstLevelWinsAndSummaryCountsTheRest() async throws {
         var probe = FakePreflightProbe.healthy().disk(free: 95, of: 1_000)   // warn (90.5%)
         probe.thermal = .critical                                            // warn
         probe.files.removeValue(forKey: Self.context.latchURL.path)          // red
         probe.power = .battery                                               // note: not counted
-        let report = await run(probe)
+        let report = try await run(probe)
         #expect(report.level == .red)
         #expect(report.problems.first?.id == .catalogSwitched)
         #expect(report.problems.map(\.level) == [.red, .warn, .warn, .note])
         #expect(report.summary.hasSuffix("(and 2 more things in Catalog Status)"), "\(report.summary)")
     }
 
-    @Test func notesAloneShowNoBanner() async {
+    @Test func notesAloneShowNoBanner() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.power = .battery
-        let report = await run(probe)
+        let report = try await run(probe)
         #expect(report.level == .note)
         #expect(!report.showsBanner)
         #expect(report.summary == "Running on battery — plug in before starting long jobs")
@@ -179,173 +194,206 @@ struct LaunchPreflightTests {
 
     // MARK: Disk thresholds (1 TB disk unless said otherwise)
 
-    @Test func diskAt90PercentWarnsAndJustUnderIsOK() async {
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 100, of: 1_000)) == .warn)
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 101, of: 1_000)) == .ok)
+    @Test func diskAt90PercentWarnsAndJustUnderIsOK() async throws {
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 100, of: 1_000)) == .warn)
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 101, of: 1_000)) == .ok)
     }
 
-    @Test func diskAt95PercentIsRedAndJustUnderWarns() async {
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 50, of: 1_000)) == .red)
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 51, of: 1_000)) == .warn)
+    @Test func diskAt95PercentIsRedAndJustUnderWarns() async throws {
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 50, of: 1_000)) == .red)
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 51, of: 1_000)) == .warn)
     }
 
-    @Test func under50GBFreeWarnsOnASmallDisk() async {
+    @Test func under50GBFreeWarnsOnASmallDisk() async throws {
         // 400 GB disk: 49 GB free is 87.75% used — the free-space line fires, not the percent.
-        let low = await check(.systemDisk, FakePreflightProbe.healthy().disk(free: 49, of: 400))
+        let low = try await check(.systemDisk, FakePreflightProbe.healthy().disk(free: 49, of: 400))
         #expect(low?.level == .warn)
         #expect(low?.words == "Your Mac's main disk has only 49 GB free — consider freeing some space soon")
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 50, of: 400)) == .ok)
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 50, of: 400)) == .ok)
     }
 
-    @Test func under20GBFreeIsRedEvenBelow95Percent() async {
+    @Test func under20GBFreeIsRedEvenBelow95Percent() async throws {
         // 300 GB disk: 19.9 GB free is 93.4% used.
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 19.9, of: 300)) == .red)
-        #expect(await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 20, of: 300)) == .warn)
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 19.9, of: 300)) == .red)
+        #expect(try await level(.systemDisk, FakePreflightProbe.healthy().disk(free: 20, of: 300)) == .warn)
     }
 
-    @Test func redFloorIsThreeTimesCatalogPlusJournal() async {
+    @Test func redFloorIsThreeTimesCatalogPlusJournal() async throws {
         // catalog 8 GB + WAL 2 GB → floor 30 GB.
         var probe = FakePreflightProbe.healthy()
         probe.files[Self.context.databaseURL.path] = 8_000_000_000
         probe.files[Self.context.walURL.path] = 2_000_000_000
         #expect(Self.context.thresholds.diskRedFreeBytes(catalogBytes: 10_000_000_000) == 30 * FakePreflightProbe.gb)
-        #expect(await level(.systemDisk, probe.disk(free: 29.9, of: 300)) == .red)
-        #expect(await level(.systemDisk, probe.disk(free: 30, of: 300)) == .warn)
+        #expect(try await level(.systemDisk, probe.disk(free: 29.9, of: 300)) == .red)
+        #expect(try await level(.systemDisk, probe.disk(free: 30, of: 300)) == .warn)
     }
 
     @Test func redFloorNeverOverflows() {
         #expect(PreflightThresholds().diskRedFreeBytes(catalogBytes: .max) == .max)
     }
 
-    @Test func tempDiskOnAnotherVolumeIsCheckedByTheSameRule() async {
+    @Test func tempDiskOnAnotherVolumeIsCheckedByTheSameRule() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.tempIsSystem = false
         probe.tempVolume = PreflightVolume(id: "/Volumes/Scratch", name: "Scratch",
                                            availableBytes: 10 * FakePreflightProbe.gb, totalBytes: 100 * FakePreflightProbe.gb)
-        let temp = await check(.tempDisk, probe)
+        let temp = try await check(.tempDisk, probe)
         #expect(temp?.level == .red)
-        #expect(temp?.words == "The disk for temporary files (Scratch) has only 10 GB free — free some space; long jobs and backups wait until you do")
-        #expect(await level(.systemDisk, probe) == .ok)
+        #expect(temp?.words == "The disk for temporary files (Scratch) has only 10 GB free — " + Self.redWords)
+        #expect(try await level(.systemDisk, probe) == .ok)
     }
 
     @Test func usedFractionOfAZeroSizedVolumeReadsFull() {
         #expect(PreflightVolume(id: "x", name: "x", availableBytes: 0, totalBytes: 0).usedFraction == 1)
     }
 
+    @Test func zeroSizedVolumeIsCouldntCheckNotFull() async throws {
+        let probe = FakePreflightProbe.healthy().disk(free: 0, of: 0)
+        let disk = try await check(.systemDisk, probe)
+        #expect(disk?.level == .warn)
+        #expect(disk?.words == "Couldn't check how full your Mac's main disk is")
+        #expect(disk?.detail.contains("reported a size of 0 bytes") == true)
+        #expect(try await run(probe).hold == .none, "an unmeasurable disk never holds edits on a guess")
+    }
+
+    @Test func purgeableInclusiveFreeIsShownButNeverJudged() async throws {
+        // 40 GB truly free (96% used → red), 200 GB counting purgeable files.
+        var probe = FakePreflightProbe.healthy()
+        probe.systemVolume = PreflightVolume(id: "/", name: "Macintosh HD", availableBytes: 40 * FakePreflightProbe.gb,
+                                             totalBytes: 1_000 * FakePreflightProbe.gb,
+                                             freeIncludingPurgeableBytes: 200 * FakePreflightProbe.gb)
+        let disk = try await check(.systemDisk, probe)
+        #expect(disk?.level == .red)
+        #expect(disk?.readings.contains { $0.name == "freeIncludingPurgeable" && $0.value == 200e9 } == true)
+    }
+
     // MARK: Memory
 
-    @Test func memoryUnder16GBWarns() async {
+    @Test func memoryUnder16GBWarns() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.memory = 16 * FakePreflightProbe.gib
-        #expect(await level(.memory, probe) == .ok)
+        #expect(try await level(.memory, probe) == .ok)
         probe.memory = 16 * FakePreflightProbe.gib - 1
-        #expect(await level(.memory, probe) == .warn)
+        #expect(try await level(.memory, probe) == .warn)
         probe.memory = 8 * FakePreflightProbe.gib
-        #expect(await check(.memory, probe)?.words == "This Mac has 8 GB of memory — big jobs may be slow")
+        #expect(try await check(.memory, probe)?.words == "This Mac has 8 GB of memory — big jobs may be slow")
     }
 
-    @Test func swapOver4GBIsANote() async {
+    @Test func swapOver4GBIsANote() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.swap = 4 * FakePreflightProbe.gib
-        #expect(await level(.swap, probe) == .ok)
+        #expect(try await level(.swap, probe) == .ok)
         probe.swap = 4 * FakePreflightProbe.gib + 1
-        #expect(await level(.swap, probe) == .note)
+        #expect(try await level(.swap, probe) == .note)
     }
 
-    // MARK: Catalog
+    // MARK: Catalog (red catalog checks hold edits — QA r1 M3)
 
-    @Test func missingCutoverMarkerIsRed() async {
+    @Test func missingCutoverMarkerIsRedAndHoldsEdits() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.files.removeValue(forKey: Self.context.latchURL.path)
-        let switched = await check(.catalogSwitched, probe)
+        let report = try await run(probe)
+        let switched = report.checks.first { $0.id == .catalogSwitched }
         #expect(switched?.level == .red)
         #expect(switched?.detail.contains("catalog.cutover missing") == true)
+        #expect(report.hold == .edits)
+        #expect(report.situation.catalogFault?.id == .catalogSwitched)
     }
 
-    @Test func missingCatalogFileIsRed() async {
+    @Test func missingCatalogFileIsRedAndHoldsEdits() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.files.removeValue(forKey: Self.context.databaseURL.path)
-        #expect(await level(.catalogSwitched, probe) == .red)
+        let report = try await run(probe)
+        #expect(report.checks.first { $0.id == .catalogSwitched }?.level == .red)
+        #expect(report.hold == .edits)
     }
 
-    @Test func schemaVersionEqualOKNewerRedOlderWarn() async {
+    @Test func schemaVersionEqualOKNewerRedOlderWarn() async throws {
         var probe = FakePreflightProbe.healthy()
-        #expect(await level(.catalogSchema, probe) == .ok)
+        #expect(try await level(.catalogSchema, probe) == .ok)
         probe.schemaVersion = Self.expectedSchema + 1
-        #expect(await level(.catalogSchema, probe) == .red)
+        #expect(try await level(.catalogSchema, probe) == .red)
+        #expect(try await run(probe).hold == .edits, "a newer build's catalog: no writes")
         probe.schemaVersion = Self.expectedSchema - 1
-        #expect(await level(.catalogSchema, probe) == .warn)
+        #expect(try await level(.catalogSchema, probe) == .warn)
+        #expect(try await run(probe).hold == .none, "warn informs; it doesn't hold")
     }
 
-    @Test func journalOver256MBWarns() async {
+    @Test func journalOver256MBWarns() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.files[Self.context.walURL.path] = 256 * PreflightThresholds.mebibyte
-        #expect(await level(.catalogJournal, probe) == .ok)
+        #expect(try await level(.catalogJournal, probe) == .ok)
         probe.files[Self.context.walURL.path] = 256 * PreflightThresholds.mebibyte + 1
-        #expect(await level(.catalogJournal, probe) == .warn)
+        #expect(try await level(.catalogJournal, probe) == .warn)
     }
 
-    @Test func quickCheckOutcomes() async {
+    @Test func quickCheckOutcomes() async throws {
         var probe = FakePreflightProbe.healthy()
-        #expect(await level(.catalogQuickCheck, probe) == .ok)
+        #expect(try await level(.catalogQuickCheck, probe) == .ok)
         probe.quickCheck = .problems(["*** in database main ***", "Page 7: btreeInitPage() returns error code 11"],
                                      elapsed: .milliseconds(5))
-        let bad = await check(.catalogQuickCheck, probe)
+        let bad = try await check(.catalogQuickCheck, probe)
         #expect(bad?.level == .red)
         #expect(bad?.detail.contains("btreeInitPage") == true)
-        probe.quickCheck = .ranOutOfTime(budget: .seconds(2))
-        #expect(await level(.catalogQuickCheck, probe) == .note)
+        // No verdict is never a quiet green (QA r1 minor 2): warn, with a banner.
+        probe.quickCheck = .ranOutOfTime(budget: .seconds(5))
+        let late = try await run(probe)
+        #expect(late.checks.first { $0.id == .catalogQuickCheck }?.level == .warn)
+        #expect(late.showsBanner)
+        #expect(late.hold == .none)
+        probe.quickCheck = .cancelled
+        #expect(try await level(.catalogQuickCheck, probe) == .warn)
     }
 
     // MARK: Tools, logs, machine, archive
 
-    @Test func missingFFprobeWarnsAndNamesIt() async {
+    @Test func missingFFprobeWarnsAndNamesIt() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.tools[.ffprobe] = nil
-        let tools = await check(.tools, probe)
+        let tools = try await check(.tools, probe)
         #expect(tools?.level == .warn)
         #expect(tools?.words.contains("ffprobe") == true)
         #expect(tools?.detail.contains("ffprobe=missing") == true)
     }
 
-    @Test func unwritableLogFolderWarns() async {
+    @Test func unwritableLogFolderWarns() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.writableFolders = []
-        #expect(await level(.logFolder, probe) == .warn)
+        #expect(try await level(.logFolder, probe) == .warn)
     }
 
     @Test(arguments: [(PreflightThermalState.nominal, PreflightLevel.ok), (.fair, .ok), (.serious, .warn), (.critical, .warn)])
-    func thermalSeriousOrCriticalWarns(state: PreflightThermalState, expected: PreflightLevel) async {
+    func thermalSeriousOrCriticalWarns(state: PreflightThermalState, expected: PreflightLevel) async throws {
         var probe = FakePreflightProbe.healthy()
         probe.thermal = state
-        #expect(await level(.thermal, probe) == expected)
+        #expect(try await level(.thermal, probe) == expected)
     }
 
-    @Test func batteryIsANote() async {
+    @Test func batteryIsANote() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.power = .battery
-        #expect(await level(.power, probe) == .note)
+        #expect(try await level(.power, probe) == .note)
     }
 
-    @Test func masterArchiveOfflineIsOnlyANote() async {
+    @Test func masterArchiveOfflineIsOnlyANote() async throws {
         var context = Self.context
         context.masterArchiveVolume = URL(fileURLWithPath: "/Volumes/MasterArchive", isDirectory: true)
         var probe = FakePreflightProbe.healthy()
-        #expect(await level(.masterArchive, probe, context: context) == .note)
+        #expect(try await level(.masterArchive, probe, context: context) == .note)
         probe.mounted = ["/Volumes/MasterArchive"]
-        #expect(await level(.masterArchive, probe, context: context) == .ok)
-        #expect(await level(.masterArchive, probe) == .ok, "no archive set")
+        #expect(try await level(.masterArchive, probe, context: context) == .ok)
+        #expect(try await level(.masterArchive, probe) == .ok, "no archive set")
     }
 
     // MARK: Isolation — a poisoned probe never crashes and never reads green
 
-    @Test func everyCheckThatThrowsSaysCouldntCheckAndIsNotGreen() async {
+    @Test func everyCheckThatThrowsSaysCouldntCheckAndIsNotGreen() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.volumesThrow = true
         probe.swapThrows = true
         probe.schemaThrows = true
         probe.quickCheckThrows = true
-        let report = await run(probe)
+        let report = try await run(probe)
         for id in [PreflightCheck.ID.systemDisk, .swap, .catalogSchema, .catalogQuickCheck] {
             let found = report.checks.first { $0.id == id }
             #expect(found?.level ?? .ok > .ok, "\(id) read green from a throwing probe")
@@ -354,9 +402,10 @@ struct LaunchPreflightTests {
         }
         #expect(report.level == .warn)
         #expect(report.showsBanner)
+        #expect(report.hold == .none, "a failed probe is not evidence of a full disk or a bad catalog")
     }
 
-    @Test func everyCheckThatGetsNilSaysCouldntCheck() async {
+    @Test func everyCheckThatGetsNilSaysCouldntCheck() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.systemVolume = nil            // a missing volume
         probe.memory = nil
@@ -364,7 +413,7 @@ struct LaunchPreflightTests {
         probe.thermal = nil
         probe.power = nil
         probe.schemaVersion = nil           // a file with no catalog_state row
-        let report = await run(probe)
+        let report = try await run(probe)
         for id in [PreflightCheck.ID.systemDisk, .memory, .swap, .thermal, .power, .catalogSchema] {
             let found = report.checks.first { $0.id == id }
             #expect(found?.level ?? .ok > .ok, "\(id) read green from a nil answer")
@@ -373,23 +422,56 @@ struct LaunchPreflightTests {
         #expect(report.level == .warn, "disk and catalog gaps are warn")
     }
 
-    @Test func missingTempVolumeIsCheckedSeparatelyAndNotGreen() async {
+    @Test func missingTempVolumeIsCheckedSeparatelyAndNotGreen() async throws {
         var probe = FakePreflightProbe.healthy()
         probe.tempIsSystem = false
         probe.tempVolume = nil
-        #expect(await check(.tempDisk, probe)?.words == "Couldn't check how full the temporary-files disk is")
-        #expect(await level(.tempDisk, probe) == .warn)
+        #expect(try await check(.tempDisk, probe)?.words == "Couldn't check how full the temporary-files disk is")
+        #expect(try await level(.tempDisk, probe) == .warn)
     }
 
-    @Test func emptyMachineEverythingMissingStillReportsEveryCheck() async {
+    @Test func emptyMachineEverythingMissingStillReportsEveryCheck() async throws {
         // Nothing exists, nothing answers: a full report, no crash.
-        let report = await run(FakePreflightProbe(systemVolume: nil, memory: nil, swap: nil, thermal: nil, power: nil,
-                                                  tools: [:], schemaVersion: nil, quickCheck: nil))
+        let report = try await run(FakePreflightProbe(systemVolume: nil, memory: nil, swap: nil, thermal: nil, power: nil,
+                                                      tools: [:], schemaVersion: nil, quickCheck: nil))
         #expect(report.level == .red)
         // Neither volume answered, so system and temp are both "couldn't check" — 13, not 12.
         #expect(report.checks.count == 13)
-        #expect(report.hold == .none, "an unreadable disk never holds edits on a guess")
+        // The catalog file is missing: a red catalog check holds edits (QA r1 M3).
+        #expect(report.hold == .edits)
         #expect(report.checks.allSatisfy { $0.level > .ok || $0.id == .catalogJournal || $0.id == .masterArchive })
+    }
+
+    // MARK: Cancellation (QA r1 minors 4–5)
+
+    @Test func alreadyCancelledRunThrowsAndReportsNothing() async {
+        let task = Task { try await LaunchPreflight.run(Self.context, probe: FakePreflightProbe.healthy()) }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+    }
+
+    @Test func cancelDuringQuickCheckStopsItAtOnce() async throws {
+        var probe = FakePreflightProbe.healthy()
+        probe.quickCheckWaitsForCancel = true
+        let clock = ContinuousClock()
+        let start = clock.now
+        let task = Task { try await LaunchPreflight.run(Self.context, probe: probe) }
+        try await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(clock.now - start < .seconds(3), "the cancel reached quick_check; it did not run to its 5 s end")
+    }
+
+    @Test func cancellationTokenRunsItsHandlerOnceAndLateRegistrationFiresAtOnce() {
+        let token = PreflightCancellation()
+        let counter = PreflightTally()
+        token.whileRegistered({ counter.bump() }) {
+            token.cancel()
+            token.cancel()
+        }
+        #expect(counter.value == 1)
+        token.whileRegistered({ counter.bump() }) {}
+        #expect(counter.value == 2, "registering on a cancelled token fires the handler at once")
     }
 
     // MARK: Sensors
@@ -409,21 +491,24 @@ struct LaunchPreflightTests {
         #expect(t.diskRedUsedFraction == 0.95)
         #expect(t.diskRedFloorBytes == 20_000_000_000)
         #expect(t.diskRedCatalogMultiple == 3)
+        #expect(t.editHoldCatalogMultiple == 2)
+        #expect(t.editHoldFloorBytes == 1_000_000_000)
         #expect(t.memoryWarnBelowBytes == 16 << 30)
         #expect(t.swapNoteAboveBytes == 4 << 30)
         #expect(t.journalWarnAboveBytes == 256 << 20)
+        #expect(PreflightThresholds.quickCheckBudget == .seconds(5))
     }
 
     // MARK: Scale / time budget
 
-    @Test func thousandFakeRunsFitInOneSecond() async {
+    @Test func thousandFakeRunsFitInOneSecond() async throws {
         let probe = FakePreflightProbe.healthy().disk(free: 60, of: 1_000)
         let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let start = clock.now
         var levels = 0
         for _ in 0..<1_000 {
-            levels += await LaunchPreflight.run(Self.context, probe: probe).level.rawValue
+            levels += try await LaunchPreflight.run(Self.context, probe: probe).level.rawValue
         }
         let elapsed = clock.now - start
         #expect(levels == 1_000 * PreflightLevel.warn.rawValue)
@@ -444,7 +529,7 @@ struct LaunchPreflightTests {
                                        masterArchiveVolume: URL(fileURLWithPath: "/Volumes/NoSuchArchive-\(UUID().uuidString)"),
                                        expectedSchemaVersion: Self.expectedSchema)
         let loadBefore = TimingBudget.sampleLoad()
-        let report = await LaunchPreflight.run(context, probe: SystemPreflightProbe(), includeQuickCheck: false)
+        let report = try await LaunchPreflight.run(context, probe: SystemPreflightProbe(), includeQuickCheck: false)
         print(report.logLines.joined(separator: "\n"))
         #expect(report.checks.first { $0.id == .catalogSwitched }?.level == .red)
         #expect(report.checks.first { $0.id == .systemDisk }?.readings.isEmpty == false, "the real disk was read")
@@ -453,4 +538,12 @@ struct LaunchPreflightTests {
         expectWithinTimingBudget("preflight fast phase, real probe", measured: report.fastElapsed,
                                  budget: .milliseconds(200), loadBefore: loadBefore)
     }
+}
+
+/// A thread-safe tally for handler tests.
+final class PreflightTally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func bump() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
