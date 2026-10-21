@@ -4,13 +4,17 @@
 //
 // One sentence: the app reads its records from catalog.sqlite ONLY when Rick
 // has switched to it (the latch file `catalog.cutover` beside the catalog),
-// the database opens, and an import finished with the comparator's word;
-// otherwise it reads catalog.json exactly as today.
+// the database opens, and an import finished with the comparator's word.
 //
 // Outcomes (each one tested, CatalogAuthorityFlipTests):
-//   .json          no latch → today's path, byte for byte (the database is
-//                  not even opened, so an imported catalog.sqlite on Rick's
-//                  Mac is inert until the later "Switch to SQLite" door);
+//   .noLatch       no latch → the launch REFUSES, loudly, master or viewer
+//                  (Rick 2026-10-21, GH #354: no JSON fallback for old
+//                  catalogs). catalog.json is never opened — not writable,
+//                  not read-only; the session starts empty and read-only,
+//                  and the words say the master (or migrate_data.sh) must
+//                  carry catalog.sqlite and its latch. The database is not
+//                  opened either. (A test host on the shared store keeps
+//                  its own path: it loads nothing.)
 //   .sqlite(url)   latch + the store opens (read-write, or read-only after a
 //                  restore — never a fall-back to an older authority) + a
 //                  finished, comparator-ok import;
@@ -41,7 +45,8 @@ import VideoScanCore
 private let flipLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogAuthority")
 
 enum CatalogAuthority: Equatable, Sendable {
-    case json
+    /// No `catalog.cutover` beside the catalog (was `.json` until GH #354).
+    case noLatch
     case sqlite(URL)
     case refused(String)
 
@@ -73,7 +78,7 @@ enum CatalogAuthority: Equatable, Sendable {
     /// high-water witness, nothing written.
     static func decide(folder: URL, readOnly: Bool = false) async -> CatalogAuthority {
         let latch = folder.appendingPathComponent(latchFileName)
-        guard FileManager.default.fileExists(atPath: latch.path) else { return .json }
+        guard FileManager.default.fileExists(atPath: latch.path) else { return .noLatch }
         let db = folder.appendingPathComponent(databaseFileName)
         guard FileManager.default.fileExists(atPath: db.path) else {
             return .refused("the catalog was switched to SQLite (\(latchFileName)) but \(databaseFileName) is not beside it")
@@ -104,6 +109,13 @@ enum CatalogAuthority: Equatable, Sendable {
     /// raise the high-water) or, for a read-only session, `openReadOnly`.
     static func open(_ repository: GRDBCatalogRepository, at url: URL, readOnly: Bool) async -> CatalogOpenOutcome {
         readOnly ? await repository.openReadOnly(at: url, reason: viewerReadOnlyWords) : await repository.open(at: url)
+    }
+
+    /// The words a launch with no latch shows (GH #354), in the one sink.
+    static func noLatchWords(folder: URL) -> String {
+        "No catalog — \(latchFileName) is not beside the catalog in \(folder.path), so this Mac was never switched to "
+            + "\(databaseFileName). catalog.json is not opened (not even read-only): the master (or migrate_data.sh) "
+            + "must carry \(databaseFileName) and its \(latchFileName). Nothing will be saved this session."
     }
 
     /// The words a refusal shows (console, catalog.log, videoscan.log).
@@ -173,7 +185,8 @@ enum CatalogLaunchWait {
 
 extension VideoScanModel {
 
-    /// What `init` restores. `.json` is `catalogStore.load()` unchanged.
+    /// What `init` restores: catalog.sqlite's records, or nothing (a launch
+    /// with no latch refuses — GH #354).
     func loadCatalogAtLaunch() -> [VideoRecord] {
         // Test hosts on the shared store: today's path (it loads nothing),
         // and never a look at the real Application Support folder.
@@ -186,8 +199,8 @@ extension VideoScanModel {
         if viewer { updateReadOnlyFacts { $0.viewerRole = true } }
         let authority = CatalogLaunchWait.run { await CatalogAuthority.decide(folder: folder, readOnly: viewer) }
         switch authority {
-        case .json:
-            return catalogStore.load()
+        case .noLatch:
+            return refuseLaunchWithoutLatch(folder)
         case .sqlite(let url):
             return loadFromSQLite(url, readOnly: viewer)
         case .refused(let why):
@@ -298,6 +311,19 @@ extension VideoScanModel {
         CatalogCommitter.Input(records: records, designation: masterArchive,
                                clearAuthorized: catalogStore.designationClearAuthorized, holdReason: catalogStore.writeHold,
                                holdOwner: catalogStore.writeHoldOwner, readOnlyReason: readOnlyFacts.readOnlyWords)
+    }
+
+    /// GH #354 (Rick 2026-10-21): no latch → no catalog. catalog.json is
+    /// never opened; the session is empty and read-only (the JSON store too,
+    /// so no save can create a catalog.json), and the words say what is
+    /// missing. Viewer or master alike — the role logic is untouched.
+    private func refuseLaunchWithoutLatch(_ folder: URL) -> [VideoRecord] {
+        updateReadOnlyFacts {
+            $0.jsonFrozenByLaunch = true
+            $0.sessionReadOnlyByLaunch = true
+        }
+        catalogAuthorityNote("OUTCOME " + CatalogAuthority.noLatchWords(folder: folder))
+        return []
     }
 
     private func loadJSONReadOnly(_ why: String) -> [VideoRecord] {

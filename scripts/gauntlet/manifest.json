@@ -29366,17 +29366,18 @@
         "databaseWithoutLatchIsInert",
         "displayStringsAndPairs",
         "journeyWordsAreUnchanged",
-        "jsonLaunchFollowsTheRole",
         "landedRowsKeepTheirFacts",
+        "latchLaunchesOnSQLite",
         "latchWithDamagedDatabaseRefuses",
         "latchWithGoodImportIsSQLite",
         "latchWithUnfinishedImportRefuses",
         "latchWithoutDatabaseRefuses",
-        "modelLoadsJSONWithoutLatch",
         "modelLoadsSQLiteWithLatch",
         "modelRefusedIsJSONReadOnly",
+        "modelRefusesWithoutLatch",
+        "noLatchLaunchStaysReadOnlyBothWays",
         "normalSQLiteLaunchFollowsTheRole",
-        "nothingIsJSON",
+        "nothingIsNoLatch",
         "pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives",
         "quarantineAndCounts",
         "readOnlyHasOneWriter",
@@ -29385,7 +29386,8 @@
         "sqliteRecordsEqualJSONRecords",
         "theSeamIsOneLine",
         "unprovenRowsAreNotRecords",
-        "viewerLaunchOpensCatalogSQLiteReadOnly"
+        "viewerLaunchOpensCatalogSQLiteReadOnly",
+        "viewerRefusesWithoutLatch"
       ]
     },
     {
@@ -33493,7 +33495,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 235,
+      "expected_floor": 237,
       "name": "regression",
       "package_expected_floor": 198,
       "package_selectors": [

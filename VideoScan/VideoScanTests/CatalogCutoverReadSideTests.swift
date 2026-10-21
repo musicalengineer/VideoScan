@@ -211,26 +211,26 @@ struct SQLiteCatalogLoaderTests {
 
 // MARK: - ISOLATION: the flip
 
-@Suite("Catalog authority flip — inert without the latch; refused words make catalog.json read-only", .serialized)
+@Suite("Catalog authority flip — no latch refuses (GH #354); refused words make catalog.json read-only", .serialized)
 @MainActor
 struct CatalogAuthorityFlipTests {
 
-    @Test("no latch, no database → JSON")
-    func nothingIsJSON() async throws {
+    @Test("no latch, no database → no latch")
+    func nothingIsNoLatch() async throws {
         let scene = try CutoverScene.make("flip_none"); defer { scene.cleanup() }
-        #expect(await CatalogAuthority.decide(folder: scene.folder) == .json)
+        #expect(await CatalogAuthority.decide(folder: scene.folder) == .noLatch)
     }
 
-    @Test("ISOLATION: an imported catalog.sqlite WITHOUT the latch → JSON, and the database is not even opened (bytes unchanged)")
+    @Test("ISOLATION: an imported catalog.sqlite WITHOUT the latch → no latch, and the database is not even opened (bytes unchanged)")
     func databaseWithoutLatchIsInert() async throws {
         let scene = try CutoverScene.make("flip_inert"); defer { scene.cleanup() }
         try await scene.importCatalog()
         let before = try scene.sha256(scene.databaseURL)
-        // Unreadable: any attempt to open it would answer `.refused`, not `.json`.
+        // Unreadable: any attempt to open it would answer `.refused`, not `.noLatch`.
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: scene.databaseURL.path)
         let authority = await CatalogAuthority.decide(folder: scene.folder)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: scene.databaseURL.path)
-        #expect(authority == .json)
+        #expect(authority == .noLatch)
         #expect(try scene.sha256(scene.databaseURL) == before)
     }
 
@@ -270,15 +270,56 @@ struct CatalogAuthorityFlipTests {
         #expect(await CatalogAuthority.decide(folder: scene.folder) == .sqlite(scene.databaseURL))
     }
 
-    @Test("model: no latch → the JSON records, nothing read-only")
-    func modelLoadsJSONWithoutLatch() async throws {
-        let scene = try CutoverScene.make("model_json"); defer { scene.cleanup() }
+    /// Size, date and inode of the JSON side (catalog.json, .prev, sidecar).
+    private static func jsonSide(_ folder: URL) -> [String] {
+        ["catalog.json", "catalog.json.prev", CatalogGenerationSidecar.fileName].map { name in
+            let path = folder.appendingPathComponent(name).path
+            guard let a = try? FileManager.default.attributesOfItem(atPath: path) else { return "\(name) absent" }
+            return "\(name) \(a[.size] ?? "?") \((a[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? -1) \(a[.systemFileNumber] ?? "?")"
+        }
+    }
+
+    @Test("GH #354: model, no latch → REFUSED, loudly: no records, read-only, the words name the latch and who must carry it; catalog.json not opened")
+    func modelRefusesWithoutLatch() async throws {
+        let scene = try CutoverScene.make("model_nolatch"); defer { scene.cleanup() }
         try await scene.importCatalog()
-        let expected = CatalogStore(directory: scene.folder).load().count
+        let before = Self.jsonSide(scene.folder)
+        try await Task.sleep(for: .milliseconds(20))   // a rewrite would carry a later date
         let records = scene.model.loadCatalogAtLaunch()
-        #expect(records.count == expected)
-        #expect(scene.model.catalogStore.isReadOnly == false)
-        #expect(scene.model.isReadOnly == false)
+        #expect(records.isEmpty)
+        #expect(scene.model.catalogCutover.isSQLiteAuthority == false)
+        #expect(scene.model.catalogStore.isReadOnly, "no save can create or rewrite catalog.json")
+        #expect(scene.model.isReadOnly)
+        #expect(scene.model.catalogStore.lastLoadOutcome == .missing, "the JSON store never loaded")
+        #expect(Self.jsonSide(scene.folder) == before, "catalog.json, .prev and the sidecar untouched")
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("Catalog store: OUTCOME No catalog — catalog.cutover is not beside the catalog"), Comment(rawValue: log))
+        #expect(log.contains("the master (or migrate_data.sh) must carry catalog.sqlite and its catalog.cutover"))
+        #expect(log.contains("catalog.json is not opened"))
+    }
+
+    @Test("GH #354: a VIEWER with no latch refuses the same way (role logic unchanged: still a viewer)")
+    func viewerRefusesWithoutLatch() async throws {
+        let scene = try CutoverScene.make("viewer_nolatch"); defer { scene.cleanup() }
+        let before = Self.jsonSide(scene.folder)
+        scene.model.applyReadOnlyMode(true)
+        let records = scene.model.loadCatalogAtLaunch()
+        #expect(records.isEmpty)
+        #expect(scene.model.readOnlyFacts.viewerRole)
+        #expect(scene.model.isReadOnly)
+        #expect(Self.jsonSide(scene.folder) == before)
+        #expect(scene.sandbox.catalogLogText().contains("OUTCOME No catalog — catalog.cutover is not beside the catalog"))
+    }
+
+    @Test("GH #354: a sandbox WITH the latch launches on catalog.sqlite")
+    func latchLaunchesOnSQLite() async throws {
+        let scene = try CutoverScene.make("model_latch"); defer { scene.cleanup() }
+        try await scene.importCatalog()
+        try scene.writeLatch()
+        let records = scene.model.loadCatalogAtLaunch()
+        #expect(!records.isEmpty)
+        #expect(scene.model.catalogCutover.isSQLiteAuthority)
+        #expect(!scene.sandbox.catalogLogText().contains("No catalog —"))
     }
 
     @Test("model: latch but the import is not comparator-ok → the JSON records, READ-ONLY, the words in catalog.log; catalog.json untouched")
@@ -424,19 +465,15 @@ struct CatalogAuthorityFlipTests {
         #expect(try scene.sha256(scene.databaseURL) == databaseBefore, "not one byte of catalog.sqlite changed")
     }
 
-    @Test("no regression: a JSON launch follows the role both ways")
-    func jsonLaunchFollowsTheRole() async throws {
-        let scene = try CutoverScene.make("role_json"); defer { scene.cleanup() }
+    @Test("GH #354: a launch with no latch stays read-only whichever way the role goes (the role adds read-only, never removes the launch's)")
+    func noLatchLaunchStaysReadOnlyBothWays() async throws {
+        let scene = try CutoverScene.make("role_nolatch"); defer { scene.cleanup() }
         scene.model.records = scene.model.loadCatalogAtLaunch()
-        scene.model.applyReadOnlyMode(false)
-        #expect(scene.model.isReadOnly == false)
-        #expect(scene.model.catalogStore.isReadOnly == false)
-        scene.model.applyReadOnlyMode(true)
-        #expect(scene.model.isReadOnly)
-        #expect(scene.model.catalogStore.isReadOnly)
-        scene.model.applyReadOnlyMode(false)
-        #expect(scene.model.isReadOnly == false)
-        #expect(scene.model.catalogStore.isReadOnly == false)
+        for viewer in [false, true, false] {
+            scene.model.applyReadOnlyMode(viewer)
+            #expect(scene.model.isReadOnly)
+            #expect(scene.model.catalogStore.isReadOnly)
+        }
     }
 
     @Test("SENSOR (source): no app code assigns isReadOnly outside the one combining function; no `isReadOnly = false` anywhere")
