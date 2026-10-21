@@ -79,22 +79,12 @@ struct FootageFolderTableRow: Identifiable {
     var people: String { keys.people }
 }
 
-/// Two rows are equal when the Table would draw the same row from them
-/// (GH #350): the same id, display, folder summary, sort facts, members and
-/// folder — and the SAME record object (`===`). A record replaced by a
-/// fresh object with the same id (a rescan) is a different row, so the
-/// cells never keep reading a retired object. The record's own fields are
-/// not compared: it is a class written in place, so old and new rows share
-/// it; its cells repaint through the table's paint clock
-/// (FootageFolderTableGate.swift). A digest the hash job writes changes
-/// none of these — the row array stays equal and is not republished.
-/// (For Rick: `===` ≈ comparing two pointers, `==` ≈ comparing the values.)
-extension FootageFolderTableRow: Equatable {
-    static func == (a: FootageFolderTableRow, b: FootageFolderTableRow) -> Bool {
-        a.id == b.id && a.record === b.record && a.inFolder == b.inFolder
-            && a.display == b.display && a.folder == b.folder && a.keys == b.keys && a.children == b.children
-    }
-}
+// Deliberately NOT Equatable (GH #350, QA r1): an equal row VALUE could let
+// SwiftUI decide a row's cells need no re-run when the paint clock moves,
+// and an in-place record edit would then never repaint. "Would the Table
+// draw the same rows?" is the named question
+// `FootageFolderTableRows.drawsTheSame(_:_:)` (FootageFolderTableGate.swift),
+// asked only by the row publish and the paint gate.
 
 // MARK: - Row ids ⇄ records (a file shown under two folders, 2026-10-19)
 

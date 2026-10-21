@@ -14,35 +14,43 @@
 // frames in AppKitOutlineTableCoordinator.update). Making the rows
 // Equatable alone changed nothing (same harness); an Equatable host view
 // whose inputs did not change ran ZERO row closures, even with the
-// context menu / focused values applied outside it.
+// context menu / focused values applied outside it. Inside that host, a
+// paint-revision bump with the SAME rows re-ran the visible cells (24 of
+// 24 on screen) and no row closures — the repaint is cheap.
 //
-// THE SEAM. Three parts, all here:
+// THE SEAM. All here:
 //   • FootageFolderTablePaint — everything the folder Table draws, as one
-//     Equatable value: the rows, the selection, the twisted-open folders,
-//     the sort, Show Pairs Only, the Angel's badge revision, and the paint
-//     clock's revision. The host view compares THIS and nothing else.
+//     value with a hand-written ==: the rows (`drawsTheSame`), the
+//     selection, the twisted-open folders, the sort, Show Pairs Only, the
+//     Angel's badge revision and the paint clock's revision.
 //   • FootageFolderTableHost — the Equatable wrapper (`.equatable()`); its
 //     body is the Table, built by CatalogContent as before.
 //   • CatalogPaintClock — the one knob for what the paint value cannot
 //     see: a record is a class written IN PLACE (a date typed in the
 //     inspector, a tag, a drive going offline), so its cells repaint when
-//     the model says something changed. The clock follows the model's
-//     publishes, coalesced: at most one paint per 0.25 s when the catalog
-//     is quiet, at most one per 10 s while a job or a scan writes to it
-//     (CatalogPaintThrottle). Nothing is ever left unpainted: the last
-//     request of a burst always lands (trailing edge).
-// And the rows themselves are rebuilt only when the folder display lands,
-// and published only when the new array differs (FootageFolderTableRows);
-// a digest-only commit changes no row.
+//     the model says something changed. Coalesced (CatalogPaintThrottle):
+//     at most one paint per 0.25 s when quiet or when Rick just acted
+//     (urgent), at most one per 10 s for a catalog-writing job's churn.
+//     The last request of a burst always lands (trailing edge).
+//   • The rows: rebuilt only when the folder display lands, published only
+//     when they would draw differently (FootageFolderTableRows); a
+//     digest-only commit changes no row.
 //
-// NO O(records) work in any body: the paint value is O(1) to build (the
-// rows array is compared by buffer identity first when unchanged — the
-// stdlib's Array == fast path); the row build runs in the display handler.
+// The row type is deliberately NOT Equatable (FootageFolderTableRow.swift):
+// the only equality question is "would the Table draw the same rows?",
+// asked here by name.
+//
+// COST. No O(records) work in any body. Building the paint value is O(1);
+// comparing two of them is O(1) while the rows are the same array (the
+// buffer-identity fast path in `drawsTheSame`) and O(rows) when a display
+// lands with a new array — once per landing, not per publish.
 //
 // (For Rick: the host is a memoised render — like a C++ widget that keeps
 // its last-drawn inputs and returns early from paint() when operator== says
-// nothing changed. The clock is a leading+trailing debounce.)
+// nothing changed. The clock is a leading+trailing debounce on a monotonic
+// clock, std::chrono::steady_clock rather than system_clock.)
 
+import AppKit
 import Combine
 import Foundation
 import SwiftUI
@@ -63,6 +71,12 @@ struct FootageFolderTablePaint: Equatable {
     var angelBadgeRevision: Int
     /// CatalogPaintClock.revision: in-place record changes.
     var paintRevision: UInt64
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.paintRevision == b.paintRevision && a.angelBadgeRevision == b.angelBadgeRevision && a.pairTint == b.pairTint
+            && a.selectedIDs == b.selectedIDs && a.rowSelection == b.rowSelection && a.expanded == b.expanded
+            && a.sort == b.sort && FootageFolderTableRows.drawsTheSame(a.rows, b.rows)
+    }
 }
 
 /// The folder Table behind an equality gate. `content` builds the Table
@@ -115,10 +129,35 @@ enum FootageFolderTableRows {
         return FootageFolderTableRow(display: d, record: rec, keys: index.keysOf[id] ?? keys(rec), inFolder: inFolder)
     }
 
+    /// Would the Table draw the same rows from `a` and `b`? The same id,
+    /// display, folder summary, sort facts, members and folder per row —
+    /// and the SAME record object (`===`): a record replaced by a fresh
+    /// object with the same id (a rescan) is a different row, so the cells
+    /// never keep reading a retired object. The record's own fields are not
+    /// compared (a class written in place — the paint clock repaints them).
+    /// O(1) when both are the same array buffer, else O(rows).
+    /// (For Rick: `===` ≈ comparing two pointers.)
+    static func drawsTheSame(_ a: [FootageFolderTableRow], _ b: [FootageFolderTableRow]) -> Bool {
+        guard a.count == b.count else { return false }
+        let sameBuffer = a.withUnsafeBufferPointer { pa in b.withUnsafeBufferPointer { pb in pa.baseAddress == pb.baseAddress } }
+        if sameBuffer { return true }
+        return zip(a, b).allSatisfy { rowDrawsTheSame($0, $1) }
+    }
+
+    private static func rowDrawsTheSame(_ a: FootageFolderTableRow, _ b: FootageFolderTableRow) -> Bool {
+        guard a.id == b.id, a.record === b.record, a.inFolder == b.inFolder, a.display == b.display,
+              a.folder == b.folder, a.keys == b.keys else { return false }
+        switch (a.children, b.children) {
+        case (nil, nil): return true
+        case let (x?, y?): return drawsTheSame(x, y)
+        default: return false
+        }
+    }
+
     /// Publish `new` over `current` only when the Table would draw
-    /// something different. O(rows) compare, event handler only.
+    /// something different. O(rows), event handler only.
     static func shouldPublish(_ new: [FootageFolderTableRow], over current: [FootageFolderTableRow]) -> Bool {
-        new != current
+        !drawsTheSame(new, current)
     }
 }
 
@@ -126,79 +165,99 @@ enum FootageFolderTableRows {
 
 /// Who is writing to the catalog right now, in words — the paint clock
 /// slows down for it and the viewer-snapshot publisher waits for it.
-/// nil = nobody. Pure.
+/// nil = nobody. Pure. The job half is
+/// `MediaFileOperationsCenter.runningCatalogWriterTitle` (MediaOps/CatalogWriterJobs.swift).
 enum CatalogWriteActivity {
-    static func words(runningJobTitle: String?, scanning: Bool) -> String? {
-        if let title = runningJobTitle, !title.isEmpty { return "\(title) is running" }
+    static func words(catalogWriterTitle: String?, scanning: Bool) -> String? {
+        if let title = catalogWriterTitle, !title.isEmpty { return "\(title) is running" }
         return scanning ? "a scan is running" : nil
     }
 }
 
-extension MediaFileOperationsCenter {
-    /// The first live job's title (one that is not merely waiting to be
-    /// stopped); nil when none runs. O(jobs).
-    var firstRunningJobTitle: String? {
-        jobs.first { $0.state.isActive && !$0.isQuiescentForQuit }?.title
+/// "Did Rick just do something?" — the urgency rule. A model publish that
+/// arrives within `window` of the last mouse or key event is treated as his
+/// (an inspector commit, a row-menu Tag or Disposition, a typed date or
+/// place) and paints at the quiet pace even while a job writes; the job's
+/// own churn arrives with no recent event and keeps the 10 s gap. ONE rule
+/// at the clock instead of a flag at every edit site.
+enum CatalogUserEditRecency {
+    static let window: TimeInterval = 1.0
+
+    /// Both times are seconds since boot (NSEvent.timestamp's clock). Pure.
+    static func isRecent(eventTimestamp: TimeInterval?, now: TimeInterval) -> Bool {
+        guard let t = eventTimestamp else { return false }
+        let age = now - t
+        return age >= 0 && age <= window
+    }
+
+    /// The live answer (main thread: the event being handled, if any).
+    @MainActor
+    static func now() -> Bool {
+        isRecent(eventTimestamp: NSApp.currentEvent?.timestamp, now: ProcessInfo.processInfo.systemUptime)
     }
 }
 
-/// The coalescing rule, pure. A request paints at once when the last paint
-/// is at least one gap old; otherwise one trailing paint is scheduled at
-/// `last + gap` (or kept, when one is already due no later than that).
+/// The coalescing rule, pure, on a MONOTONIC clock (a wall-clock step can
+/// never push a paint into the future). A request paints at once when the
+/// last paint is at least one gap old; otherwise one trailing paint is
+/// scheduled at `last + gap` (or kept, when one is already due no later).
+/// `urgent` (Rick just acted) uses the quiet gap even while a job writes.
 struct CatalogPaintThrottle: Equatable {
-    static let idleGap: TimeInterval = 0.25
-    static let busyGap: TimeInterval = 10
+    typealias Instant = ContinuousClock.Instant
+    static let idleGap: Duration = .milliseconds(250)
+    static let busyGap: Duration = .seconds(10)
 
     enum Decision: Equatable {
         case paintNow
-        case paintAt(Date)
+        case paintAt(Instant)
         case alreadyScheduled
     }
 
-    private(set) var lastPaint: Date?
-    private(set) var scheduled: Date?
+    private(set) var lastPaint: Instant?
+    private(set) var scheduled: Instant?
 
-    mutating func request(now: Date, busy: Bool) -> Decision {
-        let gap = busy ? Self.busyGap : Self.idleGap
-        guard let last = lastPaint, now.timeIntervalSince(last) < gap else {
+    mutating func request(now: Instant, busy: Bool, urgent: Bool = false) -> Decision {
+        let gap = (busy && !urgent) ? Self.busyGap : Self.idleGap
+        // `now` before the last paint cannot happen on this clock; if a
+        // caller ever hands one in, it paints rather than waiting past `now + gap`.
+        guard let last = lastPaint, now >= last, now - last < gap else {
             didPaint(at: now)
             return .paintNow
         }
-        let due = last.addingTimeInterval(gap)
+        let due = last + gap
         if let scheduled, scheduled <= due { return .alreadyScheduled }
         scheduled = due
         return .paintAt(due)
     }
 
-    mutating func didPaint(at date: Date) {
-        lastPaint = date
+    mutating func didPaint(at instant: Instant) {
+        lastPaint = instant
         scheduled = nil
     }
 }
 
 /// The revision the folder Table repaints on. Owned by the Catalog pane
-/// (a @State reference), fed by the model's publishes.
+/// (a @State reference in CatalogTableState), fed by the model's publishes.
 @MainActor
 final class CatalogPaintClock: ObservableObject {
     @Published private(set) var revision: UInt64 = 0
     private var throttle = CatalogPaintThrottle()
     private var trailing: Task<Void, Never>?
 
-    /// Something the cells may show changed. `busy` = a job or a scan is
-    /// writing to the catalog (the 10 s gap).
-    func request(busy: Bool, now: Date = Date()) {
-        switch throttle.request(now: now, busy: busy) {
+    /// Something the cells may show changed. `busy` = a catalog-writing job
+    /// or a scan runs (the 10 s gap); `urgent` = Rick just acted.
+    func request(busy: Bool, urgent: Bool = false, now: ContinuousClock.Instant = .now) {
+        switch throttle.request(now: now, busy: busy, urgent: urgent) {
         case .paintNow:
             trailing?.cancel()
             trailing = nil
             revision &+= 1
         case .paintAt(let due):
             trailing?.cancel()
-            let delay = max(0, due.timeIntervalSince(now))
             trailing = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                try? await Task.sleep(until: due, clock: .continuous)
                 guard !Task.isCancelled, let self else { return }
-                self.throttle.didPaint(at: Date())
+                self.throttle.didPaint(at: .now)
                 self.trailing = nil
                 self.revision &+= 1
             }

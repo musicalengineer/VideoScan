@@ -168,9 +168,11 @@ extension CatalogContent {
 
     /// The folder Table's paint clock (GH #350, FootageFolderTableGate.swift):
     /// any model publish may be an in-place record change its cells show —
-    /// the clock coalesces them (≤ 1 repaint per 0.25 s, ≤ 1 per 10 s while
-    /// a job or scan writes); the MFO center's progress ticks are not
-    /// followed (no cell shows them). Its own stage (GH #132).
+    /// the clock coalesces them (≤ 1 repaint per 0.25 s quiet or when Rick
+    /// just acted, ≤ 1 per 10 s for a writing job's churn); the MFO center's
+    /// progress ticks are not followed (no cell shows them). The clock's
+    /// revision is mirrored into the @State the paint value reads (why
+    /// not @StateObject: CatalogTableState.swift). Its own stage (GH #132).
     private var tableWithFolderPaintTriggers: some View {
         tableWithFilterTriggers
             .onReceive(model.objectWillChange) { _ in requestFolderPaint() }

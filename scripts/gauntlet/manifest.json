@@ -8102,6 +8102,7 @@
         "publishSealsAVerifiableSnapshot",
         "publishWithoutLatchRefuses",
         "publisherCommitsFirstAndThrottlesOnGeneration",
+        "publisherLoopRechecksSoonWhileHeld",
         "publisherWaitsForARunningJobThenPublishesOnce",
         "sealedOpenRefusesAWALDatabase",
         "unchangedSnapshotIsNotReloaded",
@@ -13112,13 +13113,19 @@
         "aJobEndingBringsTheQuietPaceBack",
         "aRecordReplacedByAFreshObjectWithTheSameIDIsANewRow",
         "aVisibleSortFactChangeIsANewRow",
+        "aWallClockStepBackNeverPushesTheTrailingPaintIntoTheFuture",
+        "anEditIsRecentForOneSecondAfterTheLastClickOrKey",
+        "everyJobKindIsClassifiedExactlyOnce",
         "everyPaintInputMovesThePaintValue",
         "quietCatalogPaintsAtOnceThenCoalescesInsideAQuarterSecond",
+        "ricksOwnEditPaintsAtOnceWhileAJobWrites",
         "rowsRebuiltFromTheSameCatalogAreEqualAndNotRepublished",
         "tenThousandRecordsAndFiftyDigestOnlyChangesRepublishNothing",
         "theClocksTrailingPaintLands",
         "theFolderTableIsDrawnBehindThePaintGate",
         "theHostComparesOnlyItsPaintValue",
+        "theRowTypeIsNotEquatable",
+        "theWritersAndTheClockAreWiredWhereTheyAreRead",
         "whileAJobWritesAtMostOnePaintPerTenSeconds",
         "writerWords"
       ]
@@ -18640,6 +18647,7 @@
         "MediaFileOperationFinishedAtTests"
       ],
       "tests": [
+        "aPausedJobIsNotACatalogWriter",
         "activeStates",
         "adaptiveButtonFlagsFlipAcrossPauseAll",
         "allPinsEveryKindInDeclarationOrder",
@@ -32469,7 +32477,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2844,
+      "expected_floor": 2851,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [
@@ -33237,7 +33245,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 232,
+      "expected_floor": 233,
       "name": "regression",
       "package_expected_floor": 190,
       "package_selectors": [

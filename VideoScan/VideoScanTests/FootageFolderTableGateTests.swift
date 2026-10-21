@@ -100,8 +100,15 @@ struct FootageFolderTableGateTests {
         let first = w.tableRows(index)
         let again = w.tableRows(index)
         #expect(!first.isEmpty)
-        #expect(first == again)
+        #expect(FootageFolderTableRows.drawsTheSame(first, again))
         #expect(!FootageFolderTableRows.shouldPublish(again, over: first))
+    }
+
+    @Test func theRowTypeIsNotEquatable() {
+        // QA r1: an Equatable row value could let SwiftUI skip re-running a
+        // row's cells when the paint clock moves; in-place edits would then
+        // never repaint. The equality question is drawsTheSame, by name.
+        #expect(!((FootageFolderTableRow.self as Any.Type) is any Equatable.Type))
     }
 
     @Test func aRecordReplacedByAFreshObjectWithTheSameIDIsANewRow() throws {
@@ -166,32 +173,72 @@ struct FootageFolderTableGateTests {
 
     @Test func quietCatalogPaintsAtOnceThenCoalescesInsideAQuarterSecond() {
         var t = CatalogPaintThrottle()
-        let t0 = Date(timeIntervalSince1970: 1_000)
+        let t0 = ContinuousClock.now
         #expect(t.request(now: t0, busy: false) == .paintNow)
-        #expect(t.request(now: t0.addingTimeInterval(0.1), busy: false) == .paintAt(t0.addingTimeInterval(0.25)))
-        #expect(t.request(now: t0.addingTimeInterval(0.2), busy: false) == .alreadyScheduled)
-        t.didPaint(at: t0.addingTimeInterval(0.25))
-        #expect(t.request(now: t0.addingTimeInterval(0.6), busy: false) == .paintNow)
+        #expect(t.request(now: t0 + .milliseconds(100), busy: false) == .paintAt(t0 + .milliseconds(250)))
+        #expect(t.request(now: t0 + .milliseconds(200), busy: false) == .alreadyScheduled)
+        t.didPaint(at: t0 + .milliseconds(250))
+        #expect(t.request(now: t0 + .milliseconds(600), busy: false) == .paintNow)
     }
 
     @Test func whileAJobWritesAtMostOnePaintPerTenSeconds() {
         var t = CatalogPaintThrottle()
-        let t0 = Date(timeIntervalSince1970: 2_000)
+        let t0 = ContinuousClock.now
         #expect(t.request(now: t0, busy: true) == .paintNow)
-        #expect(t.request(now: t0.addingTimeInterval(1), busy: true) == .paintAt(t0.addingTimeInterval(10)))
+        #expect(t.request(now: t0 + .seconds(1), busy: true) == .paintAt(t0 + .seconds(10)))
         for s in 2..<10 {
-            #expect(t.request(now: t0.addingTimeInterval(Double(s)), busy: true) == .alreadyScheduled,
+            #expect(t.request(now: t0 + .seconds(s), busy: true) == .alreadyScheduled,
                     "second \(s): the one trailing paint is already due")
         }
     }
 
     @Test func aJobEndingBringsTheQuietPaceBack() {
         var t = CatalogPaintThrottle()
-        let t0 = Date(timeIntervalSince1970: 3_000)
+        let t0 = ContinuousClock.now
         #expect(t.request(now: t0, busy: true) == .paintNow)
-        #expect(t.request(now: t0.addingTimeInterval(1), busy: true) == .paintAt(t0.addingTimeInterval(10)))
-        #expect(t.request(now: t0.addingTimeInterval(2), busy: false) == .paintNow,
+        #expect(t.request(now: t0 + .seconds(1), busy: true) == .paintAt(t0 + .seconds(10)))
+        #expect(t.request(now: t0 + .seconds(2), busy: false) == .paintNow,
                 "the job ended: an edit paints now, not at the job's pace")
+    }
+
+    /// QA r1 item 3: Rick's own edit paints at once while the job's churn
+    /// still waits its 10 s.
+    @Test func ricksOwnEditPaintsAtOnceWhileAJobWrites() {
+        var t = CatalogPaintThrottle()
+        let t0 = ContinuousClock.now
+        #expect(t.request(now: t0, busy: true) == .paintNow)
+        #expect(t.request(now: t0 + .seconds(1), busy: true) == .paintAt(t0 + .seconds(10)), "job churn waits")
+        #expect(t.request(now: t0 + .seconds(2), busy: true, urgent: true) == .paintNow,
+                "an inspector date / a row-menu tag paints now, even mid-job")
+        #expect(t.request(now: t0 + .seconds(2) + .milliseconds(100), busy: true, urgent: true)
+                == .paintAt(t0 + .seconds(2) + .milliseconds(250)), "a burst of his edits coalesces at the quiet pace")
+        t.didPaint(at: t0 + .seconds(2) + .milliseconds(250))   // that trailing paint landed
+        #expect(t.request(now: t0 + .seconds(3), busy: true) == .paintAt(t0 + .seconds(12) + .milliseconds(250)),
+                "after his edit, the job's churn is back on its 10 s gap")
+    }
+
+    @Test func anEditIsRecentForOneSecondAfterTheLastClickOrKey() {
+        #expect(CatalogUserEditRecency.isRecent(eventTimestamp: 100.0, now: 100.4))
+        #expect(CatalogUserEditRecency.isRecent(eventTimestamp: 100.0, now: 101.0))
+        #expect(!CatalogUserEditRecency.isRecent(eventTimestamp: 100.0, now: 101.5), "a job's commit long after a click is churn")
+        #expect(!CatalogUserEditRecency.isRecent(eventTimestamp: nil, now: 100.0), "no event at all → not urgent")
+        #expect(!CatalogUserEditRecency.isRecent(eventTimestamp: 105.0, now: 100.0), "an event from the future is not trusted")
+    }
+
+    /// QA r1 item 4, adapted to the monotonic clock: a `now` before the
+    /// last paint (what a wall-clock step back looked like) paints at once;
+    /// it never schedules a paint later than `now + gap`.
+    @Test func aWallClockStepBackNeverPushesTheTrailingPaintIntoTheFuture() {
+        var t = CatalogPaintThrottle()
+        let t0 = ContinuousClock.now
+        #expect(t.request(now: t0, busy: true) == .paintNow)
+        let back = t0 - .seconds(3_600)
+        let decision = t.request(now: back, busy: true)
+        if case .paintAt(let due) = decision {
+            #expect(due <= back + CatalogPaintThrottle.busyGap, "never an hour into the future")
+        }
+        #expect(decision == .paintNow)
+        #expect(t.lastPaint == back)
     }
 
     @Test func theClocksTrailingPaintLands() async throws {
@@ -206,10 +253,10 @@ struct FootageFolderTableGateTests {
     }
 
     @Test func writerWords() {
-        #expect(CatalogWriteActivity.words(runningJobTitle: nil, scanning: false) == nil)
-        #expect(CatalogWriteActivity.words(runningJobTitle: "Fill In Full Hashes", scanning: false) == "Fill In Full Hashes is running")
-        #expect(CatalogWriteActivity.words(runningJobTitle: nil, scanning: true) == "a scan is running")
-        #expect(CatalogWriteActivity.words(runningJobTitle: "", scanning: false) == nil)
+        #expect(CatalogWriteActivity.words(catalogWriterTitle: nil, scanning: false) == nil)
+        #expect(CatalogWriteActivity.words(catalogWriterTitle: "Fill In Full Hashes", scanning: false) == "Fill In Full Hashes is running")
+        #expect(CatalogWriteActivity.words(catalogWriterTitle: nil, scanning: true) == "a scan is running")
+        #expect(CatalogWriteActivity.words(catalogWriterTitle: "", scanning: false) == nil)
     }
 
     // MARK: Scale + sensor — 10k records, a commit of 50 digest-only changes
@@ -235,7 +282,8 @@ struct FootageFolderTableGateTests {
         let elapsed = ContinuousClock.now - start
 
         #expect(!publish, "a digest-only commit must not republish the folder rows (GH #350)")
-        #expect(after == before)
+        // Different buffers on purpose: the element-wise path is what ran.
+        #expect(after.withUnsafeBufferPointer { a in before.withUnsafeBufferPointer { a.baseAddress != $0.baseAddress } })
         expectWithinTimingBudget("folder rows rebuild + compare, 10k records / 50 digests",
                                  measured: elapsed, budget: PerformanceLane.debugCeiling(.milliseconds(300)), loadBefore: load)
     }
@@ -251,5 +299,36 @@ struct FootageFolderTableGateTests {
         #expect(!src.contains("tableState.folderRows = folderTableRows("), "no unconditional republish")
         let table = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogContent+Table.swift"))
         #expect(table.contains(".onReceive(model.objectWillChange) { _ in requestFolderPaint() }"))
+    }
+
+    /// QA r1 item 5: the wiring — busy comes from the center's writing jobs
+    /// plus a scan, urgency from the last event; the clock's revision is
+    /// mirrored into the paint value; the viewer source feeds `busy`.
+    @Test func theWritersAndTheClockAreWiredWhereTheyAreRead() throws {
+        let folder = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogContent+FolderTable.swift"))
+        #expect(folder.contains("CatalogWriteActivity.words(catalogWriterTitle: fileOpsCenter.runningCatalogWriterTitle,"))
+        #expect(folder.contains("scanning: model.isScanning) != nil"))
+        #expect(folder.contains("tableState.folderPaintClock.request(busy: busy, urgent: CatalogUserEditRecency.now())"))
+        #expect(folder.contains("paintRevision: tableState.folderPaintRevision"))
+        let table = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogContent+Table.swift"))
+        #expect(table.contains(".onReceive(tableState.folderPaintClock.$revision) { tableState.folderPaintRevision = $0 }"),
+                "the clock's bump reaches the paint value")
+        let viewer = try SourceTree.strippingComments(SourceTree.appSource(named: "VideoScanModel+ViewerCatalog.swift"))
+        #expect(viewer.contains("busy: { [weak self] in"))
+        #expect(viewer.contains("CatalogWriteActivity.words(catalogWriterTitle: catalogWriterTitle(), scanning: self?.isScanning ?? false)"))
+        let app = try SourceTree.strippingComments(SourceTree.appSource(named: "VideoScanApp.swift"))
+        #expect(app.contains("catalogWriterTitle: { [weak center] in center?.runningCatalogWriterTitle }"))
+    }
+
+    // MARK: Logic — which jobs write the catalog
+
+    @Test func everyJobKindIsClassifiedExactlyOnce() {
+        let writers = MediaFileOperationKind.catalogWriters, readers = MediaFileOperationKind.notCatalogWriters
+        #expect(writers.isDisjoint(with: readers), "in both: \(writers.intersection(readers))")
+        #expect(writers.union(readers) == Set(MediaFileOperationKind.all),
+                "unclassified: \(Set(MediaFileOperationKind.all).subtracting(writers.union(readers)))")
+        #expect(MediaFileOperationKind.fillFullHashes.writesCatalog)
+        #expect(MediaFileOperationKind.fingerprintSound.writesCatalog)
+        #expect(!MediaFileOperationKind.compare.writesCatalog)
     }
 }

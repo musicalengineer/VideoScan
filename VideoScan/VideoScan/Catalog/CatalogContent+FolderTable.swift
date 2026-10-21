@@ -60,8 +60,8 @@ extension CatalogContent {
     }
 
     /// Everything `footageFolderTableCore` draws from besides the record
-    /// objects. O(1) to build — no O(rows) work (the rows array is the same
-    /// buffer until a display lands with different rows).
+    /// objects. O(1) to build. Comparing two is O(1) while the rows are the
+    /// same array buffer, O(rows) once when a display lands with new rows.
     private var folderTablePaint: FootageFolderTablePaint {
         FootageFolderTablePaint(rows: tableState.folderRows,
                                 selectedIDs: selectedIDs,
@@ -74,12 +74,14 @@ extension CatalogContent {
     }
 
     /// The model said something changed: ask the clock for a repaint of
-    /// the cells (coalesced; slower while a job or a scan writes).
+    /// the cells. Busy = a catalog-writing job (unpaused) or a scan runs —
+    /// its churn waits up to 10 s; urgent = Rick just clicked or typed, so
+    /// his own edit paints at once even then.
     func requestFolderPaint() {
         guard tableState.folderKeyMirror.isOn else { return }
-        let busy = CatalogWriteActivity.words(runningJobTitle: fileOpsCenter.firstRunningJobTitle,
+        let busy = CatalogWriteActivity.words(catalogWriterTitle: fileOpsCenter.runningCatalogWriterTitle,
                                               scanning: model.isScanning) != nil
-        tableState.folderPaintClock.request(busy: busy)
+        tableState.folderPaintClock.request(busy: busy, urgent: CatalogUserEditRecency.now())
     }
 
     private var footageFolderTableCore: some View {

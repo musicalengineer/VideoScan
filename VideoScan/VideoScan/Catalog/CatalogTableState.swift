@@ -135,7 +135,14 @@ struct CatalogTableState: DynamicProperty {
     // MARK: Paint gate (GH #350, FootageFolderTableGate.swift)
 
     /// Coalesces the model's publishes into repaints of the folder Table's
-    /// cells (≤ 1 per 0.25 s quiet, ≤ 1 per 10 s while a job or scan writes).
+    /// cells (≤ 1 per 0.25 s quiet or urgent, ≤ 1 per 10 s for a writing
+    /// job's churn). Held in @State, not @StateObject, on purpose (QA r1):
+    /// @StateObject's initializer is main-actor isolated, and this
+    /// DynamicProperty's memberwise init is not — a Swift 6 error (measured:
+    /// the warning appears the moment it is a @StateObject). @State keeps
+    /// the ONE instance for the pane's life exactly like the two mirrors
+    /// above; the pane mirrors its revision into `folderPaintRevision`
+    /// (CatalogContent+Table.swift), and that @State is what re-runs the body.
     @State var folderPaintClock = CatalogPaintClock()
     /// The clock's revision as the Table's paint value reads it.
     @State var folderPaintRevision: UInt64 = 0

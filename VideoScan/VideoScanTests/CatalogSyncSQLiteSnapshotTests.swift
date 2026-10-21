@@ -305,6 +305,29 @@ struct CatalogSyncSQLiteSnapshotPublishTests {
         }
     }
 
+    @Test("publisher loop (GH #350): while held it looks again every busyRecheck, so the job's result is published soon after it ends — not a full interval later")
+    func publisherLoopRechecksSoonWhileHeld() async throws {
+        try await SnapshotWorld.with("recheck") { world in
+            var published = 0
+            var writer: String? = "Fill In Full Hashes is running"
+            let store = CatalogSnapshotPublisher.Store(repository: world.repository, commitFirst: { nil })
+            let publisher = CatalogSnapshotPublisher(
+                liveDir: world.masterLive,
+                source: .init(store: { store }, latchURL: world.scene.latchURL, busy: { writer }),
+                log: { _ in }, onPublished: { published += 1 })
+            // A 10-minute interval: only the recheck can publish inside this test.
+            publisher.start(firstDelay: .zero, interval: .seconds(600), busyRecheck: .milliseconds(50))
+            defer { publisher.stop() }
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(published == 0, "held while the job writes")
+            #expect(publisher.isHeldForWriter)
+            writer = nil
+            let deadline = ContinuousClock.now + .seconds(5)
+            while published == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(25)) }
+            #expect(published == 1, "published on the first recheck after the job ended")
+        }
+    }
+
     @Test("scope: production syncs the sealed snapshot + latch, never catalog.json")
     func productionScopeCarriesTheSnapshotNotTheJSON() {
         let scope = CatalogSyncScope.sqliteCatalog
