@@ -348,9 +348,10 @@ struct CatalogSessionLoadSensor {
     /// `CatalogStore.load()` re-baselines the designation slot, the OCC
     /// generation and .prev. The only legitimate caller is the launch
     /// path — since the cutover read side (B1, 2026-10-17) that is
-    /// `VideoScanModel.loadCatalogAtLaunch()` in Catalog/CatalogAuthorityFlip.swift
-    /// (the JSON branch, the refused-SQLite fallback and the frozen-designation
-    /// read; one doc-comment mention). The Person Finder prefilter reads the
+    /// `VideoScanModel.loadCatalogAtLaunch()` in Catalog/CatalogAuthorityFlip.swift.
+    /// Since JSON-gone slice 2 (2026-10-21) only the test-host shared-store
+    /// line remains: no launch decodes catalog.json (#353, #354, no .refused
+    /// fallback). This count only falls. The Person Finder prefilter reads the
     /// live in-memory records and never touches CatalogStore at all
     /// (2026-10-21 — catalog.json is frozen under the SQLite authority).
     @Test("no app source other than the launch path (CatalogAuthorityFlip.swift) calls catalogStore.load() / CatalogStore.shared.load()")
@@ -363,7 +364,7 @@ struct CatalogSessionLoadSensor {
             if n > 0 { hits.append("\(relative)×\(n)") }
         }
         #expect(!SourceTree.appSources.isEmpty, "the sensor must read something")
-        #expect(hits == ["Catalog/CatalogAuthorityFlip.swift×5"], "session load() callers: \(hits)")
+        #expect(hits == ["Catalog/CatalogAuthorityFlip.swift×1"], "session load() callers: \(hits)")
     }
 
     @Test("the Person Finder skip set never touches the catalog store (reads the live records)")
