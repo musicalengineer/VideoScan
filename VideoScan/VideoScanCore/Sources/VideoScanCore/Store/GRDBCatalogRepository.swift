@@ -34,7 +34,12 @@
 //     commit g+1 then g+2, while a stale SECOND repository still gets
 //     `.generationMismatch`;
 //   - adoption is the only jump larger than +1, and the DDL's triggers —
-//     not this file — are what refuse any other jump.
+//     not this file — are what refuse any other jump;
+//   - GH #359: the database file's device + inode (and the latch's, when it
+//     was there at open) are recorded at open and compared before every
+//     commit transaction, before phase 1 and just before COMMIT; a file
+//     replaced, moved or removed refuses the write BEFORE it writes, in
+//     words, and every later write of the session (CatalogFileGuard.swift).
 //
 // Every statement that touches `generations`, `generation_history` or
 // `catalog_state` is raw SQL (Rick, 2026-10-17) so it reads like the DDL;
@@ -122,6 +127,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
     private var pool: DatabasePool? { didSet { publishGate() } }
     private var databaseURL: URL? { didSet { publishGate() } }
     private var mode: Mode = .closed { didSet { publishGate() } }
+    /// GH #359: the identities recorded at open, checked before each commit.
+    private var fileGuard: CatalogFileGuard? { didSet { publishGate() } }
     /// The generation this session last loaded or committed, and whether
     /// a reopen is owed — read and updated inside the serialized write.
     private let session = WriterSession()
@@ -147,13 +154,16 @@ public actor GRDBCatalogRepository: CatalogRepository {
         guard pool == nil else {
             return .refused(reason: "already open at \(databaseURL?.path ?? "?")")
         }
+        // GH #359: the file as it was BEFORE the pool opened it (missing for
+        // a new catalog), so a swap during the open itself is caught.
+        let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
             opened = try Self.openPool(at: url, durability: durability)
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
-        return await finishOpen(opened, at: url)
+        return await finishOpen(opened, at: url, before: before)
     }
 
     public static let readerOnlyWords = "opened for reading only by a process that is not the catalog's writer"
@@ -168,6 +178,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "could not open: no file at \(url.path)")
         }
+        let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
             opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true),
@@ -175,16 +186,22 @@ public actor GRDBCatalogRepository: CatalogRepository {
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
-        return await finishOpen(opened, at: url)
+        return await finishOpen(opened, at: url, before: before)
     }
 
     /// The open checks, the settle, and publishing the session (both doors).
-    private func finishOpen(_ opened: Opened, at url: URL) async -> CatalogOpenOutcome {
+    /// GH #359: the identities are recorded once the pool has the file, the
+    /// settle's high-water raise checks them, and they are checked again
+    /// before the session is published.
+    private func finishOpen(_ opened: Opened, at url: URL, before: CatalogFileIdentity.Reading) async -> CatalogOpenOutcome {
         do {
+            let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
             let loaded = try await Self.prepare(opened, host: host)
-            let settled = try await settle(opened, loaded: loaded, at: url)
+            let settled = try await settle(opened, loaded: loaded, at: url, fileGuard: fileGuard)
+            if let words = fileGuard.violation() { throw Refusal(reason: words) }
             pool = opened.pool
             databaseURL = url
+            self.fileGuard = fileGuard
             session.reset(generation: settled.generation)
             mode = settled.mode
             storeLog.notice("catalog store OPEN \(url.lastPathComponent, privacy: .public) generation \(settled.generation, privacy: .public) → \(String(describing: settled.mode.outcome), privacy: .public)")
@@ -396,11 +413,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// A read-only open (a sealed file, a read-only folder) keeps the
     /// generation it loaded; a read-write open reconciles the witnesses
     /// under the writer lock.
-    private func settle(_ opened: Opened, loaded: Int, at url: URL) async throws -> Settled {
+    private func settle(_ opened: Opened, loaded: Int, at url: URL, fileGuard: CatalogFileGuard) async throws -> Settled {
         if let reason = opened.readOnlyReason ?? Self.folderNotWritableReason(for: url) {
             return Settled(generation: loaded, mode: .readOnly(reason: reason))
         }
-        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook)
+        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook, fileGuard: fileGuard)
         return try await opened.pool.writeWithoutTransaction { db in try plan.run(db) }
     }
 
@@ -414,6 +431,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let host: String
         let publish: AtomicFilePublish.Durability
         let hook: Seam?
+        let fileGuard: CatalogFileGuard
 
         func run(_ db: Database) throws -> Settled {
             var settled = Settled(generation: 0, mode: .closed)
@@ -458,6 +476,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
             if case .unreadable(let words) = current {
                 return .readOnly(reason: GRDBCatalogRepository.poisonedWitnessWords(words))
             }
+            // GH #359: never raise the witnesses beside a file that is not
+            // the one this open checked (the open is then refused).
+            if let words = fileGuard.violation() { return .readOnly(reason: words) }
             storeLog.notice("catalog store: \(CatalogHighWater.fileName, privacy: .public) \(current == .missing ? "missing" : "below the generation", privacy: .public) — raised to generation \(generation, privacy: .public)")
             do {
                 try CatalogHighWater.write(generation, besideDatabaseAt: databaseURL, durability: publish)
@@ -490,10 +511,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public func write(as door: CatalogWriter,
                       _ body: @Sendable (any CatalogTransaction) throws -> Void) async -> CatalogWriteOutcome {
-        guard let pool, let databaseURL else { return .refused(reason: "not open") }
+        guard let pool, let databaseURL, let fileGuard else { return .refused(reason: "not open") }
         if case .readOnly(let reason) = mode { return .refused(reason: "read-only: \(reason)") }
         let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
-                             publish: durability.publish, crashBeforeCommit: crashBeforeCommit)
+                             publish: durability.publish, crashBeforeCommit: crashBeforeCommit, fileGuard: fileGuard)
         let outcome: CatalogWriteOutcome
         do {
             outcome = try await pool.writeWithoutTransaction { db in try plan.run(db, body) }
@@ -513,10 +534,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
     public nonisolated func writeBlocking(as door: CatalogWriter,
                                           _ body: (any CatalogTransaction) throws -> Void) -> CatalogWriteOutcome {
         let open = gate.state
-        guard let pool = open.pool, let databaseURL = open.databaseURL else { return .refused(reason: "not open") }
+        guard let pool = open.pool, let databaseURL = open.databaseURL, let fileGuard = open.fileGuard else { return .refused(reason: "not open") }
         if let reason = open.readOnlyReason { return .refused(reason: "read-only: \(reason)") }
         let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
-                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit)
+                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit, fileGuard: fileGuard)
         let outcome: CatalogWriteOutcome
         do {
             outcome = try pool.writeWithoutTransaction { db in try plan.run(db, body) }
@@ -556,7 +577,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         var readOnlyReason: String?
         if case .readOnly(let reason) = mode { readOnlyReason = reason }
         gate.set(WriteGate.State(pool: mode == .closed ? nil : pool, databaseURL: databaseURL,
-                                 readOnlyReason: readOnlyReason, crashBeforeCommit: crashBeforeCommit))
+                                 readOnlyReason: readOnlyReason, crashBeforeCommit: crashBeforeCommit,
+                                 fileGuard: fileGuard))
     }
 
     /// Everything one write needs, captured by value so the closure the
@@ -571,9 +593,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let databaseURL: URL
         let publish: AtomicFilePublish.Durability
         let crashBeforeCommit: Seam?
+        let fileGuard: CatalogFileGuard
 
         func run(_ db: Database,
                  _ body: (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
+            // GH #359, check 1 of 3: before BEGIN — a refused write takes no
+            // lock and writes no frame. On the writer queue, so no other
+            // write of this repository runs between this check and BEGIN.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             if let reason = session.needsReopen {
                 return .refused(reason: "reopen the catalog: \(reason)")
             }
@@ -603,6 +630,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 let found = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? -1
                 return .generationMismatch(expected: expected, found: found)
             }
+            // GH #359, check 2 of 3: before phase 1 — no witness is raised
+            // beside a file that is not the one this session opened.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             // Phase 1 (F8r3): the external mark says `next` BEFORE the commit.
             if let problem = publishMark(expected: expected, next: next) {
                 return .refused(reason: problem)
@@ -613,6 +643,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
             try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, ?, ?, ?, 'commit', NULL)",
                            arguments: [next, now, host, door.rawValue, filesLive, filesTotal])
             try crashBeforeCommit?()
+            // GH #359, check 3 of 3: just before COMMIT (phase 1's fsync is a
+            // real window). A refusal here rolls back; the witnesses already
+            // read `next`, so the next open is read-only — the crash-between-
+            // phases case, which refuses rather than guesses.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             return .committed(generation: next)                   // phase 2 is the COMMIT that follows
         }
 
@@ -678,28 +713,6 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return try await pool.read { db in
             let generation = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? 0
             return try body(GRDBReader(generation: generation, db: db))
-        }
-    }
-
-    /// The pragmas as the engine reports them on a reader connection
-    /// (internal: the pragma test queries them back).
-    func pragmas() async throws -> [String: String] {
-        guard let pool else { throw CatalogRepositoryError.notOpen }
-        return try await pool.read { db in
-            var reported: [String: String] = [:]
-            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
-                reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { Self.text($0[0]) } ?? ""
-            }
-            return reported
-        }
-    }
-
-    private static func text(_ value: DatabaseValue) -> String {
-        switch value.storage {
-        case .int64(let number): return String(number)
-        case .string(let string): return string
-        case .double(let number): return String(number)
-        case .blob, .null: return ""
         }
     }
 
@@ -769,7 +782,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
     // MARK: - Adopt
 
     public func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome {
-        guard let pool, let databaseURL else { return .refused(reason: "not open") }
+        guard let pool, let databaseURL, let fileGuard else { return .refused(reason: "not open") }
+        // GH #359: an adopt writes the witnesses and the database — never
+        // beside, or into, a file that is not the one this session opened.
+        if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
         let from = session.generation
         guard highWater > from else {
             return .refused(reason: "nothing to adopt: generation \(from) is not below \(highWater)")
@@ -781,6 +797,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
             return .refused(reason: Self.words(error))
         }
         if let problem = Self.confirmAdoptable(highWater, witnesses: witnesses)
+            ?? session.fileStop(fileGuard)
             ?? Self.raiseWitnesses(to: highWater, witnesses: witnesses, at: databaseURL, host: host, durability: durability.publish) {
             return .refused(reason: problem)
         }
@@ -848,6 +865,13 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public func close() async {
         guard let pool else { return }
+        // GH #359: said, not acted on — the checkpoint below folds only
+        // frames committed BEFORE the file was replaced into the file they
+        // belong to (the descriptor follows it), and empties the -wal so the
+        // replacement never inherits them.
+        if let fileGuard, let words = session.fileStop(fileGuard) {
+            storeLog.error("catalog store CLOSE after the file check failed: \(words, privacy: .public)")
+        }
         // Fold the write-ahead log into the database file BEFORE the pool
         // closes (2026-10-17): GRDB closes the writer before its readers, so
         // SQLite's own close-time checkpoint never runs, and every commit
@@ -869,6 +893,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         }
         self.pool = nil
         databaseURL = nil
+        fileGuard = nil
         mode = .closed
     }
 
@@ -876,8 +901,39 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     private static func words(_ error: Error) -> String {
         if let refusal = error as? Refusal { return refusal.reason }
+        if let failure = error as? CatalogFileGuard.GuardFailure { return failure.words }
         if let engine = error as? DatabaseError { return engine.description }
         return String(describing: error)
+    }
+}
+
+// MARK: - Pragmas (tests)
+//
+// Moved out of the actor body unchanged (GH #359 kept the body under
+// SwiftLint's 600 lines); same file, so it still reads the private pool.
+
+extension GRDBCatalogRepository {
+
+    /// The pragmas as the engine reports them on a reader connection
+    /// (internal: the pragma test queries them back).
+    func pragmas() async throws -> [String: String] {
+        guard let pool else { throw CatalogRepositoryError.notOpen }
+        return try await pool.read { db in
+            var reported: [String: String] = [:]
+            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
+                reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { Self.text($0[0]) } ?? ""
+            }
+            return reported
+        }
+    }
+
+    private static func text(_ value: DatabaseValue) -> String {
+        switch value.storage {
+        case .int64(let number): return String(number)
+        case .string(let string): return string
+        case .double(let number): return String(number)
+        case .blob, .null: return ""
+        }
     }
 }
 
@@ -907,6 +963,7 @@ extension GRDBCatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "\(url.lastPathComponent) does not exist")
         }
+        let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
             opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason)
@@ -914,9 +971,11 @@ extension GRDBCatalogRepository {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
         do {
+            let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
             let loaded = try await Self.prepare(opened, host: host)
             pool = opened.pool
             databaseURL = url
+            self.fileGuard = fileGuard
             session.reset(generation: loaded)
             mode = .readOnly(reason: reason)
             storeLog.notice("catalog store OPEN READ-ONLY \(url.lastPathComponent, privacy: .public) generation \(loaded, privacy: .public) — \(reason, privacy: .public)")
@@ -968,13 +1027,15 @@ extension GRDBCatalogRepository {
 /// The open state `writeBlocking` needs, mirrored off the actor: the pool,
 /// the database URL, the read-only words and the crash seam. Set by the
 /// actor whenever one of them changes; read once per blocking write. For
-/// Rick: a mutex-guarded copy of four member variables.
+/// Rick: a mutex-guarded copy of five member variables (GH #359 added the
+/// file guard).
 final class WriteGate: @unchecked Sendable {
     struct State {
         var pool: DatabasePool?
         var databaseURL: URL?
         var readOnlyReason: String?
         var crashBeforeCommit: GRDBCatalogRepository.Seam?
+        var fileGuard: CatalogFileGuard?
     }
 
     private let lock = NSLock()
@@ -999,15 +1060,24 @@ final class WriterSession: @unchecked Sendable {
     private let lock = NSLock()
     private var committed = 0
     private var reopenReason: String?
+    private var fileStopWords: String?
 
     var generation: Int { lock.withLock { committed } }
     var needsReopen: String? { lock.withLock { reopenReason } }
+    /// GH #359: the file check failed once — every later write of this
+    /// session is refused with these words, even if the file comes back.
+    var fileStopped: String? { lock.withLock { fileStopWords } }
 
     func reset(generation: Int) {
         lock.withLock {
             committed = generation
             reopenReason = nil
+            fileStopWords = nil
         }
+    }
+
+    func stopForFile(_ words: String) {
+        lock.withLock { if fileStopWords == nil { fileStopWords = words } }
     }
 
     func commit(_ generation: Int) {

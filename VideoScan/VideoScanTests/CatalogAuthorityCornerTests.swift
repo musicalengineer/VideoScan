@@ -12,8 +12,9 @@
 //            (2026-10-21): a viewer's synced folder with the snapshot but no
 //            latch shows "nothing synced from the master yet" — a catalog.json
 //            beside it is never read (CatalogViewerSnapshot.source).
-//   Fail-fast  the latch vanishes mid-session — TODAY commits go on; INTENDED
-//            the next commit stops and says why (pending).
+//   Fail-fast  the latch vanishes mid-session (#359) — the store refuses the
+//            next commit before writing; the committer blocks with words
+//            naming catalog.cutover and does not retry.
 //   Case 10  (app) a damaged catalog.sqlite behind the latch — the launch is
 //            refused with words, no catalog opens (catalog.json is never the
 //            fallback, QA r1 F1, 2026-10-21), and neither
@@ -87,20 +88,29 @@ struct CatalogAuthorityCornerTests {
 
     // MARK: - Fail fast: the latch vanishes mid-session
 
-    @Test("fail-fast: catalog.cutover removed mid-session — today the next commit still lands; intended it stops with words (pending)")
+    @Test("fail-fast (#359, #354 mid-session note): catalog.cutover removed mid-session — the next commit is refused before writing, the committer is blocked with words naming the latch, and nothing lands; a later save does not retry")
     func latchVanishesMidSession() async throws {
         let scene = try CutoverScene.make("corner_latch_gone"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         #expect(scene.model.saveCatalogNow())
+        let wal = URL(fileURLWithPath: scene.databaseURL.path + "-wal")
+        let before = CornerFiles.catalogFingerprint(scene.databaseURL) + [CornerFiles.sha256OrAbsent(wal)]
         try FileManager.default.removeItem(at: scene.latchURL)
         try scene.record(.healthy).userNotes = "after the latch went"
         let saved = scene.model.saveCatalogNow()
+        let blocked = scene.model.catalogCutover.blockedReason
+        let attempts = scene.model.catalogCutover.committer?.commitCount
+        let again = scene.model.saveCatalogNow()                       // no silent retry
+        let after = CornerFiles.catalogFingerprint(scene.databaseURL) + [CornerFiles.sha256OrAbsent(wal)]
         let landed = try await scene.reloaded(.healthy).userNotes == "after the latch went"
-        print("[corner-authority] latch gone: saveCatalogNow → \(saved), landed → \(landed)")
-        withKnownIssue("GH #354 (mid-session note): the committer never re-checks catalog.cutover; a session whose latch vanished keeps writing") {
-            #expect(!saved, "a commit ran after catalog.cutover vanished")
-            #expect(scene.model.catalogCutover.blockedReason?.contains(CatalogAuthority.latchFileName) == true)
-        }
+        print("[corner-authority] latch gone: saveCatalogNow → \(saved), blocked → \(blocked ?? "nil"), landed → \(landed)")
+        #expect(!saved, "a commit ran after catalog.cutover vanished")
+        #expect(!again)
+        #expect(scene.model.catalogCutover.committer?.commitCount == attempts, "a blocked committer tried again")
+        #expect(blocked == "\(CatalogAuthority.latchFileName) was replaced or removed while VideoScan was open; nothing more will be saved — quit and reopen",
+                Comment(rawValue: blocked ?? "nil"))
+        #expect(!landed, "the edit landed in catalog.sqlite after the latch vanished")
+        #expect(after == before, "catalog.sqlite or a witness changed after the latch vanished")
     }
 
     // MARK: - Cases 10 and 11 at the launch
