@@ -9,11 +9,10 @@
 //
 // What is still here, and why (see the slice 2 report, 2026-10-21):
 //   • CatalogAuthorityFlip — the launch rule. `.json` (no latch: a test host,
-//     a viewer's own folder, a Mac never switched), `.refused` (catalog.json
-//     READ-ONLY), and adoptSQLiteAuthority's `_ = catalogStore.load()`,
-//     whose records are DISCARDED (the SQLite rows are the records) but
-//     whose Master Archive designation is kept when catalog_state holds
-//     none — a FINDING, reported to the Manager, not changed here.
+//     a viewer's own folder, a Mac never switched — GH #354, Rick's call),
+//     and `.refused` (catalog.json READ-ONLY). The SQLite launch reads NO
+//     catalog.json (its old discarded load brought a cleared Master Archive
+//     designation back, GH #353; retired 2026-10-21).
 //   • CatalogStore — the JSON store itself (its own load and decoder).
 //   • Person Finder's catalog prefilter (PersonFinderCatalogFilter, via
 //     CatalogStore.readRecordsWithoutAdopting) — reads catalog.json at every
@@ -39,7 +38,7 @@ struct CatalogJSONReadSensorTests {
 
     /// pattern → file (relative to VideoScan/VideoScan) → count.
     static let readers: [String: [String: Int]] = [
-        #"catalogStore\.load\(\)"#: ["Catalog/CatalogAuthorityFlip.swift": 4],
+        #"catalogStore\.load\(\)"#: ["Catalog/CatalogAuthorityFlip.swift": 3],
         // Verify's audited-file source (Import to SQLite's phase 2) read
         // catalog.json with no caller left; retired 2026-10-21.
         #"decodeCatalogFile\("#: ["Catalog/CatalogStore.swift": 2],
@@ -79,10 +78,13 @@ struct CatalogJSONReadSensorTests {
         }
     }
 
-    @Test("SENSOR: under catalog.sqlite the launch takes its records from the database — the JSON load's records are discarded")
-    func theSQLiteLaunchDiscardsTheJSONRecords() throws {
+    @Test("SENSOR: under catalog.sqlite the launch takes its records and designation from the database and never loads catalog.json")
+    func theSQLiteLaunchNeverLoadsTheJSON() throws {
         let flip = try SourceTree.appCode(named: "Catalog/CatalogAuthorityFlip.swift")
-        #expect(flip.contains("_ = catalogStore.load()"), "the adopt path's JSON load returns nothing to the caller")
+        #expect(!flip.contains("_ = catalogStore.load()"), "GH #353: the adopt path's JSON load is gone")
+        let adopt = try #require(flip.range(of: "private func adoptSQLiteAuthority("))
+        let next = try #require(flip.range(of: "func catalogCommitInput()"))
+        #expect(!flip[adopt.lowerBound..<next.lowerBound].contains("catalogStore.load"), "nothing in the adopt path loads catalog.json")
         #expect(flip.contains("let result = try SQLiteCatalogLoader.build(launch.snapshot)"))
         #expect(flip.contains("return result.records"))
         #expect(flip.contains("updateReadOnlyFacts { $0.jsonFrozenByLaunch = true }"), "catalog.json is frozen under catalog.sqlite")

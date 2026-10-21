@@ -23,8 +23,8 @@
 // here writes catalog.json. B2: under `.sqlite` the
 // repository stays OPEN for the session and the save funnels commit
 // through it (CatalogCommitter); the Master Archive designation is read
-// from `catalog_state` (catalog.json's only while the store has none yet —
-// the first commit moves it in).
+// from `catalog_state` only — a SQLite launch reads no byte of catalog.json
+// (2026-10-21, GH #353).
 //
 // The model's init is synchronous (it always was: catalog.json loads on
 // the main thread at launch), and the store is async, so the launch waits
@@ -225,15 +225,17 @@ extension VideoScanModel {
     }
 
     /// SQLite is the authority: catalog.json is frozen (read-only, never
-    /// written again); the save funnels commit through `CatalogCommitter`
-    /// into the open repository. The designation comes from catalog_state;
-    /// while the store has none, catalog.json's is kept and the first commit
-    /// moves it in. The baseline is taken NOW, before the launch-time
-    /// migrations run, and one commit is scheduled so what they change lands.
-    /// `held` (B2.1): records from `pending_rows` — still changed, and
-    /// Fill In Full Hashes is queued for them.
+    /// written again — and never read: this launch does not open it, nor
+    /// rewrite catalog.json.prev or the generation sidecar); the save
+    /// funnels commit through `CatalogCommitter` into the open repository.
+    /// The designation comes from catalog_state ONLY. (Until 2026-10-21 a
+    /// JSON load here supplied catalog.json's designation whenever
+    /// catalog_state held none — which brought a CLEARED designation back
+    /// at every relaunch, GH #353.) The baseline is taken NOW, before the
+    /// launch-time migrations run, and one commit is scheduled so what they
+    /// change lands. `held` (B2.1): records from `pending_rows` — still
+    /// changed, and Fill In Full Hashes is queued for them.
     private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord], held: Set<UUID>) {
-        _ = catalogStore.load()
         updateReadOnlyFacts { $0.jsonFrozenByLaunch = true }
         if let stored = CatalogCommitter.designation(fromJSON: launch.designationJSON) {
             catalogStore.masterArchive = stored

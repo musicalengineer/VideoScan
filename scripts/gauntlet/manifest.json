@@ -30144,7 +30144,20 @@
       "tests": [
         "theLiveReloadIsGone",
         "theReadersAreReviewed",
-        "theSQLiteLaunchDiscardsTheJSONRecords"
+        "theSQLiteLaunchNeverLoadsTheJSON"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSQLiteLaunchNoJSONTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogSQLiteLaunchNoJSONTests"
+      ],
+      "tests": [
+        "aClearedDesignationStaysCleared",
+        "theSQLiteLaunchNeedsNoCatalogJSON",
+        "theSQLiteLaunchTouchesNoJSONFile"
       ]
     }
   ],
@@ -32702,7 +32715,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2828,
+      "expected_floor": 2831,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [
@@ -33177,7 +33190,8 @@
         "VideoScanTests/CatalogStoreHoldTests",
         "VideoScanTests/CatalogQuitRecoveryTests",
         "VideoScanTests/CatalogQuitRecoverySensorTests",
-        "VideoScanTests/CatalogJSONReadSensorTests"
+        "VideoScanTests/CatalogJSONReadSensorTests",
+        "VideoScanTests/CatalogSQLiteLaunchNoJSONTests"
       ]
     },
     {
