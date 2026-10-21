@@ -153,12 +153,47 @@ struct LaunchPreflightTests {
         #expect(report.outcomeLine.hasPrefix("[preflight] OUTCOME ok: All set"))
     }
 
-    @Test func fastOnlyRunLeavesQuickCheckOut() async throws {
+    // MARK: The 10-minute re-check carries catalog health (QA r2 R2-M1)
+
+    @Test func fastOnlyRunCarriesThePreviousQuickCheckWithoutRerunningIt() async throws {
         let full = try await run(.healthy())
+        // A probe whose quick_check would now FAIL: the carry must not consult it.
+        var probe = FakePreflightProbe.healthy()
+        probe.quickCheckThrows = true
+        let fast = try await LaunchPreflight.run(Self.context, probe: probe, includeQuickCheck: false, previous: full)
+        #expect(fast.quickCheckElapsed == nil, "quick_check did not run")
+        #expect(fast.checks.map(\.id) == full.checks.map(\.id))
+        let carried = fast.checks.first { $0.id == .catalogQuickCheck }
+        #expect(carried?.level == .ok)
+        #expect(carried?.detail.hasSuffix("(carried from the last full check)") == true)
+        // Carried twice: marked once.
+        let again = try await LaunchPreflight.run(Self.context, probe: probe, includeQuickCheck: false, previous: fast)
+        #expect(again.checks.first { $0.id == .catalogQuickCheck }?.detail == carried?.detail)
+    }
+
+    @Test func quickCheckFaultIsStickyUntilANewQuickCheckPasses() async throws {
+        var probe = FakePreflightProbe.healthy()
+        probe.quickCheck = .problems(["Page 7: btreeInitPage() returns error code 11"], elapsed: .milliseconds(5))
+        let launch = try await run(probe)
+        #expect(launch.hold == .edits)
+        // The disk changes, the catalog doesn't get re-checked: still held, banner still up.
+        probe.quickCheck = .passed(elapsed: .milliseconds(5))
+        let recheck = try await LaunchPreflight.run(Self.context, probe: probe.disk(free: 300, of: 1_000),
+                                                    includeQuickCheck: false, previous: launch)
+        #expect(recheck.hold == .edits)
+        #expect(recheck.showsBanner)
+        #expect(recheck.situation.catalogFault?.id == .catalogQuickCheck)
+        #expect(PreflightGate.decide(.edit, in: recheck.situation) != .go)
+        // Only a NEW quick_check that passes lifts it.
+        let fresh = try await LaunchPreflight.run(Self.context, probe: probe, previous: recheck)
+        #expect(fresh.hold == .none)
+        #expect(fresh.situation.catalogFault == nil)
+    }
+
+    @Test func fastOnlyRunWithNoPreviousVerdictRunsQuickCheckAnyway() async throws {
         let fast = try await LaunchPreflight.run(Self.context, probe: FakePreflightProbe.healthy(), includeQuickCheck: false)
-        #expect(!fast.checks.contains { $0.id == .catalogQuickCheck })
-        #expect(fast.quickCheckElapsed == nil)
-        #expect(fast.checks.map(\.id) == full.checks.map(\.id).filter { $0 != .catalogQuickCheck })
+        #expect(fast.quickCheckElapsed != nil, "no verdict to carry → measure it")
+        #expect(fast.checks.first { $0.id == .catalogQuickCheck }?.level == .ok)
     }
 
     @Test func redDiskSummaryHoldsLongOperationsNotEdits() async throws {
@@ -462,16 +497,20 @@ struct LaunchPreflightTests {
         #expect(clock.now - start < .seconds(3), "the cancel reached quick_check; it did not run to its 5 s end")
     }
 
-    @Test func cancellationTokenRunsItsHandlerOnceAndLateRegistrationFiresAtOnce() {
+    @Test func cancellationTokenRunsItsHandlerOnceAndRefusesLateRegistration() throws {
         let token = PreflightCancellation()
         let counter = PreflightTally()
-        token.whileRegistered({ counter.bump() }) {
+        try token.whileRegistered({ counter.bump() }) {
             token.cancel()
             token.cancel()
         }
         #expect(counter.value == 1)
-        token.whileRegistered({ counter.bump() }) {}
-        #expect(counter.value == 2, "registering on a cancelled token fires the handler at once")
+        // Already cancelled: no body, no handler — an interrupt with no
+        // statement running would be dropped by SQLite anyway (QA r2).
+        var bodyRan = false
+        #expect(throws: CancellationError.self) { try token.whileRegistered({ counter.bump() }) { bodyRan = true } }
+        #expect(!bodyRan)
+        #expect(counter.value == 1)
     }
 
     // MARK: Sensors

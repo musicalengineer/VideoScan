@@ -70,9 +70,16 @@ public enum CatalogPreflightReader {
         do {
             lines = try cancellation.whileRegistered({ gate.interrupt() }) {
                 try gate.queue.read { db in
-                    try String.fetchAll(db, sql: "PRAGMA quick_check(\(maxProblemLines))")
+                    // A cancel that landed while the read transaction opened
+                    // found no statement to interrupt (SQLite drops it) — look
+                    // once more right before stepping. The window left is the
+                    // few instructions between here and the first step.
+                    if cancellation.isCancelled { throw CancellationError() }
+                    return try String.fetchAll(db, sql: "PRAGMA quick_check(\(maxProblemLines))")
                 }
             }
+        } catch is CancellationError {
+            return .cancelled
         } catch let error as DatabaseError where error.resultCode == .SQLITE_INTERRUPT {
             return cancellation.isCancelled ? .cancelled : .ranOutOfTime(budget: budget)
         }

@@ -42,16 +42,22 @@ public final class PreflightCancellation: @unchecked Sendable {
         if !wasCancelled { handler?() }
     }
 
-    /// Runs `body` with `handler` registered as the stop action. If already
-    /// cancelled, `handler` runs at once (before `body`). The handler is
-    /// cleared when `body` returns, so a late cancel never reaches a
+    /// Runs `body` with `handler` registered as the stop action, and clears
+    /// the handler when `body` returns, so a late cancel never reaches a
     /// connection that has gone away.
-    public func whileRegistered<T>(_ handler: @escaping @Sendable () -> Void, _ body: () throws -> T) rethrows -> T {
+    ///
+    /// Already cancelled → throws CancellationError WITHOUT running `body`
+    /// (QA r2): the handler would be sqlite3_interrupt(), and SQLite drops an
+    /// interrupt that arrives while no statement is running, so calling it
+    /// and then running the body would let quick_check run its full budget
+    /// on quit. The body should still check `isCancelled` just before its
+    /// statement starts, to close the gap between registering and stepping.
+    public func whileRegistered<T>(_ handler: @escaping @Sendable () -> Void, _ body: () throws -> T) throws -> T {
         lock.lock()
         let alreadyCancelled = cancelled
         if !alreadyCancelled { onCancel = handler }
         lock.unlock()
-        if alreadyCancelled { handler() }
+        if alreadyCancelled { throw CancellationError() }
         defer {
             lock.lock()
             onCancel = nil

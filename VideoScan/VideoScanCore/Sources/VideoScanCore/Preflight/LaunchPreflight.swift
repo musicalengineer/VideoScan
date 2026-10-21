@@ -137,6 +137,16 @@ public struct PreflightCheck: Sendable, Equatable, Identifiable {
         self.readings = readings
     }
 
+    /// This verdict reused by a fast-only re-check: level, words and readings
+    /// unchanged, the detail says it was not re-measured.
+    func carriedForward() -> PreflightCheck {
+        let mark = " (carried from the last full check)"
+        guard !detail.hasSuffix(mark) else { return self }
+        var copy = self
+        copy.detail += mark
+        return copy
+    }
+
     /// One log line: "[preflight] system-disk warn: <detail> (free=40 GB …)".
     public var logLine: String {
         let numbers = readings.isEmpty ? "" : " (" + readings.map(\.logText).joined(separator: ", ") + ")"
@@ -150,7 +160,8 @@ public struct PreflightReport: Sendable, Equatable {
     public var checks: [PreflightCheck]
     /// What the gate knows: the catalog disk as read, the catalog's size, and
     /// the first red catalog check. Before an operation the app swaps in a
-    /// fresh disk reading and asks `PreflightGate.decide(_:in:)`.
+    /// fresh disk reading and catalog size (`with(catalogVolume:catalogBytes:)`)
+    /// and asks `PreflightGate.decide(_:in:)`.
     public var situation: PreflightSituation
     /// Wall time of the fast phase and of quick_check (nil when not run).
     public var fastElapsed: Duration
@@ -271,12 +282,20 @@ public struct PreflightContext: Sendable {
 public enum LaunchPreflight {
 
     /// The whole checklist, off the main actor — the only way in.
-    /// `includeQuickCheck: false` gives the fast phase only (the 10-minute
-    /// re-check). Throws CancellationError if the Task is cancelled; a cancel
-    /// during quick_check interrupts SQLite at once.
+    ///
+    /// `includeQuickCheck: false` is the 10-minute re-check: the fast checks
+    /// are re-measured, and the catalog-health verdict is CARRIED from
+    /// `previous` (QA r2: a quick_check fault is sticky — a damaged catalog
+    /// stays held until a NEW quick_check passes; a fast-only run must never
+    /// lift it). With no previous verdict to carry, quick_check runs anyway:
+    /// a report never goes out without the catalog's health.
+    ///
+    /// Throws CancellationError if the Task is cancelled; a cancel during
+    /// quick_check interrupts SQLite at once.
     @concurrent
     public static func run(_ context: PreflightContext, probe: some PreflightProbe,
-                           includeQuickCheck: Bool = true) async throws -> PreflightReport {
+                           includeQuickCheck: Bool = true,
+                           previous: PreflightReport? = nil) async throws -> PreflightReport {
         let clock = ContinuousClock()
         let start = clock.now
         try Task.checkCancellation()
@@ -284,21 +303,23 @@ public enum LaunchPreflight {
         let front = try runSteps(frontSteps(rules))
         let back = try runSteps(backSteps(rules))
         let fastElapsed = clock.now - start
-        var quick: [PreflightCheck] = []
+        let carried = includeQuickCheck ? nil : previous?.checks.first { $0.id == .catalogQuickCheck }
+        let quick: PreflightCheck
         var quickElapsed: Duration?
-        if includeQuickCheck {
+        if let carried {
+            quick = carried.carriedForward()
+        } else {
             let quickStart = clock.now
             let cancellation = PreflightCancellation()
-            let check = await withTaskCancellationHandler {
+            quick = await withTaskCancellationHandler {
                 rules.quickCheck(cancellation: cancellation)
             } onCancel: {
                 cancellation.cancel()
             }
             try Task.checkCancellation()
-            quick = [check]
             quickElapsed = clock.now - quickStart
         }
-        let checks = front + quick + back
+        let checks = front + [quick] + back
         let situation = PreflightSituation(catalogVolume: rules.systemVolume(), catalogBytes: rules.catalogBytes(),
                                            catalogFault: PreflightSituation.catalogFault(in: checks))
         return PreflightReport(checks: checks, situation: situation, fastElapsed: fastElapsed,
@@ -308,7 +329,8 @@ public enum LaunchPreflight {
     /// The START line, logged by the caller just before `run`.
     public static func startLine(_ context: PreflightContext, includeQuickCheck: Bool = true) -> String {
         "[preflight] START catalog \(context.databaseURL.path)"
-            + (includeQuickCheck ? ", quick_check budget \(PreflightWords.milliseconds(context.quickCheckBudget))" : ", fast checks only")
+            + (includeQuickCheck ? ", quick_check budget \(PreflightWords.milliseconds(context.quickCheckBudget))"
+                                 : ", fast checks only (catalog health carried from the last full check)")
     }
 
     private typealias Step = () -> [PreflightCheck]

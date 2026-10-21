@@ -19,8 +19,9 @@
 //
 // Pure: values in, a verdict out. `PreflightSituation` is what the gate
 // knows; the launch report carries one, and before an operation the app
-// swaps in a fresh disk reading (`with(catalogVolume:)`, one URLResourceValues
-// read off the main actor, ≈ 7–20 ms) and asks again.
+// swaps in a fresh disk reading and catalog size (`with(catalogVolume:
+// catalogBytes:)`: one URLResourceValues read off the main actor, ≈ 7–20 ms,
+// plus two stats) and asks again.
 //
 // (For Rick: an enum with associated values ≈ a tagged union / std::variant;
 // `switch` over it is the visitor, and the compiler proves every case is handled.)
@@ -103,11 +104,21 @@ public struct PreflightSituation: Sendable, Equatable {
         self.catalogFault = catalogFault
     }
 
-    /// The same situation with a fresh disk reading (before an operation).
-    public func with(catalogVolume volume: PreflightVolume?) -> PreflightSituation {
+    /// The same situation with a fresh disk reading AND a fresh catalog size
+    /// (before an operation). Refresh both: a WAL that grew during the
+    /// session raises the edit floor and the backup's need (QA r2). The
+    /// catalog fault is kept — only a new quick_check clears it.
+    public func with(catalogVolume volume: PreflightVolume?, catalogBytes bytes: UInt64) -> PreflightSituation {
         var copy = self
         copy.catalogVolume = volume
+        copy.catalogBytes = bytes
         return copy
+    }
+
+    /// A fresh disk reading only, keeping the catalog size as last measured.
+    /// Prefer `with(catalogVolume:catalogBytes:)` before an operation.
+    public func with(catalogVolume volume: PreflightVolume?) -> PreflightSituation {
+        with(catalogVolume: volume, catalogBytes: catalogBytes)
     }
 
     /// The catalog checks whose RED holds edits.

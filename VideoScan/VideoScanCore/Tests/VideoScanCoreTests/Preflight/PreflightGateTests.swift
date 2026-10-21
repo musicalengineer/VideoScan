@@ -287,6 +287,25 @@ struct PreflightGateTests {
         #expect(PreflightSituation.catalogFault(in: checks + [switched])?.id == .catalogSwitched)
     }
 
+    @Test func aWALThatGrewDuringTheSessionRaisesTheEditFloor() {
+        // Launch: 275 MB catalog → edit floor 1 GB; 5 GB free on a big disk edits fine.
+        let disk = volume(free: 5 * Self.gb, total: 100 * Self.tb)
+        let launch = PreflightSituation(catalogVolume: disk, catalogBytes: 275_000_000)
+        #expect(PreflightGate.decide(.edit, in: launch) == .go)
+        // Ten minutes later the WAL is 3 GB: floor 2 × 3.275 GB = 6.55 GB.
+        let grown = launch.with(catalogVolume: disk, catalogBytes: 275_000_000 + 3_000_000_000)
+        #expect(limits.editHoldFreeBytes(catalogBytes: grown.catalogBytes) == 6_550_000_000)
+        #expect(shortfall(PreflightGate.decide(.edit, in: grown)) == 1_550_000_000)
+        #expect(PreflightGate.hold(grown) == .edits)
+        // The disk-only refresh keeps the stale size — and so understates the floor.
+        #expect(PreflightGate.decide(.edit, in: launch.with(catalogVolume: disk)) == .go)
+        // A backup's need grows with it too.
+        let roomy = volume(free: 30 * Self.gb, total: 300 * Self.gb)
+        #expect(PreflightGate.decide(.backup, in: launch.with(catalogVolume: roomy, catalogBytes: 275_000_000)) == .go)
+        #expect(shortfall(PreflightGate.decide(.backup, in: launch.with(catalogVolume: roomy,
+                                                                         catalogBytes: 10_000_000_000))) == 10 * Self.gb)
+    }
+
     @Test func freshDiskReadingKeepsTheCatalogFault() {
         let fault = PreflightCheck(.catalogSwitched, .red, words: "marker", detail: "")
         let situation = PreflightSituation(catalogVolume: nil, catalogBytes: 1, catalogFault: fault)
