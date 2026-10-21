@@ -2,27 +2,21 @@ import Foundation
 import AppKit
 import UniformTypeIdentifiers
 
-// MARK: - Catalog Import / Export
+// MARK: - Catalog Export
 //
-// JSON catalog snapshot import/export — used to move a curated catalog
+// JSON catalog snapshot export — once used to move a curated catalog
 // between Macs (Mac Studio → MBP via AirDrop, for example). The richer
 // "bundle" exporter lives in VideoScanModel+BundleImportExport.swift
 // because it carries POIs + per-volume metadata as well, which is enough
 // extra surface area to deserve its own file.
 //
-// Merge policy: content-identity dedup. `partialMD5 + sizeBytes` is the
-// strong key; when the import has no MD5 (e.g. an ffprobe-failed row) we
-// fall back to `filename + sizeBytes + floor(durationSeconds)`. Records
-// with neither identity are always added — better a rare duplicate than
-// a silently dropped row.
+// JSON gone, slice 2b (2026-10-21): the single-file import
+// (`importCatalog(from:)`, `importCatalogViaPanel`, and the content-identity
+// dedup it used — `identityKey(for:)`, `localStandIn`,
+// `relinkImportedProvenance`) is retired: no menu item called it, and it
+// was a catalog.json reader. The export stays until slice 3.
 
 extension VideoScanModel {
-
-    struct CatalogImportResult {
-        var added: Int
-        var skipped: Int
-        var sourceHost: String
-    }
 
     /// Write the current `records` array to `url` as a v2 snapshot tagged
     /// with the current machine's name. Throws on write failure.
@@ -64,77 +58,6 @@ extension VideoScanModel {
         }
     }
 
-    /// Decode a catalog snapshot at `url` and merge its records into the
-    /// current catalog, deduping by content identity. Each newly added
-    /// record gets `sourceHost` stamped so the origin is traceable.
-    /// Throws on decode failure.
-    @discardableResult
-    func importCatalog(from url: URL) throws -> CatalogImportResult {
-        let data = try Data(contentsOf: url)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let snapshot = try decoder.decode(CatalogSnapshot.self, from: data)
-
-        // Rewire pairedWith back-references within the imported array so
-        // imported pairs keep pointing at each other, not at nothing.
-        // Never trap on a file carrying duplicate ids (8/17 incident).
-        let importedByID = Dictionary(CatalogStore.dedupingByID(snapshot.records, sourceName: "import").map { ($0.id, $0) },
-                                      uniquingKeysWith: { first, _ in first })
-        for rec in snapshot.records {
-            if let pid = rec.pendingPairedWithID {
-                rec.pairedWith = importedByID[pid]
-                rec.pendingPairedWithID = nil
-            }
-        }
-
-        // Seed identity set from existing records so an import can't create
-        // a duplicate of something we already have locally.
-        var seen = Set<String>()
-        var localsByKey: [String: [VideoRecord]] = [:]
-        for rec in records {
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
-        }
-
-        // Fall back to filename-without-extension if the file forgot to stamp
-        // savedFromHost (v1 snapshot or manual JSON).
-        let effectiveHost: String = {
-            if !snapshot.savedFromHost.isEmpty { return snapshot.savedFromHost }
-            return url.deletingPathExtension().lastPathComponent
-        }()
-
-        var added = 0
-        var skipped = 0
-        var addedRecords: [VideoRecord] = []
-        var idRemap: [UUID: UUID] = [:]
-        for rec in snapshot.records {
-            if let key = Self.identityKey(for: rec), seen.contains(key) {
-                skipped += 1
-                // Remember which LOCAL record stands in for this skipped one so
-                // imported provenance links (archive copies' derivedFrom) can
-                // be re-pointed instead of dangling (codex R4-D).
-                if let local = Self.localStandIn(for: rec, candidates: localsByKey[key] ?? []),
-                   local.id != rec.id { idRemap[rec.id] = local.id }
-                continue
-            }
-            if rec.sourceHost.isEmpty {
-                rec.sourceHost = effectiveHost
-            }
-            records.append(rec)
-            addedRecords.append(rec)
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
-            added += 1
-        }
-        Self.relinkImportedProvenance(addedRecords, idRemap: idRemap)
-
-        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
-        if invalidPairEndpoints > 0 {
-            log("Import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")
-        }
-        adoptImportedMasterArchive(snapshot.masterArchive)
-        saveCatalogNow()
-        return CatalogImportResult(added: added, skipped: skipped, sourceHost: effectiveHost)
-    }
-
     /// Shared alert helper. Internal (not private) so the bundle import/export
     /// extension can also use it — both code paths surface failures the same
     /// way and there's no benefit to duplicating the implementation.
@@ -145,53 +68,6 @@ extension VideoScanModel {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
-    }
-
-    /// Stable content identity for a record.
-    /// Primary: partial-MD5 + size. Fallback: filename + size + duration.
-    /// Returns nil if the record has no identifying info at all — such
-    /// records are always added rather than silently dropped.
-    /// Import relink (codex R4-D): when the import DEDUPED a source record
-    /// (kept the local one), every imported record whose `derivedFrom`
-    /// pointed at the skipped id is re-pointed at the local record's id —
-    /// archive copies (and any other derivation) never dangle. Identical
-    /// ids need no change.
-    static func relinkImportedProvenance(_ added: [VideoRecord], idRemap: [UUID: UUID]) {
-        guard !idRemap.isEmpty else { return }
-        for rec in added {
-            if let d = rec.derivedFrom, let local = idRemap[d] { rec.derivedFrom = local }
-            if let s = rec.supersededByID, let local = idRemap[s] { rec.supersededByID = local }
-        }
-    }
-
-    static func identityKey(for rec: VideoRecord) -> String? {
-        // Master Archive copies are BYTE-IDENTICAL to their sources by
-        // construction (same partialMD5 + size), so content identity alone
-        // would dedup a copy against its own source (codex R5 blocker 1).
-        // An archive copy's identity is its archive LOCATION: the same copy
-        // seen from another catalog (same canonical path) still dedups; a
-        // copy never collides with its source or with a copy elsewhere.
-        if rec.derivationKind == ArchivePromotion.derivationKind {
-            let canonical = PathScope.normalize(URL(fileURLWithPath: rec.fullPath).standardizedFileURL.path)
-            return "arc:\(canonical)"
-        }
-        if !rec.partialMD5.isEmpty && rec.sizeBytes > 0 {
-            return "md5:\(rec.partialMD5):\(rec.sizeBytes)"
-        }
-        if rec.sizeBytes > 0 && !rec.filename.isEmpty {
-            return "fn:\(rec.filename):\(rec.sizeBytes):\(Int(rec.durationSeconds))"
-        }
-        return nil
-    }
-
-    /// Which LOCAL record stands in for a deduped import: same id first,
-    /// then same canonical path, then any local with that identity key —
-    /// never an arbitrary duplicate when a better match exists (codex R5
-    /// blocker 1).
-    static func localStandIn(for imported: VideoRecord, candidates: [VideoRecord]) -> VideoRecord? {
-        if let same = candidates.first(where: { $0.id == imported.id }) { return same }
-        if let samePath = candidates.first(where: { samePath($0.fullPath, imported.fullPath) }) { return samePath }
-        return candidates.first
     }
 
     /// Show a save panel, then export. UI entry point.
@@ -211,29 +87,6 @@ extension VideoScanModel {
         } catch {
             log("Export failed: \(error.localizedDescription)")
             Self.showErrorAlert(title: "Export Failed", message: error.localizedDescription)
-        }
-    }
-
-    /// Show an open panel, then import. UI entry point.
-    func importCatalogViaPanel() {
-        let panel = NSOpenPanel()
-        panel.title = "Import Catalog"
-        panel.message = "Import a catalog exported from another Mac. Records already present here are skipped."
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let result = try importCatalog(from: url)
-            log("Imported \(result.added) new record(s) from \(result.sourceHost); skipped \(result.skipped) duplicate(s).")
-            let alert = NSAlert()
-            alert.messageText = "Catalog Imported"
-            alert.informativeText = "Added \(result.added) new record(s) from \(result.sourceHost).\nSkipped \(result.skipped) record(s) already in this catalog."
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-        } catch {
-            log("Import failed: \(error.localizedDescription)")
-            Self.showErrorAlert(title: "Import Failed", message: error.localizedDescription)
         }
     }
 

@@ -8139,7 +8139,6 @@
       "path": "VideoScan/VideoScanTests/CatalogTests.swift",
       "stage": "unit",
       "suites": [
-        "CatalogImportExportTests",
         "ScanContextTests",
         "CatalogSkipSetTests",
         "PersonScanPrefilterTests",
@@ -8170,10 +8169,8 @@
         "emptyFullPathRecordsIgnored",
         "emptyInputReturnsEmptyResult",
         "emptyResolutionDoesNotTriggerLowRes",
-        "exportThenImportIntoEmptyCatalogAddsEverything",
         "fallbackMatchesByNameAndSize",
         "identicalFilesAreAlreadySafe",
-        "importSkipsRecordsAlreadyPresentByContentIdentity",
         "isPopulatedFlipsOnAnyField",
         "isRemoteMountDetectsNetworkFilesystems",
         "junkScoredBucketCatchesHighScores",
@@ -23987,7 +23984,6 @@
         "StalePairValidationTests"
       ],
       "tests": [
-        "catalogImportClearsKnownIncompatiblePair",
         "catalogLoadClearsKnownIncompatiblePersistedPairSymmetrically",
         "catalogLoadPreservesPersistedPairWhenDurationIsUnknown",
         "incrementalCorrelateReleasesStalePairAndUsesCompatibleAlternative",

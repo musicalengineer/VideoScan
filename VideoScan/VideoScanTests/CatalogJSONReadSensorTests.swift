@@ -41,8 +41,7 @@ struct CatalogJSONReadSensorTests {
         // Verify's audited-file source (Import to SQLite's phase 2) read
         // catalog.json with no caller left; retired 2026-10-21.
         #"decodeCatalogFile\("#: ["Catalog/CatalogStore.swift": 2],
-        #"CatalogSnapshot(\.self|\s*=\s*try\b)"#: ["Catalog/CatalogStore.swift": 1,
-                                                    "Catalog/VideoScanModel+CatalogImportExport.swift": 1],
+        #"CatalogSnapshot(\.self|\s*=\s*try\b)"#: ["Catalog/CatalogStore.swift": 1],
         // The retired live dossier reload (a 30 s poll merging catalog.json
         // into the records) must not come back.
         #"startLiveDossierReload|pollAndMergeDossierFromDisk|mergeDossierFields"#: [:],
