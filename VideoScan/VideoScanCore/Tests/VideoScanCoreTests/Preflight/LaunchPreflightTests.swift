@@ -49,8 +49,10 @@ struct FakePreflightProbe: PreflightProbe {
     var schemaThrows = false
     var quickCheck: PreflightQuickCheckOutcome? = .passed(elapsed: .milliseconds(100))
     var quickCheckThrows = false
-    /// quick_check that only ends when cancelled (or after 5 s) — the quit-path shape.
+    /// quick_check that only ends when cancelled (or at a 20 s safety stop) — the quit-path shape.
     var quickCheckWaitsForCancel = false
+    /// Records that the waiting quick_check began, and whether it ended because of the cancel.
+    var quickCheckWitness: QuickCheckWitness?
 
     func volume(containing url: URL) throws -> PreflightVolume? {
         if volumesThrow { throw Poisoned() }
@@ -77,9 +79,14 @@ struct FakePreflightProbe: PreflightProbe {
                            cancellation: PreflightCancellation) throws -> PreflightQuickCheckOutcome {
         if quickCheckThrows { throw Poisoned() }
         if quickCheckWaitsForCancel {
-            let deadline = Date().addingTimeInterval(5)
+            quickCheckWitness?.markStarted()
+            // Safety stop only (a lost cancel must not hang the run forever);
+            // the test reads WHY it ended from the witness, not from a clock.
+            let deadline = Date().addingTimeInterval(20)
             while !cancellation.isCancelled, Date() < deadline { usleep(1_000) }
-            return cancellation.isCancelled ? .cancelled : .ranOutOfTime(budget: budget)
+            let sawCancel = cancellation.isCancelled
+            quickCheckWitness?.markEnded(sawCancel: sawCancel)
+            return sawCancel ? .cancelled : .ranOutOfTime(budget: budget)
         }
         guard let quickCheck else { throw Poisoned() }
         return quickCheck
@@ -485,16 +492,26 @@ struct LaunchPreflightTests {
         await #expect(throws: CancellationError.self) { _ = try await task.value }
     }
 
-    @Test func cancelDuringQuickCheckStopsItAtOnce() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func cancelDuringQuickCheckStopsItAtOnce() async throws {
+        // 2026-10-21 nightly-flake hunt: this used to sleep 50 ms, cancel,
+        // and hold the WHOLE test (task start included) to < 3 s. In a full
+        // parallel run the Task itself waited ~20 s for a cooperative thread,
+        // so it failed with the cancel path working perfectly. Now: wait
+        // until quick_check is really running, cancel, and assert the
+        // causal chain — Task cancel → token → quick_check saw it and
+        // returned — instead of a wall-clock total.
+        let witness = QuickCheckWitness()
         var probe = FakePreflightProbe.healthy()
         probe.quickCheckWaitsForCancel = true
-        let clock = ContinuousClock()
-        let start = clock.now
+        probe.quickCheckWitness = witness
         let task = Task { try await LaunchPreflight.run(Self.context, probe: probe) }
-        try await Task.sleep(for: .milliseconds(50))
+        while !witness.hasStarted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!witness.hasEnded, "quick_check ended before anyone cancelled it")
         task.cancel()
         await #expect(throws: CancellationError.self) { _ = try await task.value }
-        #expect(clock.now - start < .seconds(3), "the cancel reached quick_check; it did not run to its 5 s end")
+        #expect(witness.endedBecauseCancelled == true,
+                "the cancel reached quick_check; it did not run to its safety stop")
     }
 
     @Test func cancellationTokenRunsItsHandlerOnceAndRefusesLateRegistration() throws {
@@ -577,6 +594,20 @@ struct LaunchPreflightTests {
         expectWithinTimingBudget("preflight fast phase, real probe", measured: report.fastElapsed,
                                  budget: .milliseconds(200), loadBefore: loadBefore)
     }
+}
+
+/// What a waiting fake quick_check saw. Lock-guarded: the fake runs on a
+/// pool thread, the test reads from its own task.
+final class QuickCheckWitness: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = false
+    private var ended: Bool?
+    func markStarted() { lock.lock(); started = true; lock.unlock() }
+    func markEnded(sawCancel: Bool) { lock.lock(); ended = sawCancel; lock.unlock() }
+    var hasStarted: Bool { lock.lock(); defer { lock.unlock() }; return started }
+    var hasEnded: Bool { lock.lock(); defer { lock.unlock() }; return ended != nil }
+    /// nil until it ended; then true only when it ended because of the cancel.
+    var endedBecauseCancelled: Bool? { lock.lock(); defer { lock.unlock() }; return ended }
 }
 
 /// A thread-safe tally for handler tests.

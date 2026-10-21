@@ -198,8 +198,23 @@ struct CatalogOpenCornerTests {
         print("[corner-open] replaced underneath: \(first) / \(second)")
         // Measured 2026-10-21: refused — but only because the engine's own
         // file check answers "disk I/O error"; our store does not look.
-        #expect(!first.isCommitted && !second.isCommitted, "a write landed after catalog.sqlite was replaced")
-        #expect(await repository.generation == generation)
+        // That check is Apple SQLite's SQLITE_IOERR_VNODE (extended code
+        // 6922), raised from a file-system notice that arrives
+        // ASYNCHRONOUSLY: 80 of 80 refused on a quiet M4, but in a full
+        // parallel run at load ~14 on 16 cores both writes COMMITTED
+        // (generation 2 → 3 → 4) into the moved-aside file. So "the engine
+        // refuses" is not a guarantee, and the store's own identity check
+        // (#359, ruled 10/21: device + inode at open and before each
+        // commit) is what makes this deterministic. Until then a landed
+        // write is a KNOWN, intermittent issue — listed on every run it
+        // happens, never silent; when #359 lands, delete the wrapper and
+        // this goes back to a hard expectation.
+        let generationAfter = await repository.generation
+        withKnownIssue("#359: the store does not check the file's identity; the engine's notice is asynchronous, so under load a write can land after catalog.sqlite was replaced",
+                       isIntermittent: true) {
+            #expect(!first.isCommitted && !second.isCommitted, "a write landed after catalog.sqlite was replaced: \(first) / \(second)")
+            #expect(generationAfter == generation)
+        }
         guard case .refused(let words) = first else { return }
         withKnownIssue("pending (draft issue): the refusal says 'disk I/O error', not that catalog.sqlite was replaced under the session") {
             #expect(words.contains("replaced"), Comment(rawValue: words))

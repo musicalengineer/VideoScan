@@ -358,16 +358,33 @@ struct PreflightGateTests {
         var lines: [String] = []
         for (name, ask) in questions {
             ask()   // first call pays any one-time setup
+            // Each call timed on its own. 2026-10-21 nightly-flake hunt: the
+            // MEAN of 20 calls measured the host, not the question — `volume`
+            // (an IPC to the disk-space daemon for the important-usage
+            // figure) read 7–9 ms quiet and 96 ms at load 14 on 16 cores,
+            // failing even the busy band. The FASTEST of 20 is what the
+            // question itself costs when the scheduler lets it run once; a
+            // real regression (a spawned tool, a disk walk) raises every
+            // call, so it raises the fastest too. The slowest call has its
+            // own hard ceiling: no single answer may stall a re-check.
             let rounds = 20
-            let start = clock.now
-            for _ in 0..<rounds { ask() }
-            let each = (clock.now - start) / rounds
-            lines.append("\(name)=\(String(format: "%.3f", TimingBudget.seconds(each) * 1_000)) ms")
+            var samples: [Duration] = []
+            samples.reserveCapacity(rounds)
+            for _ in 0..<rounds {
+                let start = clock.now
+                ask()
+                samples.append(clock.now - start)
+            }
+            samples.sort()
+            let fastest = samples[0], median = samples[rounds / 2], slowest = samples[rounds - 1]
+            let ms = { (d: Duration) in String(format: "%.3f", TimingBudget.seconds(d) * 1_000) }
+            lines.append("\(name)=\(ms(fastest))/\(ms(median))/\(ms(slowest)) ms")
             // 20 ms each would already be "expensive" for a 10-minute re-check.
             // Judged the house way (GH #208): strict when quiet, known issue up to 3× when busy.
-            expectWithinTimingBudget("preflight probe question \(name)", measured: each,
+            expectWithinTimingBudget("preflight probe question \(name) (fastest of \(rounds))", measured: fastest,
                                      budget: .milliseconds(20), loadBefore: loadBefore)
+            #expect(slowest < .seconds(2), "preflight probe question \(name): one call took \(ms(slowest)) ms")
         }
-        print("[preflight-cost] per question: " + lines.joined(separator: ", "))
+        print("[preflight-cost] per question, fastest/median/slowest: " + lines.joined(separator: ", "))
     }
 }

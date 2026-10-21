@@ -29298,6 +29298,8 @@
         "CatalogPreflightReaderTests"
       ],
       "tests": [
+        "aBudgetThatRunsOutBeforeTheFirstStepIsNotLost",
+        "aCancelLandingJustBeforeTheFirstStepIsNotLost",
         "cancelDuringQuickCheckInterruptsItAndSaysCancelled",
         "cancelledBeforeStartNeverOpensTheFile",
         "damagedFileIsNeverAPass",
@@ -29309,7 +29311,8 @@
         "quickCheckLeavesTheFileUnchanged",
         "quickCheckPassesOnAHealthyFile",
         "readsTheSchemaVersion",
-        "theRealProbeRunsQuickCheckThroughThisReader"
+        "theRealProbeRunsQuickCheckThroughThisReader",
+        "theRealQuickCheckHonoursAnInterruptMidWalk"
       ]
     },
     {
@@ -32730,7 +32733,7 @@
       ],
       "expected_floor": 2823,
       "name": "unit",
-      "package_expected_floor": 401,
+      "package_expected_floor": 404,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",

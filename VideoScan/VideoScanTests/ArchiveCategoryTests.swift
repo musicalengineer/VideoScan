@@ -14,6 +14,7 @@
 
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 @Suite("Archive tab — categories")
@@ -252,13 +253,21 @@ struct ArchiveCategoryTests {
         model.records = records
         let volumes = ["/Volumes/Src0", "/Volumes/Src1", "/Volumes/Src2", "/Volumes/Src3", "/Volumes/TestArchive"]
         let memo = RenderMemo<ArchiveCategoryKey, ArchiveCategorySnapshot>()
-        let t0 = CFAbsoluteTimeGetCurrent()
+        // Judged the house way (GH #208): strict when quiet, a listed known
+        // issue up to 3× when busy. 2026-10-21 nightly-flake hunt: thread
+        // CPU time does NOT help here — it tracked wall time to the ms
+        // (2.62–2.70 s quiet, 2.75–3.24 s at load 16–46 on 16 cores: a busy
+        // M4 runs the thread on slower cores), so the honest fix is headroom:
+        // this compute costs ~2.65 s of the 3 s budget in Debug.
+        let loadBefore = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
+        let t0 = clock.now
         let snap = ArchiveCategorySnapshot.cached(in: memo, model: model, volumeSearchPaths: volumes)
-        let computeMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        let computeTime = clock.now - t0
         #expect(snap.archived.count == 5_100)
         #expect(snap.archivedDates.count == 5_100)
-        #expect(.milliseconds(computeMs) < PerformanceLane.debugCeiling(.seconds(3)),
-                "compute with 5k legacy note parses took \(Int(computeMs)) ms — budget 3 s (×\(PerformanceLane.hostedRunnerFactor(environment: ProcessInfo.processInfo.environment)) on a GitHub-hosted runner)")
+        expectWithinTimingBudget("archivedDates 100k compute with 5k legacy note parses", measured: computeTime,
+                                 budget: PerformanceLane.debugCeiling(.seconds(3)), loadBefore: loadBefore)
         for (id, d) in expected.prefix(50) { #expect(snap.archivedDates[id] == d) }
         for id in orphanIDs.prefix(10) { #expect(snap.archivedDates[id] == orphanDate) }
         #expect(snap.archivedDates[sources[0].id] != nil && snap.archivedDates[records[1].id] == nil, "unarchived rows have no date")
