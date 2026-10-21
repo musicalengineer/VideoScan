@@ -29204,6 +29204,180 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/LaunchPreflightTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests"
+      ],
+      "tests": [
+        "aGapIsNeverOKForAnyCheck",
+        "alreadyCancelledRunThrowsAndReportsNothing",
+        "batteryIsANote",
+        "cancelDuringQuickCheckStopsItAtOnce",
+        "cancellationTokenRunsItsHandlerOnceAndRefusesLateRegistration",
+        "defaultsAreRicksNumbers",
+        "diskAt90PercentWarnsAndJustUnderIsOK",
+        "diskAt95PercentIsRedAndJustUnderWarns",
+        "emptyMachineEverythingMissingStillReportsEveryCheck",
+        "everyCheckThatGetsNilSaysCouldntCheck",
+        "everyCheckThatThrowsSaysCouldntCheckAndIsNotGreen",
+        "fastOnlyRunCarriesThePreviousQuickCheckWithoutRerunningIt",
+        "fastOnlyRunWithNoPreviousVerdictRunsQuickCheckAnyway",
+        "healthyMacIsAllSetWithNoBanner",
+        "journalOver256MBWarns",
+        "masterArchiveOfflineIsOnlyANote",
+        "memoryUnder16GBWarns",
+        "missingCatalogFileIsRedAndHoldsEdits",
+        "missingCutoverMarkerIsRedAndHoldsEdits",
+        "missingFFprobeWarnsAndNamesIt",
+        "missingTempVolumeIsCheckedSeparatelyAndNotGreen",
+        "notesAloneShowNoBanner",
+        "purgeableInclusiveFreeIsShownButNeverJudged",
+        "quickCheckFaultIsStickyUntilANewQuickCheckPasses",
+        "quickCheckOutcomes",
+        "realProbeFastPhaseFitsIn200ms",
+        "redDiskSummaryHoldsLongOperationsNotEdits",
+        "redFloorIsThreeTimesCatalogPlusJournal",
+        "redFloorNeverOverflows",
+        "schemaVersionEqualOKNewerRedOlderWarn",
+        "swapOver4GBIsANote",
+        "tempDiskOnAnotherVolumeIsCheckedByTheSameRule",
+        "thermalSeriousOrCriticalWarns",
+        "thousandFakeRunsFitInOneSecond",
+        "under20GBFreeIsRedEvenBelow95Percent",
+        "under50GBFreeWarnsOnASmallDisk",
+        "unwritableLogFolderWarns",
+        "usedFractionOfAZeroSizedVolumeReadsFull",
+        "worstLevelWinsAndSummaryCountsTheRest",
+        "zeroSizedVolumeIsCouldntCheckNotFull"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PreflightGateTests"
+      ],
+      "tests": [
+        "aWALThatGrewDuringTheSessionRaisesTheEditFloor",
+        "backupAndPublishNeedOneCatalog",
+        "catalogFaultRefusesEditsAndLongOperationsWithTheChecksWords",
+        "destinationThatIsTheCatalogDiskGetsTheCatalogReserve",
+        "eachRealProbeQuestionIsCheap",
+        "editFloorNeverUnder1GB",
+        "editFloorPlusMinusOneByte",
+        "exactly90PercentWarnsOneByteLessUsedIsOK",
+        "exactly95PercentIsRedOneByteLessUsedWarns",
+        "freeingTheStatedShortfallLetsTheOperationStart",
+        "freshDiskReadingKeepsTheCatalogFault",
+        "heldEditSaysHowMuchToFreeRoundedUp",
+        "hugeWALClampsInsteadOfOverflowing",
+        "launchReportBelowEditFloorSaysEditsAreHeld",
+        "launchReportHugeWALIsWarnAndHoldsEdits",
+        "leastFreeOutOfRedIsExactToTheByte",
+        "longJobMustFitAndLeaveTheDiskOutOfRed",
+        "negativeJobEstimateCountsAsZero",
+        "negativeOrOverfullReadingsNeverCrashOrOverflow",
+        "onlyRedCatalogChecksAreFaults",
+        "otherDestinationNeedsNoCatalogReserve",
+        "redCatalogFloorPlusMinusOneByte",
+        "redDiskRefusesLongOperationsButNotEdits",
+        "redFloor20GBPlusMinusOneByte",
+        "unreadableDestinationRefusesLongOperations",
+        "unreadableDiskNeverHoldsEditsButRefusesLongOperations",
+        "warnFreeLine50GBPlusMinusOneByte",
+        "zeroByteVolumeIsUnmeasurableNeverHoldsEditsButRefusesLongOperations"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "cancelDuringQuickCheckInterruptsItAndSaysCancelled",
+        "cancelledBeforeStartNeverOpensTheFile",
+        "damagedFileIsNeverAPass",
+        "expectedVersionIsTheStoresCurrentVersion",
+        "lateWatchdogsAndCancelsAfterCloseAreHarmless",
+        "missingFileThrows",
+        "noCatalogStateTableIsNil",
+        "quickCheckIsInterruptedAtItsBudget",
+        "quickCheckLeavesTheFileUnchanged",
+        "quickCheckPassesOnAHealthyFile",
+        "readsTheSchemaVersion",
+        "theRealProbeRunsQuickCheckThroughThisReader"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR1RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests",
+        "PreflightGateTests"
+      ],
+      "tests": [
+        "qaR1_catalogThatFailedQuickCheckHoldsEdits",
+        "qaR1_longJobOnCatalogDiskMustNotLeaveTheDiskRedByPercent",
+        "qaR1_missingCutoverMarkerHoldsEdits",
+        "qaR1_realProbeNeverReportsMoreThanActuallyFreeBytes",
+        "qaR1_redRefusalStatesTheWholeShortfall"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR1Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "qaR1_quickCheckBesideALiveWALWriterPassesAndNeverBlocksACommit",
+        "qaR1_readerOnAClosedWALCatalogLeavesNoSidecars"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "qaR2_interruptWithNoStatementRunningIsDropped"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR2RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests",
+        "PreflightCancellationQAR2Tests"
+      ],
+      "tests": [
+        "qaR2_alreadyCancelledTokenDoesNotRunTheBody",
+        "qaR2_fastOnlyRecheckMustNotLiftALaunchQuickCheckFault"
+      ]
+    },
+    {
+      "blocked_reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightMeasureTests"
+      ],
+      "tests": [
+        "measureOnACatalogCopy"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
       "stage": "regression",
       "suites": [
@@ -30001,6 +30175,10 @@
   "stages": [
     {
       "blocked": [
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
+          "reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog"
+        },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ArchivistBiographyPolicyStateCodeTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
@@ -32552,7 +32730,7 @@
       ],
       "expected_floor": 2823,
       "name": "unit",
-      "package_expected_floor": 311,
+      "package_expected_floor": 401,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -32581,6 +32759,10 @@
         "VideoScanCoreTests.DisplayValueDerivationTests",
         "VideoScanCoreTests.CatalogChangeDetectorTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
+        "VideoScanCoreTests.LaunchPreflightTests",
+        "VideoScanCoreTests.PreflightGateTests",
+        "VideoScanCoreTests.CatalogPreflightReaderTests",
+        "VideoScanCoreTests.PreflightCancellationQAR2Tests",
         "VideoScanCoreTests.CatalogRealityTests"
       ],
       "selectors": [
