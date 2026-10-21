@@ -24,27 +24,40 @@ const html = fs.readFileSync(process.argv[1], "utf8");
 const fixtures = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const loc = JSON.parse(process.argv[3] || "{}");
 const storage = JSON.parse(process.argv[4] || "{}");
+const actions = JSON.parse(process.argv[5] || "[]");
 globalThis.localStorage = {
   getItem(key) { return storage[key] ?? null; },
   setItem(key, value) { storage[key] = String(value); },
 };
 let script = html.match(/<script>\n([\s\S]*?)<\/script>/)[1];
 script = script.replace(/\nloadData\(\);\s*$/, "\nglobalThis.__done = loadData();");
+script += "\nglobalThis.__pollMetricsRefresh = pollMetricsRefresh;";
 const elements = new Map();
 function element(id = "") {
   const classes = new Set();
   const attributes = new Map();
-  const value = { id, children: [], innerHTML: "", textContent: "", style: {}, className: "", open: false, listeners: [],
+  const value = { id, children: [], innerHTML: "", textContent: "", style: {}, className: "", open: false, listeners: [], callbacks: {}, value: "", checked: false, disabled: false,
     classList: { add: x => classes.add(x), remove: x => classes.delete(x), contains: x => classes.has(x), toArray: () => [...classes] },
     appendChild(child) { this.children.push(child); return child; },
-    addEventListener(kind, fn) { this.listeners.push(kind); },
+    addEventListener(kind, fn) { this.listeners.push(kind); (this.callbacks[kind] ||= []).push(fn); },
     contains() { return false; }, getAttribute(key) { return attributes.get(key) ?? null; },
     setAttribute(key, value) { attributes.set(key, String(value)); },
     removeAttribute(key) { attributes.delete(key); } };
+  // Replacing a select's options resets its browser selection. Model that side
+  // effect so an outage-recovery test really catches silent scope widening.
+  let innerHTML = "";
+  Object.defineProperty(value, "innerHTML", {get() { return innerHTML; }, set(markup) {
+    innerHTML = markup;
+    if (this.tagName === "SELECT") {
+      const options = [...markup.matchAll(/<option\b([^>]*)>/g)];
+      const chosen = options.find(o => /(?:^|\s)selected(?:\s|=|$)/.test(o[1])) || options[0];
+      this.value = chosen ? (chosen[1].match(/\bvalue="([^"]*)"/) || [])[1] || "" : "";
+    }
+  }});
   return value;
 }
 // Elements declared hidden in the HTML start hidden here too.
-for (const m of html.matchAll(/<(?:div|p|details)[^>]*class="([^"]*)"[^>]*id="([^"]+)"|<(?:div|p|details)[^>]*id="([^"]+)"[^>]*class="([^"]*)"/g)) {
+for (const m of html.matchAll(/<(?:div|p|details|form|label)[^>]*class="([^"]*)"[^>]*id="([^"]+)"|<(?:div|p|details|form|label)[^>]*id="([^"]+)"[^>]*class="([^"]*)"/g)) {
   const id = m[2] || m[3], cls = m[1] || m[4];
   const el = element(id);
   if (/\bhidden\b/.test(cls)) el.classList.add("hidden");
@@ -55,13 +68,40 @@ globalThis.document = {
   getElementById(id) { if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); },
   createElement() { return element(); },
 };
+for (const m of html.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
+  const id = m[2].match(/\bid="([^"]+)"/);
+  if (!id) continue;
+  const el = document.getElementById(id[1]);
+  el.tagName = m[1].toUpperCase();
+  el.checked = /\bchecked\b/.test(m[2]);
+  el.disabled = /\bdisabled\b/.test(m[2]);
+  el.value = (m[2].match(/\bvalue="([^"]*)"/) || [])[1] || "";
+  if (m[1] === "select") {
+    const inner = html.slice(m.index + m[0].length).split("</select>")[0];
+    const options = [...inner.matchAll(/<option\b([^>]*)>/g)];
+    const choice = options.find(o => /(?:^|\s)selected(?:\s|=|$)/.test(o[1])) || options[0];
+    el.value = choice ? (choice[1].match(/\bvalue="([^"]*)"/) || [])[1] || "" : "";
+  }
+}
 const initialTheme = html.match(/<html\b[^>]*data-theme="([^"]+)"/);
 if (initialTheme) document.documentElement.setAttribute("data-theme", initialTheme[1]);
-if (loc.hash !== undefined) globalThis.location = { hash: loc.hash, search: loc.search || "" };
+if (Object.keys(loc).length) globalThis.location = { hash: loc.hash || "", search: loc.search || "", pathname: loc.pathname || "/", ...loc };
+// Polling is exercised explicitly by actions, never by wall-clock waits.
+globalThis.setInterval = () => 1;
 const charts = [];
 globalThis.Chart = function(target, config) { charts.push({ id: target.id, config }); this.canvas = target; this.resize = () => {}; };
-globalThis.fetch = async url => {
+const requests = [];
+globalThis.fetch = async (url, options = {}) => {
   url = String(url);
+  const method = options.method || "GET";
+  requests.push({url, method, options, body: options.body ? JSON.parse(options.body) : null});
+  const planned = fixtures.__responses && fixtures.__responses[`${method} ${url}`];
+  if (planned) {
+    const reply = planned.length > 1 ? planned.shift() : planned[0];
+    if (reply.error) throw new Error(reply.error);
+    return {ok: reply.status >= 200 && reply.status < 300, status: reply.status,
+      json: async () => reply.body, text: async () => JSON.stringify(reply.body)};
+  }
   for (const [key, body] of Object.entries(fixtures)) {
     if (url.includes(key)) {
       if (body === null) return { ok: false };
@@ -76,8 +116,18 @@ globalThis.console = { ...console, error: (...a) => errors.push(a.map(String).jo
 (async () => {
   eval(script);
   await globalThis.__done;
+  for (const action of actions) {
+    for (const [id, properties] of Object.entries(action.set || {})) Object.assign(document.getElementById(id), properties);
+    if (action.poll) await globalThis.__pollMetricsRefresh();
+    if (action.event) {
+      const el = document.getElementById(action.event.id);
+      const callbacks = el.callbacks[action.event.kind] || [];
+      if (!callbacks.length) throw new Error(`No ${action.event.kind} listener for ${el.id}`);
+      for (const callback of callbacks) await callback({preventDefault() {}, target: el});
+    }
+  }
   const text = el => [el.innerHTML, el.textContent, ...el.children.map(text)].join(" ");
-  const out = { charts: charts.map(c => c.id), errors, sections: {}, notes: {}, open: {}, listeners: {},
+  const out = { charts: charts.map(c => c.id), errors, sections: {}, notes: {}, open: {}, listeners: {}, requests, controls: {},
     theme: document.documentElement.getAttribute("data-theme"),
     chartData: Object.fromEntries(charts.map(c => [c.id, c.config && c.config.data])) };
   for (const [id, el] of elements) {
@@ -85,6 +135,7 @@ globalThis.console = { ...console, error: (...a) => errors.push(a.map(String).jo
     if (id.endsWith("-note") && !el.classList.contains("hidden")) out.notes[id] = el.textContent;
     if (id.startsWith("area-")) { out.open[id] = el.open; out.listeners[id] = el.listeners; }
     out.sections[id] = text(el);
+    if (id.startsWith("refresh-")) out.controls[id] = {value: el.value, checked: el.checked, disabled: el.disabled, hidden: el.classList.contains("hidden")};
   }
   process.stdout.write(JSON.stringify(out));
 })().catch(e => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });
@@ -102,10 +153,10 @@ def jsonl(rows):
     return "".join(json.dumps(r) + "\n" for r in rows)
 
 
-def run_page(tmp_path, fixtures, location=None, storage=None):
+def run_page(tmp_path, fixtures, location=None, storage=None, actions=None):
     fx = tmp_path / "fixtures.json"
     fx.write_text(json.dumps(fixtures))
-    r = subprocess.run(["node", "-e", HARNESS, str(PAGE), str(fx), json.dumps(location or {}), json.dumps(storage or {})],
+    r = subprocess.run(["node", "-e", HARNESS, str(PAGE), str(fx), json.dumps(location or {}), json.dumps(storage or {}), json.dumps(actions or [])],
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
@@ -686,3 +737,172 @@ def test_page_data_comes_from_public_sources_only():
     # Phone width: 16px gutters, nothing wider than the viewport.
     assert "@media (max-width: 720px)" in page and "padding: 12px 16px 32px" in page
     assert '<meta name="viewport" content="width=device-width,initial-scale=1">' in page
+
+
+def refresh_fixture(requests=None):
+    return {"capabilities": {"execution": "manager-queue", "machines": [
+        {"id": "m4", "available": True}, {"id": "m5", "available": True},
+        {"id": "m5Ultra", "available": False}], "areas": ["tests", "code", "hallie", "reviews"],
+        "folders": ["VideoScan/VideoScan/Hallie", "tests"]}, "requests": requests or []}
+
+
+def submit_refresh(**properties):
+    return {"set": {"refresh-" + name: value for name, value in properties.items()},
+            "event": {"id": "refresh-form", "kind": "submit"}}
+
+
+@needs_node
+def test_public_page_never_reads_or_writes_private_queue_even_with_poisoned_settings(tmp_path):
+    out = run_page(tmp_path, {"/api/metrics-refresh": refresh_fixture()},
+                   {"pathname": "/VideoScan/", "search": "?api=http://127.0.0.1:8765&machine=m4"},
+                   {"metrics-api": "http://127.0.0.1:8765", "metrics-machine": "m4"},
+                   [submit_refresh()])
+    assert not [r for r in out["requests"] if "/api/metrics-refresh" in r["url"]]
+    assert out["controls"]["refresh-form"]["hidden"]
+    assert out["controls"]["refresh-submit"]["disabled"]
+    assert "authenticated Engineering Room" in out["sections"]["refresh-message"]
+
+
+@needs_node
+def test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly_results(tmp_path):
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    fixtures["/api/metrics-refresh"] = refresh_fixture()
+    fixtures["__responses"] = {"POST /api/metrics-refresh": [{"status": 201, "body": {
+        "accepted": True, "queued": True, "task": {"state": "queued"}}}]}
+    before = run_page(tmp_path, fixtures)
+    out = run_page(tmp_path, fixtures, {"pathname": "/metrics"}, actions=[submit_refresh(
+        machine={"value": "m5"}, manager={"value": "claude"}, code={"checked": False},
+        reviews={"checked": True}, folder={"value": "VideoScan/VideoScan/Hallie"},
+        revision={"value": "feature/metrics"}, **{"test-scope": {"value": "selected"},
+        "selectors": {"value": "PairTests, tests/test_metrics_dashboard.py"}})])
+    posts = [r for r in out["requests"] if r["method"] == "POST"]
+    assert len(posts) == 1
+    payload = posts[0]["body"]
+    assert payload["machine"] == "m5" and payload["manager"] == "claude"
+    assert payload["areas"] == ["tests", "reviews"]
+    assert payload["testScope"] == "selected"
+    assert payload["testSelectors"] == "PairTests, tests/test_metrics_dashboard.py"
+    assert payload["folder"] == "VideoScan/VideoScan/Hallie" and payload["revision"] == "feature/metrics"
+    assert payload["quietWindow"] is False and len(payload["requestId"]) >= 8
+    assert posts[0]["url"] == "/api/metrics-refresh"
+    assert posts[0]["options"]["credentials"] == "same-origin"
+    for section in ["head", "tl", "sum-tests", "evidence-tests"]:
+        assert out["sections"][section] == before["sections"][section], section
+    assert "Waiting for a worker to claim it" in out["sections"]["refresh-message"]
+    assert "measurement dates and revisions" in out["sections"]["refresh-message"]
+    assert 'value="m5Ultra" disabled' in out["sections"]["refresh-machine"]
+
+
+@needs_node
+@pytest.mark.parametrize("settings, phrase", [
+    ({"machine": {"value": "m5Ultra"}}, "not configured"),
+    ({"machine": {"value": "m4"}}, "quiet window"),
+    ({"test-scope": {"value": "selected"}, "selectors": {"value": ""}}, "1 and 40"),
+    ({"test-scope": {"value": "selected"}, "selectors": {"value": "PairTests;touch pwn"}}, "without shell commands"),
+    ({"folder": {"value": "../private"}}, "available source folders"),
+])
+def test_refresh_invalid_or_unavailable_choices_cannot_submit(tmp_path, settings, phrase):
+    out = run_page(tmp_path, {"/api/metrics-refresh": refresh_fixture()}, {"pathname": "/metrics"},
+                   actions=[submit_refresh(**settings)])
+    assert not [r for r in out["requests"] if r["method"] == "POST"]
+    assert phrase in out["sections"]["refresh-message"]
+
+
+@needs_node
+def test_refresh_uncertain_retry_reuses_key_and_accepts_already_running_request(tmp_path):
+    fixtures = {"/api/metrics-refresh": refresh_fixture(), "__responses": {
+        "POST /api/metrics-refresh": [{"error": "Connection lost after acceptance"}, {"status": 200,
+            "body": {"accepted": True, "queued": False, "reused": True, "task": {"state": "working"}}}]}}
+    out = run_page(tmp_path, fixtures, {"pathname": "/metrics"}, actions=[submit_refresh(), submit_refresh()])
+    posts = [r for r in out["requests"] if r["method"] == "POST"]
+    assert len(posts) == 2
+    assert posts[0]["body"]["requestId"] == posts[1]["body"]["requestId"]
+    message = out["sections"]["refresh-message"]
+    assert "Existing request" in message and "Current task state: working" in message
+    assert "could not be queued" not in message
+
+
+@needs_node
+def test_poll_outage_preserves_machine_folder_and_uncertain_retry_identity(tmp_path):
+    fixtures = {"__responses": {
+        "GET /api/metrics-refresh": [{"status": 200, "body": refresh_fixture()}, {"status": 503, "body": {}},
+                                     {"status": 200, "body": refresh_fixture()}],
+        "POST /api/metrics-refresh": [{"error": "Connection lost after acceptance"}, {"status": 200,
+            "body": {"accepted": True, "queued": False, "reused": True, "task": {"state": "working"}}}]}}
+    out = run_page(tmp_path, fixtures, {"pathname": "/metrics"}, actions=[
+        submit_refresh(machine={"value": "m4"}, quiet={"checked": True}, folder={"value": "VideoScan/VideoScan/Hallie"}),
+        {"poll": True}, {"poll": True}, submit_refresh()])
+    posts = [r for r in out["requests"] if r["method"] == "POST"]
+    assert len(posts) == 2
+    assert posts[0]["body"] == posts[1]["body"], "poll recovery must neither broaden scope nor create a new request"
+    assert posts[1]["body"]["machine"] == "m4" and posts[1]["body"]["folder"] == "VideoScan/VideoScan/Hallie"
+    assert out["controls"]["refresh-machine"]["value"] == "m4"
+    assert out["controls"]["refresh-folder"]["value"] == "VideoScan/VideoScan/Hallie"
+
+
+@needs_node
+def test_refresh_statuses_are_queue_evidence_and_escape_private_progress(tmp_path):
+    requests = [{"state": state, "machine": "m5", "manager": "claude", "title": "Hallie folder review",
+                 "progress": '<script>alert("bad")</script>', "updatedAt": "2026-10-20T12:00:00Z"}
+                for state in ["queued", "working", "blocked", "done", "failed", "not-reporting", "waiting-on-human"]]
+    out = run_page(tmp_path, {"/api/metrics-refresh": refresh_fixture(requests)}, {"pathname": "/metrics"})
+    rendered = out["sections"]["refresh-requests"]
+    for status in ["Queued", "Running", "Blocked", "Handled", "Failed"]:
+        assert status in rendered
+    assert "Status unknown" not in rendered
+    assert "<script>" not in rendered and "&lt;script&gt;" in rendered
+    assert "check their evidence date and SHA" in rendered
+
+
+@needs_node
+def test_freshness_reports_measurement_time_and_sha_not_latest_page_load(tmp_path):
+    now = datetime.now(timezone.utc)
+    stale_time = iso(now - timedelta(days=8))
+    fixtures = full_fixtures(now)
+    fixtures["history.jsonl"] = jsonl([{"ts": stale_time, "sha": "abcdef1234567890", "app_source_lines": 1000}])
+    complexity = complexity_row(now, 500, 2)
+    complexity.pop("sha", None)
+    fixtures["complexity.jsonl"] = jsonl([complexity])
+    out = run_page(tmp_path, fixtures)
+    text = out["sections"]["evidence-size"]
+    assert stale_time in text and "stale (>36h)" in text and "SHA abcdef123456" in text
+    assert "revision not recorded" in text, "fresh complexity row cannot borrow code-size revision"
+
+
+@needs_node
+def test_passing_scoped_run_cannot_replace_full_suite_failure_or_freshness(tmp_path):
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    before = run_page(tmp_path, fixtures)
+    fixtures["testdriver.jsonl"] += jsonl([{"source": "gauntlet", "schemaVersion": 1, "machine": "m5",
+        "ts": iso(now), "sha": "0123456789abcdef", "dirty": True, "passed": 999999, "failed": 0, "total": 999999,
+        "stages": [{"name": "unit", "status": "passed", "passed": 2, "failed": 0, "skipped": 0}]}])
+    out = run_page(tmp_path, fixtures)
+    for section in ["head", "tl", "sum-tests", "evidence-tests"]:
+        assert out["sections"][section] == before["sections"][section], section
+    assert "Stage run" in out["sections"]["body-tests"] and "SHA 0123456789ab" in out["sections"]["body-tests"]
+    assert "passing subset does not verify the whole repository" in out["sections"]["body-tests"]
+    assert "not run" in out["sections"]["body-tests"]
+    assert "uncommitted changes" in out["sections"]["body-tests"]
+
+
+@needs_node
+def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path):
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    rows = [json.loads(line) for line in fixtures["testdriver.jsonl"].splitlines()]
+    for row in rows:
+        if row.get("source") == "nightly-local":
+            row.update({"sha": "aaaaaaa123456", "hallie_replay_git_sha": "bbbbbbb123456"})
+    fixtures["testdriver.jsonl"] = jsonl(rows)
+    out = run_page(tmp_path, fixtures)
+    assert "SHA aaaaaaa12345" in out["sections"]["evidence-tests"]
+    assert "bbbbbbb" not in out["sections"]["evidence-tests"]
+    assert "SHA bbbbbbb12345" in out["sections"]["evidence-hallie"]
+    assert "aaaaaaa" not in out["sections"]["evidence-hallie"]
+
+
+def test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes():
+    page = PAGE.read_text()
+    assert not re.search(r"\bon(?:click|change|submit|keydown)\s*=", page)

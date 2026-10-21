@@ -192,6 +192,68 @@ test("local server requires its token and persists a safe round trip", async t =
   assert.equal(hostile.status, 403);
 });
 
+test("metrics page and refresh API require login, reject hostile writes, and queue idempotently", async t => {
+  const qwenProvider = await startFakeQwen(t);
+  const port = 38000 + Math.floor(Math.random() * 8000);
+  const token = "isolated-metrics-refresh-token";
+  const runtime = mkdtempSync(join(tmpdir(), "engineering-room-metrics-"));
+  const child = spawn(process.execPath, [join(root, "src/server.mjs")], {
+    cwd: root, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, CODEX_BIN: join(here, "fake-codex.mjs"), CLAUDE_BIN: join(here, "fake-claude.mjs"),
+      QWEN_BASE_URL: qwenProvider.baseUrl, QWEN_MODEL: "qwen-test-local", ENGINEERING_ROOM_PORT: String(port),
+      ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(runtime, "room.sqlite3"),
+      ENGINEERING_ROOM_STATUS_FEED: join(runtime, "missing-status"), ENGINEERING_ROOM_TEAM_CHANNEL: join(runtime, "team-channel"),
+      ENGINEERING_ROOM_RECONSTRUCTION_SEED: join(runtime, "missing-seed") },
+  });
+  t.after(() => child.kill("SIGTERM"));
+  await waitForLine(child.stdout, "Engineering Room is ready:");
+  const base = `http://127.0.0.1:${port}`;
+  const unauthenticated = await fetch(`${base}/metrics`);
+  assert.equal(unauthenticated.status, 401);
+  assert.match(await unauthenticated.text(), /continue to metrics/);
+  assert.equal((await fetch(`${base}/api/metrics-refresh`)).status, 401);
+  const payload = { requestId: "server-metrics-001", machine: "m5", areas: ["tests"],
+    testScope: "selected", testSelectors: "PairTests", revision: "HEAD" };
+  assert.equal((await fetch(`${base}/api/metrics-refresh`, { method: "POST", headers: {"Content-Type": "application/json", Origin: base}, body: JSON.stringify(payload) })).status, 401);
+  const login = await fetch(`${base}/metrics?token=${token}`, {redirect: "manual"});
+  assert.equal(login.status, 302);
+  assert.equal(login.headers.get("location"), "/metrics");
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  const headers = { Cookie: cookie, Origin: base, "Content-Type": "application/json" };
+  const page = await fetch(`${base}/metrics`, {headers});
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("cache-control"), /no-store/);
+  const html = await page.text();
+  const nonce = html.match(/<script nonce="([^"]+)"/)[1];
+  assert.ok(page.headers.get("content-security-policy").includes(`'nonce-${nonce}'`));
+  assert.match(html, /Rerun tests and refresh metrics/);
+  const ordinary = await fetch(`${base}/`, {headers});
+  assert.equal(ordinary.headers.get("content-security-policy").includes("cdnjs.cloudflare.com"), false);
+  const before = await (await fetch(`${base}/api/control-plane/board`, {headers})).json();
+  for (const input of [{...payload, machine: "m5Ultra"}, {...payload, folder: "../private"}, {...payload, machine: "m4"}]) {
+    assert.equal((await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: JSON.stringify(input)})).status, 400);
+  }
+  assert.equal((await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers: {...headers, Origin: "https://evil.example"}, body: JSON.stringify(payload)})).status, 403);
+  assert.equal((await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: "{broken"})).status, 400);
+  const afterRejected = await (await fetch(`${base}/api/control-plane/board`, {headers})).json();
+  assert.equal(afterRejected.tasks.length, before.tasks.length);
+  assert.equal(afterRejected.events.length, before.events.length);
+  const createdResponse = await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: JSON.stringify(payload)});
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  assert.equal(created.queued, true);
+  assert.equal(created.task.state, "queued");
+  assert.equal(created.task.resultSummary, null);
+  const retry = await fetch(`${base}/api/metrics-refresh`, {method: "POST", headers, body: JSON.stringify(payload)});
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).task.id, created.task.id);
+  const snapshot = await (await fetch(`${base}/api/metrics-refresh`, {headers})).json();
+  assert.equal(snapshot.requests.length, 1);
+  assert.equal(snapshot.requests[0].request.testSelectors, "PairTests");
+  assert.equal(snapshot.capabilities.machines.find(m => m.id === "m5Ultra").available, false);
+  assert.equal(qwenProvider.inputs.length, 0, "queueing never sends work to discussion providers");
+});
+
 test("LAN mode accepts an allowed household host and rejects hostile hosts", async t => {
   const qwenProvider = await startFakeQwen(t);
   const port = 28000 + Math.floor(Math.random() * 8000);

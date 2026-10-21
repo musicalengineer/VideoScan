@@ -161,6 +161,51 @@ node scripts/team-control.mjs complete --manager codex --agent testing/example \
   --session example-session --task-id example-task --result-file /tmp/result.md
 ```
 
+## Refresh metrics during the day
+
+After signing in to the room, open `/metrics` on the same host, for example
+`http://127.0.0.1:8765/metrics`. It serves the repository's health page with a
+private refresh control. The public GitHub Pages version links here; it cannot
+dispatch work or access private request history. Restart the room after updating
+the server code, and deploy `docs/index.html` through the usual Pages workflow
+to update the public page.
+
+Choose M4 or M5, a manager, and any combination of tests, code health, Hallie
+evaluation, and reviews. M5 Ultra is visible but unavailable until configured.
+Tests can cover all tests or explicit stage/suite/test identifiers; reviews
+can name a tracked source folder without requiring a PR. `working-tree` means
+the selected machine's current checkout, including uncommitted changes. A
+branch or commit can be requested instead. M4 tests and Hallie require an
+explicit quiet-window declaration; the worker must check it is still current
+when the queued request is claimed.
+
+This first iteration **queues work for the selected manager** using the existing
+Team Board. It does not start an unattended runner or open an SSH connection.
+The manager polls `queue`/`watch`, claims the task, executes on the requested
+machine, and reports progress and results through the existing worker commands.
+The request carries its scope and a collection/publication checklist. A machine
+being offered in the menu is not evidence that it is online or idle.
+
+The page distinguishes queued, working, blocked, failed, and handled requests.
+A handled request does not itself change health colors. Measurements still need
+to be published, and their timestamp/revision checked. A passing subset does not
+clear a failing whole-suite result. Gauntlet stage evidence is shown separately
+from overnight history; its unrun UI stage remains unrun. Code size, complexity,
+and debt share one top-level section, with debt details nested beneath it.
+
+Workers should use the narrow existing collectors and runners, never the
+overnight orchestrator as a daytime shortcut: it synchronizes branches and
+maintains baselines. Record the actual machine, SHA, dirty state, selected tests,
+folder, outcome, and publication evidence. When a current publisher cannot
+represent a selected scope, attach that evidence to the task and mark publication
+blocked instead of substituting it for a full clean-main measurement. Automatic
+workers and additional scoped publishing adapters are follow-up work.
+
+`GET /api/metrics-refresh` exposes capabilities and the latest 50 refresh tasks;
+`POST /api/metrics-refresh` validates and queues a request. Both require the room
+session and its existing host/origin checks. Reusing a request ID with identical
+content returns the same task; conflicting content is rejected.
+
 ## Tests
 
 ```sh

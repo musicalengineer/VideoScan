@@ -13,6 +13,7 @@ import { RoomAgent } from "./room-agent.mjs";
 import { loadOrCreateAccessToken } from "./access-token.mjs";
 import { RoundtableController } from "./roundtable-controller.mjs";
 import { ControlPlane } from "./control-plane.mjs";
+import { MetricsRefresh, metricsDocument } from "./metrics-refresh.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const toolRoot = resolve(here, "..");
@@ -51,6 +52,7 @@ const controlPlane = new ControlPlane({
 });
 controlPlane.ingestAll();
 ensureDailyArtifacts();
+const metricsRefresh = new MetricsRefresh({ controlPlane, repoRoot });
 
 for (const agent of Object.values(agents)) agent.on("event", event => publish(event.type, event.data));
 const autopilot = new RoundtableController({
@@ -68,13 +70,29 @@ const server = createServer(async (request, response) => {
     if (!validHost(request.headers.host) || !validOrigin(request.headers.origin)) return json(response, 403, { error: "Local room request rejected." });
     const url = new URL(request.url, `http://${request.headers.host}`);
 
-    if (request.method === "GET" && url.pathname === "/" && url.searchParams.has("token")) {
+    if (request.method === "GET" && ["/", "/metrics"].includes(url.pathname) && url.searchParams.has("token")) {
       if (url.searchParams.get("token") !== sessionToken) return text(response, 403, "Invalid room token.");
-      response.writeHead(302, { "Set-Cookie": `engineering_room=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`, Location: "/" });
+      response.writeHead(302, { "Set-Cookie": `engineering_room=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`, Location: url.pathname });
       return response.end();
     }
 
+    if (!authorized(request) && request.method === "GET" && url.pathname === "/metrics") {
+      // A navigation from public Pages can omit the Strict cookie. A same-origin
+      // link lets an already signed-in user continue without weakening the cookie.
+      response.writeHead(401, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      return response.end('<!doctype html><html lang="en"><meta charset="utf-8"><title>Private metrics</title><h1>Private metrics</h1><p>If you are already signed in, <a href="/metrics">continue to metrics</a>.</p><p>Otherwise sign in using the startup link printed by Engineering Room, then select Code metrics on its Team Board.</p></html>');
+    }
     if (!authorized(request)) return text(response, 401, "Open the startup URL printed by Engineering Room.");
+    if (request.method === "GET" && url.pathname === "/metrics") {
+      const page = metricsDocument(await readFile(join(repoRoot, "docs", "index.html"), "utf8"));
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Security-Policy": page.csp });
+      return response.end(page.body);
+    }
+    if (request.method === "GET" && url.pathname === "/api/metrics-refresh") return json(response, 200, metricsRefresh.snapshot());
+    if (request.method === "POST" && url.pathname === "/api/metrics-refresh") {
+      const result = metricsRefresh.enqueue(await readJson(request));
+      return json(response, result.reused ? 200 : 201, result);
+    }
     if (request.method === "GET" && url.pathname === "/healthz") return json(response, 200, {
       status: "ok",
       codex: agents.codex.status.connection,
