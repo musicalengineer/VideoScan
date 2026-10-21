@@ -225,19 +225,6 @@ struct CatalogTransactionDoorsTests {
         await repository.close()
         #expect(try count(fixture, "SELECT count(*) FROM event_members") == 1)
     }
-
-    // MARK: - The JSON store refuses the readings by name
-
-    @Test func theJSONReaderRefusesRecordReadingsByName() async throws {
-        let fixture = try await StoreFixture.make(.json, generation: 3)
-        defer { fixture.remove() }
-        let repository = JSONCatalogRepository()
-        _ = await repository.open(at: fixture.url)
-        await #expect(throws: CatalogRepositoryError.unsupported("\(JSONCatalogRepository.readOnlyReason); it has no record tables to read")) {
-            try await repository.read { try $0.recordCounts() }
-        }
-        await repository.close()
-    }
 }
 
 /// Collects relation landings out of a `@Sendable` write body.

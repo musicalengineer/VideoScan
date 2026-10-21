@@ -9,11 +9,10 @@
 // imports Foundation only, and CatalogStoreSensorTests fails if
 // `import GRDB` appears outside Sources/VideoScanCore/Store/.
 //
-// Two implementations exist from day one so the seam is real, not a
-// wrapper around one engine:
-//   - GRDBCatalogRepository  — SQLite through GRDB (the future authority)
-//   - JSONCatalogRepository  — the existing catalog.json, read-only (the
-//                              import source; it is never written here)
+// Implementations:
+//   - GRDBCatalogRepository  — SQLite through GRDB (the authority since 10/18)
+//   (JSONCatalogRepository, the read-only catalog.json stub that kept the
+//   seam honest during the import, was retired 2026-10-20 — JSON gone.)
 //
 // Part 2b (2026-10-17): `CatalogTransaction` gains one door per table row
 // the importer writes — each one row per call, each raw SQL on the GRDB

@@ -1,7 +1,9 @@
 // StoreTestSupport.swift — fixtures shared by the Store suites.
-// Each fixture is one fresh temp directory holding either a GRDB catalog
-// (catalog.sqlite + catalog.highwater) or a JSON catalog (catalog.json),
-// built to a chosen generation, then CLOSED so the test opens it itself.
+// Each fixture is one fresh temp directory holding a GRDB catalog
+// (catalog.sqlite + catalog.highwater), built to a chosen generation, then
+// CLOSED so the test opens it itself. (The JSON kind left with
+// JSONCatalogRepository, 2026-10-20; the enum keeps its one case so the
+// contract suites stay parameterized for a future second store.)
 
 import Foundation
 import Testing
@@ -9,13 +11,12 @@ import Testing
 
 enum StoreKind: String, CaseIterable, Sendable {
     case grdb
-    case json
 
-    var fileName: String { self == .grdb ? "catalog.sqlite" : "catalog.json" }
+    var fileName: String { "catalog.sqlite" }
 
     /// What `open` says for a healthy store of this kind.
     var expectedOpen: CatalogOpenOutcome {
-        self == .grdb ? .readWrite : .readOnly(reason: JSONCatalogRepository.readOnlyReason)
+        .readWrite
     }
 }
 
@@ -48,9 +49,6 @@ struct StoreFixture: Sendable {
                 }
             }
             await repository.close()
-        case .json:
-            let text = "{\"version\":6,\"generation\":\(generation),\"savedFromHost\":\"test-host\",\"records\":[]}"
-            try Data(text.utf8).write(to: fixture.url)
         }
         return fixture
     }
@@ -58,7 +56,6 @@ struct StoreFixture: Sendable {
     func makeRepository(durability: GRDBCatalogRepository.Durability = .volatileForTests) -> any CatalogRepository {
         switch kind {
         case .grdb: return GRDBCatalogRepository(host: "test-host", durability: durability)
-        case .json: return JSONCatalogRepository()
         }
     }
 
