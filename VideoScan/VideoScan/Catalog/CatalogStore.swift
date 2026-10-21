@@ -923,33 +923,6 @@ final class CatalogStore {
         return records
     }
 
-    /// The records currently in catalog.json (or .prev when the primary is
-    /// unreadable) for a READ-ONLY query, WITHOUT adopting the file as this
-    /// session's state (GH #167).
-    ///
-    /// `load()` is the SESSION load: it replaces the designation slot the
-    /// next save serialises, re-baselines the OCC generation and rotates
-    /// catalog.json → .prev. Person Finder used to call it at every job
-    /// start just to build a skip set, which nulled a designation set
-    /// inside the save debounce, reverted a rehomed one, adopted a foreign
-    /// writer's generation without merging (so our next save clobbered
-    /// it) and overwrote the one-generation-back backup. This read touches
-    /// none of that. Same test-host gate as `load()` for the shared store.
-    /// (≈ a const member function: it only reads the file.)
-    func readRecordsWithoutAdopting() -> [VideoRecord] {
-        if Self.isRunningTests && self === CatalogStore.shared { return [] }
-        let fm = FileManager.default
-        if fm.fileExists(atPath: fileURL.path),
-           let records = loadRecords(fromSnapshotAtPath: fileURL.path) {
-            return records
-        }
-        if fm.fileExists(atPath: backupURL.path),
-           let records = loadRecords(fromSnapshotAtPath: backupURL.path) {
-            return records
-        }
-        return []
-    }
-
     /// Copy primary → .prev so the previous-good snapshot is preserved one
     /// generation back. Best-effort: errors are logged but never thrown —
     /// a load that can't make a backup still proceeds with the primary.

@@ -14,10 +14,9 @@
 //     refuses and opens no catalog.json (GH #354, Rick 2026-10-21); the
 //     SQLite launch reads none either (GH #353).
 //   • CatalogStore — the JSON store itself (its own load and decoder).
-//   • Person Finder's catalog prefilter (PersonFinderCatalogFilter, via
-//     CatalogStore.readRecordsWithoutAdopting) — reads catalog.json at every
-//     job start, also under catalog.sqlite, where that file is frozen and
-//     stale: a FINDING (2026-10-21), routed to bug-fix, not changed here.
+//   (Person Finder's catalog prefilter read the frozen catalog.json through
+//   CatalogStore.readRecordsWithoutAdopting; it reads the live records since
+//   0005b81ee, and that reader was retired 2026-10-21.)
 //   • VideoScanModel+VolumeRenameUndo.loadSafetyCopy — a pre-cutover
 //     `catalog.pre-volume-rename.*.json` safety copy (never catalog.json).
 //   • BundleImporter — reading a legacy (pre-SQLite) backup bundle; under
@@ -49,8 +48,8 @@ struct CatalogJSONReadSensorTests {
         // into the records) must not come back.
         #"startLiveDossierReload|pollAndMergeDossierFromDisk|mergeDossierFields"#: [:],
         #"CatalogStore\.shared\.load\(\)"#: [:],
-        #"readRecordsWithoutAdopting\(\)"#: ["Catalog/CatalogStore.swift": 1, "People/PersonFinderCatalogFilter.swift": 2],
-        #"loadRecords\(fromSnapshotAtPath"#: ["Catalog/CatalogStore.swift": 3, "Volumes/VideoScanModel+VolumeRenameUndo.swift": 1],
+        #"readRecordsWithoutAdopting"#: [:],
+        #"loadRecords\(fromSnapshotAtPath"#: ["Catalog/CatalogStore.swift": 1, "Volumes/VideoScanModel+VolumeRenameUndo.swift": 1],
         // The live reload's generation adopt (it read catalog.json's header
         // after a merge) left with it; retired 2026-10-21.
         #"adoptOnDiskGenerationAfterReconcile|auditedFileRows|verifyCatalogSnapshot\(auditedGeneration"#: [:],
