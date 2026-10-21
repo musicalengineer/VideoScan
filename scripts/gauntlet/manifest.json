@@ -29914,6 +29914,86 @@
         "theVolumeMenuKeepsRescanAndUpdate",
         "theWaitBeforeVerify"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogWriteCornerDiskTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogWriteCornerDiskTests"
+      ],
+      "tests": [
+        "belowTheFloorRefuses",
+        "diskFullAtCommit",
+        "diskFullMidJob",
+        "hundredThousandUnderPressure"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogOpenCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogOpenCornerTests"
+      ],
+      "tests": [
+        "corruptCatalogIsRefusedAndNeverWritten",
+        "databaseReplacedUnderneath",
+        "newerSchemaIsRefused",
+        "readOnlyFileIsNotWritten",
+        "writeLockHeldElsewhere"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogQuitCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogQuitCornerTests"
+      ],
+      "tests": [
+        "keepOpenChoiceNeedsTheCommitBeforeTerminate",
+        "masterQuitWithFailedFinalCommit",
+        "viewerQuitSavesNothingAndSaysNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogAuthorityCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogAuthorityCornerTests"
+      ],
+      "tests": [
+        "damagedOrNewerCatalogIsRefusedAndUntouched",
+        "latchVanishesMidSession",
+        "masterWithoutLatch",
+        "viewerWithoutLatch"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCommitterFailFastTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitterFailFastTests"
+      ],
+      "tests": [
+        "diskFullBlocksThenReopenLands",
+        "jobCheckpointAfterDiskFills"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogViewerPublishCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogViewerPublishCornerTests"
+      ],
+      "tests": [
+        "interruptedSealPublishesNothing",
+        "writerHoldsThePublishThenPublishesOnce"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -33242,9 +33322,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 224,
+      "expected_floor": 235,
       "name": "regression",
-      "package_expected_floor": 190,
+      "package_expected_floor": 199,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33275,7 +33355,9 @@
         "VideoScanCoreTests.CatalogCommitB26Tests",
         "VideoScanCoreTests.CatalogHardKillTests",
         "VideoScanCoreTests.CatalogDiskFullTests",
-        "VideoScanCoreTests.CatalogFolderDoorsTests"
+        "VideoScanCoreTests.CatalogFolderDoorsTests",
+        "VideoScanCoreTests.CatalogWriteCornerDiskTests",
+        "VideoScanCoreTests.CatalogOpenCornerTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -33343,7 +33425,11 @@
         "VideoScanTests/AdvRescanLiveAppliedCountTests",
         "VideoScanTests/CatalogBackupSQLiteTests",
         "VideoScanTests/CatalogBackupImportTests",
-        "VideoScanTests/CatalogBackupScaleTests"
+        "VideoScanTests/CatalogBackupScaleTests",
+        "VideoScanTests/CatalogQuitCornerTests",
+        "VideoScanTests/CatalogAuthorityCornerTests",
+        "VideoScanTests/CatalogCommitterFailFastTests",
+        "VideoScanTests/CatalogViewerPublishCornerTests"
       ]
     },
     {
