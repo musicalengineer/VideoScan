@@ -6601,19 +6601,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/BundleImportLegacyManifestTests.swift",
-      "stage": "unit",
-      "suites": [
-        "BundleImportLegacyManifestTests"
-      ],
-      "tests": [
-        "readStillRejectsCatalogMissing",
-        "readToleratesMissingManifest"
-      ]
-    },
-    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CICanaryTests.swift",
@@ -18358,8 +18345,6 @@
         "barrierFailuresAreNotClaimed",
         "containedHelpers",
         "csvFormulaNeutralized",
-        "identityKeyForArchiveCopies",
-        "importKeepsArchiveCopiesAndRelinks",
         "intermediateSymlinkDirRefused",
         "manifestBarrierFailureThenConverge",
         "manifestSymlinkRefused",
@@ -31035,10 +31020,6 @@
         },
         {
           "name": "VideoScan/VideoScanTests/BundleImportFieldMergeTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/BundleImportLegacyManifestTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

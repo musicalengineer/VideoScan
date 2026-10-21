@@ -37,8 +37,8 @@ import VideoScanCore
 // MARK: - Helpers
 
 /// Writes a v1 (catalog.json) bundle exactly as builds before 2026-10-19
-/// did — the shape Import Catalog must recognise, merge on a catalog.json
-/// Mac, and refuse under catalog.sqlite. Overwrites an existing bundle.
+/// did — the shape Import Catalog must recognise and refuse, on every Mac
+/// since slice 2b (2026-10-21). Overwrites an existing bundle.
 @MainActor
 enum LegacyJSONBundle {
     static func write(records: [VideoRecord], to url: URL) throws {
@@ -250,13 +250,10 @@ struct CatalogBackupImportTests {
         #expect(model.bundleImportDecision(for: url) == .refuse(VideoScanModel.jsonBundleUnderSQLiteWords))
         #expect(VideoScanModel.jsonBundleUnderSQLiteWords
                 == "this backup is from before the database switch; it can't be merged into catalog.sqlite")
-
-        // The door's own guard, for any caller that skips the panel.
-        var payload = try BundleImporter.read(from: url)
-        payload.poiFoldersInBundle = []
-        let result = await model.applyBundlePayload(payload, bundleURL: url)
-        #expect(result.refusal == VideoScanModel.jsonBundleUnderSQLiteWords)
-        #expect(result.recordsAdded == 0 && result.volumesAdded == 0)
+        // (Slice 2b, 2026-10-21: the JSON merge door — BundleImporter.read +
+        // applyBundlePayload, with its own guard — is retired; the decision
+        // above is the only door, and the sensor pins that nothing decodes
+        // a bundle's catalog.json.)
 
         #expect(model.records.count == recordCount, "no JSON record joined memory")
         #expect(!model.records.contains { $0.id == fresh.id })
@@ -264,7 +261,6 @@ struct CatalogBackupImportTests {
         #expect(try scene.databaseFingerprint() == fingerprint, "catalog.sqlite (+ -wal) changed")
         let after = try await scene.liveFacts()
         #expect(after.counts == before.counts && after.generation == before.generation)
-        #expect(scene.sandbox.catalogLogText().contains("REFUSED Import Catalog"))
     }
 
     @Test("a catalog.sqlite bundle is refused (no merge, no safe Restore yet) and the database is unchanged")
@@ -281,10 +277,10 @@ struct CatalogBackupImportTests {
         #expect(try scene.databaseFingerprint() == fingerprint)
     }
 
-    @Test("decision table: only a JSON bundle on a catalog.json Mac merges; everything else refuses")
+    @Test("decision table: every bundle refuses — a catalog.json bundle in words on any Mac (JSON gone, slice 2b), a catalog.sqlite bundle until Restore exists")
     func decisionTable() {
         typealias M = VideoScanModel
-        #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: false) == .mergeLegacyJSON)
+        #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: false) == .refuse(M.jsonBundleUnderSQLiteWords))
         #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: true) == .refuse(M.jsonBundleUnderSQLiteWords))
         for kind: BundleImporter.CatalogKind in [.sqlite(generation: 7), .sqlite(generation: nil), .none] {
             for authority in [true, false] {
