@@ -5335,7 +5335,6 @@
         "everyBackgroundWriterLeavesAnArchivedStageRowsDates",
         "humanMarkCarryLeavesAnArchivedKeepersDate",
         "linkRepairedCopyKeepsAnArchivedRowsDate",
-        "liveReloadStillDatesACatalogedRow",
         "reanchorSkipsArchivedStage",
         "reapplyNeverRestoresOntoAnArchivedStageRow",
         "repairOfAnArchivedOriginalStillTakesTheDate",
@@ -9684,7 +9683,6 @@
         "folderYearPlaceholderGainingEvidenceSettles",
         "hundredThousand",
         "inferredSummary",
-        "liveReloadCarriesRangeAndReason",
         "logLineBreakdownSums",
         "modelUnderTestNeverReadsRealPeople",
         "noEvidenceIsNil",
@@ -17579,8 +17577,6 @@
         "identity_recipientTakesTheBestVERIFIEDDonorInABucket",
         "inferredDateSource_roundTripsThroughTheDTO_andIsOmittedWhenNil",
         "invariantStillCountsAGenuineGap",
-        "liveReload_carriesTheProvenanceField",
-        "liveReload_mergedRowSharesItsDateWithSiblingsInMemory",
         "ordinaryCopyIsDatedAndLeavesNothingBehind",
         "passNeverWritesOutsideTheScratchStore",
         "perf_allAlreadyDatedBucketIsLinear",
@@ -18066,38 +18062,6 @@
         "verifierKnowsTheSubjectsShortAndBridgedNames",
         "verifierLeavesTheDepartedAndUnknownAlone",
         "verifierRejectsAFinishedLifeForALivingSubject"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/LiveDossierReloadTests.swift",
-      "stage": "unit",
-      "suites": [
-        "LiveDossierReloadTests",
-        "CatalogCoverageTests",
-        "FleetStatsTests"
-      ],
-      "tests": [
-        "activeLabel",
-        "brandNewRecordsAppended",
-        "dossierFieldsCopyOver",
-        "emptyCatalog",
-        "emptyDir",
-        "emptyTranscriptDoesNotCount",
-        "hostStatEmpty",
-        "identityPreservedOnMergePass",
-        "lineCounts",
-        "missingPathAppendedAsNew",
-        "mixedChannels",
-        "multiRecordMatch",
-        "partialFiles",
-        "relinkedRecordIsMatchedByID",
-        "repairKeepsCurrentHome",
-        "sameVintageSkipped",
-        "skipUndossieredSnapshot",
-        "strongDatesThreshold",
-        "userFieldsPreserved"
       ]
     },
     {
@@ -21956,7 +21920,6 @@
       "tests": [
         "carryOverNeverSkipsARecipientWhoseAudioTheDonorNeverHad",
         "duplicateEnrichmentDoesNotDateAnArchivedStageKeeper",
-        "liveReloadMergeLeavesAnArchivedStageRowsDateAlone",
         "notSameDecisionSurvivesASameBytesHop",
         "perVolumeCoverageLineDoesNotCallOtherVolumesOffline",
         "pipelinedZeroSceneArchivedRowIsNotFlagged"
@@ -28859,7 +28822,6 @@
         "fileContentAndVolumeDoorsWriteTheirRowsAndTheCommitCountsThem",
         "finishingARunWithLyingCountersIsRefusedByTheTrigger",
         "quarantineKnowledgeAndDerivedDoorsWriteOneRowEach",
-        "theJSONReaderRefusesRecordReadingsByName",
         "theRelationDoorAnswersLandedAlreadyPresentAndRefused"
       ]
     },
@@ -30167,6 +30129,19 @@
       "tests": [
         "interruptedSealPublishesNothing",
         "writerHoldsThePublishThenPublishesOnce"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogJSONReadSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogJSONReadSensorTests"
+      ],
+      "tests": [
+        "theLiveReloadIsGone",
+        "theReadersAreReviewed",
+        "theSQLiteLaunchDiscardsTheJSONRecords"
       ]
     }
   ],
@@ -31712,10 +31687,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/LiveDossierReloadTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanTests/LocalProbeGroupCatalogGateTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -32728,7 +32699,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2823,
+      "expected_floor": 2825,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [
@@ -33202,7 +33173,8 @@
         "VideoScanTests/CatalogPhaseLogicTests",
         "VideoScanTests/CatalogStoreHoldTests",
         "VideoScanTests/CatalogQuitRecoveryTests",
-        "VideoScanTests/CatalogQuitRecoverySensorTests"
+        "VideoScanTests/CatalogQuitRecoverySensorTests",
+        "VideoScanTests/CatalogJSONReadSensorTests"
       ]
     },
     {
@@ -33506,7 +33478,7 @@
       ],
       "expected_floor": 235,
       "name": "regression",
-      "package_expected_floor": 199,
+      "package_expected_floor": 198,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
