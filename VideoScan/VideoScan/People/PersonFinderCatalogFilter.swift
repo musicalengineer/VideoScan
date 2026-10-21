@@ -124,6 +124,9 @@ struct CatalogSkipResult: Equatable {
     /// Resolution height < `minResolutionHeight`. Vision struggles below
     /// 480p; signal-to-noise is poor.
     var lowResolution: Set<String> = []
+    /// How many catalog records (with a path) the prefilter looked at —
+    /// 0 means the live catalog had nothing loaded (e.g. an early-launch job).
+    var checkedRecords: Int = 0
 
     /// Union of every category — what callers actually filter against.
     var all: Set<String> {
@@ -140,6 +143,31 @@ struct CatalogSkipResult: Equatable {
         unscannable.count + alreadyKnown.count + junkScored.count
             + tooShort.count + lowResolution.count
     }
+
+    /// The per-category breakdown for the job log, e.g.
+    /// " (3 unscannable, 1 already-known for Donna)"; "" when every bucket
+    /// is empty.
+    func breakdownDetail(targetName: String) -> String {
+        let buckets: [(Int, String)] = [
+            (unscannable.count, "unscannable"),
+            (alreadyKnown.count, "already-known for \(targetName)"),
+            (junkScored.count, "junk-scored"),
+            (tooShort.count, "too-short"),
+            (lowResolution.count, "low-resolution"),
+        ]
+        let parts = buckets.filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        return parts.isEmpty ? "" : " (\(parts.joined(separator: ", ")))"
+    }
+}
+
+/// The prefilter's one always-written job-log line (it is never silent):
+/// what it looked at and what it dropped.
+nonisolated func pfPrefilterSummaryLine(connected: Bool, checked: Int, skipped: Int) -> String {
+    guard connected else { return "Catalog prefilter: no catalog connected — nothing skipped" }
+    guard checked > 0 else {
+        return "Catalog prefilter: the catalog has no records loaded yet — nothing skipped"
+    }
+    return "Catalog prefilter: checked \(checked) catalog record(s), skipped \(skipped) file(s)"
 }
 
 /// Parse a resolution string like "1920x1080" → 1080. Returns nil if the
@@ -171,6 +199,7 @@ nonisolated func pfPersonScanSkipPaths(
         .lowercased()
 
     for rec in facts where !rec.fullPath.isEmpty {
+        result.checkedRecords += 1
         // Rule 1: unscannable (existing #23 behavior)
         if rec.isUnscannable {
             result.unscannable.insert(rec.fullPath)
@@ -223,6 +252,13 @@ nonisolated func pfPersonScanSkipPaths(
                           junkScoreCeiling: junkScoreCeiling)
 }
 
+/// The live-catalog snapshot closure. `@Sendable` as well as `@MainActor`
+/// so it may be stored in the Sendable `PFLiveCatalogSource` and carried
+/// into the nonisolated scan path (Swift 6 strict concurrency). For Rick:
+/// think of it as a std::function that may only be invoked on the main
+/// thread and whose captures are all safe to share across threads.
+typealias PFSkipFactsSnapshot = @MainActor @Sendable () -> [PFSkipFacts]
+
 /// The job-start prefilter: snapshot the live catalog on the main actor
 /// (`source` — the app wires `VideoScanModel.personScanSkipFacts`), then
 /// build the skip set on a detached background task. Returns nil when no
@@ -230,7 +266,7 @@ nonisolated func pfPersonScanSkipPaths(
 /// the caller can say so rather than pretend the catalog knew nothing.
 nonisolated func pfLiveCatalogSkipResult(
     targetPersonName: String?,
-    source: (@MainActor () -> [PFSkipFacts])?
+    source: PFSkipFactsSnapshot?
 ) async -> CatalogSkipResult? {
     guard let source else { return nil }
     let facts = await MainActor.run { source() }
@@ -243,9 +279,9 @@ nonisolated func pfLiveCatalogSkipResult(
 /// carried into the nonisolated scan path. Wraps the optional snapshot
 /// closure (nil = no catalog connected) so the job path passes one value.
 nonisolated struct PFLiveCatalogSource: Sendable {
-    let snapshot: (@MainActor () -> [PFSkipFacts])?
+    let snapshot: PFSkipFactsSnapshot?
 
-    init(_ snapshot: (@MainActor () -> [PFSkipFacts])?) {
+    init(_ snapshot: PFSkipFactsSnapshot?) {
         self.snapshot = snapshot
     }
 

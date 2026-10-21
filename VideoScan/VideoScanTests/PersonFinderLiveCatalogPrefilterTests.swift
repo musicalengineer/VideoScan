@@ -7,18 +7,21 @@
 // made on pre-cutover data. The fix reads the LIVE records the catalog model
 // holds (`VideoScanModel.personScanSkipFacts` → `pfLiveCatalogSkipResult`).
 //
+// This file holds the cases that need a filesystem sandbox (a SQLite-
+// authority CutoverScene, or a temp folder of video files for the job path).
+// The pure logic, the 100k scale case and the wiring sensor are in
+// PersonFinderLiveCatalogPrefilterUnitTests.swift (gauntlet-selectable).
+//
 // Dimensions (CLAUDE.md feature-test checklist):
 //   LOGIC      a record that exists ONLY in the live (SQLite-loaded) records
 //              drives every skip category, under a real SQLite-authority
-//              sandbox (CutoverScene.launchOnSQLite); the value snapshot
-//              gives the same result as the record rules; no catalog
-//              connected → nil (the job says so), never a file read.
+//              sandbox (CutoverScene.launchOnSQLite); a removed record stops
+//              being skipped; the job path always writes one prefilter line
+//              with the record count — including N == 0 (early launch).
 //   ISOLATION  a poisoned catalog.json (a ghost audio-only file, a live file
 //              falsely marked unscannable + junk) has no effect.
-//   SCALE      100k synthetic records: snapshot + skip set within a budget.
-//   SENSOR     the job path passes the live source through; ContentView
-//              wires it (source pins).
-//   MEDIA      N/A — no media is opened.
+//   MEDIA      N/A — no media is decoded (the job-path case uses empty .mov
+//              files only for discovery by extension).
 // Red evidence: the LOGIC case against the old store-read path failed with
 // `result.unscannable.contains(live.fullPath)` false (Debug, 2026-10-21).
 
@@ -72,6 +75,7 @@ struct PersonFinderLiveCatalogPrefilterTests {
         #expect(result.junkScored.contains("\(base)/junk.mov"))
         #expect(result.tooShort.contains("\(base)/short.mov"))
         #expect(result.lowResolution.contains("\(base)/tiny.mov"))
+        #expect(result.checkedRecords == model.records.filter { !$0.fullPath.isEmpty }.count)
         // Same rules as before the fix: the whole result equals the record
         // rules applied to the live records.
         #expect(result == pfPersonScanSkipPaths(from: model.records, targetPersonName: "donna"))
@@ -127,83 +131,65 @@ struct PersonFinderLiveCatalogPrefilterTests {
         #expect(!result.all.contains("/Volumes/PoisonVol/ghost.wav"))
         #expect(!result.all.contains(liveVideo.fullPath))
     }
-
-    @Test("LOGIC: no catalog connected → nil (the job says so), not an empty catalog")
-    func noSourceIsNil() async {
-        #expect(await pfLiveCatalogSkipResult(targetPersonName: "donna", source: nil) == nil)
-        #expect(await pfLiveCatalogSkipResult(targetPersonName: "donna", source: { [] })
-                == CatalogSkipResult())
-        #expect(await PFLiveCatalogSource(nil).skipResult(targetPersonName: "donna") == nil)
-        let one = PFLiveCatalogSource { [PFSkipFacts(fullPath: "/v/a.wav", isUnscannable: true)] }
-        #expect(await one.skipResult(targetPersonName: nil)?.unscannable == ["/v/a.wav"])
-    }
-
-    @Test("LOGIC: the value snapshot keeps every rule's input (records without a path dropped)")
-    func snapshotFaithful() {
-        let r = record("/v/a.mov", stream: .videoOnly, detected: ["Donna"], junk: 7,
-                       duration: 3.5, resolution: "640x480")
-        r.suspectedPeople = ["Hallie"]
-        let unnamed = record("")
-        let facts = pfSkipFacts(from: [r, unnamed])
-        #expect(facts == [PFSkipFacts(fullPath: "/v/a.mov", isUnscannable: false,
-                                      detectedPeople: ["Donna"], suspectedPeople: ["Hallie"],
-                                      junkScore: 7, durationSeconds: 3.5, resolution: "640x480")])
-        for stream in [StreamType.audioOnly, .noStreams, .ffprobeFailed] {
-            #expect(PFSkipFacts(record("/v/x", stream: stream)).isUnscannable)
-        }
-        for stream in [StreamType.videoAndAudio, .videoOnly] {
-            #expect(!PFSkipFacts(record("/v/x", stream: stream)).isUnscannable)
-        }
-    }
 }
 
-@Suite("Person Finder live prefilter — scale (100k records)")
+// MARK: - The job path's prefilter line (never silent)
+
+@Suite("Person Finder prefilter — the job log always says what it checked", .serialized)
 @MainActor
-struct PersonFinderLiveCatalogPrefilterScaleTests {
+struct PersonFinderPrefilterJobLogTests {
 
-    @Test("SCALE: 100k synthetic records snapshot + skip set within budget")
-    func hundredThousand() async throws {
-        let n = 100_000
-        var recs: [VideoRecord] = []
-        recs.reserveCapacity(n)
-        for i in 0..<n {
-            switch i % 5 {
-            case 0: recs.append(record("/Volumes/S/\(i).wav", stream: .audioOnly))
-            case 1: recs.append(record("/Volumes/S/\(i).mov", detected: ["Donna"]))
-            case 2: recs.append(record("/Volumes/S/\(i).mov", duration: 1))
-            case 3: recs.append(record("/Volumes/S/\(i).mov", resolution: "320x240"))
-            default: recs.append(record("/Volumes/S/\(i).mov"))
-            }
+    /// A temp folder holding `names` as empty files (discovery is by
+    /// extension; nothing is decoded).
+    private func folder(_ names: [String]) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_pf_prefilter_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (i, name) in names.enumerated() {
+            // Distinct sizes: discovery de-dupes on name + size.
+            try Data(repeating: 0, count: i + 1).write(to: dir.appendingPathComponent(name))
         }
-        let catalog = recs
-        let start = ContinuousClock.now
-        let result = try #require(await pfLiveCatalogSkipResult(
-            targetPersonName: "donna", source: { pfSkipFacts(from: catalog) }))
-        let elapsed = ContinuousClock.now - start
-        #expect(result.unscannable.count == n / 5)
-        #expect(result.alreadyKnown.count == n / 5)
-        #expect(result.tooShort.count == n / 5)
-        #expect(result.lowResolution.count == n / 5)
-        #expect(result.all.count == 4 * n / 5)
-        // Budget: Debug build on the M4/M1 measures well under this; the old
-        // path decoded ~80 MB of JSON on the main actor at every job start.
-        #expect(elapsed < .seconds(5), "100k prefilter took \(elapsed)")
-        print("PF live prefilter 100k: \(elapsed)")
+        return dir
     }
-}
 
-@Suite("Person Finder live prefilter — sensor (source wiring)")
-struct PersonFinderLiveCatalogPrefilterSensor {
+    private func discover(in dir: URL, catalog: PFLiveCatalogSource) async -> (files: [String]?, log: [String]) {
+        let job = ScanJob(searchPath: dir.path)
+        var settings = PersonFinderSettings()
+        settings.skipCatalogBadFiles = true
+        let files = await PersonFinderModel.discoverVideos(job: job, settings: settings, liveCatalog: catalog)
+        job.flushConsoleLines()
+        return (files, job.consoleLines)
+    }
 
-    @Test("SENSOR: the job path passes the live source to the prefilter; ContentView wires it")
-    func wiring() throws {
-        let lifecycle = try SourceTree.appSource(named: "PersonFinderModel+JobLifecycle.swift")
-        #expect(lifecycle.contains("let liveCatalog = PFLiveCatalogSource(self.catalogSkipFactsSource)"))
-        #expect(lifecycle.contains("liveCatalog: liveCatalog"))
-        #expect(lifecycle.contains("await liveCatalog.skipResult(targetPersonName: targetName)"))
-        #expect(!lifecycle.contains("pfPersonScanSkipResult("))
-        let content = try SourceTree.appSource(named: "ContentView.swift")
-        #expect(content.contains("personFinderModel.catalogSkipFactsSource = { [weak model] in"))
-        #expect(content.contains("model?.personScanSkipFacts() ?? []"))
+    @Test("N == 0: an early-launch job says the catalog has no records loaded yet")
+    func emptyCatalogExplainsItself() async throws {
+        let dir = try folder(["a.mov", "b.mov"]); defer { try? FileManager.default.removeItem(at: dir) }
+        let (files, log) = await discover(in: dir, catalog: PFLiveCatalogSource { [] })
+        #expect(files?.count == 2, "nothing is skipped")
+        #expect(log.contains("Catalog prefilter: the catalog has no records loaded yet — nothing skipped"),
+                "log: \(log)")
+    }
+
+    @Test("N > 0: one line with the record count and the skip count, then the existing breakdown")
+    func countedLine() async throws {
+        let dir = try folder(["a.mov", "b.mov"]); defer { try? FileManager.default.removeItem(at: dir) }
+        let aPath = dir.appendingPathComponent("a.mov").path
+        let catalog = PFLiveCatalogSource {
+            [PFSkipFacts(fullPath: aPath, isUnscannable: true),
+             PFSkipFacts(fullPath: "/Volumes/Elsewhere/c.mov"),
+             PFSkipFacts(fullPath: "/Volumes/Elsewhere/d.mov")]
+        }
+        let (files, log) = await discover(in: dir, catalog: catalog)
+        #expect(files == [dir.appendingPathComponent("b.mov").path])
+        #expect(log.contains("Catalog prefilter: checked 3 catalog record(s), skipped 1 file(s)"), "log: \(log)")
+        #expect(log.contains("Catalog prefilter skipped 1 file(s) (1 unscannable)"), "log: \(log)")
+    }
+
+    @Test("no catalog connected: the job says so")
+    func notConnectedSaysSo() async throws {
+        let dir = try folder(["a.mov"]); defer { try? FileManager.default.removeItem(at: dir) }
+        let (files, log) = await discover(in: dir, catalog: PFLiveCatalogSource(nil))
+        #expect(files?.count == 1)
+        #expect(log.contains("Catalog prefilter: no catalog connected — nothing skipped"), "log: \(log)")
     }
 }

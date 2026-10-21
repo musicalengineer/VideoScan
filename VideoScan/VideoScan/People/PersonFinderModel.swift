@@ -400,7 +400,7 @@ final class PersonFinderModel: ObservableObject {
     /// decoupling reason as `onScanComplete`. nil = no catalog connected,
     /// and the job says so; it never falls back to reading catalog.json
     /// (frozen since the 10/18 SQLite cutover).
-    var catalogSkipFactsSource: (@MainActor () -> [PFSkipFacts])?
+    var catalogSkipFactsSource: PFSkipFactsSnapshot?
 
     /// Batch evidence lookup for identity narrowing: given the set of
     /// matched video paths, return each path's inferred record date +

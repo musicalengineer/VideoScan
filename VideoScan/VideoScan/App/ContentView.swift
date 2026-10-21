@@ -195,8 +195,11 @@ struct ContentView: View {
 
             // The Person Finder catalog prefilter reads the LIVE records
             // (catalog.sqlite-loaded), never the frozen catalog.json.
-            personFinderModel.catalogSkipFactsSource = { [weak model] in
-                model?.personScanSkipFacts() ?? []
+            // Weak capture of a local (not of `model` straight from the
+            // enclosing closure) so the capture ownership is unambiguous.
+            let catalogModel = model
+            personFinderModel.catalogSkipFactsSource = { [weak catalogModel] in
+                catalogModel?.personScanSkipFacts() ?? []
             }
 
             // Bridge the catalog's dossier evidence (inferred record date +

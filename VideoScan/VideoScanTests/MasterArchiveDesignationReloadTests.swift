@@ -146,6 +146,5 @@ struct MasterArchiveDesignationReloadTests {
         let live = audioOnlyRecord("/Volumes/TestVol/live_only.wav")
         let result = try #require(await personFinderRead(store: store, dir: dir, records: [live], target: nil))
         #expect(result.unscannable == ["/Volumes/TestVol/live_only.wav"])
-        #expect(pfCatalogSkipPaths(from: [live]) == ["/Volumes/TestVol/live_only.wav"])
     }
 }
