@@ -19,7 +19,7 @@ pm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pm)
 
 NOW = datetime(2026, 10, 12, 9, 0, 0, tzinfo=timezone.utc)
-SECRETS = ["RicksM4", "RicksM1", "/Users/rickb", "SECRET", "Donna", "VideoScan.xcscheme"]
+SECRETS = ["RicksM4", "RicksM5", "RicksM1", "/Users/rickb", "SECRET", "Donna", "VideoScan.xcscheme"]
 
 
 def night(host, date, hour="07", **f):
@@ -84,15 +84,47 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     n = pm.nightly_summary(rows, "2026-10-12")
     assert n["days"] == 90 and len(n["nights"]) == 90
     assert n["nights"][0]["date"] == "2026-07-15" and n["nights"][-1]["date"] == "2026-10-12"
-    assert n["hosts"] == ["M4", "M5", "M1"]
+    # GH #360: the M1 is OFF the rota (scripts/nightly_rota.json) — its rows leave
+    # the table entirely, and the summary says so instead of showing a gap.
+    assert n["hosts"] == ["M4", "M5"]
+    assert n["off_rota"] == ["M1"]
     assert n["nights"][0]["hosts"] == {"M4": {"state": "green", "passed": 2631, "failed": 0, "total": 2678, "reason": None}}
     assert n["nights"][-2]["hosts"]["M4"]["state"] == "green"
     last = n["nights"][-1]["hosts"]
-    assert set(last) == {"M5", "M1"}
-    assert last["M1"] == {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0, "reason": "build-timeout:5400s"}
+    assert set(last) == {"M5"}
     assert last["M5"]["state"] == "watch" and last["M5"]["failed"] == 1
     # Nights with no row are present and empty, never invented.
     assert n["nights"][1]["hosts"] == {}
+    # Back on the rota, the same rows give the M1 its column and its amber cell again.
+    back = pm.nightly_summary(rows, "2026-10-12", rota={"on": ["M4", "M5", "M1"], "off": []})
+    assert back["hosts"] == ["M4", "M5", "M1"] and back["off_rota"] == []
+    assert back["nights"][-1]["hosts"]["M1"] == {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
+                                                 "reason": "build-timeout:5400s"}
+
+
+def test_the_real_rota_takes_the_m1_out_and_keeps_the_m4_and_m5():
+    """GH #360 item 4: the M1 (a travel laptop, often on battery) is out of the
+    nightly. One file says so; the publisher reads it."""
+    rota = pm.load_rota()
+    assert rota["on"] == ["M4", "M5"] and rota["off"] == ["M1"]
+
+
+def test_an_unreadable_rota_drops_nobody(tmp_path):
+    bad = tmp_path / "rota.json"
+    bad.write_text("{not json")
+    assert pm.load_rota(bad) == {"on": list(pm.HOST_ORDER), "off": []}
+    assert pm.load_rota(tmp_path / "missing.json")["off"] == []
+
+
+def test_an_off_rota_mac_that_still_publishes_never_colours_a_night():
+    """The M1's launchd job may fire once more before Rick unloads it (or its
+    checkout pulls the new guard): its build-timeout row must not show up."""
+    rows = [night("RicksM4", "2026-10-22", status="ok", passed=12300, total=12300),
+            night("RicksM5", "2026-10-22", hour="08", status="ok", passed=12300, total=12300),
+            night("RicksM1", "2026-10-22", hour="10", status="failed", reason="build-timeout:5400s")]
+    n = pm.nightly_summary(rows, "2026-10-22")
+    assert set(n["nights"][-1]["hosts"]) == {"M4", "M5"}
+    assert all(c["state"] == "green" for c in n["nights"][-1]["hosts"].values())
 
 
 def test_person_summary_is_codes_and_numbers_only():
@@ -293,7 +325,8 @@ def metrics_dir(tmp_path):
     d.mkdir()
     rows = [night("RicksM4", "2026-10-11", status="ok", passed=11000, total=11060,
                   person_eval_status="not-configured", person_eval_readiness_pct=0, person_eval_quality_score=None),
-            night("RicksM1", "2026-10-12", status="failed", reason="build-timeout:5400s"),
+            night("RicksM5", "2026-10-12", status="failed", reason="build-timeout:5400s"),
+            night("RicksM1", "2026-10-12", status="failed", reason="build-timeout:5400s"),   # off the rota
             night("RicksM4", "2026-10-12", status="failed", reason="failed-tests:2", passed=11211, failed=2, total=11275)]
     (d / "testdriver.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
     (d / "history.jsonl").write_text("{}\n")
@@ -324,8 +357,9 @@ def test_summary_object_validates_and_leaks_nothing(metrics_dir, tmp_path):
     assert s["github"]["open_bugs"] == 2 and s["sprint"]["title"] == "Week of Oct 12"
     assert s["tags"] == [{"date": "2026-10-09", "name": "demo-2026-10-10"}]
     assert s["person"]["status"] == "not-configured"
-    assert s["nightly"]["hosts"] == ["M4", "M1"]
-    assert s["nightly"]["nights"][-1]["hosts"]["M1"]["state"] == "did_not_run"
+    assert s["nightly"]["hosts"] == ["M4", "M5"] and s["nightly"]["off_rota"] == ["M1"]
+    assert s["nightly"]["nights"][-1]["hosts"]["M5"]["state"] == "did_not_run"
+    assert "M1" not in s["nightly"]["nights"][-1]["hosts"]
     assert s["nightly"]["nights"][-1]["hosts"]["M4"]["state"] == "watch"   # 2 failed of 11,275: a few
     assert s["nightly"]["nights"][-2]["hosts"]["M4"]["state"] == "green"
     blob = " ".join(every_string(s))
@@ -374,17 +408,17 @@ def test_publish_writes_summary_latest_beside_the_other_streams(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     wt = tmp_path / "wt"
-    td = json.dumps(night("RicksM1", "2026-10-12", status="failed", reason="build-timeout:5400s")) + "\n"
+    td = json.dumps(night("RicksM5", "2026-10-12", status="failed", reason="build-timeout:5400s")) + "\n"
     git = FakeGit(repo, remote={"history.jsonl": "{}\n", "testdriver.jsonl": td})
     build = pm.summary_builder(gh=FakeGh(GH_OK), git=TagGit([]), now=NOW, pbxproj=tmp_path / "missing")
     assert pm.publish({"coverage.jsonl": []}, repo=repo, wt=wt, git=git, folders=FOLDERS,
                       say=lambda m: None, summary=build) == "pushed"
     assert set(git.remote) == {"history.jsonl", "testdriver.jsonl", "coverage.jsonl", "summary_latest.json"}
     s = json.loads(git.remote["summary_latest.json"])
-    assert s["nightly"]["nights"][-1]["hosts"] == {"M1": {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
+    assert s["nightly"]["nights"][-1]["hosts"] == {"M5": {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
                                                           "reason": "build-timeout:5400s"}}
     assert s["github"]["open_bugs"] == 2
-    assert "RicksM1" not in git.remote["summary_latest.json"]
+    assert "RicksM5" not in git.remote["summary_latest.json"]
     # Same inputs again: the summary is byte-identical (fixed `now`), so nothing is committed.
     assert pm.publish({"coverage.jsonl": []}, repo=repo, wt=wt, git=git, folders=FOLDERS,
                       say=lambda m: None, summary=build) == "unchanged"
@@ -457,7 +491,8 @@ def test_cli_out_dir_with_metrics_dir_writes_summary_with_nulls_when_gh_is_missi
     # The CLI uses the real clock; the fixture's rows are dated 2026-10-12, so
     # find that night by date (the last cell is "today", empty after 10/12).
     night_1012 = next(x for x in s["nightly"]["nights"] if x["date"] == "2026-10-12")
-    assert night_1012["hosts"]["M1"]["state"] == "did_not_run"
+    assert night_1012["hosts"]["M5"]["state"] == "did_not_run"
+    assert "M1" not in night_1012["hosts"] and s["nightly"]["off_rota"] == ["M1"]
     assert s["version"] is not None                          # the repo's own pbxproj
     assert not (out / "github_daily.jsonl").exists()         # gh failed: no daily row, never a null row
     assert "github_daily" not in r.stdout

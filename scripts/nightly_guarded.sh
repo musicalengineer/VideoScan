@@ -6,7 +6,9 @@
 #
 #   M4 @ 02:00   (primary — most dev happens here)
 #   M5 @ 03:15   (runs only if M4 didn't land a green run)
-#   M1 @ 04:30   (last resort)
+#   M1           OFF the rota (GH #360, 2026-10-21: a travel laptop, often on
+#                battery). scripts/nightly_rota.json is the one source; a Mac
+#                that is off it never runs, even if its launchd job still fires.
 #
 # Logic: fetch origin/metrics; if a GREEN (status:ok, total>0) testdriver row
 # dated *today* (UTC) already exists from any host, there's nothing to do —
@@ -26,6 +28,16 @@ mkdir -p "$LOGDIR"
 GUARD_LOG="$LOGDIR/nightly_guard.log"
 HOST="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$HOST] $*" >> "$GUARD_LOG"; }
+
+# Off the rota = never run, publish nothing (the page lists it as "off the
+# rota", not as a failure). Unknown = run as before: never silently drop a Mac.
+SLOT="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" slot "$HOST" 2>/dev/null || echo unknown)"
+case "$SLOT" in
+    off\ *)
+        log "off the nightly rota (${SLOT#off }) — not running. To remove the job: bash scripts/install_nightly.sh"
+        exit 0
+        ;;
+esac
 
 git fetch origin metrics --quiet 2>/dev/null || true
 TODAY="$(date -u +%Y-%m-%d)"

@@ -90,10 +90,27 @@
 #       row fields; a red/timed-out/not-run Core lane turns a green row red
 #       with reason core-<why>. parse_test_counts/parse_crashed_tests moved up
 #       (unchanged) so the Core lane can use them before the app build.
+#
+#   2026-10-21 (machine-setup-r1, GH #360 item 5 "green means green"):
+#     - A MACHINE PREFLIGHT before any build: automation mode must be
+#       enable-able without a password (`automationmodetool`), Xcode's first
+#       launch must be done (`xcodebuild -checkFirstLaunchStatus`), and the
+#       Metal toolchain must resolve (`xcrun -f metal`). No sudo. A failing
+#       check publishes reason "machine-setup:<what>" and stops: the page shows
+#       a "?" (the machine), never a test failure, and no 90-minute build is
+#       spent on a Mac that cannot host the tests. (10/21 on the M5: automation
+#       mode wanted a password and Xcode 27.1 needed -runFirstLaunch.)
+#     - A test HOST that never connects ("The test runner hung before
+#       establishing connection", "never finished bootstrapping", automation
+#       mode timing out, no sleep assertion) with ZERO tests counted publishes
+#       "machine-setup:test-host-hung" (or -sleep-assertion) instead of
+#       "zero-tests-ran", and the log says what to check. UI tests stay out of
+#       the nightly (-skip-testing:VideoScanUITests): a UI runner can never zero
+#       the unit count.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-10-18-core-lane-r1"
+NIGHTLY_SCRIPT_VERSION="2026-10-21-machine-setup-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -201,6 +218,70 @@ classify_nightly_test_result() {
         STATUS="failed"
         REASON="test-rc:$test_rc"
     fi
+}
+
+# ── Machine setup (GH #360 item 5) ───────────────────────────────────
+# The three things a Mac needs before it can host the unit tests at all, each
+# checked WITHOUT sudo. Sets MACHINE_SETUP_REASON to "" (ready) or
+# "machine-setup:<what>" for the FIRST failing check, and logs every finding
+# with the one-line fix (the fixes need sudo, so they are Rick's). Binaries are
+# overridable for the harness: NIGHTLY_AUTOMATIONMODETOOL, NIGHTLY_XCODEBUILD,
+# NIGHTLY_XCRUN.
+check_machine_setup() {
+    local amt="${NIGHTLY_AUTOMATIONMODETOOL:-automationmodetool}"
+    local xcb="${NIGHTLY_XCODEBUILD:-xcodebuild}"
+    local xcr="${NIGHTLY_XCRUN:-xcrun}"
+    local out
+    MACHINE_SETUP_REASON=""
+    # automationmodetool prints "This device DOES NOT REQUIRE user
+    # authentication to enable Automation Mode." when the test host can start
+    # unattended, and "... REQUIRES user authentication ..." when it would sit
+    # at a password prompt until the watchdog (10/21 on the M5). Only that
+    # positive evidence fails; an unrecognised answer is logged, not fatal.
+    out=$("$amt" 2>&1)
+    if printf '%s' "$out" | grep -q 'REQUIRES user authentication' \
+            && ! printf '%s' "$out" | grep -q 'DOES NOT REQUIRE user authentication'; then
+        log "MACHINE SETUP: automation mode needs a password, so the test host would hang unattended."
+        log "  fix (once, at the Mac): sudo automationmodetool enable-automationmode-without-authentication"
+        MACHINE_SETUP_REASON="machine-setup:automation-mode"
+    elif ! printf '%s' "$out" | grep -q 'DOES NOT REQUIRE user authentication'; then
+        log "machine setup: automationmodetool answer not recognised (not fatal): $(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+    fi
+    if ! "$xcb" -checkFirstLaunchStatus >/dev/null 2>&1; then
+        log "MACHINE SETUP: Xcode's first launch is not done (xcodebuild -checkFirstLaunchStatus failed) — e.g. a CoreSimulator newer than the installed one."
+        log "  fix (once, at the Mac): sudo xcodebuild -runFirstLaunch"
+        [ -z "$MACHINE_SETUP_REASON" ] && MACHINE_SETUP_REASON="machine-setup:xcode-first-launch"
+    fi
+    if ! "$xcr" -f metal >/dev/null 2>&1; then
+        log "MACHINE SETUP: the Metal toolchain is missing (xcrun -f metal failed); MLX shaders cannot compile."
+        log "  fix (once, at the Mac): xcodebuild -downloadComponent MetalToolchain"
+        [ -z "$MACHINE_SETUP_REASON" ] && MACHINE_SETUP_REASON="machine-setup:metal-toolchain"
+    fi
+    [ -z "$MACHINE_SETUP_REASON" ] && log "Machine setup: automation mode, Xcode first launch and Metal toolchain all ready."
+    return 0
+}
+
+# A run that counted ZERO tests because the test HOST never started (or never
+# connected) is the machine, not the code. Rewrites a "zero-tests-ran" reason
+# to "machine-setup:<what>" and logs what to check; anything else (a timeout, a
+# real failure, tests that ran) is left exactly as classified.
+# Args: test_log total
+apply_test_host_start_diagnosis() {
+    local test_log="$1"
+    local total="$2"
+    [ "$total" -eq 0 ] || return 0
+    case "${REASON:-}" in zero-tests-ran*) ;; *) return 0 ;; esac
+    local what=""
+    if grep -qE 'test runner hung|never finished bootstrapping|Timed out while enabling automation|Failed to establish communication with the test runner|Test runner never began executing tests|encountered an error \(The test runner' "$test_log" 2>/dev/null; then
+        what="test-host-hung"
+    elif grep -qE 'Failed to prevent system sleep' "$test_log" 2>/dev/null; then
+        what="sleep-assertion"
+    fi
+    [ -n "$what" ] || return 0
+    log "test host could not start: check \`automationmodetool\` / Xcode first-launch / Metal toolchain"
+    log "  (zero tests counted and the log shows ${what}; the unit tests never ran — this is the machine, not the code)"
+    STATUS="failed"
+    REASON="machine-setup:$what"
 }
 
 # Refresh the privacy-safe person-recognition fields. With no app argument it
@@ -904,6 +985,15 @@ log "Commit: $COMMIT ($COMMIT_DATE)"
 # failure publishes the desired red 0 when no quality benchmark is configured.
 refresh_person_metrics
 
+# ── Machine preflight (GH #360 item 5): before any build ─────────────
+check_machine_setup
+if [ -n "$MACHINE_SETUP_REASON" ]; then
+    log "FATAL: this Mac is not set up to host the tests ($MACHINE_SETUP_REASON) — publishing a machine row, not a test result"
+    publish_row "$(with_person_metrics "$(make_status_row failed "$MACHINE_SETUP_REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
+    PUBLISH_RC=$?
+    exit 1
+fi
+
 # ── VideoScanCore package tests (before the app build; see the lane note) ──
 run_core_package_tests "$REPO/VideoScan/VideoScanCore" \
     "$HOME/Library/Caches/videoscan-nightly-core-build"
@@ -1050,6 +1140,7 @@ fi
 
 if [ "$POST_TEST_ROUTE_RC" -eq 2 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
+    apply_test_host_start_diagnosis /tmp/nightly-test-output.log "$TOTAL"
     publish_row "$(with_person_metrics "$(make_status_row "$STATUS" "$REASON" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     PUBLISH_RC=$?
     exit 1

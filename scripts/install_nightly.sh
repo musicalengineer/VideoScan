@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Install the staggered, guarded nightly on whichever fleet host this is.
 #
-#   M4 → 02:00 (primary)   M5 → 03:15 (failover)   M1 → 04:30 (failover)
+# THE ROTA is scripts/nightly_rota.json (GH #360, 2026-10-21):
+#   M4 → 02:00 (primary)   M5 → 03:15 (failover)
+#   M1 → OFF the rota (travel laptop, often on battery). Run on the M1, this
+#        script REMOVES the nightly job instead of installing it.
 #
 # All hosts run scripts/nightly_guarded.sh, which no-ops if a green run for
 # today already landed. Run once per machine (re-runnable / idempotent):
@@ -20,13 +23,26 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 GUARD="$REPO_ROOT/scripts/nightly_guarded.sh"
 LOG="$HOME/Library/Logs/VideoScan/nightly_launchd.log"
 
-case "$HOST" in
-    *M4*) HOUR=2;  MIN=0  ;;
-    *M5*) HOUR=3;  MIN=15 ;;
-    *M1*) HOUR=4;  MIN=30 ;;
+SLOT="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" slot "$HOST")"
+case "$SLOT" in
+    on\ *)
+        read -r _ HOUR MIN <<<"$SLOT"
+        ;;
+    off\ *)
+        # Off the rota: take the job down (bootout + move the plist aside, so a
+        # login does not reload it) and stop. Nothing else on this Mac changes.
+        echo "$HOST is OFF the nightly rota (${SLOT#off }) — removing $LABEL."
+        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        if [ -f "$PLIST" ]; then
+            mv "$PLIST" "$PLIST.off-rota"
+            echo "  moved $PLIST -> $PLIST.off-rota"
+        fi
+        echo "Done. Verify with: launchctl list | grep videoscan"
+        exit 0
+        ;;
     *)
-        echo "ERROR: unrecognized host '$HOST' — expected RicksM4/M5/M1." >&2
-        echo "       Edit the case statement if this is a new fleet member." >&2
+        echo "ERROR: host '$HOST' is not on scripts/nightly_rota.json (on or off)." >&2
+        echo "       Add it there if this is a new fleet member." >&2
         exit 1
         ;;
 esac
