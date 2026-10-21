@@ -488,14 +488,13 @@ struct SameFootageSensorTests {
         #expect(snapshot.contains("likeness: DuplicateLikeness.Facts(record: r, deferStem: true)"), "no regex on the main actor")
     }
 
-    @Test("the split keeps the same footage: likeness facts go into the plan; the engine starts Find Similar Footage after a split")
+    @Test("the split keeps the same footage: likeness facts go into the plan; the menu item starts Find Similar Footage after a split")
     func splitKeepsIt() throws {
         let door = try SourceTree.appCode(named: "VideoScanModel+DuplicateDigestSplit.swift")
         #expect(door.contains("likeness: DuplicateLikeness.Facts(record: r)"))
         #expect(door.contains("plan.sameFootageFiles"))
-        // The Catalog menu item was retired 2026-10-20; the engine stays for a
-        // future red Catalog Status item.
-        #expect(door.contains("func splitDuplicateGroupsKeepingSameFootage(model: VideoScanModel) -> DuplicateDigestSplitOutcome"))
+        let app = try SourceTree.appCode(named: "App/VideoScanApp.swift")
+        #expect(app.contains("fileOpsCenter.splitDuplicateGroupsKeepingSameFootage(model: catalogModel)"))
         #expect(door.contains("if case .split = outcome { startFindSimilarFootage(scope: .catalog, model: model) }"))
     }
 

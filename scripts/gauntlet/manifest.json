@@ -29813,6 +29813,7 @@
         "aClockThatKeepsSteppingBackGivesUp",
         "anAcknowledgedSaveInFlightIsUnsaved",
         "anotherTokenIsHeld",
+        "digestFindingNamesALiveDoor",
         "phaseVerdicts",
         "theDelegateQuitWiring",
         "theHoldDrainsAnAdmittedSave",
@@ -29822,7 +29823,9 @@
         "theOwnersSavePasses",
         "theRetiredMenuItemsAreGone",
         "theStoreHoldRefusesEveryDoor",
+        "theTerminalSaveBothFailing",
         "theTerminalSaveIsChecked",
+        "theTerminalSaveSkipsAStalledWriter",
         "theVolumeMenuKeepsRescanAndUpdate",
         "theWaitBeforeVerify"
       ]
@@ -32382,7 +32385,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2791,
+      "expected_floor": 2794,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [

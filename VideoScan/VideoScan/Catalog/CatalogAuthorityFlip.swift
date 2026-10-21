@@ -46,7 +46,8 @@ enum CatalogAuthority: Equatable, Sendable {
     case refused(String)
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
-    /// Written ONLY by the explicit "Switch Catalog to SQLite…" door (B2).
+    /// Written once, by the explicit "Switch Catalog to SQLite…" door (B2,
+    /// retired 2026-10-20 after the switch); nothing in the app writes it now.
     nonisolated static let latchFileName = "catalog.cutover"
 
     /// The latch beside `folder` names catalog.sqlite the authority. A side

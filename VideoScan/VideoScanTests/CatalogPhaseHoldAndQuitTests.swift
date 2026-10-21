@@ -229,6 +229,48 @@ struct CatalogQuitRecoveryTests {
         #expect(CatalogQuitRecovery.saveAtTermination(model: model, writerDeadline: 5) == .saved)
     }
 
+    @Test("P2: willTerminate behind a stalled writer SKIPS the synchronous save (it would block the main thread) and writes the recovery copy, within the bound, logged")
+    func theTerminalSaveSkipsAStalledWriter() async throws {
+        let scene = try QuitScene.make("terminal_stall"); defer { scene.cleanup() }
+        let model = scene.sandbox.model
+        let store = model.catalogStore
+        store.testWriteDelay = 3
+        store.saveAsync(records: model.records)                      // admitted, stalled on the write queue
+        model.records.first?.userNotes = "edited behind a stalled save"
+        let started = Date()
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: model, writerDeadline: 0.3)
+        #expect(Date().timeIntervalSince(started) < 2, "bounded: the stalled writer is detected, not joined")
+        guard case .recoveryCopy(let url) = outcome else { Issue.record("expected a recovery copy, got \(outcome)"); return }
+        #expect(url.lastPathComponent.hasPrefix(CatalogQuitRecovery.filePrefix))
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("edited behind a stalled save"))
+        #expect(scene.log().contains("the synchronous save is SKIPPED — writing a recovery copy instead"), Comment(rawValue: scene.log()))
+        #expect(scene.log().contains("Catalog quit: OUTCOME recovery copy written"))
+        for _ in 0..<1_000 where store.hasUnsavedChanges { try await Task.sleep(for: .milliseconds(10)) }
+        store.testWriteDelay = 0
+    }
+
+    @Test("P1: willTerminate where the save AND the recovery copy fail (read-only folder) — .unsaved with the words and N, logged, nothing written")
+    func theTerminalSaveBothFailing() async throws {
+        let scene = try QuitScene.make("terminal_both")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scene.folder.path)
+            scene.cleanup()
+        }
+        let model = scene.sandbox.model
+        model.records.first?.userNotes = "nowhere to go"
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: scene.folder.path)
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: model, writerDeadline: 5)
+        guard case .unsaved(let words, let changes) = outcome else { Issue.record("expected unsaved, got \(outcome)"); return }
+        #expect(words.contains("the catalog could not be saved"), Comment(rawValue: words))
+        #expect(words.contains("the recovery copy also failed"), Comment(rawValue: words))
+        #expect(changes == 1)
+        #expect(scene.log().contains("Catalog quit: app exit — the catalog could not be saved"), Comment(rawValue: scene.log()))
+        #expect(scene.log().contains("Catalog quit: OUTCOME recovery copy FAILED"))
+        let left = ((try? FileManager.default.contentsOfDirectory(atPath: scene.folder.path)) ?? [])
+            .filter { $0.hasPrefix(CatalogQuitRecovery.filePrefix) }
+        #expect(left.isEmpty, "nothing written: \(left)")
+    }
+
     @Test("P1: the next launch says a recovery copy is beside the catalog — console + catalog.log — and merges nothing")
     func theNextLaunchSaysACopyIsThere() async throws {
         let scene = try QuitScene.make("launch"); defer { scene.cleanup() }
@@ -280,13 +322,14 @@ struct CatalogQuitRecoverySensorTests {
         }
     }
 
-    @Test("the retired Catalog menu items are gone; Reopen SQLite Catalog stays; the Split engine stays without a menu item")
+    @Test("the retired Catalog menu items are gone; Reopen SQLite Catalog stays; Split Duplicate Groups by Full Hash stays (its finding's only door)")
     func theRetiredMenuItemsAreGone() throws {
         let app = try Self.code("App/VideoScanApp.swift")
         #expect(app.contains("CatalogReopenMenuItems(cutover: catalogModel.catalogCutover)"))
         #expect(!app.contains("ImportToSQLiteMenuItems"))
         #expect(!app.contains("CatalogSwitchMenuItems"))
-        #expect(!app.contains("duplicateDigestSplitTitle"))
+        #expect(app.contains("Button(VideoScanModel.duplicateDigestSplitTitle)"))
+        #expect(app.contains("fileOpsCenter.splitDuplicateGroupsKeepingSameFootage(model: catalogModel)"))
         #expect(!app.contains("attachImportDryRunMarker"))
         let reopen = try Self.code("Catalog/CatalogReopenMenuItems.swift")
         #expect(reopen.contains("Button(\"Reopen SQLite Catalog\")"))
@@ -294,6 +337,22 @@ struct CatalogQuitRecoverySensorTests {
         #expect(!MediaFileOperationKind.all.map(\.rawValue).contains("importToSQLite"))
         let split = try Self.code("MediaOps/VideoScanModel+DuplicateDigestSplit.swift")
         #expect(split.contains("func splitDuplicateGroupsKeepingSameFootage("))
+    }
+
+    @Test("QA 2026-10-20: the red duplicateGroupDigestsAgree finding names a door the Catalog menu offers, and no Catalog finding names a retired menu item")
+    func digestFindingNamesALiveDoor() throws {
+        let constraints = try Self.code("Integrity/CatalogConstraints.swift")
+        let title = VideoScanModel.duplicateDigestSplitTitle
+        #expect(constraints.contains(title + " settles it"), "the finding's words name \(title)")
+        let app = try Self.code("App/VideoScanApp.swift")
+        #expect(app.contains("Button(VideoScanModel.duplicateDigestSplitTitle)"), "…and the Catalog menu offers it")
+        for name in ["Integrity/CatalogConstraints.swift", "Integrity/VerifyCatalogTiers.swift", "Integrity/VerifyCatalogJob.swift",
+                     "MediaOps/ValidateCatalogJob.swift"] {
+            let code = try Self.code(name)
+            for retired in ["Import to SQLite", "Switch Catalog to SQLite", "Audit Catalog…", "Verify Catalog…"] {
+                #expect(!code.contains(retired), "\(name) names the retired menu item \(retired)")
+            }
+        }
     }
 
     @Test("the per-drive right-click no longer offers Verify Catalog; Rescan and Update Catalog… stay")

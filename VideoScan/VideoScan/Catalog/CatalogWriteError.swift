@@ -62,8 +62,9 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// the designation on disk survives whatever nulled it in memory.
     case designationLossRefused(targetPath: String)
 
-    /// MOPS-16 (Import to SQLite, 2026-10-17): a job that READS catalog.json
-    /// holds every write to it while it runs — one writer at a time. The
+    /// MOPS-16 (Import to SQLite, 2026-10-17; retired 2026-10-20 — no
+    /// production job holds now): a job that READS catalog.json holds
+    /// every write to it while it runs — one writer at a time. The
     /// change stays in memory; the holder schedules a catch-up save when
     /// it lets go, so nothing is lost, only delayed.
     case heldByJob(String)
