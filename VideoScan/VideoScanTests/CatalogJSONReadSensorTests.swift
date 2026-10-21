@@ -48,7 +48,7 @@ struct CatalogJSONReadSensorTests {
         #"startLiveDossierReload|pollAndMergeDossierFromDisk|mergeDossierFields"#: [:],
         #"CatalogStore\.shared\.load\(\)"#: [:],
         #"readRecordsWithoutAdopting"#: [:],
-        #"loadRecords\(fromSnapshotAtPath"#: ["Catalog/CatalogStore.swift": 1, "Volumes/VideoScanModel+VolumeRenameUndo.swift": 1],
+        #"loadRecords\(fromSnapshotAtPath"#: ["Catalog/CatalogStore.swift": 1],
         // The live reload's generation adopt (it read catalog.json's header
         // after a merge) left with it; retired 2026-10-21.
         #"adoptOnDiskGenerationAfterReconcile|auditedFileRows|verifyCatalogSnapshot\(auditedGeneration"#: [:],

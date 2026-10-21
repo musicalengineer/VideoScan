@@ -20,8 +20,8 @@
 // Dimensions (CLAUDE.md feature-test checklist):
 //   LOGIC     Undo reads the .sqlite copy and puts paths, directories and
 //             the volume name back; a record added since stays; an edit made
-//             since stays; a record changed since is left alone; the JSON
-//             authority keeps working (and now also keeps added records)
+//             since stays; a record changed since is left alone; a .json
+//             safety copy is refused in words and never read (slice 2b)
 //   SCALE     100k records through the revert, explicit time budget
 //   ISOLATION every case in a CutoverScene sandbox, never Application Support
 //   SENSOR    relaunch from catalog.sqlite after Undo: old paths stored, the
@@ -100,6 +100,11 @@ struct AdvVolumeRenameUndoSQLiteTests {
             #expect(Before(fullPath: rec.fullPath, directory: rec.directory, volumeName: rec.scanContext.volumeName) == b,
                     Comment(rawValue: rec.filename))
         }
+        // Carried over from VolumeRenameMigrationTests' JSON round trip (its
+        // .json copy is refused since slice 2b): Undo suppresses the auto
+        // pass for the old volume so the next rebuild does not redo it.
+        #expect(scene.model.volumeRenameAutoSuppressed.contains(PathScope.normalize(Self.oldRoot)))
+        #expect(scene.model.pendingVolumeRenameNotice == nil)
     }
 
     @Test("SENSOR: a record added and an edit made after the migration survive Undo — and the relaunch from catalog.sqlite")
@@ -145,22 +150,28 @@ struct AdvVolumeRenameUndoSQLiteTests {
         #expect(healthy.fullPath == moved)
     }
 
-    @Test("JSON authority: Undo still restores from catalog.<prefix>.json, and keeps a record added since")
-    func jsonAuthorityUndo() async throws {
+    /// JSON gone, slice 2b (2026-10-21): a pre-cutover
+    /// `catalog.pre-volume-rename.*.json` safety copy is never read. Undo
+    /// refuses in words, the records keep the new volume path, and the copy
+    /// is left exactly as it was.
+    @Test("a .json safety copy (from before the switch) is refused in words — Undo changes nothing and the copy is untouched")
+    func jsonSafetyCopyIsRefused() async throws {
         let scene = try CutoverScene.make("adv_vr_undo_json"); defer { scene.cleanup() }
         scene.model.records = scene.model.catalogStore.load()
         #expect(!scene.model.catalogCutover.isSQLiteAuthority)
-        let was = Self.before(scene.model)
         let snapshot = try #require(scene.model.snapshotCatalog(prefix: "pre-volume-rename"))
         #expect(snapshot.hasSuffix(".json"))
-        _ = Self.migrate(scene.model)
-        let added = Self.addedRecord()
-        scene.model.records.append(added)
-        #expect(await scene.model.undoVolumeRenameMigration(Self.notice(snapshot)))
-        for rec in scene.model.records where rec.id != added.id {
-            #expect(rec.fullPath == was[rec.id]?.fullPath, Comment(rawValue: rec.filename))
-        }
-        #expect(scene.model.records.contains { $0.id == added.id })
+        let copyBefore = try Data(contentsOf: URL(fileURLWithPath: snapshot))
+        #expect(Self.migrate(scene.model) > 0)
+        let migrated = Self.before(scene.model)
+
+        #expect(await scene.model.undoVolumeRenameMigration(Self.notice(snapshot)) == false)
+        #expect(Self.before(scene.model) == migrated, "a refused Undo changes no record")
+        #expect(scene.model.pendingVolumeRenameNotice == nil)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: snapshot)) == copyBefore)
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("REFUSED reading the safety copy \(snapshot) — \(VideoScanModel.jsonSafetyCopyWords)"), Comment(rawValue: log))
+        #expect(await scene.model.loadSafetyCopy(atPath: snapshot) == nil)
     }
 
     @Test("SCALE: reverting 100k rewritten records stays inside the budget")

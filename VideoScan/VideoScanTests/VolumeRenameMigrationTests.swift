@@ -406,48 +406,35 @@ struct VolumeRenameMigrationTests {
         #expect(target.searchPath == oldRoot)
     }
 
-    // MARK: - 1. LOGIC: Undo round-trip (byte-identical restore)
+    // MARK: - 1. LOGIC: Undo from a catalog.json safety copy is refused
 
+    /// JSON gone, slice 2b (2026-10-21): this model has no catalog.sqlite
+    /// (a test sandbox — the app never runs without one), so the migration's
+    /// safety copy is a `.json`; Undo refuses it in words and changes
+    /// nothing. The successful Undo (records put back, the auto pass
+    /// suppressed) is pinned under catalog.sqlite in
+    /// AdvVolumeRenameUndoSQLiteTests.
     @Test
-    func undoRestoresPreMigrationCatalogByteIdentically() async throws {
+    func undoFromAJSONSafetyCopyIsRefusedAndChangesNothing() async throws {
         let dir = tempDir("undo")
         defer { try? FileManager.default.removeItem(at: dir) }
         let (model, target) = makeStandardModel(autoPass: false,
                                                 store: CatalogStore(directory: dir))
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        // .sortedKeys — JSONEncoder guarantees NO key order: two encodes of
-        // identical values can emit different key orders even in the same
-        // process (hash-layout dependent; reproduced 2026-07-13). Canonical
-        // sorted-keys encoding makes the byte comparison deterministic while
-        // still pinning every field's value AND presence (delta-minimal
-        // keys included) plus the records-array order. Same convention as
-        // CatalogStoreAsyncSaveTests' clone-parity oracle.
-        encoder.outputFormatting = [.sortedKeys]
-        let before = try encoder.encode(model.records.map(VideoRecordDTO.init))
-
         await model.rebuildVolumeRenameCandidatesNow()
         await model.userInitiatedVolumeRenameMigration(for: target)
         let notice = try #require(model.pendingVolumeRenameNotice)
-        #expect(model.records.contains { $0.fullPath.hasPrefix(newRoot + "/") })
+        guard case .migrated(let snapshotPath) = notice.kind else {
+            Issue.record("expected a migration with a safety copy"); return
+        }
+        #expect(snapshotPath.hasSuffix(".json"))
+        let migratedPaths = model.records.map(\.fullPath)
+        #expect(migratedPaths.contains { $0.hasPrefix(newRoot + "/") })
 
         let undone = await model.undoVolumeRenameMigration(notice)
-        #expect(undone)
-        let after = try encoder.encode(model.records.map(VideoRecordDTO.init))
-        #expect(after == before,
-                "Undo must restore the pre-migration snapshot byte-identically (canonical sorted-keys encoding)")
-        #expect(target.searchPath == oldRoot, "The scan target's old path is restored")
+        #expect(!undone, "a catalog.json safety copy is never read")
+        #expect(model.records.map(\.fullPath) == migratedPaths, "a refused Undo changes no record")
+        #expect(target.searchPath == newRoot, "the scan target stays where the migration put it")
         #expect(model.pendingVolumeRenameNotice == nil)
-        // The very next detection rebuild re-finds the candidate but the
-        // AUTO pass must not redo what Rick just undid.
-        model.volumeRenameAutoPassEnabled = true
-        await model.rebuildVolumeRenameCandidatesNow()
-        #expect(model.volumeRenameCandidate(for: oldRoot) != nil,
-                "Badge stays available as the manual affordance")
-        #expect(model.pendingVolumeRenameNotice == nil,
-                "Suppressed after Undo — no dialog nag")
-        #expect(model.records.contains { $0.fullPath == "\(oldRoot)/tapes/a.mov" },
-                "Auto pass must not re-migrate after Undo")
     }
 
     // MARK: - 1. LOGIC: auto pass + ask flow

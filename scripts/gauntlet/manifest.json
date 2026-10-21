@@ -25822,7 +25822,7 @@
         "rewritePathPrefixHonorsComponentBoundaries",
         "spotCheckCountsMissingAndSizeMismatchAsDirty",
         "spotCheckSamplingIsDeterministicAndBounded",
-        "undoRestoresPreMigrationCatalogByteIdentically",
+        "undoFromAJSONSafetyCopyIsRefusedAndChangesNothing",
         "uuidMatchWithZeroCleanSamplesAsksInsteadOfActing"
       ]
     },
@@ -29779,7 +29779,7 @@
         "AdvVolumeRenameUndoSQLiteTests"
       ],
       "tests": [
-        "jsonAuthorityUndo",
+        "jsonSafetyCopyIsRefused",
         "revertScale",
         "undoKeepsWhatChangedSince",
         "undoLeavesARecordChangedSinceAlone",
