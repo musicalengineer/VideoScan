@@ -118,7 +118,7 @@ enum CatalogQuitRecovery {
         let target = url(besideCatalog: catalogURL)
         let sqlite = latchNamesSQLite(besideCatalog: catalogURL)
         model.catalogQuitNote(startLine(model, because: because, target: target, sqlite: sqlite))
-        let write = model.catalogStore.recoveryCopyWriter(records: model.records)
+        let write = model.catalogStore.recoveryCopyWriter(records: model.records, generation: model.catalogGenerationForStamp)
         let box = ResultBox()
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {

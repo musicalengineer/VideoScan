@@ -14,7 +14,8 @@
 //   Fail-fast  the latch vanishes mid-session — TODAY commits go on; INTENDED
 //            the next commit stops and says why (pending).
 //   Case 10  (app) a damaged catalog.sqlite behind the latch — the launch is
-//            refused with words, catalog.json opens READ-ONLY, and neither
+//            refused with words, no catalog opens (catalog.json is never the
+//            fallback, QA r1 F1, 2026-10-21), and neither
 //            catalog.sqlite nor its witnesses change by one byte.
 //   Case 11  (app) a newer schema behind the latch — the same: refused with
 //            the store's "newer than this build" words, read-only, untouched.
@@ -104,7 +105,7 @@ struct CatalogAuthorityCornerTests {
         var description: String { rawValue }
     }
 
-    @Test("cases 10/11 (app): a damaged or newer catalog.sqlite behind the latch — refused with words, catalog.json READ-ONLY, catalog.sqlite and its witnesses byte-identical",
+    @Test("cases 10/11 (app): a damaged or newer catalog.sqlite behind the latch — refused with words, no catalog opened (catalog.json never the fallback), catalog.sqlite and its witnesses byte-identical",
           arguments: Damage.allCases)
     func damagedOrNewerCatalogIsRefusedAndUntouched(_ damage: Damage) async throws {
         let scene = try CutoverScene.make("corner_\(damage)"); defer { scene.cleanup() }
@@ -133,7 +134,7 @@ struct CatalogAuthorityCornerTests {
             #expect(log.contains("newer than this build"), Comment(rawValue: log))
         }
         // Fail-fast: nothing may be written over it, by any door.
-        try scene.record(.healthy).userNotes = "must not land"
+        #expect(scene.model.records.isEmpty, "\(damage): a refused launch opens no catalog (QA r1 F1)")
         #expect(scene.model.saveCatalogNow() == false, "\(damage)")
         #expect(CornerFiles.catalogFingerprint(scene.databaseURL) == before, "\(damage): catalog.sqlite or a witness changed")
         #expect(try CornerFiles.sha256(scene.catalogURL) == jsonBefore, "\(damage): catalog.json was written")

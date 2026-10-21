@@ -88,7 +88,8 @@ struct CatalogQuitCornerTests {
         _ = try await scene.sqliteLoad()                        // the master's display pass
         scene.model.applyReadOnlyMode(true)
         scene.model.records = scene.model.loadCatalogAtLaunch()
-        _ = try #require(scene.model.catalogCutover.committer)
+        #expect(scene.model.catalogCutover.committer == nil, "a viewer never opens its own catalog.sqlite (QA r1 F2)")
+        scene.model.records = try await scene.sqliteLoad().records   // what the synced snapshot shows
         let before = CornerFiles.catalogFingerprint(scene.databaseURL)
         let jsonBefore = try CornerFiles.sha256(scene.catalogURL)
 

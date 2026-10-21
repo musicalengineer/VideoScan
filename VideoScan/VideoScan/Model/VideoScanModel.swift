@@ -1484,6 +1484,11 @@ final class VideoScanModel: ObservableObject {
         change(&readOnlyFacts)
         isReadOnly = readOnlyFacts.modelReadOnly
         catalogStore.isReadOnly = readOnlyFacts.storeReadOnly
+        // QA r1 F5: the side stores' JSON files follow the same facts — a
+        // read-only session (a viewer, a launch with no catalog) writes none.
+        // The shared Events store only outside a test host (one per app).
+        ignoredContentStore.sessionRefusal = readOnlyFacts.readOnlyWords
+        if !Self.isRunningTests { EventsDecisionStore.shared.sessionRefusal = readOnlyFacts.readOnlyWords }
     }
 
     /// Persist the current records array. Debounced; bursts of mutations

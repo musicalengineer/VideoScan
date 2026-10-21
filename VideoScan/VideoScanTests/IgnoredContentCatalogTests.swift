@@ -243,10 +243,13 @@ struct IgnoredContentCatalogSensorTests {
     func noJSONWriteNoInferredPutBack() throws {
         let store = try SourceTree.appCode(named: "IgnoredContentStore.swift")
         let save = try #require(store.range(of: "func save() async -> Bool {"))
-        let body = String(store[save.upperBound...].prefix(600))
+        let body = String(store[save.upperBound...].prefix(1_200))
         let catalogBranch = try #require(body.range(of: "if let catalog {"))
         let jsonWrite = try #require(body.range(of: "Self.saveOffMain"))
         #expect(catalogBranch.lowerBound < jsonWrite.lowerBound, "the catalog branch returns before the JSON write")
+        // QA r1 F5: a read-only session's refusal also comes before the JSON write.
+        let session = try #require(body.range(of: "if let session = sessionRefusal {"))
+        #expect(session.lowerBound < jsonWrite.lowerBound, "the session refusal returns before the JSON write")
         #expect(body.contains("return saveToCatalog(catalog)"))
         let importer = try SourceTree.appCode(named: "IgnoredContentJSONImport.swift")
         #expect(!importer.contains("putBackIgnored"), "the import never puts back")

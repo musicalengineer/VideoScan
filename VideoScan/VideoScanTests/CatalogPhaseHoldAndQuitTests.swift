@@ -296,7 +296,7 @@ struct CatalogQuitRecoveryTests {
             .filter { $0.hasPrefix(CatalogQuitRecovery.filePrefix) }
     }
 
-    @Test("ISOLATION: a viewer's quit (catalog.sqlite opened read-only) writes NO recovery copy, and says why")
+    @Test("ISOLATION: a viewer's quit (its synced catalog on screen) writes NO recovery copy, and says why")
     func aViewerUnderSQLiteWritesNoCopy() async throws {
         let scene = try CutoverScene.make("quit_viewer_sqlite"); defer { scene.cleanup() }
         try await scene.importCatalog()
@@ -304,8 +304,9 @@ struct CatalogQuitRecoveryTests {
         _ = try await scene.sqliteLoad()               // a writer's first load fills the display tables (as the master's did)
         scene.model.applyReadOnlyMode(true)            // the role is known before the launch, as on the M5
         scene.model.records = scene.model.loadCatalogAtLaunch()
-        #expect(scene.model.catalogCutover.isSQLiteAuthority)
-        #expect(scene.model.saveCatalogNow() == false, "the viewer's commit is refused — what the quit used to read as data at risk")
+        #expect(scene.model.catalogCutover.committer == nil, "a viewer never opens its own catalog.sqlite (QA r1 F2)")
+        scene.model.records = try await scene.sqliteLoad().records   // what the synced snapshot shows
+        #expect(scene.model.saveCatalogNow() == false, "the viewer's save is refused — what the quit used to read as data at risk")
         try scene.record(.healthy).userNotes = "a viewer's launch-time change"
         let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5)
         guard case .readOnlySession(let words) = outcome else { Issue.record("expected no copy, got \(outcome)"); return }

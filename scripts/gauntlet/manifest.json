@@ -29373,7 +29373,7 @@
         "latchWithUnfinishedImportRefuses",
         "latchWithoutDatabaseRefuses",
         "modelLoadsSQLiteWithLatch",
-        "modelRefusedIsJSONReadOnly",
+        "modelRefusedOpensNoCatalog",
         "modelRefusesWithoutLatch",
         "noLatchLaunchStaysReadOnlyBothWays",
         "normalSQLiteLaunchFollowsTheRole",
@@ -29386,7 +29386,7 @@
         "sqliteRecordsEqualJSONRecords",
         "theSeamIsOneLine",
         "unprovenRowsAreNotRecords",
-        "viewerLaunchOpensCatalogSQLiteReadOnly",
+        "viewerLaunchNeverOpensItsOwnCatalogSQLite",
         "viewerWithNothingSynced",
         "viewerWithSyncedSnapshotShowsIt"
       ]
@@ -30155,12 +30155,18 @@
       "path": "VideoScan/VideoScanTests/CatalogSQLiteLaunchNoJSONTests.swift",
       "stage": "unit",
       "suites": [
-        "CatalogSQLiteLaunchNoJSONTests"
+        "CatalogSQLiteLaunchNoJSONTests",
+        "CatalogNoCatalogDoorsTests"
       ],
       "tests": [
         "aClearedDesignationStaysCleared",
+        "aMissingDesignationIsSaid",
+        "eventsStoreRefusesInAReadOnlySession",
+        "ignoredContentRefusesInANoCatalogSession",
         "theSQLiteLaunchNeedsNoCatalogJSON",
-        "theSQLiteLaunchTouchesNoJSONFile"
+        "theSQLiteLaunchTouchesNoJSONFile",
+        "validateWithoutLatchRefuses",
+        "verifyOnAViewerRefuses"
       ]
     },
     {
@@ -32731,7 +32737,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2834,
+      "expected_floor": 2839,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [
@@ -33208,6 +33214,7 @@
         "VideoScanTests/CatalogQuitRecoverySensorTests",
         "VideoScanTests/CatalogJSONReadSensorTests",
         "VideoScanTests/CatalogSQLiteLaunchNoJSONTests",
+        "VideoScanTests/CatalogNoCatalogDoorsTests",
         "VideoScanTests/QASlice2RedTests"
       ]
     },

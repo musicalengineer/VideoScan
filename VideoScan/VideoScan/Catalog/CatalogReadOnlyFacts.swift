@@ -34,6 +34,10 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
     /// The role: this Mac is a viewer (CatalogSync, via applyReadOnlyMode).
     var viewerRole = false
 
+    /// The launch opened no catalog (no latch, GH #354; or catalog.sqlite
+    /// refused): its words, for the doors that need a catalog (QA r1 F5).
+    var launchRefusalWords: String?
+
     /// CatalogStore.isReadOnly — may catalog.json be written?
     var storeReadOnly: Bool { jsonFrozenByLaunch || viewerRole }
 

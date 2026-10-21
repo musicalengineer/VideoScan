@@ -123,3 +123,83 @@ struct CatalogSQLiteLaunchNoJSONTests {
         #expect(Self.fingerprint(Self.jsonSide, in: scene.folder).values.allSatisfy { $0 == "absent" })
     }
 }
+
+// MARK: - QA r1 F4 / F5: what a session with no catalog.sqlite open may do
+
+@Suite("Sessions with no catalog open — Verify/Validate and the side stores refuse with words (QA r1 F4/F5)", .serialized)
+@MainActor
+struct CatalogNoCatalogDoorsTests {
+
+    private static func failedWords(_ state: MediaFileOperationState) -> String? {
+        if case .failed(let message) = state { return message }
+        return nil
+    }
+
+    @Test("F4: a launch on a catalog.sqlite with no Master Archive designation says so in the one sink")
+    func aMissingDesignationIsSaid() async throws {
+        let scene = try CutoverScene.make("doors_no_designation"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        #expect(scene.model.masterArchive == nil)
+        #expect(scene.sandbox.catalogLogText().contains("Catalog store: catalog.sqlite carries no Master Archive designation"),
+                Comment(rawValue: scene.sandbox.catalogLogText()))
+    }
+
+    @Test("F5: on a viewer, Verify Catalog refuses — validate on the master; catalog.json is never hashed or labelled")
+    func verifyOnAViewerRefuses() async throws {
+        let scene = try CutoverScene.make("doors_verify_viewer"); defer { scene.cleanup() }
+        scene.model.applyReadOnlyMode(true)
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        let job = VerifyCatalogJob(model: scene.model)
+        job.start()
+        await job.task?.value
+        let words = try #require(Self.failedWords(job.state), "Verify ran on a viewer: \(job.state)")
+        #expect(words.contains("this Mac is a viewer — validate on the master"), Comment(rawValue: words))
+        #expect(job.report == nil, "no report was made")
+        #expect(job.tiers.isEmpty, "no tier ran")
+    }
+
+    @Test("F5: with no latch (GH #354), Validate Catalog refuses with the #354 words; nothing is checked")
+    func validateWithoutLatchRefuses() async throws {
+        let scene = try CutoverScene.make("doors_validate_nolatch"); defer { scene.cleanup() }
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        let job = ValidateCatalogJob(model: scene.model, marker: CatalogAuditRunMarker())
+        job.start()
+        await job.task?.value
+        #expect(job.wasRefused)
+        #expect(!job.state.isActive)
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("No catalog — catalog.cutover is not beside the catalog"), Comment(rawValue: log))
+        #expect(!log.contains("START — step 1 of 2"), "Validate started on a session with no catalog")
+    }
+
+    @Test("F5: with no latch, the model's ignore list refuses its JSON write with the session's words")
+    func ignoredContentRefusesInANoCatalogSession() async throws {
+        let scene = try CutoverScene.make("doors_ignored"); defer { scene.cleanup() }
+        scene.model.records = scene.model.loadCatalogAtLaunch()
+        let store = scene.model.ignoredContentStore
+        let before = FileManager.default.fileExists(atPath: store.fileURL.path)
+        #expect(await store.save() == false)
+        let why = try #require(store.lastSaveFailure)
+        #expect(why.contains("ignored-content.json is never written"), Comment(rawValue: why))
+        #expect(FileManager.default.fileExists(atPath: store.fileURL.path) == before)
+    }
+
+    @Test("F5: a read-only session's words make the folders store refuse its JSON write; the model sets them on the app's store")
+    func eventsStoreRefusesInAReadOnlySession() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("doors-events-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = EventsDecisionStore(directory: dir)
+        _ = await store.load()
+        #expect(store.writeRefusal == nil, "a fresh store with no session reason writes")
+        store.sessionRefusal = CatalogReadOnlyFacts(viewerRole: true).readOnlyWords
+        let why = try #require(store.writeRefusal)
+        #expect(why.contains("events-decisions.json is never written"), Comment(rawValue: why))
+        #expect(await store.save() == false)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+        // The wiring: updateReadOnlyFacts sets the app's one store outside a test host.
+        let code = try SourceTree.appCode(named: "Model/VideoScanModel.swift")
+        #expect(code.contains("EventsDecisionStore.shared.sessionRefusal = readOnlyFacts.readOnlyWords"))
+        #expect(code.contains("ignoredContentStore.sessionRefusal = readOnlyFacts.readOnlyWords"))
+    }
+}

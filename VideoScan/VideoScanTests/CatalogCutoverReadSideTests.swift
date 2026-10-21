@@ -356,22 +356,24 @@ struct CatalogAuthorityFlipTests {
         #expect(!scene.sandbox.catalogLogText().contains("No catalog —"))
     }
 
-    @Test("model: latch but the import is not comparator-ok → the JSON records, READ-ONLY, the words in catalog.log; catalog.json untouched")
-    func modelRefusedIsJSONReadOnly() async throws {
+    @Test("QA r1 F1: model, latch but the import is not comparator-ok → REFUSED: no records, read-only, the words in catalog.log; catalog.json, .prev and the sidecar untouched (size, date, inode)")
+    func modelRefusedOpensNoCatalog() async throws {
         let scene = try CutoverScene.make("model_refused"); defer { scene.cleanup() }
         let repository = GRDBCatalogRepository(host: "cutover-test")
         _ = await repository.open(at: scene.databaseURL)
         await repository.close()
         try scene.writeLatch()
-        let expected = CatalogStore(directory: scene.folder).load().count
-        let before = try scene.sha256(scene.catalogURL)
+        let before = Self.jsonSide(scene.folder)
+        try await Task.sleep(for: .milliseconds(20))   // a rewrite would carry a later date
         let records = scene.model.loadCatalogAtLaunch()
-        #expect(records.count == expected)
+        #expect(records.isEmpty, "no catalog is opened — catalog.json is never the fallback")
         #expect(scene.model.catalogStore.isReadOnly)
         #expect(scene.model.isReadOnly)
-        #expect(scene.sandbox.catalogLogText().contains("SQLite catalog refused — catalog.sqlite holds no finished import"))
-        #expect(scene.sandbox.catalogLogText().contains("catalog.json is open READ-ONLY"))
-        #expect(try scene.sha256(scene.catalogURL) == before)
+        #expect(scene.model.catalogStore.lastLoadOutcome == .missing, "catalog.json was never loaded")
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("SQLite catalog refused — catalog.sqlite holds no finished import"), Comment(rawValue: log))
+        #expect(log.contains("No catalog is open (catalog.json is not opened)"))
+        #expect(Self.jsonSide(scene.folder) == before)
     }
 
     @Test("model: latch + a good import → the SQLite records; catalog.json frozen; the OUTCOME line names the counts")
@@ -405,8 +407,8 @@ struct CatalogAuthorityFlipTests {
         scene.model.applyReadOnlyMode(false)                    // the master's onAppear
         #expect(scene.model.catalogStore.isReadOnly)
         #expect(scene.model.isReadOnly)
-        #expect(scene.model.catalogCutover.committer == nil, "no committer: catalog.json is the only door, and it is shut")
-        try #require(scene.model.records.first).starRating = 3
+        #expect(scene.model.catalogCutover.committer == nil, "no committer, and catalog.json is never a door (QA r1 F1)")
+        #expect(scene.model.records.isEmpty, "no catalog is opened on a refused launch")
         #expect(scene.model.saveCatalogNow() == false)
         #expect(try scene.sha256(scene.catalogURL) == before)
     }
@@ -474,29 +476,27 @@ struct CatalogAuthorityFlipTests {
         #expect(committer.commitCount == before)
     }
 
-    @Test("codex #112: a viewer launch opens its catalog.sqlite READ-ONLY — no launch commit, no high-water write, every save refused")
-    func viewerLaunchOpensCatalogSQLiteReadOnly() async throws {
+    @Test("QA r1 F2: a viewer never opens its own top-level catalog.sqlite — no committer, no records from it, not one byte of it or its witness changed; catalog.json not opened")
+    func viewerLaunchNeverOpensItsOwnCatalogSQLite() async throws {
         let scene = try CutoverScene.make("role_viewer_launch"); defer { scene.cleanup() }
         try await scene.importCatalog()
         try scene.writeLatch()
-        // A writer's first load fills the display tables (a read-only session
-        // cannot, and is refused to read-only catalog.json if it would have to).
-        _ = try await scene.sqliteLoad()
+        _ = try await scene.sqliteLoad()                        // a full, launchable catalog.sqlite + latch
         let highWater = scene.folder.appendingPathComponent(CatalogHighWater.fileName)
         let witnessBefore = try? scene.sha256(highWater)
         let databaseBefore = try scene.sha256(scene.databaseURL)
+        let jsonBefore = Self.jsonSide(scene.folder)
         scene.model.applyReadOnlyMode(true)                     // the role is known before the launch (test hosts)
         scene.model.records = scene.model.loadCatalogAtLaunch()
-        let committer = try #require(scene.model.catalogCutover.committer)
-        #expect(!scene.model.records.isEmpty)
-        #expect(!committer.isBusy, "no launch commit is scheduled on a viewer")
-        #expect(scene.model.catalogCutover.readOnlyReason == CatalogAuthority.viewerReadOnlyWords)
+        #expect(scene.model.catalogCutover.committer == nil, "no committer on a viewer")
+        #expect(scene.model.records.isEmpty, "a viewer's records come only from its synced snapshot")
         #expect(scene.model.isReadOnly)
-        try scene.record(.healthy).starRating = 5
+        #expect(scene.model.catalogStore.lastLoadOutcome == .missing)
         #expect(scene.model.saveCatalogNow() == false)
-        let witnessAfter = try? scene.sha256(highWater)
-        #expect(witnessAfter == witnessBefore, "the high-water witness is neither raised nor written")
+        #expect((try? scene.sha256(highWater)) == witnessBefore, "the high-water witness is neither raised nor written")
         #expect(try scene.sha256(scene.databaseURL) == databaseBefore, "not one byte of catalog.sqlite changed")
+        #expect(Self.jsonSide(scene.folder) == jsonBefore)
+        #expect(scene.sandbox.catalogLogText().contains("OUTCOME viewer: nothing synced from the master yet"))
     }
 
     @Test("GH #354: a launch with no latch stays read-only whichever way the role goes (the role adds read-only, never removes the launch's)")

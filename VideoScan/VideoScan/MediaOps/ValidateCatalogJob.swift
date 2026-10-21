@@ -149,6 +149,17 @@ final class ValidateCatalogJob: @MainActor MediaFileOperationJob, MediaFileOpera
             apply(ValidateCatalogEnding.couldNotStart("the catalog went away before the job could start").outcome(refused: false))
             return
         }
+        // QA r1 F5: a session with no catalog.sqlite open (a viewer, or a
+        // launch that refused) validates nothing — never catalog.json.
+        if let why = model.catalogUnavailableWords {
+            wasRefused = true
+            let end = ValidateCatalogEnding.couldNotStart(why)
+            ending = end
+            let outcome = end.outcome(refused: true)
+            model.validateCatalogNote(outcome.logLine)
+            apply(outcome)
+            return
+        }
         model.validateCatalogNote("START — " + Self.startWords)
         let mirror = driver.mirror { [weak self] subtitle, fraction in self?.copyPhaseProgress(subtitle, fraction) }
         let end = await runPhases(model: model)

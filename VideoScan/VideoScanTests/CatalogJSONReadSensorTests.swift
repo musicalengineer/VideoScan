@@ -8,11 +8,11 @@
 // whose authority is catalog.sqlite.
 //
 // What is still here, and why (see the slice 2 report, 2026-10-21):
-//   • CatalogAuthorityFlip — the launch rule: the test host on the shared
-//     store (its load reads nothing), and `.refused` (catalog.json
-//     READ-ONLY — slice 2 part B retires it). A launch with NO latch
-//     refuses and opens no catalog.json (GH #354, Rick 2026-10-21); the
-//     SQLite launch reads none either (GH #353).
+//   • CatalogAuthorityFlip — the launch rule: only the test host on the
+//     shared store (its load reads nothing). A launch with NO latch, or a
+//     refused catalog.sqlite, refuses and opens no catalog.json (GH #354,
+//     QA r1 F1); the SQLite launch reads none either (GH #353); a viewer
+//     never opens its own catalog (QA r1 F2).
 //   • CatalogStore — the JSON store itself (its own load and decoder).
 //   (Person Finder's catalog prefilter read the frozen catalog.json through
 //   CatalogStore.readRecordsWithoutAdopting; it reads the live records since
@@ -37,7 +37,7 @@ struct CatalogJSONReadSensorTests {
 
     /// pattern → file (relative to VideoScan/VideoScan) → count.
     static let readers: [String: [String: Int]] = [
-        #"catalogStore\.load\(\)"#: ["Catalog/CatalogAuthorityFlip.swift": 2],
+        #"catalogStore\.load\(\)"#: ["Catalog/CatalogAuthorityFlip.swift": 1],
         // Verify's audited-file source (Import to SQLite's phase 2) read
         // catalog.json with no caller left; retired 2026-10-21.
         #"decodeCatalogFile\("#: ["Catalog/CatalogStore.swift": 2],

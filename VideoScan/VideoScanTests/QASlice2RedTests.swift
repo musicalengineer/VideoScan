@@ -79,7 +79,20 @@ struct QASlice2RedTests {
         let committer = try #require(scene.model.catalogCutover.committer)
         let dbGeneration = try await committer.repository.read { $0.generation }
         #expect(dbGeneration > 0)
-        #expect(scene.model.catalogStore.currentGeneration == dbGeneration,
-                "CatalogAuditJob.conclude would stamp \(scene.model.catalogStore.currentGeneration); catalog.sqlite is at \(dbGeneration)")
+        // Fix (2026-10-21): the stamp comes from the model's catalog
+        // generation — catalog.sqlite's when a committer is installed — not
+        // from the frozen JSON store, which never loads under SQLite.
+        let stamped = await scene.model.catalogGenerationNow()
+        #expect(stamped == dbGeneration, "CatalogAuditJob.conclude would stamp \(stamped); catalog.sqlite is at \(dbGeneration)")
+        #expect(scene.model.catalogGenerationForStamp == dbGeneration, "the quit copy's header stamp")
+
+        // The marker itself (CatalogAuditJob.conclude → catalog-audit.json).
+        let marker = CatalogAuditRunMarker()
+        _ = await runAudit(scene.model, marker: marker)
+        let after = try await committer.repository.read { $0.generation }
+        let file = scene.folder.appendingPathComponent(CatalogAuditRunMarker.fileName)
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(json["catalogGeneration"] as? Int == after, "the marker stamps catalog.sqlite's generation \(after), got \(String(describing: json["catalogGeneration"]))")
+        #expect((json["catalogGeneration"] as? Int ?? 0) > 0)
     }
 }

@@ -190,7 +190,9 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
         if TestEnvironment.isTestHost && model.catalogStore === CatalogStore.shared {
             return "the catalog in use is the shared one and this process is a test host"
         }
-        return nil
+        // QA r1 F5: no catalog.sqlite open (a viewer, or a launch that
+        // refused) → nothing to verify; never catalog.json.
+        return model.catalogUnavailableWords
     }
 
     /// The rows this run checks: the catalog in use. Under the SQLite

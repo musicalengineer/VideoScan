@@ -698,7 +698,12 @@ final class CatalogStore {
         // known even if decode falls back to .prev — and even if there is
         // no catalog.json at all: a catalog that carried generation N
         // before must not restart at 1 just because the file was removed.
-        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL)
+        // Defence in depth (QA r1 F1, 2026-10-21): a READ-ONLY store writes
+        // nothing beside the catalog — no sidecar bootstrap or advance, no
+        // .prev rotation — whoever calls load().
+        generationFloor = isReadOnly
+            ? (CatalogGenerationSidecar.read(besideCatalogAt: fileURL) ?? 0)
+            : CatalogGenerationSidecar.load(besideCatalogAt: fileURL)
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             NSLog("VideoScan: CatalogStore.load() — no catalog file at %@", fileURL.path)
             lastLoadOutcome = .missing
@@ -730,8 +735,9 @@ final class CatalogStore {
                                       probed: lastPrimaryProbe,
                                       source: fileURL.lastPathComponent)
             // Rotate primary → .prev on every successful load. Copy (not move)
-            // so primary stays in place; replace any stale .prev.
-            rotateBackup()
+            // so primary stays in place; replace any stale .prev. Never from
+            // a read-only store (see above).
+            if !isReadOnly { rotateBackup() }
             masterArchive = master
             persistedMasterArchive = master
             acceptedMasterArchive = master
@@ -866,7 +872,7 @@ final class CatalogStore {
             lastGenerationAnomaly = msg
             NSLog("VideoScan: %@", msg)
             catalogStoreLog.fault("\(msg, privacy: .public)")
-        } else if loadedGeneration > generationFloor {
+        } else if loadedGeneration > generationFloor, !isReadOnly {
             generationFloor = CatalogGenerationSidecar.recordMax(loadedGeneration, besideCatalogAt: fileURL)
         }
     }
@@ -1726,8 +1732,11 @@ extension CatalogStore {
     /// `writeQueue`, so a stalled catalog save cannot hold it. The closure
     /// returns nil when the copy is durable, else the words. Not a catalog
     /// save: no hold, lock or generation check — it never touches catalog.json.
-    func recoveryCopyWriter(records: [VideoRecord]) -> @Sendable (URL) -> String? {
-        let payload = Self.makePayload(records: records, generation: currentGeneration, masterArchive: masterArchive)
+    /// `generation`: the header's stamp — the caller's catalog generation
+    /// (catalog.sqlite's under the SQLite authority, QA r1 F3); nil = this
+    /// store's own.
+    func recoveryCopyWriter(records: [VideoRecord], generation: Int? = nil) -> @Sendable (URL) -> String? {
+        let payload = Self.makePayload(records: records, generation: generation ?? currentGeneration, masterArchive: masterArchive)
         return { url in
             do {
                 let encoder = JSONEncoder()

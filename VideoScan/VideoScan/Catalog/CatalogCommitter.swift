@@ -161,6 +161,12 @@ final class CatalogCommitter {
         didSet { if blockedReason != oldValue { onBlockedChanged(blockedReason) } }
     }
     private(set) var lastOutcome: CatalogCommit.Outcome?
+    /// catalog.sqlite's generation as this session last knew it: the
+    /// launch's read, then every commit's, a reopen's and an adopt's. What
+    /// a synchronous stamp (the quit copy's header) records — never the
+    /// frozen JSON store's (QA r1 F3, 2026-10-21). Async callers may read
+    /// the repository itself (`generationNow()`).
+    private(set) var knownGeneration = 0
     /// Writes attempted (tests and the status line).
     private(set) var commitCount = 0
     /// The last commit's snapshot + fingerprint cost.
@@ -184,7 +190,8 @@ final class CatalogCommitter {
     /// The store holds exactly these records (right after a load, before
     /// the launch-time migrations run — what they change is then committed).
     /// `held`: records that came from `pending_rows` (still no row).
-    func adoptBaseline(_ records: [VideoRecord], held: Set<UUID> = []) {
+    func adoptBaseline(_ records: [VideoRecord], held: Set<UUID> = [], generation: Int? = nil) {
+        if let generation { knownGeneration = generation }
         baseline.adopt(records, held: held)
         markerDirty = []
         purgeRequested = [:]
@@ -408,6 +415,7 @@ final class CatalogCommitter {
         reopening = false
         switch opened {
         case .readWrite:
+            if let now = try? await repository.read({ $0.generation }) { knownGeneration = now }
             sink("Catalog store: OUTCOME reopened catalog.sqlite — writes allowed again; committing what is still changed")
             becameWritable()
         case .readOnly(let reason), .refused(let reason):
@@ -425,6 +433,7 @@ final class CatalogCommitter {
         reopening = false
         switch outcome {
         case .adopted(let from, let to):
+            knownGeneration = to
             sink("Catalog store: OUTCOME adopted catalog.sqlite at generation \(from) as generation \(to) — writes allowed again; "
                  + "committing what changed while it was read-only")
             becameWritable()
@@ -432,6 +441,12 @@ final class CatalogCommitter {
             sink("Catalog store: REFUSED Adopt This SQLite Catalog — \(words). Nothing changed.")
         }
         return outcome
+    }
+
+    /// catalog.sqlite's generation read now from the store (one small read);
+    /// `knownGeneration` when the read fails.
+    func generationNow() async -> Int {
+        (try? await repository.read { $0.generation }) ?? knownGeneration
     }
 
     private func becameWritable() {
@@ -573,6 +588,7 @@ final class CatalogCommitter {
         let door = prepared.plan.door.rawValue
         switch outcome {
         case .committed(let generation, let rows):
+            knownGeneration = generation
             adoptDesignation(prepared)
             lastMarkerRefusal = nil
             let durable = apply(rows, prepared.plan)
