@@ -52,7 +52,7 @@
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::AppDelegate.applicationShouldTerminate": {
    "ccn": 24,
-   "nloc": 85
+   "nloc": 84
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body": {
    "ccn": 14,
