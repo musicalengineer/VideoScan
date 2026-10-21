@@ -75,7 +75,7 @@ if [ -z "$TD" ]; then
     exit 0
 fi
 
-TD_ROWS="$TD" TD_SA="$SA" python3 - <<'PY'
+TD_ROWS="$TD" TD_SA="$SA" ROTA_FILE="$REPO_ROOT/scripts/nightly_rota.json" python3 - <<'PY'
 import sys, os, json, datetime
 
 def norm_host(h):
@@ -178,8 +178,18 @@ print("─" * 46)
 print(f"{'Host':<5} {'Status':<8} {'P/F/S':<13} {'Cov':>6}  {'When':<11}")
 
 order = ["M5", "M4", "M1"]
+# GH #360: a Mac OFF the nightly rota (scripts/nightly_rota.json — the M1) says
+# so instead of showing its last stale failure.
+try:
+    off_rota = set((json.load(open(os.environ.get("ROTA_FILE", ""))).get("off") or {}))
+except Exception:
+    off_rota = set()
 seen = set()
 def emit(h):
+    if h in off_rota:
+        print(f"{h:<5} — off the nightly rota")
+        seen.add(h)
+        return
     r = latest.get(h)
     if not r:
         print(f"{h:<5} {'(no row)':<8}")
@@ -197,7 +207,7 @@ def emit(h):
     seen.add(h)
 
 for h in order:
-    if h in latest: emit(h)
+    if h in latest or h in off_rota: emit(h)
 for h in latest:
     if h not in seen and h not in order: emit(h)
 
@@ -246,7 +256,7 @@ if not green_today:
 
 for h in order:
     r = latest.get(h)
-    if r and r.get("status") == "failed":
+    if r and r.get("status") == "failed" and h not in off_rota:
         flags.append(f"{h} last run FAILED ({r.get('reason','?')}, {r['_date']}).")
     elif r and (today_minus := (datetime.date.fromisoformat(today) - datetime.date.fromisoformat(r["_date"])).days) >= 3:
         flags.append(f"{h} hasn't reported in {today_minus} days (last {r['_date']}).")

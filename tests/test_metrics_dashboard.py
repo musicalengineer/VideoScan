@@ -533,6 +533,36 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
 
 
 @needs_node
+def test_an_off_rota_mac_reads_off_the_rota_never_did_not_run(tmp_path):
+    """GH #360 item 4: the M1 is out of the nightly. The publisher drops its
+    column and lists it in nightly.off_rota; the page names it once, grey, as
+    "off the rota" — never "did not run", never "no nightly on the M1", and it
+    never pulls the tests line or the last-night tile off green."""
+    now = datetime.now(timezone.utc)
+    fx = full_fixtures(now)
+    s = fx["summary_latest.json"]
+    for night in s["nightly"]["nights"]:
+        night["hosts"].pop("M1", None)
+        if night is s["nightly"]["nights"][-1]:
+            for h in ("M4", "M5"):
+                night["hosts"][h] = {"state": "green", "passed": 12300, "failed": 0, "total": 12300, "reason": None}
+    s["nightly"]["hosts"] = ["M4", "M5"]
+    s["nightly"]["off_rota"] = ["M1"]
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    assert "<b>M1</b> off the rota" in head and 'class="grey"' in head
+    assert "M1</b> did not run" not in head and "M1</b> no run" not in head
+    assert '<div class="tile" data-state="green"><div class="label">Last night&#39;s tests</div>' in head \
+        or '<div class="tile" data-state="green"><div class="label">Last night\'s tests</div>' in head
+    tests_line = out["sections"]["sum-tests"]
+    assert "the M1 is off the nightly rota" in tests_line
+    assert "no nightly on the M1" not in tests_line and "M1 <b>did not run</b>" not in tests_line
+    assert out["sections"]["tl"].count('class="cell ') == 2 * 90 and 'title="M1 · ' not in out["sections"]["tl"]
+    assert "off the nightly rota: <b>M1</b>" in out["sections"]["stab"]
+
+
+@needs_node
 def test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week(tmp_path):
     now = datetime.now(timezone.utc)
     monday = datetime(now.year, now.month, now.day, 9, tzinfo=timezone.utc) - timedelta(days=now.weekday())

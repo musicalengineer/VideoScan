@@ -83,6 +83,18 @@ Per project `CLAUDE.md` ("Build mode policy"), use **Debug** for all build/verif
 - Don't change the log file paths or formats.
 - Don't touch tests yourself — that's the testing agent's job. You can write a test stub if it helps, but the testing agent owns the test suite.
 
+## Before reporting done: the sensor lane (mandatory, GH #360)
+
+Run `scripts/run_sensors.sh` (absolute path inside your worktree; it is a
+plain script, so no `cd`) after your last code change and before you report
+done or anything merges. It runs every source-scan / architecture sensor
+(VideoScanTests via `-only-testing`, VideoScanCore via `swift test --filter`)
+in Debug, ~70 s once built. Add `--derived-data <your -derivedDataPath>` so it
+reuses your build instead of starting a cold one. Report its last line ("sensor lane GREEN (N tests)") verbatim. If it
+prints "SENSOR LANE RED", fix the code or — only when the change is deliberate
+and reviewed — update the sensor in the same commit, and say which. Never hand
+back work with a red sensor for the nightly to find.
+
 ## Command shape — permission prompts interrupt Rick
 
 Every permission prompt lands on Rick's screen and stops his work. The matcher

@@ -299,6 +299,7 @@ SCHEMAS: Dict[str, dict] = {
         "tags": ("list", ("obj", {"date": "date", "name": "tagname"})),
         "person": ("opt", ("obj", {"status": "code", "readiness_pct": "num?", "quality_score": "num?"})),
         "nightly": ("obj", {"days": "int", "hosts": ("list", "hostlabel"),
+                            "off_rota": ("list", "hostlabel"),
                             "nights": ("list", ("obj", {"date": "date",
                                                         "hosts": ("map", "hostlabel", ("obj", _NIGHT))}))}),
     },
@@ -803,12 +804,37 @@ def reason_code(reason) -> Optional[str]:
 
 
 HOST_ORDER = ("M4", "M5", "M1")
+# THE nightly rota (GH #360): which Macs run the 2 AM nightly. One file, read by
+# the installer, the failover guard, the morning digest and this publisher.
+NIGHTLY_ROTA = REPO / "scripts" / "nightly_rota.json"
 
 
-def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS) -> dict:
+def load_rota(path: Path = NIGHTLY_ROTA) -> dict:
+    """{"on": [labels in slot order], "off": [labels]} from nightly_rota.json.
+    A missing or unreadable file means nobody is off the rota (the table then
+    shows every Mac that published, as before) — never a crash."""
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {"on": list(HOST_ORDER), "off": []}
+    on = [h for h in (raw.get("on") or {}) if isinstance(h, str) and HOSTLABEL_RE.match(h)]
+    off = [h for h in (raw.get("off") or {}) if isinstance(h, str) and HOSTLABEL_RE.match(h) and h not in on]
+    return {"on": on, "off": off}
+
+
+def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
+                    rota: Optional[dict] = None) -> dict:
     """The last `days` nights (ending `today`, a UTC date) of the 2 AM nightly,
     one cell per Mac, from the published testdriver rows. The last row a host
-    published on a UTC date wins for that night (a rerun is newer evidence)."""
+    published on a UTC date wins for that night (a rerun is newer evidence).
+
+    A Mac that is OFF the rota (nightly_rota.json; GH #360: the M1) has no
+    column and no cells — not even its old nights — so its absence can never
+    read as a failure or a "no run"; it is listed in `off_rota` instead and the
+    page says so."""
+    rota = load_rota() if rota is None else rota
+    off = set(rota.get("off") or ())
+    order = tuple(rota.get("on") or ()) + tuple(h for h in HOST_ORDER if h not in (rota.get("on") or ()))
     end = datetime.strptime(today, "%Y-%m-%d")
     dates = [(end - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d") for i in range(days)]
     wanted = set(dates)
@@ -820,7 +846,7 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS) -
         ts = row.get("ts")
         date = ts[:10] if isinstance(ts, str) and TS_RE.match(ts) else None
         label = host_label(row.get("host"))
-        if date is None or date not in wanted or label is None:
+        if date is None or date not in wanted or label is None or label in off:
             continue
         seen_hosts.add(label)
         cells.setdefault(date, {})[label] = {
@@ -828,8 +854,8 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS) -
             "failed": _int(row.get("failed")), "total": _int(row.get("total")),
             "reason": reason_code(row.get("reason")),
         }
-    hosts = [h for h in HOST_ORDER if h in seen_hosts] + sorted(seen_hosts - set(HOST_ORDER))
-    return {"days": days, "hosts": hosts,
+    hosts = [h for h in order if h in seen_hosts] + sorted(seen_hosts - set(order))
+    return {"days": days, "hosts": hosts, "off_rota": sorted(off),
             "nights": [{"date": d, "hosts": cells.get(d, {})} for d in dates]}
 
 

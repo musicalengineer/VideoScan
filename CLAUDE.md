@@ -90,6 +90,28 @@ Every feature/fix ships with tests along FIVE dimensions, not just the first:
 
 Rationale: escaped bugs are boundary bugs (environment, cost, capability) — the suite already catches function-level logic errors. NO O(records) work in view bodies. Integration-test ladder: GH #105–#108.
 
+## Pre-merge sensor lane (Rick, GH #360, 2026-10-21) — MANDATORY
+Before any agent reports done, and before anything merges to main, run:
+
+    scripts/run_sensors.sh        # from the checkout/worktree being merged
+
+It runs every source-scan / architecture sensor and nothing else: each test
+that reads the repo's own Swift source (`SourceTree.…`, a `#filePath` walk of
+the tree, or a helper that does) plus the `*Sensor*` / `*Ratchet*` suites whose
+file reads source — in VideoScanTests (`xcodebuild -only-testing`, Debug,
+parallel) and VideoScanCore (`swift test --filter`). Scale/timing tests and
+real-global-state isolation tests are left to the nightly. ~550 tests, ~70 s
+on the M4 once built; pass `--derived-data <the DerivedData you already built
+with>` to stay incremental (the default, ~/Library/Caches/videoscan-sensor-dd/
+<checkout>, costs one cold Debug build per new worktree). The list is DISCOVERED from the test source each run
+(`python3 scripts/sensor_lane.py list`), so a new sensor joins the lane the day
+it is written. Exit 1 names every red sensor; a lane that ran zero tests is red
+too. A red sensor is fixed (code or a reviewed sensor update) before merge —
+never merged red "for the nightly to sort out": one stayed red 11 nights.
+Not a git hook: a hook would need an app build inside `git merge` (minutes when
+cold, and concurrent merges would fight over one DerivedData), so it is a
+mandatory step instead, in every implementing agent's definition.
+
 ## Long operations (Rick, 2026-09-27)
 Anything that can run longer than about a minute is an **MFO job** (Media File
 Operations window), whether Rick starts it or it runs overnight on the M4:

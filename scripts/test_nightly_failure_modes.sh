@@ -1090,6 +1090,200 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
+# Test 15 (2026-10-21, GH #360 item 5): machine setup is the machine, not a
+# test result. Fake automationmodetool / xcodebuild / xcrun drive the REAL
+# check_machine_setup; the M5's real 10/21 log line drives the REAL
+# apply_test_host_start_diagnosis. Pins: each failing check names itself as
+# machine-setup:<what> (first failure wins); a ready Mac passes; a test host
+# that never connected with ZERO tests is machine-setup:test-host-hung (with
+# the diagnosis line), while a timeout, a real failure or a run with tests is
+# never rewritten; the preflight runs before any build; UI tests stay skipped.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 15: machine-setup preflight and test-host-hang diagnosis =="
+MS_BIN="$SANDBOX/ms-bin"
+mkdir -p "$MS_BIN"
+printf '%s\n' '#!/bin/sh' 'echo "Automation Mode is disabled."' 'echo "This device DOES NOT REQUIRE user authentication to enable Automation Mode."' > "$MS_BIN/amt-ok"
+printf '%s\n' '#!/bin/sh' 'echo "Automation Mode is disabled."' 'echo "This device REQUIRES user authentication to enable Automation Mode."' > "$MS_BIN/amt-password"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$MS_BIN/ok"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$MS_BIN/bad"
+chmod +x "$MS_BIN"/*
+setup_case() {
+    # args: automationmodetool xcodebuild xcrun -> "<reason>|<log>"
+    ( # shellcheck disable=SC1090
+      source "$WATCHDOG_LIB"
+      log() { echo "$*" >> "$SANDBOX/ms-case.log"; }
+      : > "$SANDBOX/ms-case.log"
+      NIGHTLY_AUTOMATIONMODETOOL="$MS_BIN/$1" NIGHTLY_XCODEBUILD="$MS_BIN/$2" NIGHTLY_XCRUN="$MS_BIN/$3"
+      export NIGHTLY_AUTOMATIONMODETOOL NIGHTLY_XCODEBUILD NIGHTLY_XCRUN
+      check_machine_setup
+      printf '%s|%s' "$MACHINE_SETUP_REASON" "$(tr '\n' ' ' < "$SANDBOX/ms-case.log")" )
+}
+got=$(setup_case amt-ok ok ok)
+case "$got" in
+    "|Machine setup: automation mode, Xcode first launch and Metal toolchain all ready. ") pass "a ready Mac passes the machine preflight" ;;
+    *) fail "ready Mac: got '$got'" ;;
+esac
+got=$(setup_case amt-password ok ok)
+case "$got" in
+    "machine-setup:automation-mode|"*"enable-automationmode-without-authentication"*) pass "automation mode behind a password is machine-setup:automation-mode, with the fix" ;;
+    *) fail "automation-mode check: got '$got'" ;;
+esac
+got=$(setup_case amt-ok bad ok)
+case "$got" in
+    "machine-setup:xcode-first-launch|"*"xcodebuild -runFirstLaunch"*) pass "Xcode first launch not done is machine-setup:xcode-first-launch" ;;
+    *) fail "first-launch check: got '$got'" ;;
+esac
+got=$(setup_case amt-ok ok bad)
+case "$got" in
+    "machine-setup:metal-toolchain|"*) pass "a missing Metal toolchain is machine-setup:metal-toolchain" ;;
+    *) fail "metal check: got '$got'" ;;
+esac
+got=$(setup_case amt-password bad bad)
+case "$got" in
+    "machine-setup:automation-mode|"*"runFirstLaunch"*"MetalToolchain"*) pass "every failing check is logged; the first names the row" ;;
+    *) fail "multi-failure check: got '$got'" ;;
+esac
+# The publisher's code allowlist must accept every reason (else it is dropped to its kind).
+ms_codes_ok=$(python3 - "$SCRIPT_DIR/../tools/publish_metrics.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pm", sys.argv[1]); pm = importlib.util.module_from_spec(spec); spec.loader.exec_module(pm)
+codes = ["machine-setup:automation-mode", "machine-setup:xcode-first-launch", "machine-setup:metal-toolchain",
+         "machine-setup:test-host-hung", "machine-setup:sleep-assertion"]
+row = lambda r: {"status": "failed", "reason": r, "total": 0}
+print("yes" if all(pm.reason_code(c) == c and pm.classify_nightly_row(row(c)) == "did_not_run" for c in codes) else "no")
+PY
+)
+[ "$ms_codes_ok" = "yes" ] && pass "every machine-setup reason survives the publisher and reads did_not_run (the '?' cell)" \
+    || fail "a machine-setup reason is rejected or coloured by the publisher"
+
+cat > "$SANDBOX/host-hung.log" <<'HHL'
+2026-10-21 05:00:13.843 xcodebuild[36418:28252994]  IDETestOperationsObserverDebug: Failure collecting logarchive: Error Domain=com.apple.dt.xctest.error Code=8 "Timed out after 120.0s while initiating control session with daemon."
+Testing failed:
+	VideoScan (36530) encountered an error (The test runner hung before establishing connection.)
+** TEST FAILED **
+HHL
+cat > "$SANDBOX/sleep-assertion.log" <<'SAL'
+xcodebuild: error: Failed to build project VideoScan with scheme VideoScan.: Failed to prevent system sleep during UI testing. Error code: -536870211
+SAL
+printf 'xcodebuild: error: Unable to find a destination matching the provided destination specifier\n' > "$SANDBOX/other-zero.log"
+diag_case() {
+    # args: log total timed_out failed ui_hung rc -> "<status>|<reason>|<diagnosis printed?>"
+    ( # shellcheck disable=SC1090
+      source "$WATCHDOG_LIB"
+      log() { echo "$*" >> "$SANDBOX/diag-case.log"; }
+      : > "$SANDBOX/diag-case.log"
+      classify_nightly_test_result "$3" 7200 "$2" "$4" "$5" "$6"
+      apply_test_host_start_diagnosis "$1" "$2"
+      printf '%s|%s|%s' "$STATUS" "$REASON" "$(grep -c 'test host could not start: check `automationmodetool` / Xcode first-launch / Metal toolchain' "$SANDBOX/diag-case.log")" )
+}
+got=$(diag_case "$SANDBOX/host-hung.log" 0 false 0 true 65)
+[ "$got" = "failed|machine-setup:test-host-hung|1" ] && pass "10/21 M5: a test host that never connected is machine-setup:test-host-hung, with the diagnosis line" \
+    || fail "host-hung diagnosis: got '$got'"
+got=$(diag_case "$SANDBOX/sleep-assertion.log" 0 false 0 false 70)
+[ "$got" = "failed|machine-setup:sleep-assertion|1" ] && pass "10/13 M4: no sleep assertion is machine-setup:sleep-assertion" \
+    || fail "sleep-assertion diagnosis: got '$got'"
+got=$(diag_case "$SANDBOX/other-zero.log" 0 false 0 false 70)
+[ "$got" = "failed|zero-tests-ran:test-rc=70|0" ] && pass "a zero-test run with no host-start evidence stays zero-tests-ran" \
+    || fail "unexplained zero: got '$got'"
+got=$(diag_case "$SANDBOX/host-hung.log" 0 true 0 true 65)
+[ "$got" = "failed|test-timeout:7200s|0" ] && pass "a watchdog timeout is never rewritten as machine setup" \
+    || fail "timeout precedence: got '$got'"
+got=$(diag_case "$SANDBOX/host-hung.log" 12000 false 0 true 65)
+[ "$got" = "failed|ui-runner-hung|0" ] && pass "with tests counted, a runner-hang marker keeps its own reason (never machine-setup)" \
+    || fail "tests-ran hang: got '$got'"
+got=$(diag_case "$SANDBOX/host-hung.log" 12000 false 3 true 65)
+[ "$got" = "failed|failed-tests:3|0" ] && pass "real failures are never rewritten by the host diagnosis" \
+    || fail "failures + hang: got '$got'"
+
+NIGHTLY="$SCRIPT_DIR/nightly_local_tests.sh"
+PREFLIGHT_LINE=$(grep -n '^check_machine_setup$' "$NIGHTLY" | cut -d: -f1)
+CORE_LINE2=$(grep -n '^run_core_package_tests "\$REPO/VideoScan/VideoScanCore"' "$NIGHTLY" | cut -d: -f1)
+DIAG_LINE=$(grep -n '^    apply_test_host_start_diagnosis /tmp/nightly-test-output.log "\$TOTAL"$' "$NIGHTLY" | cut -d: -f1)
+ZERO_PUBLISH_LINE=$(grep -n 'publish_row "\$(with_person_metrics "\$(make_status_row "\$STATUS" "\$REASON"' "$NIGHTLY" | cut -d: -f1)
+if [ -n "$PREFLIGHT_LINE" ] && [ -n "$CORE_LINE2" ] && [ "$PREFLIGHT_LINE" -lt "$CORE_LINE2" ] &&
+   [ -n "$DIAG_LINE" ] && [ -n "$ZERO_PUBLISH_LINE" ] && [ "$DIAG_LINE" -lt "$ZERO_PUBLISH_LINE" ]; then
+    pass "the machine preflight runs before any build, and the host diagnosis before the zero-test row"
+else
+    fail "machine-setup wiring moved (preflight=$PREFLIGHT_LINE core=$CORE_LINE2 diag=$DIAG_LINE zero-publish=$ZERO_PUBLISH_LINE)"
+fi
+# Item 5: no UI tests in the nightly. The ONE test invocation skips the UI
+# target, so a UI runner can never hang the unit run or zero its count.
+TEST_INVOCATIONS=$(grep -c '^    xcodebuild test-without-building' "$NIGHTLY")
+UI_SKIPS=$(grep -c '^    -skip-testing:VideoScanUITests \\$' "$NIGHTLY")
+if [ "$TEST_INVOCATIONS" -eq 1 ] && [ "$UI_SKIPS" -eq 1 ]; then
+    pass "the nightly's only test invocation passes -skip-testing:VideoScanUITests"
+else
+    fail "UI tests may be back in the nightly (test invocations=$TEST_INVOCATIONS, UI skips=$UI_SKIPS)"
+fi
+
+# ───────────────────────────────────────────────────────────────────
+# Test 16 (2026-10-21, GH #360 item 4): the M1 is OFF the nightly rota.
+# scripts/nightly_rota.json is the one source. The REAL guard and installer
+# run in a sandbox HOME with fake scutil / launchctl / crontab on PATH: an
+# off-rota Mac's guard exits 0 before fetching anything, its installer takes
+# the job down (bootout + plist moved aside), an on-rota Mac gets its slot from
+# the rota, and a Mac on neither list is refused.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 16: the nightly rota (M1 off) =="
+RT="$SANDBOX/rota"
+mkdir -p "$RT/scripts" "$RT/bin" "$RT/home/Library/LaunchAgents"
+cp "$SCRIPT_DIR/nightly_guarded.sh" "$SCRIPT_DIR/install_nightly.sh" "$SCRIPT_DIR/nightly_rota.py" "$SCRIPT_DIR/nightly_rota.json" "$RT/scripts/"
+printf '%s\n' '#!/bin/sh' 'echo "$FAKE_HOST"' > "$RT/bin/scutil"
+printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_LAUNCHCTL_LOG"' > "$RT/bin/launchctl"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$RT/bin/crontab"
+# A git that records it was called: the off-rota guard must exit before it.
+printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_GIT_LOG"' 'exit 1' > "$RT/bin/git"
+chmod +x "$RT/bin"/*
+rota_run() {
+    # args: host script -> rc; logs in $RT
+    : > "$RT/launchctl.log"; : > "$RT/git.log"
+    HOME="$RT/home" FAKE_HOST="$1" FAKE_LAUNCHCTL_LOG="$RT/launchctl.log" FAKE_GIT_LOG="$RT/git.log" \
+        PATH="$RT/bin:$PATH" bash "$RT/scripts/$2" > "$RT/out.log" 2>&1
+}
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM4)" = "on 2 0" ] &&
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM5)" = "on 3 15" ] &&
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM1 | cut -c1-4)" = "off " ] &&
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot SomeoneElse)" = "unknown" ] \
+    && pass "the rota: M4 02:00, M5 03:15, M1 off, anyone else unknown" \
+    || fail "nightly_rota.py slots changed"
+rota_run RicksM1 nightly_guarded.sh
+GUARD_RC=$?
+if [ "$GUARD_RC" -eq 0 ] && [ ! -s "$RT/git.log" ] &&
+   grep -q 'off the nightly rota' "$RT/home/Library/Logs/VideoScan/nightly_guard.log" 2>/dev/null; then
+    pass "an off-rota Mac's guard exits 0 before fetching or running anything, and says why"
+else
+    fail "off-rota guard: rc=$GUARD_RC git calls='$(tr '\n' ' ' < "$RT/git.log")'"
+fi
+echo '<plist/>' > "$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist"
+rota_run RicksM1 install_nightly.sh
+INST_RC=$?
+if [ "$INST_RC" -eq 0 ] && grep -q '^bootout gui/.*/com.videoscan.nightly-tests$' "$RT/launchctl.log" &&
+   [ ! -e "$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist" ] &&
+   [ -e "$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist.off-rota" ] &&
+   ! grep -q '^bootstrap' "$RT/launchctl.log"; then
+    pass "on the M1 the installer takes the job down (bootout, plist moved aside) and installs nothing"
+else
+    fail "off-rota installer: rc=$INST_RC launchctl='$(tr '\n' ' ' < "$RT/launchctl.log")' out='$(tr '\n' ' ' < "$RT/out.log")'"
+fi
+rota_run RicksM5 install_nightly.sh
+INST_RC=$?
+M5_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist"
+if [ "$INST_RC" -eq 0 ] && [ -f "$M5_PLIST" ] &&
+   [ "$(plutil -extract StartCalendarInterval.Hour raw "$M5_PLIST" 2>/dev/null)" = "3" ] &&
+   [ "$(plutil -extract StartCalendarInterval.Minute raw "$M5_PLIST" 2>/dev/null)" = "15" ]; then
+    pass "an on-rota Mac (M5) is installed at its rota slot, 03:15"
+else
+    fail "on-rota installer: rc=$INST_RC out='$(tr '\n' ' ' < "$RT/out.log")'"
+fi
+rota_run SomeoneElse install_nightly.sh
+INST_RC=$?
+[ "$INST_RC" -ne 0 ] && grep -q 'not on scripts/nightly_rota.json' "$RT/out.log" \
+    && pass "a Mac on neither list is refused by the installer" \
+    || fail "unknown host was installed (rc=$INST_RC)"
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo
