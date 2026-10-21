@@ -1126,7 +1126,7 @@ struct InferredDatePropagationTests {
         #expect(rec.inferredDateSource == nil, "an own pass clears any inherited provenance")
     }
 
-    // MARK: - Hooks: applyDossier + live reload
+    // MARK: - Hooks: applyDossier (live reload retired 2026-10-20)
 
     @Test func applyDossier_sharesTheFreshDateWithTheContentGroup() throws {
         let dir = try scratchDir("hook-dossier")
@@ -1172,44 +1172,6 @@ struct InferredDatePropagationTests {
         // GH #201: a caption year alone is a soft claim (0.45) — shown, not filed.
         #expect(year(captioned.inferredRecordDate) == 1985 && captioned.inferredDateConfidence == DateTriangulationWeights.captionYear)
         #expect(year(captionedTwin.inferredRecordDate) == 1985)
-    }
-
-    @Test func liveReload_mergedRowSharesItsDateWithSiblingsInMemory() throws {
-        let dir = try scratchDir("hook-live")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let model = makeModel(dir)
-        let mem = makeRecord(path: "/Volumes/Projects/1991/NV12.mkv", md5: "m", size: 1)
-        let twin = makeRecord(path: "/Volumes/MediaExpansion/1991/NV12.mkv", md5: "m", size: 1)
-        model.records = [mem, twin]
-
-        // What the external merger wrote to disk for ONE copy.
-        let fresh = mem.snapshotClone()
-        fresh.ocrDateCandidates = [Self.nv12OCR]
-        fresh.inferredRecordDate = Self.june21_1991
-        fresh.inferredDateConfidence = 0.75
-        fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_784_081_580)
-        fresh.dossierProcessedBy = "qwen2.5-vl-3b-4bit"
-
-        let merged = model.mergeDossierFields(from: [fresh])
-        #expect(merged == 1)
-        #expect(mem.inferredRecordDate == Self.june21_1991)
-        #expect(twin.inferredRecordDate == Self.june21_1991, "the sweep is where an external result lands — siblings follow at once")
-        #expect(twin.inferredDateSource == "propagated from \(mem.id.uuidString)")
-    }
-
-    @Test func liveReload_carriesTheProvenanceField() throws {
-        let dir = try scratchDir("hook-live-src")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let model = makeModel(dir)
-        let mem = makeRecord(path: "/V/a.mov")
-        model.records = [mem]
-        let fresh = mem.snapshotClone()
-        fresh.inferredRecordDate = Self.june21_1991
-        fresh.inferredDateConfidence = 0.75
-        fresh.inferredDateSource = "propagated from \(UUID().uuidString)"
-        fresh.dossierProcessedAt = Date()
-        _ = model.mergeDossierFields(from: [fresh])
-        #expect(mem.inferredDateSource == fresh.inferredDateSource)
     }
 
     // MARK: - Notifications + search index

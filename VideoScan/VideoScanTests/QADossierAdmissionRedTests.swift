@@ -119,32 +119,6 @@ struct QADossierAdmissionRedTests {
         #expect(line.contains(", 0 eligible on offline volumes not queued"), "\(line)")
     }
 
-    /// P3-b — VideoScanModel+LiveReload.swift:205. The external merger's
-    /// date landed on an Archived-stage row outside the archive root, which
-    /// Dossier and the date lane treat as frozen. FIXED 2026-10-11 (Rick's
-    /// ruling: the rule follows the stage) — LiveReload consults the date
-    /// seam `isDateReadOnly`. Now an ordinary pin.
-    @Test func liveReloadMergeLeavesAnArchivedStageRowsDateAlone() throws {
-        let sb = try F.Sandbox("qa-livereload")
-        defer { sb.cleanup() }
-        let t = sb.record("test_filed.mov", stage: .archived, onDisk: false)
-        t.fullPath = "/Volumes/TestSrcQA/FromCheesegrater/test_filed.mov"
-        t.directory = "/Volumes/TestSrcQA/FromCheesegrater"
-        t.inferredRecordDate = F.utc(1985); t.inferredDateConfidence = 0.9
-        t.inferredDateReason = "filed as 1985"
-        t.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
-        sb.model.records = [t]
-        let fresh = VideoRecord()
-        fresh.fullPath = t.fullPath; fresh.filename = t.filename; fresh.directory = t.directory
-        fresh.inferredRecordDate = F.utc(1991); fresh.inferredDateConfidence = 0.95
-        fresh.inferredDateReason = "on-screen date 1991"
-        fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_800_000_000)
-        _ = sb.model.mergeDossierFields(from: [fresh])
-        #expect(t.inferredRecordDate == F.utc(1985), "archived-stage row re-dated by live reload")
-        #expect(t.inferredDateReason == "filed as 1985" && t.inferredDateConfidence == 0.9)
-        #expect(t.dossierProcessedAt == fresh.dossierProcessedAt, "the dossier channels still merge")
-    }
-
     /// P3-c — VideoScanModel+DuplicateEnrichment.swift:60. Same predicate
     /// gap on the duplicate-delete enrichment merge. FIXED 2026-10-11 (the
     /// date seam `isDateReadOnly`). Now an ordinary pin.

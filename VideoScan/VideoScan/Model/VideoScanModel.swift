@@ -1068,19 +1068,8 @@ final class VideoScanModel: ObservableObject {
 
     /// Cutover B2: set once catalog.sqlite is the authority — its committer
     /// then takes every save funnel below (CatalogCommitter.swift); the
-    /// JSON store above is frozen. Also the Switch sheet's state.
+    /// JSON store above is frozen.
     let catalogCutover = CatalogCutoverState()
-
-    /// Live-reload polling task — set by `startLiveDossierReload()` in
-    /// VideoScanModel+LiveReload.swift, cancelled by
-    /// `stopLiveDossierReload()`. nil when the live reload is not
-    /// active (e.g. tests, viewer mode).
-    var liveReloadTask: Task<Void, Never>?
-
-    /// Mtime watermark for the live-reload polling loop. Set to the
-    /// catalog file's mtime at launch (so the first tick doesn't
-    /// re-merge what we just loaded) and on every successful merge.
-    var lastLiveReloadMtime: Date?
 
     /// Date-inference pass memory (VideoScanModel+DateInference, codex
     /// #1415): record id → fingerprint of the stored evidence that a
