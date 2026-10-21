@@ -29387,7 +29387,8 @@
         "theSeamIsOneLine",
         "unprovenRowsAreNotRecords",
         "viewerLaunchOpensCatalogSQLiteReadOnly",
-        "viewerRefusesWithoutLatch"
+        "viewerWithNothingSynced",
+        "viewerWithSyncedSnapshotShowsIt"
       ]
     },
     {
@@ -33495,7 +33496,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 237,
+      "expected_floor": 238,
       "name": "regression",
       "package_expected_floor": 198,
       "package_selectors": [

@@ -5,10 +5,12 @@
 // missing, vanish mid-session, are damaged, or come from a newer build.
 //
 //   Case 5   no catalog.cutover beside a real catalog.sqlite — on a master and
-//            on a viewer. TODAY (pinned): `.json`, and on the master
-//            catalog.json opens WRITABLE; a viewer's synced folder with the
-//            snapshot but no latch shows the frozen catalog.json silently.
-//            INTENDED (GH #354, slice 2): refuse loudly, read-only, with words.
+//            on a viewer. Since slice 2 (GH #354, 2026-10-21): `.noLatch`;
+//            the master refuses loudly, read-only, with words, and opens no
+//            catalog.json; a viewer with no latch of its own nor in
+//            viewer-catalog/ says nothing is synced yet. PENDING (slice 2b):
+//            a viewer's synced folder with the snapshot but no latch is still
+//            labelled as the frozen catalog.json (CatalogViewerSnapshot.source).
 //   Fail-fast  the latch vanishes mid-session — TODAY commits go on; INTENDED
 //            the next commit stops and says why (pending).
 //   Case 10  (app) a damaged catalog.sqlite behind the latch — the launch is
@@ -32,33 +34,32 @@ struct CatalogAuthorityCornerTests {
 
     // MARK: - Case 5
 
-    @Test("case 5 (master): catalog.sqlite with no catalog.cutover — today .json and catalog.json WRITABLE; intended refused loudly, read-only (GH #354)")
+    @Test("case 5 (master): catalog.sqlite with no catalog.cutover — refused loudly, read-only, catalog.json not opened (GH #354)")
     func masterWithoutLatch() async throws {
         let scene = try CutoverScene.make("corner_nolatch_master"); defer { scene.cleanup() }
         try await scene.importCatalog()
         _ = try await scene.sqliteLoad()
+        let jsonBefore = try CornerFiles.sha256(scene.catalogURL)
         let authority = await CatalogAuthority.decide(folder: scene.folder)
         scene.model.records = scene.model.loadCatalogAtLaunch()
-        // Pinned today.
-        #expect(authority == .json)
+        #expect(authority == .noLatch)
         #expect(scene.model.catalogCutover.committer == nil)
-        withKnownIssue("GH #354: a Mac without catalog.cutover opens catalog.json writable beside a real catalog.sqlite") {
-            guard case .refused(let words) = authority else {
-                Issue.record("no latch beside a real catalog.sqlite was not refused: \(authority)"); return
-            }
-            #expect(words.contains(CatalogAuthority.latchFileName), Comment(rawValue: words))
-            #expect(scene.model.isReadOnly, "catalog.json must not open writable")
-            #expect(scene.model.catalogStore.isReadOnly)
-        }
+        #expect(scene.model.records.isEmpty, "no catalog was opened")
+        #expect(scene.model.isReadOnly, "catalog.json must not open writable")
+        #expect(scene.model.catalogStore.isReadOnly)
+        #expect(scene.model.catalogStore.lastLoadOutcome == .missing, "catalog.json was never loaded")
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("OUTCOME No catalog — \(CatalogAuthority.latchFileName) is not beside the catalog"), Comment(rawValue: log))
+        #expect(try CornerFiles.sha256(scene.catalogURL) == jsonBefore)
     }
 
-    @Test("case 5 (viewer): own catalog.sqlite with no latch → .json today; a synced snapshot with no latch → the frozen catalog.json, silently; intended refused with words (#354 / slice 2)")
+    @Test("case 5 (viewer): own catalog.sqlite with no latch → .noLatch (GH #354); a synced snapshot with no latch → still labelled as the frozen catalog.json (pending, slice 2b)")
     func viewerWithoutLatch() async throws {
         let scene = try CutoverScene.make("corner_nolatch_viewer"); defer { scene.cleanup() }
         try await scene.importCatalog()
         _ = try await scene.sqliteLoad()
         let own = await CatalogAuthority.decide(folder: scene.folder, readOnly: true)
-        #expect(own == .json)
+        #expect(own == .noLatch, "a viewer without the latch never takes catalog.json as its catalog")
 
         // The synced folder: the master's sealed snapshot arrived, its latch did not.
         let live = scene.sandbox.root.appendingPathComponent("viewer-live", isDirectory: true)
@@ -72,8 +73,7 @@ struct CatalogAuthorityCornerTests {
         let source = CatalogViewerSnapshot.source(in: live)
         #expect(source == .legacyJSON, "pinned: the snapshot without its latch falls back to catalog.json")
 
-        withKnownIssue("GH #354 / slice 2: a missing catalog.cutover is not refused loudly on a viewer") {
-            #expect(own != .json, "a viewer without the latch opened catalog.json as its catalog")
+        withKnownIssue("slice 2b: a synced snapshot that arrived without its latch is labelled as the frozen catalog.json, without a word") {
             #expect(source != .legacyJSON, "a snapshot that arrived without its latch is ignored without a word")
         }
     }
@@ -90,7 +90,7 @@ struct CatalogAuthorityCornerTests {
         let saved = scene.model.saveCatalogNow()
         let landed = try await scene.reloaded(.healthy).userNotes == "after the latch went"
         print("[corner-authority] latch gone: saveCatalogNow → \(saved), landed → \(landed)")
-        withKnownIssue("pending: the committer never re-checks catalog.cutover; a session whose latch vanished keeps writing") {
+        withKnownIssue("GH #354 (mid-session note): the committer never re-checks catalog.cutover; a session whose latch vanished keeps writing") {
             #expect(!saved, "a commit ran after catalog.cutover vanished")
             #expect(scene.model.catalogCutover.blockedReason?.contains(CatalogAuthority.latchFileName) == true)
         }

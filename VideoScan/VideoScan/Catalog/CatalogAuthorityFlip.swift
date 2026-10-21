@@ -14,7 +14,13 @@
 //                  and the words say the master (or migrate_data.sh) must
 //                  carry catalog.sqlite and its latch. The database is not
 //                  opened either. (A test host on the shared store keeps
-//                  its own path: it loads nothing.)
+//                  its own path: it loads nothing.) A VIEWER's authority is
+//                  its synced copy (Rick 2026-10-21): with the master's
+//                  snapshot and ITS latch in viewer-catalog/, there is no
+//                  refusal — the launch is empty and read-only and the
+//                  viewer shows the snapshot (CatalogSync's
+//                  refreshViewerCatalog); with neither latch it says
+//                  "nothing synced from the master yet".
 //   .sqlite(url)   latch + the store opens (read-write, or read-only after a
 //                  restore — never a fall-back to an older authority) + a
 //                  finished, comparator-ok import;
@@ -118,6 +124,13 @@ enum CatalogAuthority: Equatable, Sendable {
             + "must carry \(databaseFileName) and its \(latchFileName). Nothing will be saved this session."
     }
 
+    /// A viewer with neither latch (its own, nor viewer-catalog/'s).
+    static func viewerNothingSyncedWords(folder: URL) -> String {
+        "viewer: nothing synced from the master yet — no \(latchFileName) in \(folder.path) nor in "
+            + "\(CatalogViewerSnapshot.directoryName)/. catalog.json is not opened; the catalog appears read-only "
+            + "after the first sync from the master."
+    }
+
     /// The words a refusal shows (console, catalog.log, videoscan.log).
     static func readOnlyWords(_ why: String) -> String {
         "SQLite catalog refused — \(why). catalog.json is open READ-ONLY: nothing will be saved this session."
@@ -200,7 +213,7 @@ extension VideoScanModel {
         let authority = CatalogLaunchWait.run { await CatalogAuthority.decide(folder: folder, readOnly: viewer) }
         switch authority {
         case .noLatch:
-            return refuseLaunchWithoutLatch(folder)
+            return viewer ? viewerLaunchWithoutOwnLatch(folder) : refuseLaunchWithoutLatch(folder)
         case .sqlite(let url):
             return loadFromSQLite(url, readOnly: viewer)
         case .refused(let why):
@@ -318,12 +331,30 @@ extension VideoScanModel {
     /// so no save can create a catalog.json), and the words say what is
     /// missing. Viewer or master alike — the role logic is untouched.
     private func refuseLaunchWithoutLatch(_ folder: URL) -> [VideoRecord] {
+        freezeLaunchWithoutCatalog()
+        catalogAuthorityNote("OUTCOME " + CatalogAuthority.noLatchWords(folder: folder))
+        return []
+    }
+
+    /// A viewer with no latch of its own: its authority is the synced copy
+    /// (viewer-catalog/catalog.sqlite + viewer-catalog/catalog.cutover).
+    /// Present → no refusal; the launch is empty and read-only and CatalogSync
+    /// shows the snapshot. Absent → "nothing synced from the master yet".
+    /// catalog.json is never opened on either branch.
+    private func viewerLaunchWithoutOwnLatch(_ folder: URL) -> [VideoRecord] {
+        freezeLaunchWithoutCatalog()
+        if FileManager.default.fileExists(atPath: CatalogViewerSnapshot.latchURL(in: folder).path) { return [] }
+        catalogAuthorityNote("OUTCOME " + CatalogAuthority.viewerNothingSyncedWords(folder: folder))
+        return []
+    }
+
+    /// No catalog opened at launch: nothing may be saved, and the JSON store
+    /// refuses every write (no save can create catalog.json).
+    private func freezeLaunchWithoutCatalog() {
         updateReadOnlyFacts {
             $0.jsonFrozenByLaunch = true
             $0.sessionReadOnlyByLaunch = true
         }
-        catalogAuthorityNote("OUTCOME " + CatalogAuthority.noLatchWords(folder: folder))
-        return []
     }
 
     private func loadJSONReadOnly(_ why: String) -> [VideoRecord] {

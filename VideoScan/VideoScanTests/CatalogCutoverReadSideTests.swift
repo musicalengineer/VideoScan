@@ -298,8 +298,8 @@ struct CatalogAuthorityFlipTests {
         #expect(log.contains("catalog.json is not opened"))
     }
 
-    @Test("GH #354: a VIEWER with no latch refuses the same way (role logic unchanged: still a viewer)")
-    func viewerRefusesWithoutLatch() async throws {
+    @Test("GH #354: a VIEWER with neither latch says nothing is synced yet — empty, read-only, catalog.json not opened; still a viewer")
+    func viewerWithNothingSynced() async throws {
         let scene = try CutoverScene.make("viewer_nolatch"); defer { scene.cleanup() }
         let before = Self.jsonSide(scene.folder)
         scene.model.applyReadOnlyMode(true)
@@ -307,8 +307,42 @@ struct CatalogAuthorityFlipTests {
         #expect(records.isEmpty)
         #expect(scene.model.readOnlyFacts.viewerRole)
         #expect(scene.model.isReadOnly)
+        #expect(scene.model.catalogStore.isReadOnly)
         #expect(Self.jsonSide(scene.folder) == before)
-        #expect(scene.sandbox.catalogLogText().contains("OUTCOME No catalog — catalog.cutover is not beside the catalog"))
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("OUTCOME viewer: nothing synced from the master yet"), Comment(rawValue: log))
+        #expect(!log.contains("No catalog —"), "a viewer's words are not the master's")
+    }
+
+    @Test("viewer latch ruling: a viewer whose synced snapshot AND its latch are in viewer-catalog/ launches with no refusal line and shows the snapshot")
+    func viewerWithSyncedSnapshotShowsIt() async throws {
+        let scene = try CutoverScene.make("viewer_synced"); defer { scene.cleanup() }
+        try await scene.importCatalog()
+        let master = try await scene.sqliteLoad()                // the master's display pass
+        // The synced copy, as CatalogSync leaves it: sealed snapshot + its latch.
+        let repository = GRDBCatalogRepository(host: "cutover-test")
+        _ = await repository.open(at: scene.databaseURL)
+        try FileManager.default.createDirectory(at: CatalogViewerSnapshot.directory(in: scene.folder), withIntermediateDirectories: true)
+        let sealed = repository.sealedCopyBlocking(to: CatalogViewerSnapshot.databaseURL(in: scene.folder))
+        await repository.close()
+        #expect(sealed == nil)
+        try Data("switched\n".utf8).write(to: CatalogViewerSnapshot.latchURL(in: scene.folder))
+        let before = Self.jsonSide(scene.folder)
+
+        scene.model.applyReadOnlyMode(true)
+        #expect(scene.model.loadCatalogAtLaunch().isEmpty, "the launch opens no catalog; CatalogSync shows the snapshot")
+        #expect(scene.model.isReadOnly)
+        let log = scene.sandbox.catalogLogText()
+        #expect(!log.contains("No catalog —"), Comment(rawValue: log))
+        #expect(!log.contains("nothing synced"), Comment(rawValue: log))
+        #expect(Self.jsonSide(scene.folder) == before, "catalog.json not opened")
+
+        let source = CatalogViewerSnapshot.source(in: scene.folder)
+        #expect(source == .snapshot(CatalogViewerSnapshot.databaseURL(in: scene.folder)))
+        var shown: [VideoRecord] = []
+        let status = await CatalogViewerSnapshot.show(source, note: { _ in }, adopt: { shown = $0.records })
+        #expect(shown.count == master.records.count)
+        guard case .snapshot = status else { Issue.record("expected the snapshot shown, got \(status)"); return }
     }
 
     @Test("GH #354: a sandbox WITH the latch launches on catalog.sqlite")
