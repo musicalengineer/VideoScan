@@ -30162,6 +30162,19 @@
         "theSQLiteLaunchNeedsNoCatalogJSON",
         "theSQLiteLaunchTouchesNoJSONFile"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QASlice2RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QASlice2RedTests"
+      ],
+      "tests": [
+        "auditGenerationUnderSQLiteIsTheDatabases",
+        "refusedLaunchWritesNoJSONSideFile",
+        "viewerWithOwnLatchAndNoDatabaseNeverReadsJSON"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32718,7 +32731,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2831,
+      "expected_floor": 2834,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [
@@ -33194,7 +33207,8 @@
         "VideoScanTests/CatalogQuitRecoveryTests",
         "VideoScanTests/CatalogQuitRecoverySensorTests",
         "VideoScanTests/CatalogJSONReadSensorTests",
-        "VideoScanTests/CatalogSQLiteLaunchNoJSONTests"
+        "VideoScanTests/CatalogSQLiteLaunchNoJSONTests",
+        "VideoScanTests/QASlice2RedTests"
       ]
     },
     {
