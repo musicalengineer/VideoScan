@@ -50,11 +50,18 @@ struct GedcomCompiledTreeCharacterizationTests {
         return graph
     }
 
-    @Test("codec 7 preserves its exact pre-refactor byte representation")
+    @Test("codec 8 keeps codec 7's exact pre-refactor byte representation")
     func frozenEncoding() throws {
         let graph = fixture()
         let bytes = GedcomCompiledTree.encode(graph)
-        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        // Codec 8 (2026-10-21) changed NAME parsing, not the layout: the
+        // header's codec word (bytes 4..<8, outside the payload checksum)
+        // is the only byte that differs. Patch it back to 7 and the frozen
+        // codec-7 digest must still match byte for byte.
+        #expect(Array(bytes[4..<8]) == [8, 0, 0, 0])
+        var asCodec7 = bytes
+        asCodec7.replaceSubrange(4..<8, with: [7, 0, 0, 0])
+        let digest = SHA256.hash(data: asCodec7).map { String(format: "%02x", $0) }.joined()
         // Like EXPECT_EQ in C++: a fixed external expectation, not another
         // call to the encoder under test. Changing this requires format review.
         #expect(digest == "ef42bb54d156f51f6f89021114f2bc56f93b2e177b1d3414f0d5180bb779e1b8")
