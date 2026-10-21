@@ -91,7 +91,7 @@ enum CatalogAuthority: Equatable, Sendable {
         }
         await repository.close()
         guard finished > 0 else {
-            return .refused("\(databaseFileName) holds no finished import checked by the comparator — run Import to SQLite again")
+            return .refused("\(databaseFileName) holds no finished import checked by the comparator")
         }
         return .sqlite(db)
     }
