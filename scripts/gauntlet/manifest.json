@@ -7109,7 +7109,6 @@
       "tests": [
         "testAcquireIsReentrantForSameInstance",
         "testAcquireSucceedsOnFreeLock",
-        "testAdoptOnDiskGenerationAfterReconcileUnblocksSaves",
         "testCatalogWithDuplicateRecordIDsStillLoads_keepingTheCurrentHome",
         "testChecksumOfA100kRecordSizedPayloadIsFast",
         "testErrorCodesAreStableAndDistinct",
@@ -32699,7 +32698,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2825,
+      "expected_floor": 2824,
       "name": "unit",
       "package_expected_floor": 401,
       "package_selectors": [

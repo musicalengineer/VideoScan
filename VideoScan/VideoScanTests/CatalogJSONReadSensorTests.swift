@@ -7,7 +7,7 @@
 // and no code path reads catalog.json into the live records of a session
 // whose authority is catalog.sqlite.
 //
-// What is still here, and why (see the slice 2 report, 2026-10-20):
+// What is still here, and why (see the slice 2 report, 2026-10-21):
 //   • CatalogAuthorityFlip — the launch rule. `.json` (no latch: a test host,
 //     a viewer's own folder, a Mac never switched), `.refused` (catalog.json
 //     READ-ONLY), and adoptSQLiteAuthority's `_ = catalogStore.load()`,
@@ -15,8 +15,12 @@
 //     whose Master Archive designation is kept when catalog_state holds
 //     none — a FINDING, reported to the Manager, not changed here.
 //   • CatalogStore — the JSON store itself (its own load and decoder).
-//   • VerifyCatalogJob — Verify's JSON source, used only when the audited
-//     catalog is catalog.json.
+//   • Person Finder's catalog prefilter (PersonFinderCatalogFilter, via
+//     CatalogStore.readRecordsWithoutAdopting) — reads catalog.json at every
+//     job start, also under catalog.sqlite, where that file is frozen and
+//     stale: a FINDING (2026-10-21), routed to bug-fix, not changed here.
+//   • VideoScanModel+VolumeRenameUndo.loadSafetyCopy — a pre-cutover
+//     `catalog.pre-volume-rename.*.json` safety copy (never catalog.json).
 //   • BundleImporter — reading a legacy (pre-SQLite) backup bundle; under
 //     catalog.sqlite the import is refused before any merge
 //     (bundleImportDecision).
@@ -36,7 +40,9 @@ struct CatalogJSONReadSensorTests {
     /// pattern → file (relative to VideoScan/VideoScan) → count.
     static let readers: [String: [String: Int]] = [
         #"catalogStore\.load\(\)"#: ["Catalog/CatalogAuthorityFlip.swift": 4],
-        #"decodeCatalogFile\("#: ["Catalog/CatalogStore.swift": 2, "Integrity/VerifyCatalogJob.swift": 1],
+        // Verify's audited-file source (Import to SQLite's phase 2) read
+        // catalog.json with no caller left; retired 2026-10-21.
+        #"decodeCatalogFile\("#: ["Catalog/CatalogStore.swift": 2],
         #"CatalogSnapshot(\.self|\s*=\s*try\b)"#: ["Catalog/CatalogStore.swift": 1,
                                                     "App/BundleImporter.swift": 1,
                                                     "Catalog/VideoScanModel+CatalogImportExport.swift": 1],
@@ -44,6 +50,11 @@ struct CatalogJSONReadSensorTests {
         // into the records) must not come back.
         #"startLiveDossierReload|pollAndMergeDossierFromDisk|mergeDossierFields"#: [:],
         #"CatalogStore\.shared\.load\(\)"#: [:],
+        #"readRecordsWithoutAdopting\(\)"#: ["Catalog/CatalogStore.swift": 1, "People/PersonFinderCatalogFilter.swift": 2],
+        #"loadRecords\(fromSnapshotAtPath"#: ["Catalog/CatalogStore.swift": 3, "Volumes/VideoScanModel+VolumeRenameUndo.swift": 1],
+        // The live reload's generation adopt (it read catalog.json's header
+        // after a merge) left with it; retired 2026-10-21.
+        #"adoptOnDiskGenerationAfterReconcile|auditedFileRows|verifyCatalogSnapshot\(auditedGeneration"#: [:],
     ]
 
     private static func count(_ pattern: String, in code: String) throws -> Int {
