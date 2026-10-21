@@ -29168,6 +29168,99 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/LaunchPreflightTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests"
+      ],
+      "tests": [
+        "aGapIsNeverOKForAnyCheck",
+        "batteryIsANote",
+        "defaultsAreRicksNumbers",
+        "diskAt90PercentWarnsAndJustUnderIsOK",
+        "diskAt95PercentIsRedAndJustUnderWarns",
+        "emptyMachineEverythingMissingStillReportsEveryCheck",
+        "everyCheckThatGetsNilSaysCouldntCheck",
+        "everyCheckThatThrowsSaysCouldntCheckAndIsNotGreen",
+        "fastOnlyRunLeavesQuickCheckOut",
+        "healthyMacIsAllSetWithNoBanner",
+        "journalOver256MBWarns",
+        "masterArchiveOfflineIsOnlyANote",
+        "memoryUnder16GBWarns",
+        "missingCatalogFileIsRed",
+        "missingCutoverMarkerIsRed",
+        "missingFFprobeWarnsAndNamesIt",
+        "missingTempVolumeIsCheckedSeparatelyAndNotGreen",
+        "notesAloneShowNoBanner",
+        "quickCheckOutcomes",
+        "realProbeFastPhaseFitsIn200ms",
+        "redDiskSummaryIsRicksSentence",
+        "redFloorIsThreeTimesCatalogPlusJournal",
+        "redFloorNeverOverflows",
+        "schemaVersionEqualOKNewerRedOlderWarn",
+        "swapOver4GBIsANote",
+        "tempDiskOnAnotherVolumeIsCheckedByTheSameRule",
+        "thermalSeriousOrCriticalWarns",
+        "thousandFakeRunsFitInOneSecond",
+        "under20GBFreeIsRedEvenBelow95Percent",
+        "under50GBFreeWarnsOnASmallDisk",
+        "unwritableLogFolderWarns",
+        "usedFractionOfAZeroSizedVolumeReadsFull",
+        "worstLevelWinsAndSummaryCountsTheRest"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PreflightGateTests"
+      ],
+      "tests": [
+        "backupAndPublishNeedOneCatalog",
+        "eachRealProbeQuestionIsCheap",
+        "editFloorNeverUnder1GB",
+        "editFloorPlusMinusOneByte",
+        "exactly90PercentWarnsOneByteLessUsedIsOK",
+        "exactly95PercentIsRedOneByteLessUsedWarns",
+        "heldEditSaysHowMuchToFreeRoundedUp",
+        "hugeWALClampsInsteadOfOverflowing",
+        "launchReportBelowEditFloorSaysEditsAreHeld",
+        "launchReportHugeWALIsWarnAndHoldsEdits",
+        "longJobMustFitAndLeaveTheRedFloorBehind",
+        "negativeJobEstimateCountsAsZero",
+        "negativeOrOverfullReadingsNeverCrash",
+        "otherDestinationNeedsNoCatalogReserve",
+        "redCatalogFloorPlusMinusOneByte",
+        "redDiskRefusesLongOperationsButNotEdits",
+        "redFloor20GBPlusMinusOneByte",
+        "unreadableDiskNeverHoldsEditsButRefusesLongOperations",
+        "warnFreeLine50GBPlusMinusOneByte",
+        "zeroByteVolumeIsRedAndHoldsEdits"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "damagedFileIsNeverAPass",
+        "expectedVersionIsTheStoresCurrentVersion",
+        "measureOnACatalogCopy",
+        "missingFileThrows",
+        "noCatalogStateTableIsNil",
+        "quickCheckIsInterruptedAtItsBudget",
+        "quickCheckLeavesTheFileUnchanged",
+        "quickCheckPassesOnAHealthyFile",
+        "readsTheSchemaVersion",
+        "theRealProbeRunsQuickCheckThroughThisReader"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
       "stage": "regression",
       "suites": [
@@ -32436,7 +32529,7 @@
       ],
       "expected_floor": 2817,
       "name": "unit",
-      "package_expected_floor": 311,
+      "package_expected_floor": 374,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -32465,6 +32558,9 @@
         "VideoScanCoreTests.DisplayValueDerivationTests",
         "VideoScanCoreTests.CatalogChangeDetectorTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
+        "VideoScanCoreTests.LaunchPreflightTests",
+        "VideoScanCoreTests.PreflightGateTests",
+        "VideoScanCoreTests.CatalogPreflightReaderTests",
         "VideoScanCoreTests.CatalogRealityTests"
       ],
       "selectors": [
