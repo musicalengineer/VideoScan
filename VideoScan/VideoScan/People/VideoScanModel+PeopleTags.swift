@@ -17,6 +17,14 @@ import Foundation
 
 extension VideoScanModel {
 
+    /// The Person Finder prefilter's source: the live in-memory catalog
+    /// (`records` — loaded from catalog.sqlite under the SQLite authority).
+    /// One O(records) field copy; no file I/O, no decode. Lives here, not in
+    /// PersonFinderCatalogFilter.swift, so the #337 extension ceiling holds.
+    func personScanSkipFacts() -> [PFSkipFacts] {
+        pfSkipFacts(from: records)
+    }
+
     /// Set `name`'s presence across `recs` — context-menu toggle
     /// semantics: mixed selections apply to ALL. Case-insensitive
     /// matching so a menu "Dan" toggles a free-text "dan" rather than

@@ -92,15 +92,6 @@ nonisolated func pfSkipFacts(from records: [VideoRecord]) -> [PFSkipFacts] {
     return out
 }
 
-extension VideoScanModel {
-    /// The Person Finder prefilter's source: the live in-memory catalog
-    /// (`records` — loaded from catalog.sqlite under the SQLite authority).
-    /// One O(records) field copy; no file I/O, no decode.
-    func personScanSkipFacts() -> [PFSkipFacts] {
-        pfSkipFacts(from: records)
-    }
-}
-
 // MARK: - Person scan prefilter (issue #66)
 //
 // Extends the basic catalog-skip set with four more rules grounded in
