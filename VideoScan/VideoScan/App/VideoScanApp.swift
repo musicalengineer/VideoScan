@@ -699,7 +699,9 @@ struct VideoScanApp: App {
                             // Phase 2 (2026-10-19): keep the sealed
                             // catalog.sqlite the viewers read current —
                             // commit first, VACUUM INTO, publish, manifest.
-                            catalogSync.startSnapshotPublishing(catalogModel.viewerSnapshotSource())
+                            // Held while an MFO job writes (GH #350).
+                            catalogSync.startSnapshotPublishing(catalogModel.viewerSnapshotSource(
+                                catalogWriterTitle: { [weak center] in center?.runningCatalogWriterTitle }))
                         } else {
                             // Phase 2: the viewer shows the master's
                             // catalog.sqlite read-only (or the frozen

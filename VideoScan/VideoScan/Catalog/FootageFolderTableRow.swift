@@ -79,6 +79,13 @@ struct FootageFolderTableRow: Identifiable {
     var people: String { keys.people }
 }
 
+// Deliberately NOT Equatable (GH #350, QA r1): an equal row VALUE could let
+// SwiftUI decide a row's cells need no re-run when the paint clock moves,
+// and an in-place record edit would then never repaint. "Would the Table
+// draw the same rows?" is the named question
+// `FootageFolderTableRows.drawsTheSame(_:_:)` (FootageFolderTableGate.swift),
+// asked only by the row publish and the paint gate.
+
 // MARK: - Row ids ⇄ records (a file shown under two folders, 2026-10-19)
 
 /// A folder-table row id → the record it shows and the folder it is shown

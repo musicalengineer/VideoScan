@@ -11,6 +11,14 @@
 // refreshed after every save; with a whole-database seal that would hold
 // the store's writer for a full copy on every 2 s commit.)
 //
+// Not while a job or a scan writes to the catalog (GH #350, `Source.busy`):
+// its commits move the generation on every tick, so the whole copy was
+// sealed and integrity-checked again every interval for the length of the
+// run. The tick is skipped (said once, same sink), looked at again every
+// `busyRecheck`, and the copy is published once on the first tick after
+// the writer ends. What a publish contains and how it is validated are
+// unchanged. Viewers lag a running job by its length — Rick's call.
+//
 // Each publish:
 //   1. commits what is in memory FIRST (`CatalogCommitter
 //      .commitBeforeSafetyCopy`, main actor) — so the snapshot holds what
@@ -51,6 +59,13 @@ final class CatalogSnapshotPublisher {
         let store: () -> Store?
         /// The master's `catalog.cutover`, beside its catalog.sqlite.
         let latchURL: URL
+        /// Who is writing to the catalog right now, in words ("Fill In
+        /// Full Hashes is running"); nil = nobody (GH #350). While someone
+        /// is, a tick seals nothing — the generation moves on every commit,
+        /// so each tick would `VACUUM INTO` and integrity-check the whole
+        /// copy again (and commit first on the main actor) for the whole
+        /// run. The copy is published once the writer is done.
+        var busy: () -> String? = { nil }
     }
 
     enum Outcome: Equatable {
@@ -62,6 +77,10 @@ final class CatalogSnapshotPublisher {
 
     static let interval: Duration = .seconds(120)
     static let firstDelay: Duration = .seconds(15)
+    /// While a writer holds the publish back, look again this often, so the
+    /// viewers get the job's result soon after it ends (not up to `interval`
+    /// later). A look is one closure call — nothing is opened or sealed.
+    static let busyRecheck: Duration = .seconds(15)
 
     private let liveDir: URL
     private let source: Source
@@ -72,6 +91,8 @@ final class CatalogSnapshotPublisher {
     private var lastSkipWords: String?
     private(set) var lastPublishedGeneration: Int?
     private(set) var lastOutcome: Outcome?
+    /// The last tick was held back for a writer (`Source.busy`).
+    private(set) var isHeldForWriter = false
 
     init(liveDir: URL, source: Source, log: @escaping (String) -> Void, onPublished: @escaping () -> Void) {
         self.liveDir = liveDir
@@ -82,13 +103,15 @@ final class CatalogSnapshotPublisher {
 
     /// Start the periodic publish. Idempotent.
     func start(firstDelay: Duration = CatalogSnapshotPublisher.firstDelay,
-               interval: Duration = CatalogSnapshotPublisher.interval) {
+               interval: Duration = CatalogSnapshotPublisher.interval,
+               busyRecheck: Duration = CatalogSnapshotPublisher.busyRecheck) {
         guard loop == nil else { return }
         loop = Task { [weak self] in
             try? await Task.sleep(for: firstDelay)
             while !Task.isCancelled {
                 await self?.publishIfChanged()
-                try? await Task.sleep(for: interval)
+                let held = self?.isHeldForWriter ?? false
+                try? await Task.sleep(for: held ? min(busyRecheck, interval) : interval)
             }
         }
     }
@@ -105,6 +128,15 @@ final class CatalogSnapshotPublisher {
         guard !publishing else { return .skipped("a publish is already running") }
         guard let store = source.store() else {
             return skip("catalog.json is this Mac's catalog — there is no catalog.sqlite to publish for viewers")
+        }
+        // Before commit-first: nothing touches the store while a writer runs.
+        if let writer = source.busy() {
+            isHeldForWriter = true
+            return skip("\(writer) and writing to the catalog — the viewer copy is published once it ends")
+        }
+        if isHeldForWriter {
+            isHeldForWriter = false
+            lastSkipWords = nil   // the next hold says why again
         }
         if let why = store.commitFirst() {
             return skip("what is in memory could not be committed first: \(why)")

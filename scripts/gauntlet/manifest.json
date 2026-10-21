@@ -8102,6 +8102,8 @@
         "publishSealsAVerifiableSnapshot",
         "publishWithoutLatchRefuses",
         "publisherCommitsFirstAndThrottlesOnGeneration",
+        "publisherLoopRechecksSoonWhileHeld",
+        "publisherWaitsForARunningJobThenPublishesOnce",
         "sealedOpenRefusesAWALDatabase",
         "unchangedSnapshotIsNotReloaded",
         "viewerOpenNeverModifiesTheSnapshot"
@@ -13097,6 +13099,38 @@
         "theTopComposesEveryFolderOpenAndTheTriangleIsViewState",
         "theWordsReadLikeTheFinder",
         "topLevelListsFoldersByDateThenNameThenTheLooseFiles"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FootageFolderTableGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FootageFolderTableGateTests"
+      ],
+      "tests": [
+        "aFolderMembershipChangeIsANewRow",
+        "aJobEndingBringsTheQuietPaceBack",
+        "aMouseMoveIsNotAnEdit",
+        "aRecordReplacedByAFreshObjectWithTheSameIDIsANewRow",
+        "aRequestBeforeTheLastPaintPaintsAtOnce",
+        "aVisibleSortFactChangeIsANewRow",
+        "anEditIsRecentForOneSecondAfterTheLastClickOrKey",
+        "everyFolderColumnClosureCallsACatalogContentMethod",
+        "everyJobKindIsClassifiedExactlyOnce",
+        "everyPaintInputMovesThePaintValue",
+        "onlyDiscreteActionsCountAsEdits",
+        "quietCatalogPaintsAtOnceThenCoalescesInsideAQuarterSecond",
+        "ricksOwnEditPaintsAtOnceWhileAJobWrites",
+        "rowsRebuiltFromTheSameCatalogAreEqualAndNotRepublished",
+        "tenThousandRecordsAndFiftyDigestOnlyChangesRepublishNothing",
+        "theClocksTrailingPaintLands",
+        "theFolderTableIsDrawnBehindThePaintGate",
+        "theHostComparesOnlyItsPaintValue",
+        "theRowTypeIsNotEquatable",
+        "theWritersAndTheClockAreWiredWhereTheyAreRead",
+        "whileAJobWritesAtMostOnePaintPerTenSeconds",
+        "writerWords"
       ]
     },
     {
@@ -18616,6 +18650,7 @@
         "MediaFileOperationFinishedAtTests"
       ],
       "tests": [
+        "aPausedJobIsNotACatalogWriter",
         "activeStates",
         "adaptiveButtonFlagsFlipAcrossPauseAll",
         "allPinsEveryKindInDeclarationOrder",
@@ -32445,7 +32480,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2831,
+      "expected_floor": 2854,
       "name": "unit",
       "package_expected_floor": 311,
       "package_selectors": [
@@ -32914,7 +32949,8 @@
         "VideoScanTests/CatalogRealityBuilderTests",
         "VideoScanTests/MissingCopyCountTests",
         "VideoScanTests/CatalogRealityStateTests",
-        "VideoScanTests/QAValidateCatalogRedTests"
+        "VideoScanTests/QAValidateCatalogRedTests",
+        "VideoScanTests/FootageFolderTableGateTests"
       ]
     },
     {
@@ -33212,7 +33248,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 231,
+      "expected_floor": 233,
       "name": "regression",
       "package_expected_floor": 190,
       "package_selectors": [

@@ -35,7 +35,10 @@ extension VideoScanModel {
 
     /// What the master's snapshot publisher borrows, read on every tick:
     /// nil while catalog.json is the authority (no committer installed).
-    func viewerSnapshotSource() -> CatalogSnapshotPublisher.Source {
+    /// `catalogWriterTitle`: the MFO center's first live, unpaused
+    /// catalog-writing job (GH #350, MediaOps/CatalogWriterJobs.swift) —
+    /// with a scan, the writers the publisher waits for (CatalogWriteActivity).
+    func viewerSnapshotSource(catalogWriterTitle: @escaping () -> String? = { nil }) -> CatalogSnapshotPublisher.Source {
         let folder = URL(fileURLWithPath: catalogStore.fileLocation).deletingLastPathComponent()
         return CatalogSnapshotPublisher.Source(
             store: { [weak self] in
@@ -43,6 +46,9 @@ extension VideoScanModel {
                 return CatalogSnapshotPublisher.Store(repository: committer.repository,
                                                       commitFirst: { committer.commitBeforeSafetyCopy() })
             },
-            latchURL: folder.appendingPathComponent(CatalogAuthority.latchFileName))
+            latchURL: folder.appendingPathComponent(CatalogAuthority.latchFileName),
+            busy: { [weak self] in
+                CatalogWriteActivity.words(catalogWriterTitle: catalogWriterTitle(), scanning: self?.isScanning ?? false)
+            })
     }
 }

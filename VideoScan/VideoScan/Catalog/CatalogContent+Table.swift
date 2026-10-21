@@ -132,7 +132,7 @@ extension CatalogContent {
     /// the folder rows observe), and a derivative landing in the catalog.
     /// Its own stage, same reason as the others (GH #132).
     private var tableWithFolderTriggers: some View {
-        tableWithFilterTriggers
+        tableWithFolderPaintTriggers
             .onChange(of: showFootageFolders, initial: true) { footageFoldersOptionChanged(on: showFootageFolders) }
             // Show ▸ Folders Only: same rows, a different compose.
             .onChange(of: showFoldersOnly) { foldersOnlyOptionChanged() }
@@ -164,6 +164,19 @@ extension CatalogContent {
     /// title search listens, see `tableWithFolderTriggers`.
     private var folderIndexPublisher: Published<FootageFolders.Index>.Publisher {
         model.footageFolders.$index
+    }
+
+    /// The folder Table's paint clock (GH #350, FootageFolderTableGate.swift):
+    /// any model publish may be an in-place record change its cells show —
+    /// the clock coalesces them (≤ 1 repaint per 0.25 s quiet or when Rick
+    /// just acted, ≤ 1 per 10 s for a writing job's churn); the MFO center's
+    /// progress ticks are not followed (no cell shows them). The clock's
+    /// revision is mirrored into the @State the paint value reads (why
+    /// not @StateObject: CatalogTableState.swift). Its own stage (GH #132).
+    private var tableWithFolderPaintTriggers: some View {
+        tableWithFilterTriggers
+            .onReceive(model.objectWillChange) { _ in requestFolderPaint() }
+            .onReceive(tableState.folderPaintClock.$revision) { tableState.folderPaintRevision = $0 }
     }
 
     /// Reveal toggles: disconnected media, kind facet, removed / set-aside /

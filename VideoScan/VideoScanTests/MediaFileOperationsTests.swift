@@ -103,6 +103,21 @@ struct MediaFileOperationsCenterTests {
         #expect(center.runningCount == 2)
     }
 
+    /// GH #350 QA r1: a paused Fill In Full Hashes writes nothing, so it
+    /// must not hold viewer publishing or keep the folder Table on its
+    /// 10 s gap; only live, unpaused catalog-writing jobs count.
+    @Test func aPausedJobIsNotACatalogWriter() {
+        let center = MediaFileOperationsCenter()
+        center.add(FakeOperationJob(kind: .fillFullHashes, title: "Fill In Full Hashes", canPause: true, isPaused: true))
+        #expect(center.runningCatalogWriterTitle == nil, "paused → not writing")
+        center.add(FakeOperationJob(kind: .compare, title: "Compare"))
+        #expect(center.runningCatalogWriterTitle == nil, "a running compare never writes the catalog")
+        center.add(FakeOperationJob(kind: .fillFullHashes, title: "Fill In Full Hashes", state: .finished(summary: "done")))
+        #expect(center.runningCatalogWriterTitle == nil, "a finished job writes nothing")
+        center.add(FakeOperationJob(kind: .fingerprintSound, title: "Sound Prints"))
+        #expect(center.runningCatalogWriterTitle == "Sound Prints")
+    }
+
     @Test func clearFinishedKeepsActiveJobs() {
         let center = MediaFileOperationsCenter()
         let running = FakeOperationJob(state: .running)
