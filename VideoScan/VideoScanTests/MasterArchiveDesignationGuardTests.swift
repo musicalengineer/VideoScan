@@ -350,8 +350,9 @@ struct CatalogSessionLoadSensor {
     /// path — since the cutover read side (B1, 2026-10-17) that is
     /// `VideoScanModel.loadCatalogAtLaunch()` in Catalog/CatalogAuthorityFlip.swift
     /// (the JSON branch, the refused-SQLite fallback and the frozen-designation
-    /// read; one doc-comment mention); a read-only query uses
-    /// `readRecordsWithoutAdopting()`.
+    /// read; one doc-comment mention). The Person Finder prefilter reads the
+    /// live in-memory records and never touches CatalogStore at all
+    /// (2026-10-21 — catalog.json is frozen under the SQLite authority).
     @Test("no app source other than the launch path (CatalogAuthorityFlip.swift) calls catalogStore.load() / CatalogStore.shared.load()")
     func singleSessionLoad() throws {
         let pattern = try NSRegularExpression(pattern: #"(CatalogStore\.shared|catalogStore)\.load\(\)"#)
@@ -365,10 +366,15 @@ struct CatalogSessionLoadSensor {
         #expect(hits == ["Catalog/CatalogAuthorityFlip.swift×5"], "session load() callers: \(hits)")
     }
 
-    @Test("the Person Finder skip set reads without adopting")
-    func personFinderUsesReadOnlyPath() throws {
+    @Test("the Person Finder skip set never touches the catalog store (reads the live records)")
+    func personFinderUsesLiveRecords() throws {
         let text = try SourceTree.appSource(named: "PersonFinderCatalogFilter.swift")
-        #expect(text.contains("readRecordsWithoutAdopting()"))
-        #expect(!text.contains(".load()"))
+        let code = text.split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        #expect(code.contains("pfSkipFacts(from: records)"))
+        #expect(!code.contains("CatalogStore"))
+        #expect(!code.contains("readRecordsWithoutAdopting"))
+        #expect(!code.contains(".load()"))
     }
 }

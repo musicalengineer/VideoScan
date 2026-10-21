@@ -1,12 +1,19 @@
 // MasterArchiveDesignationReloadTests.swift
 // GH #167 — the Master Archive designation silently vanished from
-// catalog.json. One live path that loses it in the current code: every
+// catalog.json. One live path that loses it in the old code: every
 // Person Finder job start called `CatalogStore.shared.load()` just to read
 // records for its skip set. `load()` is the SESSION load — it overwrites the
 // store's designation slot (what the next save serialises) and its OCC
 // baseline with whatever is on disk, and rotates catalog.json → .prev. A
 // designation set but not yet saved (Initialize inside the 2 s debounce) or
 // rehomed to a new mount was reverted or nulled by the next save.
+//
+// 2026-10-21: the Person Finder prefilter no longer reads any catalog file —
+// it snapshots the model's LIVE records (`VideoScanModel.personScanSkipFacts`
+// through `pfLiveCatalogSkipResult`). These tests drive that real path on a
+// model whose store is the scratch store and pin that the store's session is
+// untouched; the last one pins that the skip set follows the live records,
+// not the file.
 //
 // Isolation: every test pins its own CatalogStore(directory:) in a scratch
 // directory. Nothing here touches App Support, the shared store or /Volumes
@@ -41,8 +48,21 @@ struct MasterArchiveDesignationReloadTests {
         return r
     }
 
+    /// The Person Finder job-start prefilter, exactly as a job runs it, on a
+    /// model whose catalog store is `store`.
+    @discardableResult
+    private func personFinderRead(store: CatalogStore, dir: URL,
+                                  records: [VideoRecord] = [],
+                                  target: String? = "Test Person") async -> CatalogSkipResult? {
+        let model = VideoScanModel(logDirectory: dir.appendingPathComponent("logs", isDirectory: true))
+        model.catalogStore = store
+        model.records = records
+        return await pfLiveCatalogSkipResult(targetPersonName: target,
+                                             source: { model.personScanSkipFacts() })
+    }
+
     @Test("a designation set but not yet saved survives a Person Finder job start and reaches disk")
-    func unsavedDesignationSurvives() throws {
+    func unsavedDesignationSurvives() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = CatalogStore(directory: dir)
@@ -51,7 +71,7 @@ struct MasterArchiveDesignationReloadTests {
 
         let d = designation("TestArchiveVol")
         store.masterArchive = d                      // what the model's didSet mirror does on Initialize
-        _ = pfPersonScanSkipResult(targetPersonName: "Test Person", store: store)
+        await personFinderRead(store: store, dir: dir)
         #expect(store.masterArchive == d, "the skip-set read must not touch the designation slot")
 
         #expect(store.saveNow(records: []))
@@ -61,7 +81,7 @@ struct MasterArchiveDesignationReloadTests {
     }
 
     @Test("a rehomed designation is not reverted to the stale on-disk mount path")
-    func rehomedDesignationNotReverted() throws {
+    func rehomedDesignationNotReverted() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = CatalogStore(directory: dir)
@@ -72,7 +92,7 @@ struct MasterArchiveDesignationReloadTests {
 
         let rehomed = old.rehomed(to: "/Volumes/NewMountName")
         store.masterArchive = rehomed                // reresolveMasterArchiveMount
-        _ = pfCatalogSkipSet(store: store)
+        await personFinderRead(store: store, dir: dir)
         #expect(store.masterArchive == rehomed)
         #expect(store.saveNow(records: []))
         let reread = CatalogStore(directory: dir)
@@ -81,7 +101,7 @@ struct MasterArchiveDesignationReloadTests {
     }
 
     @Test("a Person Finder read does not adopt a foreign writer's generation (OCC stays armed)")
-    func foreignGenerationNotAdopted() throws {
+    func foreignGenerationNotAdopted() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let app = CatalogStore(directory: dir)
@@ -93,7 +113,7 @@ struct MasterArchiveDesignationReloadTests {
         _ = foreign.load()
         #expect(foreign.saveNow(records: [audioOnlyRecord("/Volumes/TestVol/foreign-work.wav")]))
 
-        _ = pfPersonScanSkipResult(targetPersonName: nil, store: app)
+        await personFinderRead(store: app, dir: dir, target: nil)
         // Our in-memory copy never merged the foreign write: saving it must
         // still be refused as stale, not silently clobber the foreign work.
         #expect(app.saveNow(records: []) == false)
@@ -103,7 +123,7 @@ struct MasterArchiveDesignationReloadTests {
     }
 
     @Test("a Person Finder read does not rotate catalog.json over catalog.json.prev")
-    func prevNotRotated() throws {
+    func prevNotRotated() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = CatalogStore(directory: dir)
@@ -112,19 +132,19 @@ struct MasterArchiveDesignationReloadTests {
         #expect(store.saveNow(records: []))           // primary = generation 2
         let prevURL = URL(fileURLWithPath: store.backupLocation)
         let before = CatalogSnapshot.headerProbe(at: prevURL)?.generation
-        _ = pfCatalogSkipSet(store: store)
+        await personFinderRead(store: store, dir: dir)
         #expect(CatalogSnapshot.headerProbe(at: prevURL)?.generation == before,
                 "the one-generation-back backup was overwritten by a read")
     }
 
-    @Test("the skip set still reflects the records on disk (behaviour preserved)")
-    func skipSetReadsDisk() throws {
+    @Test("the skip set follows the LIVE records, not the records on disk")
+    func skipSetFollowsLiveRecords() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = CatalogStore(directory: dir)
-        #expect(store.saveNow(records: [audioOnlyRecord("/Volumes/TestVol/a.wav")]))
-        #expect(pfCatalogSkipSet(store: store) == ["/Volumes/TestVol/a.wav"])
-        #expect(pfPersonScanSkipResult(targetPersonName: nil, store: store).unscannable
-                == ["/Volumes/TestVol/a.wav"])
+        #expect(store.saveNow(records: [audioOnlyRecord("/Volumes/TestVol/on_disk_only.wav")]))
+        let live = audioOnlyRecord("/Volumes/TestVol/live_only.wav")
+        let result = try #require(await personFinderRead(store: store, dir: dir, records: [live], target: nil))
+        #expect(result.unscannable == ["/Volumes/TestVol/live_only.wav"])
     }
 }

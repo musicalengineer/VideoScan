@@ -193,6 +193,15 @@ struct ContentView: View {
                 )
             }
 
+            // The Person Finder catalog prefilter reads the LIVE records
+            // (catalog.sqlite-loaded), never the frozen catalog.json.
+            // Weak capture of a local (not of `model` straight from the
+            // enclosing closure) so the capture ownership is unambiguous.
+            let catalogModel = model
+            personFinderModel.catalogSkipFactsSource = { [weak catalogModel] in
+                catalogModel?.personScanSkipFacts() ?? []
+            }
+
             // Bridge the catalog's dossier evidence (inferred record date +
             // VLM scene captions) into PersonFinder's identity-narrowing
             // pass. Batch shape: one O(records) walk per annotate call,
