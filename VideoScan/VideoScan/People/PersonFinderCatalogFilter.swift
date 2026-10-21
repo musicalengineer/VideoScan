@@ -2,42 +2,103 @@
 // Catalog skip-set, person-scan prefilter, video discovery, and small
 // formatting/sanitization helpers extracted from PersonFinderModel.swift.
 //
-// Step 2 of 6 in the PersonFinderModel decomposition. Pure code movement
-// from PersonFinderModel.swift — no logic changes. These free functions
+// Step 2 of 6 in the PersonFinderModel decomposition. These free functions
 // are shared by both the catalog scan path and the person-finder pre-flight
 // path, which is why they sit at file scope (not on the model).
+//
+// 2026-10-21: the prefilter reads the LIVE catalog records (see "Live
+// catalog snapshot" below) and never touches a catalog file.
 
 import Foundation
 
 // MARK: - Catalog skip set
 
+/// The one "known unscannable" rule (audio-only, no streams, ffprobe
+/// failure), shared by the basic skip set (#23) and the prefilter (#66).
+nonisolated func pfIsUnscannable(_ streamType: StreamType) -> Bool {
+    switch streamType {
+    case .audioOnly, .noStreams, .ffprobeFailed: return true
+    case .videoAndAudio, .videoOnly: return false
+    }
+}
+
 /// Pure helper: from a list of records, return paths known to be unscannable
-/// (audio-only, no streams, ffprobe failures). Pulled out for unit testing —
-/// `pfCatalogSkipSet()` calls this with the records on disk.
+/// (audio-only, no streams, ffprobe failures).
 nonisolated func pfCatalogSkipPaths(from records: [VideoRecord]) -> Set<String> {
     var skip = Set<String>()
-    for rec in records {
-        switch rec.streamType {
-        case .audioOnly, .noStreams, .ffprobeFailed:
-            if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
-        case .videoAndAudio, .videoOnly:
-            break
-        }
+    for rec in records where !rec.fullPath.isEmpty && pfIsUnscannable(rec.streamType) {
+        skip.insert(rec.fullPath)
     }
     return skip
 }
 
-/// Build a set of full paths that should be skipped during person search because
-/// they are known from prior catalog scans to be unscannable (audio-only, no streams,
-/// ffprobe failures). Must be called on MainActor since CatalogStore is MainActor-isolated.
-///
-/// GH #167: reads with `readRecordsWithoutAdopting()`, NEVER `load()`. The
-/// session load resets the store's Master Archive slot, OCC generation and
-/// .prev backup — a Person Finder job start used to null an unsaved
-/// designation that way. `store:` is a test seam (default the shared store).
-@MainActor
-func pfCatalogSkipSet(store: CatalogStore = .shared) -> Set<String> {
-    pfCatalogSkipPaths(from: store.readRecordsWithoutAdopting())
+// MARK: - Live catalog snapshot
+//
+// Until 2026-10-21 the prefilter decoded catalog.json from disk at every job
+// start (`CatalogStore.readRecordsWithoutAdopting()`, inside MainActor.run —
+// an ~80 MB decode on the main thread). Since the 10/18 cutover catalog.sqlite
+// is the authority and catalog.json is frozen, so every skip decision was
+// made on pre-cutover data: files catalogued since were not skipped, files
+// removed since still were. The prefilter now reads the LIVE records the
+// catalog model holds — whichever authority loaded them.
+//
+// GH #167 still holds by construction: nothing here can load, adopt or
+// rotate the catalog session, because nothing here touches CatalogStore.
+
+/// The facts the prefilter reads from one record, copied out on the main
+/// actor. A value type (for Rick: a plain C++ struct copied by value; the
+/// String/Array members are copy-on-write, so a copy is a refcount bump,
+/// not a deep copy) so the snapshot can cross to a background task —
+/// `VideoRecord` is a mutable class owned by the main actor.
+nonisolated struct PFSkipFacts: Sendable, Equatable {
+    var fullPath: String
+    var isUnscannable: Bool
+    var detectedPeople: [String]
+    var suspectedPeople: [String]
+    var junkScore: Int
+    var durationSeconds: Double
+    var resolution: String
+
+    init(fullPath: String, isUnscannable: Bool = false,
+         detectedPeople: [String] = [], suspectedPeople: [String] = [],
+         junkScore: Int = 0, durationSeconds: Double = 0, resolution: String = "") {
+        self.fullPath = fullPath
+        self.isUnscannable = isUnscannable
+        self.detectedPeople = detectedPeople
+        self.suspectedPeople = suspectedPeople
+        self.junkScore = junkScore
+        self.durationSeconds = durationSeconds
+        self.resolution = resolution
+    }
+
+    init(_ rec: VideoRecord) {
+        self.init(fullPath: rec.fullPath,
+                  isUnscannable: pfIsUnscannable(rec.streamType),
+                  detectedPeople: rec.detectedPeople,
+                  suspectedPeople: rec.suspectedPeople,
+                  junkScore: rec.junkScore,
+                  durationSeconds: rec.durationSeconds,
+                  resolution: rec.resolution)
+    }
+}
+
+/// Snapshot the records' prefilter facts. Records with no path are dropped
+/// here (no rule could match them). Call where the records live (the main
+/// actor); hand the result to `pfPersonScanSkipPaths(fromFacts:)` off it.
+nonisolated func pfSkipFacts(from records: [VideoRecord]) -> [PFSkipFacts] {
+    var out: [PFSkipFacts] = []
+    out.reserveCapacity(records.count)
+    for rec in records where !rec.fullPath.isEmpty { out.append(PFSkipFacts(rec)) }
+    return out
+}
+
+extension VideoScanModel {
+    /// The Person Finder prefilter's source: the live in-memory catalog
+    /// (`records` — loaded from catalog.sqlite under the SQLite authority).
+    /// One O(records) field copy; no file I/O, no decode.
+    func personScanSkipFacts() -> [PFSkipFacts] {
+        pfSkipFacts(from: records)
+    }
 }
 
 // MARK: - Person scan prefilter (issue #66)
@@ -98,7 +159,7 @@ nonisolated func pfResolutionHeight(from resolution: String) -> Int? {
 /// Defaults match the conservative rules from issue #66 — increase
 /// thresholds to be more aggressive, set to nil to disable a rule.
 nonisolated func pfPersonScanSkipPaths(
-    from records: [VideoRecord],
+    fromFacts facts: [PFSkipFacts],
     targetPersonName: String?,
     minDurationSeconds: Double = 5.0,
     minResolutionHeight: Int = 480,
@@ -109,14 +170,11 @@ nonisolated func pfPersonScanSkipPaths(
         .trimmingCharacters(in: .whitespaces)
         .lowercased()
 
-    for rec in records where !rec.fullPath.isEmpty {
+    for rec in facts where !rec.fullPath.isEmpty {
         // Rule 1: unscannable (existing #23 behavior)
-        switch rec.streamType {
-        case .audioOnly, .noStreams, .ffprobeFailed:
+        if rec.isUnscannable {
             result.unscannable.insert(rec.fullPath)
             continue   // no other rule matters
-        case .videoAndAudio, .videoOnly:
-            break
         }
 
         // Rule 2: detectedPeople OR suspectedPeople already contains target
@@ -149,15 +207,52 @@ nonisolated func pfPersonScanSkipPaths(
     return result
 }
 
-/// MainActor wrapper that reads the catalog on disk and applies the full
-/// prefilter. Read-only — see `pfCatalogSkipSet` for why not `load()` (GH #167).
-@MainActor
-func pfPersonScanSkipResult(targetPersonName: String?,
-                            store: CatalogStore = .shared) -> CatalogSkipResult {
-    pfPersonScanSkipPaths(
-        from: store.readRecordsWithoutAdopting(),
-        targetPersonName: targetPersonName
-    )
+/// Record-array convenience over `pfPersonScanSkipPaths(fromFacts:)` —
+/// identical rules, for callers already holding the records.
+nonisolated func pfPersonScanSkipPaths(
+    from records: [VideoRecord],
+    targetPersonName: String?,
+    minDurationSeconds: Double = 5.0,
+    minResolutionHeight: Int = 480,
+    junkScoreCeiling: Int = 80
+) -> CatalogSkipResult {
+    pfPersonScanSkipPaths(fromFacts: pfSkipFacts(from: records),
+                          targetPersonName: targetPersonName,
+                          minDurationSeconds: minDurationSeconds,
+                          minResolutionHeight: minResolutionHeight,
+                          junkScoreCeiling: junkScoreCeiling)
+}
+
+/// The job-start prefilter: snapshot the live catalog on the main actor
+/// (`source` — the app wires `VideoScanModel.personScanSkipFacts`), then
+/// build the skip set on a detached background task. Returns nil when no
+/// catalog is connected (a bare PersonFinderModel, e.g. in a unit test), so
+/// the caller can say so rather than pretend the catalog knew nothing.
+nonisolated func pfLiveCatalogSkipResult(
+    targetPersonName: String?,
+    source: (@MainActor () -> [PFSkipFacts])?
+) async -> CatalogSkipResult? {
+    guard let source else { return nil }
+    let facts = await MainActor.run { source() }
+    return await Task.detached(priority: .userInitiated) {
+        pfPersonScanSkipPaths(fromFacts: facts, targetPersonName: targetPersonName)
+    }.value
+}
+
+/// A scan job's connection to the live catalog, captured at job start and
+/// carried into the nonisolated scan path. Wraps the optional snapshot
+/// closure (nil = no catalog connected) so the job path passes one value.
+nonisolated struct PFLiveCatalogSource: Sendable {
+    let snapshot: (@MainActor () -> [PFSkipFacts])?
+
+    init(_ snapshot: (@MainActor () -> [PFSkipFacts])?) {
+        self.snapshot = snapshot
+    }
+
+    /// See `pfLiveCatalogSkipResult` — nil when no catalog is connected.
+    func skipResult(targetPersonName: String?) async -> CatalogSkipResult? {
+        await pfLiveCatalogSkipResult(targetPersonName: targetPersonName, source: snapshot)
+    }
 }
 
 // MARK: - Video discovery

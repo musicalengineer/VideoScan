@@ -18340,7 +18340,7 @@
         "outOfOrderCompletion",
         "pendingFirstDesignationCannotBeLost",
         "pendingFirstDesignationThenClearLands",
-        "personFinderUsesReadOnlyPath",
+        "personFinderUsesLiveRecords",
         "reDesignateCancelsClear",
         "refusedOnEveryLivePath",
         "refusedWithoutClear",
@@ -18360,7 +18360,7 @@
         "foreignGenerationNotAdopted",
         "prevNotRotated",
         "rehomedDesignationNotReverted",
-        "skipSetReadsDisk",
+        "skipSetFollowsLiveRecords",
         "unsavedDesignationSurvives"
       ]
     },
@@ -20638,6 +20638,26 @@
         "thresholdForEngineSelectsPerEngineKnob",
         "togglePauseLogsHintFromIdleState",
         "togglePauseSwitchesScanningAndPaused"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonFinderLiveCatalogPrefilterTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PersonFinderLiveCatalogPrefilterScaleTests",
+        "PersonFinderLiveCatalogPrefilterSensor",
+        "PersonFinderLiveCatalogPrefilterTests"
+      ],
+      "tests": [
+        "hundredThousand",
+        "liveOnlyRecordDrivesSkipSet",
+        "noSourceIsNil",
+        "poisonedJSONHasNoEffect",
+        "removedRecordNotSkipped",
+        "snapshotFaithful",
+        "wiring"
       ]
     },
     {
@@ -33058,6 +33078,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/NotificationStormSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PersonFinderLiveCatalogPrefilterTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

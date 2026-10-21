@@ -654,6 +654,8 @@ extension PersonFinderModel {
         let onAnnotate: @MainActor (ScanJob) -> Void = { [weak self] finishedJob in
             self?.annotateIdentityPlausibility(for: finishedJob)
         }
+        // The live-catalog prefilter source, same capture pattern.
+        let liveCatalog = PFLiveCatalogSource(self.catalogSkipFactsSource)
         job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
             await MainActor.run {
@@ -666,7 +668,7 @@ extension PersonFinderModel {
                 default:       dash?.activeEngineLabel = "Vision / ANE"
                 }
             }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, onComplete: onComplete, onAnnotate: onAnnotate)
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, liveCatalog: liveCatalog, onComplete: onComplete, onAnnotate: onAnnotate)
             await MainActor.run {
                 dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
                 // Clear scanningPersonName when no jobs are still scanning
@@ -1171,7 +1173,8 @@ extension PersonFinderModel {
     /// .failed on the job) if nothing is scannable; the caller should bail out.
     private nonisolated static func discoverVideos(
         job: ScanJob,
-        settings: PersonFinderSettings
+        settings: PersonFinderSettings,
+        liveCatalog: PFLiveCatalogSource
     ) async -> [String]? {
         let path = await job.searchPath
         let skipBundles = settings.skipBundles
@@ -1191,12 +1194,16 @@ extension PersonFinderModel {
         // to avoid expensive Vision/ArcFace work on files we already know
         // about. Categories: unscannable (audio-only/broken), already-known
         // (target in detectedPeople from prior scan), junk-scored, too-short,
-        // low-resolution.
+        // low-resolution. Reads the LIVE catalog records (snapshot on the
+        // main actor, skip set built off it) — never catalog.json, frozen
+        // since the 10/18 SQLite cutover.
         if settings.skipCatalogBadFiles {
             let targetName = await MainActor.run { job.personLabel }
-            let skipResult = await MainActor.run {
-                pfPersonScanSkipResult(targetPersonName: targetName)
+            let liveResult = await liveCatalog.skipResult(targetPersonName: targetName)
+            if liveResult == nil {
+                await job.appendLog("Catalog prefilter: no catalog connected — nothing skipped")
             }
+            let skipResult = liveResult ?? CatalogSkipResult()
             let allSkip = skipResult.all
             if !allSkip.isEmpty {
                 let before = videoFiles.count
@@ -1244,6 +1251,7 @@ extension PersonFinderModel {
         settings: PersonFinderSettings,
         refFilenames: [String],
         dashboard: DashboardState?,
+        liveCatalog: PFLiveCatalogSource,
         onComplete: (
             @MainActor (
                 _ identity: PersonTagIdentity,
@@ -1265,7 +1273,8 @@ extension PersonFinderModel {
         await job.appendLog("  engine=\(settings.recognitionEngine.rawValue) threshold=\(scanThreshold) floor=\(scanFloor) refs=\(refFilenames.count) refHash=\(scanRefHash)")
         PersonFinderCache.shared.resetStats()
 
-        guard let videoFiles = await discoverVideos(job: job, settings: settings) else { return }
+        guard let videoFiles = await discoverVideos(job: job, settings: settings,
+                                                    liveCatalog: liveCatalog) else { return }
 
         if Task.isCancelled {
             osLog.info("Job cancelled before scan: \(path, privacy: .public)")

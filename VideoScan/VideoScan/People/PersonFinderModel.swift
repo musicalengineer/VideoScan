@@ -394,6 +394,14 @@ final class PersonFinderModel: ObservableObject {
         ) -> Void
     )?
 
+    /// The catalog prefilter's source (issue #66): a snapshot of the LIVE
+    /// catalog records' skip facts. Wired in ContentView.onAppear to
+    /// `VideoScanModel.personScanSkipFacts`. Closure form for the same
+    /// decoupling reason as `onScanComplete`. nil = no catalog connected,
+    /// and the job says so; it never falls back to reading catalog.json
+    /// (frozen since the 10/18 SQLite cutover).
+    var catalogSkipFactsSource: (@MainActor () -> [PFSkipFacts])?
+
     /// Batch evidence lookup for identity narrowing: given the set of
     /// matched video paths, return each path's inferred record date +
     /// VLM scene captions from the catalog. Closure form for the same
