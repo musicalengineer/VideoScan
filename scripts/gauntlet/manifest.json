@@ -30153,7 +30153,8 @@
       "tests": [
         "theLiveReloadIsGone",
         "theReadersAreReviewed",
-        "theSQLiteLaunchNeverLoadsTheJSON"
+        "theSQLiteLaunchNeverLoadsTheJSON",
+        "theViewerNeverLooksForCatalogJSON"
       ]
     },
     {

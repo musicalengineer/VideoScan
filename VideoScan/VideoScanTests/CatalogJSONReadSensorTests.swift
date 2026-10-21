@@ -13,17 +13,22 @@
 //     refused catalog.sqlite, refuses and opens no catalog.json (GH #354,
 //     QA r1 F1); the SQLite launch reads none either (GH #353); a viewer
 //     never opens its own catalog (QA r1 F2).
-//   • CatalogStore — the JSON store itself (its own load and decoder).
+//   • CatalogStore — the JSON store itself (its own load and decoder; slice
+//     3 moves the tests off it).
 //   (Person Finder's catalog prefilter read the frozen catalog.json through
 //   CatalogStore.readRecordsWithoutAdopting; it reads the live records since
 //   0005b81ee, and that reader was retired 2026-10-21.)
-//   • VideoScanModel+VolumeRenameUndo.loadSafetyCopy — a pre-cutover
-//     `catalog.pre-volume-rename.*.json` safety copy (never catalog.json).
-//   • BundleImporter — reading a legacy (pre-SQLite) backup bundle; under
-//     catalog.sqlite the import is refused before any merge
-//     (bundleImportDecision).
-//   • VideoScanModel+CatalogImportExport.importCatalog(from:) — the old
-//     single-file import; no menu item calls it (tests do).
+//
+// Retired in slice 2b (2026-10-21, "no quarter for old JSON") — each pinned
+// at zero below, each refusing with words where a person could reach it:
+//   • CatalogViewerSnapshot's `.legacyJSON` display — a synced folder with
+//     catalog.json but no snapshot + latch says "nothing synced from the
+//     master yet".
+//   • Verify tier 5's catalog.json hash (CatalogFileHash.swift).
+//   • BundleImporter.read + applyBundlePayload — a catalog.json bundle is
+//     refused in words on every Mac (bundleImportDecision).
+//   • VolumeRenameUndo.loadSafetyCopy's `.json` branch — refused in words.
+//   • CatalogImportExport.importCatalog(from:) — no menu item called it.
 //
 // Dimensions: SENSOR (source). LOGIC/SCALE/MEDIA/ISOLATION: N/A — reads
 // source text only.
@@ -48,6 +53,12 @@ struct CatalogJSONReadSensorTests {
         #"CatalogStore\.shared\.load\(\)"#: [:],
         #"readRecordsWithoutAdopting"#: [:],
         #"loadRecords\(fromSnapshotAtPath"#: ["Catalog/CatalogStore.swift": 1],
+        // Slice 2b (2026-10-21): the readers retired today must not come back.
+        #"\.legacyJSON\b"#: ["App/VideoScanModel+BundleImportExport.swift": 1,   // the refusal case
+                             "App/BundleImporter.swift": 1],                      // the detection (file name only)
+        #"CatalogFileHash|catalogFileRule"#: [:],
+        #"BundleImporter\.read\(|applyBundlePayload|mergeLegacyJSON"#: [:],
+        #"func importCatalog\(from|importCatalogViaPanel"#: [:],
         // The live reload's generation adopt (it read catalog.json's header
         // after a merge) left with it; retired 2026-10-21.
         #"adoptOnDiskGenerationAfterReconcile|auditedFileRows|verifyCatalogSnapshot\(auditedGeneration"#: [:],
@@ -85,6 +96,13 @@ struct CatalogJSONReadSensorTests {
         #expect(flip.contains("let result = try SQLiteCatalogLoader.build(launch.snapshot)"))
         #expect(flip.contains("return result.records"))
         #expect(flip.contains("updateReadOnlyFacts { $0.jsonFrozenByLaunch = true }"), "catalog.json is frozen under catalog.sqlite")
+    }
+
+    @Test("SENSOR: a viewer never looks for catalog.json in its synced folder (slice 2b)")
+    func theViewerNeverLooksForCatalogJSON() throws {
+        let viewer = try SourceTree.appCode(named: "Catalog/CatalogViewerSnapshot.swift")
+        #expect(!viewer.contains("catalog.json"), "CatalogViewerSnapshot.source must not consider catalog.json")
+        #expect(viewer.contains("return .none"), "no snapshot + latch → nothing synced")
     }
 
     @Test("SENSOR: the retired live dossier reload is gone from the launch")
