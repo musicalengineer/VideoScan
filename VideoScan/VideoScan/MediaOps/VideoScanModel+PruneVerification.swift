@@ -63,7 +63,7 @@ extension VideoScanModel {
         guard !hooks.shouldCancel() else { return .failure(PruneHold("the check was cancelled")) }
         guard let before = FileIdentityStamp.capture(path: path) else { return .failure(PruneHold(PruneReason.missing.text)) }
         hooks.didOpen?(path)
-        let digest = (try? ArchivePromoteEngine.sha256(path: path, shouldCancel: hooks.shouldCancel)) ?? nil
+        let digest = try? ArchivePromoteEngine.sha256(path: path, shouldCancel: hooks.shouldCancel)
         guard let digest, !digest.isEmpty else {
             return .failure(PruneHold(hooks.shouldCancel() ? "the check was cancelled" : "could not be read in full"))
         }

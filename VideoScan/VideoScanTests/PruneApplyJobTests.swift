@@ -142,7 +142,7 @@ struct PruneApplyJobTests {
         await j2.task?.value
         #expect(j2.state == .cancelled && j2.outcome.trashed == 1, "\(j2.outcome)")
         await g.model.mediaLedger.waitForPendingWrites()
-        #expect(g.model.mediaLedger.allEvents().filter { $0.event == .approval }.first?.detail[MediaLedgerEvent.Detail.count] == "1")
+        #expect(g.model.mediaLedger.allEvents().first { $0.event == .approval }?.detail[MediaLedgerEvent.Detail.count] == "1")
     }
 
     // MARK: The queue
