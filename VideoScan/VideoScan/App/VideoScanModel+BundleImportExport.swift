@@ -278,8 +278,13 @@ extension VideoScanModel {
 
     /// The refusal for a pre-switch (catalog.json) bundle — on every Mac
     /// since JSON gone, slice 2b (2026-10-21): no catalog.json backup is read.
-    nonisolated static let jsonBundleUnderSQLiteWords =
-        "this backup is from before the database switch; it can't be merged into catalog.sqlite"
+    nonisolated static let jsonBundleRefusedWords =
+        "this backup is from before the database switch (it holds catalog.json), and VideoScan no longer reads "
+            + "catalog.json backups; nothing was changed — the backup is intact"
+
+    /// File ▸ Import Catalog…'s help while it is disabled (QA r1 NIT on
+    /// slice 2b): every bundle is refused until Restore exists.
+    nonisolated static let importCatalogComingHelp = "Restore from a catalog.sqlite backup is coming (GH #343)"
 
     /// What Import Catalog may do with a bundle holding `kind` on a Mac
     /// whose authority is (or is not) catalog.sqlite: today, refuse — with
@@ -294,7 +299,7 @@ extension VideoScanModel {
                                                  isSQLiteAuthority: Bool) -> BundleImportDecision {
         switch (kind, isSQLiteAuthority) {
         case (.legacyJSON, _):
-            return .refuse(jsonBundleUnderSQLiteWords)
+            return .refuse(jsonBundleRefusedWords)
         case (.sqlite(let generation), true):
             let at = generation.map { " (generation \($0))" } ?? ""
             return .refuse("this backup holds a sealed catalog.sqlite\(at); backups are never merged into catalog.sqlite, "

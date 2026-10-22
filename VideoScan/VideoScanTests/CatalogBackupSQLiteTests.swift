@@ -247,9 +247,10 @@ struct CatalogBackupImportTests {
         let targets = model.scanTargets.count
 
         #expect(BundleImporter.catalogKind(of: url) == .legacyJSON)
-        #expect(model.bundleImportDecision(for: url) == .refuse(VideoScanModel.jsonBundleUnderSQLiteWords))
-        #expect(VideoScanModel.jsonBundleUnderSQLiteWords
-                == "this backup is from before the database switch; it can't be merged into catalog.sqlite")
+        #expect(model.bundleImportDecision(for: url) == .refuse(VideoScanModel.jsonBundleRefusedWords))
+        #expect(VideoScanModel.jsonBundleRefusedWords
+                == "this backup is from before the database switch (it holds catalog.json), and VideoScan no longer reads "
+                + "catalog.json backups; nothing was changed — the backup is intact")
         // (Slice 2b, 2026-10-21: the JSON merge door — BundleImporter.read +
         // applyBundlePayload, with its own guard — is retired; the decision
         // above is the only door, and the sensor pins that nothing decodes
@@ -280,8 +281,8 @@ struct CatalogBackupImportTests {
     @Test("decision table: every bundle refuses — a catalog.json bundle in words on any Mac (JSON gone, slice 2b), a catalog.sqlite bundle until Restore exists")
     func decisionTable() {
         typealias M = VideoScanModel
-        #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: false) == .refuse(M.jsonBundleUnderSQLiteWords))
-        #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: true) == .refuse(M.jsonBundleUnderSQLiteWords))
+        #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: false) == .refuse(M.jsonBundleRefusedWords))
+        #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: true) == .refuse(M.jsonBundleRefusedWords))
         for kind: BundleImporter.CatalogKind in [.sqlite(generation: 7), .sqlite(generation: nil), .none] {
             for authority in [true, false] {
                 guard case .refuse = M.bundleImportDecision(kind: kind, isSQLiteAuthority: authority) else {

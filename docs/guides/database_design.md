@@ -303,7 +303,12 @@ If those three tests are green, this procedure works.
 
 ### Symptom: catalog.json is corrupt / unreadable
 
-**Procedure:**
+> **Retired 2026-10-21 (JSON gone; restore from a catalog.sqlite backup = GH #343).**
+> catalog.sqlite is the catalog; no launch reads catalog.json, so rolling
+> catalog.json back (or copying one out of a bundle) restores nothing.
+> Kept as history.
+
+**Procedure (retired):**
 
 ```bash
 cd ~/Library/Application\ Support/VideoScan/

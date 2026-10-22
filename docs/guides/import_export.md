@@ -30,6 +30,12 @@ destination machine.
 
 ## Current Behavior (v1)
 
+> **Retired 2026-10-21 (JSON gone; restore from a catalog.sqlite backup = GH #343).**
+> Import Catalog no longer merges anything: a catalog.json (v1) bundle is
+> refused in words on every Mac, a catalog.sqlite (v2) bundle is refused
+> until Restore exists, and File ▸ Import Catalog… is disabled. The table
+> below describes the retired merge.
+
 | Data        | Strategy         | Notes                                    |
 |-------------|------------------|------------------------------------------|
 | Catalog     | Merge by content identity | No duplicates; new records added   |
@@ -188,6 +194,11 @@ Photos access requires:
   needs limited access — this is a step up)
 
 ## Catalog Merge Strategy
+
+> **Retired 2026-10-21 (JSON gone; restore from a catalog.sqlite backup = GH #343).**
+> The catalog and volume merges below left with the catalog.json import
+> (`BundleImporter.read`, `applyBundlePayload`, `importCatalog(from:)`).
+> Kept as history for the Restore design.
 
 The catalog merge is already solid (content-identity dedup), but worth
 documenting edge cases:

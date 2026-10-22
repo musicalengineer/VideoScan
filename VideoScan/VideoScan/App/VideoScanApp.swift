@@ -797,6 +797,12 @@ struct VideoScanApp: App {
                 }
                 // ⇧⌘I since 2026-10-06: ⌘I is Catalog Info (Finder's rule).
                 .keyboardShortcut("i", modifiers: [.command, .shift])
+                // Disabled since JSON gone, slice 2b (2026-10-21): every
+                // bundle is refused (bundleImportDecision), so the panel
+                // could never succeed. Restore from a catalog.sqlite backup
+                // is GH #343; the item returns enabled with it.
+                .disabled(true)
+                .help(VideoScanModel.importCatalogComingHelp)
 
                 // Same prompt the backup-time nag shows, on demand — so the
                 // user never has to run a backup just to reach it
