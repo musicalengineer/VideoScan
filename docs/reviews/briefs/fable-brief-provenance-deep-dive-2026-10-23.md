@@ -42,6 +42,30 @@ metadata → **identify / correlate / confirm** → **archive**.
 6. **Risks.** Anything in the draft that would put existing catalog rows or the archive's existing `00_Index`
    files at risk. (Ground rule: additive tables only; never rewrite the v3 manifest; archived files are read-only.)
 
+7. **The three puzzle pieces, with the least of Rick's time.** Rick's "magic wand": every record shows
+   **event date** (with confidence / range), **event description** (per stretch of a file — one tape holds
+   several events; the `events` / `event_members` tables with start/end seconds already exist), and
+   **ingest** (split into *digitized on* and *cataloged on*). Rick's constraint, verbatim in spirit: this is not
+   LOC/AMPAS/PBS; re-answering "when was this, who is that, how did you digitize it" file by file would be hugely
+   painful. Design for **answer once, apply to many**: confirm per tape / per folder / per event, propagate by
+   SHA-256 and by footage groups, let the machine draft with evidence, and rank what to ask by payoff
+   (archive Masters first, then the oldest generations). Estimate Rick's minutes for the 142 Masters and the July batch.
+
+## Baseline (catalog backup, morning of 2026-10-22; live videos, distinct content)
+
+| | All videos (4,948) | Archive Masters (142) |
+|---|---|---|
+| User-set date (known/estimated) | 68 | 51 |
+| Inferred date only | 3,175 — ~3,040 at confidence ≤ 0.3 or none; ~65 at ≥ 0.7 | 3 |
+| Embedded date only (often the *capture* date on tape transfers, not the event) | 821 | 32 |
+| No date at all | ~880 | ~56 |
+| In a named event | 40 | 1 |
+| User note | 13 | 7 |
+| Machine caption | 3,174 | 9 |
+| `files.catalogued_at` filled | 0 (column exists, never populated) | 0 |
+
+Ask the Manager for the backup copy if you need to re-query; never open the live database.
+
 ## Report shape
 ≤ 2,000 words. Start with a 5-line summary and a ranked list of changes to the Manager's draft.
 Every code claim with file:line; every external claim with a link.
