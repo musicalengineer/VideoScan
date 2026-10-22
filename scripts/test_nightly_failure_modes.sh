@@ -1243,10 +1243,10 @@ rota_run() {
         PATH="$RT/bin:$PATH" bash "$RT/scripts/$2" > "$RT/out.log" 2>&1
 }
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM4)" = "on 2 0" ] &&
-[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM5)" = "on 3 15" ] &&
+[ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM5 | cut -c1-4)" = "off " ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM1 | cut -c1-4)" = "off " ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot SomeoneElse)" = "unknown" ] \
-    && pass "the rota: M4 02:00, M5 03:15, M1 off, anyone else unknown" \
+    && pass "the rota: M4 02:00, M5 and M1 off (laptops), anyone else unknown" \
     || fail "nightly_rota.py slots changed"
 rota_run RicksM1 nightly_guarded.sh
 GUARD_RC=$?
@@ -1267,13 +1267,14 @@ if [ "$INST_RC" -eq 0 ] && grep -q '^bootout gui/.*/com.videoscan.nightly-tests$
 else
     fail "off-rota installer: rc=$INST_RC launchctl='$(tr '\n' ' ' < "$RT/launchctl.log")' out='$(tr '\n' ' ' < "$RT/out.log")'"
 fi
-rota_run RicksM5 install_nightly.sh
+rm -f "$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist"
+rota_run RicksM4 install_nightly.sh
 INST_RC=$?
-M5_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist"
-if [ "$INST_RC" -eq 0 ] && [ -f "$M5_PLIST" ] &&
-   [ "$(plutil -extract StartCalendarInterval.Hour raw "$M5_PLIST" 2>/dev/null)" = "3" ] &&
-   [ "$(plutil -extract StartCalendarInterval.Minute raw "$M5_PLIST" 2>/dev/null)" = "15" ]; then
-    pass "an on-rota Mac (M5) is installed at its rota slot, 03:15"
+M4_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.nightly-tests.plist"
+if [ "$INST_RC" -eq 0 ] && [ -f "$M4_PLIST" ] &&
+   [ "$(plutil -extract StartCalendarInterval.Hour raw "$M4_PLIST" 2>/dev/null)" = "2" ] &&
+   [ "$(plutil -extract StartCalendarInterval.Minute raw "$M4_PLIST" 2>/dev/null)" = "0" ]; then
+    pass "an on-rota Mac (M4) is installed at its rota slot, 02:00"
 else
     fail "on-rota installer: rc=$INST_RC out='$(tr '\n' ' ' < "$RT/out.log")'"
 fi

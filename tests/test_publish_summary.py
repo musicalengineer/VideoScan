@@ -17,6 +17,17 @@ ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("publish_metrics", ROOT / "tools" / "publish_metrics.py")
 pm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pm)
+_real_load_rota = pm.load_rota
+
+
+@pytest.fixture(autouse=True)
+def fixed_rota(tmp_path_factory, monkeypatch):
+    """These tests are about the summary rules, not about who is on the rota
+    today, so they read a fixed two-Mac rota (M4 + M5 on, M1 off). Only
+    test_the_real_rota_* reads scripts/nightly_rota.json."""
+    path = tmp_path_factory.mktemp("rota") / "nightly_rota.json"
+    path.write_text(json.dumps({"on": {"M4": "02:00", "M5": "03:15"}, "off": {"M1": "laptop"}}))
+    monkeypatch.setattr(pm, "load_rota", lambda p=None: _real_load_rota(p or path))
 
 NOW = datetime(2026, 10, 12, 9, 0, 0, tzinfo=timezone.utc)
 SECRETS = ["RicksM4", "RicksM5", "RicksM1", "/Users/rickb", "SECRET", "Donna", "VideoScan.xcscheme"]
@@ -102,11 +113,12 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
                                                  "reason": "build-timeout:5400s"}
 
 
-def test_the_real_rota_takes_the_m1_out_and_keeps_the_m4_and_m5():
-    """GH #360 item 4: the M1 (a travel laptop, often on battery) is out of the
-    nightly. One file says so; the publisher reads it."""
-    rota = pm.load_rota()
-    assert rota["on"] == ["M4", "M5"] and rota["off"] == ["M1"]
+def test_the_real_rota_runs_the_nightly_on_mac_studios_only():
+    """GH #360 item 4 (10/21) took the M1 out; Rick 10/22: laptops are not
+    nightly hosts (a closed lid slept the M5 37 times in one night), so the M5
+    MacBook Pro is out too. One file says so; the publisher reads it."""
+    rota = _real_load_rota(pm.NIGHTLY_ROTA)
+    assert rota["on"] == ["M4"] and sorted(rota["off"]) == ["M1", "M5"]
 
 
 def test_an_unreadable_rota_drops_nobody(tmp_path):
@@ -491,8 +503,10 @@ def test_cli_out_dir_with_metrics_dir_writes_summary_with_nulls_when_gh_is_missi
     # The CLI uses the real clock; the fixture's rows are dated 2026-10-12, so
     # find that night by date (the last cell is "today", empty after 10/12).
     night_1012 = next(x for x in s["nightly"]["nights"] if x["date"] == "2026-10-12")
-    assert night_1012["hosts"]["M5"]["state"] == "did_not_run"
-    assert "M1" not in night_1012["hosts"] and s["nightly"]["off_rota"] == ["M1"]
+    # The CLI reads the REAL rota (Mac Studios only since 10/22): the fixture's
+    # M5 and M1 rows are off-rota, so they colour nothing and are named instead.
+    assert "M5" not in night_1012["hosts"] and "M1" not in night_1012["hosts"]
+    assert sorted(s["nightly"]["off_rota"]) == ["M1", "M5"]
     assert s["version"] is not None                          # the repo's own pbxproj
     assert not (out / "github_daily.jsonl").exists()         # gh failed: no daily row, never a null row
     assert "github_daily" not in r.stdout

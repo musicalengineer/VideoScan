@@ -1,10 +1,10 @@
 {
   "_comment": "THE nightly rota (GH #360). Which Macs run the 2 AM nightly, and when. Read by scripts/install_nightly.sh (the launchd time), scripts/nightly_guarded.sh (an off-rota Mac never runs), tools/publish_metrics.py (an off-rota Mac's rows leave the pass/fail table; the page shows it as 'off the rota', never as a failure) and scripts/morning_metrics.sh. Labels are the short host labels (RicksM4 -> M4).",
   "on": {
-    "M4": "02:00",
-    "M5": "03:15"
+    "M4": "02:00"
   },
   "off": {
-    "M1": "travel laptop, often on battery: out of the nightly (Rick, GH #360, 2026-10-21)"
+    "M1": "MacBook Pro, travel laptop, often on battery: out of the nightly (Rick, GH #360, 2026-10-21)",
+    "M5": "MacBook Pro: a closed lid sleeps it all night whatever caffeinate holds (10/22: 37 sleeps 03:00-10:00); laptops are not nightly hosts (Rick, 2026-10-22). Mac Studios only: the M4, plus the M5 Ultra from the week of 10/27"
   }
 }
