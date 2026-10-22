@@ -93,3 +93,7 @@ Regression evidence on the fix commit:
 - Core catalog/store-wide: 373 tests in 54 suites. One load-sensitive miss, the disk-full "edits land once space returns" retry. It passes alone: `CatalogWriteCornerDiskTests` 4 of 4.
 - App corner / Quit / Undo / committer / adopt / flip suites: 56 tests in 9 suites, green.
 - Sensor lane: see the commit report.
+
+## Closed
+
+Closed by `a40e49762` at 2026-10-22 (tools/codex_review.py close, cycle #117). 4 P1 closed with tests.
