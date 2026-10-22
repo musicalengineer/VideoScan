@@ -230,6 +230,20 @@ def test_folder_names_must_be_plain_source_folders(name):
         pm.validate("coverage.jsonl", row, FOLDERS)
 
 
+def test_a_folder_deleted_since_it_was_published_does_not_wedge_the_publish(tmp_path):
+    """FamilyMusic was removed 10/19; its old coverage rows on the branch refused
+    every later publish and froze the dashboard at 10/18. Names already on the
+    branch stay allowed; a NEW row still may only name a folder that exists."""
+    old = pm.coverage_row({"meta": {"date": "2026-10-18"}, "folders": {"FamilyMusic": folder(1, 2, 1, 2)}})
+    (tmp_path / "coverage.jsonl").write_text(pm.render([old]))
+    new = pm.coverage_row({"meta": {"date": "2026-10-22"}, "folders": {"Hallie": folder(1, 2, 1, 2)}})
+    text = pm.sanitized_files({"coverage.jsonl": [new]}, tmp_path, FOLDERS)["coverage.jsonl"]
+    assert "FamilyMusic" in text and "2026-10-22" in text
+    stray = pm.coverage_row({"meta": {"date": "2026-10-22"}, "folders": {"Donna": folder(1, 2, 1, 2)}})
+    with pytest.raises(pm.PrivacyError):
+        pm.sanitized_files({"coverage.jsonl": [stray]}, tmp_path, FOLDERS)
+
+
 def test_real_source_folders_are_the_allowlist():
     names = pm.source_folders()
     assert {"Core", "(app root)", "Hallie", "Catalog"} <= names

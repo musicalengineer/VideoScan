@@ -1071,6 +1071,12 @@ def render(rows: List[dict]) -> str:
     return "".join(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n" for r in rows)
 
 
+def _published_folders(rows: List[dict]) -> set:
+    """Every coverage folder name the rows already on the branch carry."""
+    return {f["folder"] for r in rows for f in (r.get("folders") or [])
+            if isinstance(f, dict) and isinstance(f.get("folder"), str) and FOLDER_RE.match(f["folder"])}
+
+
 def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Optional[Path],
                     folders: Optional[set]) -> Dict[str, str]:
     """name -> full file text, merged with what is already published, every row
@@ -1093,8 +1099,12 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
             out[name] = render(merged)
             continue
         merged = merge_rows(existing, rows)
+        # A folder named by a row ALREADY on the branch passed this gate when it
+        # was published; a source folder deleted since (FamilyMusic, 10/19) must
+        # not wedge every later publish. New names still have to exist today.
+        allowed = None if folders is None else folders | _published_folders(existing)
         for row in merged:
-            validate(name, row, folders)
+            validate(name, row, allowed)
         out[name] = render(merged)
     return out
 
