@@ -137,7 +137,8 @@ struct CompareMediaTests {
                                          day: EventDay(year: 1996, month: 3, day: 15), dayIsReliable: true, people: ["Alex"], isArchiveFile: true, isArchived: true, codec: .original, frameHeight: 480)
         let facts = CompareMediaWords.facts(r, side: side, other: other)
         let byName = Dictionary(uniqueKeysWithValues: facts.map { ($0.name, $0) })
-        #expect(byName["length"]?.value == "1:18" && byName["length"]?.differs == true)
+        // The table's formatter (Formatting.duration), 10/22 — was "1:18".
+        #expect(byName["length"]?.value == "00:01:18" && byName["length"]?.differs == true)
         #expect(byName["codecs"]?.value == "h264 · aac" && byName["codecs"]?.differs == true)
         #expect(byName["frame"]?.differs == false)
         #expect(byName["SHA-256"]?.value == "a7c3…0000" && byName["SHA-256"]?.differs == true)

@@ -2,8 +2,8 @@
 // Compare Media, step 1 of the view (docs/design/event_analyzer_compare_media_2026_10_15.md §2):
 // the verdict band, the evidence lines, the recommendation, and the two
 // sound spools — drawn from last night's fingerprints — above the
-// existing pair-compare detail (streams table, tiers). The film frames
-// and the next-face buttons come next (§3).
+// existing pair-compare detail (streams table, tiers). The next-face
+// buttons come next (§3).
 //
 //   ┌ SAME EVENT · 37:30 of 38:00 · at 0:12 ──────────────────────┐  the band
 //   │ Two transfers of one recording.                              │
@@ -13,12 +13,23 @@
 //   ┌ name A ─────────┐   ┌ name B ─────────┐
 //   │ facts, diffs in │   │ facts …         │
 //   │ the accent      │   │                 │
-//   │ ▌sound strip    │   │ ▌sound strip    │  time runs down; green = matched
+//   │ ▣▣▣▣▣▣▣▣ frames │   │ ▣▣▣▣▣▣▣▣        │  same fractions both sides
+//   │ ▌sound strip    │   │ ▌sound strip    │  green = matched
 //   └─────────────────┘   └─────────────────┘
+//   ■ green = same sound in both · ■ orange … · ■ grey = silence      the legend
+//
+// The frames (CompareFilmstrip.swift, 2026-10-22) load lazily, one loader
+// per card, inside each card's `.task` — cancelled when the view goes.
+//
+// Byte-identical pair (Rick 2026-10-22): when the ladder's identicalCopy
+// rung fired, the strips paint every audible second green — the sound IS
+// the same, the bytes say so — and a short note says the fingerprint is
+// stale when its stored match left audible seconds out (SoundStripPaint).
 //
 // PERF: the answer is computed once per pair in the store's task (the
-// projection on the main actor, the match off it) and cached; the view
-// reads values. Nothing in a body touches the catalog or the disk.
+// projection on the main actor, the match off it) and cached, with the
+// strips' paint; the view reads values. Nothing in a body touches the
+// catalog or the disk.
 
 import Combine
 import SwiftUI
@@ -27,6 +38,10 @@ import VideoScanCore
 @MainActor
 final class CompareMediaStore: ObservableObject {
     @Published private(set) var answer: RelatedAnswer?
+    /// What each strip paints — derived from the answer once, here, so the
+    /// body never walks a per-second map to decide colours.
+    @Published private(set) var paintA: SoundStripPaint?
+    @Published private(set) var paintB: SoundStripPaint?
     @Published private(set) var isWorking = false
     private var task: Task<Void, Never>?
 
@@ -36,6 +51,15 @@ final class CompareMediaStore: ObservableObject {
         task = Task { [weak self] in
             let answer = await model.relatedAnswer(a: a, b: b)
             guard let self, !Task.isCancelled else { return }
+            let identical = answer.verdict.isIdenticalCopy
+            self.paintA = answer.strips.a.map {
+                SoundStripPaint(active: $0, matched: answer.strips.matchedA,
+                                durationSeconds: answer.evidence.a.durationSeconds, identicalBytes: identical)
+            }
+            self.paintB = answer.strips.b.map {
+                SoundStripPaint(active: $0, matched: answer.strips.matchedB,
+                                durationSeconds: answer.evidence.b.durationSeconds, identicalBytes: identical)
+            }
             self.answer = answer
             self.isWorking = false
         }
@@ -48,19 +72,27 @@ struct CompareMediaView: View {
     let recordA: VideoRecord
     let recordB: VideoRecord
     /// Forwarded ONCE into the store's load (the projection runs there,
-    /// never in this body); the body reads only the store's cached answer.
+    /// never in this body) and into the frame loaders' tasks (its
+    /// thumbnail cache); the body reads only cached values.
     // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject private var model: VideoScanModel
     @StateObject private var store = CompareMediaStore()
+    // `@StateObject` ≈ a member the framework owns for the view's lifetime
+    // (the struct itself is rebuilt on every render; this is not).
+    @StateObject private var framesA = CompareFilmstripLoader()
+    @StateObject private var framesB = CompareFilmstripLoader()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let answer = store.answer {
                 verdictCard(answer)
                 HStack(alignment: .top, spacing: 12) {
-                    spool(recordA, side: answer.evidence.a, other: answer.evidence.b, active: answer.strips.a, words: answer.strips.wordsA, matched: answer.strips.matchedA)
-                    spool(recordB, side: answer.evidence.b, other: answer.evidence.a, active: answer.strips.b, words: answer.strips.wordsB, matched: answer.strips.matchedB)
+                    spool(recordA, side: answer.evidence.a, other: answer.evidence.b, active: answer.strips.a,
+                          words: answer.strips.wordsA, paint: store.paintA, frames: framesA)
+                    spool(recordB, side: answer.evidence.b, other: answer.evidence.a, active: answer.strips.b,
+                          words: answer.strips.wordsB, paint: store.paintB, frames: framesB)
                 }
+                SoundStripLegend()
             } else {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -69,6 +101,15 @@ struct CompareMediaView: View {
             }
         }
         .task { store.load(model: model, a: recordA, b: recordB) }
+        // One structured task per card: leaving the view cancels the
+        // decode (and its ffmpeg children). Keyed on the path so a reused
+        // view never shows the previous pair's frames.
+        .task(id: recordA.fullPath) {
+            await framesA.load(CompareFilmstripRequest(record: recordA), cache: model.thumbnailCache)
+        }
+        .task(id: recordB.fullPath) {
+            await framesB.load(CompareFilmstripRequest(record: recordB), cache: model.thumbnailCache)
+        }
         .accessibilityIdentifier("compareMedia")
     }
 
@@ -114,10 +155,11 @@ struct CompareMediaView: View {
         .accessibilityIdentifier("compareMedia.verdict")
     }
 
-    // MARK: One spool: the facts, then the sound
+    // MARK: One spool: the facts, then the frames over the sound
 
     private func spool(_ r: VideoRecord, side: RelatedEvidence.Side, other: RelatedEvidence.Side,
-                       active: [Bool]?, words: String?, matched: Range<Int>?) -> some View {
+                       active: [Bool]?, words: String?, paint: SoundStripPaint?,
+                       frames: CompareFilmstripLoader) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(r.filename).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
             Text(r.volumeName.isEmpty ? r.directory : r.volumeName).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
@@ -131,20 +173,31 @@ struct CompareMediaView: View {
                     }
                 }
             }
-            // nil = not measured: say so — an empty strip would draw silence.
-            if let active {
-                SoundStrip(active: active, matched: matched, durationSeconds: side.durationSeconds)
-                    .frame(height: 44)
-                // A quiet strip from the stamp says why it is quiet.
-                if let words { Text(words).font(.system(size: 11)).foregroundStyle(.secondary) }
-            } else {
-                Text("Sound not measured").font(.system(size: 11)).foregroundStyle(.secondary)
-                    .frame(height: 44, alignment: .leading)
-            }
+            // Same width as the strip below: frame i sits over the i-th
+            // eighth of the seconds.
+            CompareFilmstripView(loader: frames) { MediaOpener.open([r]) }
+            soundRows(active: active, words: words, paint: paint, durationSeconds: side.durationSeconds)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func soundRows(active: [Bool]?, words: String?, paint: SoundStripPaint?, durationSeconds: Double) -> some View {
+        // nil = not measured: say so — an empty strip would draw silence.
+        if let active {
+            SoundStrip(active: active, matched: paint?.matched, durationSeconds: durationSeconds)
+                .frame(height: 44)
+            if paint?.fingerprintStale == true {
+                Text(SoundStripPaint.staleWords).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            // A quiet strip from the stamp says why it is quiet.
+            if let words { Text(words).font(.system(size: 11)).foregroundStyle(.secondary) }
+        } else {
+            Text("Sound not measured").font(.system(size: 11)).foregroundStyle(.secondary)
+                .frame(height: 44, alignment: .leading)
+        }
     }
 
     static func bandColor(_ band: RelatedBand) -> Color {
@@ -201,11 +254,36 @@ struct SoundStrip: View {
                 let audible = bins.anyAudible(s0, min(s1, n)), inMatch = bins.anyMatched(s0, min(s1, n))
                 let h = audible ? size.height * 0.85 : size.height * 0.18
                 let rect = CGRect(x: CGFloat(px), y: size.height - h, width: 1, height: h)
-                let color: Color = !audible ? Color.gray.opacity(0.35) : inMatch ? Color.green : Color.orange.opacity(0.8)
+                let color: Color = !audible ? SoundStripLegend.silence : inMatch ? SoundStripLegend.same : SoundStripLegend.unmatched
                 ctx.fill(Path(rect), with: .color(color))
             }
         }
         .accessibilityLabel("sound strip")
+    }
+}
+
+/// One caption line under the two strips: what the three colours mean.
+struct SoundStripLegend: View {
+    static let same = Color.green
+    static let unmatched = Color.orange.opacity(0.8)
+    static let silence = Color.gray.opacity(0.35)
+
+    var body: some View {
+        HStack(spacing: 4) {
+            swatch(Self.same); Text("green = same sound in both")
+            Text("·")
+            swatch(Self.unmatched); Text("orange = sound not found in the other file")
+            Text("·")
+            swatch(Self.silence); Text("grey = silence")
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .accessibilityIdentifier("compareMedia.legend")
+    }
+
+    private func swatch(_ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 8, height: 8)
     }
 }
 
@@ -237,6 +315,38 @@ struct SoundStripBins: Equatable {
         guard let m = matched, s1 > s0 else { return false }
         return s0 < m.upperBound && s1 > m.lowerBound
     }
+
+    /// Any audible second the matched range leaves out (all of them when
+    /// nothing matched) — the seconds the strip would paint orange.
+    var hasAudibleOutsideMatch: Bool {
+        guard let m = matched else { return anyAudible(0, seconds) }
+        return anyAudible(0, m.lowerBound) || anyAudible(m.upperBound, seconds)
+    }
+}
+
+/// What one side's strip paints (Rick 2026-10-22). Two byte-identical files
+/// have the same sound by definition, so the strip paints every audible
+/// second green — never orange as if the sound differed — and flags the
+/// fingerprint as stale when its stored match left audible seconds out.
+/// Any other pair paints the stored match as is. Pure.
+struct SoundStripPaint: Equatable {
+    /// The range drawn green.
+    let matched: Range<Int>?
+    /// Byte-identical, yet the stored match missed audible seconds.
+    let fingerprintStale: Bool
+
+    static let staleWords = "fingerprint stale; sound is identical (same bytes)"
+
+    init(active: [Bool], matched: Range<Int>?, durationSeconds: Double, identicalBytes: Bool) {
+        guard identicalBytes else {
+            self.matched = matched
+            fingerprintStale = false
+            return
+        }
+        let bins = SoundStripBins(active: active, matched: matched, durationSeconds: durationSeconds)
+        self.matched = 0..<bins.seconds
+        fingerprintStale = bins.hasAudibleOutsideMatch
+    }
 }
 
 /// Words for the band's duration and the fact rows — pure, so tests pin them.
@@ -265,6 +375,13 @@ enum CompareMediaWords {
         }
     }
 
+    /// The card's `length`: the catalog table's own formatter (HH:MM:SS,
+    /// whole seconds truncated), so the card and the table say the same
+    /// thing for the same file (Rick 10/22: 19:36 here vs 00:19:35 there).
+    static func length(_ seconds: Double) -> String {
+        Formatting.duration(seconds.isFinite ? max(0, seconds) : 0)
+    }
+
     static func facts(_ r: VideoRecord, side: RelatedEvidence.Side, other: RelatedEvidence.Side) -> [Fact] {
         let m = RelatedLadder.mmss
         func fact(_ name: String, _ value: String, _ otherValue: String) -> Fact { Fact(name: name, value: value, differs: value != otherValue) }
@@ -276,7 +393,7 @@ enum CompareMediaWords {
         let otherSound = other.audibleSeconds.map { $0 <= 0 ? "no sound" : "\(m($0)) audible" } ?? "no fingerprint"
         let codecs = [r.videoCodec, r.audioCodec].filter { !$0.isEmpty }.joined(separator: " · ")
         return [
-            fact("length", m(side.durationSeconds), m(other.durationSeconds)),
+            fact("length", length(side.durationSeconds), length(other.durationSeconds)),
             Fact(name: "codecs", value: codecs.isEmpty ? "—" : codecs, differs: side.codec != other.codec),
             Fact(name: "frame", value: r.resolution.isEmpty ? "—" : r.resolution, differs: side.frameHeight != other.frameHeight),
             fact("size", CatalogStorageTotals.displaySize(side.sizeBytes), CatalogStorageTotals.displaySize(other.sizeBytes)),

@@ -562,26 +562,9 @@ enum PreviewFrameRenderer {
         let route = PreviewFrameRouter.previewRoute(container: container,
                                                     videoCodec: videoCodec,
                                                     likelyUnanalyzable: likelyUnanalyzable)
-        var candidates: [(offset: Double, image: CGImage)] = []
-
-        if route == .avFoundation {
-            // One asset open, all offsets in one batch — same swallow-
-            // then-arbitrate shape as renderBestPreviewCGImage: an AVF
-            // batch failure falls through to the ffmpeg loop below.
-            candidates = (try? await renderCandidateFramesViaAVFoundation(path: path,
-                                                                          offsets: offsets)) ?? []
-            try Task.checkCancellation()
-            if !candidates.isEmpty {
-                onFrameProgress?(offsets.count, offsets.count)
-            }
-        }
-
-        if candidates.isEmpty {
-            candidates = try await ripFilmstripFramesViaFFmpeg(path: path,
-                                                               offsets: offsets,
-                                                               ffmpegPath: ffmpegPath,
-                                                               onFrameProgress: onFrameProgress)
-        }
+        var candidates = try await ripRoutedFrames(path: path, route: route, offsets: offsets,
+                                                   ffmpegPath: ffmpegPath,
+                                                   onFrameProgress: onFrameProgress)
 
         guard !candidates.isEmpty else {
             previewLog.notice("filmstrip: no frame decoded at any offset — \((path as NSString).lastPathComponent, privacy: .public)")
@@ -611,6 +594,74 @@ enum PreviewFrameRenderer {
         return PreviewFilmstrip(frames: frames)
     }
 
+    // MARK: - Fixed-positions mode (Compare Media filmstrip, 2026-10-22)
+
+    /// Frames at exactly `offsets`, none dropped: the Compare Media cards
+    /// put frame i of BOTH files over the same fraction of their strips,
+    /// so a near-solid frame (a black leader) must still hold its slot —
+    /// unlike `renderPreviewFilmstrip`, which scores and drops them.
+    /// Same routed tiers (AVF one-asset batch → bounded ffmpeg rips),
+    /// same cancellation and failure contract: per-frame failures drop
+    /// out, all-fail throws noFrameProduced, a missing ffmpeg throws
+    /// ffmpegUnavailable. Result is sorted by offset.
+    ///
+    /// `onFrame(offset, image)` fires as each frame lands so the caller
+    /// can fill placeholders in; called from the rendering executor —
+    /// callers hop to the main actor themselves.
+    ///
+    /// Memory: `offsets.count` CGImages at ≤480 wide (8 → ~4 MB) plus
+    /// `filmstripFFmpegConcurrency` transient ffmpeg children.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func renderFramesAtOffsets(path: String,
+                                                  container: String,
+                                                  videoCodec: String,
+                                                  likelyUnanalyzable: Bool,
+                                                  offsets: [Double],
+                                                  ffmpegPath: String = ToolLocator.ffmpegPath,
+                                                  onFrame: (@Sendable (Double, CGImage) -> Void)? = nil) async throws -> [PreviewFilmstrip.Frame] {
+        guard !offsets.isEmpty else { return [] }
+        let route = PreviewFrameRouter.previewRoute(container: container,
+                                                    videoCodec: videoCodec,
+                                                    likelyUnanalyzable: likelyUnanalyzable)
+        let landed = try await ripRoutedFrames(path: path, route: route, offsets: offsets,
+                                               ffmpegPath: ffmpegPath,
+                                               onFrameProgress: nil, onFrame: onFrame)
+        guard !landed.isEmpty else { throw PreviewFrameError.noFrameProduced }
+        return landed.sorted { $0.offset < $1.offset }
+            .map { PreviewFilmstrip.Frame(offsetSeconds: $0.offset, image: $0.image) }
+    }
+
+    /// The routed rip tiers both strip modes share: `.avFoundation` tries
+    /// the one-asset batch first (a batch failure is swallowed and the
+    /// ffmpeg loop arbitrates, as in renderBestPreviewCGImage);
+    /// `.ffmpegDirect`, or an AVF batch that produced nothing, rips per
+    /// offset with bounded concurrency. Unordered result.
+    private nonisolated static func ripRoutedFrames(
+        path: String,
+        route: PreviewRoute,
+        offsets: [Double],
+        ffmpegPath: String,
+        onFrameProgress: (@Sendable (Int, Int) -> Void)?,
+        onFrame: (@Sendable (Double, CGImage) -> Void)? = nil) async throws -> [(offset: Double, image: CGImage)] {
+        if route == .avFoundation {
+            let batch = (try? await renderCandidateFramesViaAVFoundation(path: path,
+                                                                         offsets: offsets)) ?? []
+            try Task.checkCancellation()
+            if !batch.isEmpty {
+                onFrameProgress?(offsets.count, offsets.count)
+                for frame in batch { onFrame?(frame.offset, frame.image) }
+                return batch
+            }
+        }
+        return try await ripFilmstripFramesViaFFmpeg(path: path,
+                                                     offsets: offsets,
+                                                     ffmpegPath: ffmpegPath,
+                                                     onFrameProgress: onFrameProgress,
+                                                     onFrame: onFrame)
+    }
+
     /// ffmpeg filmstrip rips: one single-frame child per offset, at
     /// most `filmstripFFmpegConcurrency` in flight (sliding-window task
     /// group — same shape as ThumbnailPrecacher's window; no 16
@@ -622,7 +673,8 @@ enum PreviewFrameRenderer {
         path: String,
         offsets: [Double],
         ffmpegPath: String = ToolLocator.ffmpegPath,
-        onFrameProgress: (@Sendable (Int, Int) -> Void)?) async throws -> [(offset: Double, image: CGImage)] {
+        onFrameProgress: (@Sendable (Int, Int) -> Void)?,
+        onFrame: (@Sendable (Double, CGImage) -> Void)? = nil) async throws -> [(offset: Double, image: CGImage)] {
         let total = offsets.count
         var collected: [(offset: Double, image: CGImage)] = []
         collected.reserveCapacity(total)
@@ -660,7 +712,10 @@ enum PreviewFrameRenderer {
             }
             while let landed = try await group.next() {
                 attempted += 1
-                if let landed { collected.append((landed.0, landed.1)) }
+                if let landed {
+                    collected.append((landed.0, landed.1))
+                    onFrame?(landed.0, landed.1)
+                }
                 onFrameProgress?(attempted, total)
                 try Task.checkCancellation()
                 if let next = iterator.next() {

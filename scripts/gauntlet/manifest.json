@@ -9049,6 +9049,53 @@
       ]
     },
     {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CompareFilmstripMediaTests.swift",
+      "stage": "integration",
+      "suites": [
+        "CompareFilmstripMediaTests"
+      ],
+      "tests": [
+        "aviDV",
+        "cancelled",
+        "ffv1",
+        "fixedPositionsKeepLeader",
+        "framesCached",
+        "garbage",
+        "h264",
+        "missing",
+        "mxfAudioOnly",
+        "mxfVideoOnly",
+        "offline",
+        "poisonedCacheNotServed",
+        "prores",
+        "rightKeyServed"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CompareFilmstripTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CompareFilmstripLogicTests"
+      ],
+      "tests": [
+        "blockers",
+        "cacheKey",
+        "differentBytesPassThrough",
+        "fractions",
+        "hasPicture",
+        "identicalCoversDuration",
+        "identicalFullCoverageNotStale",
+        "identicalPaintsAllGreen",
+        "lengthMatchesTable",
+        "sameFractionsBothSides",
+        "slots",
+        "unplannable"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CompareMediaTests.swift",
       "stage": "unit",
@@ -32752,7 +32799,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2833,
+      "expected_floor": 2845,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -32885,6 +32932,7 @@
         "VideoScanTests/CombineBatchPlanTests",
         "VideoScanTests/CombineEngineArgsTests",
         "VideoScanTests/CombineTestCapTests",
+        "VideoScanTests/CompareFilmstripLogicTests",
         "VideoScanTests/CompareMediaTests",
         "VideoScanTests/CompareTests",
         "VideoScanTests/ConfirmJourneyStampTests",
@@ -33686,6 +33734,10 @@
         {
           "name": "VideoScan/VideoScanTests/CombinePipelineIntegrationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CompareFilmstripMediaTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
         {
           "name": "VideoScan/VideoScanTests/CoverArtMusicPurgeIntegrationTests.swift",
