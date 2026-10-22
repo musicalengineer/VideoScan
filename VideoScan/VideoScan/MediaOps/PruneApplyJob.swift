@@ -1,21 +1,18 @@
 // PruneApplyJob.swift
-// "Archived — what next?" → "Move N to Trash" as a Media File Operation
-// (Rick 2026-09-20: "the app blocks when post-promote delete of big
-// files, can't do anything, must wait"). The checklist's Apply reads
-// every duplicate in full before it goes — minutes per file on a tape
-// capture — and it used to do that behind the sheet, modally. Rule of the
-// app: nothing long runs behind a modal; long work is a Media File
-// Operation. So the sheet now hands its plan + the person's checks to
-// this job and closes; the job runs the SAME pipeline `applyPrune` runs
-// (VideoScanModel+PruneApply: prepare → one copy at a time → finish), one
-// file at a time, with Pause/Stop between files, progress by bytes
-// verified, every held copy named in the row's detail and in the log,
-// and the approval ledger line written at the end with the actual counts.
+// "Move N copies to the Trash" as a Media File Operation — the one job for
+// the one prune plan: "Archived — what next?" and Triage ▸ Clean up ▸ Excess
+// copies both start it (2026-10-21, docs/design/pruneplan_simple_2026-10-21.md).
+// Rick 2026-09-20: "the app blocks when post-promote delete of big files" —
+// every copy and its archive file are read in full before it goes (minutes
+// per file on a tape capture), so nothing of it runs behind a modal. The job
+// runs the SAME pipeline `applyPrune` runs (VideoScanModel+PruneApply:
+// prepare → one copy at a time → finish), with Pause/Stop between files,
+// progress by bytes read, every held copy named in the row's detail and in
+// the log, and the approval ledger line written at the end with the actual
+// counts. The Trash is the only destination: there is no mode to pass.
 //
-// One file in flight, always. Two would only be safe with both on SSD,
-// and the delete-safety rule outranks the speed-up for now — the archive
-// copy's evidence is shared across the batch (one read), so the cost per
-// copy is one read of the copy itself.
+// One file in flight, always. The archive file is read once per batch and
+// shared, so the cost per copy is one read of the copy itself.
 //
 // Stop: the file being checked is left where it is ("stopped" — its
 // verdict is thrown away), files already moved stay moved, the rest are
@@ -188,12 +185,13 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     let sequence: Int
 
     weak var model: VideoScanModel?
+    /// The plan the person saw (already capped to the rows shown).
     let shown: PrunePlan
     let selected: Set<UUID>
-    let recordIDs: [UUID]
-    let options: PrunePlan.Options
+    /// The scope `shown` was built for (nil = the whole catalog) — the fresh
+    /// plan at this batch's turn is built for the same scope.
+    let batch: Set<UUID>?
     let batchID: String?
-    let mode: VideoScanModel.JunkDeletionMode
     let hooks: VideoScanModel.PruneVerifyHooks
 
     @Published private(set) var rows: [Row] = []
@@ -284,25 +282,17 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     var canPause: Bool { !isQueued }
     var isPaused: Bool { isPausedValue }
 
-    init(model: VideoScanModel, shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID],
-         options: PrunePlan.Options, batchID: String?,
-         mode: VideoScanModel.JunkDeletionMode = .toTrash,
-         hooks: VideoScanModel.PruneVerifyHooks = .live) {
+    init(model: VideoScanModel, shown: PrunePlan, selected: Set<UUID>, batch: Set<UUID>?,
+         batchID: String?, hooks: VideoScanModel.PruneVerifyHooks = .live) {
         self.model = model
         self.shown = shown
         self.selected = selected
-        self.recordIDs = recordIDs
-        self.options = options
+        self.batch = batch
         self.batchID = batchID
-        self.mode = mode
         self.hooks = hooks
         Self.nextSequence += 1
         self.sequence = Self.nextSequence
-        var bytes: Int64 = 0
-        for family in shown.families {
-            for row in family.rows where selected.contains(row.id) { bytes += row.copy.sizeBytes }
-        }
-        self.selectedBytes = bytes
+        self.selectedBytes = shown.selectedBytes(selected)
     }
 
     // MARK: Log lines (pure — pinned by tests)
@@ -319,7 +309,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
     /// The START line's plan clause (after "trash copies: <title> — ").
     nonisolated static func startPlan(count: Int, bytes: Int64, waitedSeconds: Double?) -> String {
-        var text = "\(sizeClause(count: count, bytes: bytes)) — verify each copy against its archive copy, then move it to the Trash"
+        var text = "\(sizeClause(count: count, bytes: bytes)) — read each copy and its archive copy in full, then move it to the Trash"
         if let w = waitedSeconds { text += " (waited \(Int(w.rounded())) s in line; every copy is checked now, at its turn)" }
         return text
     }
@@ -495,13 +485,20 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         // running (a quit's stop-all): nothing to do, nothing touched.
         if stopRequested { finishCancelled(); return }
         let n = selected.count
-        model.log("\nArchived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each is checked byte-for-byte against the archive first.")
+        model.log("\nArchived — what next?: Trashing \(n) cop\(n == 1 ? "y" : "ies") in Media File Operations — each copy and its archive copy are read in full first.")
         pruneApplyLog.notice("prune BEGIN \(n, privacy: .public) checked copies \(self.selectedBytes, privacy: .public) bytes inherited-moved=\(self.movedEarlier.count, privacy: .public)")
 
         // The fresh plan and every per-copy check happen HERE, at this
         // batch's turn — never when it was queued.
-        let prepared = await model.preparePrune(shown: shown, selected: selected, recordIDs: recordIDs,
-                                                options: options, movedEarlier: movedEarlier)
+        let prepared = await model.preparePrune(shown: shown, selected: selected, batch: batch, movedEarlier: movedEarlier)
+        showPrepared(prepared)
+        let (trashed, errorLines) = await work(prepared.items, model: model)
+        model.finishPrune(trashed: trashed, batchID: batchID)
+        settle(errorLines: errorLines, model: model)
+    }
+
+    /// The rows before any byte is read: moved earlier, held, then pending.
+    private func showPrepared(_ prepared: VideoScanModel.PrunePrepared) {
         outcome.held = prepared.held.map(\.line)
         outcome.movedByEarlierBatch = prepared.movedEarlier.count
         rows = prepared.movedEarlier.map { Row(id: $0.copyID, filename: $0.filename, path: "", sizeBytes: $0.sizeBytes,
@@ -514,44 +511,35 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         progress.totalBytes = prepared.items.reduce(0) { $0 + $1.sizeBytes }
         isIndeterminateValue = false
         publishProgress()
-        guard !prepared.items.isEmpty else {
-            model.log("Archived — what next?: " + outcome.summary)
-            if stopRequested { finishCancelled() } else { finish(success: outcome.summary) }
-            return
-        }
+    }
 
+    /// The loop: one file in flight; Pause / Stop between files. Returns the
+    /// records moved and the copies whose MOVE went wrong.
+    private func work(_ items: [VideoScanModel.PruneItem], model: VideoScanModel) async -> ([VideoRecord], [String]) {
         // The pipeline's reads poll the job's Stop flag as well as the
         // caller's hook (tests).
         var jobHooks = hooks
         let flag = cancelFlag
         let outer = hooks.shouldCancel
         jobHooks.shouldCancel = { flag.isSet || outer() }
-
-        let batch = VideoScanModel.PruneBatchState()
-        var trashedRecords: [VideoRecord] = []
+        let state = VideoScanModel.PruneBatchState()
+        var trashed: [VideoRecord] = []
         var errorLines: [String] = []
-        for (i, item) in prepared.items.enumerated() {
+        for (i, item) in items.enumerated() {
             await waitWhilePaused()
             if stopRequested {
-                markStopped(from: i, items: prepared.items)
+                markStopped(from: i, items: items)
                 break
             }
             setRow(item.copyID, status: .verifying, note: "")
             let started = Date()
-            let one = await model.pruneOneCopy(item, batch: batch, mode: mode, hooks: jobHooks)
+            let one = await model.pruneOneCopy(item, batch: state, hooks: jobHooks)
             outcome.absorb(one, item: item)
-            if case .trashed = one.result {
+            if case .trashed = one.result, let rec = model.record(forID: item.copyID) {
                 trashedIDs.insert(item.copyID)
-                if let rec = model.record(forID: item.copyID) { trashedRecords.append(rec) }
+                trashed.append(rec)
             }
-            switch one.result {
-            case .trashed:          setRow(item.copyID, status: .trashed, note: one.readInFull ? "byte-identical to the archive copy" : (item.kind.isVersion ? "a version — on provenance" : "trusted on its promotion stamp"))
-            case .held(let why):    setRow(item.copyID, status: .held, note: why)
-                                    model.log("Archived — what next?: held back \(item.filename) — \(why)")
-            case .failed(let why):  setRow(item.copyID, status: .failed, note: why)
-            case .alreadyMissing:   setRow(item.copyID, status: .alreadyMissing, note: "already gone")
-            case .skippedOffline:   setRow(item.copyID, status: .skippedOffline, note: "drive not connected")
-            }
+            show(one.result, for: item, model: model)
             if let error = one.result.errorText {
                 errorLines.append("\(item.filename) — \(error)")
                 model.log("Archived — what next?: could not move \(item.filename) — \(error)")
@@ -560,8 +548,24 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
             progress.settle(bytes: item.sizeBytes, seconds: -started.timeIntervalSinceNow, result: one.result)
             publishProgress()
         }
+        return (trashed, errorLines)
+    }
 
-        outcome.overrideCount = model.finishPrune(fresh: prepared.fresh, trashed: trashedRecords, batchID: batchID, mode: mode)
+    /// One copy's row: state and reason (a hold is named in the log too).
+    private func show(_ result: VideoScanModel.PruneCopyResult, for item: VideoScanModel.PruneItem,
+                      model: VideoScanModel) {
+        switch result {
+        case .trashed:          setRow(item.copyID, status: .trashed, note: "byte-identical to the archive copy")
+        case .held(let why):    setRow(item.copyID, status: .held, note: why)
+                                model.log("Archived — what next?: held back \(item.filename) — \(why)")
+        case .failed(let why):  setRow(item.copyID, status: .failed, note: why)
+        case .alreadyMissing:   setRow(item.copyID, status: .alreadyMissing, note: "already gone")
+        case .skippedOffline:   setRow(item.copyID, status: .skippedOffline, note: "drive not connected")
+        }
+    }
+
+    /// The terminal state: Stop wins, then an error (drops the line), else done.
+    private func settle(errorLines: [String], model: VideoScanModel) {
         model.log("Archived — what next?: " + outcome.summary)
         pruneApplyLog.notice("prune DONE trashed=\(self.outcome.trashed, privacy: .public) bytes=\(self.outcome.trashedBytes, privacy: .public) movedEarlier=\(self.outcome.movedByEarlierBatch, privacy: .public) held=\(self.outcome.held.count, privacy: .public) failed=\(self.outcome.failed.count, privacy: .public) stopped=\(self.stopRequested, privacy: .public)")
         if !errorLines.isEmpty {
@@ -634,21 +638,19 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
 extension MediaFileOperationsCenter {
 
-    /// Start "Move N to Trash" as an MFO job (the sheet's confirmation
-    /// button). One at a time — two batches could name the same copy — but
+    /// Start "Move N to Trash" as an MFO job (the confirmation button of
+    /// "Archived — what next?" and of Triage's Excess copies pane). One at a time — two batches could name the same copy — but
     /// a second request while one runs is QUEUED, not refused (Rick
     /// 2026-09-22): it waits in its row, the sheet closes, and it starts
     /// when the batch before settles, re-checking every copy then.
-    /// `mode` is `.toTrash` from the sheet; tests pass `.permanent` so
-    /// fixtures never reach the real Trash (and `hooks` to act mid-batch).
+    /// Always the Trash; tests pass `hooks.removeFile` so fixtures never
+    /// reach the real Trash (and `hooks` to act mid-batch).
     @discardableResult
-    func startPruneApply(shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID],
-                         options: PrunePlan.Options, batchID: String?,
+    func startPruneApply(shown: PrunePlan, selected: Set<UUID>, batch: Set<UUID>?, batchID: String?,
                          model: VideoScanModel,
-                         mode: VideoScanModel.JunkDeletionMode = .toTrash,
                          hooks: VideoScanModel.PruneVerifyHooks = .live) -> PruneApplyJob {
-        let job = PruneApplyJob(model: model, shown: shown, selected: selected, recordIDs: recordIDs,
-                                options: options, batchID: batchID, mode: mode, hooks: hooks)
+        let job = PruneApplyJob(model: model, shown: shown, selected: selected, batch: batch,
+                                batchID: batchID, hooks: hooks)
         // Read the batch ahead BEFORE the new job joins the list: the list
         // is newest-first and the new job is not marked waiting yet, so
         // afterwards `runningPruneApply` would find the new job itself

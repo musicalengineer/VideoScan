@@ -275,20 +275,20 @@ struct ArchiveVolumeProtectionTests {
         let x = expansion.appendingPathComponent("test_prune_a.mov")
         try FileManager.default.copyItem(at: a, to: x)
         let recX = MasterArchiveTestSupport.makeRecord(path: x.path, userDate: "1992")
-        for r in [recA, recX, archive] { r.contentHash = "v1:test-archvol-a" }
+        let digest = try #require(archive.archiveFixity?.digest.lowercased())
+        recX.contentFixity = ContentFixity.captured(path: x.path, digest: digest, byteCount: recX.sizeBytes)
         model.records.append(recX)
-        let ids = [recA.id, recX.id]
+        let ids: Set<UUID> = [recA.id, recX.id]
 
-        let shown = await model.prunePlan(for: ids, options: .init(), isOnline: { _ in true })
-        let family = try #require(shown.families.first)
-        let row = try #require(family.rows.first { $0.id == recX.id }, "the copy is listed — \(family.rows)")
-        #expect(!row.checkable, "an archive-volume copy is never offered — \(row)")
-        #expect(!family.defaultSelection.contains(recX.id))
-        #expect(family.rows.first { $0.id == recA.id }?.checkable == true, "the sources copy still is")
+        // FamilyArchive is never listed (2026-10-21 simple plan); the source is offered.
+        let shown = await model.prunePlan(batch: ids, isOnline: { _ in true }).shown()
+        #expect(!shown.items.flatMap(\.rows).contains { $0.id == recX.id }, "an archive-volume copy is never listed — \(shown)")
+        #expect(shown.offeredIDs == [recA.id], "the source's copy still is")
 
         // Even when a caller insists (a stale sheet), nothing moves.
-        _ = await model.applyPrune(shown: shown, selected: [recX.id], recordIDs: ids, options: .init(),
-                                   batchID: "test-archvol", mode: .permanent)
+        var hooks = VideoScanModel.PruneVerifyHooks(shouldCancel: { false })
+        hooks.removeFile = { try FileManager.default.removeItem(at: $0) }
+        _ = await model.applyPrune(shown: shown, selected: [recX.id], batch: ids, batchID: "test-archvol", hooks: hooks)
         #expect(FileManager.default.fileExists(atPath: x.path))
         #expect(recX.purgedAt == nil)
     }

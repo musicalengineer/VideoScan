@@ -163,6 +163,8 @@ struct KeeperNeverInheritsRemovalStateTests {
         try FileManager.default.copyItem(at: a, to: a2)
         let recA2 = MasterArchiveTestSupport.makeRecord(path: a2.path, userDate: "1984")
         for r in [recA, recA2, archive] { r.contentHash = "v1:test-keeper-a" }
+        let digest = try #require(archive.archiveFixity?.digest.lowercased())
+        recA2.contentFixity = ContentFixity.captured(path: a2.path, digest: digest, byteCount: recA2.sizeBytes)
         model.records.append(recA2)
         await model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud", for: [recA.id, recA2.id]).flush?.value
 
@@ -172,11 +174,13 @@ struct KeeperNeverInheritsRemovalStateTests {
         archive.lifecycleStage = .cataloged
         recA2.archiveStage = .manuallyDeleted
 
-        let shown = await model.prunePlan(for: [recA.id, recA2.id], options: .init(), isOnline: { _ in true })
-        let row = try #require(shown.families.first?.rows.first { $0.id == recA2.id && $0.checkable },
-                               "fixture: the labelled copy is a checkable row — \(shown)")
-        let out = await model.applyPrune(shown: shown, selected: [row.id], recordIDs: [recA.id, recA2.id],
-                                         options: .init(), batchID: "keeper-test", mode: .permanent)
+        let batch: Set<UUID> = [recA.id, recA2.id]
+        let shown = await model.prunePlan(batch: batch, isOnline: { _ in true }).shown()
+        try #require(shown.offeredIDs.contains(recA2.id), "fixture: the labelled copy is offered — \(shown)")
+        var hooks = VideoScanModel.PruneVerifyHooks(shouldCancel: { false })
+        hooks.removeFile = { try FileManager.default.removeItem(at: $0) }
+        let out = await model.applyPrune(shown: shown, selected: [recA2.id], batch: batch,
+                                         batchID: "keeper-test", hooks: hooks)
         #expect(out.trashed == 1, "\(out)")
         #expect(archive.archiveStage == .none, "the archive copy took 'deleted': \(archive.archiveStage)")
         #expect(archive.lifecycleStage == .cataloged, "the archive copy took the trashed copy's 'Trashed': \(archive.lifecycleStage)")
