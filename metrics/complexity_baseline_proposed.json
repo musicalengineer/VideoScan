@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 398,
+ "entry_count": 397,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -1153,10 +1153,6 @@
   "VideoScan/VideoScan/MediaOps/VideoScanModel+RepairLifecycle.swift::VideoScanModel.applyHumanMetadataInheritance": {
    "ccn": 16,
    "nloc": 54
-  },
-  "VideoScan/VideoScan/Model/VideoScanModel.swift::VideoScanModel.init": {
-   "ccn": 16,
-   "nloc": 91
   },
   "VideoScan/VideoScan/People/ArcFaceEngine.swift::pfProcessVideoWithArcFace": {
    "ccn": 24,

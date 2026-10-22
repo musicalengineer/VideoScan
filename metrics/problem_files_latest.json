@@ -1,20 +1,20 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-21T09:45:37Z",
- "sha": "a027fb72",
+ "ts": "2026-10-22T09:45:07Z",
+ "sha": "1a2e4344",
  "formula_version": 1,
- "files_scored": 794,
+ "files_scored": 795,
  "rows": [
   {
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "offenders": 4,
    "worst_ccn": 20,
    "new_or_worse": 2,
-   "lines": 1844,
+   "lines": 1853,
    "could_be_private": 5,
    "widened_for_split": 21,
-   "churn_7d": 10,
-   "score": 95.9
+   "churn_7d": 11,
+   "score": 96.0
   },
   {
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
@@ -32,22 +32,22 @@
    "offenders": 2,
    "worst_ccn": 24,
    "new_or_worse": 1,
-   "lines": 1341,
-   "could_be_private": 12,
+   "lines": 1347,
+   "could_be_private": 11,
    "widened_for_split": 0,
-   "churn_7d": 19,
-   "score": 58.5
+   "churn_7d": 21,
+   "score": 57.1
   },
   {
    "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
-   "offenders": 1,
-   "worst_ccn": 16,
+   "offenders": 0,
+   "worst_ccn": 0,
    "new_or_worse": 0,
-   "lines": 1876,
+   "lines": 1903,
    "could_be_private": 6,
-   "widened_for_split": 31,
-   "churn_7d": 19,
-   "score": 55.0
+   "widened_for_split": 28,
+   "churn_7d": 22,
+   "score": 46.5
   },
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -105,17 +105,6 @@
    "score": 31.6
   },
   {
-   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 867,
-   "could_be_private": 27,
-   "widened_for_split": 0,
-   "churn_7d": 5,
-   "score": 27.7
-  },
-  {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift",
    "offenders": 4,
    "worst_ccn": 41,
@@ -138,6 +127,39 @@
    "score": 25.4
   },
   {
+   "file": "VideoScan/VideoScan/Catalog/CatalogStore.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 1753,
+   "could_be_private": 7,
+   "widened_for_split": 0,
+   "churn_7d": 11,
+   "score": 24.8
+  },
+  {
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 1317,
+   "could_be_private": 11,
+   "widened_for_split": 0,
+   "churn_7d": 18,
+   "score": 24.3
+  },
+  {
+   "file": "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift",
+   "offenders": 5,
+   "worst_ccn": 24,
+   "new_or_worse": 0,
+   "lines": 1704,
+   "could_be_private": 2,
+   "widened_for_split": 0,
+   "churn_7d": 2,
+   "score": 24.2
+  },
+  {
    "file": "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift",
    "offenders": 7,
    "worst_ccn": 32,
@@ -147,28 +169,6 @@
    "widened_for_split": 0,
    "churn_7d": 0,
    "score": 23.9
-  },
-  {
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift",
-   "offenders": 1,
-   "worst_ccn": 16,
-   "new_or_worse": 1,
-   "lines": 1569,
-   "could_be_private": 10,
-   "widened_for_split": 1,
-   "churn_7d": 2,
-   "score": 22.8
-  },
-  {
-   "file": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift",
-   "offenders": 3,
-   "worst_ccn": 20,
-   "new_or_worse": 0,
-   "lines": 1473,
-   "could_be_private": 5,
-   "widened_for_split": 2,
-   "churn_7d": 3,
-   "score": 21.4
   }
  ]
 }
