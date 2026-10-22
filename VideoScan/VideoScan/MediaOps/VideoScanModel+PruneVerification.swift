@@ -76,6 +76,9 @@ extension VideoScanModel {
 
     // MARK: The archive file, once per batch
 
+    /// The candidate's catalog digest no longer names the archive's bytes.
+    nonisolated static let catalogDigestChangedReason = "the catalog's record of this copy changed — kept"
+
     /// What a full read of the archive file proved, in this batch.
     struct PruneArchiveReading: Sendable, Equatable {
         let archiveID: UUID
@@ -159,6 +162,11 @@ extension VideoScanModel {
             return "the catalog row was rebuilt or retired since it was read — nothing moved"
         }
         guard rec.fullPath == p.path else { return "moved in the catalog since it was read — nothing moved" }
+        // R1 at the move (codex P2, I5): the catalog still says this copy IS
+        // the archive's bytes — the key its notes and marks are stored under.
+        guard CatalogCommit.digest(of: rec) == p.archiveDigest else {
+            return "\(Self.catalogDigestChangedReason) — nothing moved"
+        }
         guard let archive = record(forID: p.archiveID), archive.removal == nil, archive.fullPath == p.archivePath,
               Self.verifiedArchiveDigest(archive) == p.archiveDigest else {
             return "its archive copy is no longer the verified file that was read — nothing moved"

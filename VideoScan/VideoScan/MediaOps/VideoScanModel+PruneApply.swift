@@ -256,6 +256,9 @@ extension VideoScanModel {
             return .failure(PruneHold("no longer an active catalog record"))
         }
         guard rec.fullPath == item.path else { return .failure(PruneHold("moved in the catalog since the list was shown")) }
+        guard CatalogCommit.digest(of: rec) == item.archiveDigest else {   // R1, live (codex P2)
+            return .failure(PruneHold(Self.catalogDigestChangedReason))
+        }
         let archiveVolume = archiveVolumeProtection()
         if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
             return .failure(PruneHold(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume")))
