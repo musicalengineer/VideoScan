@@ -1,6 +1,6 @@
 // VideoRecordJSON.swift
 // The importer's OWN reading of one catalog.json row (step D′). It is a
-// plain `Decodable` mirror of all 129 keys of contract §a (source of truth:
+// plain `Decodable` mirror of all 131 keys of contract §a (source of truth:
 // `VideoRecord.CodingKeys`, C/VideoRecord+Codable.swift:34–102), with every
 // key OPTIONAL on read (contract §a "all keys are optional on READ").
 //
@@ -22,7 +22,7 @@ import Foundation
 
 public struct VideoRecordJSON: Decodable, Sendable, Equatable {
 
-    /// The 129 keys of contract §a, in `VideoRecord.CodingKeys` order (the
+    /// The 131 keys of contract §a, in `VideoRecord.CodingKeys` order (the
     /// contract table lists the same keys grouped its own way).
     public enum Key: String, CodingKey, CaseIterable, Sendable {
         case id, filename, ext, streamTypeRaw, size, sizeBytes, duration, durationSeconds
@@ -37,6 +37,7 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
         case avidClipName, avidMobID, avidMaterialUUID, avidBinFile, avidMobType
         case avidMediaPath, avidTapeName, avidEditRate, avidTracks
         case materialPackageUMID
+        case materialPackageName, isAvidRender   // 130, 131 — A/V pair matcher 2026-10-22
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
@@ -227,7 +228,7 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
         public var computedAt: CatalogJSONDate
     }
 
-    // MARK: Typed fields (129), CodingKeys order. nil = absent, null, or undecodable.
+    // MARK: Typed fields (131), CodingKeys order. nil = absent, null, or undecodable.
 
     public var id: String?
     public var filename: String?
@@ -279,6 +280,8 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
     public var avidEditRate: Double?
     public var avidTracks: String?
     public var materialPackageUMID: String?
+    public var materialPackageName: String?
+    public var isAvidRender: Bool?
     public var pairedWithID: String?
     public var pairGroupID: String?
     public var pairConfidence: String?
@@ -372,7 +375,7 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
     /// are only in `raw`.
     public var undecodable: [String]
 
-    /// Keys present in the row that are not one of the 129 (a future build's
+    /// Keys present in the row that are not one of the 131 (a future build's
     /// field). Kept in `raw`.
     public var unknownKeys: [String] {
         let known = Set(Key.allCases.map(\.rawValue))
@@ -442,6 +445,8 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
         avidEditRate = Self.read(c, .avidEditRate, &bad)
         avidTracks = Self.read(c, .avidTracks, &bad)
         materialPackageUMID = Self.read(c, .materialPackageUMID, &bad)
+        materialPackageName = Self.read(c, .materialPackageName, &bad)
+        isAvidRender = Self.read(c, .isAvidRender, &bad)
         pairedWithID = Self.read(c, .pairedWithID, &bad)
         pairGroupID = Self.read(c, .pairGroupID, &bad)
         pairConfidence = Self.read(c, .pairConfidence, &bad)

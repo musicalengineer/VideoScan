@@ -81,6 +81,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let avidEditRate: Double
     public let avidTracks: String
     public let materialPackageUMID: String
+    public let materialPackageName: String
+    public let isAvidRender: Bool
     /// Flattened from `VideoRecord.pairedWith?.id` — encode only ever read
     /// the partner's id, never the partner object.
     public let pairedWithID: UUID?
@@ -225,6 +227,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         avidEditRate                = r.avidEditRate
         avidTracks                  = r.avidTracks
         materialPackageUMID         = r.materialPackageUMID
+        materialPackageName         = r.materialPackageName
+        isAvidRender                = r.isAvidRender
         pairedWithID                = r.pairedWith?.id
         pairGroupID                 = r.pairGroupID
         pairConfidence              = r.pairConfidence
@@ -318,6 +322,23 @@ public struct VideoRecordDTO: Sendable, Encodable {
     // isEmpty / non-zero gating, and the encoder's date strategy are all
     // unchanged. Reuses VideoRecord.CodingKeys directly (same module, the
     // enum is internal-nested so it is visible here).
+    /// The MXF material-package identity — the file's own UMID, the Avid
+    /// clip name, the render flag (A/V pair matcher 2026-10-22) — each
+    /// written only when known, so every non-Avid row (and every
+    /// byte-identity golden) is unchanged. Same keys, same position in the
+    /// row as before; `encode(to:)` calls this in place.
+    private func encodeMaterialPackage(into c: inout KeyedEncodingContainer<VideoRecord.CodingKeys>) throws {
+        if !materialPackageUMID.isEmpty {
+            try c.encode(materialPackageUMID, forKey: .materialPackageUMID)
+        }
+        if !materialPackageName.isEmpty {
+            try c.encode(materialPackageName, forKey: .materialPackageName)
+        }
+        if isAvidRender {
+            try c.encode(isAvidRender, forKey: .isAvidRender)
+        }
+    }
+
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: VideoRecord.CodingKeys.self)
         try c.encode(id, forKey: .id)
@@ -372,9 +393,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         try c.encode(avidTapeName, forKey: .avidTapeName)
         try c.encode(avidEditRate, forKey: .avidEditRate)
         try c.encode(avidTracks, forKey: .avidTracks)
-        if !materialPackageUMID.isEmpty {
-            try c.encode(materialPackageUMID, forKey: .materialPackageUMID)
-        }
+        try encodeMaterialPackage(into: &c)
         try c.encodeIfPresent(pairedWithID, forKey: .pairedWithID)
         try c.encodeIfPresent(pairGroupID, forKey: .pairGroupID)
         try c.encodeIfPresent(pairConfidence, forKey: .pairConfidence)

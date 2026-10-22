@@ -84,14 +84,19 @@ import Testing
 
 @Suite struct ScoreCorrelatePairTests {
 
+    // The rubric under test is the shared score, so the default video is a
+    // NON-Avid file (2026-10-22: an Avid MXF video now pairs only on Avid
+    // identity — AvidPairEvidence — never on a .wav's duration). The two
+    // MXF-to-MXF cases carry the clip name every file of one clip shares.
     private func makeRecord(
-        filename: String = "test.mxf",
+        filename: String = "test.mov",
         directory: String = "/test",
         duration: Double = 60.0,
         streamType: StreamType = .videoOnly,
         timecode: String = "",
         tapeName: String = "",
-        dateCreated: Date? = nil
+        dateCreated: Date? = nil,
+        clipName: String = ""
     ) -> VideoRecord {
         let rec = VideoRecord()
         rec.filename = filename
@@ -101,12 +106,13 @@ import Testing
         rec.timecode = timecode
         rec.tapeName = tapeName
         rec.dateCreatedRaw = dateCreated
+        rec.materialPackageName = clipName
         return rec
     }
 
     @Test func filenameMatchScores4() {
-        let v = makeRecord(filename: "V01AB.mxf", streamType: .videoOnly)
-        let a = makeRecord(filename: "A01AB.mxf", streamType: .audioOnly)
+        let v = makeRecord(filename: "V01AB.mxf", streamType: .videoOnly, clipName: "01AB")
+        let a = makeRecord(filename: "A01AB.mxf", streamType: .audioOnly, clipName: "01AB")
         let vKey = CorrelationScorer.filenameCorrelationKey(v.filename)
         let result = CorrelationScorer.scoreCorrelatePair(
             video: v, audio: a, vKey: vKey,
@@ -155,9 +161,9 @@ import Testing
     @Test func highConfidenceAt7Plus() {
         let now = Date()
         let v = makeRecord(filename: "V01AB.mxf", directory: "/same", duration: 60.0,
-                          timecode: "01:00:00:00", dateCreated: now)
+                          timecode: "01:00:00:00", dateCreated: now, clipName: "01AB")
         let a = makeRecord(filename: "A01AB.mxf", directory: "/same", duration: 60.0,
-                          streamType: .audioOnly, timecode: "01:00:00:00", dateCreated: now)
+                          streamType: .audioOnly, timecode: "01:00:00:00", dateCreated: now, clipName: "01AB")
         let vKey = CorrelationScorer.filenameCorrelationKey(v.filename)
         let result = CorrelationScorer.scoreCorrelatePair(
             video: v, audio: a, vKey: vKey,

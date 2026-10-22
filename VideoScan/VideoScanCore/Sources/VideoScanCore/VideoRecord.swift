@@ -203,6 +203,19 @@ public class VideoRecord: Identifiable, Decodable {
     /// added (re-scan picks it up).
     public var materialPackageUMID: String = ""
 
+    /// The MXF's `material_package_name` format tag (2026-10-22, the A/V
+    /// pair matcher). Unlike the UMID — which a consolidate or transcode
+    /// re-mints for the new V file — every file of one Avid clip keeps the
+    /// clip's name (`00002.A1…`, `00002.A2…`, `00002.V1…` → "00002"), so it
+    /// is the identity the matcher pairs on (AvidPairEvidence). Empty for
+    /// non-MXF files and for MXFs not yet read ("Fill In Avid IDs" backfills).
+    public var materialPackageName: String = ""
+
+    /// True for an Avid render / precompute (an effect render, a title, a
+    /// mixdown): video by design with NO correct audio partner, so it never
+    /// pairs (AvidPairEvidence). Set at scan / backfill from AvidRenderSignal.
+    public var isAvidRender: Bool = false
+
     public var pairedWith: VideoRecord?
     /// Set during decode; CatalogStore resolves it to a real `pairedWith`
     /// reference after the entire array has been decoded.
@@ -818,6 +831,8 @@ public class VideoRecord: Identifiable, Decodable {
         avidEditRate                = try c.decodeIfPresent(Double.self, forKey: .avidEditRate) ?? 0
         avidTracks                  = try c.decodeIfPresent(String.self, forKey: .avidTracks) ?? ""
         materialPackageUMID         = try c.decodeIfPresent(String.self, forKey: .materialPackageUMID) ?? ""
+        materialPackageName         = try c.decodeIfPresent(String.self, forKey: .materialPackageName) ?? ""
+        isAvidRender                = try c.decodeIfPresent(Bool.self, forKey: .isAvidRender) ?? false
         pendingPairedWithID         = try c.decodeIfPresent(UUID.self, forKey: .pairedWithID)
         pairGroupID                 = try c.decodeIfPresent(UUID.self, forKey: .pairGroupID)
         pairConfidence              = try c.decodeIfPresent(PairConfidence.self, forKey: .pairConfidence)

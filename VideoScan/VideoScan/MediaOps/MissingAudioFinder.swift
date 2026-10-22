@@ -127,6 +127,8 @@ enum MissingAudioFinder {
         let dateCreatedRaw: Date?
         let timecode: String
         let tapeName: String
+        /// The Avid identity Correlate's pair rule reads (AvidPairEvidence).
+        var avid: AvidPairSide
 
         init(id: UUID, filename: String, fullPath: String, directory: String,
              durationSeconds: Double, dateCreatedRaw: Date? = nil,
@@ -139,6 +141,7 @@ enum MissingAudioFinder {
             self.dateCreatedRaw = dateCreatedRaw
             self.timecode = timecode
             self.tapeName = tapeName
+            self.avid = AvidPairSide(filename: filename)
         }
 
         init(snap: CorrelationScorer.Snap, fullPath: String) {
@@ -146,6 +149,7 @@ enum MissingAudioFinder {
                       directory: snap.directory, durationSeconds: snap.durationSeconds,
                       dateCreatedRaw: snap.dateCreatedRaw, timecode: snap.timecode,
                       tapeName: snap.tapeName)
+            self.avid = snap.avid
         }
 
         /// Correlate's strict filename key (Avid V/A aware).
@@ -340,6 +344,9 @@ enum MissingAudioFinder {
         let dateCreatedRaw: Date?
         var timecode: String = ""
         var tapeName: String = ""
+        /// A catalog record's Avid identity; nil for a file found on disk
+        /// (only its name is known).
+        var avid: AvidPairSide?
     }
 
     struct Match: Sendable, Equatable {
@@ -416,7 +423,11 @@ enum MissingAudioFinder {
         // selection is always thin); then the duration gate; then the
         // strict rubric floor.
         let pooled = keyMatch || dirMatch || durationHit || timestampHit
-        let gate = CorrelationScorer.durationGatePermitsFuzzyPair(
+        // Correlate's own formation gate — the Avid rule (an MXF video takes
+        // only an MXF of the same clip) and the duration gate — so the
+        // prediction can never promise a pair Correlate refuses.
+        let gate = CorrelationScorer.formationGatePasses(
+            video: v.avid, audio: a.avid ?? AvidPairSide(filename: a.filename),
             videoDuration: v.durationSeconds, audioDuration: a.durationSeconds,
             filenameKeyMatches: keyMatch)
         let willAccept = pooled && gate && strict != nil
@@ -437,7 +448,7 @@ enum MissingAudioFinder {
             let facts = AudioFacts(filename: h.snap.filename, directory: h.snap.directory,
                                    durationSeconds: h.snap.durationSeconds,
                                    dateCreatedRaw: h.snap.dateCreatedRaw,
-                                   timecode: h.snap.timecode, tapeName: h.snap.tapeName)
+                                   timecode: h.snap.timecode, tapeName: h.snap.tapeName, avid: h.snap.avid)
             switch evaluate(video: video, audio: facts, config: config) {
             case .belowFloor:
                 continue

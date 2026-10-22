@@ -244,6 +244,7 @@ extension VideoScanModel {
             do {
                 let result = try SQLiteCatalogLoader.build(launch.snapshot)
                 adoptSQLiteAuthority(launch, url: url, records: result.records, held: result.heldIDs)
+                releaseStoredPairsAfterLaunch(result.records)
                 catalogAuthorityNote("OUTCOME loaded \(result.summary)")
                 return result.records
             } catch {
@@ -401,6 +402,29 @@ extension VideoScanModel {
     }
 
     /// The one sink: console + catalog.log, videoscan.log, the unified log.
+    /// Release the stored pairs the Avid evidence proves wrong (a render, an
+    /// MXF video's non-MXF partner, two different Avid clip names —
+    /// AvidPairEvidence; the build already applied every older check, so
+    /// only these remain) AFTER the committer's baseline, so the launch
+    /// commit writes the release (row_knowledge 'pair' cleared on both
+    /// rows). Catalog only — no media file is touched. On a read-only
+    /// launch the release holds for this session and nothing is written.
+    func releaseStoredPairsAfterLaunch(_ records: [VideoRecord]) {
+        let outcome = CorrelationScorer.releaseInvalidPairs(in: records)
+        if let text = Self.releasedPairsText(outcome, context: "at launch") { catalogAuthorityNote(text) }
+    }
+
+    /// The count line, then one line per released pair — ONE string, so
+    /// the console publishes once (the 10ae1be per-line storm). nil when
+    /// nothing was released.
+    static func releasedPairsText(_ outcome: (clearedEndpoints: Int, released: [CorrelationScorer.ReleasedPair]),
+                                  context: String) -> String? {
+        guard outcome.clearedEndpoints > 0 else { return nil }
+        let head = "released \(outcome.released.count) stored A/V pair(s) \(context) "
+            + "(\(outcome.clearedEndpoints) link end(s) cleared; catalog only — no media touched)"
+        return ([head] + outcome.released.map { "  " + $0.line }).joined(separator: "\n")
+    }
+
     func catalogAuthorityNote(_ line: String) {
         log("Catalog store: " + line)
         appLog.write("[catalog-store] " + line)

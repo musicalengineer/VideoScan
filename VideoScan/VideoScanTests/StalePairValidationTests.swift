@@ -88,6 +88,10 @@ struct StalePairValidationTests {
                                     duration: 125.6255)
         let compatibleAudio = makeRecord("00001.A14D1BBD3F.mxf", streamType: .audioOnly,
                                          duration: 3798.261)
+        // Same Avid clip (AvidPairEvidence, 2026-10-22: an MXF video pairs
+        // only on Avid identity).
+        video.materialPackageName = "00001"
+        compatibleAudio.materialPackageName = "00001"
         link(video, staleAudio)
         model.records = [video, staleAudio, compatibleAudio]
 
@@ -106,6 +110,8 @@ struct StalePairValidationTests {
                                     duration: 125.6255)
         let compatibleAudio = makeRecord("00001.A14D1BBD3F.mxf", streamType: .audioOnly,
                                          duration: 3798.261)
+        video.materialPackageName = "00001"
+        compatibleAudio.materialPackageName = "00001"
         link(video, staleAudio)
 
         let selection = try #require(CorrelationScorer.preferredPair(

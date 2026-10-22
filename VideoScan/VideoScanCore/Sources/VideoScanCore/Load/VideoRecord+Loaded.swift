@@ -108,6 +108,7 @@ extension VideoRecord {
         ("avidMaterialUUID", \.avidMaterialUUID), ("avidBinFile", \.avidBinFile), ("avidMobType", \.avidMobType),
         ("avidMediaPath", \.avidMediaPath), ("avidTapeName", \.avidTapeName), ("avidTracks", \.avidTracks),
         ("materialPackageUMID", \.materialPackageUMID),
+        ("materialPackageName", \.materialPackageName),
     ]
 
     private static let probeOptionalStrings: [(String, ReferenceWritableKeyPath<VideoRecord, String?>)] = [
@@ -122,6 +123,7 @@ extension VideoRecord {
         for (key, path) in Self.probeOptionalStrings { if let s = extra[key]?.stringValue { self[keyPath: path] = s } }
         avidEditRate = extra["avidEditRate"]?.doubleValue ?? 0
         drmProtected = extra["drmProtected"]?.boolValue ?? false
+        isAvidRender = extra["isAvidRender"]?.boolValue ?? false
         // The importer moved a lone embedded date or source here (the DDL
         // wants both or neither in the columns); it comes back as it was.
         if f.embeddedCreatedAt == nil, let text = extra["embeddedCreationDate"]?.stringValue {

@@ -38,7 +38,11 @@ Two copiers touch nearly every field and are not repeated per row: **CLONE** `sn
 `A/Catalog/VideoScanModel+RescanPreservation.swift` (capture :337–385, restore `apply(to:)` :439–492). A field
 WITHOUT **R** is lost or recomputed on a rescan today.
 
-## a. Field inventory — `VideoRecord` (129 JSON keys)
+## a. Field inventory — `VideoRecord` (131 JSON keys)
+
+> **Additive amendment 2026-10-22 (Rick-approved A/V pair-matcher fix):** rows 130–131
+> (`materialPackageName`, `isAvidRender`) are new `probe_extra` keys, written only when known. No SQLite
+> schema change: `probe_extra` is a JSON column. Rows 1–129 are unchanged.
 
 Source of truth: `CodingKeys` `C/VideoRecord+Codable.swift:34–102` (129 cases); decoder `C/VideoRecord.swift:756–972`;
 encoder `C/VideoRecordDTO.swift:321ff`. Non-persisted stored state, out of the contract: `pairedWith` (object ref;
@@ -195,6 +199,8 @@ L = lineage / relation · V = display copy of another field. **Fate**: `col` = c
 | 127 | perceptualFingerprint | StoredPerceptualFingerprint? | P | S bound (size + recipe) | `A/Media/VideoScanModel+PerceptualFingerprints.swift:99,109,133`; R:492 (size match) | T:perceptual_prints |
 | 128 | mediaReportCard | MediaReportCard? | P | S unbound | CM:270; MediaRepairJob:212,256 | media_checks `reportCard` |
 | 129 | audioFingerprint | AudioFingerprintStamp? | P | S bound (`contentDigest`) | `A/MediaOps/VideoScanModel+AudioFingerprintBackfill.swift:48,58` ← AudioFingerprintBackfillJob:541 | T:sound_prints (sha256-keyed only) |
+| 130 | materialPackageName | String | N | D (MXF tag) | ScanEngine `material_package_name`; Fill In Avid IDs (`A/MediaOps/AvidIDBackfillJob.swift`) | X |
+| 131 | isAvidRender | Bool | N | D (MXF name / header) | ScanEngine via AvidRenderSignal; Fill In Avid IDs | X |
 
 **Roll-up** (one role per row): D 41 · S 39 · C 14 · L 13 · B 11 · V 7 · unclear 4 = 129. **Lost on a rescan
 today** (no R): every verify field, `contentFixity`, `audioFingerprint`, `mediaReportCard`, `archivedAt`,

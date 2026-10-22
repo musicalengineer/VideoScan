@@ -108,6 +108,13 @@ enum ScanEngine {
         // store it verbatim — the substitute-file resolver matches by
         // exact string, no normalization needed.
         r.materialPackageUMID = fmtTags["material_package_umid"] ?? ""
+        // The clip's name — the identity every file of one Avid clip shares,
+        // even a consolidated V whose UMID was re-minted (AvidPairEvidence,
+        // 2026-10-22). A render's name has Avid's `<seq>,<effect>,<n>` shape;
+        // the header's precompute marker is checked where the path is known
+        // (`applyProbeOrFallback`).
+        r.materialPackageName = fmtTags["material_package_name"] ?? ""
+        r.isAvidRender = AvidRenderSignal.nameLooksLikeRender(r.materialPackageName)
 
         // Embedded creation date + origin (2026-08-16): the container's own
         // creation stamp (survives copies, unlike filesystem dates) and the
@@ -233,6 +240,12 @@ enum ScanEngine {
                 // to the old unconditional VideoRecord.apply(extractMetadata()).
                 o.probe = extractMetadata(probe: probe)
             }
+            // An Avid precompute whose name does not say so: the header's
+            // "Precompute Source Mob" (read-only, first 256 KB, MXF only).
+            if url.pathExtension.lowercased() == "mxf", !o.probe.isAvidRender,
+               let header = AvidRenderSignal.readHeader(path: path) {
+                o.probe.isAvidRender = AvidRenderSignal.headerHasPrecomputeMarker(header)
+            }
             if !stderrTrimmed.isEmpty {
                 // GH #176: every stderr line signed "ffprobe: …" so the
                 // author is on the line and no later reader mistakes it
@@ -244,6 +257,8 @@ enum ScanEngine {
         if url.pathExtension.lowercased() == "mxf" {
             if let mxf = MxfHeaderParser.parse(fileAt: path) {
                 applyMxfMetadata(mxf, into: &o.probe)
+                o.probe.isAvidRender = AvidRenderSignal.readHeader(path: path)
+                    .map(AvidRenderSignal.headerHasPrecomputeMarker) ?? false
                 let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
                 o.notes = MachineNote.line(author: .scan, text: "MXF header parsed (ffprobe failed: \(reason))")
             } else {

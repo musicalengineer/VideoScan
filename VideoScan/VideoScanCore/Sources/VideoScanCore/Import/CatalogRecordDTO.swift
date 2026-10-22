@@ -34,7 +34,7 @@ import Foundation
 
 public struct CatalogRecordDTO: Codable, Sendable, Equatable {
 
-    // MARK: - Where each of the 129 keys goes (contract §a "Fate")
+    // MARK: - Where each of the 131 keys goes (contract §a "Fate")
 
     public enum Fate: String, Codable, Sendable, Equatable {
         /// A `files` column.
@@ -54,6 +54,7 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
         .originMake, .originModel, .originEncoder,
         .avidClipName, .avidMobID, .avidMaterialUUID, .avidBinFile, .avidMobType, .avidMediaPath,
         .avidTapeName, .avidEditRate, .avidTracks, .materialPackageUMID,
+        .materialPackageName, .isAvidRender,
         .drmProtected, .proAppsMediaIdentifier,
     ]
 

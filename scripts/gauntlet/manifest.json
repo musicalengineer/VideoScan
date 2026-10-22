@@ -1776,12 +1776,12 @@
         "theCuratedFieldsAreTheDDLKnowledgeFields",
         "theDuplicateConfidenceListEqualsThePairList",
         "theFullRowBindsItsSha256SoundPrint",
-        "theFullRowCarriesAll129Keys",
+        "theFullRowCarriesAll131Keys",
         "theFullRowCarriesEveryCuratedField",
         "theFullRowHasAnAgreeingDigestAndContentRow",
         "theFullRowHasOneKnowledgeSourcePerCuratedField",
         "theFullRowMapsEveryProbeExtraKey",
-        "theMirrorHasTheContracts129Keys",
+        "theMirrorHasTheContracts131Keys",
         "thePathFoldKeepsDiacriticsAndFoldsCase",
         "thePlaceConfidenceListEqualsTheDateList",
         "thePoisonedMarkersDoNotCostARow",
@@ -6189,6 +6189,57 @@
         "searchMatchesTranscriptSubstring",
         "searchTolerantOfNilTranscript",
         "transcribesFixtureEndToEnd"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AvidIDBackfillTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AvidIDFillLogicTests",
+        "AvidIDBackfillJobTests",
+        "AvidIDMediaMatrixTests",
+        "AvidPairLaunchReleaseTests"
+      ],
+      "tests": [
+        "controlsMp4MovMkvAviAreUnaffected",
+        "fillsOnlineFilesSkipsOfflineDrivesAndReleasesWhatTheIDsDisprove",
+        "opAtomVideoAndAudioOfOneClipPairAndARenderNeverDoes",
+        "refusedOnAReadOnlyCatalog",
+        "renderNamesAreRecognisedAndClipNamesAreNot",
+        "renderToNonMXFLinksAreReleasedAtLaunchAndTheReleaseIsWritten",
+        "tagsBecomeTheThreeFields",
+        "theFillOnlyFillsEmptyFieldsAndNeverClearsARender",
+        "thePlanAt100kIsLinear",
+        "thePlanIsLiveMXFRowsMissingAnID",
+        "thePrecomputeMarkerIsFoundInUTF16BigEndianAtAnyOffset"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AvidPairMatcherTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AvidPairMatcherLogicTests",
+        "AvidPairMatcherScaleTests"
+      ],
+      "tests": [
+        "aRenderNeverPairs",
+        "bulkCorrelateMakesNoBadPairsAt100k",
+        "consolidateCounterSuffixIsTheSameClip",
+        "consolidatedVideoWithDifferentUMIDButSameNamePairs",
+        "legacyCorrelatorHonoursTheRule",
+        "missingIDsMakeNoNewPairButKeepAStoredOne",
+        "mxfVideoWithWavOrAifPartnerIsRefused",
+        "nonMXFFilesAreUnaffected",
+        "preferredPairIgnoresAStoredRenderLink",
+        "sameNamePairs",
+        "sameUMIDPairs",
+        "sensorNoBadStoredPairSurvivesRevalidationAt100k",
+        "tinyMXFVideoAgainstTinyNonMXFAudioIsRefused",
+        "twoDifferentNamesReleaseAStoredPair"
       ]
     },
     {
@@ -30966,6 +31017,14 @@
         {
           "name": "VideoScan/VideoScanTests/AudioTranscriberTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/AvidIDBackfillTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/AvidPairMatcherTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/BackupAttestationJournalTests.swift",

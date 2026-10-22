@@ -891,6 +891,10 @@ struct VideoScanApp: App {
                 // fingerprint backfill as an MFO job; confirm sheet first;
                 // restart = resume.
                 AudioFingerprintBackfillMenuItem(model: catalogModel)
+                // Fill In Avid IDs (2026-10-22): the Avid clip name + UMID of
+                // every MXF missing one, renders marked, then the stored A/V
+                // pairs the IDs prove wrong released. MFO job; read-only on media.
+                AvidIDBackfillMenuItem(model: catalogModel, center: fileOpsCenter, isReadOnly: catalogModel.isReadOnly)
                 Divider()
                 // Validate Catalog (Rick 2026-10-20, ONE verb): every live
                 // row on a connected drive is stat'ed (gone → Missing, back

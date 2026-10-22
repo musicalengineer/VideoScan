@@ -189,6 +189,7 @@ enum RichRecord {
         r.avidClipName = "Clip 7"; r.avidMobID = "mob-7"; r.avidMaterialUUID = "mat-7"; r.avidBinFile = "Bin.avb"
         r.avidMobType = "MasterMob"; r.avidMediaPath = "/Avid MediaFiles/MXF/1"; r.avidTapeName = "TAPE 7"
         r.avidEditRate = 29.97; r.avidTracks = "V1, A1-A2"; r.materialPackageUMID = "060a2b34-umid"
+        r.materialPackageName = "00007"; r.isAvidRender = true
         r.drmProtected = true
         r.proAppsMediaIdentifier = "pro-apps-7"
     }

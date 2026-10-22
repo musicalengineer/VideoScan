@@ -57,12 +57,22 @@ enum SQLiteCatalogLoader {
         }
     }
 
-    /// Display pass + snapshot (off the main actor), then the records.
+    /// Display pass + snapshot (off the main actor), then the records, with
+    /// the Avid-evidence releases applied in memory too (a viewer / undo
+    /// reload: no committer of its own to persist them).
     static func load(repository: any CatalogRepository) async throws -> LoadResult {
-        try build(try await CatalogLoad.read(repository))
+        let result = try build(try await CatalogLoad.read(repository))
+        _ = CorrelationScorer.releaseInvalidPairs(in: result.records)
+        return result
     }
 
-    /// The records for a snapshot, pairs rewired.
+    /// The records for a snapshot, pairs rewired and checked as every load
+    /// always did — EXCEPT the Avid evidence (AvidPairEvidence, 2026-10-22):
+    /// the launch applies that only AFTER the committer has taken its
+    /// baseline (`releaseStoredPairsAfterLaunch`), so those releases are a
+    /// change the launch commit writes. (Released before the baseline they
+    /// would never be saved and would come back from the store at every
+    /// launch.)
     static func build(_ snapshot: CatalogLoad.Snapshot) throws -> LoadResult {
         let formatter = VideoRecord.makeRowDateFormatter()
         var records: [VideoRecord] = []
@@ -102,7 +112,8 @@ enum SQLiteCatalogLoader {
     /// `pendingPairedWithID` → `pairedWith`, the same rule as
     /// CatalogStore.decode: a partner that did not load (quarantined)
     /// leaves no half-pair behind; then the persisted pairs are
-    /// re-validated like every other load.
+    /// re-validated like every other load (the Avid evidence excepted —
+    /// see `build`).
     static func rewirePairs(_ records: [VideoRecord]) {
         var byID: [UUID: VideoRecord] = [:]
         byID.reserveCapacity(records.count)
@@ -116,6 +127,6 @@ enum SQLiteCatalogLoader {
                 record.pairConfidence = nil
             }
         }
-        _ = CorrelationScorer.revalidateExistingPairs(in: records)
+        _ = CorrelationScorer.releaseInvalidPairs(in: records, includingAvidEvidence: false)
     }
 }

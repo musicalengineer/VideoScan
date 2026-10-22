@@ -30,6 +30,20 @@ extension CorrelationScorer {
         let dateCreatedRaw: Date?
         let timecode: String
         let tapeName: String
+        /// The Avid identity the pair rule reads (AvidPairEvidence).
+        let avid: AvidPairSide
+
+        init(id: UUID, filename: String, directory: String, durationSeconds: Double,
+             dateCreatedRaw: Date?, timecode: String, tapeName: String, avid: AvidPairSide? = nil) {
+            self.id = id
+            self.filename = filename
+            self.directory = directory
+            self.durationSeconds = durationSeconds
+            self.dateCreatedRaw = dateCreatedRaw
+            self.timecode = timecode
+            self.tapeName = tapeName
+            self.avid = avid ?? AvidPairSide(filename: filename)
+        }
     }
 
     /// Main-actor boundary: capture one record's scoring signals.
@@ -41,7 +55,8 @@ extension CorrelationScorer {
              durationSeconds: r.durationSeconds,
              dateCreatedRaw: r.dateCreatedRaw,
              timecode: r.timecode,
-             tapeName: r.tapeName)
+             tapeName: r.tapeName,
+             avid: AvidPairSide(r))
     }
 
     /// One pairing decision, ready to apply on the main actor. Filenames
@@ -138,6 +153,7 @@ extension CorrelationScorer {
             byKey[filenameCorrelationKey(a.filename), default: []].append(i)
             byDir[a.directory, default: []].append(i)
         }
+        let avidIndex = AvidAudioIndex(audios)
 
         struct SnapCandidate {
             let vIndex: Int
@@ -150,36 +166,25 @@ extension CorrelationScorer {
 
         for (vi, v) in videos.enumerated() {
             let vKey = filenameCorrelationKey(v.filename)
-            // Gather (legacy gatherCandidateAudios shape).
-            var seen = Set<Int>()
-            var pool: [Int] = []
-            for ai in byKey[vKey] ?? [] where seen.insert(ai).inserted { pool.append(ai) }
-            for ai in byDir[v.directory] ?? [] where seen.insert(ai).inserted { pool.append(ai) }
-            if pool.count < 5 {
-                for (ai, a) in audios.enumerated() where !seen.contains(ai) {
-                    let durationHit = v.durationSeconds > 0 && a.durationSeconds > 0 &&
-                        abs(v.durationSeconds - a.durationSeconds) <= durationTolerance
-                    let timestampHit: Bool
-                    if let vDate = v.dateCreatedRaw, let aDate = a.dateCreatedRaw {
-                        timestampHit = abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance
-                    } else {
-                        timestampHit = false
-                    }
-                    if (durationHit || timestampHit) && seen.insert(ai).inserted {
-                        pool.append(ai)
-                    }
-                }
-            }
+            let pool = v.avid.isMXF || v.avid.isRender
+                // An Avid MXF video may pair ONLY with an MXF of the same
+                // clip (AvidPairEvidence): its pool is that index lookup —
+                // never the directory, never the catalog-wide thin-pool scan
+                // that joined 0.17 s renders to Logic samples.
+                ? avidIndex.candidates(for: v.avid)
+                : gatherPool(v, vKey: vKey, audios: audios, byKey: byKey, byDir: byDir,
+                             durationTolerance: durationTolerance, timestampTolerance: timestampTolerance)
             // Score.
             for ai in pool {
                 let a = audios[ai]
-                // GH #125 duration gate at pair formation: a 3808 s video
-                // must never be OFFERED a 125 s audio, no matter how the
-                // other signals coincide. Unknown durations pass only on
-                // an exact filename-key identity match (MAJOR 1) — the
-                // OMFI tape-name shape whose ffprobe duration is missing;
-                // otherwise do nothing rather than conflate.
-                guard durationGatePermitsFuzzyPair(
+                // The pair-formation gate: the Avid rule, then GH #125 — a
+                // 3808 s video must never be OFFERED a 125 s audio, no
+                // matter how the other signals coincide. Unknown durations
+                // pass only on an exact filename-key identity match (MAJOR
+                // 1) — the OMFI tape-name shape whose ffprobe duration is
+                // missing; otherwise do nothing rather than conflate.
+                guard formationGatePasses(
+                    video: v.avid, audio: a.avid,
                     videoDuration: v.durationSeconds,
                     audioDuration: a.durationSeconds,
                     filenameKeyMatches: vKey == filenameCorrelationKey(a.filename)
@@ -218,6 +223,61 @@ extension CorrelationScorer {
                                       audioFilename: audios[c.aIndex].filename))
         }
         return out
+    }
+
+    /// The candidate pool for a NON-Avid video (legacy gatherCandidateAudios
+    /// shape, unchanged): by filename key, by directory, and — only when
+    /// that pool is thin — every audio within the duration or timestamp
+    /// tolerance.
+    private static func gatherPool(_ v: Snap, vKey: String, audios: [Snap],
+                                   byKey: [String: [Int]], byDir: [String: [Int]],
+                                   durationTolerance: Double, timestampTolerance: TimeInterval) -> [Int] {
+        var seen = Set<Int>()
+        var pool: [Int] = []
+        for ai in byKey[vKey] ?? [] where seen.insert(ai).inserted { pool.append(ai) }
+        for ai in byDir[v.directory] ?? [] where seen.insert(ai).inserted { pool.append(ai) }
+        guard pool.count < 5 else { return pool }
+        for (ai, a) in audios.enumerated() where !seen.contains(ai) {
+            let durationHit = v.durationSeconds > 0 && a.durationSeconds > 0 &&
+                abs(v.durationSeconds - a.durationSeconds) <= durationTolerance
+            let timestampHit: Bool
+            if let vDate = v.dateCreatedRaw, let aDate = a.dateCreatedRaw {
+                timestampHit = abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance
+            } else {
+                timestampHit = false
+            }
+            if (durationHit || timestampHit) && seen.insert(ai).inserted {
+                pool.append(ai)
+            }
+        }
+        return pool
+    }
+
+    /// Audio MXFs indexed by Avid identity (UMID, clip name), so an Avid
+    /// video's pool is two hash lookups — O(1) per video instead of the
+    /// O(audios) thin-pool scan (466 s for 5k × 20k in Debug before this).
+    /// (For Rick: two `unordered_map<string, vector<int>>`.)
+    struct AvidAudioIndex {
+        private var byUMID: [String: [Int]] = [:]
+        private var byName: [String: [Int]] = [:]
+
+        init(_ audios: [Snap]) {
+            for (i, a) in audios.enumerated() where a.avid.isMXF && !a.avid.isRender {
+                if !a.avid.umid.isEmpty { byUMID[a.avid.umid, default: []].append(i) }
+                if !a.avid.clipName.isEmpty { byName[a.avid.clipName, default: []].append(i) }
+            }
+        }
+
+        /// Every audio that shares the video's UMID or clip name; none for a
+        /// render or an MXF video with no Avid ID.
+        func candidates(for v: AvidPairSide) -> [Int] {
+            guard !v.isRender else { return [] }
+            var seen = Set<Int>()
+            var out: [Int] = []
+            if !v.umid.isEmpty { for i in byUMID[v.umid] ?? [] where seen.insert(i).inserted { out.append(i) } }
+            if !v.clipName.isEmpty { for i in byName[v.clipName] ?? [] where seen.insert(i).inserted { out.append(i) } }
+            return out
+        }
     }
 
     // MARK: - Avid cross-volume pipeline (off-main)

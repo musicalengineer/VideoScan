@@ -44,6 +44,7 @@ extension VideoRecord {
         case avidClipName, avidMobID, avidMaterialUUID, avidBinFile, avidMobType
         case avidMediaPath, avidTapeName, avidEditRate, avidTracks
         case materialPackageUMID
+        case materialPackageName, isAvidRender   // A/V pair matcher 2026-10-22, additive
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount

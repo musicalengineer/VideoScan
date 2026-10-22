@@ -89,6 +89,20 @@ enum CorrelationScorer {
         return filenameKeyMatches
     }
 
+    /// THE pair-FORMATION gate, both halves in one place, for every site
+    /// that may make a new pair (scoreCorrelatePair → findBestPair,
+    /// assignPairs, Correlator.scoreCandidate, and MissingAudioFinder's
+    /// "Correlate will accept" prediction): the Avid rule
+    /// (AvidPairEvidence — an MXF video pairs only with an MXF of the same
+    /// clip; a render never pairs), then the GH #125 duration gate.
+    static func formationGatePasses(video: AvidPairSide, audio: AvidPairSide,
+                                    videoDuration: Double, audioDuration: Double,
+                                    filenameKeyMatches: Bool) -> Bool {
+        guard AvidPairEvidence.permitsNewPair(video: video, audio: audio) else { return false }
+        return durationGatePermitsFuzzyPair(videoDuration: videoDuration, audioDuration: audioDuration,
+                                            filenameKeyMatches: filenameKeyMatches)
+    }
+
     // MARK: - Persisted-Pair Validation
 
     /// Validate historical/manual pair evidence without requiring it to
@@ -109,20 +123,62 @@ enum CorrelationScorer {
             return false
         }
 
+        return releaseReason(video: video, audio: audio) == nil
+    }
+
+    /// Why a stored video/audio pair must be released; nil = keep it. The
+    /// Avid rule (AvidPairEvidence, 2026-10-22) releases only on positive
+    /// evidence — a render, a non-MXF partner of an MXF video, two different
+    /// clip names; a missing ID keeps the link. Known durations must satisfy
+    /// today's hard gate; unknown durations keep it (old Avid essence often
+    /// lacks a usable container duration).
+    static func releaseReason(video: VideoRecord, audio: VideoRecord, includingAvidEvidence: Bool = true) -> String? {
+        if includingAvidEvidence,
+           let why = AvidPairEvidence.releaseReason(video: AvidPairSide(video), audio: AvidPairSide(audio)) {
+            return why
+        }
         let videoKnown = video.durationSeconds > 0 && video.durationSeconds.isFinite
         let audioKnown = audio.durationSeconds > 0 && audio.durationSeconds.isFinite
-        guard videoKnown && audioKnown else { return true }
-        return durationCompatible(videoDuration: video.durationSeconds,
-                                  audioDuration: audio.durationSeconds)
+        guard videoKnown && audioKnown else { return nil }
+        guard durationCompatible(videoDuration: video.durationSeconds,
+                                 audioDuration: audio.durationSeconds) else {
+            return String(format: "durations cannot be one program (%.3f s video, %.3f s audio)",
+                          video.durationSeconds, audio.durationSeconds)
+        }
+        return nil
+    }
+
+    /// One released stored pair, in words for the log ("released pair:
+    /// X ↔ Y — reason").
+    struct ReleasedPair: Equatable, Sendable {
+        let first: String
+        let second: String
+        let reason: String
+        var line: String { "released pair: \(first) \u{2194} \(second) — \(reason)" }
     }
 
     /// Remove invalid direct links from a live catalog graph. This is O(n)
     /// and runs only at load/import/correlation boundaries, never in a view.
     /// Purged pairs retain their historical relation for restore workflows.
+    /// Returns the number of endpoints cleared.
     @discardableResult
     static func revalidateExistingPairs(in records: [VideoRecord]) -> Int {
+        releaseInvalidPairs(in: records).clearedEndpoints
+    }
+
+    /// `revalidateExistingPairs` with its reasons — one entry per released
+    /// pair. Clearing touches the CATALOG only (both sides' link fields),
+    /// never a media file; the caller's save persists it.
+    /// `includingAvidEvidence: false` is the pre-2026-10-22 check alone
+    /// (dangling / one-sided links, wrong stream types, impossible
+    /// durations) — what the SQLite build applies before the launch
+    /// baseline, unchanged; the Avid releases then run after it, so the
+    /// launch commit writes exactly those.
+    static func releaseInvalidPairs(in records: [VideoRecord],
+                                    includingAvidEvidence: Bool = true) -> (clearedEndpoints: Int, released: [ReleasedPair]) {
         let catalogInstances = Set(records.map(ObjectIdentifier.init))
         var invalidIDs = Set<UUID>()
+        var released: [ReleasedPair] = []
 
         for record in records {
             guard let partner = record.pairedWith else { continue }
@@ -131,11 +187,12 @@ enum CorrelationScorer {
                 invalidIDs.insert(record.id)
                 continue
             }
-            guard record.purgedAt == nil, partner.purgedAt == nil else { continue }
-            guard persistedPairIsValid(record, partner) else {
+            guard record.purgedAt == nil, partner.purgedAt == nil,
+                  !invalidIDs.contains(record.id) else { continue }   // the partner's turn already said why
+            if let why = pairReleaseReason(record, partner, includingAvidEvidence: includingAvidEvidence) {
                 invalidIDs.insert(record.id)
                 invalidIDs.insert(partner.id)
-                continue
+                released.append(ReleasedPair(first: record.filename, second: partner.filename, reason: why))
             }
         }
 
@@ -148,7 +205,20 @@ enum CorrelationScorer {
             record.pairGroupID = nil
             record.pairConfidence = nil
         }
-        return cleared
+        return (cleared, released)
+    }
+
+    /// The release reason for a stored link, in either order; a link that is
+    /// not one video-only + one audio-only record is never a valid pair.
+    private static func pairReleaseReason(_ first: VideoRecord, _ second: VideoRecord,
+                                          includingAvidEvidence: Bool) -> String? {
+        if first.streamType == .videoOnly && second.streamType == .audioOnly {
+            return releaseReason(video: first, audio: second, includingAvidEvidence: includingAvidEvidence)
+        }
+        if first.streamType == .audioOnly && second.streamType == .videoOnly {
+            return releaseReason(video: second, audio: first, includingAvidEvidence: includingAvidEvidence)
+        }
+        return "not one video-only and one audio-only file"
     }
 
     // MARK: - Filename Key
@@ -245,12 +315,14 @@ enum CorrelationScorer {
         durationTolerance: Double,
         timestampTolerance: TimeInterval
     ) -> Candidate? {
-        // GH #125 duration gate at pair FORMATION — every caller
-        // (findBestPair, the legacy record pipeline, stress paths) gets
-        // the same protection. Unknown durations pass only on an exact
-        // filename-key identity match (MAJOR 1); known-incompatible
-        // durations are always refused.
-        guard durationGatePermitsFuzzyPair(
+        // The pair-formation gate — every caller (findBestPair, the legacy
+        // record pipeline, stress paths) gets the same protection: the
+        // Avid rule (AvidPairEvidence, 2026-10-22: an MXF video pairs only
+        // with an MXF of the same clip; a render never pairs), then GH #125
+        // — unknown durations pass only on an exact filename-key identity
+        // match (MAJOR 1); known-incompatible durations are always refused.
+        guard formationGatePasses(
+            video: AvidPairSide(video), audio: AvidPairSide(audio),
             videoDuration: video.durationSeconds,
             audioDuration: audio.durationSeconds,
             filenameKeyMatches: vKey == filenameCorrelationKey(audio.filename)

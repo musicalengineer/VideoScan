@@ -77,11 +77,11 @@ enum ImportTestSupport {
         let fate: String
     }
 
-    /// The 129 rows of contract §a (`| N | key … | … | Fate |`), in order.
+    /// The 131 rows of contract §a (`| N | key … | … | Fate |`), in order.
     static func inventory(_ contract: String) -> [InventoryRow] {
         var out: [InventoryRow] = []
         for line in contract.split(separator: "\n") {
-            guard out.count < 129, line.hasPrefix("| ") else { continue }
+            guard out.count < 131, line.hasPrefix("| ") else { continue }
             let cells = line.split(separator: "|", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             // ["", "N", "field", type, enc, role, writers, fate, ""]

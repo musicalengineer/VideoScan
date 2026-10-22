@@ -454,6 +454,17 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let verifyCatalog = Self("verifyCatalog", hasDetailView: true,
         style: .init(badge: "Verify Catalog", logVerb: "verify catalog", fill: .init(0.00, 0.40, 0.90)))
 
+    // Fill In Avid IDs (2026-10-22, the A/V pair-matcher fix) — electric
+    // ultraviolet: a reading verb whose only catalog writes are three Avid
+    // fields and the pair links they prove wrong. Δ ≥ 0.39 from every other
+    // fill, contrast vs white ≈ 8.9.
+    /// "Fill In Avid IDs…" (Rick 2026-10-22): one tag-only ffprobe per live
+    /// MXF missing its Avid UMID or clip name; marks renders; then releases
+    /// the stored A/V pairs the IDs prove wrong. Read-only on media.
+    /// AvidIDBackfillJob.
+    static let fillAvidIDs = Self("fillAvidIDs", hasDetailView: true,
+        style: .init(badge: "Avid IDs", logVerb: "fill in avid ids", fill: .init(0.15, 0.00, 0.95)))
+
     // (Import to SQLite, 2026-10-17 — ledger indigo — was retired
     // 2026-10-20 with its menu items: the cutover is done.)
 
@@ -478,7 +489,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
-        .verifyCatalog, .validateCatalog,
+        .verifyCatalog, .fillAvidIDs, .validateCatalog,
     ]
 
     /// Badge text — rendered in small caps by the row view.

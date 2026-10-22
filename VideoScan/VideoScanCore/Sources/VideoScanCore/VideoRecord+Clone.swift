@@ -89,6 +89,8 @@ extension VideoRecord {
         c.avidEditRate = avidEditRate
         c.avidTracks = avidTracks
         c.materialPackageUMID = materialPackageUMID
+        c.materialPackageName = materialPackageName
+        c.isAvidRender = isAvidRender
         // pairedWith: rewired by CatalogStore.deepCopySnapshot — see doc above.
         c.pendingPairedWithID = pendingPairedWithID
         c.pairGroupID = pairGroupID

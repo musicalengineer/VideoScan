@@ -207,14 +207,27 @@ struct MissingAudioTierTests {
 
     @Test("Tier a: an exact Avid key match with unknown duration is Correlate-acceptable")
     func tierAAvidKeyUnknownDuration() {
-        let v = MissingAudioFinder.VideoTarget(
+        var v = MissingAudioFinder.VideoTarget(
             id: UUID(), filename: "NewTape9V01.4B9C1586.8D8520.mxf",
             fullPath: "/Volumes/T/Avid MediaFiles/MXF/1/NewTape9V01.4B9C1586.8D8520.mxf",
             directory: "/Volumes/T/Avid MediaFiles/MXF/1", durationSeconds: 0)
-        let h = [hidden("NewTape9A01.4B9C1586.8D8510.wav", dir: "/Volumes/T/OMFI MediaFiles", duration: 0)]
-        let (cands, _) = MissingAudioFinder.hiddenCatalogCandidates(video: v, hidden: h, config: testConfig())
+        v.avid = AvidPairSide(filename: v.filename, name: "JeffBeck2 Bin.01")
+        // The same clip's audio MXF (Avid identity: the clip name) — accepted.
+        let dir = "/Volumes/T/OMFI MediaFiles"
+        let mxfName = "NewTape9A01.4B9C1586.8D8510.mxf"
+        let mxf = MissingAudioFinder.HiddenAudio(
+            snap: .init(id: UUID(), filename: mxfName, directory: dir, durationSeconds: 0, dateCreatedRaw: nil,
+                        timecode: "", tapeName: "", avid: AvidPairSide(filename: mxfName, name: "JeffBeck2 Bin.01")),
+            fullPath: dir + "/" + mxfName, state: .setAside(reason: "unlinked-audio"))
+        let (cands, _) = MissingAudioFinder.hiddenCatalogCandidates(video: v, hidden: [mxf], config: testConfig())
         #expect(cands.first?.reasons == ["filename"])
         #expect(cands.first?.correlateWillAccept == true)
+        // A .wav with the same key is still listed, but Correlate refuses it:
+        // an Avid MXF video's sound is always an MXF (AvidPairEvidence, 2026-10-22).
+        let wav = [hidden("NewTape9A01.4B9C1586.8D8510.wav", dir: dir, duration: 0)]
+        let (wavCands, _) = MissingAudioFinder.hiddenCatalogCandidates(video: v, hidden: wav, config: testConfig())
+        #expect(wavCands.first?.reasons == ["filename"])
+        #expect(wavCands.first?.correlateWillAccept == false)
     }
 
     @Test("Tier b: same folder by duration; sibling folder by stem; short take refused; mkv ignored")

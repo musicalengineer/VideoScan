@@ -104,6 +104,9 @@ struct RepairAudioFindBestPairTests {
     /// correlation key. Don't regress legitimate auto-pairing while
     /// fixing the bug.
     @Test func avidVideoToAvidAudioWithMatchingClipIDsStillPairs() {
+        // 2026-10-22: an Avid MXF video pairs only on Avid identity
+        // (AvidPairEvidence) — both files carry the clip's name, as every
+        // file of one Avid clip does once Fill In Avid IDs has read them.
         let video = makeAV(
             path: "/Volumes/X/Avid MediaFiles/MXF/1/00001.V14D1BBD3F.mxf",
             streamType: .videoOnly,
@@ -114,6 +117,8 @@ struct RepairAudioFindBestPairTests {
             streamType: .audioOnly,
             duration: 30.0
         )
+        video.materialPackageName = "00001"
+        audio.materialPackageName = "00001"
         let result = CorrelationScorer.findBestPair(
             for: video,
             in: [video, audio],

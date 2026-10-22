@@ -42,6 +42,13 @@ public struct ProbeResult: Sendable {
     public var timecode: String = ""
     public var tapeName: String = ""
     public var materialPackageUMID: String = ""
+    /// Avid OP-Atom `material_package_name` (2026-10-22, A/V pair matcher):
+    /// every file of one clip — V, A1, A2, even a later consolidate whose
+    /// UMID differs — carries the clip's name. "" when absent.
+    public var materialPackageName: String = ""
+    /// An Avid render / precompute (an effect render, a title, a mixdown):
+    /// video by design with NO audio partner. See AvidRenderSignal.
+    public var isAvidRender: Bool = false
     public var videoCodec: String = ""
     public var resolution: String = ""
     public var frameRate: String = ""
@@ -93,6 +100,8 @@ extension ProbeResult {
         timecode            = rec.timecode
         tapeName            = rec.tapeName
         materialPackageUMID = rec.materialPackageUMID
+        materialPackageName = rec.materialPackageName
+        isAvidRender        = rec.isAvidRender
         videoCodec          = rec.videoCodec
         resolution          = rec.resolution
         frameRate           = rec.frameRate
@@ -127,6 +136,8 @@ extension VideoRecord {
         timecode            = r.timecode
         tapeName            = r.tapeName
         materialPackageUMID = r.materialPackageUMID
+        materialPackageName = r.materialPackageName
+        isAvidRender        = r.isAvidRender
         videoCodec          = r.videoCodec
         resolution          = r.resolution
         frameRate           = r.frameRate

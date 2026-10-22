@@ -98,7 +98,8 @@ struct DurationGatePairFormationTests {
         streamType: StreamType,
         dir: String = "/Volumes/LaCie/Avid MediaFiles/MXF/1",
         duration: Double = 0,
-        dateCreated: Date? = nil
+        dateCreated: Date? = nil,
+        clipName: String = ""
     ) -> VideoRecord {
         let r = VideoRecord()
         r.filename = filename
@@ -107,6 +108,10 @@ struct DurationGatePairFormationTests {
         r.streamTypeRaw = streamType.rawValue
         r.durationSeconds = duration
         r.dateCreatedRaw = dateCreated
+        // The Avid clip name (2026-10-22): an MXF video pairs only with an
+        // MXF of the same clip (AvidPairEvidence), so the identity cases
+        // below carry the name every file of one clip shares.
+        r.materialPackageName = clipName
         return r
     }
 
@@ -188,9 +193,9 @@ struct DurationGatePairFormationTests {
     /// via filename-key identity — the regression MAJOR 1 fixes.
     @Test func major1_omfiTapeNameUnknownDurationsStillPairOnIdentity() {
         let video = makeAV(filename: "NewTape9V01.4B9C1586.8D8520.mxf",
-                           streamType: .videoOnly, duration: 0)
+                           streamType: .videoOnly, duration: 0, clipName: "JeffBeck2 Bin.01")
         let audio = makeAV(filename: "NewTape9A01.4B9C1586.8D8520.mxf",
-                           streamType: .audioOnly, duration: 0)
+                           streamType: .audioOnly, duration: 0, clipName: "JeffBeck2 Bin.01")
 
         Correlator.correlate(records: [video, audio])
         #expect(video.pairedWith === audio,
@@ -209,11 +214,13 @@ struct DurationGatePairFormationTests {
         let v = CorrelationScorer.Snap(
             id: UUID(), filename: "00001.V14D1BBD3F.mxf",
             directory: "/volA", durationSeconds: 0, dateCreatedRaw: nil,
-            timecode: "", tapeName: "")
+            timecode: "", tapeName: "",
+            avid: AvidPairSide(filename: "00001.V14D1BBD3F.mxf", name: "00001"))
         let a = CorrelationScorer.Snap(
             id: UUID(), filename: "00001.A14D1BBD3F.mxf",
             directory: "/volA", durationSeconds: 0, dateCreatedRaw: nil,
-            timecode: "", tapeName: "")
+            timecode: "", tapeName: "",
+            avid: AvidPairSide(filename: "00001.A14D1BBD3F.mxf", name: "00001"))
         let assignments = await CorrelationScorer.assignPairs(
             videos: [v], audios: [a],
             durationTolerance: 1.0, timestampTolerance: 5.0)
@@ -280,8 +287,8 @@ struct DurationGatePairFormationTests {
     /// The gate is a FILTER, not a rescore: a compatible pair keeps its
     /// exact pre-gate score, confidence, and reasons.
     @Test func compatiblePairBehaviorIsUnchanged() {
-        let video = makeAV(filename: "V01AB23.mxf", streamType: .videoOnly, duration: 30.0)
-        let audio = makeAV(filename: "A01AB23.mxf", streamType: .audioOnly, duration: 30.2)
+        let video = makeAV(filename: "V01AB23.mxf", streamType: .videoOnly, duration: 30.0, clipName: "01AB23")
+        let audio = makeAV(filename: "A01AB23.mxf", streamType: .audioOnly, duration: 30.2, clipName: "01AB23")
 
         Correlator.correlate(records: [video, audio])
 
@@ -300,7 +307,9 @@ struct DurationGatePairFormationTests {
         // duration score point (diff > 1.0 s) — timestamp 3 + directory 1
         // = 4 pairs at medium, same as before the gate existed.
         let v = CorrelationScorer.Snap(
-            id: UUID(), filename: "ceremony_master.mxf",
+            // A non-Avid master (an Avid MXF video takes only an MXF of
+            // its own clip — AvidPairEvidence, 2026-10-22).
+            id: UUID(), filename: "ceremony_master.mov",
             directory: "/Volumes/LaCie/captures",
             durationSeconds: 3600.0, dateCreatedRaw: t0,
             timecode: "", tapeName: "")
@@ -509,11 +518,14 @@ struct DurationRefusedDiagnosticTests {
             let dir = "/vol/pool\(i / 10)"          // 10 pairs per directory
             let clipID = String(format: "%08X", i)
             let vDur = 100.0 + Double(i % 40)
+            // Each clip carries its Avid clip name (AvidPairEvidence: an MXF
+            // video pairs only with an MXF of the same clip).
             videos.append(CorrelationScorer.Snap(
                 id: UUID(), filename: "00001.V\(clipID).mxf",
                 directory: dir, durationSeconds: vDur,
                 dateCreatedRaw: t0.addingTimeInterval(Double(i)),
-                timecode: "", tapeName: ""))
+                timecode: "", tapeName: "",
+                avid: AvidPairSide(filename: "00001.V\(clipID).mxf", name: clipID)))
             // Even pairs: compatible partner (+0.2 s). Odd pairs: the
             // GH #125 shape — an unrelated audio ~500 s off.
             let aDur = i.isMultiple(of: 2) ? vDur + 0.2 : vDur + 500.0
@@ -523,7 +535,8 @@ struct DurationRefusedDiagnosticTests {
                 id: aID, filename: "00001.A\(clipID).mxf",
                 directory: dir, durationSeconds: aDur,
                 dateCreatedRaw: t0.addingTimeInterval(Double(i)),
-                timecode: "", tapeName: ""))
+                timecode: "", tapeName: "",
+                avid: AvidPairSide(filename: "00001.A\(clipID).mxf", name: clipID)))
         }
 
         let clock = ContinuousClock()

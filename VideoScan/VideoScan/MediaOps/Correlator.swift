@@ -109,13 +109,15 @@ enum Correlator {
         let filenameKeyMatches =
             filenameCorrelationKey(v.filename) == filenameCorrelationKey(a.filename)
 
-        // GH #125 duration gate at pair formation: files that cannot be
-        // the same program are never offered as a candidate, regardless
-        // of how the other signals coincide. Unknown durations pass only
-        // on an exact filename-key identity match (MAJOR 1); known-
-        // incompatible durations are always refused. Shared rule with the
-        // production snap pipeline — CorrelationScorer.durationGatePermitsFuzzyPair.
-        guard CorrelationScorer.durationGatePermitsFuzzyPair(
+        // The pair-formation gate, shared with the production snap
+        // pipeline (CorrelationScorer.formationGatePasses): the Avid rule
+        // (AvidPairEvidence, 2026-10-22 — an MXF video pairs only with an
+        // MXF of the same clip; a render never pairs), then GH #125 —
+        // files that cannot be the same program are never offered as a
+        // candidate; unknown durations pass only on an exact filename-key
+        // identity match (MAJOR 1).
+        guard CorrelationScorer.formationGatePasses(
+            video: AvidPairSide(v), audio: AvidPairSide(a),
             videoDuration: v.durationSeconds,
             audioDuration: a.durationSeconds,
             filenameKeyMatches: filenameKeyMatches
