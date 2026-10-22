@@ -30125,6 +30125,24 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardQAR1Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFileGuardQAR1Tests",
+        "CatalogOpenCornerTests"
+      ],
+      "tests": [
+        "adoptTransactionRechecksTheDatabase",
+        "adoptTransactionRechecksTheLatch",
+        "differentReplacementIsNotOverwrittenByTheSessionsWAL",
+        "latchRemovedAfterPhaseOneStopsBeforeCommit",
+        "latchRemovedDuringBodyStopsBeforePhaseOne",
+        "replacementDoesNotInheritTheSessionsWAL",
+        "sealedCopyRefusedAfterReplace"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogQuitCornerTests.swift",
       "stage": "regression",
@@ -33575,7 +33593,7 @@
       ],
       "expected_floor": 239,
       "name": "regression",
-      "package_expected_floor": 198,
+      "package_expected_floor": 205,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33608,7 +33626,8 @@
         "VideoScanCoreTests.CatalogDiskFullTests",
         "VideoScanCoreTests.CatalogFolderDoorsTests",
         "VideoScanCoreTests.CatalogWriteCornerDiskTests",
-        "VideoScanCoreTests.CatalogOpenCornerTests"
+        "VideoScanCoreTests.CatalogOpenCornerTests",
+        "VideoScanCoreTests.CatalogFileGuardQAR1Tests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
