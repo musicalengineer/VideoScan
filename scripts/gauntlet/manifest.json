@@ -21712,6 +21712,7 @@
         "PruneApplyTests"
       ],
       "tests": [
+        "aCatalogDigestChangeAtTheMoveIsHeld",
         "aDigestMismatchAtTheMoveIsHeld",
         "aPoisonedArchiveDigestHoldsEverything",
         "aRebuiltRowIsHeldAtTheGuard",
@@ -30170,6 +30171,18 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PruneCuratedSurvivesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PruneCuratedSurvivesTests"
+      ],
+      "tests": [
+        "unsavedCurationOnTheCopySurvivesTheMove"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PruneSensorTests.swift",
       "stage": "unit",
@@ -32728,6 +32741,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/PruneApplyJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PruneCuratedSurvivesTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

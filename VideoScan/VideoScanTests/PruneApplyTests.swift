@@ -293,6 +293,21 @@ struct PruneApplyTests {
         #expect(out.trashed == 0 && mover.paths.isEmpty && out.held.first?.contains("rebuilt") == true, "\(out)")
     }
 
+    @Test("codex P2 (I5): the copy's CATALOG digest changed between its read and its move (same row, path and bytes) → held, kept")
+    func aCatalogDigestChangeAtTheMoveIsHeld() async throws {
+        let f = try await Self.fixture("digest_at_move"); defer { f.sb.cleanup() }
+        let shown = await plan(f)
+        let mover = Mover(trash: f.trashDir)
+        let copy = f.copy
+        let out = await apply(f, shown, selected: [copy.id], hooks: Self.hooks(mover, beforeMutation: { _ in
+            copy.contentFixity = ContentFixity.captured(path: copy.fullPath, digest: String(repeating: "d", count: 64),
+                                                        byteCount: copy.sizeBytes)
+        }))
+        #expect(out.trashed == 0 && mover.paths.isEmpty, "\(out)")
+        #expect(out.held.first?.contains("the catalog's record of this copy changed") == true, "\(out.held)")
+        #expect(exists(copy) && copy.removal == nil)
+    }
+
     @Test("I5: the copy or the archive file changed on disk between the read and the move → held by the re-stat")
     func aStampChangeAtTheMoveIsHeld() async throws {
         let f = try await Self.fixture("restat"); defer { f.sb.cleanup() }
