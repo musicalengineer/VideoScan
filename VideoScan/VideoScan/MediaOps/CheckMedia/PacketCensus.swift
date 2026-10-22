@@ -14,6 +14,9 @@ import Foundation
 //   * PictureIndex      — where (byte) the picture for each ¼ s is stored;
 //     the sound pass then measures, for EVERY sound packet, how far it sits
 //     from its picture: the full-file version of the quick Layout sample.
+//   * picturePackets / soundPackets — every listed packet, timed or not
+//     (2026-10-21): a raw .m2v has no duration, and this count is how its
+//     length is estimated (DurationEstimate).
 //
 // One stream per ffprobe run (`-select_streams`): ffprobe discards the
 // other streams, so on a non-interleaved mov the demuxer reads each stream
@@ -185,6 +188,10 @@ struct PacketCensusReport: Sendable, Equatable {
     var keyframes: KeyframeTally?
     var dataRate: DataRateTally?
     var layout: FullLayoutTally?
+    /// Every picture / sound packet listed, including ones with no time
+    /// (StreamTimingTally counts only timed packets). DurationEstimate.
+    var picturePackets = 0
+    var soundPackets = 0
 }
 
 /// Builds the report as lines stream in: the picture run first (it fills
@@ -198,22 +205,27 @@ struct PacketCensus {
     private var dataRate = DataRateTally()
     private var layout = FullLayoutTally()
     private var index = PictureIndex()
+    private var picturePackets = 0
+    private var soundPackets = 0
 
-    /// Returns the packet's time (for progress), nil for other lines.
-    mutating func notePicture(line: String) -> Double? {
+    /// Returns the packet (its time or byte position drives progress), nil
+    /// for other lines.
+    mutating func notePicture(line: String) -> CensusPacket? {
         guard let p = CensusPacket.parse(line) else { return nil }
+        picturePackets += 1
         video.observe(p)
         keyframes.observe(p)
         dataRate.observe(p)
         index.note(p)
-        return p.time
+        return p
     }
 
-    mutating func noteSound(line: String) -> Double? {
+    mutating func noteSound(line: String) -> CensusPacket? {
         guard let p = CensusPacket.parse(line) else { return nil }
+        soundPackets += 1
         audio.observe(p)
         layout.observe(p, index: index, farBytes: CheckMediaRules.layoutApartBytes)
-        return p.time
+        return p
     }
 
     /// Streams that had no packets come back nil.
@@ -223,7 +235,8 @@ struct PacketCensus {
                                   audio: audio.packets > 0 ? audio : nil,
                                   keyframes: hasPicture ? keyframes : nil,
                                   dataRate: hasPicture ? dataRate : nil,
-                                  layout: layout.soundPackets > 0 ? layout : nil)
+                                  layout: layout.soundPackets > 0 ? layout : nil,
+                                  picturePackets: picturePackets, soundPackets: soundPackets)
     }
 }
 
@@ -232,12 +245,12 @@ final class PacketCensusTally: @unchecked Sendable {
     private let lock = NSLock()
     private var census = PacketCensus()
 
-    func notePicture(_ line: String) -> Double? {
+    func notePicture(_ line: String) -> CensusPacket? {
         lock.lock(); defer { lock.unlock() }
         return census.notePicture(line: line)
     }
 
-    func noteSound(_ line: String) -> Double? {
+    func noteSound(_ line: String) -> CensusPacket? {
         lock.lock(); defer { lock.unlock() }
         return census.noteSound(line: line)
     }
