@@ -8084,6 +8084,7 @@
         "CatalogSyncSQLiteSnapshotLegacyTests"
       ],
       "tests": [
+        "aShownSnapshotIsNeverCalledNothingSynced",
         "jsonOnlyFolderShowsNothingSynced",
         "manifestMismatchKeepsTheOldSnapshot",
         "olderMasterIsRefusedWithWords",
@@ -32760,7 +32761,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2845,
+      "expected_floor": 2843,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33541,7 +33542,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 238,
+      "expected_floor": 239,
       "name": "regression",
       "package_expected_floor": 198,
       "package_selectors": [

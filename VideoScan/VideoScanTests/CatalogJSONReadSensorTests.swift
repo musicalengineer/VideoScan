@@ -98,11 +98,17 @@ struct CatalogJSONReadSensorTests {
         #expect(flip.contains("updateReadOnlyFacts { $0.jsonFrozenByLaunch = true }"), "catalog.json is frozen under catalog.sqlite")
     }
 
-    @Test("SENSOR: a viewer never looks for catalog.json in its synced folder (slice 2b)")
+    @Test("SENSOR: a viewer never looks for catalog.json in its synced folder — neither the snapshot reader nor CatalogSync's refresh (slice 2b, QA r1)")
     func theViewerNeverLooksForCatalogJSON() throws {
         let viewer = try SourceTree.appCode(named: "Catalog/CatalogViewerSnapshot.swift")
         #expect(!viewer.contains("catalog.json"), "CatalogViewerSnapshot.source must not consider catalog.json")
         #expect(viewer.contains("return .none"), "no snapshot + latch → nothing synced")
+        let sync = try SourceTree.appCode(named: "Catalog/CatalogSync.swift")
+        let refresh = try #require(sync.range(of: "func refreshViewerCatalog()"))
+        let end = try #require(sync.range(of: "// MARK: - Snapshot publishing", range: refresh.upperBound..<sync.endIndex)
+                                ?? sync.range(of: "func startSnapshotPublishing(", range: refresh.upperBound..<sync.endIndex))
+        #expect(!sync[refresh.lowerBound..<end.lowerBound].contains("catalog.json"),
+                "refreshViewerCatalog must not consider catalog.json")
     }
 
     @Test("SENSOR: the retired live dossier reload is gone from the launch")

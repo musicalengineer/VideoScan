@@ -402,6 +402,28 @@ struct CatalogSyncSQLiteSnapshotViewerTests {
         }
     }
 
+    /// QA r1 MINOR 1 on slice 2b (2026-10-21): once a snapshot is on screen,
+    /// a synced folder that loses its latch (a half-done swap) must not be
+    /// reported as "nothing synced" — the records shown are the last good
+    /// catalog, and the words say so.
+    @Test("TRUTH: a snapshot already on screen is never called 'nothing synced' when the folder loses its latch")
+    func aShownSnapshotIsNeverCalledNothingSynced() async throws {
+        try await SnapshotWorld.with("latch_gone") { world in
+            try await world.publish()
+            let adopted = Adopted()
+            let viewer = world.viewer(SnapshotStubRsync(source: world.masterLive), adopted: adopted)
+            await viewer.syncFromMaster()
+            #expect(viewer.state.isSynced)
+            try FileManager.default.removeItem(at: CatalogViewerSnapshot.latchURL(in: world.viewerPaths.liveDir))
+            await viewer.refreshViewerCatalog()
+            #expect(adopted.loads == 1, "nothing new was swapped in")
+            #expect(viewer.state.viewerCatalog.words != CatalogViewerSnapshot.nothingSyncedWords,
+                    Comment(rawValue: viewer.state.viewerCatalog.words ?? "nil"))
+            #expect(viewer.state.viewerCatalog.words?.contains("kept the previous catalog") == true,
+                    Comment(rawValue: viewer.state.viewerCatalog.words ?? "nil"))
+        }
+    }
+
     @Test("an unchanged snapshot is not reloaded on the next sync")
     func unchangedSnapshotIsNotReloaded() async throws {
         try await SnapshotWorld.with("unchanged") { world in
