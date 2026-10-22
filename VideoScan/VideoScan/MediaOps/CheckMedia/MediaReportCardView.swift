@@ -14,6 +14,9 @@ struct MediaReportCardView: View {
     /// Show the evidence numbers under each row (the detail view does;
     /// a compact summary can turn them off).
     var showsEvidence = true
+    /// A file with no recorded duration: its counted length, drawn under
+    /// the headline and banners (Rick 2026-10-21). nil = nothing to add.
+    var durationLine: String?
     /// Flags drawn under the headline, loud (Rick 2026-10-10: "No sound").
     var banners: [DiagnosticBanner] = []
     /// What a banner's button does; nil = no button.
@@ -31,6 +34,15 @@ struct MediaReportCardView: View {
             .accessibilityIdentifier("checkMedia.headline")
 
             ForEach(banners) { DiagnosticBannerView(banner: $0, onAction: onAction) }
+
+            // After the headline AND the banners — what is wrong first,
+            // then how long it runs (Rick 2026-10-21).
+            if let durationLine {
+                Text(durationLine)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("checkMedia.durationEstimate")
+            }
 
             Text("\(card.tier == .full ? "Full" : "Quick") check, \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))")
                 .font(.callout)
@@ -127,7 +139,8 @@ struct CheckMediaDetailView: View {
         case .running(let step):
             Text("Checking — \(step)…").font(.callout).foregroundStyle(.secondary)
         case .checked(let card):
-            MediaReportCardView(card: card, banners: item.banner.map { [$0] } ?? [], onAction: repair?.onAction)
+            MediaReportCardView(card: card, durationLine: item.durationEstimate?.sentence,
+                                banners: item.banner.map { [$0] } ?? [], onAction: repair?.onAction)
         case .failed(let reason):
             Label("Couldn't check: \(reason)", systemImage: "questionmark.circle")
                 .font(.callout)

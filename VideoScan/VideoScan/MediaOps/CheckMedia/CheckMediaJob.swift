@@ -23,6 +23,13 @@ import os
 //   - a file that couldn't be read writes NOTHING ("couldn't check" is
 //     not a verdict).
 //
+// A file whose header records no duration (a raw .m2v, a recovered
+// fragment) gets its length counted by the full check's packet census —
+// DurationEstimate, on the item, shown right under the headline and in the
+// one-line summary (Rick 2026-10-21: is it worth rescuing?). Display only:
+// it is NOT on the persisted card. Only an OPENABLE file gets one — an
+// unopenable file gets none (its header may exist; it just can't be read).
+//
 // A file whose card says "No sound" (SoundPresencePolicy) gets one more
 // step: where its sound is (SoundCopyFinder.load — one main-actor catalog
 // pass, ~ms at 100k records, after that file's seconds of probing; never
@@ -54,6 +61,9 @@ struct CheckMediaItem: Identifiable, Sendable {
     /// Where a no-sound file's sound is (nil = not looked up: the file has
     /// sound, or the lookup hasn't finished).
     var soundAdvice: SoundCopyAdvice?
+    /// How long it runs, counted, when its header records no duration
+    /// (full check only; nil = the header has one, or not counted).
+    var durationEstimate: DurationEstimate?
 }
 
 @MainActor
@@ -194,6 +204,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
             switch try await quickRunner(path, pauser.control) {
             case .unopenable(let detail, let size):
                 let card = CheckMediaRules.unopenableCard(detail: detail, sizeBytes: size, at: Date())
+                // No estimate: a corrupt .mp4/.mov/.mxf HAS a header, so
+                // "no header to read it from" would be false (QA r1, 2026-10-21).
                 persist(card: card, video: VerifyVideoProbe.unopenableDiagnosis(detail: detail, sizeBytes: size),
                         audio: nil, on: rec, index: index)
             case .measured(let quick):
@@ -232,6 +244,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
             if case .success(let d)? = full.video { video = d }
             if case .success(let d)? = full.audio { audio = d }
             measuredPicture = CheckMediaRules.measuredPictureSeconds(full)
+            items[index].durationEstimate = DurationEstimate.make(facts: quick.facts, census: full.census)
         } else {
             setStep("checking frame windows", index: index, within: 0.9)
             checks += CheckMediaRules.fullRowsNotRun()
@@ -275,8 +288,9 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         }
         model?.saveCatalogDebounced()
         items[index].outcome = .checked(card)
-        model?.log("Verify: \(rec.filename) → \(card.verdictWord) — \(card.headline)")
-        checkMediaJobLog.info("verify media: \(rec.filename, privacy: .public) → \(card.verdictWord, privacy: .public): \(card.headline, privacy: .public)")
+        let length = items[index].durationEstimate.map { " · \($0.sentence)" } ?? ""
+        model?.log("Verify: \(rec.filename) → \(card.verdictWord) — \(card.headline)\(length)")
+        checkMediaJobLog.info("verify media: \(rec.filename, privacy: .public) → \(card.verdictWord, privacy: .public): \(card.headline, privacy: .public)\(length, privacy: .public)")
     }
 
     private func setStep(_ step: String, index: Int, within: Double) {
@@ -322,9 +336,13 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
 
     /// The one-line finished summary: "3 checked — 1 problem, 1 warning, 1 OK".
     /// A quick pass is never "OK": it is "no problems in the quick check".
+    /// One file with no recorded duration carries its counted length right
+    /// after what is wrong: "Warning — No sound — … · about 45 min 55 s of
+    /// video (counted from frames)".
     static func summary(_ items: [CheckMediaItem]) -> String {
         if items.count == 1, case .checked(let card) = items[0].outcome {
-            return card.isQuickPassOnly ? card.displayHeadline : "\(card.verdict.word) — \(card.headline)"
+            let verdict = card.isQuickPassOnly ? card.displayHeadline : "\(card.verdict.word) — \(card.headline)"
+            return verdict + (items[0].durationEstimate.map { " · \($0.sentence)" } ?? "")
         }
         let tally = CheckMediaTally(items)
         let parts = tally.parts
