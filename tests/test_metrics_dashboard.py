@@ -536,7 +536,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
 def test_an_off_rota_mac_reads_off_the_rota_never_did_not_run(tmp_path):
     """GH #360 item 4: the M1 is out of the nightly. The publisher drops its
     column and lists it in nightly.off_rota; the page names it once, grey, as
-    "off the rota" — never "did not run", never "no nightly on the M1", and it
+    "off the rotation" — never "did not run", never "no nightly on the M1", and it
     never pulls the tests line or the last-night tile off green."""
     now = datetime.now(timezone.utc)
     fx = full_fixtures(now)
@@ -551,15 +551,15 @@ def test_an_off_rota_mac_reads_off_the_rota_never_did_not_run(tmp_path):
     out = run_page(tmp_path, fx, {"hash": "#all"})
     assert out["errors"] == []
     head = out["sections"]["head"]
-    assert "<b>M1</b> off the rota" in head and 'class="grey"' in head
+    assert "<b>M1</b> off the rotation" in head and 'class="grey"' in head
     assert "M1</b> did not run" not in head and "M1</b> no run" not in head
     assert '<div class="tile" data-state="green"><div class="label">Last night&#39;s tests</div>' in head \
         or '<div class="tile" data-state="green"><div class="label">Last night\'s tests</div>' in head
     tests_line = out["sections"]["sum-tests"]
-    assert "the M1 is off the nightly rota" in tests_line
+    assert "the M1 is off the nightly rotation" in tests_line
     assert "no nightly on the M1" not in tests_line and "M1 <b>did not run</b>" not in tests_line
     assert out["sections"]["tl"].count('class="cell ') == 2 * 90 and 'title="M1 · ' not in out["sections"]["tl"]
-    assert "off the nightly rota: <b>M1</b>" in out["sections"]["stab"]
+    assert "off the nightly rotation: <b>M1</b>" in out["sections"]["stab"]
 
 
 @needs_node

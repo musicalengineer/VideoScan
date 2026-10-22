@@ -1218,15 +1218,15 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
-# Test 16 (2026-10-21, GH #360 item 4): the M1 is OFF the nightly rota.
+# Test 16 (2026-10-21, GH #360 item 4): the M1 is OFF the nightly rotation.
 # scripts/nightly_rota.json is the one source. The REAL guard and installer
 # run in a sandbox HOME with fake scutil / launchctl / crontab on PATH: an
 # off-rota Mac's guard exits 0 before fetching anything, its installer takes
 # the job down (bootout + plist moved aside), an on-rota Mac gets its slot from
-# the rota, and a Mac on neither list is refused.
+# the rotation, and a Mac on neither list is refused.
 # ───────────────────────────────────────────────────────────────────
 echo
-echo "== Test 16: the nightly rota (M1 off) =="
+echo "== Test 16: the nightly rotation (M1 off) =="
 RT="$SANDBOX/rota"
 mkdir -p "$RT/scripts" "$RT/bin" "$RT/home/Library/LaunchAgents"
 cp "$SCRIPT_DIR/nightly_guarded.sh" "$SCRIPT_DIR/install_nightly.sh" "$SCRIPT_DIR/nightly_rota.py" "$SCRIPT_DIR/nightly_rota.json" "$RT/scripts/"
@@ -1246,12 +1246,12 @@ rota_run() {
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM5 | cut -c1-4)" = "off " ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot RicksM1 | cut -c1-4)" = "off " ] &&
 [ "$(python3 "$RT/scripts/nightly_rota.py" slot SomeoneElse)" = "unknown" ] \
-    && pass "the rota: M4 02:00, M5 and M1 off (laptops), anyone else unknown" \
+    && pass "the rotation: M4 02:00, M5 and M1 off (laptops), anyone else unknown" \
     || fail "nightly_rota.py slots changed"
 rota_run RicksM1 nightly_guarded.sh
 GUARD_RC=$?
 if [ "$GUARD_RC" -eq 0 ] && [ ! -s "$RT/git.log" ] &&
-   grep -q 'off the nightly rota' "$RT/home/Library/Logs/VideoScan/nightly_guard.log" 2>/dev/null; then
+   grep -q 'off the nightly rotation' "$RT/home/Library/Logs/VideoScan/nightly_guard.log" 2>/dev/null; then
     pass "an off-rota Mac's guard exits 0 before fetching or running anything, and says why"
 else
     fail "off-rota guard: rc=$GUARD_RC git calls='$(tr '\n' ' ' < "$RT/git.log")'"

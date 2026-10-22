@@ -816,12 +816,12 @@ function nights(d) {
   const s = d.summary && d.summary.nightly;
   if (!s || !Array.isArray(s.nights)) return null;
   const hosts = Array.isArray(s.hosts) ? s.hosts.slice() : [];
-  // GH #360: a Mac taken OFF the nightly rota (the M1) has no column at all; the
-  // page names it once as "off the rota" so its absence never reads as a failure.
+  // GH #360: a Mac taken OFF the nightly rotation (the M1) has no column at all; the
+  // page names it once as "off the rotation" so its absence never reads as a failure.
   const offRota = Array.isArray(s.off_rota) ? s.off_rota.filter(h => typeof h === "string" && !hosts.includes(h)) : [];
   return { hosts, offRota, list: s.nights.filter(x => x && typeof x.date === "string" && x.hosts && typeof x.hosts === "object") };
 }
-const offRotaChips = N => N.offRota.map(h => `<span class="grey">${dot("grey")}<b>${esc(h)}</b> off the rota</span>`).join("");
+const offRotaChips = N => N.offRota.map(h => `<span class="grey">${dot("grey")}<b>${esc(h)}</b> off the rotation</span>`).join("");
 const cellOf = (night, h) => (night && night.hosts && night.hosts[h] && typeof night.hosts[h] === "object") ? night.hosts[h] : null;
 const nightStates = night => Object.values(night.hosts || {}).map(c => c && c.state).filter(Boolean);
 const anyRed = night => nightStates(night).includes("red");
@@ -1030,7 +1030,7 @@ function renderTimeline(d) {
     `<span><b>${st.fewNights}</b> nights a few tests failed</span>` +
     `<span><b>${st.redNights}</b> nights broken</span>` +
     `<span><b>${st.notRunNights}</b> nights no Mac ran</span>` +
-    (N.offRota.length ? `<span>off the nightly rota: ${N.offRota.map(h => `<b>${esc(h)}</b>`).join(", ")}</span>` : "") +
+    (N.offRota.length ? `<span>off the nightly rotation: ${N.offRota.map(h => `<b>${esc(h)}</b>`).join(", ")}</span>` : "") +
     (tags.length ? `<span>demo tags: ${tags.map(t => `<b>${esc(t.name)}</b> ${day(t.date)}`).join(", ")}</span>` : "");
   const bad = T.filter(t => nightStates(t).some(s => s !== "green")).reverse();
   document.getElementById("tl-table").innerHTML = bad.length ? table(["Night", ...N.hosts, "Tag"],
@@ -1093,7 +1093,7 @@ const SUMMARY = {
     if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(h)} is green (${n(c.passed)} passed)`).join(", "));
     if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(h)} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
     if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(h)).join(" or ")}`);
-    if (N.offRota.length) parts.push(`the ${N.offRota.map(esc).join(" and the ")} ${N.offRota.length === 1 ? "is" : "are"} off the nightly rota`);
+    if (N.offRota.length) parts.push(`the ${N.offRota.map(esc).join(" and the ")} ${N.offRota.length === 1 ? "is" : "are"} off the nightly rotation`);
     const lead = st.redStreak ? `Red <b>${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running</b>: ` : st.greenStreak ? `Green <b>${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running</b>: ` : "";
     const primary = (greens[0] || watches[0] || reds[0] || [null, null]);
     const ph = primary[0], pc = primary[1];

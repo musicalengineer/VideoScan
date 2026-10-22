@@ -22,7 +22,7 @@ _real_load_rota = pm.load_rota
 
 @pytest.fixture(autouse=True)
 def fixed_rota(tmp_path_factory, monkeypatch):
-    """These tests are about the summary rules, not about who is on the rota
+    """These tests are about the summary rules, not about who is on the rotation
     today, so they read a fixed two-Mac rota (M4 + M5 on, M1 off). Only
     test_the_real_rota_* reads scripts/nightly_rota.json."""
     path = tmp_path_factory.mktemp("rota") / "nightly_rota.json"
@@ -95,7 +95,7 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     n = pm.nightly_summary(rows, "2026-10-12")
     assert n["days"] == 90 and len(n["nights"]) == 90
     assert n["nights"][0]["date"] == "2026-07-15" and n["nights"][-1]["date"] == "2026-10-12"
-    # GH #360: the M1 is OFF the rota (scripts/nightly_rota.json) — its rows leave
+    # GH #360: the M1 is OFF the rotation (scripts/nightly_rota.json) — its rows leave
     # the table entirely, and the summary says so instead of showing a gap.
     assert n["hosts"] == ["M4", "M5"]
     assert n["off_rota"] == ["M1"]
@@ -106,7 +106,7 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     assert last["M5"]["state"] == "watch" and last["M5"]["failed"] == 1
     # Nights with no row are present and empty, never invented.
     assert n["nights"][1]["hosts"] == {}
-    # Back on the rota, the same rows give the M1 its column and its amber cell again.
+    # Back on the rotation, the same rows give the M1 its column and its amber cell again.
     back = pm.nightly_summary(rows, "2026-10-12", rota={"on": ["M4", "M5", "M1"], "off": []})
     assert back["hosts"] == ["M4", "M5", "M1"] and back["off_rota"] == []
     assert back["nights"][-1]["hosts"]["M1"] == {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
@@ -338,7 +338,7 @@ def metrics_dir(tmp_path):
     rows = [night("RicksM4", "2026-10-11", status="ok", passed=11000, total=11060,
                   person_eval_status="not-configured", person_eval_readiness_pct=0, person_eval_quality_score=None),
             night("RicksM5", "2026-10-12", status="failed", reason="build-timeout:5400s"),
-            night("RicksM1", "2026-10-12", status="failed", reason="build-timeout:5400s"),   # off the rota
+            night("RicksM1", "2026-10-12", status="failed", reason="build-timeout:5400s"),   # off the rotation
             night("RicksM4", "2026-10-12", status="failed", reason="failed-tests:2", passed=11211, failed=2, total=11275)]
     (d / "testdriver.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
     (d / "history.jsonl").write_text("{}\n")

@@ -3,7 +3,7 @@
 #
 # THE ROTA is scripts/nightly_rota.json (GH #360, 2026-10-21):
 #   M4 → 02:00 (primary)   M5 → 03:15 (failover)
-#   M1 → OFF the rota (travel laptop, often on battery). Run on the M1, this
+#   M1 → OFF the rotation (travel laptop, often on battery). Run on the M1, this
 #        script REMOVES the nightly job instead of installing it.
 #
 # All hosts run scripts/nightly_guarded.sh, which no-ops if a green run for
@@ -29,9 +29,9 @@ case "$SLOT" in
         read -r _ HOUR MIN <<<"$SLOT"
         ;;
     off\ *)
-        # Off the rota: take the job down (bootout + move the plist aside, so a
+        # Off the rotation: take the job down (bootout + move the plist aside, so a
         # login does not reload it) and stop. Nothing else on this Mac changes.
-        echo "$HOST is OFF the nightly rota (${SLOT#off }) — removing $LABEL."
+        echo "$HOST is OFF the nightly rotation (${SLOT#off }) — removing $LABEL."
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
         if [ -f "$PLIST" ]; then
             mv "$PLIST" "$PLIST.off-rota"

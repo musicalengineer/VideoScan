@@ -804,14 +804,14 @@ def reason_code(reason) -> Optional[str]:
 
 
 HOST_ORDER = ("M4", "M5", "M1")
-# THE nightly rota (GH #360): which Macs run the 2 AM nightly. One file, read by
+# THE nightly rotation (GH #360): which Macs run the 2 AM nightly. One file, read by
 # the installer, the failover guard, the morning digest and this publisher.
 NIGHTLY_ROTA = REPO / "scripts" / "nightly_rota.json"
 
 
 def load_rota(path: Path = NIGHTLY_ROTA) -> dict:
     """{"on": [labels in slot order], "off": [labels]} from nightly_rota.json.
-    A missing or unreadable file means nobody is off the rota (the table then
+    A missing or unreadable file means nobody is off the rotation (the table then
     shows every Mac that published, as before) — never a crash."""
     try:
         raw = json.loads(path.read_text())
@@ -828,7 +828,7 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
     one cell per Mac, from the published testdriver rows. The last row a host
     published on a UTC date wins for that night (a rerun is newer evidence).
 
-    A Mac that is OFF the rota (nightly_rota.json; GH #360: the M1) has no
+    A Mac that is OFF the rotation (nightly_rota.json; GH #360: the M1) has no
     column and no cells — not even its old nights — so its absence can never
     read as a failure or a "no run"; it is listed in `off_rota` instead and the
     page says so."""

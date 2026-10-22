@@ -178,7 +178,7 @@ print("─" * 46)
 print(f"{'Host':<5} {'Status':<8} {'P/F/S':<13} {'Cov':>6}  {'When':<11}")
 
 order = ["M5", "M4", "M1"]
-# GH #360: a Mac OFF the nightly rota (scripts/nightly_rota.json — the M1) says
+# GH #360: a Mac OFF the nightly rotation (scripts/nightly_rota.json — the M1) says
 # so instead of showing its last stale failure.
 try:
     off_rota = set((json.load(open(os.environ.get("ROTA_FILE", ""))).get("off") or {}))
@@ -187,7 +187,7 @@ except Exception:
 seen = set()
 def emit(h):
     if h in off_rota:
-        print(f"{h:<5} — off the nightly rota")
+        print(f"{h:<5} — off the nightly rotation")
         seen.add(h)
         return
     r = latest.get(h)

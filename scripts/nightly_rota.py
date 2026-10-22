@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""nightly_rota.py — where a Mac stands on the 2 AM nightly rota (GH #360).
+"""nightly_rota.py — where a Mac stands on the 2 AM nightly rotation (GH #360).
 
-The rota itself is scripts/nightly_rota.json (one file; the publisher reads it
+The rotation itself is scripts/nightly_rota.json (one file; the publisher reads it
 too). This is the shell scripts' way in:
 
   python3 scripts/nightly_rota.py slot RicksM4   ->  "on 2 0"        (hour minute)
