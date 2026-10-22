@@ -34,7 +34,12 @@
 //     commit g+1 then g+2, while a stale SECOND repository still gets
 //     `.generationMismatch`;
 //   - adoption is the only jump larger than +1, and the DDL's triggers —
-//     not this file — are what refuse any other jump.
+//     not this file — are what refuse any other jump;
+//   - GH #359: the database file's device + inode (and the latch's, when it
+//     was there at open) are recorded at open and compared before every
+//     commit transaction, before phase 1 and just before COMMIT; a file
+//     replaced, moved or removed refuses the write BEFORE it writes, in
+//     words, and every later write of the session (CatalogFileGuard.swift).
 //
 // Every statement that touches `generations`, `generation_history` or
 // `catalog_state` is raw SQL (Rick, 2026-10-17) so it reads like the DDL;
@@ -122,6 +127,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
     private var pool: DatabasePool? { didSet { publishGate() } }
     private var databaseURL: URL? { didSet { publishGate() } }
     private var mode: Mode = .closed { didSet { publishGate() } }
+    /// GH #359: the identities recorded at open, checked before each commit.
+    private var fileGuard: CatalogFileGuard? { didSet { publishGate() } }
+    /// QA r2-2: what the last close said (quarantine START / OUTCOME).
+    let closeNotes = CatalogCloseNotes()
     /// The generation this session last loaded or committed, and whether
     /// a reopen is owed — read and updated inside the serialized write.
     private let session = WriterSession()
@@ -144,16 +153,29 @@ public actor GRDBCatalogRepository: CatalogRepository {
     // MARK: - Open
 
     public func open(at url: URL) async -> CatalogOpenOutcome {
+        await open(at: url, requiringLatch: false)
+    }
+
+    /// `requiringLatch` (QA r1 D): the app's launch and Reopen — no
+    /// catalog.cutover beside `url`, no open, nothing written (#354 words).
+    /// Bare stores, the importer and tests open without it.
+    public func open(at url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome {
         guard pool == nil else {
             return .refused(reason: "already open at \(databaseURL?.path ?? "?")")
         }
+        if requiringLatch, CatalogFileIdentity.read(url.deletingLastPathComponent().appendingPathComponent(CatalogFileGuard.latchFileName)) == .missing {
+            return refusedToOpen(url, Self.noLatchWords(folder: url.deletingLastPathComponent()))
+        }
+        // GH #359: the file as it was BEFORE the pool opened it (missing for
+        // a new catalog), so a swap during the open itself is caught.
+        let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
             opened = try Self.openPool(at: url, durability: durability)
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
-        return await finishOpen(opened, at: url)
+        return await finishOpen(opened, at: url, before: before, requiringLatch: requiringLatch)
     }
 
     public static let readerOnlyWords = "opened for reading only by a process that is not the catalog's writer"
@@ -168,6 +190,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "could not open: no file at \(url.path)")
         }
+        let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
             opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true),
@@ -175,17 +198,26 @@ public actor GRDBCatalogRepository: CatalogRepository {
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
-        return await finishOpen(opened, at: url)
+        return await finishOpen(opened, at: url, before: before)
     }
 
     /// The open checks, the settle, and publishing the session (both doors).
-    private func finishOpen(_ opened: Opened, at url: URL) async -> CatalogOpenOutcome {
+    /// GH #359: the identities are recorded once the pool has the file, the
+    /// settle's high-water raise checks them, and they are checked again
+    /// before the session is published.
+    private func finishOpen(_ opened: Opened, at url: URL, before: CatalogFileIdentity.Reading,
+                            requiringLatch: Bool = false) async -> CatalogOpenOutcome {
         do {
+            let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
+            if requiringLatch, fileGuard.latch == nil { throw Refusal(reason: Self.noLatchWords(folder: url.deletingLastPathComponent())) }
             let loaded = try await Self.prepare(opened, host: host)
-            let settled = try await settle(opened, loaded: loaded, at: url)
+            let settled = try await settle(opened, loaded: loaded, at: url, fileGuard: fileGuard)
+            if let words = fileGuard.violation() { throw Refusal(reason: words) }
             pool = opened.pool
             databaseURL = url
-            session.reset(generation: settled.generation)
+            self.fileGuard = fileGuard
+            session.begin(generation: settled.generation)
+            session.noteSidecars(CatalogSidecarQuarantine.identities(besideDatabaseAt: url))
             mode = settled.mode
             storeLog.notice("catalog store OPEN \(url.lastPathComponent, privacy: .public) generation \(settled.generation, privacy: .public) → \(String(describing: settled.mode.outcome), privacy: .public)")
             return settled.mode.outcome
@@ -396,11 +428,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// A read-only open (a sealed file, a read-only folder) keeps the
     /// generation it loaded; a read-write open reconciles the witnesses
     /// under the writer lock.
-    private func settle(_ opened: Opened, loaded: Int, at url: URL) async throws -> Settled {
+    private func settle(_ opened: Opened, loaded: Int, at url: URL, fileGuard: CatalogFileGuard) async throws -> Settled {
         if let reason = opened.readOnlyReason ?? Self.folderNotWritableReason(for: url) {
             return Settled(generation: loaded, mode: .readOnly(reason: reason))
         }
-        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook)
+        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook, fileGuard: fileGuard)
         return try await opened.pool.writeWithoutTransaction { db in try plan.run(db) }
     }
 
@@ -414,6 +446,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let host: String
         let publish: AtomicFilePublish.Durability
         let hook: Seam?
+        let fileGuard: CatalogFileGuard
 
         func run(_ db: Database) throws -> Settled {
             var settled = Settled(generation: 0, mode: .closed)
@@ -458,6 +491,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
             if case .unreadable(let words) = current {
                 return .readOnly(reason: GRDBCatalogRepository.poisonedWitnessWords(words))
             }
+            // GH #359: never raise the witnesses beside a file that is not
+            // the one this open checked (the open is then refused).
+            if let words = fileGuard.violation() { return .readOnly(reason: words) }
             storeLog.notice("catalog store: \(CatalogHighWater.fileName, privacy: .public) \(current == .missing ? "missing" : "below the generation", privacy: .public) — raised to generation \(generation, privacy: .public)")
             do {
                 try CatalogHighWater.write(generation, besideDatabaseAt: databaseURL, durability: publish)
@@ -490,15 +526,16 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public func write(as door: CatalogWriter,
                       _ body: @Sendable (any CatalogTransaction) throws -> Void) async -> CatalogWriteOutcome {
-        guard let pool, let databaseURL else { return .refused(reason: "not open") }
+        guard let pool, let databaseURL, let fileGuard else { return .refused(reason: "not open") }
+        if let words = session.fileStopped { return .refused(reason: words) }   // #359: the stop speaks first
         if case .readOnly(let reason) = mode { return .refused(reason: "read-only: \(reason)") }
         let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
-                             publish: durability.publish, crashBeforeCommit: crashBeforeCommit)
+                             publish: durability.publish, crashBeforeCommit: crashBeforeCommit, fileGuard: fileGuard)
         let outcome: CatalogWriteOutcome
         do {
             outcome = try await pool.writeWithoutTransaction { db in try plan.run(db, body) }
         } catch {
-            outcome = .refused(reason: "write rolled back: \(Self.words(error))")
+            outcome = .refused(reason: session.fileStop(fileGuard) ?? "write rolled back: \(Self.words(error))")
         }
         Self.noteCommit(outcome, door: door)
         return outcome
@@ -513,15 +550,16 @@ public actor GRDBCatalogRepository: CatalogRepository {
     public nonisolated func writeBlocking(as door: CatalogWriter,
                                           _ body: (any CatalogTransaction) throws -> Void) -> CatalogWriteOutcome {
         let open = gate.state
-        guard let pool = open.pool, let databaseURL = open.databaseURL else { return .refused(reason: "not open") }
+        guard let pool = open.pool, let databaseURL = open.databaseURL, let fileGuard = open.fileGuard else { return .refused(reason: "not open") }
+        if let words = session.fileStopped { return .refused(reason: words) }   // #359: the stop speaks first
         if let reason = open.readOnlyReason { return .refused(reason: "read-only: \(reason)") }
         let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
-                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit)
+                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit, fileGuard: fileGuard)
         let outcome: CatalogWriteOutcome
         do {
             outcome = try pool.writeWithoutTransaction { db in try plan.run(db, body) }
         } catch {
-            outcome = .refused(reason: "write rolled back: \(Self.words(error))")
+            outcome = .refused(reason: session.fileStop(fileGuard) ?? "write rolled back: \(Self.words(error))")
         }
         Self.noteCommit(outcome, door: door)
         return outcome
@@ -535,14 +573,21 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// writer queue (VACUUM cannot run inside a read transaction), so it
     /// sees every committed generation and no commit lands half-way through
     /// it. Refuses an existing target. nil = written; else the words.
+    /// QA r1 F2 (#359): after a file-stop the copy would be of the MOVED-ASIDE
+    /// file, labelled as the catalog — refused in the stop's words, checked
+    /// first and again on the writer queue just before VACUUM INTO.
     public nonisolated func sealedCopyBlocking(to target: URL) -> String? {
         guard let pool = gate.state.pool else { return "catalog.sqlite is not open" }
+        if let words = fileStopWords { return words }
         guard !FileManager.default.fileExists(atPath: target.path) else { return "\(target.lastPathComponent) already exists" }
         do {
-            try pool.writeWithoutTransaction { db in try db.execute(sql: "VACUUM INTO ?", arguments: [target.path]) }
-            return nil
+            return try pool.writeWithoutTransaction { db -> String? in
+                if let words = fileStopWords { return words }
+                try db.execute(sql: "VACUUM INTO ?", arguments: [target.path])
+                return nil
+            }
         } catch {
-            return "VACUUM INTO \(target.lastPathComponent) failed: \(Self.words(error))"
+            return fileStopWords ?? "VACUUM INTO \(target.lastPathComponent) failed: \(Self.words(error))"
         }
     }
 
@@ -556,7 +601,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         var readOnlyReason: String?
         if case .readOnly(let reason) = mode { readOnlyReason = reason }
         gate.set(WriteGate.State(pool: mode == .closed ? nil : pool, databaseURL: databaseURL,
-                                 readOnlyReason: readOnlyReason, crashBeforeCommit: crashBeforeCommit))
+                                 readOnlyReason: readOnlyReason, crashBeforeCommit: crashBeforeCommit,
+                                 fileGuard: fileGuard))
     }
 
     /// Everything one write needs, captured by value so the closure the
@@ -571,9 +617,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let databaseURL: URL
         let publish: AtomicFilePublish.Durability
         let crashBeforeCommit: Seam?
+        let fileGuard: CatalogFileGuard
 
         func run(_ db: Database,
                  _ body: (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
+            // GH #359, check 1 of 3: before BEGIN — a refused write takes no
+            // lock and writes no frame. On the writer queue, so no other
+            // write of this repository runs between this check and BEGIN.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             if let reason = session.needsReopen {
                 return .refused(reason: "reopen the catalog: \(reason)")
             }
@@ -586,7 +637,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 if case .committed = outcome { return .commit }
                 return .rollback
             }
-            if case .committed(let generation) = outcome { session.commit(generation) }
+            if case .committed(let generation) = outcome { session.commit(generation); session.noteSidecarsOnce(fileGuard) }
             return outcome
         }
 
@@ -603,6 +654,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 let found = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? -1
                 return .generationMismatch(expected: expected, found: found)
             }
+            // GH #359, check 2 of 3: before phase 1 — no witness is raised
+            // beside a file that is not the one this session opened.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             // Phase 1 (F8r3): the external mark says `next` BEFORE the commit.
             if let problem = publishMark(expected: expected, next: next) {
                 return .refused(reason: problem)
@@ -613,6 +667,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
             try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, ?, ?, ?, 'commit', NULL)",
                            arguments: [next, now, host, door.rawValue, filesLive, filesTotal])
             try crashBeforeCommit?()
+            // GH #359, check 3 of 3: just before COMMIT (phase 1's fsync is a
+            // real window). A refusal here rolls back; the witnesses already
+            // read `next`, so the next open is read-only — the crash-between-
+            // phases case, which refuses rather than guesses.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             return .committed(generation: next)                   // phase 2 is the COMMIT that follows
         }
 
@@ -678,28 +737,6 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return try await pool.read { db in
             let generation = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? 0
             return try body(GRDBReader(generation: generation, db: db))
-        }
-    }
-
-    /// The pragmas as the engine reports them on a reader connection
-    /// (internal: the pragma test queries them back).
-    func pragmas() async throws -> [String: String] {
-        guard let pool else { throw CatalogRepositoryError.notOpen }
-        return try await pool.read { db in
-            var reported: [String: String] = [:]
-            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
-                reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { Self.text($0[0]) } ?? ""
-            }
-            return reported
-        }
-    }
-
-    private static func text(_ value: DatabaseValue) -> String {
-        switch value.storage {
-        case .int64(let number): return String(number)
-        case .string(let string): return string
-        case .double(let number): return String(number)
-        case .blob, .null: return ""
         }
     }
 
@@ -769,7 +806,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
     // MARK: - Adopt
 
     public func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome {
-        guard let pool, let databaseURL else { return .refused(reason: "not open") }
+        guard let pool, let databaseURL, let fileGuard else { return .refused(reason: "not open") }
+        // GH #359: an adopt writes the witnesses and the database — never
+        // beside, or into, a file that is not the one this session opened.
+        if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
         let from = session.generation
         guard highWater > from else {
             return .refused(reason: "nothing to adopt: generation \(from) is not below \(highWater)")
@@ -781,24 +821,101 @@ public actor GRDBCatalogRepository: CatalogRepository {
             return .refused(reason: Self.words(error))
         }
         if let problem = Self.confirmAdoptable(highWater, witnesses: witnesses)
+            ?? session.fileStop(fileGuard)
             ?? Self.raiseWitnesses(to: highWater, witnesses: witnesses, at: databaseURL, host: host, durability: durability.publish) {
             return .refused(reason: problem)
         }
         let host = host
         let now = unixNow()
+        let session = session
         do {
+            // QA r1 F1 (#359): BEGIN IMMEDIATE may wait for another writer;
+            // the file is checked again after it and just before COMMIT.
             let jumped = try await pool.writeWithoutTransaction { db in
-                try Self.runAdoption(db, from: from, to: highWater, host: host, now: now)
+                try Self.runAdoption(db, from: from, to: highWater, host: host, now: now) { session.fileStop(fileGuard) }
             }
-            guard jumped else { return .refused(reason: "the database no longer reads generation \(from)") }
+            switch jumped {
+            case .jumped: break
+            case .notJumped: return .refused(reason: "the database no longer reads generation \(from)")
+            case .stopped(let words): return .refused(reason: words)
+            }
         } catch {
-            return .refused(reason: "adoption rolled back: \(Self.words(error))")
+            return .refused(reason: session.fileStop(fileGuard) ?? "adoption rolled back: \(Self.words(error))")
         }
         session.reset(generation: highWater)
         mode = .readWrite
         storeLog.notice("catalog store ADOPT generation \(from, privacy: .public) → \(highWater, privacy: .public) (\(CatalogHighWater.fileName, privacy: .public), \(CatalogHighWaterLedger.fileName, privacy: .public)) — writes enabled")
         return .adopted(from: from, to: highWater)
     }
+
+
+    // MARK: - Close
+
+    public func close() async {
+        guard let pool else { return }
+        // GH #359 — decided by the DATABASE AT THE PATH, not by the stop
+        // (QA r2-1), and only AFTER the writer queue drains (codex #117 F2):
+        // a swap while close waits behind a writer must be seen.
+        //   .same    (a latch-only stop, a file moved away and back): the
+        //            normal checkpoint; if it fails the -wal stays at the
+        //            path, where the right file replays it.
+        //   .moved   (missing, or another inode — QA r1 F3): no checkpoint,
+        //            and once the pool is closed this session's own -wal /
+        //            -shm are renamed into quarantine (never deleted).
+        //   .unknown (stat failed, codex #117 F1): NOTHING is moved and no
+        //            checkpoint runs; the -wal stays at the path; the words say so.
+        // Fold the write-ahead log into the database file BEFORE the pool
+        // closes (2026-10-17): GRDB closes the writer before its readers, so
+        // SQLite's own close-time checkpoint never runs (CatalogCloseCheckpointTests).
+        // A read-only session has nothing of its own to fold in.
+        let atPath = mode == .readWrite ? await Self.decideAtClose(pool, fileGuard, session) : .same
+        if mode != .readWrite, let fileGuard { _ = session.fileStop(fileGuard) }
+        if let stop = session.fileStopped {
+            storeLog.error("catalog store CLOSE after the file check failed (\(String(describing: atPath), privacy: .public)): \(stop, privacy: .public)")
+        }
+        var poolClosed = true
+        do {
+            try pool.close()
+        } catch {
+            poolClosed = false
+            storeLog.error("catalog store CLOSE: \(Self.words(error), privacy: .public)")
+        }
+        var notes: [String] = []
+        if mode == .readWrite, let databaseURL {
+            switch atPath {
+            case .same: break                                    // checkpointed (or its -wal stays for the right file)
+            case .moved:
+                notes = poolClosed
+                    ? CatalogSidecarQuarantine.quarantine(besideDatabaseAt: databaseURL, own: session.sidecars,
+                                                          why: session.fileStopped ?? "catalog.sqlite moved")
+                    : CatalogSidecarQuarantine.skipped(besideDatabaseAt: databaseURL, because: "the catalog's connections did not close")
+            case .unknown(let why):
+                notes = [CatalogSidecarQuarantine.unknownIdentityWords(databaseURL, why)]
+            }
+        }
+        closeNotes.set(notes)
+        self.pool = nil
+        databaseURL = nil
+        fileGuard = nil
+        mode = .closed
+    }
+
+    // MARK: - Words
+
+    private static func words(_ error: Error) -> String {
+        if let refusal = error as? Refusal { return refusal.reason }
+        if let failure = error as? CatalogFileGuard.GuardFailure { return failure.words }
+        if let engine = error as? DatabaseError { return engine.description }
+        return String(describing: error)
+    }
+}
+
+// MARK: - Adopt helpers
+//
+// Moved out of the actor body unchanged except runAdoption's file check
+// (GH #359 QA r1 F1) — same file, so the actor still calls them privately.
+
+extension GRDBCatalogRepository {
 
     /// The person's number must be what the witnesses hold: never below the
     /// highest readable one, and exactly it while every witness is readable.
@@ -831,53 +948,121 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     /// F8r3 verbatim: the adopt row first (while the counter still reads
     /// `from`), then the jump, in one immediate transaction.
-    private static func runAdoption(_ db: Database, from: Int, to: Int, host: String, now: Int) throws -> Bool {
-        var jumped = false
+    private enum Adoption { case jumped, notJumped, stopped(String) }
+
+    /// `stop` (GH #359, QA r1 F1): the file check, run after BEGIN and again
+    /// just before COMMIT; non-nil rolls the adoption back.
+    private static func runAdoption(_ db: Database, from: Int, to: Int, host: String, now: Int,
+                                    stop: () -> String?) throws -> Adoption {
+        var result = Adoption.notJumped
         try db.inTransaction(.immediate) {
+            if let words = stop() { result = .stopped(words); return .rollback }
             try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, 'adopt', 0, 0, 'adopt', ?)",
                            arguments: [to, now, host, from])
             try db.execute(sql: "UPDATE generations SET generation = ?, adopted_at = ?, adopted_from = ?, saved_at = ?, saved_from_host = ? WHERE id = 1 AND ? > generation",
                            arguments: [to, now, from, now, host, to])
-            jumped = db.changesCount == 1
-            return jumped ? .commit : .rollback
+            guard db.changesCount == 1 else { return .rollback }
+            if let words = stop() { result = .stopped(words); return .rollback }
+            result = .jumped
+            return .commit
         }
-        return jumped
+        return result
     }
+}
 
-    // MARK: - Close
+// MARK: - Close's decision, after the writer drains (codex #117 F2)
 
-    public func close() async {
-        guard let pool else { return }
-        // Fold the write-ahead log into the database file BEFORE the pool
-        // closes (2026-10-17): GRDB closes the writer before its readers, so
-        // SQLite's own close-time checkpoint never runs, and every commit
-        // stays in catalog.sqlite-wal. A backup or off-site copy of
-        // catalog.sqlite alone would then hold no tables at all (pinned by
-        // CatalogCloseCheckpointTests). TRUNCATE leaves a zero-length -wal.
-        // A read-only session has nothing of its own to fold in.
-        if mode == .readWrite {
-            do {
-                try await pool.writeWithoutTransaction { try $0.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)") }
-            } catch {
-                storeLog.error("catalog store CLOSE checkpoint: \(Self.words(error), privacy: .public)")
-            }
-        }
+extension GRDBCatalogRepository {
+
+    /// Runs ON the writer queue — after every write queued before close —
+    /// so the identity read and the checkpoint see the same moment. Records
+    /// the sticky stop (database or latch). Checkpoints only when the file
+    /// at the path is still this session's. If the queue cannot run the
+    /// closure at all, the decision is read just after that failed wait.
+    static func decideAtClose(_ pool: DatabasePool, _ fileGuard: CatalogFileGuard?,
+                              _ session: WriterSession) async -> CatalogFileGuard.DatabaseAtPath {
         do {
-            try pool.close()
+            return try await pool.writeWithoutTransaction { db -> CatalogFileGuard.DatabaseAtPath in
+                let found = fileGuard?.databaseAtPath() ?? .same
+                if let fileGuard { _ = session.fileStop(fileGuard) }
+                if found == .same {
+                    do {
+                        try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+                    } catch {
+                        storeLog.error("catalog store CLOSE checkpoint: \(Self.words(error), privacy: .public)")
+                    }
+                }
+                return found
+            }
         } catch {
-            storeLog.error("catalog store CLOSE: \(Self.words(error), privacy: .public)")
+            storeLog.error("catalog store CLOSE: the writer did not run the close step: \(Self.words(error), privacy: .public)")
+            if let fileGuard { _ = session.fileStop(fileGuard) }
+            return fileGuard?.databaseAtPath() ?? .same
         }
-        self.pool = nil
-        databaseURL = nil
-        mode = .closed
+    }
+}
+
+// MARK: - The file stop, off the actor (GH #359)
+
+extension GRDBCatalogRepository {
+    /// Sticky until the next open; checked afresh while a guard is set
+    /// (one or two `stat` calls, on the calling thread).
+    public nonisolated var fileStopWords: String? {
+        if let fileGuard = gate.state.fileGuard { return session.fileStop(fileGuard) }
+        return session.fileStopped
     }
 
-    // MARK: - Words
+    /// codex #117 F3: the quit's close did not finish in time. Off the actor
+    /// and without waiting for close: if catalog.sqlite at the path is
+    /// CONFIRMED not this session's file (missing or another inode), rename
+    /// this session's own -wal / -shm (matched by inode) into quarantine now —
+    /// safe under open descriptors: a writer still running keeps writing to
+    /// the renamed files, never to the path. Anything else (the same file —
+    /// a latch-only stop —, an unreadable identity, a read-only or closed
+    /// session) moves NOTHING.
+    public nonisolated func quarantineAfterTimedOutClose() -> CatalogTimedOutClose {
+        let open = gate.state
+        guard let fileGuard = open.fileGuard, open.pool != nil, open.readOnlyReason == nil else { return .notOpen }
+        switch fileGuard.databaseAtPath() {
+        case .same:
+            return .stillItsOwnFile
+        case .unknown(let why):
+            return .identityUnreadable(why)
+        case .moved:
+            let why = session.fileStop(fileGuard) ?? "catalog.sqlite moved"
+            return .quarantined(lines: CatalogSidecarQuarantine.quarantine(besideDatabaseAt: fileGuard.databaseURL,
+                                                                           own: session.sidecars, why: why))
+        }
+    }
+}
 
-    private static func words(_ error: Error) -> String {
-        if let refusal = error as? Refusal { return refusal.reason }
-        if let engine = error as? DatabaseError { return engine.description }
-        return String(describing: error)
+// MARK: - Pragmas (tests)
+//
+// Moved out of the actor body unchanged (GH #359 kept the body under
+// SwiftLint's 600 lines); same file, so it still reads the private pool.
+
+extension GRDBCatalogRepository {
+
+    /// The pragmas as the engine reports them on a reader connection
+    /// (internal: the pragma test queries them back).
+    func pragmas() async throws -> [String: String] {
+        guard let pool else { throw CatalogRepositoryError.notOpen }
+        return try await pool.read { db in
+            var reported: [String: String] = [:]
+            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
+                reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { Self.text($0[0]) } ?? ""
+            }
+            return reported
+        }
+    }
+
+    private static func text(_ value: DatabaseValue) -> String {
+        switch value.storage {
+        case .int64(let number): return String(number)
+        case .string(let string): return string
+        case .double(let number): return String(number)
+        case .blob, .null: return ""
+        }
     }
 }
 
@@ -907,6 +1092,7 @@ extension GRDBCatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "\(url.lastPathComponent) does not exist")
         }
+        let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
             opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason)
@@ -914,10 +1100,12 @@ extension GRDBCatalogRepository {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
         do {
+            let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
             let loaded = try await Self.prepare(opened, host: host)
             pool = opened.pool
             databaseURL = url
-            session.reset(generation: loaded)
+            self.fileGuard = fileGuard
+            session.begin(generation: loaded)
             mode = .readOnly(reason: reason)
             storeLog.notice("catalog store OPEN READ-ONLY \(url.lastPathComponent, privacy: .public) generation \(loaded, privacy: .public) — \(reason, privacy: .public)")
             return .readOnly(reason: reason)
@@ -968,13 +1156,15 @@ extension GRDBCatalogRepository {
 /// The open state `writeBlocking` needs, mirrored off the actor: the pool,
 /// the database URL, the read-only words and the crash seam. Set by the
 /// actor whenever one of them changes; read once per blocking write. For
-/// Rick: a mutex-guarded copy of four member variables.
+/// Rick: a mutex-guarded copy of five member variables (GH #359 added the
+/// file guard).
 final class WriteGate: @unchecked Sendable {
     struct State {
         var pool: DatabasePool?
         var databaseURL: URL?
         var readOnlyReason: String?
         var crashBeforeCommit: GRDBCatalogRepository.Seam?
+        var fileGuard: CatalogFileGuard?
     }
 
     private let lock = NSLock()
@@ -999,15 +1189,47 @@ final class WriterSession: @unchecked Sendable {
     private let lock = NSLock()
     private var committed = 0
     private var reopenReason: String?
+    private var fileStopWords: String?
+    private var sidecarIdentities: [String: CatalogFileIdentity] = [:]
 
     var generation: Int { lock.withLock { committed } }
     var needsReopen: String? { lock.withLock { reopenReason } }
+    /// GH #359: the file check failed once — every later write of this
+    /// session is refused with these words, even if the file comes back.
+    var fileStopped: String? { lock.withLock { fileStopWords } }
+    /// QA r1 F3: this session's own -wal / -shm, by suffix, as first seen.
+    var sidecars: [String: CatalogFileIdentity] { lock.withLock { sidecarIdentities } }
 
+    /// A NEW session (every open): nothing carried over.
+    func begin(generation: Int) {
+        lock.withLock {
+            committed = generation
+            reopenReason = nil
+            fileStopWords = nil
+            sidecarIdentities = [:]
+        }
+    }
+
+    /// The same session at a new generation (adopt). A sticky file-stop is
+    /// NOT cleared (QA r1 F1): only a new open starts clean.
     func reset(generation: Int) {
         lock.withLock {
             committed = generation
             reopenReason = nil
         }
+    }
+
+    /// Record the -wal / -shm the first time each is seen (never replaced:
+    /// a later file at that path is not this session's).
+    func noteSidecars(_ found: [String: CatalogFileIdentity]) {
+        lock.withLock { sidecarIdentities.merge(found) { first, _ in first } }
+    }
+
+    /// Both sidecars already recorded (the per-commit note is then free).
+    var sidecarsComplete: Bool { lock.withLock { sidecarIdentities.count == CatalogSidecarQuarantine.suffixes.count } }
+
+    func stopForFile(_ words: String) {
+        lock.withLock { if fileStopWords == nil { fileStopWords = words } }
     }
 
     func commit(_ generation: Int) {

@@ -278,7 +278,9 @@ struct CatalogDecisionTablesTests {
     /// 100k pairs over 100,001 contents in ONE write, then read back with
     /// their verdicts. Budgets (Debug, M4 Max): write 20 s, read 10 s — a
     /// per-row scan of footage_decisions or a missing index would be
-    /// minutes.
+    /// minutes. Load-aware (GH #208 busy-machine rule, 2026-10-21): measured
+    /// 5.2 s on its own, 33 s at load 40–190 on 16 cores — a busy miss
+    /// within 3× is a known issue, a real miss still fails.
     @Test(.timeLimit(.minutes(3)))
     func oneHundredThousandPairsRecordAndReadInsideBudgets() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
@@ -288,6 +290,7 @@ struct CatalogDecisionTablesTests {
         let repository = try await open(fixture)
         let clock = ContinuousClock()
         var outcome: CatalogWriteOutcome?
+        let loadBeforeWrite = TimingBudget.sampleLoad()
         let write = await clock.measure {
             outcome = await repository.write(as: .ui) { tx in
                 for i in 1...n { _ = try tx.recordFootageLikeness(Self.pair(i, i + 1)) }
@@ -295,11 +298,14 @@ struct CatalogDecisionTablesTests {
         }
         #expect(outcome == .committed(generation: 1))
         var read: [CatalogRow.FootageLikenessReview] = []
+        let loadBeforeRead = TimingBudget.sampleLoad()
         let reading = try await clock.measure { read = try await reviews(repository) }
-        print("[decision-tables] 100k pairs: write \(write), read \(reading)")
+        print("[decision-tables] 100k pairs: write \(write), read \(reading) (\(TimingBudget.loadDescription()))")
         #expect(read.count == n)
-        #expect(write < .seconds(20))
-        #expect(reading < .seconds(10))
+        expectWithinTimingBudget("100k footage-likeness pairs written", measured: write,
+                                 budget: .seconds(20), loadBefore: loadBeforeWrite)
+        expectWithinTimingBudget("100k footage-likeness pairs read", measured: reading,
+                                 budget: .seconds(10), loadBefore: loadBeforeRead)
         await repository.close()
     }
 }

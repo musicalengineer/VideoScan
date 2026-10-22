@@ -137,11 +137,19 @@ extension VideoScanModel {
             return nil
         }
         guard FileManager.default.fileExists(atPath: path) else { return nil }
+        // Read-only, never `open(at:)` (#359 QA r2): a read-write open would
+        // switch the sealed copy to WAL, create sidecars and maybe migrate it —
+        // the safety copy would no longer be the copy that was taken. A sealed
+        // copy (VACUUM INTO, rollback journal) opens with nothing created
+        // beside it; one an older build already switched to WAL falls back to
+        // the plain read-only door (no migration: an older schema is refused).
+        let url = URL(fileURLWithPath: path)
         let repository = GRDBCatalogRepository()
-        switch await repository.open(at: URL(fileURLWithPath: path)) {
-        case .readWrite, .readOnly:
-            break
-        case .refused(let reason):
+        var opened = await repository.openSealedSnapshot(at: url)
+        if case .refused = opened, GRDBCatalogRepository.sealedSnapshotRefusal(url) != nil {
+            opened = await repository.openReadOnly(at: url, reason: "a safety copy, read for Undo")
+        }
+        if case .refused(let reason) = opened {
             catalogAuthorityNote("REFUSED reading the safety copy \(path) — \(reason)")
             return nil
         }

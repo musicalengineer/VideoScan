@@ -15,9 +15,10 @@
 //            repository stays closed (every write refused).
 //   Case 11  schema version newer than this build — refused with words that
 //            say so; not one byte written; the read-only door refuses too.
-//   Fail-fast  the database file REPLACED underneath an open session —
-//            every later write is refused (today: by the engine's "disk I/O
-//            error"); pending: our words say the file was replaced.
+//   Fail-fast  (#359) the database file REPLACED or MOVED underneath an
+//            open session, or the latch beside it removed or replaced —
+//            the store compares device + inode before every commit and
+//            refuses before writing, in words, for the rest of the session.
 //
 // Five dimensions: LOGIC (above) · SCALE N/A (each case is one open) · MEDIA
 // N/A · ISOLATION (temp folders only; flags and modes restored before the
@@ -178,7 +179,10 @@ struct CatalogOpenCornerTests {
 
     // MARK: - Fail fast: the file replaced underneath
 
-    @Test("fail-fast: catalog.sqlite replaced underneath an open session — every later write is refused and nothing lands; the words should say the file was replaced (pending)")
+    /// The ruled words (#359, Rick 10/21) a refused commit carries.
+    static let replacedWords = "catalog.sqlite was replaced or moved while VideoScan was open; nothing more will be saved — quit and reopen"
+
+    @Test("fail-fast (#359): catalog.sqlite replaced underneath an open session — both write doors refuse BEFORE writing, in the ruled words; not one byte lands in the moved-aside file, its -wal, the replacement or the witnesses")
     func databaseReplacedUnderneath() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 2, durability: .archival)
         defer { fixture.remove() }
@@ -189,36 +193,307 @@ struct CatalogOpenCornerTests {
         let copy = fixture.directory.appendingPathComponent("copy.sqlite")
         #expect(repository.sealedCopyBlocking(to: copy) == nil)
         let aside = fixture.directory.appendingPathComponent("moved-aside.sqlite")
+        let wal = URL(fileURLWithPath: fixture.url.path + "-wal")
+        let originalBefore = try Self.sha256(fixture.url)
+        let replacementBefore = try Self.sha256(copy)
+        let walBefore = try Self.sha256(wal)
+        let witnessesBefore = Array(try Self.fingerprint(fixture).dropFirst())
         try FileManager.default.moveItem(at: fixture.url, to: aside)
         try FileManager.default.moveItem(at: copy, to: fixture.url)
 
+        // Both doors: the actor's `write` and the committer's `writeBlocking`.
         let first = await repository.write(as: .ui) { _ in }
-        let second = await repository.write(as: .ui) { _ in }
+        let second = repository.writeBlocking(as: .ui) { _ in }
+        let generationAfter = await repository.generation
+        // Before close: close's checkpoint is not a commit (see the report on #359).
+        let walAfter = try Self.sha256(wal)
+        let witnessesAfter = Array(try Self.fingerprint(fixture).dropFirst())
         await repository.close()
         print("[corner-open] replaced underneath: \(first) / \(second)")
-        // Measured 2026-10-21: refused — but only because the engine's own
-        // file check answers "disk I/O error"; our store does not look.
-        // That check is Apple SQLite's SQLITE_IOERR_VNODE (extended code
-        // 6922), raised from a file-system notice that arrives
-        // ASYNCHRONOUSLY: 80 of 80 refused on a quiet M4, but in a full
-        // parallel run at load ~14 on 16 cores both writes COMMITTED
-        // (generation 2 → 3 → 4) into the moved-aside file. So "the engine
-        // refuses" is not a guarantee, and the store's own identity check
-        // (#359, ruled 10/21: device + inode at open and before each
-        // commit) is what makes this deterministic. Until then a landed
-        // write is a KNOWN, intermittent issue — listed on every run it
-        // happens, never silent; when #359 lands, delete the wrapper and
-        // this goes back to a hard expectation.
-        let generationAfter = await repository.generation
-        withKnownIssue("#359: the store does not check the file's identity; the engine's notice is asynchronous, so under load a write can land after catalog.sqlite was replaced",
-                       isIntermittent: true) {
-            #expect(!first.isCommitted && !second.isCommitted, "a write landed after catalog.sqlite was replaced: \(first) / \(second)")
-            #expect(generationAfter == generation)
+        // Until #359 this was refused only by Apple SQLite's SQLITE_IOERR_VNODE
+        // (6922), a file-system notice that arrives ASYNCHRONOUSLY: under load
+        // both writes committed into the moved-aside file (generation 2 → 3 → 4).
+        // Now the store compares device + inode before every commit: a hard
+        // expectation, never a known issue.
+        #expect(first == .refused(reason: Self.replacedWords), "first write: \(first)")
+        #expect(second == .refused(reason: Self.replacedWords), "second write: \(second)")
+        #expect(generationAfter == generation)
+        #expect(walAfter == walBefore, "a frame landed in catalog.sqlite-wal after the file was replaced")
+        #expect(witnessesAfter == witnessesBefore, "a high-water witness moved after the file was replaced")
+        #expect(try Self.sha256(aside) == originalBefore, "the moved-aside catalog.sqlite changed")
+        #expect(try Self.sha256(fixture.url) == replacementBefore, "the replacement catalog.sqlite changed")
+    }
+
+    @Test("fail-fast (#359): catalog.sqlite moved away with nothing in its place — refused in the ruled words; moving it back does not resume writing (no silent retry)")
+    func databaseMovedAwayStaysStopped() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let aside = fixture.directory.appendingPathComponent("moved-aside.sqlite")
+        try FileManager.default.moveItem(at: fixture.url, to: aside)
+        let gone = await repository.write(as: .ui) { _ in }
+        try FileManager.default.moveItem(at: aside, to: fixture.url)
+        let back = await repository.write(as: .ui) { _ in }
+        let generation = await repository.generation
+        await repository.close()
+        #expect(gone == .refused(reason: Self.replacedWords), "\(gone)")
+        #expect(back == .refused(reason: Self.replacedWords), "the session resumed writing once the file came back: \(back)")
+        #expect(generation == 2)
+    }
+
+    /// Every file a swap could touch (QA r1 E): the database at the path, its
+    /// -wal and -shm, both witnesses, and any extra file (the replacement,
+    /// the moved-aside file). SHA-256 each; missing = "-". No `dropFirst`.
+    static func everyFile(_ fixture: StoreFixture, plus extra: [URL] = []) throws -> [String: String] {
+        var files = [fixture.url, URL(fileURLWithPath: fixture.url.path + "-wal"), URL(fileURLWithPath: fixture.url.path + "-shm"),
+                     fixture.highWaterURL, fixture.highWaterLogURL]
+        files += extra
+        var hashes: [String: String] = [:]
+        for url in files { hashes[url.lastPathComponent] = try sha256(url) }
+        return hashes
+    }
+
+    @Test("fail-fast (#359): the latch beside catalog.sqlite removed or replaced mid-session — the next write is refused in words naming catalog.cutover; not one byte changes in any catalog file",
+          arguments: [false, true])
+    func latchGoneOrReplacedMidSession(_ replaced: Bool) async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let latch = fixture.directory.appendingPathComponent(SQLiteCatalogReader.latchFileName)
+        try Data("switched\n".utf8).write(to: latch)
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        #expect(await repository.write(as: .ui) { _ in }.isCommitted, "an armed latch that has not moved lets the write through")
+        let before = try Self.everyFile(fixture)
+        try FileManager.default.removeItem(at: latch)
+        if replaced { try Data("switched\n".utf8).write(to: latch) }      // same name, a new file
+        let refused = await repository.write(as: .ui) { _ in }
+        let generation = await repository.generation
+        let after = try Self.everyFile(fixture)
+        await repository.close()
+        #expect(refused == .refused(reason: "\(SQLiteCatalogReader.latchFileName) was replaced or removed while VideoScan was open; nothing more will be saved — quit and reopen"),
+                "\(refused)")
+        #expect(generation == 3)
+        #expect(after == before, "a catalog file changed after the latch went: \(before) → \(after)")
+    }
+
+    @Test("fail-fast (#359): Adopt after catalog.sqlite was moved aside — refused in the ruled words before any witness is raised; not one byte changes in any catalog file")
+    func adoptAfterTheFileMovedIsRefused() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        try fixture.writeHighWater("10")
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        guard case .readOnly = await repository.open(at: fixture.url) else {
+            Issue.record("expected a read-only open below the high-water"); await repository.close(); return
         }
-        guard case .refused(let words) = first else { return }
-        withKnownIssue("pending (draft issue): the refusal says 'disk I/O error', not that catalog.sqlite was replaced under the session") {
-            #expect(words.contains("replaced"), Comment(rawValue: words))
+        let aside = fixture.directory.appendingPathComponent("moved-aside.sqlite")
+        let originalBefore = try Self.sha256(fixture.url)
+        try FileManager.default.moveItem(at: fixture.url, to: aside)
+        let before = try Self.everyFile(fixture, plus: [aside])
+        let adopted = await repository.adopt(toHighWater: 10)
+        let generation = await repository.generation
+        let after = try Self.everyFile(fixture, plus: [aside])
+        await repository.close()
+        #expect(adopted == .refused(reason: Self.replacedWords), "\(adopted)")
+        #expect(generation == 5)
+        #expect(after == before, "a catalog file changed: \(before) → \(after)")
+        #expect(try Self.sha256(aside) == originalBefore)
+    }
+
+    /// QA r1 F3 — commits BEFORE the swap (the case the first round missed).
+    /// close() after a stop does NOT checkpoint (Apple SQLite refuses or
+    /// skips it once it noticed the rename) and RENAMES this session's own
+    /// -wal / -shm into `catalog-wal-quarantine-<stamp>/`: the replacement
+    /// never inherits them, and the quarantined -wal put beside the
+    /// moved-aside file completes it (generation 4). Nothing deleted.
+    @Test("fail-fast (#359, QA r1 F3): commits before the swap, then close — the session's -wal is quarantined (renamed, never deleted); the replacement opens at its own generation; moved-aside + quarantined -wal = every commit")
+    func closeAfterSwapQuarantinesTheSessionsWAL() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let copy = fixture.directory.appendingPathComponent("copy.sqlite")
+        #expect(repository.sealedCopyBlocking(to: copy) == nil)          // the replacement, at generation 2
+        #expect(await repository.write(as: .ui) { _ in } == .committed(generation: 3))
+        #expect(await repository.write(as: .ui) { _ in } == .committed(generation: 4))
+        let wal = URL(fileURLWithPath: fixture.url.path + "-wal")
+        let walAtSwap = try Self.sha256(wal)
+        #expect(Self.size(wal) > 0, "the two commits sit in the -wal before the swap")
+        let aside = fixture.directory.appendingPathComponent("moved-aside.sqlite")
+        try FileManager.default.moveItem(at: fixture.url, to: aside)
+        try FileManager.default.moveItem(at: copy, to: fixture.url)
+        let replacementBefore = try Self.sha256(fixture.url)
+        await repository.close()                                          // no write after the swap: close's own check finds it
+
+        let quarantine = try Self.quarantineFolders(fixture.directory)
+        #expect(quarantine.count == 1, "one quarantine folder: \(quarantine.map(\.lastPathComponent))")
+        #expect(!FileManager.default.fileExists(atPath: wal.path), "the session's -wal is still beside the replacement")
+        #expect(!FileManager.default.fileExists(atPath: fixture.url.path + "-shm"), "the session's -shm is still beside the replacement")
+        #expect(try Self.sha256(fixture.url) == replacementBefore, "the replacement changed at close")
+        if let folder = quarantine.first {
+            let moved = folder.appendingPathComponent("catalog.sqlite-wal")
+            #expect(try Self.sha256(moved) == walAtSwap, "the quarantined -wal is not the session's, byte for byte")
+            #expect(try Self.generationOfACopy(aside, wal: moved, in: fixture.directory) == 4,
+                    "moved-aside + quarantined -wal do not hold every commit")
         }
+        #expect(try Self.generationOfACopy(aside, in: fixture.directory) == 2, "precondition: the commits lived only in the -wal")
+        let reopened = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        _ = await reopened.open(at: fixture.url)
+        let generation = await reopened.generation
+        await reopened.close()
+        #expect(generation == 2, "the replacement inherited the session's frames: generation \(generation)")
+    }
+
+    @Test("fail-fast (#359, QA r1 F3): a -wal at the path that is NOT this session's (it came with the replacement) is left alone — no quarantine, not one byte changed")
+    func closeLeavesSomeoneElsesWALAlone() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        #expect(await repository.write(as: .ui) { _ in } == .committed(generation: 3))
+        let wal = URL(fileURLWithPath: fixture.url.path + "-wal")
+        let shm = URL(fileURLWithPath: fixture.url.path + "-shm")
+        let asideFolder = fixture.directory.appendingPathComponent("aside", isDirectory: true)
+        try FileManager.default.createDirectory(at: asideFolder, withIntermediateDirectories: false)
+        for url in [fixture.url, wal, shm] {                              // a tool moves all three away …
+            try FileManager.default.moveItem(at: url, to: asideFolder.appendingPathComponent(url.lastPathComponent))
+        }
+        try Data("someone else's catalog".utf8).write(to: fixture.url)    // … and puts its own in their place
+        try Data("someone else's wal".utf8).write(to: wal)
+        let theirs = try Self.sha256(wal)
+        await repository.close()
+        #expect(try Self.quarantineFolders(fixture.directory).isEmpty, "a quarantine ran on files that are not this session's")
+        #expect(try Self.sha256(wal) == theirs, "someone else's -wal was touched")
+    }
+
+    /// Two stand-in sidecars and their identities, as a session records them.
+    static func standInSidecars(_ database: URL) throws -> [String: CatalogFileIdentity] {
+        try Data("frames".utf8).write(to: URL(fileURLWithPath: database.path + "-wal"))
+        try Data("index".utf8).write(to: URL(fileURLWithPath: database.path + "-shm"))
+        return CatalogSidecarQuarantine.identities(besideDatabaseAt: database)
+    }
+
+    @Test("fail-fast (#359, QA r2-3): the quarantine folder cannot be made — each sidecar is renamed in place (.quarantined-<stamp>), never deleted, and the OUTCOME says where")
+    func quarantineFallsBackToAnInPlaceRename() throws {
+        let folder = try StoreFixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let database = folder.appendingPathComponent("catalog.sqlite")
+        let own = try Self.standInSidecars(database)
+        let walBytes = try Self.sha256(URL(fileURLWithPath: database.path + "-wal"))
+        let unmakeable = folder.appendingPathComponent("no-such-parent/catalog-wal-quarantine-x", isDirectory: true)
+        let lines = CatalogSidecarQuarantine.quarantine(besideDatabaseAt: database, own: own, why: "test", folder: unmakeable)
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        let renamedWAL = names.first { $0.hasPrefix("catalog.sqlite-wal.quarantined-") }
+        #expect(renamedWAL != nil, "\(names)")
+        #expect(names.contains { $0.hasPrefix("catalog.sqlite-shm.quarantined-") }, "\(names)")
+        #expect(!names.contains("catalog.sqlite-wal") && !names.contains("catalog.sqlite-shm"))
+        if let renamedWAL { #expect(try Self.sha256(folder.appendingPathComponent(renamedWAL)) == walBytes) }
+        #expect(lines.contains { $0.contains("START quarantine") }, "\(lines)")
+        #expect(lines.contains { $0.contains("OUTCOME quarantine — 2 file(s) moved") && $0.contains(".quarantined-") }, "\(lines)")
+    }
+
+    @Test("fail-fast (#359, QA r2-3): nothing can be renamed (read-only folder) — the OUTCOME names exactly which files to move away before reopening; nothing deleted")
+    func quarantineThatCannotMoveSaysWhatToMove() throws {
+        let folder = try StoreFixture.temporaryDirectory()
+        let database = folder.appendingPathComponent("catalog.sqlite")
+        let own = try Self.standInSidecars(database)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let lines = CatalogSidecarQuarantine.quarantine(besideDatabaseAt: database, own: own, why: "test")
+        let outcome = lines.last ?? ""
+        #expect(outcome.contains("OUTCOME quarantine FAILED"), Comment(rawValue: outcome))
+        #expect(outcome.contains(database.path + "-wal") && outcome.contains(database.path + "-shm"), Comment(rawValue: outcome))
+        #expect(outcome.contains("BEFORE opening VideoScan"), Comment(rawValue: outcome))
+        #expect(FileManager.default.fileExists(atPath: database.path + "-wal"), "a sidecar vanished")
+    }
+
+    @Test("fail-fast (#359, QA r2 nit): when the catalog's connections did not close, nothing is renamed and the words say what to move")
+    func skippedQuarantineSaysWhatToMove() {
+        let database = URL(fileURLWithPath: "/tmp/somewhere/catalog.sqlite")
+        let lines = CatalogSidecarQuarantine.skipped(besideDatabaseAt: database, because: "the catalog's connections did not close")
+        #expect(lines.count == 1)
+        #expect(lines[0].contains("OUTCOME quarantine SKIPPED — the catalog's connections did not close"), Comment(rawValue: lines[0]))
+        #expect(lines[0].contains("/tmp/somewhere/catalog.sqlite-wal") && lines[0].contains("BEFORE opening VideoScan"), Comment(rawValue: lines[0]))
+    }
+
+    @Test("fail-fast (#359, QA r2-2): close after a swap keeps its quarantine lines for the app (lastCloseNotes); a clean close has none")
+    func closeNotesCarryTheQuarantineLines() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let copy = fixture.directory.appendingPathComponent("copy.sqlite")
+        #expect(repository.sealedCopyBlocking(to: copy) == nil)
+        #expect(await repository.write(as: .ui) { _ in } == .committed(generation: 3))
+        try FileManager.default.moveItem(at: fixture.url, to: fixture.directory.appendingPathComponent("moved-aside.sqlite"))
+        try FileManager.default.moveItem(at: copy, to: fixture.url)
+        await repository.close()
+        let notes = repository.lastCloseNotes
+        #expect(notes.contains { $0.contains("START quarantine") }, "\(notes)")
+        #expect(notes.contains { $0.contains("OUTCOME quarantine — ") }, "\(notes)")
+
+        let clean = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        let other = try await StoreFixture.make(.grdb, generation: 1)
+        defer { other.remove() }
+        _ = await clean.open(at: other.url)
+        await clean.close()
+        #expect(clean.lastCloseNotes.isEmpty)
+    }
+
+    @Test("fail-fast (#359, QA r1 D): an open that requires the latch refuses without it, in GH #354's words, and writes nothing")
+    func openRequiringTheLatchRefusesWithoutIt() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        try Self.removeSidecars(fixture.url)
+        let before = try Self.everyFile(fixture)
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        let opened = await repository.open(at: fixture.url, requiringLatch: true)
+        let wrote = await repository.write(as: .ui) { _ in }
+        await repository.close()
+        #expect(opened == .refused(reason: GRDBCatalogRepository.noLatchWords(folder: fixture.directory)), "\(opened)")
+        #expect(wrote == .refused(reason: "not open"))
+        #expect(try Self.everyFile(fixture) == before, "a refused open wrote")
+        try Data("switched\n".utf8).write(to: fixture.directory.appendingPathComponent(SQLiteCatalogReader.latchFileName))
+        let again = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        #expect(await again.open(at: fixture.url, requiringLatch: true) == .readWrite, "with the latch it opens")
+        await again.close()
+    }
+
+    static func size(_ url: URL) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.intValue ?? 0
+    }
+
+    static func quarantineFolders(_ folder: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("catalog-wal-quarantine-") }
+    }
+
+    /// The generation `url` holds ON ITS OWN (or with `wal` beside it): byte
+    /// copies opened in a private folder, so the probe never touches the
+    /// files under test.
+    static func generationOfACopy(_ url: URL, wal: URL? = nil, in folder: URL) throws -> Int {
+        let probeFolder = folder.appendingPathComponent("probe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: probeFolder, withIntermediateDirectories: true)
+        let probe = probeFolder.appendingPathComponent("probe.sqlite")
+        try FileManager.default.copyItem(at: url, to: probe)
+        if let wal { try FileManager.default.copyItem(at: wal, to: URL(fileURLWithPath: probe.path + "-wal")) }
+        let queue = try DatabaseQueue(path: probe.path)
+        defer { try? queue.close() }
+        return try queue.read { try Int.fetchOne($0, sql: "SELECT generation FROM generations WHERE id = 1") ?? -1 }
+    }
+
+    @Test("fail-fast (#359): no latch at open (a bare store, the importer) — the latch is not watched and writes go on")
+    func noLatchAtOpenIsNotWatched() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let wrote = await repository.write(as: .ui) { _ in }
+        await repository.close()
+        #expect(wrote == .committed(generation: 3))
     }
 
     // MARK: - Helpers
@@ -235,10 +510,13 @@ struct CatalogOpenCornerTests {
 
     /// SHA-256 of catalog.sqlite and both witnesses (missing = "-").
     static func fingerprint(_ fixture: StoreFixture) throws -> [String] {
-        try [fixture.url, fixture.highWaterURL, fixture.highWaterLogURL].map { url in
-            guard FileManager.default.fileExists(atPath: url.path) else { return "-" }
-            return SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
-        }
+        try [fixture.url, fixture.highWaterURL, fixture.highWaterLogURL].map(sha256)
+    }
+
+    /// SHA-256 of one file (missing = "-").
+    static func sha256(_ url: URL) throws -> String {
+        guard FileManager.default.fileExists(atPath: url.path) else { return "-" }
+        return SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
     }
 
     static func removeSidecars(_ database: URL) throws {

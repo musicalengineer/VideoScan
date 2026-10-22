@@ -383,6 +383,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let model = catalogModel {
                 let outcome = CatalogQuitRecovery.saveAtTermination(model: model)
                 appLog.write("shutdown step: catalog — \(outcome)")
+                // GH #359 (QA r2-2): only after a file-stop — quarantine or
+                // checkpoint this session's -wal and say so; else a no-op.
+                if CatalogQuitRecovery.closeAfterFileStop(model: model) {
+                    appLog.write("shutdown step: catalog.sqlite closed after a file-stop")
+                }
             }
         }
         // Synchronous on purpose — Cmd-Q must not return before the RAM disk

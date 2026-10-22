@@ -49,6 +49,11 @@ final class CatalogCutoverState: ObservableObject {
 
     var isSQLiteAuthority: Bool { committer != nil }
 
+    /// Catalog ▸ Reopen SQLite Catalog is offered while saving has stopped —
+    /// except after a file-stop (GH #359), where only quitting is safe.
+    /// Re-read whenever `blockedReason` publishes.
+    var canReopen: Bool { blockedReason != nil && committer?.canReopen == true }
+
     /// Only a restore below the high-water may be adopted.
     var canAdopt: Bool { readOnlyReason?.hasPrefix("restoredBelowHighWater") == true }
 

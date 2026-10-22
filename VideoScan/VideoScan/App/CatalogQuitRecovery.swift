@@ -200,6 +200,63 @@ enum CatalogQuitRecovery {
         return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline)
     }
 
+    /// GH #359 (QA r2-2), at quit and ONLY after a file-stop: close the store
+    /// so this session's -wal is checkpointed into catalog.sqlite (still the
+    /// session's file — a latch-only stop) or quarantined (catalog.sqlite was
+    /// replaced or moved — the replacement must never replay it), and say
+    /// what happened through the one sink. Without a stop this is a no-op and
+    /// the quit path is unchanged. Blocks the main thread for at most
+    /// `seconds` (the quit's writer deadline, as `writeCopyBlocking` is
+    /// bounded — QA r3): the close runs off the main actor; if it has not
+    /// finished in time the quit goes on and the words say what to move away
+    /// by hand. `close` is the test seam (a close that never returns).
+    /// True when the store was stopped and a close was attempted.
+    @discardableResult
+    static func closeAfterFileStop(model: VideoScanModel, within seconds: TimeInterval = CatalogQuitRecovery.writerDeadline,
+                                   close: @escaping @Sendable (any CatalogRepository) async -> Void = { await $0.close() }) -> Bool {
+        guard let repository = model.catalogCutover.committer?.repository,
+              let stop = repository.fileStopWords else { return false }
+        let databasePath = model.catalogCutover.databaseURL?.path ?? "catalog.sqlite"
+        model.catalogAuthorityNote("START closing catalog.sqlite at quit after the file check stopped saving — \(stop)")
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await close(repository)
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + max(0, seconds)) == .success else {
+            noteTimedOutClose(model, repository, seconds: seconds, databasePath: databasePath)
+            return true
+        }
+        let notes = repository.lastCloseNotes
+        for line in notes { model.catalogAuthorityNote(line.replacingOccurrences(of: "Catalog store: ", with: "")) }
+        model.catalogAuthorityNote("OUTCOME closed catalog.sqlite at quit — "
+            + (notes.isEmpty ? "it is still this session's own file and was closed normally" : "see the quarantine lines above"))
+        return true
+    }
+
+    /// codex #117 F3: the close did not finish in time. Only a catalog.sqlite
+    /// CONFIRMED not to be this session's file lets the quit quarantine this
+    /// session's -wal / -shm itself (by inode, without waiting for close).
+    /// The same file (a latch-only stop) or an unreadable identity moves
+    /// nothing — and the words never tell a person to move the live -wal.
+    private static func noteTimedOutClose(_ model: VideoScanModel, _ repository: any CatalogRepository,
+                                          seconds: TimeInterval, databasePath: String) {
+        let head = "OUTCOME catalog.sqlite could not be closed within \(seconds.quitWords) s — "
+        let name = (databasePath as NSString).lastPathComponent
+        switch repository.quarantineAfterTimedOutClose() {
+        case .quarantined(let lines):
+            for line in lines { model.catalogAuthorityNote(line.replacingOccurrences(of: "Catalog store: ", with: "")) }
+            model.catalogAuthorityNote(head + "\(name) at \(databasePath) is not this session's file, so this session's "
+                + "-wal and -shm were quarantined now (see above): the file there cannot take them.")
+        case .stillItsOwnFile, .notOpen:
+            model.catalogAuthorityNote(head + "it is still this session's own file. Its own \(name)-wal holds committed "
+                + "changes and will be applied at the next open; leave it where it is.")
+        case .identityUnreadable(let why):
+            model.catalogAuthorityNote(head + "its identity could not be read (\(why)), so nothing was moved. If it is this "
+                + "session's file, its own \(name)-wal holds committed changes and will be applied at the next open.")
+        }
+    }
+
     /// Why the terminal save failed: under catalog.sqlite the committer's
     /// words (the JSON store's error is not the session's), else the store's.
     private static func failureWords(_ model: VideoScanModel) -> String {

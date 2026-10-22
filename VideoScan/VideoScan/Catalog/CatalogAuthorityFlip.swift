@@ -117,14 +117,12 @@ enum CatalogAuthority: Equatable, Sendable {
     /// The launch's one open: read-write (`open`, which may migrate and
     /// raise the high-water) or, for a read-only session, `openReadOnly`.
     static func open(_ repository: GRDBCatalogRepository, at url: URL, readOnly: Bool) async -> CatalogOpenOutcome {
-        readOnly ? await repository.openReadOnly(at: url, reason: viewerReadOnlyWords) : await repository.open(at: url)
+        readOnly ? await repository.openReadOnly(at: url, reason: viewerReadOnlyWords) : await repository.open(at: url, requiringLatch: true)
     }
 
     /// The words a launch with no latch shows (GH #354), in the one sink.
     static func noLatchWords(folder: URL) -> String {
-        "No catalog — \(latchFileName) is not beside the catalog in \(folder.path), so this Mac was never switched to "
-            + "\(databaseFileName). catalog.json is not opened (not even read-only): the master (or migrate_data.sh) "
-            + "must carry \(databaseFileName) and its \(latchFileName). Nothing will be saved this session."
+        GRDBCatalogRepository.noLatchWords(folder: folder)    // one place: the store refuses an open with these too (#359 D)
     }
 
     /// A viewer with no synced snapshot latch in viewer-catalog/.
