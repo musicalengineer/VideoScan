@@ -63,7 +63,7 @@ else
     # `ollama list` needs a running server; start one briefly if none is up.
     started_server=0
     if ! ollama list >/dev/null 2>&1 && ! checking; then
-        ollama serve >/tmp/videoscan-install-ollama.log 2>&1 &
+        ollama serve >>"$(install_log ollama)" 2>&1 &
         server_pid=$!
         started_server=1
         for _ in 1 2 3 4 5 6 7 8 9 10; do ollama list >/dev/null 2>&1 && break; sleep 1; done

@@ -1,0 +1,18 @@
+# venv-genealogy: exact versions from the M4's working venv (Python 3.14.9), frozen 2026-10-22.
+# install.sh installs from this file, so a new Mac gets what the M4 runs.
+# Refresh after a deliberate upgrade on the M4:
+#   uv pip freeze --python venv-genealogy/bin/python > install_videoscan_dev_dependencies/locks/venv-genealogy.txt
+#   (then drop the face-recognition-models line: it is not on PyPI; 40_python.sh installs it from git by SHA)
+
+babelfish==0.6.1
+certifi==2026.7.22
+charset-normalizer==3.5.1
+diskcache==5.6.3
+fake-useragent==2.0.3
+getmyancestors==1.2.0
+idna==3.19
+pip==26.2.1
+pyrate-limiter==2.10.0
+requests==2.32.3
+requests-ratelimiter==0.7.0
+urllib3==2.7.0

@@ -12,17 +12,21 @@ if [[ -n "$git_dir" && -f "$hook_src" ]]; then
         ok "pre-commit hook installed"
     elif checking; then
         failed "pre-commit hook" "missing or stale; run scripts/install-git-hooks.sh"
-    elif bash "$REPO_ROOT/scripts/install-git-hooks.sh" >/dev/null 2>&1; then
+    # The hook script finds the repo from the current directory, and Rick runs
+    # this from wherever he cloned — so run it inside the checkout.
+    elif (cd "$REPO_ROOT" && bash scripts/install-git-hooks.sh) >/dev/null 2>&1; then
         installed "pre-commit hook"
     else
-        failed "pre-commit hook" "run scripts/install-git-hooks.sh"
+        failed "pre-commit hook" "run: cd $REPO_ROOT && scripts/install-git-hooks.sh"
     fi
 fi
 
 if command -v git-lfs >/dev/null 2>&1; then
+    # Global filter config AND this repo's lfs hooks: -C so the repo half isn't
+    # skipped when the caller is outside the checkout.
     if git config --global --get filter.lfs.process >/dev/null 2>&1; then
         ok "git-lfs initialised"
-    elif ! checking && git lfs install >/dev/null 2>&1; then
+    elif ! checking && git -C "$REPO_ROOT" lfs install >/dev/null 2>&1; then
         installed "git-lfs hooks (git lfs install)"
     else
         failed "git-lfs" "run: git lfs install"

@@ -60,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 export CHECK_ONLY WITH_MODELS WITH_SCHEDULES COPY_FROM REPO_ROOT
+# --check changes nothing: the import probes must not compile .pyc files.
+[[ "${CHECK_ONLY:-0}" == "1" ]] && export PYTHONDONTWRITEBYTECODE=1
 
 wanted() {
     local step="$1"

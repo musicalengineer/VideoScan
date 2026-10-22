@@ -8,10 +8,15 @@ if ! command -v brew >/dev/null 2>&1; then
 elif checking; then
     # Lines look like "→ Formula jpeg needs to be installed." and go to
     # STDERR — discarding stderr here once turned every check green.
-    missing=$(HOMEBREW_NO_AUTO_UPDATE=1 brew bundle check --file="$BREWFILE" --verbose --no-upgrade 2>&1 \
-        | grep -E "needs to be installed" || true)
-    if [[ -z "$missing" ]]; then
+    # Its exit status decides; the text only names what is missing. A brew
+    # that errors out must never read as "all installed".
+    bundle_out=$(HOMEBREW_NO_AUTO_UPDATE=1 brew bundle check --file="$BREWFILE" --verbose --no-upgrade 2>&1)
+    bundle_rc=$?
+    missing=$(grep -E "needs to be installed" <<< "$bundle_out" || true)
+    if [[ "$bundle_rc" == "0" ]]; then
         ok "every Brewfile entry is installed"
+    elif [[ -z "$missing" ]]; then
+        failed "brew bundle check" "exit $bundle_rc: $(tail -1 <<< "$bundle_out")"
     else
         while IFS= read -r line; do
             failed "brew: $(echo "$line" | awk '{print tolower($2) " " $3}')" "missing (run without --check to install)"

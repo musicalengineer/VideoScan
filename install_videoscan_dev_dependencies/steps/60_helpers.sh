@@ -18,10 +18,11 @@ elif ! command -v git-lfs >/dev/null 2>&1; then
 else
     # Builds a pinned Swift helper, fetches the SHA-checked model, smoke-tests it.
     note "building Hallie's Kokoro voice (several minutes)…"
-    if bash "$REPO_ROOT/scripts/install_hallie_kokoro.sh" >/tmp/videoscan-install-kokoro.log 2>&1; then
+    kokoro_log=$(install_log kokoro)
+    if (cd "$REPO_ROOT" && bash scripts/install_hallie_kokoro.sh) >>"$kokoro_log" 2>&1; then
         installed "Hallie Kokoro voice"
     else
-        failed "Hallie Kokoro voice" "see /tmp/videoscan-install-kokoro.log"
+        failed "Hallie Kokoro voice" "see $kokoro_log"
     fi
 fi
 

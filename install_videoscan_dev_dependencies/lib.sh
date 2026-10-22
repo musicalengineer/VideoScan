@@ -29,6 +29,14 @@ section()   { echo; echo "${BOLD}== $1 ==${RESET}"; }
 CHECK_ONLY="${CHECK_ONLY:-0}"
 checking() { [[ "$CHECK_ONLY" == "1" ]]; }
 
+# install_log NAME — path of a log that survives a reboot (not /tmp), for the
+# long installs (pip, Kokoro, ollama). Only install mode writes logs.
+INSTALL_LOG_DIR="$HOME/Library/Logs/VideoScan/install"
+install_log() {
+    mkdir -p "$INSTALL_LOG_DIR"
+    echo "$INSTALL_LOG_DIR/$1.log"
+}
+
 # Homebrew is not on PATH in non-login shells (ssh host ./install.sh) or on a
 # Mac that has only just installed it. Put it there for this run.
 ensure_brew_on_path() {

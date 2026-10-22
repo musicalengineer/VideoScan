@@ -32,14 +32,26 @@ make_venv() {
 # pip_into NAME LABEL ARGS… — uv pip install into a venv; quiet unless it fails.
 pip_into() {
     local name="$1" label="$2"; shift 2
-    local py="$REPO_ROOT/$name/bin/python"
+    local py="$REPO_ROOT/$name/bin/python" log
+    log=$(install_log "pip-$name")
     note "installing $label into $name…"
-    if uv pip install --python "$py" "$@" >/tmp/videoscan-install-$name.log 2>&1; then
+    if uv pip install --python "$py" "$@" >>"$log" 2>&1; then
         ok "$label in $name"
     else
-        failed "$label in $name" "see /tmp/videoscan-install-$name.log"
+        failed "$label in $name" "see $log"
     fi
 }
+
+# requirements_for NAME LOOSE — the M4's exact versions (locks/NAME.txt) when
+# present, else the loose requirements file. The lock is what makes a new Mac
+# match the M4 instead of whatever PyPI has that day.
+LOCKS="$REPO_ROOT/install_videoscan_dev_dependencies/locks"
+requirements_for() {
+    if [[ -f "$LOCKS/$1.txt" ]]; then echo "$LOCKS/$1.txt"; else echo "$2"; fi
+}
+
+# Not on PyPI and unmaintained upstream; pinned so it can't drift.
+FACE_MODELS_GIT="git+https://github.com/ageitgey/face_recognition_models@e67de717267507d1e9246de95692eb8be736ab61"
 
 # check_imports NAME MODULE… — the real test: can the venv import them?
 check_imports() {
@@ -62,22 +74,28 @@ else
     # ---- venv (main) ----
     if make_venv venv "$MAIN_PYTHON" && ! checking; then
         # dlib compiles from source (5–10 min the first time).
-        pip_into venv "requirements.txt" -r "$REPO_ROOT/requirements.txt"
+        reqs=$(requirements_for venv "$REPO_ROOT/requirements.txt")
+        pip_into venv "${reqs#"$REPO_ROOT"/}" -r "$reqs"
         # Not on PyPI; carries dlib's face model files.
-        pip_into venv "face_recognition_models" \
-            "git+https://github.com/ageitgey/face_recognition_models"
+        pip_into venv "face_recognition_models" --no-deps "$FACE_MODELS_GIT"
     fi
     check_imports venv openpyxl dlib face_recognition torch cv2 sklearn hdbscan pytest shapefile yaml
 
     # ---- venv-mlx ----
     if make_venv venv-mlx "$MLX_PYTHON" && ! checking; then
-        pip_into venv-mlx "requirements-mlx.txt" -r "$REPO_ROOT/scripts/requirements-mlx.txt"
+        reqs=$(requirements_for venv-mlx "$REPO_ROOT/scripts/requirements-mlx.txt")
+        pip_into venv-mlx "${reqs#"$REPO_ROOT"/}" -r "$reqs"
     fi
     check_imports venv-mlx mlx mlx_whisper mlx_vlm
 
     # ---- venv-genealogy ----
     if make_venv venv-genealogy "$GENEALOGY_PYTHON" && ! checking; then
-        pip_into venv-genealogy "getmyancestors" getmyancestors
+        reqs=$(requirements_for venv-genealogy "")
+        if [[ -n "$reqs" ]]; then
+            pip_into venv-genealogy "${reqs#"$REPO_ROOT"/}" -r "$reqs"
+        else
+            pip_into venv-genealogy "getmyancestors" getmyancestors
+        fi
     fi
     if [[ -x "$REPO_ROOT/venv-genealogy/bin/getmyancestors" ]]; then
         ok "getmyancestors (FamilySearch pull)"

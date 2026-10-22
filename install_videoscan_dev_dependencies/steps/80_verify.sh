@@ -35,16 +35,31 @@ fi
 
 # The Python side: collect (not run) the pytest suite, which imports every
 # test module and so catches a missing package in seconds.
+# Exit 0 AND "N tests collected" both required ("no tests collected" exits 5).
+# No bytecode or cache writes, so --check leaves the checkout untouched.
 if [[ -x "$REPO_ROOT/venv/bin/python" ]]; then
-    collected=$("$REPO_ROOT/venv/bin/python" -m pytest -q --collect-only "$REPO_ROOT/tests" 2>/dev/null | tail -1)
-    if [[ "$collected" == *"error"* || -z "$collected" ]]; then
-        failed "pytest collection" "${collected:-no output}; run: venv/bin/python -m pytest -q --collect-only tests"
-    else
+    # From the checkout: some tests import `scripts.…` relative to it.
+    collected=$(cd "$REPO_ROOT" && PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m pytest -q --collect-only \
+        -p no:cacheprovider tests 2>&1)
+    pytest_rc=$?
+    collected=$(tail -1 <<< "$collected")
+    if [[ "$pytest_rc" == "0" && "$collected" =~ [1-9][0-9]*\ tests?\ collected ]]; then
         ok "pytest collects: $collected"
+    else
+        failed "pytest collection" "exit $pytest_rc: ${collected:-no output}; run: venv/bin/python -m pytest -q --collect-only tests"
     fi
 fi
 
-mkdir -p "$HOME/Library/Logs/VideoScan" 2>/dev/null && ok "log folder ~/Library/Logs/VideoScan"
+LOG_DIR="$HOME/Library/Logs/VideoScan"
+if [[ -d "$LOG_DIR" ]]; then
+    ok "log folder ~/Library/Logs/VideoScan"
+elif checking; then
+    failed "log folder" "~/Library/Logs/VideoScan missing; run without --check to create it"
+elif mkdir -p "$LOG_DIR"; then
+    installed "log folder ~/Library/Logs/VideoScan"
+else
+    failed "log folder" "could not create ~/Library/Logs/VideoScan"
+fi
 
 note "Build and run is yours: open VideoScan/VideoScan.xcodeproj, scheme VideoScan, Debug, ⌘R."
 note "Command-line equivalent: xcodebuild -project VideoScan/VideoScan.xcodeproj -scheme VideoScan -configuration Debug build"

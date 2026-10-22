@@ -7,16 +7,25 @@ but it works for any new dev Mac.
 
 ## Quick start
 
+**Dev bring-up (tools only, no family data):**
+
 ```bash
-# Rick first: Xcode 27 from the App Store (open it once), Homebrew, git identity.
+# Rick first: Xcode 27 from the App Store (open it once), Homebrew, gh auth login.
 git clone https://github.com/musicalengineer/VideoScan.git ~/dev/VideoScan
-~/dev/VideoScan/install_videoscan_dev_dependencies/install.sh --copy-from RicksM4.local --with-models
-~/dev/VideoScan/install_videoscan_dev_dependencies/migrate_data.sh --from RicksM4.local        # dry run
-~/dev/VideoScan/install_videoscan_dev_dependencies/migrate_data.sh --from RicksM4.local --go   # copy
-~/dev/VideoScan/install_videoscan_dev_dependencies/install.sh --check                          # all green?
+~/dev/VideoScan/scripts/install_dev_tools.sh            # = install.sh; --check reports only
 ```
 
-Then open `VideoScan/VideoScan.xcodeproj`, scheme **VideoScan**, **Debug**, ⌘R.
+Then open `VideoScan/VideoScan.xcodeproj`, scheme **VideoScan**, **Debug**,
+Product ▸ Clean Build Folder, ⌘R. The build needs nothing outside git; the
+face models in `models/` are loaded at run time (`--copy-from RicksM4.local`
+fetches them, `--with-models` pulls the big Ollama/HF models).
+
+**Later, data (Rick's machines only):**
+
+```bash
+~/dev/VideoScan/install_videoscan_dev_dependencies/migrate_data.sh --from RicksM4.local        # dry run
+~/dev/VideoScan/install_videoscan_dev_dependencies/migrate_data.sh --from RicksM4.local --go   # copy
+```
 
 ## What's in here
 
