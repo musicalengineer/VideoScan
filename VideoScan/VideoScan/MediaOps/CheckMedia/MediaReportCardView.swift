@@ -14,8 +14,8 @@ struct MediaReportCardView: View {
     /// Show the evidence numbers under each row (the detail view does;
     /// a compact summary can turn them off).
     var showsEvidence = true
-    /// A file with no recorded duration: its counted length, drawn right
-    /// under the headline (Rick 2026-10-21). nil = nothing to add.
+    /// A file with no recorded duration: its counted length, drawn under
+    /// the headline and banners (Rick 2026-10-21). nil = nothing to add.
     var durationLine: String?
     /// Flags drawn under the headline, loud (Rick 2026-10-10: "No sound").
     var banners: [DiagnosticBanner] = []
@@ -33,14 +33,16 @@ struct MediaReportCardView: View {
             }
             .accessibilityIdentifier("checkMedia.headline")
 
+            ForEach(banners) { DiagnosticBannerView(banner: $0, onAction: onAction) }
+
+            // After the headline AND the banners — what is wrong first,
+            // then how long it runs (Rick 2026-10-21).
             if let durationLine {
                 Text(durationLine)
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("checkMedia.durationEstimate")
             }
-
-            ForEach(banners) { DiagnosticBannerView(banner: $0, onAction: onAction) }
 
             Text("\(card.tier == .full ? "Full" : "Quick") check, \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))")
                 .font(.callout)

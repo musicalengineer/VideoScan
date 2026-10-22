@@ -16,7 +16,9 @@ import VideoScanCore
 //   sound:   packets × samples per packet (by codec) ÷ sample_rate
 //
 // Pure (no I/O): MediaFacts + the census report in, a value out. The job
-// keeps it on the job's item and shows it right under the card's headline.
+// keeps it on the job's item and shows it after the card's headline and
+// banners. Only an openable file is estimated: an unopenable one gets nil
+// (a corrupt .mp4 has a header, so "no header" would be false).
 // Display only — never written to the catalog.
 //
 // Known limits, both of which make the estimate SHORT, never long (hence
@@ -39,8 +41,9 @@ enum DurationEstimate: Sendable, Equatable {
     }
 
     case counted(seconds: Double, source: Source)
-    /// Nothing usable could be counted (the listing failed, no rate, an
-    /// unknown sound codec) — said plainly, never a guessed number.
+    /// An openable file with no recorded duration where nothing usable
+    /// could be counted (the listing failed, no rate, an unknown sound
+    /// codec) — said plainly, never a guessed number.
     case unknown
 
     /// nil when the header records a length (there is nothing to
@@ -90,14 +93,15 @@ enum DurationEstimate: Sendable, Equatable {
     }
 
     /// "about 1 h 5 min" / "about 45 min 55 s" / "about 42 s" /
-    /// "under a second".
+    /// "under a second". A zero last part is dropped: "about 1 min",
+    /// "about 2 h".
     static func aboutText(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "an unknown length" }
         let total = Int(seconds.rounded())
         guard total >= 1 else { return "under a second" }
         let (h, m, s) = (total / 3_600, (total % 3_600) / 60, total % 60)
-        if h > 0 { return "about \(h) h \(m) min" }
-        if m > 0 { return "about \(m) min \(s) s" }
+        if h > 0 { return m > 0 ? "about \(h) h \(m) min" : "about \(h) h" }
+        if m > 0 { return s > 0 ? "about \(m) min \(s) s" : "about \(m) min" }
         return "about \(s) s"
     }
 
@@ -110,7 +114,7 @@ enum DurationEstimate: Sendable, Equatable {
         case .counted(let seconds, .frames):
             return "\(Self.aboutText(seconds)) of video (counted from frames)"
         case .counted(let seconds, .audioPackets):
-            return "\(Self.aboutText(seconds)) of sound (counted from audio packets)"
+            return "\(Self.aboutText(seconds)) of sound (counted from the sound)"
         case .unknown:
             return Self.unknownSentence
         }

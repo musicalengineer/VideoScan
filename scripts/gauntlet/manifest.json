@@ -11085,7 +11085,8 @@
         "quickCheckNeverCounts",
         "rawAAC",
         "rawM2V",
-        "unopenableFileInAFullCheckSaysUnknown"
+        "unopenableFileInAFullCheckMakesNoLengthClaim",
+        "unopenableMp4InAFullCheckDoesNotClaimNoHeader"
       ]
     },
     {

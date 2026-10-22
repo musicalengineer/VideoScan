@@ -5,7 +5,8 @@
 //
 // Dimensions (CLAUDE.md): LOGIC (the wording; frames ÷ rate incl.
 // 30000/1001 and 0/0; packets × samples ÷ rate), ISOLATION (a failed or
-// missing census, an unopenable file → "duration unknown", never a crash),
+// missing census → "duration unknown", never a crash; an UNOPENABLE file
+// makes no length claim at all — a corrupt .mp4 has a header, QA r1),
 // MEDIA MATRIX (real ffmpeg: synthetic `test_*` raw .m2v and ADTS .aac
 // elementary streams, plus an mp4 control that keeps its header length),
 // SENSOR (the job's one-line summary carries the length; the persisted
@@ -50,7 +51,9 @@ struct DurationEstimateLogicTests {
         #expect(E.aboutText(3_900) == "about 1 h 5 min")
         #expect(E.aboutText(7_260.4) == "about 2 h 1 min")
         #expect(E.aboutText(42.4) == "about 42 s")
-        #expect(E.aboutText(59.6) == "about 1 min 0 s")
+        #expect(E.aboutText(59.6) == "about 1 min", "a zero last part is dropped")
+        #expect(E.aboutText(7_200) == "about 2 h")
+        #expect(E.aboutText(61) == "about 1 min 1 s")
         #expect(E.aboutText(0.3) == "under a second")
         #expect(E.aboutText(.nan) == "an unknown length")
         #expect(E.aboutText(-1) == "an unknown length")
@@ -80,7 +83,7 @@ struct DurationEstimateLogicTests {
         let s = try #require(E.soundSeconds(packets: 469, stream: aac))
         #expect(abs(s - 469.0 * 1_024 / 48_000) < 1e-9)
         #expect(E.counted(seconds: 191, source: .audioPackets).sentence
-                == "about 3 min 11 s of sound (counted from audio packets)")
+                == "about 3 min 11 s of sound (counted from the sound)")
         #expect(E.soundSeconds(packets: 100, stream: stream(.audio, codec: "mp2", sampleRate: 48_000))
                 == 100.0 * 1_152 / 48_000)
         #expect(E.soundSeconds(packets: 100, stream: stream(.audio, codec: "pcm_s16le", sampleRate: 48_000)) == nil,
@@ -201,7 +204,8 @@ struct DurationEstimateJobTests {
         #expect(job.items[0].durationEstimate == nil, "the count reads the whole file — full check only")
     }
 
-    @Test func unopenableFileInAFullCheckSaysUnknown() async throws {
+    /// QA r1: an unopenable file makes no length claim at all.
+    @Test func unopenableFileInAFullCheckMakesNoLengthClaim() async throws {
         let model = VideoScanModel()
         let rec = record("test_de_garbage.995")
         model.records = [rec]
@@ -209,9 +213,24 @@ struct DurationEstimateJobTests {
                                 quickRunner: { _, _ in .unopenable(detail: "Invalid data found", sizeBytes: 4_096) })
         job.start()
         await job.task?.value
-        #expect(job.items[0].durationEstimate == .unknown)
+        #expect(job.items[0].durationEstimate == nil)
         guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
-        #expect(summary.hasSuffix(" · duration unknown — no header to read it from"), "\(summary)")
+        #expect(!summary.contains("duration unknown") && !summary.contains("counted from"), "\(summary)")
+    }
+
+    /// QA r1 (red on 94cd9efd4): a corrupt .mp4 HAS a header — never say
+    /// "no header to read it from".
+    @Test func unopenableMp4InAFullCheckDoesNotClaimNoHeader() async throws {
+        let model = VideoScanModel()
+        let rec = record("test_de_corrupt.mp4")
+        model.records = [rec]
+        let job = CheckMediaJob(records: [rec], tier: .full, model: model, center: nil,
+                                quickRunner: { _, _ in .unopenable(detail: "moov atom not found", sizeBytes: 1_000_000) })
+        job.start()
+        await job.task?.value
+        #expect(job.items[0].durationEstimate == nil)
+        guard case .finished(let summary) = job.state else { Issue.record("\(job.state)"); return }
+        #expect(!summary.contains("no header"), "\(summary)")
     }
 
     @Test func failedCensusInAFullCheckSaysUnknown() async throws {
@@ -300,6 +319,8 @@ struct DurationEstimateMediaMatrixTests {
         let census = try await CheckMediaProbe.census(path: path, facts: q.facts)
         #expect(E.hasRecordedDuration(q.facts))
         #expect(E.make(facts: q.facts, census: census) == nil)
+        let header = try #require(q.facts.durationSeconds)
+        #expect(CensusProgressBasis.basis(for: q.facts) == .seconds(header), "a header length drives the bar in seconds")
     }
 }
 

@@ -27,7 +27,8 @@ import os
 // fragment) gets its length counted by the full check's packet census —
 // DurationEstimate, on the item, shown right under the headline and in the
 // one-line summary (Rick 2026-10-21: is it worth rescuing?). Display only:
-// it is NOT on the persisted card.
+// it is NOT on the persisted card. Only an OPENABLE file gets one — an
+// unopenable file gets none (its header may exist; it just can't be read).
 //
 // A file whose card says "No sound" (SoundPresencePolicy) gets one more
 // step: where its sound is (SoundCopyFinder.load — one main-actor catalog
@@ -203,8 +204,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
             switch try await quickRunner(path, pauser.control) {
             case .unopenable(let detail, let size):
                 let card = CheckMediaRules.unopenableCard(detail: detail, sizeBytes: size, at: Date())
-                // No header could be read, so no length either; a full check says so.
-                if tier == .full { items[index].durationEstimate = .unknown }
+                // No estimate: a corrupt .mp4/.mov/.mxf HAS a header, so
+                // "no header to read it from" would be false (QA r1, 2026-10-21).
                 persist(card: card, video: VerifyVideoProbe.unopenableDiagnosis(detail: detail, sizeBytes: size),
                         audio: nil, on: rec, index: index)
             case .measured(let quick):
