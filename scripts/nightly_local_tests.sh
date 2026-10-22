@@ -110,7 +110,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-10-21-machine-setup-r1"
+NIGHTLY_SCRIPT_VERSION="2026-10-22-core-lane-sampler-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -371,6 +371,15 @@ CORE_STATUS="not-run"
 CORE_REASON="lane-not-reached"
 CORE_TEST_JSON='{"core_status":"not-run","core_reason":"lane-not-reached"}'
 
+# Every 5 min until killed: load, swap and the three busiest processes, to the
+# nightly log, so a slow night records what else the machine was doing.
+sample_core_lane_environment() {
+    while :; do
+        log "Core lane machine: $(uptime | sed 's/.*load/load/') · swap $(sysctl -n vm.swapusage | awk '{print $6}') used · busiest: $(ps -Ao %cpu,comm -r | sed -n '2,4p' | awk '{n=$2; sub(".*/","",n); printf "%s %s%%; ", n, $1}')"
+        sleep 300
+    done
+}
+
 # Args: package_path scratch_path. Sets CORE_STATUS, CORE_REASON and
 # CORE_TEST_JSON. Leaves the app lane's globals (PASSED, STATUS, …) to be
 # recomputed by the app parse; it never publishes on its own.
@@ -381,7 +390,14 @@ run_core_package_tests() {
     swift_configuration=$(printf '%s' "${NIGHTLY_CONFIGURATION:-Release}" | tr '[:upper:]' '[:lower:]')
     log "Core package tests: swift test -c $swift_configuration --package-path $package_path (watchdog ${NIGHTLY_CORE_TIMEOUT_SECONDS}s)"
     start=$(date +%s)
-    run_with_process_group_watchdog \
+    # 10/22: the M4 core lane ran ~20x slow and the watchdog's kill lost a
+    # 16 KB stdout block, so the log ended at a buffer boundary, not at the
+    # test that was running, and nothing said what the machine was doing.
+    # NSUnbufferedIO makes XCTest write each line as it happens; the sampler
+    # logs load, swap and the busiest processes every 5 min of the lane.
+    sample_core_lane_environment &
+    local sampler_pid=$!
+    NSUnbufferedIO=YES run_with_process_group_watchdog \
         "$NIGHTLY_CORE_TIMEOUT_SECONDS" \
         "${NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS:-10}" \
         "$NIGHTLY_CORE_LOG" \
@@ -391,6 +407,8 @@ run_core_package_tests() {
         --scratch-path "$scratch_path" \
         --no-parallel
     rc=$?
+    kill "$sampler_pid" 2>/dev/null || true
+    wait "$sampler_pid" 2>/dev/null || true
     timed_out=$NIGHTLY_WATCHDOG_DID_TIMEOUT
     end=$(date +%s)
     elapsed=$((end - start))
