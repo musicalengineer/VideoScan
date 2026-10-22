@@ -2466,6 +2466,7 @@
       ],
       "tests": [
         "testABatchRecordWithNoArchiveFileIsNotPromotedYet",
+        "testAHeldIdenticalCopyGoneFromAMountedDriveIsMissing",
         "testAMissingCopyDoesNotCountAsRemaining",
         "testBatchScopeListsTheBatchsItemsCatalogScopeListsItemsWithACopy",
         "testI6OnlyTheArchiveDigestEverReachesTheOfferedList",
@@ -2474,6 +2475,7 @@
         "testR1AnIdenticalCopyOfAVerifiedArchiveFileIsOffered",
         "testR1AnUnverifiedArchiveFileOffersNothing",
         "testR2toR5AHeldIdenticalCopyIsListedWithItsReasonAndNeverOffered",
+        "testReasonCountsCoverTheWholeCatalogEvenWithNothingToList",
         "testScale100kSnapshotsBuildUnderBudget",
         "testTheAdviceSentenceNamesArchiveOnlyFilesWithoutACloudOrOffsiteYes",
         "testTheCapListsOfferedRowsFirstAndNeverOffersAHiddenRow",

@@ -133,9 +133,26 @@ public struct PrunePlan: Equatable, Sendable {
     public let unarchived: [Row]
     /// Rows left out by `shown(maxRows:)` — never offered from here.
     public let hiddenRowCount: Int
+    /// "No obvious choices", counted per reason over the WHOLE scope — for
+    /// the catalog, every related copy, even of archive files with no
+    /// identical copy to list (so "nothing offered" can always say why).
+    public let reasonCounts: [PruneReason: Int]
 
-    public init(items: [Item], unarchived: [Row] = [], hiddenRowCount: Int = 0) {
+    public init(items: [Item], unarchived: [Row] = [], hiddenRowCount: Int = 0,
+                reasonCounts: [PruneReason: Int]? = nil) {
         self.items = items; self.unarchived = unarchived; self.hiddenRowCount = hiddenRowCount
+        self.reasonCounts = reasonCounts ?? Self.count(items, unarchived)
+    }
+
+    static func count(_ items: [Item], _ unarchived: [Row]) -> [PruneReason: Int] {
+        var out: [PruneReason: Int] = [:]
+        for row in items.lazy.flatMap(\.rows) + unarchived { if let r = row.reason { out[r, default: 0] += 1 } }
+        return out
+    }
+
+    /// "3 not hashed yet", "1 drive not connected" — in the table's order.
+    public var reasonSummary: [String] {
+        PruneReason.allCases.compactMap { r in reasonCounts[r].map { "\($0) \(r.text)" } }
     }
 
     public static let empty = PrunePlan(items: [])
@@ -176,7 +193,8 @@ public struct PrunePlan: Equatable, Sendable {
         var lookup = ArchiveLookup(snapshots.lazy.filter(\.isArchive))
         for s in snapshots where !s.isArchive { lookup.place(s) }
         let items = lookup.items.filter { keeps($0, batch: batch) }
-        return PrunePlan(items: items, unarchived: unarchived(snapshots, items: items, batch: batch))
+        let lone = unarchived(snapshots, items: items, batch: batch)
+        return PrunePlan(items: items, unarchived: lone, reasonCounts: count(batch == nil ? lookup.items : items, lone))
     }
 
     static func keeps(_ item: Item, batch: Set<UUID>?) -> Bool {
@@ -196,20 +214,29 @@ public struct PrunePlan: Equatable, Sendable {
 
     // MARK: Off-main disk facts
 
-    /// Offered rows whose file is gone, or that sit on a network drive, are
-    /// held with the reason. Only offered rows are asked (one stat each).
+    /// Identical rows whose file is gone from a MOUNTED drive become
+    /// `.missing` (offered or held — a held copy that is gone is not a copy
+    /// that stays, QA r1 m2); offered rows on a network drive are held. One
+    /// stat per identical row on a connected drive.
     public func confirmingOnDisk(isMissing: (String) -> Bool, isNetwork: (String) -> Bool) -> PrunePlan {
+        var counts = reasonCounts
+        func verdict(_ r: Row) -> PruneReason? {
+            if isMissing(r.fullPath) { return .missing }
+            return r.isOffered && isNetwork(r.fullPath) ? .driveProtected : r.reason
+        }
         func check(_ r: Row) -> Row {
-            guard r.isOffered else { return r }
-            if isMissing(r.fullPath) { return r.with(.missing) }
-            return isNetwork(r.fullPath) ? r.with(.driveProtected) : r
+            guard r.isIdentical, r.reason != .driveOffline, r.reason != .missing,
+                  let now = verdict(r), now != r.reason else { return r }
+            if let was = r.reason { counts[was] = (counts[was] ?? 1) > 1 ? counts[was].map { $0 - 1 } : nil }
+            counts[now, default: 0] += 1
+            return r.with(now)
         }
         let checked = items.map { item -> Item in
             var out = item
             out.rows = item.rows.map(check)
             return out
         }
-        return PrunePlan(items: checked, unarchived: unarchived, hiddenRowCount: hiddenRowCount)
+        return PrunePlan(items: checked, unarchived: unarchived, hiddenRowCount: hiddenRowCount, reasonCounts: counts)
     }
 
     // MARK: The 200-row cap
@@ -232,7 +259,7 @@ public struct PrunePlan: Equatable, Sendable {
         }
         let listed = Array(unarchived.prefix(budget))
         hidden += unarchived.count - listed.count
-        return PrunePlan(items: out, unarchived: listed, hiddenRowCount: hidden)
+        return PrunePlan(items: out, unarchived: listed, hiddenRowCount: hidden, reasonCounts: reasonCounts)
     }
 }
 

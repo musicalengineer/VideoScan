@@ -206,7 +206,7 @@ struct ArchivedWhatNextSheet: View {
     private func reloadPlan() async {
         reloading = true
         defer { reloading = false }
-        let full = await model.prunePlan(batch: Set(request.recordIDs))
+        let full = await model.prunePlan(batch: request.scope)
         guard !Task.isCancelled else { return }
         let shown = full.shown()
         plan = shown
@@ -272,7 +272,7 @@ struct ArchivedWhatNextSheet: View {
         applying = true
         let n = selectedCount
         let job = fileOpsCenter.startedByUser {
-            $0.startPruneApply(shown: shown, selected: selected, batch: Set(request.recordIDs),
+            $0.startPruneApply(shown: shown, selected: selected, batch: request.scope,
                                batchID: request.batchID, model: model)
         }
         if job.wasRefused {

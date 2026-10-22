@@ -34,6 +34,11 @@ struct ArchivedWhatNextRequest: Identifiable {
     let archiveLabel: String
     let protection: ProtectionSummary
     let source: Source
+
+    /// The plan's scope: the batch for a Promote batch; the WHOLE catalog for
+    /// Tidy's backlog (the same plan as Triage's Excess copies), so a backlog
+    /// with nothing offered still lists why (QA r1 M1).
+    var scope: Set<UUID>? { source == .tidyBacklog ? nil : Set(recordIDs) }
 }
 
 extension VideoScanModel {
@@ -164,13 +169,14 @@ extension VideoScanModel {
 
     // MARK: The sheet
 
-    /// Present "Archived — what next?" for a finished Promote batch. The
-    /// job calls this ONCE, only when every copy landed verified (no
-    /// failed file, not cancelled). A sheet already pending is never
+    /// Present "Archived — what next?" for a finished Promote batch (the
+    /// job calls this ONCE, only when every copy landed verified), or for
+    /// Tidy's backlog — which ALWAYS opens when asked, even with nothing
+    /// offered: Rick's "if none, say so". A sheet already pending is never
     /// replaced mid-read.
     func offerArchivedWhatNext(batchID: String, recordIDs: [UUID], totalBytes: Int64,
                                protection: ProtectionSummary, source: ArchivedWhatNextRequest.Source) {
-        guard !recordIDs.isEmpty, pendingArchivedWhatNext == nil else { return }
+        guard !recordIDs.isEmpty || source == .tidyBacklog, pendingArchivedWhatNext == nil else { return }
         pendingArchivedWhatNext = ArchivedWhatNextRequest(
             batchID: batchID, recordIDs: recordIDs, fileCount: recordIDs.count, totalBytes: totalBytes,
             archiveLabel: masterArchive.map { VolumeReachability.displayLabel(forPath: $0.targetPath) } ?? "the Master Archive",

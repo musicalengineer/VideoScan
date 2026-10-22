@@ -169,6 +169,33 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertFalse(asked.contains(offline.fullPath), "a held row is never stat'ed")
     }
 
+    /// QA r1 m2: a HELD identical copy on a mounted drive is stat'ed too; gone
+    /// means `.missing`, so it no longer counts as a copy that stays.
+    func testAHeldIdenticalCopyGoneFromAMountedDriveIsMissing() {
+        let a = archive(digest: digest)
+        let c = copy(digest: digest)
+        let pair = copy(vol: "Shelf", digest: digest, hold: .pairHalf)
+        let plan = PrunePlan.build([a, c, pair])
+            .confirmingOnDisk(isMissing: { $0 == pair.fullPath }, isNetwork: { _ in false })
+        XCTAssertEqual(reason(plan, pair.id), .some(.missing))
+        XCTAssertEqual(plan.reasonCounts, [.missing: 1])
+        XCTAssertEqual(plan.adviceSentence(after: [c.id]),
+                       "1 file will exist only in the Master Archive after this. No cloud or off-site copy is recorded for tape.mov.")
+    }
+
+    /// QA r1 M1: catalog-wide, "nothing offered" still says why — counted
+    /// over every archive file, even ones with no identical copy to list.
+    func testReasonCountsCoverTheWholeCatalogEvenWithNothingToList() {
+        let source = UUID()
+        let a = archive(digest: digest, source: source)
+        let src = copy(digest: nil, id: source)
+        let other = copy("tape.mov", vol: "Crucial", digest: nil)
+        let plan = PrunePlan.build([a, src, other]).confirmingOnDisk(isMissing: { _ in false }, isNetwork: { _ in false })
+        XCTAssertTrue(plan.items.isEmpty && plan.offeredIDs.isEmpty)
+        XCTAssertEqual(plan.reasonSummary, ["2 not hashed yet"])
+        XCTAssertEqual(plan.shown().reasonSummary, ["2 not hashed yet"], "the cap keeps the counts")
+    }
+
     // MARK: Scope
 
     func testBatchScopeListsTheBatchsItemsCatalogScopeListsItemsWithACopy() {

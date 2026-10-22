@@ -58,6 +58,13 @@ struct PruneChecklistView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("prune.noObviousChoices")
             }
+            if !plan.reasonSummary.isEmpty {
+                Text("No obvious choices: " + plan.reasonSummary.joined(separator: " · "))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("prune.reasonCounts")
+            }
             list
         }
     }

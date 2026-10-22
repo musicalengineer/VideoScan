@@ -346,7 +346,7 @@ struct TidyIgnoredContentCategoryTests {
         #expect(second.rows.isEmpty)
     }
 
-    @Test("Copies of archived media: count + bytes, dry run only, archive-managed rows excluded")
+    @Test("Copies of archived media: the prune plan's offer + its no-obvious-choices words, dry run only, archive-managed rows excluded")
     func copiesOfArchivedMedia() async {
         let model = makeModel("arch")
         let root = "/Volumes/TestArchive/Breen_Family_Archive"
@@ -372,8 +372,11 @@ struct TidyIgnoredContentCategoryTests {
         model.records = [source, copy, inside, outside, staging, other, insideStill]
 
         let plan = await model.computeTidyCatalogPlan()
-        #expect(plan.archivedCopyCount == 3, "source (promote link) + outside (fingerprint) + staging (content hash)")
-        #expect(plan.archivedCopyBytes == 1_000 + 2_000 + 1_000)
+        // Since 2026-10-21 the count is the ONE prune plan's offer: only a
+        // copy byte-proven against a fixity-VERIFIED archive file counts. None
+        // here is (no digests), so nothing is offered — and Tidy says why.
+        #expect(plan.archivedCopyCount == 0 && plan.archivedCopyBytes == 0)
+        #expect(plan.archivedNoObviousChoices == ["1 the archive copy hasn't been verified yet"], "\(plan.archivedNoObviousChoices)")
         // DRY RUN ONLY: no rows for them, nothing set aside on apply. The
         // still inside the archive root used to be a row; since Rick's
         // 2026-09-22 ruling ("For now we won't Remove anything from

@@ -94,11 +94,18 @@ extension VideoScanModel {
         await prunePlan(batch: Set(recordIDs)).protection
     }
 
-    /// Tidy → "Copies of archived media": the same sheet for every offered
-    /// copy in the catalog. Computed off-main; presents when done.
+    /// Tidy → "Copies of archived media": the same sheet, catalog-wide. The
+    /// headline's count and size are BOTH the offered copies (QA r1 m1). The
+    /// sheet opens even when nothing is offered, and says why (QA r1 M1).
+    /// Computed off-main; presents when done.
     func offerArchivedWhatNextForBacklog() async {
         let plan = await prunePlan(batch: nil)
-        let ids = plan.items.flatMap { $0.rows.filter(\.isIdentical).map(\.id) }
+        let ids = plan.items.flatMap { $0.offered.map(\.id) }
+        if ids.isEmpty {
+            let why = plan.reasonSummary.joined(separator: ", ")
+            log("Archived — what next?: no obvious choices — nothing outside the Master Archive is byte-for-byte a verified archive file"
+                + (why.isEmpty ? "." : " (\(why))."))
+        }
         offerArchivedWhatNext(batchID: "tidy-\(UUID().uuidString.prefix(8))", recordIDs: ids,
                               totalBytes: plan.offeredBytes, protection: plan.protection, source: .tidyBacklog)
     }

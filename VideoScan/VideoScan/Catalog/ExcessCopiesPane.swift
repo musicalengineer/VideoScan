@@ -120,7 +120,8 @@ struct ExcessCopiesPane: View {
             }
         }
         .onAppear { if store.plan == nil { store.refresh(model: model) } else { selectAll() } }
-        .onReceive(store.$plan) { _ in selectAll() }
+        // `$plan` publishes on willSet: read the NEW value it hands in (QA r1 m3).
+        .onReceive(store.$plan) { selected = $0?.offeredIDs ?? [] }
         .sheet(isPresented: $confirming) {
             ExcessCopiesConfirmSheet(message: confirmMessage, title: actionTitle,
                                      onCancel: { confirming = false },

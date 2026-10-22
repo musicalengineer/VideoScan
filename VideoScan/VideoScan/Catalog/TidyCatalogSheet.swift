@@ -77,6 +77,13 @@ struct TidyCatalogSheet: View {
                     countRow("archivebox", .indigo,
                              "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive",
                              plan.archivedCopyCount)
+                    if !plan.archivedNoObviousChoices.isEmpty {
+                        Text("No obvious choices: " + plan.archivedNoObviousChoices.joined(separator: " · "))
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("tidy.archivedNoObviousChoices")
+                    }
                 }
                 .font(.system(size: 14))
 
@@ -85,7 +92,7 @@ struct TidyCatalogSheet: View {
                 // copies Rick ticks go to the Trash after that sheet's own
                 // confirm (the label no longer says "dry run"). Hop a turn
                 // after dismiss (chained-sheet rule).
-                if plan.archivedCopyCount > 0 {
+                if plan.archivedCopyCount > 0 || !plan.archivedNoObviousChoices.isEmpty {
                     Button {
                         dismiss()
                         Task { @MainActor in await model.offerArchivedWhatNextForBacklog() }

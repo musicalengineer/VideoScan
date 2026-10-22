@@ -29,10 +29,10 @@ import os
 //     catalog's own set-aside / purged rows so the category is
 //     retroactive). Set aside with the ORIGINAL reason. Measured 2,030
 //     such copies on 2026-09-11, none at the original path.
-//   * "Copies of archived media" — DRY-RUN ONLY: active records outside
-//     the Master Archive whose content has a copy inside it. Count + GB
-//     for the sheet; no rows, nothing set aside, nothing touched. The
-//     deletion policy is a separate design.
+//   * "Copies of archived media" — DRY-RUN ONLY: the copies the ONE prune
+//     plan offers (byte-identical to a verified archive file, R1–R5 —
+//     VideoScanModel+PrunePlan, 2026-10-21), count + GB, and its "no obvious
+//     choices" counts. No rows, nothing set aside, nothing touched here.
 // Every record Tidy sets aside (and every Remove from Catalog) is
 // written to the ignore list; Put Back / Undo removes it — the override.
 // See IgnoredContentStore.swift and VideoScanModel+IgnoredContent.swift.
@@ -77,10 +77,12 @@ extension VideoScanModel {
         /// Rows whose content matches the ignore list / a set-aside or
         /// purged record (2026-09-11). Included in `rows`.
         var junkCameBackCount = 0
-        /// DRY-RUN ONLY (2026-09-11): active records outside the Master
-        /// Archive whose content has a copy inside it. NOT in `rows`.
+        /// DRY-RUN ONLY: the copies the prune plan OFFERS — the same set the
+        /// review sheet shows checked (QA r1 M1, 2026-10-21). NOT in `rows`.
         var archivedCopyCount = 0
         var archivedCopyBytes: Int64 = 0
+        /// The prune plan's "no obvious choices", e.g. "3 not hashed yet".
+        var archivedNoObviousChoices: [String] = []
         /// Records left alone because they live on the Master Archive's
         /// volume (Rick 2026-09-22: "For now we won't Remove anything from
         /// FamilyArchive"). NOT in `rows` — the preview matches Apply.
@@ -96,21 +98,12 @@ extension VideoScanModel {
         var candidates: [TidyCandidate] = []
         candidates.reserveCapacity(records.count)
         var videoSnaps: [CorrelationScorer.Snap] = []
-        // Archive evidence for "Copies of archived media": the promote /
-        // content-hash / dup-group index (archivedCopy(of:), O(1) per
-        // record after one rebuild) plus the archive copies' partialMD5 +
-        // size fingerprints for records that never got a content hash.
-        var archiveFingerprints = Set<ScanMergeFingerprint>()
         // One archive-volume snapshot for the pass: the same catalog-
         // removal rule Apply uses, so the preview never lists a file Apply
         // would then leave alone.
         let archiveVolume = archiveVolumeProtection()
         for rec in records where !rec.isPurged && !rec.isSetAside {
             let archiveSelf = isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath)
-            if archiveSelf {
-                let fp = ScanMergeFingerprint(of: rec)
-                if fp.isViable { archiveFingerprints.insert(fp) }
-            }
             candidates.append(TidyCandidate(
                 snap: CorrelationScorer.snap(rec),
                 fullPath: rec.fullPath,
@@ -120,7 +113,6 @@ extension VideoScanModel {
                 pairProtected: CatalogScopePolicy.isPairProtected(rec),
                 partialMD5: rec.partialMD5,
                 isArchiveSelf: archiveSelf,
-                hasArchivedCopy: !archiveSelf && archivedCopy(of: rec) != nil,
                 onArchiveVolume: bulkDeleteRefusal(rec, effect: .catalogRemoval, volume: archiveVolume) != nil))
         }
         // Evidence pool: ALL active video-only records — deliberately
@@ -134,8 +126,13 @@ extension VideoScanModel {
         }
         let ignored = retroactiveIgnoredContentIndex()
 
-        let plan = await Self.buildTidyPlan(candidates: candidates, videoSnaps: videoSnaps,
-                                            ignored: ignored, archiveFingerprints: archiveFingerprints)
+        var plan = await Self.buildTidyPlan(candidates: candidates, videoSnaps: videoSnaps, ignored: ignored)
+        // "Copies of archived media" = the one prune plan's offer (QA r1 M1):
+        // the count Tidy shows is exactly what its Review button lists.
+        let prune = await prunePlan(batch: nil)
+        plan.archivedCopyCount = prune.offeredCount
+        plan.archivedCopyBytes = prune.offeredBytes
+        plan.archivedNoObviousChoices = prune.reasonSummary
         tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) livePhoto=\(plan.livePhotoComplementCount) junkCameBack=\(plan.junkCameBackCount) archivedCopies=\(plan.archivedCopyCount) (\(plan.archivedCopyBytes) bytes) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
         return plan
     }
@@ -154,9 +151,6 @@ extension VideoScanModel {
         /// root — app-managed: never "junk that came back", never a
         /// "copy of archived media" (it IS the archived media).
         var isArchiveSelf: Bool = false
-        /// archivedCopy(of:) found a master copy (promote link, content
-        /// hash, or high-confidence hash-backed dup group).
-        var hasArchivedCopy: Bool = false
         /// Refused by the catalog-removal rule (the archive tree or the
         /// proven archive volume) — never a row.
         var onArchiveVolume: Bool = false
@@ -170,8 +164,7 @@ extension VideoScanModel {
     nonisolated static func buildTidyPlan(
         candidates: [TidyCandidate],
         videoSnaps: [CorrelationScorer.Snap],
-        ignored: IgnoredContentIndex = IgnoredContentIndex(),
-        archiveFingerprints: Set<ScanMergeFingerprint> = []
+        ignored: IgnoredContentIndex = IgnoredContentIndex()
     ) async -> TidyCatalogPlan {
         var plan = TidyCatalogPlan()
         plan.examined = candidates.count
@@ -186,15 +179,6 @@ extension VideoScanModel {
             if c.onArchiveVolume {
                 plan.keptOnArchiveVolume += 1
                 continue
-            }
-            // Copies of archived media — a TALLY, never a row (dry run;
-            // the deletion policy is a separate design).
-            if !c.isArchiveSelf {
-                let fp = ScanMergeFingerprint(partialMD5: c.partialMD5, sizeBytes: c.sizeBytes)
-                if c.hasArchivedCopy || (fp.isViable && archiveFingerprints.contains(fp)) {
-                    plan.archivedCopyCount += 1
-                    plan.archivedCopyBytes += c.sizeBytes
-                }
             }
             // Junk that came back — checked BEFORE classification so the
             // row carries the ORIGINAL reason. Archive-managed rows are

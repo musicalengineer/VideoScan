@@ -29,11 +29,10 @@
 // the live record re-lookups, the PruneProof and the byte-for-byte reads
 // all happen when ITS turn comes, exactly as for a batch started alone. A
 // copy the batch before already moved is skipped, named "already moved to
-// the Trash by the batch before" — never read, never counted twice. And a
-// copy this batch LEFT UNCHECKED that the batch before moved (or that went
-// missing / offline while it waited) holds every checked copy in its
-// family: the survivors the person confirmed are not all there any more
-// (rule 7 in VideoScanModel+PruneApply). Stop on a waiting batch just
+// the Trash by the batch before" — never read, never counted twice. A copy
+// left unchecked is simply never touched: since 2026-10-21 nothing depends
+// on it (each copy goes on its own two full reads against the archive
+// file), so it is not re-checked. Stop on a waiting batch just
 // takes it out of the line (nothing was started, so there is nothing to
 // put back); Quit does the same. Every batch logs queued / started / done
 // (or taken out of the line) with its file count and bytes, to
@@ -59,8 +58,8 @@
 // copies (each is verified and guarded on its own), keeps what it did,
 // writes the approval line with the actual counts, and then ends FAILED —
 // so the line behind it is dropped, each drop logged with the message. A
-// HOLD is not an error: rule 7, a copy moved by the batch before, a
-// safety refusal, a changed stamp, a Stop are decisions, and a batch that
+// HOLD is not an error: a row changed since the list, a copy moved by the
+// batch before, a safety refusal, a changed stamp, a Stop are decisions, and a batch that
 // only held still hands on.
 //
 // (For Rick: the same shape as DeleteDuplicatesJob — an ObservableObject
