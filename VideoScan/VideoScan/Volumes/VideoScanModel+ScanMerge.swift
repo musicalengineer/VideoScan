@@ -805,8 +805,7 @@ extension VideoScanModel {
             guard let live = liveByPath[fresh.fullPath], live !== fresh else { continue }
             liveIDs[fresh.fullPath] = live.id
             let current = RescanPreservedFields(from: live)
-            if current.isWorthRestoring || current.carriesKeptFingerprint || current.carriesRemovalHistory
-                || restoredFromSnapshot.contains(fresh.fullPath) {
+            if current.worthSnapshotting || restoredFromSnapshot.contains(fresh.fullPath) {
                 current.apply(to: fresh)
                 applied += 1
             } else if fresh.archiveFixity != nil {

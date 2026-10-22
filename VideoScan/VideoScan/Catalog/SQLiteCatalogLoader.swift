@@ -57,13 +57,13 @@ enum SQLiteCatalogLoader {
         }
     }
 
-    /// Display pass + snapshot (off the main actor), then the records, with
-    /// the Avid-evidence releases applied in memory too (a viewer / undo
-    /// reload: no committer of its own to persist them).
+    /// Display pass + snapshot (off the main actor), then the records. (A
+    /// viewer, or Undo reading a safety copy: the Avid-evidence releases are
+    /// never applied here — they go only through AvidPairRelease's door,
+    /// with a safety copy and a journal. Find A/V Pair already ignores such
+    /// a link: `persistedPairIsValid` reads the evidence.)
     static func load(repository: any CatalogRepository) async throws -> LoadResult {
-        let result = try build(try await CatalogLoad.read(repository))
-        _ = CorrelationScorer.releaseInvalidPairs(in: result.records)
-        return result
+        try build(try await CatalogLoad.read(repository))
     }
 
     /// The records for a snapshot, pairs rewired and checked as every load

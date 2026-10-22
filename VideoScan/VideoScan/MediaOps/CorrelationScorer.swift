@@ -151,19 +151,41 @@ enum CorrelationScorer {
     /// One released stored pair, in words for the log ("released pair:
     /// X ↔ Y — reason").
     struct ReleasedPair: Equatable, Sendable {
+        /// One side as the journal records it (path, Avid clip name, UMID).
+        struct Side: Equatable, Sendable, Codable {
+            let path: String
+            let clipName: String
+            let umid: String
+        }
         let first: String
         let second: String
         let reason: String
+        /// The video and audio sides (record order when the stream types
+        /// are not one video-only + one audio-only).
+        let video: Side
+        let audio: Side
         var line: String { "released pair: \(first) \u{2194} \(second) — \(reason)" }
+
+        init(_ a: VideoRecord, _ b: VideoRecord, reason: String) {
+            first = a.filename
+            second = b.filename
+            self.reason = reason
+            let (v, au) = a.streamType == .audioOnly ? (b, a) : (a, b)
+            video = Side(path: v.fullPath, clipName: v.materialPackageName, umid: v.materialPackageUMID)
+            audio = Side(path: au.fullPath, clipName: au.materialPackageName, umid: au.materialPackageUMID)
+        }
     }
 
     /// Remove invalid direct links from a live catalog graph. This is O(n)
     /// and runs only at load/import/correlation boundaries, never in a view.
     /// Purged pairs retain their historical relation for restore workflows.
-    /// Returns the number of endpoints cleared.
+    /// Returns the number of endpoints cleared. The checks are the
+    /// pre-2026-10-22 ones (dangling / one-sided, stream types, impossible
+    /// durations): the Avid-evidence releases go ONLY through
+    /// AvidPairRelease's door (safety copy + journal first).
     @discardableResult
     static func revalidateExistingPairs(in records: [VideoRecord]) -> Int {
-        releaseInvalidPairs(in: records).clearedEndpoints
+        releaseInvalidPairs(in: records, includingAvidEvidence: false).clearedEndpoints
     }
 
     /// `revalidateExistingPairs` with its reasons — one entry per released
@@ -174,8 +196,11 @@ enum CorrelationScorer {
     /// durations) — what the SQLite build applies before the launch
     /// baseline, unchanged; the Avid releases then run after it, so the
     /// launch commit writes exactly those.
+    /// `dryRun: true` decides and reports without clearing anything (the
+    /// door's plan, taken before its safety copy).
     static func releaseInvalidPairs(in records: [VideoRecord],
-                                    includingAvidEvidence: Bool = true) -> (clearedEndpoints: Int, released: [ReleasedPair]) {
+                                    includingAvidEvidence: Bool = true,
+                                    dryRun: Bool = false) -> (clearedEndpoints: Int, released: [ReleasedPair]) {
         let catalogInstances = Set(records.map(ObjectIdentifier.init))
         var invalidIDs = Set<UUID>()
         var released: [ReleasedPair] = []
@@ -192,7 +217,7 @@ enum CorrelationScorer {
             if let why = pairReleaseReason(record, partner, includingAvidEvidence: includingAvidEvidence) {
                 invalidIDs.insert(record.id)
                 invalidIDs.insert(partner.id)
-                released.append(ReleasedPair(first: record.filename, second: partner.filename, reason: why))
+                released.append(ReleasedPair(record, partner, reason: why))
             }
         }
 
@@ -201,6 +226,7 @@ enum CorrelationScorer {
             if record.pairedWith != nil || record.pairGroupID != nil || record.pairConfidence != nil {
                 cleared += 1
             }
+            if dryRun { continue }
             record.pairedWith = nil
             record.pairGroupID = nil
             record.pairConfidence = nil

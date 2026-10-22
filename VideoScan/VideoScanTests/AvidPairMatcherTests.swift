@@ -118,7 +118,7 @@ struct AvidPairMatcherLogicTests {
         #expect(F.best(v, in: [v, a])?.audio === a)
         F.link(v, a)
         #expect(CorrelationScorer.persistedPairIsValid(v, a))
-        #expect(CorrelationScorer.revalidateExistingPairs(in: [v, a]) == 0)
+        #expect(CorrelationScorer.releaseInvalidPairs(in: [v, a]).clearedEndpoints == 0)
     }
 
     @Test func aRenderNeverPairs() async throws {
@@ -153,7 +153,7 @@ struct AvidPairMatcherLogicTests {
         #expect(await F.bulk([v, a]).isEmpty)
         F.link(v, a)
         #expect(!CorrelationScorer.persistedPairIsValid(v, a))
-        #expect(CorrelationScorer.revalidateExistingPairs(in: [v, a]) == 2)
+        #expect(CorrelationScorer.releaseInvalidPairs(in: [v, a]).clearedEndpoints == 2)
         #expect(v.pairedWith == nil && a.pairedWith == nil)
     }
 
@@ -164,11 +164,11 @@ struct AvidPairMatcherLogicTests {
         #expect(await F.bulk([v, a]).isEmpty)
         F.link(v, a)
         #expect(CorrelationScorer.persistedPairIsValid(v, a))
-        #expect(CorrelationScorer.revalidateExistingPairs(in: [v, a]) == 0)
+        #expect(CorrelationScorer.releaseInvalidPairs(in: [v, a]).clearedEndpoints == 0)
         #expect(v.pairedWith === a)
         // One side known, the other not: still unproven — kept.
         v.materialPackageName = "00001"
-        #expect(CorrelationScorer.revalidateExistingPairs(in: [v, a]) == 0)
+        #expect(CorrelationScorer.releaseInvalidPairs(in: [v, a]).clearedEndpoints == 0)
     }
 
     @Test func twoDifferentNamesReleaseAStoredPair() {
@@ -176,8 +176,22 @@ struct AvidPairMatcherLogicTests {
         let a = F.record("00041.A24D1BD29D.mxf", .audioOnly, duration: 4.0, name: "00041")
         F.link(v, a)
         #expect(!CorrelationScorer.persistedPairIsValid(v, a))
-        #expect(CorrelationScorer.revalidateExistingPairs(in: [v, a]) == 2)
+        #expect(CorrelationScorer.releaseInvalidPairs(in: [v, a]).clearedEndpoints == 2)
         #expect(v.pairGroupID == nil && a.pairConfidence == nil)
+    }
+
+    /// Avid-evidence releases go ONLY through AvidPairRelease's door (safety
+    /// copy + journal first): the everyday revalidation (Correlate, scan
+    /// merge, restore, every load) keeps the link, and a dry run clears nothing.
+    @Test func onlyTheDoorReleasesOnAvidEvidence() {
+        let render = F.bostonRender()
+        let sample = F.record("KONTBSTR1X32", .audioOnly, duration: 2.3, directory: F.samplesDir)
+        F.link(render, sample)
+        #expect(CorrelationScorer.revalidateExistingPairs(in: [render, sample]) == 0)
+        let plan = CorrelationScorer.releaseInvalidPairs(in: [render, sample], dryRun: true)
+        #expect(plan.released.count == 1 && render.pairedWith === sample)
+        #expect(plan.released.first?.video.path == render.fullPath && plan.released.first?.audio.path == sample.fullPath)
+        #expect(plan.released.first?.video.clipName == render.materialPackageName)
     }
 
     @Test func preferredPairIgnoresAStoredRenderLink() {
@@ -302,7 +316,7 @@ struct AvidPairMatcherScaleTests {
         }
         let clock = ContinuousClock()
         let started = clock.now
-        let cleared = CorrelationScorer.revalidateExistingPairs(in: all)
+        let cleared = CorrelationScorer.releaseInvalidPairs(in: all).clearedEndpoints
         let elapsed = started.duration(to: clock.now)
         #expect(cleared == 2 * (5_000 + 1_000))
         var bad = 0

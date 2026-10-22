@@ -89,6 +89,7 @@ struct AppSupportSideStoreInventoryTests {
         "Archive_Inventory_Manifest.csv": .notAppSupport, "README_Naming_and_Layout.txt": .notAppSupport,
         ".framemd5-MISMATCH.log": .notAppSupport,             // beside a transcode output
         "2026-10-09_214502_junk.csv": .notAppSupport,         // Logs/VideoScan/deletions (doc example)
+        "released-pairs.jsonl": .notAppSupport,               // Logs/VideoScan/pair-releases — a receipt, not a store (AvidPairRelease)
         "TidyCatalog_dry_run.csv": .notAppSupport, "VideoScan_Volumes.csv": .notAppSupport,
         "rick-review-neutral.csv": .notAppSupport, "rick-review-neutral.person.txt": .notAppSupport,
         "cluster_summary.csv": .notAppSupport,                // a People run's output folder

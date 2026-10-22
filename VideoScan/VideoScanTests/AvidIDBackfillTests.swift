@@ -56,6 +56,32 @@ struct AvidIDFillLogicTests {
         #expect(!AvidIDBackfill.fill(AvidIDProbe(), into: rec))
     }
 
+    /// The rescan gap: an unchanged file is rebuilt from the probe cache,
+    /// which holds no Avid IDs, so the backfilled fields were lost. They
+    /// now ride the rescan preservation — only onto the SAME bytes (same
+    /// size), and a fresh probe that read IDs itself wins.
+    @Test func aRescanOfAnUnchangedMXFKeepsItsAvidIDs() {
+        let r = AvidPairFixture.record("Boston.Sequence upd4C6B6468.mxf", .videoOnly, duration: 2,
+                                       umid: "0xUMID-R", name: "Boston.Sequence updated.03,Title,13", render: true)
+        r.sizeBytes = 4_500_000
+        let snap = RescanPreservedFields(from: r)
+        #expect(snap.worthSnapshotting && !snap.isWorthRestoring,
+                "the Avid IDs alone must put the row in the rescan snapshot map")
+        let fresh = AvidPairFixture.record(r.filename, .videoOnly, duration: 2)     // cache hit: no IDs
+        fresh.sizeBytes = r.sizeBytes
+        _ = snap.apply(to: fresh)
+        #expect(fresh.materialPackageUMID == "0xUMID-R" && fresh.materialPackageName == r.materialPackageName && fresh.isAvidRender)
+        let changed = AvidPairFixture.record(r.filename, .videoOnly, duration: 2)
+        changed.sizeBytes = r.sizeBytes + 4096
+        _ = snap.apply(to: changed)
+        #expect(changed.materialPackageUMID.isEmpty && changed.materialPackageName.isEmpty && !changed.isAvidRender,
+                "different bytes — the IDs are read again, never carried")
+        let reread = AvidPairFixture.record(r.filename, .videoOnly, duration: 2, umid: "0xNEW", name: "00002")
+        reread.sizeBytes = r.sizeBytes
+        _ = snap.apply(to: reread)
+        #expect(reread.materialPackageUMID == "0xNEW" && reread.materialPackageName == "00002", "a fresh read wins")
+    }
+
     @Test func thePlanIsLiveMXFRowsMissingAnID() {
         let missing = AvidPairFixture.record("a.mxf", .videoOnly, duration: 1)
         let half = AvidPairFixture.record("b.MXF", .audioOnly, duration: 1, umid: "U")
@@ -90,8 +116,42 @@ struct AvidIDFillLogicTests {
 struct AvidIDBackfillJobTests {
     typealias F = AvidPairFixture
 
+    private static func scratchJournal() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_pair_releases_\(UUID().uuidString.prefix(8))/released-pairs.jsonl")
+    }
+
+    /// Degraded = hold: no safety copy → the IDs are kept, NO pair is
+    /// released, nothing is journaled, and the summary says so.
+    @Test func aFailedSafetyCopyHoldsEveryRelease() async throws {
+        let model = VideoScanModel()
+        let v = F.record("00005.PHYSV01.91_4D4D228565.mxf", .videoOnly, duration: 4)
+        let a = F.record("00041.A24D1BD29D.mxf", .audioOnly, duration: 4)
+        F.link(v, a)
+        model.records = [v, a]
+        let probes = [v.fullPath: AvidIDProbe(umid: "U5", name: "00005.new.05"), a.fullPath: AvidIDProbe(umid: "U41", name: "00041")]
+        let journal = Self.scratchJournal()
+        defer { try? FileManager.default.removeItem(at: journal.deletingLastPathComponent()) }
+        let job = AvidIDBackfillJob(model: model)
+        job.proberForTesting = { probes[$0] }
+        job.volumeOnline = { _ in true }
+        job.fileExists = { _ in true }
+        job.saveCatalogForTesting = { true }
+        job.safetyCopyForTesting = { nil }
+        job.journalURL = journal
+        job.start()
+        await job.task?.value
+        #expect(v.materialPackageName == "00005.new.05", "the IDs are still filled in")
+        #expect(v.pairedWith === a && a.pairedWith === v, "held: nothing released")
+        #expect(job.totals.releasedPairs == 0 && job.releaseHeld != nil)
+        #expect(job.summaryLine.contains("HELD"))
+        #expect(!FileManager.default.fileExists(atPath: journal.path), "nothing journaled")
+    }
+
     @Test func fillsOnlineFilesSkipsOfflineDrivesAndReleasesWhatTheIDsDisprove() async throws {
         let model = VideoScanModel()
+        let journal = Self.scratchJournal()
+        defer { try? FileManager.default.removeItem(at: journal.deletingLastPathComponent()) }
         // A stored pair that only the IDs can disprove (two different clips).
         let v = F.record("00005.PHYSV01.91_4D4D228565.mxf", .videoOnly, duration: 4)
         let a = F.record("00041.A24D1BD29D.mxf", .audioOnly, duration: 4)
@@ -117,6 +177,8 @@ struct AvidIDBackfillJobTests {
         job.volumeOnline = { !$0.hasPrefix("/Volumes/test_Unplugged") }
         job.fileExists = { !$0.hasSuffix("00098.V1.mxf") }
         job.saveCatalogForTesting = { true }
+        job.safetyCopyForTesting = { "/tmp/test_catalog.pre-pair-release.sqlite" }
+        job.journalURL = journal
         job.start()
         await job.task?.value
 
@@ -132,6 +194,37 @@ struct AvidIDBackfillJobTests {
         #expect(job.released.first?.line.contains("different Avid clips") == true)
         #expect(offline.materialPackageName.isEmpty)
         #expect(job.problems.map(\.kind).sorted { "\($0)" < "\($1)" } == [.failed, .notFound, .offline])
+        // The journal: one line per released pair — time, both paths, clip
+        // names, UMIDs, the reason, and the safety copy holding the link.
+        let text = try String(contentsOf: journal, encoding: .utf8)
+        let lines = text.split(separator: "\n")
+        #expect(lines.count == 1)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let line = try decoder.decode(PairReleaseJournalLine.self, from: Data(lines[0].utf8))
+        #expect(line.video == .init(path: v.fullPath, clipName: "00005.new.05", umid: "U5"))
+        #expect(line.audio == .init(path: a.fullPath, clipName: "00041", umid: "U41"))
+        #expect(line.reason.contains("different Avid clips"))
+        #expect(line.safetyCopy == "/tmp/test_catalog.pre-pair-release.sqlite")
+        #expect(line.context == "after Fill In Avid IDs")
+    }
+
+    /// The door's other hold: a journal that cannot be written releases nothing.
+    @Test func anUnwritableJournalHoldsEveryRelease() throws {
+        let model = VideoScanModel()
+        let render = F.bostonRender()
+        let sample = F.record("KONTBSTR1X32", .audioOnly, duration: 2.3, directory: F.samplesDir)
+        F.link(render, sample)
+        model.records = [render, sample]
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("test_journal_dir_\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)   // a DIRECTORY where the file should be
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var lines: [String] = []
+        let outcome = AvidPairRelease.release(in: model, context: "test", safetyCopy: { "/tmp/test_copy.sqlite" },
+                                              journal: dir, sink: { lines.append($0) })
+        guard case .held = outcome else { Issue.record("expected a hold, got \(outcome)"); return }
+        #expect(render.pairedWith === sample)
+        #expect(lines.first?.hasPrefix("HELD 1 stored A/V pair release(s) test") == true)
     }
 
     @Test func refusedOnAReadOnlyCatalog() async {
@@ -251,7 +344,10 @@ struct AvidPairLaunchReleaseTests {
         #expect(scene.model.saveCatalogNow())
         #expect(try await storedPartner(of: render, in: scene) == sample.id, "the poison is stored")
 
-        try await scene.relaunch()
+        // Quit and launch again: the committer's store closed, then the SAME
+        // code init runs (records installed, launch migrations, the door).
+        if let committer = scene.model.catalogCutover.committer { await committer.repository.close() }
+        scene.model.restoreCatalogAtLaunch()
 
         let r2 = try scene.record(.healthy), s2 = try scene.record(.stalePrint)
         let v2 = try scene.record(.curatedConflictA), a2 = try scene.record(.curatedConflictB)
@@ -261,6 +357,14 @@ struct AvidPairLaunchReleaseTests {
         let log = scene.sandbox.catalogLogText()
         #expect(log.contains("released pair: Boston.Sequence upd4C6B6468.mxf \u{2194} KONTBSTR1X32 —")
                     || log.contains("released pair: KONTBSTR1X32 \u{2194} Boston.Sequence upd4C6B6468.mxf —"), Comment(rawValue: log))
+        // Before the release: a safety copy through the existing path, and
+        // the journal line — both named in the OUTCOME line.
+        let copies = try FileManager.default.contentsOfDirectory(atPath: scene.folder.path)
+            .filter { $0.hasPrefix("catalog.pre-pair-release.") && $0.hasSuffix(".sqlite") }
+        #expect(copies.count == 1, "\(copies)")
+        let journalText = try String(contentsOf: AvidPairRelease.defaultJournalURL, encoding: .utf8)
+        #expect(journalText.contains(r2.fullPath) && journalText.contains("\"context\":\"at launch\""))
+        #expect(log.contains("· journal \(AvidPairRelease.defaultJournalURL.path) · safety copy "))
         // The launch commit wrote the release: the store itself no longer links them.
         #expect(scene.model.saveCatalogNow())
         #expect(try await storedPartner(of: r2, in: scene) == nil)

@@ -6203,6 +6203,9 @@
         "AvidPairLaunchReleaseTests"
       ],
       "tests": [
+        "aFailedSafetyCopyHoldsEveryRelease",
+        "aRescanOfAnUnchangedMXFKeepsItsAvidIDs",
+        "anUnwritableJournalHoldsEveryRelease",
         "controlsMp4MovMkvAviAreUnaffected",
         "fillsOnlineFilesSkipsOfflineDrivesAndReleasesWhatTheIDsDisprove",
         "opAtomVideoAndAudioOfOneClipPairAndARenderNeverDoes",
@@ -6234,6 +6237,7 @@
         "missingIDsMakeNoNewPairButKeepAStoredOne",
         "mxfVideoWithWavOrAifPartnerIsRefused",
         "nonMXFFilesAreUnaffected",
+        "onlyTheDoorReleasesOnAvidEvidence",
         "preferredPairIgnoresAStoredRenderLink",
         "sameNamePairs",
         "sameUMIDPairs",

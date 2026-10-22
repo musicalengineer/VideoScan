@@ -111,17 +111,15 @@ enum AvidIDBackfill {
         return changed
     }
 
-    /// With the IDs known: release the stored pairs they prove wrong and
-    /// log each one. Catalog only — no media file is touched; the caller
-    /// saves.
+    /// With the IDs known: release the stored pairs they prove wrong,
+    /// through the one door (AvidPairRelease: safety copy, then the
+    /// journal, then the release — a failed copy holds). Catalog only — no
+    /// media file is touched; the caller saves.
     @MainActor
-    static func releaseStoredPairs(in model: VideoScanModel) -> [CorrelationScorer.ReleasedPair] {
-        let outcome = CorrelationScorer.releaseInvalidPairs(in: model.records)
-        if let text = VideoScanModel.releasedPairsText(outcome, context: "after Fill In Avid IDs") {
-            note(text, model: model)
-        }
-        if outcome.clearedEndpoints > 0 { model.noteCatalogRecordsMutated() }
-        return outcome.released
+    static func releaseStoredPairs(in model: VideoScanModel, safetyCopy: () -> String?,
+                                   journal: URL = AvidPairRelease.defaultJournalURL) -> AvidPairRelease.Outcome {
+        AvidPairRelease.release(in: model, context: "after Fill In Avid IDs", safetyCopy: safetyCopy,
+                                journal: journal, sink: { note($0, model: model) })
     }
 
     /// Console + catalog.log (`log`), videoscan.log and the unified log —

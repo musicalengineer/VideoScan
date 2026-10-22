@@ -1452,6 +1452,10 @@ final class VideoScanModel: ObservableObject {
             // verified pass below re-dates only what it can prove.
             unwindUnverifiedPropagatedDates(trigger: "load")
             catchUpInferredDates(trigger: "load")
+            // A/V pair matcher (2026-10-22): stored pairs the Avid evidence
+            // proves wrong — after the committer's baseline, through the one
+            // door (safety copy + journal first; a failed copy holds).
+            releaseStoredPairsAfterLaunch()
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")
                 saveCatalogDebounced()   // one funnel (B2.1)

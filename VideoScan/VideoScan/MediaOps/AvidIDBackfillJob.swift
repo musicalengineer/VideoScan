@@ -76,6 +76,13 @@ final class AvidIDBackfillJob: @MainActor MediaFileOperationJob {
     var fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     var gatesFor: (String) -> [MediaVolumeGate] = { _ in [] }
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// TEST SEAM: replaces the pre-release safety copy (nil = the model's).
+    var safetyCopyForTesting: (() -> String?)?
+    /// Where the released pairs are journaled.
+    var journalURL = AvidPairRelease.defaultJournalURL
+    /// Set when the release door HELD (its safety copy or journal failed):
+    /// nothing was released, and the summary says so.
+    private(set) var releaseHeld: String?
     var checkpointEvery = 200
     var progressLineEvery = 250
     static let sampleCap = 500
@@ -174,17 +181,35 @@ final class AvidIDBackfillJob: @MainActor MediaFileOperationJob {
                 guard await persist(model: model) else { failSave(model: model); return }
             }
         }
-        // The IDs are in: release what they prove wrong, then save once.
-        let freed = AvidIDBackfill.releaseStoredPairs(in: model)
-        totals.releasedPairs = freed.count
-        released = Array(freed.prefix(Self.sampleCap))
-        unsaved += freed.count
+        // The IDs are in — saved first, so the safety copy holds them — then
+        // the one release door (safety copy, journal, release), then save.
+        guard await persist(model: model) else { failSave(model: model); return }
+        recordRelease(AvidIDBackfill.releaseStoredPairs(in: model, safetyCopy: safetyCopy(model), journal: journalURL))
         guard await persist(model: model) else { failSave(model: model); return }
         conclude(model: model)
     }
 
+    /// The door's safety copy: the model's existing path, or the test seam.
+    private func safetyCopy(_ model: VideoScanModel) -> () -> String? {
+        safetyCopyForTesting ?? { model.snapshotCatalog(prefix: "pre-pair-release") }
+    }
+
+    private func recordRelease(_ outcome: AvidPairRelease.Outcome) {
+        switch outcome {
+        case .nothingToRelease:
+            break
+        case .held(let why):
+            releaseHeld = why
+        case .released(let pairs, _, _):
+            totals.releasedPairs = pairs.count
+            released = Array(pairs.prefix(Self.sampleCap))
+            unsaved += pairs.count
+        }
+    }
+
     private func conclude(model: VideoScanModel) {
         summaryLine = Self.summaryCounts(totals)
+            + (releaseHeld.map { " · pair releases HELD (\($0)) — none released" } ?? "")
         if stopped {
             AvidIDBackfill.note("\(title): OUTCOME stopped at \(totals.done) of \(totals.total) — \(summaryLine)", model: model)
             finish(cancelled: ())

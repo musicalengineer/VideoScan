@@ -244,7 +244,6 @@ extension VideoScanModel {
             do {
                 let result = try SQLiteCatalogLoader.build(launch.snapshot)
                 adoptSQLiteAuthority(launch, url: url, records: result.records, held: result.heldIDs)
-                releaseStoredPairsAfterLaunch(result.records)
                 catalogAuthorityNote("OUTCOME loaded \(result.summary)")
                 return result.records
             } catch {
@@ -409,20 +408,18 @@ extension VideoScanModel {
     /// commit writes the release (row_knowledge 'pair' cleared on both
     /// rows). Catalog only — no media file is touched. On a read-only
     /// launch the release holds for this session and nothing is written.
-    func releaseStoredPairsAfterLaunch(_ records: [VideoRecord]) {
-        let outcome = CorrelationScorer.releaseInvalidPairs(in: records)
-        if let text = Self.releasedPairsText(outcome, context: "at launch") { catalogAuthorityNote(text) }
-    }
-
-    /// The count line, then one line per released pair — ONE string, so
-    /// the console publishes once (the 10ae1be per-line storm). nil when
-    /// nothing was released.
-    static func releasedPairsText(_ outcome: (clearedEndpoints: Int, released: [CorrelationScorer.ReleasedPair]),
-                                  context: String) -> String? {
-        guard outcome.clearedEndpoints > 0 else { return nil }
-        let head = "released \(outcome.released.count) stored A/V pair(s) \(context) "
-            + "(\(outcome.clearedEndpoints) link end(s) cleared; catalog only — no media touched)"
-        return ([head] + outcome.released.map { "  " + $0.line }).joined(separator: "\n")
+    /// Through the one door (AvidPairRelease): plan, then a safety copy of
+    /// catalog.sqlite, then the journal, and only then the release. Called
+    /// by restoreCatalogAtLaunch once the launch records are installed (the
+    /// committer's baseline was taken at adopt, so the release is a change
+    /// the launch commit writes). Only under catalog.sqlite: the JSON test
+    /// path and a viewer never release on Avid evidence.
+    @discardableResult
+    func releaseStoredPairsAfterLaunch() -> AvidPairRelease.Outcome {
+        guard catalogCutover.isSQLiteAuthority else { return .nothingToRelease }
+        return AvidPairRelease.release(in: self, context: "at launch",
+                                       safetyCopy: { self.snapshotCatalog(prefix: "pre-pair-release") },
+                                       sink: { self.catalogAuthorityNote($0) })
     }
 
     func catalogAuthorityNote(_ line: String) {

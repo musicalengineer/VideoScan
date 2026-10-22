@@ -286,6 +286,17 @@ struct RescanPreservedFields: Sendable {
     /// probe reports the same size (else the next backfill recomputes it).
     let perceptualFingerprint: StoredPerceptualFingerprint?
 
+    /// The MXF's Avid identity (A/V pair matcher, 2026-10-22): UMID, clip
+    /// name, render flag. Read from the FILE (scan / Fill In Avid IDs), but
+    /// the probe cache does not hold them, so a rescan of an unchanged file
+    /// rebuilt from the cache would drop them. They follow the file only
+    /// while the fresh probe reports the same size, and only into fields
+    /// the fresh probe left empty (a fresh read wins).
+    let materialPackageUMID: String
+    let materialPackageName: String
+    let isAvidRender: Bool
+    let avidIdentitySizeBytes: Int64
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -345,6 +356,16 @@ struct RescanPreservedFields: Sendable {
     /// `carriesKeptFingerprint`.
     var carriesRemovalHistory: Bool { removalRevision > 0 || auditSeenOn != nil }
 
+    /// Worth snapshotting for its Avid identity alone (a sibling for the
+    /// same reason as the two above).
+    var carriesAvidIdentity: Bool { !materialPackageUMID.isEmpty || !materialPackageName.isEmpty || isAvidRender }
+
+    /// Does this row belong in the rescan snapshot map at all? The ONE
+    /// question both the scan-start snapshot and the merge's live re-read ask.
+    var worthSnapshotting: Bool {
+        isWorthRestoring || carriesKeptFingerprint || carriesRemovalHistory || carriesAvidIdentity
+    }
+
     @MainActor
     init(from rec: VideoRecord) {
         self.sceneCaptions = rec.sceneCaptions
@@ -396,6 +417,20 @@ struct RescanPreservedFields: Sendable {
         self.footage = rec.footage
         self.familyMusic = rec.familyMusic
         self.perceptualFingerprint = rec.perceptualFingerprint
+        self.materialPackageUMID = rec.materialPackageUMID
+        self.materialPackageName = rec.materialPackageName
+        self.isAvidRender = rec.isAvidRender
+        self.avidIdentitySizeBytes = rec.sizeBytes
+    }
+
+    /// The Avid identity onto a fresh record of the SAME bytes (same size),
+    /// into empty fields only; the render flag only ever turns on.
+    @MainActor
+    func carryAvidIdentity(onto rec: VideoRecord) {
+        guard carriesAvidIdentity, rec.sizeBytes == avidIdentitySizeBytes else { return }
+        if rec.materialPackageUMID.isEmpty { rec.materialPackageUMID = materialPackageUMID }
+        if rec.materialPackageName.isEmpty { rec.materialPackageName = materialPackageName }
+        if isAvidRender { rec.isAvidRender = true }
     }
 
     // MARK: Fixity identity guard
@@ -506,6 +541,7 @@ struct RescanPreservedFields: Sendable {
         rec.footage = self.footage
         rec.familyMusic = self.familyMusic
         rec.perceptualFingerprint = (perceptualFingerprint?.sizeBytes == rec.sizeBytes) ? perceptualFingerprint : nil
+        carryAvidIdentity(onto: rec)
         return carry
     }
 }
@@ -539,7 +575,7 @@ extension VideoScanModel {
             // restoring (deep-test finding 2).
             oldIDs[rec.fullPath] = rec.id
             let snap = RescanPreservedFields(from: rec)
-            if snap.isWorthRestoring || snap.carriesKeptFingerprint || snap.carriesRemovalHistory {
+            if snap.worthSnapshotting {
                 map[rec.fullPath] = snap
             }
         }
