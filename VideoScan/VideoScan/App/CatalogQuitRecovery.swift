@@ -224,8 +224,7 @@ enum CatalogQuitRecovery {
             done.signal()
         }
         guard done.wait(timeout: .now() + max(0, seconds)) == .success else {
-            model.catalogAuthorityNote("OUTCOME catalog.sqlite could not be closed within \(seconds.quitWords) s — move "
-                + "\(databasePath)-wal and \(databasePath)-shm away before reopening VideoScan")
+            noteTimedOutClose(model, repository, seconds: seconds, databasePath: databasePath)
             return true
         }
         let notes = repository.lastCloseNotes
@@ -233,6 +232,29 @@ enum CatalogQuitRecovery {
         model.catalogAuthorityNote("OUTCOME closed catalog.sqlite at quit — "
             + (notes.isEmpty ? "it is still this session's own file and was closed normally" : "see the quarantine lines above"))
         return true
+    }
+
+    /// codex #117 F3: the close did not finish in time. Only a catalog.sqlite
+    /// CONFIRMED not to be this session's file lets the quit quarantine this
+    /// session's -wal / -shm itself (by inode, without waiting for close).
+    /// The same file (a latch-only stop) or an unreadable identity moves
+    /// nothing — and the words never tell a person to move the live -wal.
+    private static func noteTimedOutClose(_ model: VideoScanModel, _ repository: any CatalogRepository,
+                                          seconds: TimeInterval, databasePath: String) {
+        let head = "OUTCOME catalog.sqlite could not be closed within \(seconds.quitWords) s — "
+        let name = (databasePath as NSString).lastPathComponent
+        switch repository.quarantineAfterTimedOutClose() {
+        case .quarantined(let lines):
+            for line in lines { model.catalogAuthorityNote(line.replacingOccurrences(of: "Catalog store: ", with: "")) }
+            model.catalogAuthorityNote(head + "\(name) at \(databasePath) is not this session's file, so this session's "
+                + "-wal and -shm were quarantined now (see above): the file there cannot take them.")
+        case .stillItsOwnFile, .notOpen:
+            model.catalogAuthorityNote(head + "it is still this session's own file. Its own \(name)-wal holds committed "
+                + "changes and will be applied at the next open; leave it where it is.")
+        case .identityUnreadable(let why):
+            model.catalogAuthorityNote(head + "its identity could not be read (\(why)), so nothing was moved. If it is this "
+                + "session's file, its own \(name)-wal holds committed changes and will be applied at the next open.")
+        }
     }
 
     /// Why the terminal save failed: under catalog.sqlite the committer's

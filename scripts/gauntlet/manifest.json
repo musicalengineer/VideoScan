@@ -30157,6 +30157,18 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardCodex117Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFileGuardCodex117Tests"
+      ],
+      "tests": [
+        "swapDuringTheWriterWaitIsSeen",
+        "unreadableIdentityNeverMovesTheWAL"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardQAR2Tests.swift",
       "stage": "regression",
       "suites": [
@@ -30193,7 +30205,9 @@
         "masterWithoutLatch",
         "quitAfterLatchOnlyStopSaysClosedNormally",
         "quitAfterReplaceQuarantinesAndSaysSo",
-        "quitCloseIsBoundedAndSaysWhatToMove",
+        "quitCloseIsBoundedAndKeepsTheLiveWAL",
+        "quitTimeoutAfterReplaceStillQuarantines",
+        "reopenRechecksAfterClose",
         "replacedCatalogRefusesReopen",
         "viewerWithoutLatch"
       ]
@@ -33620,9 +33634,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 244,
+      "expected_floor": 246,
       "name": "regression",
-      "package_expected_floor": 218,
+      "package_expected_floor": 220,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33657,7 +33671,8 @@
         "VideoScanCoreTests.CatalogWriteCornerDiskTests",
         "VideoScanCoreTests.CatalogOpenCornerTests",
         "VideoScanCoreTests.CatalogFileGuardQAR1Tests",
-        "VideoScanCoreTests.CatalogFileGuardQAR2Tests"
+        "VideoScanCoreTests.CatalogFileGuardQAR2Tests",
+        "VideoScanCoreTests.CatalogFileGuardCodex117Tests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

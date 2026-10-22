@@ -446,6 +446,14 @@ final class CatalogCommitter {
         cancelTimer()
         await repository.close()
         for line in repository.lastCloseNotes { sink(line) }        // GH #359 QA r2-2
+        // codex #117 F4: a swap while close was pending is a stop too —
+        // re-checked AFTER close and BEFORE opening; a stop opens nothing.
+        if let stop = repository.fileStopWords {
+            reopening = false
+            blockedReason = stop
+            sink("Catalog store: REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop). Nothing was opened or written.")
+            return
+        }
         let opened = await repository.open(at: url, requiringLatch: true)   // QA r1 D (#359): no latch, no reopen
         reopening = false
         switch opened {

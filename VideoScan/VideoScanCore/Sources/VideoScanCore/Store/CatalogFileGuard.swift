@@ -61,6 +61,7 @@ struct CatalogFileIdentity: Equatable, Sendable {
     }
 
     static func read(_ url: URL) -> Reading {
+        if let injected = TestOverride.reading(for: url.path) { return injected }
         var info = stat()
         let result = url.withUnsafeFileSystemRepresentation { path -> Int32 in
             guard let path else { return -1 }
@@ -71,6 +72,22 @@ struct CatalogFileIdentity: Equatable, Sendable {
             return code == ENOENT ? .missing : .unreadable(errno: code)
         }
         return .file(CatalogFileIdentity(device: info.st_dev, inode: info.st_ino))
+    }
+
+    /// TEST SEAM ONLY (codex #117 finding 1): make `read` answer a given
+    /// reading for ONE exact path (an EIO from `stat`). Keyed by path so a
+    /// parallel suite's files are never affected. Production never sets it.
+    enum TestOverride {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var readings: [String: Reading] = [:]
+
+        static func set(_ reading: Reading?, for path: String) {
+            lock.withLock { readings[path] = reading }
+        }
+
+        static func reading(for path: String) -> Reading? {
+            lock.withLock { readings.isEmpty ? nil : readings[path] }
+        }
     }
 }
 
@@ -129,6 +146,24 @@ struct CatalogFileGuard: Equatable, Sendable {
             return Self.replacedWords(latchURL.lastPathComponent, Self.what(latchNow, else: "was replaced or removed"))
         }
         return nil
+    }
+
+    /// What is at the database's path now, for close() and the quit
+    /// (codex #117 F1): ONLY `.moved` (missing, or another inode) authorizes
+    /// moving this session's sidecars. An unreadable identity is `.unknown`
+    /// and authorizes nothing — not a checkpoint, not a quarantine.
+    enum DatabaseAtPath: Equatable, Sendable {
+        case same
+        case moved
+        case unknown(String)
+    }
+
+    func databaseAtPath() -> DatabaseAtPath {
+        switch CatalogFileIdentity.read(databaseURL) {
+        case .file(let identity) where identity == database: return .same
+        case .file, .missing: return .moved
+        case .unreadable(let code): return .unknown(String(cString: strerror(code)))
+        }
     }
 
     /// A stat that failed for another reason than "no such file" (EACCES,
@@ -257,6 +292,16 @@ enum CatalogSidecarQuarantine {
         return [line]
     }
 
+    /// codex #117 F1: the database's identity could not be read at close —
+    /// nothing is moved and no checkpoint runs.
+    static func unknownIdentityWords(_ url: URL, _ why: String) -> String {
+        let line = "Catalog store: OUTCOME close — the identity of \(url.lastPathComponent) could not be read (\(why)), so nothing "
+            + "was moved and no checkpoint was run. Its -wal stays beside it: if \(url.lastPathComponent) is this session's file, "
+            + "the -wal holds committed changes and will be applied at the next open."
+        guardLog.error("\(line, privacy: .public)")
+        return line
+    }
+
     static func stamp(_ now: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -291,6 +336,18 @@ extension GRDBCatalogRepository {
     /// What the last close() said about quarantining this session's -wal /
     /// -shm (START / OUTCOME lines); empty when there was nothing to say.
     public nonisolated var lastCloseNotes: [String] { closeNotes.current }
+}
+
+/// What the quit may do after a close that did not finish in time (codex #117 F3).
+public enum CatalogTimedOutClose: Equatable, Sendable {
+    /// catalog.sqlite is confirmed not this session's file; these lines say what was renamed.
+    case quarantined(lines: [String])
+    /// catalog.sqlite is still this session's own file: its -wal holds committed changes.
+    case stillItsOwnFile
+    /// The identity could not be read: nothing was moved.
+    case identityUnreadable(String)
+    /// Nothing open to act on (or a store with no file guard).
+    case notOpen
 }
 
 extension WriterSession {

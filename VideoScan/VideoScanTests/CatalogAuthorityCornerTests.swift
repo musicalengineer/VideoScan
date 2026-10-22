@@ -174,26 +174,81 @@ struct CatalogAuthorityCornerTests {
         #expect(log.contains("OUTCOME closed catalog.sqlite at quit"), Comment(rawValue: log))
     }
 
-    @Test("fail-fast (#359, QA r3): the quit close is bounded — a close that does not finish in time lets the quit go on, and the words say which files to move away",
+    /// A close that never returns in time (the hung-writer stand-in).
+    nonisolated static let hangingClose: @Sendable (any CatalogRepository) async -> Void = { _ in
+        try? await Task.sleep(for: .seconds(20))
+    }
+
+    @Test("fail-fast (#359, QA r3 + codex #117 F3): latch-only stop, the quit close times out — nothing is moved, and the words say the catalog's own -wal holds committed changes for the next open (never 'move it away')",
           .timeLimit(.minutes(1)))
-    func quitCloseIsBoundedAndSaysWhatToMove() async throws {
+    func quitCloseIsBoundedAndKeepsTheLiveWAL() async throws {
         let scene = try CutoverScene.make("corner_quit_bounded"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         try FileManager.default.removeItem(at: scene.latchURL)
         try scene.record(.healthy).userNotes = "after the latch went"
         #expect(!scene.model.saveCatalogNow())
+        let wal = URL(fileURLWithPath: scene.databaseURL.path + "-wal")
+        let walBefore = CornerFiles.sha256OrAbsent(wal)
         let clock = ContinuousClock()
         let start = clock.now
-        let attempted = CatalogQuitRecovery.closeAfterFileStop(model: scene.model, within: 0.3) { _ in
-            try? await Task.sleep(for: .seconds(20))                     // a close that hangs
-        }
+        let attempted = CatalogQuitRecovery.closeAfterFileStop(model: scene.model, within: 0.3, close: Self.hangingClose)
         let waited = clock.now - start
         let log = scene.sandbox.catalogLogText()
         #expect(attempted)
         #expect(waited < .seconds(5), "the quit waited \(waited) for a hung close")
         #expect(log.contains("OUTCOME catalog.sqlite could not be closed within"), Comment(rawValue: log))
-        #expect(log.contains("move \(scene.databaseURL.path)-wal and \(scene.databaseURL.path)-shm away before reopening VideoScan"),
-                Comment(rawValue: log))
+        #expect(log.contains("will be applied at the next open"), Comment(rawValue: log))
+        #expect(!log.contains("away before reopening"), "a latch-only stop must never advise moving the live -wal")
+        #expect(CornerFiles.sha256OrAbsent(wal) == walBefore, "the live -wal was touched")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: scene.folder.path).filter { $0.hasPrefix("catalog-wal-quarantine-") }.isEmpty)
+    }
+
+    @Test("fail-fast (#359, codex #117 F3): catalog.sqlite REPLACED, the quit close times out — the quit itself quarantines this session's -wal/-shm by inode, so the replacement cannot take them",
+          .timeLimit(.minutes(1)))
+    func quitTimeoutAfterReplaceStillQuarantines() async throws {
+        let scene = try CutoverScene.make("corner_quit_timeout_replace"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        try scene.record(.healthy).userNotes = "committed before the restore"
+        #expect(scene.model.saveCatalogNow())
+        let committer = try #require(scene.model.catalogCutover.committer)
+        let copy = scene.folder.appendingPathComponent("restored.sqlite")
+        #expect(committer.repository.sealedCopyBlocking(to: copy) == nil)
+        try FileManager.default.moveItem(at: scene.databaseURL, to: scene.folder.appendingPathComponent("moved-aside.sqlite"))
+        try FileManager.default.moveItem(at: copy, to: scene.databaseURL)
+        let replacementBefore = try CornerFiles.sha256(scene.databaseURL)
+        _ = scene.model.saveCatalogNow()                                    // the stop
+        #expect(CatalogQuitRecovery.closeAfterFileStop(model: scene.model, within: 0.3, close: Self.hangingClose))
+        let log = scene.sandbox.catalogLogText()
+        let folders = try FileManager.default.contentsOfDirectory(atPath: scene.folder.path).filter { $0.hasPrefix("catalog-wal-quarantine-") }
+        #expect(folders.count == 1, "\(folders)")
+        #expect(!FileManager.default.fileExists(atPath: scene.databaseURL.path + "-wal"), "the session's -wal is still beside the replacement")
+        #expect(try CornerFiles.sha256(scene.databaseURL) == replacementBefore)
+        #expect(log.contains("START quarantine"), Comment(rawValue: log))
+        #expect(log.contains("OUTCOME catalog.sqlite could not be closed within"), Comment(rawValue: log))
+    }
+
+    @Test("fail-fast (#359, codex #117 F4): catalog.sqlite replaced WHILE Reopen closes the store — Reopen re-checks after the close and refuses with the same words; nothing is opened and the replacement is untouched")
+    func reopenRechecksAfterClose() async throws {
+        let scene = try CutoverScene.make("corner_reopen_swap_in_close"); defer { scene.cleanup() }
+        try await scene.importCatalog()
+        try scene.writeLatch()
+        let inner = GRDBCatalogRepository(host: "corner-test")
+        try #require(await inner.open(at: scene.databaseURL, requiringLatch: true) == .readWrite)
+        let replacement = scene.folder.appendingPathComponent("restored.sqlite")
+        #expect(inner.sealedCopyBlocking(to: replacement) == nil)
+        let swapping = SwapOnCloseRepository(inner: inner, database: scene.databaseURL, replacement: replacement)
+        var lines: [String] = []
+        let committer = CatalogCommitter(repository: swapping, storedDesignationJSON: nil,
+                                         input: { CatalogCommitter.Input(records: [], designation: nil, clearAuthorized: false,
+                                                                          holdReason: nil, holdOwner: nil) },
+                                         sink: { lines.append($0) })
+        committer.block("a refusal that offers Reopen")
+        await committer.reopen(at: scene.databaseURL)
+        let stop = "catalog.sqlite was replaced or moved while VideoScan was open; nothing more will be saved — quit and reopen"
+        #expect(swapping.openCalls == 0, "Reopen opened the replacement")
+        #expect(committer.blockedReason == stop, "\(committer.blockedReason ?? "nil")")
+        #expect(lines.contains { $0.contains("REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop)") }, "\(lines)")
+        #expect(swapping.replacementSHA == (try CornerFiles.sha256(scene.databaseURL)), "the replacement was written")
     }
 
     @Test("fail-fast (#359, QA r3 nit): quit after a latch-only stop — catalog.sqlite is still the session's file, closed normally; the words do not talk about a -wal left behind")

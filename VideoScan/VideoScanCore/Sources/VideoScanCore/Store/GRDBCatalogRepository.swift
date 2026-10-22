@@ -854,32 +854,24 @@ public actor GRDBCatalogRepository: CatalogRepository {
     public func close() async {
         guard let pool else { return }
         // GH #359 — decided by the DATABASE AT THE PATH, not by the stop
-        // (QA r2-1). Still the session's inode (a latch-only stop, a file
-        // moved away and back): the normal checkpoint, and if it fails the
-        // -wal stays at the path, where the right file replays it. Missing or
-        // another file (QA r1 F3): no checkpoint (Apple SQLite refuses or
-        // skips it), and once the pool is closed this session's own -wal /
-        // -shm are renamed into quarantine (CatalogSidecarQuarantine — never
-        // deleted), so the replacement never replays them. The lines are kept
-        // for the app's sink (`lastCloseNotes`, QA r2-2).
-        let stop = fileGuard.flatMap { session.fileStop($0) }
-        let databaseMoved = fileGuard.map { CatalogFileIdentity.read($0.databaseURL) != .file($0.database) } ?? false
-        if let stop {
-            storeLog.error("catalog store CLOSE after the file check failed (\(databaseMoved ? "catalog.sqlite is not this session's file — no checkpoint" : "catalog.sqlite is still this session's file — checkpointed as usual", privacy: .public)): \(stop, privacy: .public)")
-        }
+        // (QA r2-1), and only AFTER the writer queue drains (codex #117 F2):
+        // a swap while close waits behind a writer must be seen.
+        //   .same    (a latch-only stop, a file moved away and back): the
+        //            normal checkpoint; if it fails the -wal stays at the
+        //            path, where the right file replays it.
+        //   .moved   (missing, or another inode — QA r1 F3): no checkpoint,
+        //            and once the pool is closed this session's own -wal /
+        //            -shm are renamed into quarantine (never deleted).
+        //   .unknown (stat failed, codex #117 F1): NOTHING is moved and no
+        //            checkpoint runs; the -wal stays at the path; the words say so.
         // Fold the write-ahead log into the database file BEFORE the pool
         // closes (2026-10-17): GRDB closes the writer before its readers, so
-        // SQLite's own close-time checkpoint never runs, and every commit
-        // stays in catalog.sqlite-wal. A backup or off-site copy of
-        // catalog.sqlite alone would then hold no tables at all (pinned by
-        // CatalogCloseCheckpointTests). TRUNCATE leaves a zero-length -wal.
+        // SQLite's own close-time checkpoint never runs (CatalogCloseCheckpointTests).
         // A read-only session has nothing of its own to fold in.
-        if mode == .readWrite && !databaseMoved {
-            do {
-                try await pool.writeWithoutTransaction { try $0.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)") }
-            } catch {
-                storeLog.error("catalog store CLOSE checkpoint: \(Self.words(error), privacy: .public)")
-            }
+        let atPath = mode == .readWrite ? await Self.decideAtClose(pool, fileGuard, session) : .same
+        if mode != .readWrite, let fileGuard { _ = session.fileStop(fileGuard) }
+        if let stop = session.fileStopped {
+            storeLog.error("catalog store CLOSE after the file check failed (\(String(describing: atPath), privacy: .public)): \(stop, privacy: .public)")
         }
         var poolClosed = true
         do {
@@ -889,10 +881,17 @@ public actor GRDBCatalogRepository: CatalogRepository {
             storeLog.error("catalog store CLOSE: \(Self.words(error), privacy: .public)")
         }
         var notes: [String] = []
-        if mode == .readWrite, databaseMoved, let databaseURL {
-            notes = poolClosed
-                ? CatalogSidecarQuarantine.quarantine(besideDatabaseAt: databaseURL, own: session.sidecars, why: stop ?? "catalog.sqlite moved")
-                : CatalogSidecarQuarantine.skipped(besideDatabaseAt: databaseURL, because: "the catalog's connections did not close")
+        if mode == .readWrite, let databaseURL {
+            switch atPath {
+            case .same: break                                    // checkpointed (or its -wal stays for the right file)
+            case .moved:
+                notes = poolClosed
+                    ? CatalogSidecarQuarantine.quarantine(besideDatabaseAt: databaseURL, own: session.sidecars,
+                                                          why: session.fileStopped ?? "catalog.sqlite moved")
+                    : CatalogSidecarQuarantine.skipped(besideDatabaseAt: databaseURL, because: "the catalog's connections did not close")
+            case .unknown(let why):
+                notes = [CatalogSidecarQuarantine.unknownIdentityWords(databaseURL, why)]
+            }
         }
         closeNotes.set(notes)
         self.pool = nil
@@ -971,6 +970,38 @@ extension GRDBCatalogRepository {
     }
 }
 
+// MARK: - Close's decision, after the writer drains (codex #117 F2)
+
+extension GRDBCatalogRepository {
+
+    /// Runs ON the writer queue — after every write queued before close —
+    /// so the identity read and the checkpoint see the same moment. Records
+    /// the sticky stop (database or latch). Checkpoints only when the file
+    /// at the path is still this session's. If the queue cannot run the
+    /// closure at all, the decision is read just after that failed wait.
+    static func decideAtClose(_ pool: DatabasePool, _ fileGuard: CatalogFileGuard?,
+                              _ session: WriterSession) async -> CatalogFileGuard.DatabaseAtPath {
+        do {
+            return try await pool.writeWithoutTransaction { db -> CatalogFileGuard.DatabaseAtPath in
+                let found = fileGuard?.databaseAtPath() ?? .same
+                if let fileGuard { _ = session.fileStop(fileGuard) }
+                if found == .same {
+                    do {
+                        try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+                    } catch {
+                        storeLog.error("catalog store CLOSE checkpoint: \(Self.words(error), privacy: .public)")
+                    }
+                }
+                return found
+            }
+        } catch {
+            storeLog.error("catalog store CLOSE: the writer did not run the close step: \(Self.words(error), privacy: .public)")
+            if let fileGuard { _ = session.fileStop(fileGuard) }
+            return fileGuard?.databaseAtPath() ?? .same
+        }
+    }
+}
+
 // MARK: - The file stop, off the actor (GH #359)
 
 extension GRDBCatalogRepository {
@@ -979,6 +1010,29 @@ extension GRDBCatalogRepository {
     public nonisolated var fileStopWords: String? {
         if let fileGuard = gate.state.fileGuard { return session.fileStop(fileGuard) }
         return session.fileStopped
+    }
+
+    /// codex #117 F3: the quit's close did not finish in time. Off the actor
+    /// and without waiting for close: if catalog.sqlite at the path is
+    /// CONFIRMED not this session's file (missing or another inode), rename
+    /// this session's own -wal / -shm (matched by inode) into quarantine now —
+    /// safe under open descriptors: a writer still running keeps writing to
+    /// the renamed files, never to the path. Anything else (the same file —
+    /// a latch-only stop —, an unreadable identity, a read-only or closed
+    /// session) moves NOTHING.
+    public nonisolated func quarantineAfterTimedOutClose() -> CatalogTimedOutClose {
+        let open = gate.state
+        guard let fileGuard = open.fileGuard, open.pool != nil, open.readOnlyReason == nil else { return .notOpen }
+        switch fileGuard.databaseAtPath() {
+        case .same:
+            return .stillItsOwnFile
+        case .unknown(let why):
+            return .identityUnreadable(why)
+        case .moved:
+            let why = session.fileStop(fileGuard) ?? "catalog.sqlite moved"
+            return .quarantined(lines: CatalogSidecarQuarantine.quarantine(besideDatabaseAt: fileGuard.databaseURL,
+                                                                           own: session.sidecars, why: why))
+        }
     }
 }
 

@@ -400,6 +400,10 @@ public protocol CatalogRepository: Sendable {
     /// the -wal quarantine's START / OUTCOME lines). The app logs them
     /// through its one sink after it closes the store; empty otherwise.
     var lastCloseNotes: [String] { get }
+
+    /// codex #117 F3: after a quit's close timed out — quarantine this
+    /// session's -wal / -shm ONLY if catalog.sqlite is confirmed not its file.
+    func quarantineAfterTimedOutClose() -> CatalogTimedOutClose
 }
 
 extension CatalogRepository {
@@ -413,6 +417,9 @@ extension CatalogRepository {
 
     /// A store that never quarantines has nothing to say at close (test fakes).
     public var lastCloseNotes: [String] { [] }
+
+    /// A store with no file guard has nothing to quarantine (test fakes).
+    public func quarantineAfterTimedOutClose() -> CatalogTimedOutClose { .notOpen }
 
     /// A store with no latch notion opens as `open(at:)` does (test fakes).
     public func open(at url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome {
