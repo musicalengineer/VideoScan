@@ -205,19 +205,33 @@ enum CatalogQuitRecovery {
     /// session's file — a latch-only stop) or quarantined (catalog.sqlite was
     /// replaced or moved — the replacement must never replay it), and say
     /// what happened through the one sink. Without a stop this is a no-op and
-    /// the quit path is unchanged. Blocks the main thread on the store's own
-    /// queue — the launch's `CatalogLaunchWait` pattern; nothing inside
-    /// touches the main actor. True when it closed the store.
+    /// the quit path is unchanged. Blocks the main thread for at most
+    /// `seconds` (the quit's writer deadline, as `writeCopyBlocking` is
+    /// bounded — QA r3): the close runs off the main actor; if it has not
+    /// finished in time the quit goes on and the words say what to move away
+    /// by hand. `close` is the test seam (a close that never returns).
+    /// True when the store was stopped and a close was attempted.
     @discardableResult
-    static func closeAfterFileStop(model: VideoScanModel) -> Bool {
+    static func closeAfterFileStop(model: VideoScanModel, within seconds: TimeInterval = CatalogQuitRecovery.writerDeadline,
+                                   close: @escaping @Sendable (any CatalogRepository) async -> Void = { await $0.close() }) -> Bool {
         guard let repository = model.catalogCutover.committer?.repository,
               let stop = repository.fileStopWords else { return false }
+        let databasePath = model.catalogCutover.databaseURL?.path ?? "catalog.sqlite"
         model.catalogAuthorityNote("START closing catalog.sqlite at quit after the file check stopped saving — \(stop)")
-        CatalogLaunchWait.run { await repository.close() }
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await close(repository)
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + max(0, seconds)) == .success else {
+            model.catalogAuthorityNote("OUTCOME catalog.sqlite could not be closed within \(seconds.quitWords) s — move "
+                + "\(databasePath)-wal and \(databasePath)-shm away before reopening VideoScan")
+            return true
+        }
         let notes = repository.lastCloseNotes
         for line in notes { model.catalogAuthorityNote(line.replacingOccurrences(of: "Catalog store: ", with: "")) }
         model.catalogAuthorityNote("OUTCOME closed catalog.sqlite at quit — "
-            + (notes.isEmpty ? "it is still this session's file, so its -wal stays with it" : "see the quarantine lines above"))
+            + (notes.isEmpty ? "it is still this session's own file and was closed normally" : "see the quarantine lines above"))
         return true
     }
 

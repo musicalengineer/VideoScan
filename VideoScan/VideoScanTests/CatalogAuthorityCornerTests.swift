@@ -174,6 +174,44 @@ struct CatalogAuthorityCornerTests {
         #expect(log.contains("OUTCOME closed catalog.sqlite at quit"), Comment(rawValue: log))
     }
 
+    @Test("fail-fast (#359, QA r3): the quit close is bounded — a close that does not finish in time lets the quit go on, and the words say which files to move away",
+          .timeLimit(.minutes(1)))
+    func quitCloseIsBoundedAndSaysWhatToMove() async throws {
+        let scene = try CutoverScene.make("corner_quit_bounded"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        try FileManager.default.removeItem(at: scene.latchURL)
+        try scene.record(.healthy).userNotes = "after the latch went"
+        #expect(!scene.model.saveCatalogNow())
+        let clock = ContinuousClock()
+        let start = clock.now
+        let attempted = CatalogQuitRecovery.closeAfterFileStop(model: scene.model, within: 0.3) { _ in
+            try? await Task.sleep(for: .seconds(20))                     // a close that hangs
+        }
+        let waited = clock.now - start
+        let log = scene.sandbox.catalogLogText()
+        #expect(attempted)
+        #expect(waited < .seconds(5), "the quit waited \(waited) for a hung close")
+        #expect(log.contains("OUTCOME catalog.sqlite could not be closed within"), Comment(rawValue: log))
+        #expect(log.contains("move \(scene.databaseURL.path)-wal and \(scene.databaseURL.path)-shm away before reopening VideoScan"),
+                Comment(rawValue: log))
+    }
+
+    @Test("fail-fast (#359, QA r3 nit): quit after a latch-only stop — catalog.sqlite is still the session's file, closed normally; the words do not talk about a -wal left behind")
+    func quitAfterLatchOnlyStopSaysClosedNormally() async throws {
+        let scene = try CutoverScene.make("corner_quit_latch_only"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        try FileManager.default.removeItem(at: scene.latchURL)
+        try scene.record(.healthy).userNotes = "after the latch went"
+        #expect(!scene.model.saveCatalogNow())
+        #expect(CatalogQuitRecovery.closeAfterFileStop(model: scene.model))
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("OUTCOME closed catalog.sqlite at quit — it is still this session's own file and was closed normally"),
+                Comment(rawValue: log))
+        #expect(!log.contains("-wal stays with it"))
+        let folders = try FileManager.default.contentsOfDirectory(atPath: scene.folder.path).filter { $0.hasPrefix("catalog-wal-quarantine-") }
+        #expect(folders.isEmpty, "a latch-only stop quarantined the live catalog's -wal: \(folders)")
+    }
+
     // MARK: - Cases 10 and 11 at the launch
 
     enum Damage: String, CaseIterable, Sendable, CustomStringConvertible {

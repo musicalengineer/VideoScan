@@ -30191,7 +30191,9 @@
         "damagedOrNewerCatalogIsRefusedAndUntouched",
         "latchVanishesMidSession",
         "masterWithoutLatch",
+        "quitAfterLatchOnlyStopSaysClosedNormally",
         "quitAfterReplaceQuarantinesAndSaysSo",
+        "quitCloseIsBoundedAndSaysWhatToMove",
         "replacedCatalogRefusesReopen",
         "viewerWithoutLatch"
       ]
@@ -33618,7 +33620,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 242,
+      "expected_floor": 244,
       "name": "regression",
       "package_expected_floor": 218,
       "package_selectors": [
