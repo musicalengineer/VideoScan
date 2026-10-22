@@ -19,7 +19,23 @@
 //     or is another file, or a latch that was present at open and is now
 //     gone or another file, is a violation, with the words below;
 //   - a latch that was NOT there at open (a bare store, the importer before
-//     the switch) is not watched.
+//     the switch) is not watched — unless the open REQUIRES it (the app's
+//     launch and Reopen, QA r1 D): then no latch, no open (#354 words);
+//   - the stop is sticky for the session: adopt, the sealed copy (backup,
+//     viewer snapshot) and every write refuse with the same words (QA r1
+//     F1, F2), and an engine error that arrives instead is reported in them.
+//
+// close() after a stop (QA r1 F3, 2026-10-21 — the earlier "keep the
+// checkpoint" decision was reversed by evidence): Apple SQLite refuses or
+// silently skips the checkpoint once it has noticed the rename, so the
+// session's committed frames stay in catalog.sqlite-wal at the PATH, and the
+// replacement's next open REPLAYED them into itself (another catalog at
+// generation 7 reopened as generation 5, integrity_check clean). So: no
+// checkpoint after a stop, and once the pool is closed the -wal and -shm at
+// the path — only if they are still this session's own files (device +
+// inode recorded when the session first saw them) — are RENAMED into
+// `catalog-wal-quarantine-<stamp>/` beside the catalog. Never deleted: put
+// back beside the moved-aside file under its name + "-wal", they complete it.
 //
 // What it cannot do: a stat and a write are two system calls, so a file
 // replaced in the microseconds between the last check and COMMIT is still
@@ -139,6 +155,93 @@ struct CatalogFileGuard: Equatable, Sendable {
 
 private let guardLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogStore")
 
+// MARK: - The latch an app open requires (QA r1 D)
+
+extension GRDBCatalogRepository {
+    /// GH #354's words, ONE place (the app's CatalogAuthority.noLatchWords
+    /// returns these): no latch beside the catalog — nothing is opened.
+    public static func noLatchWords(folder: URL) -> String {
+        let latch = SQLiteCatalogReader.latchFileName
+        let database = SQLiteCatalogReader.databaseFileName
+        return "No catalog — \(latch) is not beside the catalog in \(folder.path), so this Mac was never switched to "
+            + "\(database). catalog.json is not opened (not even read-only): the master (or migrate_data.sh) "
+            + "must carry \(database) and its \(latch). Nothing will be saved this session."
+    }
+}
+
+// MARK: - The session's own -wal and -shm (QA r1 F3)
+
+enum CatalogSidecarQuarantine {
+    static let suffixes = ["-wal", "-shm"]
+
+    /// What is at `<database>-wal` / `-shm` now, by suffix (present files only).
+    static func identities(besideDatabaseAt url: URL) -> [String: CatalogFileIdentity] {
+        var found: [String: CatalogFileIdentity] = [:]
+        for suffix in suffixes {
+            if case .file(let identity) = CatalogFileIdentity.read(URL(fileURLWithPath: url.path + suffix)) {
+                found[suffix] = identity
+            }
+        }
+        return found
+    }
+
+    /// After the pool closed on a stopped session: rename the -wal / -shm at
+    /// the path into `catalog-wal-quarantine-<stamp>/` beside the catalog —
+    /// ONLY those still this session's own files (`own`). Anything else at
+    /// the path is someone else's and is left alone. Never deletes. Returns
+    /// the log lines (START / OUTCOME), already written to the store log.
+    @discardableResult
+    static func quarantine(besideDatabaseAt url: URL, own: [String: CatalogFileIdentity], why: String,
+                           now: Date = Date()) -> [String] {
+        var lines: [String] = []
+        func say(_ line: String) { lines.append(line); guardLog.notice("\(line, privacy: .public)") }
+        let name = url.lastPathComponent
+        var mine: [String] = []
+        for suffix in suffixes {
+            let reading = CatalogFileIdentity.read(URL(fileURLWithPath: url.path + suffix))
+            guard case .file(let identity) = reading else { continue }
+            if let recorded = own[suffix], recorded == identity {
+                mine.append(suffix)
+            } else {
+                say("catalog store QUARANTINE: \(name)\(suffix) at the path is not this session's file — left where it is")
+            }
+        }
+        guard !mine.isEmpty else { return lines }
+        let folder = folderName(beside: url, now: now)
+        say("catalog store QUARANTINE START: moving this session's \(mine.map { name + $0 }.joined(separator: " and ")) "
+            + "into \(folder.lastPathComponent) (\(why)) — renamed, never deleted")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            for suffix in mine {
+                try FileManager.default.moveItem(at: URL(fileURLWithPath: url.path + suffix),
+                                                 to: folder.appendingPathComponent(name + suffix))
+            }
+            say("catalog store QUARANTINE OUTCOME: \(mine.count) file(s) moved to \(folder.path). They hold the moved-aside "
+                + "catalog's last commits: put \(name)-wal beside that file under its own name + \"-wal\" to complete it.")
+        } catch {
+            say("catalog store QUARANTINE OUTCOME: FAILED — \(error.localizedDescription). Nothing was deleted; "
+                + "move \(name)-wal and \(name)-shm away by hand BEFORE opening VideoScan again.")
+        }
+        return lines
+    }
+
+    /// `catalog-wal-quarantine-<yyyyMMdd-HHmmss>`, with `-2`, `-3`… if taken.
+    static func folderName(beside url: URL, now: Date) -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let base = "catalog-wal-quarantine-\(formatter.string(from: now))"
+        let parent = url.deletingLastPathComponent()
+        var candidate = parent.appendingPathComponent(base, isDirectory: true)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = parent.appendingPathComponent("\(base)-\(n)", isDirectory: true)
+            n += 1
+        }
+        return candidate
+    }
+}
+
 extension WriterSession {
     /// The session's stop words, or a fresh violation — which becomes the
     /// stop. Sticky: a file moved back does not resume writing; only a new
@@ -150,5 +253,13 @@ extension WriterSession {
         stopForFile(words)
         guardLog.error("catalog store STOPPED: \(words, privacy: .public)")
         return words
+    }
+
+    /// After a commit: record the -wal / -shm if not yet seen (normally
+    /// done at open; this covers a sidecar created later) — only while the
+    /// database is still the file this session opened.
+    func noteSidecarsOnce(_ fileGuard: CatalogFileGuard) {
+        guard !sidecarsComplete, fileGuard.violation() == nil else { return }
+        noteSidecars(CatalogSidecarQuarantine.identities(besideDatabaseAt: fileGuard.databaseURL))
     }
 }

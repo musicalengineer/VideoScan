@@ -78,6 +78,12 @@
 //                                   NO further commit is tried until the
 //                                   person chooses Catalog ▸ Reopen SQLite
 //                                   Catalog (never retried silently);
+//   file-stop (GH #359)           → catalog.sqlite or its latch is not the
+//                                   file this session opened: refused like
+//                                   any refusal, but the words say "quit and
+//                                   reopen" and Catalog ▸ Reopen is REFUSED
+//                                   (it would open the replacement and
+//                                   commit memory into it);
 //   marker change refused         → the row is left exactly as it was; the
 //                                   door shows the words (once per reason
 //                                   here, per row at the door).
@@ -238,6 +244,10 @@ final class CatalogCommitter {
     /// when one can. (Internal: the quit's recovery-copy words use it.)
     func saveRefusal() -> String? {
         if reopening { return Self.cantSave("it is being reopened", until: "the reopen finishes") }
+        // GH #359: catalog.sqlite (or its latch) is not the file this session
+        // opened. The words end "quit and reopen" — never Catalog ▸ Reopen,
+        // which would open the replacement and commit memory into it.
+        if let stop = fileStop { return Self.cantSaveUntilQuit(stop) }
         if let blockedReason { return Self.cantSave(blockedReason, until: "you choose Catalog ▸ Reopen SQLite Catalog") }
         let now = input()
         if let readOnly = now.readOnlyReason { return Self.readOnlyWords(readOnly) }
@@ -258,6 +268,21 @@ final class CatalogCommitter {
     static func cantSave(_ words: String, until: String) -> String {
         "the catalog can't save (\(words)); try again when \(until)"
     }
+
+    /// GH #359: no "try again when" — the stop's own words say quit and reopen.
+    static func cantSaveUntilQuit(_ stop: String) -> String {
+        "the catalog can't save (\(stop))"
+    }
+
+    /// GH #359: the store's file-stop words while saving stopped because
+    /// catalog.sqlite or its latch was replaced or moved. Only read while
+    /// commits are already blocked, so a working session pays no `stat`.
+    private var fileStop: String? {
+        blockedReason == nil ? nil : repository.fileStopWords
+    }
+
+    /// Catalog ▸ Reopen SQLite Catalog is refused after a file-stop.
+    var canReopen: Bool { blockedReason != nil && fileStop == nil }
 
     /// A read-only session never saves; there is no "try again when".
     static func readOnlyWords(_ why: String) -> String {
@@ -409,10 +434,18 @@ final class CatalogCommitter {
     /// Catalog ▸ Reopen SQLite Catalog: close, open again, and — when the
     /// store is writable — commit what is still changed.
     func reopen(at url: URL) async {
+        // GH #359: the file at `url` is not the one this session opened —
+        // reopening it would commit memory into the replacement. Refused,
+        // the store left as it is, the same words as every refused save.
+        if let stop = fileStop ?? repository.fileStopWords {
+            blockedReason = stop
+            sink("Catalog store: REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop). Nothing was opened or written.")
+            return
+        }
         reopening = true
         cancelTimer()
         await repository.close()
-        let opened = await repository.open(at: url)
+        let opened = await repository.open(at: url, requiringLatch: true)   // QA r1 D (#359): no latch, no reopen
         reopening = false
         switch opened {
         case .readWrite:
@@ -504,7 +537,11 @@ final class CatalogCommitter {
     private func admit(owner: CatalogWriteHoldOwner?) -> Input? {
         guard !reopening else { return nil }
         if let blockedReason {
-            noteOnce("Catalog store: NOT SAVED — \(blockedReason) (Catalog ▸ Reopen SQLite Catalog)")
+            if let stop = fileStop {
+                noteOnce("Catalog store: NOT SAVED — \(stop)")       // GH #359: quit and reopen, not Reopen
+            } else {
+                noteOnce("Catalog store: NOT SAVED — \(blockedReason) (Catalog ▸ Reopen SQLite Catalog)")
+            }
             return nil
         }
         let now = input()
@@ -601,8 +638,13 @@ final class CatalogCommitter {
             return apply(rows, prepared.plan)
         case .refused(let words, _):
             blockedReason = words
-            sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written; the changes stay in memory "
-                 + "until Catalog ▸ Reopen SQLite Catalog.")
+            if fileStop != nil {
+                // GH #359: the words already say "quit and reopen".
+                sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written.")
+            } else {
+                sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written; the changes stay in memory "
+                     + "until Catalog ▸ Reopen SQLite Catalog.")
+            }
             return false
         case .generationMismatch(let expected, let found):
             let words = "another writer committed generation \(found) (this session expected \(expected)) — reopen the catalog"

@@ -113,6 +113,41 @@ struct CatalogAuthorityCornerTests {
         #expect(after == before, "catalog.sqlite or a witness changed after the latch vanished")
     }
 
+    @Test("fail-fast (#359): catalog.sqlite replaced mid-session — the committer's words say quit and reopen (never Catalog ▸ Reopen), and Reopen refuses with the same words, so memory is never committed into the replacement")
+    func replacedCatalogRefusesReopen() async throws {
+        let scene = try CutoverScene.make("corner_replaced_reopen"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        #expect(scene.model.saveCatalogNow())
+        let committer = try #require(scene.model.catalogCutover.committer)
+        // A restore put in its place while the app runs: a sealed copy.
+        let copy = scene.folder.appendingPathComponent("restored.sqlite")
+        #expect(committer.repository.sealedCopyBlocking(to: copy) == nil)
+        try FileManager.default.moveItem(at: scene.databaseURL, to: scene.folder.appendingPathComponent("moved-aside.sqlite"))
+        try FileManager.default.moveItem(at: copy, to: scene.databaseURL)
+        let replacementBefore = try CornerFiles.sha256(scene.databaseURL)
+
+        try scene.record(.healthy).userNotes = "typed after the restore"
+        #expect(!scene.model.saveCatalogNow(), "a commit ran after catalog.sqlite was replaced")
+        let stop = "catalog.sqlite was replaced or moved while VideoScan was open; nothing more will be saved — quit and reopen"
+        #expect(scene.model.catalogCutover.blockedReason == stop)
+        let refusal = committer.saveRefusal() ?? "nil"
+        #expect(refusal.contains("quit and reopen"), Comment(rawValue: refusal))
+        #expect(!refusal.contains("Reopen SQLite Catalog"), Comment(rawValue: refusal))
+        #expect(!scene.model.catalogCutover.canReopen, "the Reopen item is offered after a file-stop")
+
+        await scene.model.catalogCutover.reopen()                   // the menu item, if reached anyway
+        let afterReopen = scene.model.saveCatalogNow()
+        let log = scene.sandbox.catalogLogText()
+        #expect(!afterReopen, "a commit ran after Reopen on a replaced catalog.sqlite")
+        #expect(scene.model.catalogCutover.blockedReason == stop)
+        #expect(log.contains("REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop)"), Comment(rawValue: log))
+        #expect(!log.contains("(Catalog ▸ Reopen SQLite Catalog)"), "the NOT SAVED line still points at Reopen")
+        #expect(try CornerFiles.sha256(scene.databaseURL) == replacementBefore, "the replacement catalog.sqlite was written")
+        // No reload of the replacement here: the session still holds the old
+        // catalog's -wal at the path, and opening beside it is the separate
+        // read-after-swap issue (Manager, 10/21), not this one.
+    }
+
     // MARK: - Cases 10 and 11 at the launch
 
     enum Damage: String, CaseIterable, Sendable, CustomStringConvertible {

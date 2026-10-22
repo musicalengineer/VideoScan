@@ -28766,6 +28766,7 @@
       ],
       "tests": [
         "hundredThousandAdvances",
+        "hundredThousandCommitsOfIdentityChecks",
         "tenThousandAdvances",
         "twoHundredArchivalCommitsRecordTheirCost"
       ]
@@ -30117,9 +30118,16 @@
         "CatalogOpenCornerTests"
       ],
       "tests": [
+        "adoptAfterTheFileMovedIsRefused",
+        "closeAfterSwapQuarantinesTheSessionsWAL",
+        "closeLeavesSomeoneElsesWALAlone",
         "corruptCatalogIsRefusedAndNeverWritten",
+        "databaseMovedAwayStaysStopped",
         "databaseReplacedUnderneath",
+        "latchGoneOrReplacedMidSession",
         "newerSchemaIsRefused",
+        "noLatchAtOpenIsNotWatched",
+        "openRequiringTheLatchRefusesWithoutIt",
         "readOnlyFileIsNotWritten",
         "writeLockHeldElsewhere"
       ]
@@ -30166,6 +30174,7 @@
         "damagedOrNewerCatalogIsRefusedAndUntouched",
         "latchVanishesMidSession",
         "masterWithoutLatch",
+        "replacedCatalogRefusesReopen",
         "viewerWithoutLatch"
       ]
     },
@@ -33593,7 +33602,7 @@
       ],
       "expected_floor": 239,
       "name": "regression",
-      "package_expected_floor": 205,
+      "package_expected_floor": 212,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33903,7 +33912,7 @@
       },
       "expected_floor": 68,
       "name": "performance",
-      "package_expected_floor": 12,
+      "package_expected_floor": 13,
       "package_selectors": [
         "VideoScanCoreTests.CatalogRepositoryScaleTests",
         "VideoScanCoreTests.CatalogDataSchemaScaleTests",

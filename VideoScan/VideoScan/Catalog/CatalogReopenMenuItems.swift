@@ -18,8 +18,9 @@ struct CatalogReopenMenuItems: View {
         Button("Reopen SQLite Catalog") {
             Task { await cutover.reopen() }
         }
-        .disabled(cutover.blockedReason == nil)
-        .help(cutover.blockedReason.map { "Saving to catalog.sqlite stopped: \($0). Reopen to try again." } ?? "Saving to catalog.sqlite is working.")
+        .disabled(!cutover.canReopen)
+        .help(cutover.blockedReason.map { cutover.canReopen ? "Saving to catalog.sqlite stopped: \($0). Reopen to try again."
+                                                            : "Saving to catalog.sqlite stopped: \($0)." } ?? "Saving to catalog.sqlite is working.")
         .accessibilityIdentifier("catalog.menu.reopenSQLite")
 
         CatalogAdoptMenuItem(cutover: cutover)

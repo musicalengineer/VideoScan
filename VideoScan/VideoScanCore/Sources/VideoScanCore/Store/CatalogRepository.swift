@@ -340,6 +340,11 @@ public protocol CatalogRepository: Sendable {
     /// written. Opening an already-open repository is refused.
     func open(at url: URL) async -> CatalogOpenOutcome
 
+    /// The same, refused with GH #354's words unless catalog.cutover is
+    /// beside `url` (QA r1 D, #359): the app's launch and Reopen use it, so
+    /// a session without the latch can never write.
+    func open(at url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome
+
     /// The generation this session last loaded or committed — the
     /// compare-and-set expectation for the next write. 0 before `open`.
     var generation: Int { get async }
@@ -383,11 +388,26 @@ public protocol CatalogRepository: Sendable {
     /// calling thread (cutover B2.3): the pre-change safety copy a door
     /// takes before removing records. nil = written; else the words.
     func sealedCopyBlocking(to target: URL) -> String?
+
+    /// GH #359: the words when the store's file (or its latch) is no longer
+    /// the file this session opened — nothing more may be saved until the
+    /// app quits and reopens; nil while it is the same file. Synchronous,
+    /// any thread. A Reopen in-session would open the REPLACEMENT, so the
+    /// committer refuses it while this is non-nil.
+    var fileStopWords: String? { get }
 }
 
 extension CatalogRepository {
     /// A store with no sealed-copy door says so (the JSON repository; test fakes).
     public func sealedCopyBlocking(to target: URL) -> String? {
         "this catalog store cannot make a sealed copy"
+    }
+
+    /// A store with no file guard never stops for a moved file (test fakes).
+    public var fileStopWords: String? { nil }
+
+    /// A store with no latch notion opens as `open(at:)` does (test fakes).
+    public func open(at url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome {
+        await open(at: url)
     }
 }
