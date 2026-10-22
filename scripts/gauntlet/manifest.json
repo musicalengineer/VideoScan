@@ -30153,6 +30153,21 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "PruneQARound1Tests"
+      ],
+      "tests": [
+        "adviceCountsAMissingHeldCopyAsGone",
+        "symlinkedFolderIntoTheArchiveNeverMoves",
+        "tidyBacklogWithNothingOfferedSaysSo",
+        "tidyHeadlineCountMatchesItsBytes"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PruneSensorTests.swift",
       "stage": "unit",
@@ -32711,6 +32726,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/PruneApplyJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
