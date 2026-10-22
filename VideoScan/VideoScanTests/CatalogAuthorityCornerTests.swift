@@ -8,9 +8,10 @@
 //            on a viewer. Since slice 2 (GH #354, 2026-10-21): `.noLatch`;
 //            the master refuses loudly, read-only, with words, and opens no
 //            catalog.json; a viewer with no latch of its own nor in
-//            viewer-catalog/ says nothing is synced yet. PENDING (slice 2b):
-//            a viewer's synced folder with the snapshot but no latch is still
-//            labelled as the frozen catalog.json (CatalogViewerSnapshot.source).
+//            viewer-catalog/ says nothing is synced yet. Since slice 2b
+//            (2026-10-21): a viewer's synced folder with the snapshot but no
+//            latch shows "nothing synced from the master yet" — a catalog.json
+//            beside it is never read (CatalogViewerSnapshot.source).
 //   Fail-fast  the latch vanishes mid-session — TODAY commits go on; INTENDED
 //            the next commit stops and says why (pending).
 //   Case 10  (app) a damaged catalog.sqlite behind the latch — the launch is
@@ -54,7 +55,7 @@ struct CatalogAuthorityCornerTests {
         #expect(try CornerFiles.sha256(scene.catalogURL) == jsonBefore)
     }
 
-    @Test("case 5 (viewer): own catalog.sqlite with no latch → .noLatch (GH #354); a synced snapshot with no latch → still labelled as the frozen catalog.json (pending, slice 2b)")
+    @Test("case 5 (viewer): own catalog.sqlite with no latch → .noLatch (GH #354); a synced snapshot with no latch is not shown and the catalog.json beside it is never read — 'nothing synced from the master yet' (slice 2b)")
     func viewerWithoutLatch() async throws {
         let scene = try CutoverScene.make("corner_nolatch_viewer"); defer { scene.cleanup() }
         try await scene.importCatalog()
@@ -70,13 +71,18 @@ struct CatalogAuthorityCornerTests {
         let sealed = repository.sealedCopyBlocking(to: CatalogViewerSnapshot.databaseURL(in: live))
         await repository.close()
         #expect(sealed == nil)
-        try Data("{\"version\":4,\"records\":[]}".utf8).write(to: live.appendingPathComponent("catalog.json"))
-        let source = CatalogViewerSnapshot.source(in: live)
-        #expect(source == .legacyJSON, "pinned: the snapshot without its latch falls back to catalog.json")
+        let json = live.appendingPathComponent("catalog.json")
+        try Data("{\"version\":4,\"records\":[]}".utf8).write(to: json)
+        let jsonBefore = try CornerFiles.sha256(json)
 
-        withKnownIssue("slice 2b: a synced snapshot that arrived without its latch is labelled as the frozen catalog.json, without a word") {
-            #expect(source != .legacyJSON, "a snapshot that arrived without its latch is ignored without a word")
-        }
+        let source = CatalogViewerSnapshot.source(in: live)
+        #expect(source == .none, "a snapshot without its latch is not shown, and catalog.json is never the fallback")
+        var adopted = 0
+        let status = await CatalogViewerSnapshot.show(source, note: { _ in }, adopt: { _ in adopted += 1 })
+        #expect(status == .none)
+        #expect(status.words == "nothing synced from the master yet")
+        #expect(adopted == 0, "nothing was swapped in")
+        #expect(try CornerFiles.sha256(json) == jsonBefore, "the frozen catalog.json is left exactly as it was")
     }
 
     // MARK: - Fail fast: the latch vanishes mid-session

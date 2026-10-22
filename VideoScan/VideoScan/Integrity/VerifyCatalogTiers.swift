@@ -3,21 +3,24 @@
 // §3), each a pure function from the snapshot to one IntegrityTier line and
 // its findings. THIS SLICE fills tiers 0, 1, 3, 4 and 5 from what the
 // catalog already records — the audit's marker, the fixity and sound-print
-// stamps, the rows' relations — and the catalog file's own hash. Tiers 2
+// stamps, the rows' relations — and catalog.sqlite's own generation. Tiers 2
 // (bytes re-read against the stored digest) and 6 (the UI truth sweep) say
 // "not built yet" rather than claim anything (`builtTiers` is the list the
 // Catalog Status verdict reads; the other two never colour the row).
 //
 // ONE GENERATION (codex, Verify Catalog slice 1, P1): the snapshot carries
-// the catalog generation its rows came from; tier 5 reads the generation
-// in the file it hashes and, when the two differ (a save landed between
-// the snapshot and the hash — Pause, save, Resume; the snapshot is never
-// retaken), says so in words. The report then marks the hash "not
-// certified" and `catalogChangedDuringRun`; the run still completes.
+// the catalog generation its rows came from; tier 5 reads catalog.sqlite's
+// generation again and, when the two differ (a commit landed between the
+// snapshot and tier 5 — Pause, save, Resume; the snapshot is never
+// retaken), says so in words. The report then marks `catalogChangedDuringRun`;
+// the run still completes. (Until 2026-10-21 tier 5 also streamed a SHA-256
+// of catalog.json and compared it run to run; that hash left with JSON gone,
+// slice 2b — Verify refuses without catalog.sqlite since QA r1 F5, so it had
+// no caller.)
 //
-// No I/O here except two reads: the audit marker (tier 0) and the catalog
-// file hash (tier 5), both of files beside the catalog — never a media file.
-// Nothing is written. Runs off the main actor on Sendable values.
+// No I/O here except one read: the audit marker (tier 0), beside the
+// catalog — never a media file, never catalog.json. Nothing is written.
+// Runs off the main actor on Sendable values.
 //
 // (For Rick: `evaluate(_:input:)` is the dispatcher — a switch over the tier
 // number to one function each; `TierInput` / `TierOutcome` are the plain
@@ -105,7 +108,9 @@ enum VerifyCatalogTiers {
     /// What one tier evaluation is given.
     struct TierInput: Sendable {
         var snapshot: VerifyCatalogSnapshot
-        /// The last report (for the catalog-file hash comparison); nil = none.
+        /// The last report; nil = none. (Read by no tier since the
+        /// catalog.json hash comparison left, 2026-10-21; the job still
+        /// hands it in.)
         var previous: IntegrityReport?
         /// The constraint findings computed by tier 4, handed on to tier 5
         /// so the rows are walked once for both.
@@ -130,16 +135,11 @@ enum VerifyCatalogTiers {
         var findings: [IntegrityFinding]
         /// Tier 4 fills this for tier 5.
         var constraintFindings: [CatalogConstraints.Finding]?
-        /// Tier 5 fills this for the report (so the file is hashed once);
-        /// nil when the file is not on disk or could not be read.
-        var catalogHash: CatalogFileHash?
 
-        init(tier: IntegrityTier, findings: [IntegrityFinding] = [], constraintFindings: [CatalogConstraints.Finding]? = nil,
-             catalogHash: CatalogFileHash? = nil) {
+        init(tier: IntegrityTier, findings: [IntegrityFinding] = [], constraintFindings: [CatalogConstraints.Finding]? = nil) {
             self.tier = tier
             self.findings = findings
             self.constraintFindings = constraintFindings
-            self.catalogHash = catalogHash
         }
     }
 
@@ -453,54 +453,32 @@ enum VerifyCatalogTiers {
         return TierOutcome(tier: t, findings: findings(stale, rows: input.snapshot.rows), constraintFindings: all)
     }
 
-    // MARK: Tier 5 — relations, constraints, the catalog file's hash
+    // MARK: Tier 5 — relations, constraints, the store's generation
 
-    static let catalogFileRule = "catalogFileChanged"
-
-    /// What tier 5 learned about the catalog file itself.
-    enum CatalogFileRead: Sendable, Equatable {
-        case notOnDisk
-        /// Exists and could not be read (or not read whole) — the errno words.
-        case unreadable(String)
-        case hashed(CatalogFileHash)
-
-        var hash: CatalogFileHash? {
-            if case .hashed(let h) = self { return h }
-            return nil
-        }
-    }
-
+    /// Tier 5: the constraints, and under catalog.sqlite the store's
+    /// generation (`databaseConstraints`). A `.json` snapshot — a test
+    /// sandbox that never ran the launch; the app refuses Verify without
+    /// catalog.sqlite (QA r1 F5) — gets the relations alone: catalog.json is
+    /// never opened (JSON gone, slice 2b, 2026-10-21).
     static func constraints(_ input: TierInput) -> TierOutcome {
         if input.snapshot.store == .sqlite { return databaseConstraints(input) }
         let all = input.constraintFindings
             ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
-        var found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
-        let file = catalogFile(input.snapshot.catalogURL)
-        let comparison = CatalogFileHash.compare(previousSHA: input.previous?.catalogSHA256,
-                                                 previousGeneration: input.previous?.catalogGeneration, current: file.hash)
-        if comparison.needsDecision {
-            found.append(IntegrityFinding(tier: 5, rule: catalogFileRule, recordID: nil, filename: nil,
-                                          words: comparison.words, needsDecision: true))
-        }
+        let found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
         let decided = found.filter(\.needsDecision)
-        let unverified = found.count - decided.count
+        let couldNotCheck = found.count - decided.count
         let rows = input.snapshot.rows.count
-        let unreadable = file.hash == nil && file != .notOnDisk
-        let couldNotCheck = unverified + (unreadable ? 1 : 0)
         var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
                               needsDecision: decided.count, couldNotCheck: couldNotCheck, summary: "")
-        t.catalogFileUnchecked = unreadable ? 1 : 0
+        t.catalogFileUnchecked = 0
         if !decided.isEmpty {
             t.result = .needsDecision(decided.count)
         } else if couldNotCheck > 0 {
             t.result = .couldNotCheck(couldNotCheck)
         }
-        t.summary = relationWords(found, rows: rows, fileWords: unreadable ? nil : comparison.words)
-        if let said = fileProblemWords(file, snapshotGeneration: input.snapshot.catalogGeneration) {
-            t.summary += " · " + said
-        }
-        return TierOutcome(tier: t, findings: found, catalogHash: file.hash)
+        t.summary = relationWords(found, rows: rows, fileWords: nil)
+        return TierOutcome(tier: t, findings: found)
     }
 
     /// Tier 5 over catalog.sqlite (GH #342): the same constraints over the
@@ -553,8 +531,8 @@ enum VerifyCatalogTiers {
     /// The decisions by rule (most first), then the UNVERIFIED findings
     /// by rule (a lineage link to a purged row — kept as history), then,
     /// when nothing needs a decision, "every [other] relation holds (N
-    /// rows)" and the catalog-file comparison (`fileWords`; nil when the
-    /// file could not be read, so nothing is claimed about it).
+    /// rows)" and what the store's generation says (`fileWords`; nil = say
+    /// nothing about the catalog file).
     static func relationWords(_ found: [IntegrityFinding], rows: Int, fileWords: String?) -> String {
         let decided = found.filter(\.needsDecision)
         let kept = found.filter { !$0.needsDecision }
@@ -566,32 +544,6 @@ enum VerifyCatalogTiers {
             if let fileWords { parts.append(fileWords) }
         }
         return parts.joined(separator: " · ")
-    }
-
-    /// The catalog file's streamed SHA-256, or why there is none: not on
-    /// disk, or on disk and unreadable (the words carry the errno).
-    static func catalogFile(_ url: URL) -> CatalogFileRead {
-        guard FileManager.default.fileExists(atPath: url.path) else { return .notOnDisk }
-        do {
-            return .hashed(try CatalogFileHash.of(fileAt: url))
-        } catch {
-            return .unreadable(CatalogFileHash.readProblemWords(error))
-        }
-    }
-
-    /// What a person must hear about the file beyond the routine
-    /// comparison: it could not be read; or its generation is not the
-    /// snapshot's; or it carries no generation, so nothing is certified.
-    static func fileProblemWords(_ file: CatalogFileRead, snapshotGeneration: Int) -> String? {
-        switch file {
-        case .notOnDisk:
-            return nil
-        case .unreadable(let why):
-            return "catalog.json exists but could not be read (\(why)) — its hash is not recorded"
-        case .hashed(let hash):
-            guard hash.generation != nil else { return "catalog.json carries no generation header — hash recorded, not certified" }
-            return generationMismatch(snapshot: snapshotGeneration, file: hash.generation)
-        }
     }
 
     /// "findings describe generation N; the file on disk is generation M —
@@ -613,8 +565,10 @@ enum VerifyCatalogTiers {
             .joined(separator: " · ")
     }
 
-    /// A constraint rule's counted phrase (its own table), or the one
-    /// tier-5 rule that is not a constraint: the catalog file's hash.
+    /// A constraint rule's counted phrase (its own table). Any other rule
+    /// is the retired catalog.json hash's "catalogFileChanged" — no run
+    /// writes it since 2026-10-21, but a report written before then may
+    /// still be the one beside the catalog, and Catalog Status reads it.
     static func ruleWords(_ rule: String, count n: Int, decided: Bool = true) -> String {
         guard let r = CatalogConstraints.Rule(rawValue: rule) else { return "catalog.json changed without a new generation" }
         return r.words(count: n, decided: decided)

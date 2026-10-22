@@ -18,7 +18,7 @@ import os
 // time" half of that door (VideoScanModel+UpdateCatalog.swift is the UI /
 // preview half):
 //   * identity = sizeBytes + partialMD5 (the SAME key duplicate detection
-//     and identityKey(for:) already trust), PLUS contentHash when BOTH
+//     and the retired catalog import's identityKey(for:) trusted), PLUS contentHash when BOTH
 //     sides carry one — two files with the same head/size but different
 //     segmented signatures are never the same file;
 //   * ambiguity is never guessed away: several missing records for one

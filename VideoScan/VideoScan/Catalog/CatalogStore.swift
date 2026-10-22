@@ -922,7 +922,8 @@ final class CatalogStore {
     /// effects: no rotation, no lastLoadOutcome change, no test-host gate
     /// (the caller passes an explicit path — there's nothing implicit to
     /// protect). Returns nil on any failure or a newer-version snapshot.
-    /// Used by the volume-rename Undo to restore the pre-migration catalog.
+    /// No app caller since JSON gone, slice 2b (2026-10-21): the volume-rename
+    /// Undo refuses a .json copy. Tests still read their sandbox copies.
     func loadRecords(fromSnapshotAtPath path: String) -> [VideoRecord]? {
         guard let (records, version, _, _) = decode(url: URL(fileURLWithPath: path)),
               version <= CatalogSnapshot.currentVersion else { return nil }

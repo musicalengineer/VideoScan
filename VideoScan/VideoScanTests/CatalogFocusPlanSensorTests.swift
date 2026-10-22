@@ -179,6 +179,12 @@ struct CatalogInfoShortcutSensorTests {
         let next = app[start.upperBound...].prefix(160)
         #expect(next.contains(".keyboardShortcut(\"i\", modifiers: [.command, .shift])"), "Import Catalog… is ⇧⌘I")
         #expect(!next.contains(".keyboardShortcut(\"i\", modifiers: [.command])"))
+        // JSON gone, slice 2b (QA r1 NIT, 2026-10-21): every bundle is
+        // refused until Restore (GH #343), so the item is disabled and says why.
+        let after = app[start.upperBound...].prefix(400)
+        #expect(after.contains(".disabled(true)"), "Import Catalog… must be disabled until Restore exists")
+        #expect(after.contains(".help(VideoScanModel.importCatalogComingHelp)"))
+        #expect(VideoScanModel.importCatalogComingHelp == "Restore from a catalog.sqlite backup is coming (GH #343)")
     }
 
     @Test func catalogInfoIsAFocusScopedMenuItem() throws {

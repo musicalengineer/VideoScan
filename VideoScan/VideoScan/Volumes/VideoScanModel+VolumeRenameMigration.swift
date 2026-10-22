@@ -50,9 +50,11 @@
 // launch (init), NSWorkspace mount/unmount, records didSet.
 //
 // MIGRATION:
-//   - Pre-flight catalog snapshot (`catalog.pre-volume-rename.<stamp>.json`,
-//     same facility as the scan-merge tripwire). NO snapshot → NO rewrite
-//     (fail safe). The snapshot is also what UNDO restores.
+//   - Pre-flight catalog snapshot (`catalog.pre-volume-rename.<stamp>.sqlite`
+//     under catalog.sqlite, B2.3; `.json` only in a test sandbox with no
+//     catalog.sqlite — same facility as the scan-merge tripwire). NO
+//     snapshot → NO rewrite (fail safe). The .sqlite snapshot is what UNDO
+//     reads; a .json one is refused (slice 2b, 2026-10-21).
 //   - Off-main re-verify (mounted volume must still be there, with the
 //     expected UUID when one was part of the evidence) + plan: old→new
 //     path per record, UUID-GATED — only records whose stored UUID is in

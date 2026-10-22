@@ -67,7 +67,8 @@
 // published by CatalogSnapshotPublisher). catalog.json is no longer
 // published. A viewer opens the snapshot READ-ONLY and swaps its records
 // in (`viewerCatalogLoader`); a viewer that has only the old catalog.json
-// keeps showing it, read-only, labelled "older catalog". A master whose
+// never reads it and says "nothing synced from the master yet" (JSON gone,
+// slice 2b, 2026-10-21). A master whose
 // manifest does not name the snapshot (an older build) is refused with
 // those words and the viewer keeps what it had.
 
@@ -958,6 +959,10 @@ final class CatalogSync: ObservableObject {
     /// unchanged snapshot is not reloaded every 90 s.
     private var shownSnapshotHash: String?
 
+    /// Why the status reads "kept the previous catalog" when the snapshot
+    /// on screen is no longer in the synced folder.
+    static let snapshotLeftWords = "the synced folder no longer holds the snapshot and its latch"
+
     /// Show what the live folder holds now: at launch (the last good
     /// snapshot, before the master answers) and after every sync attempt.
     /// A snapshot whose manifest hash is the one already shown is skipped.
@@ -968,7 +973,16 @@ final class CatalogSync: ObservableObject {
         let manifest = (try? String(contentsOf: paths.liveDir.appendingPathComponent("manifest.sha256"), encoding: .utf8)) ?? ""
         let hash = CatalogViewerSnapshot.snapshotHash(inManifest: manifest)
         if case .snapshot = source, let hash, hash == shownSnapshotHash { return }
-        let status = await loader(source)
+        // A snapshot is already on screen and the folder no longer holds a
+        // snapshot with its latch (a half-done swap moved the latch away):
+        // the records shown are the last good catalog — never "nothing
+        // synced" (QA r1 on slice 2b, 2026-10-21). Nothing is reloaded.
+        let status: ViewerCatalogStatus
+        if case .none = source, shownSnapshotHash != nil {
+            status = .refused(Self.snapshotLeftWords)
+        } else {
+            status = await loader(source)
+        }
         state.viewerCatalog = status
         if case .snapshot = status { shownSnapshotHash = hash }
         log("CatalogSync: viewer catalog — \(status.words ?? "nothing synced yet")")

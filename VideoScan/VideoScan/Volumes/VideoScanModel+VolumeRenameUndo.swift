@@ -6,8 +6,9 @@
 // migration's safety copy under catalog.sqlite is a sealed
 // `catalog.pre-volume-rename.<stamp>.sqlite`, but Undo read it with the
 // catalog.json decoder, got nil, and said "Couldn't read the pre-update
-// snapshot" — the rename could not be undone. Undo now reads the copy in
-// the format it was written (`loadSafetyCopy`).
+// snapshot" — the rename could not be undone. Undo now reads the .sqlite
+// copy (`loadSafetyCopy`); since JSON gone, slice 2b (2026-10-21), a
+// pre-cutover `.json` copy is refused in words and never read.
 //
 // It also no longer swaps the whole records array for the copy. That was
 // verbatim restore: under catalog.json it silently dropped every record
@@ -49,7 +50,8 @@ extension VideoScanModel {
     /// the scan target back on its old path, rebuild the search index,
     /// persist, and suppress the auto pass for this volume so the very next
     /// rebuild doesn't redo what Rick just undid. Returns false (and
-    /// changes nothing) when the safety copy can't be read back.
+    /// changes nothing) when the safety copy can't be read back — or is a
+    /// catalog.json copy, which is refused.
     /// `async` because the catalog.sqlite copy is read on the store's queue.
     @discardableResult
     func undoVolumeRenameMigration(_ notice: VolumeRenameNotice) async -> Bool {
@@ -118,12 +120,22 @@ extension VideoScanModel {
         return revert
     }
 
-    /// Read back a safety copy `snapshotCatalog` wrote, in the format it was
-    /// written: a sealed catalog.sqlite copy (`.sqlite`, cutover B2.3) through
-    /// the app's one SQLite loader, else a catalog.json snapshot through the
-    /// store's decoder. nil = unreadable (the caller changes nothing).
+    /// Why a `.json` safety copy is not read (JSON gone, slice 2b).
+    nonisolated static let jsonSafetyCopyWords =
+        "it is a catalog.json copy from before the switch to catalog.sqlite, and VideoScan no longer reads catalog.json; "
+            + "the rename was not undone and the catalog is unchanged"
+
+    /// Read back a safety copy `snapshotCatalog` wrote: a sealed
+    /// catalog.sqlite copy (`.sqlite`, cutover B2.3) through the app's one
+    /// SQLite loader. Anything else — a pre-cutover
+    /// `catalog.pre-volume-rename.*.json` copy — is refused in words and
+    /// never read (JSON gone, slice 2b, 2026-10-21). nil = unreadable or
+    /// refused (the caller changes nothing).
     func loadSafetyCopy(atPath path: String) async -> [VideoRecord]? {
-        guard path.hasSuffix(".sqlite") else { return catalogStore.loadRecords(fromSnapshotAtPath: path) }
+        guard path.hasSuffix(".sqlite") else {
+            catalogAuthorityNote("REFUSED reading the safety copy \(path) — \(Self.jsonSafetyCopyWords)")
+            return nil
+        }
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         let repository = GRDBCatalogRepository()
         switch await repository.open(at: URL(fileURLWithPath: path)) {

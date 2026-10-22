@@ -18,13 +18,16 @@ import UniformTypeIdentifiers
 //     refused ("from before the database switch"); a catalog.sqlite bundle
 //     is refused too, because there is no safe Restore yet (replacing the
 //     live database needs its own design — see `bundleImportDecision`).
-//     A Mac still on catalog.json can still merge an old JSON bundle.
+//   * JSON gone, slice 2b (2026-10-21): the old JSON merge (a catalog.json
+//     bundle on a Mac still on catalog.json — `BundleImporter.read`,
+//     `applyBundlePayload`) is retired; a JSON bundle is refused in words on
+//     every Mac. BundleImporter.installPOIs (the People half) stays for the
+//     future Restore.
 //
 // Split out from VideoScanModel.swift during the 2026-05 size-cap
-// refactor — the JSON-only catalog import/export lives in
+// refactor — the JSON-only catalog export lives in
 // VideoScanModel+CatalogImportExport.swift; this file is everything
-// extra that the bundle format adds on top (POIs, audit log,
-// confirmation dialogs).
+// extra that the bundle format adds on top.
 
 /// What Back Up Catalog did.
 enum CatalogBackupOutcome {
@@ -33,10 +36,11 @@ enum CatalogBackupOutcome {
     case refused(String)
 }
 
-/// What Import Catalog may do with a chosen bundle.
+/// What Import Catalog may do with a chosen bundle. One case today — every
+/// bundle is refused (the JSON merge left 2026-10-21); a Restore of a
+/// catalog.sqlite bundle would be the next case. (A one-case enum ≈ a C++
+/// tagged result whose other alternatives are not written yet.)
 enum BundleImportDecision: Equatable {
-    /// A catalog.json bundle on a Mac still on catalog.json: the old merge.
-    case mergeLegacyJSON
     /// Nothing is imported; the words say why.
     case refuse(String)
 }
@@ -272,24 +276,30 @@ extension VideoScanModel {
 
     // MARK: - Import Catalog
 
-    /// The refusal for a pre-switch (catalog.json) bundle under catalog.sqlite.
-    nonisolated static let jsonBundleUnderSQLiteWords =
-        "this backup is from before the database switch; it can't be merged into catalog.sqlite"
+    /// The refusal for a pre-switch (catalog.json) bundle — on every Mac
+    /// since JSON gone, slice 2b (2026-10-21): no catalog.json backup is read.
+    nonisolated static let jsonBundleRefusedWords =
+        "this backup is from before the database switch (it holds catalog.json), and VideoScan no longer reads "
+            + "catalog.json backups; nothing was changed — the backup is intact"
+
+    /// File ▸ Import Catalog…'s help while it is disabled (QA r1 NIT on
+    /// slice 2b): every bundle is refused until Restore exists.
+    nonisolated static let importCatalogComingHelp = "Restore from a catalog.sqlite backup is coming (GH #343)"
 
     /// What Import Catalog may do with a bundle holding `kind` on a Mac
-    /// whose authority is (or is not) catalog.sqlite. Nothing is ever merged
-    /// into catalog.sqlite. A catalog.sqlite bundle is refused as well:
-    /// a proper Restore would REPLACE the live database (close the store,
-    /// keep this Mac's high-water witnesses so the restored copy opens
-    /// read-only below them, then Adopt) — that is a new door with its own
-    /// design, not a merge, and it does not exist yet.
+    /// whose authority is (or is not) catalog.sqlite: today, refuse — with
+    /// words. Nothing is ever merged into catalog.sqlite, and a catalog.json
+    /// bundle is never read (slice 2b retired the old JSON merge, the last
+    /// reader of a catalog.json backup). A catalog.sqlite bundle is refused
+    /// as well: a proper Restore would REPLACE the live database (close the
+    /// store, keep this Mac's high-water witnesses so the restored copy
+    /// opens read-only below them, then Adopt) — that is a new door with
+    /// its own design, not a merge, and it does not exist yet.
     nonisolated static func bundleImportDecision(kind: BundleImporter.CatalogKind,
                                                  isSQLiteAuthority: Bool) -> BundleImportDecision {
         switch (kind, isSQLiteAuthority) {
-        case (.legacyJSON, true):
-            return .refuse(jsonBundleUnderSQLiteWords)
-        case (.legacyJSON, false):
-            return .mergeLegacyJSON
+        case (.legacyJSON, _):
+            return .refuse(jsonBundleRefusedWords)
         case (.sqlite(let generation), true):
             let at = generation.map { " (generation \($0))" } ?? ""
             return .refuse("this backup holds a sealed catalog.sqlite\(at); backups are never merged into catalog.sqlite, "
@@ -308,12 +318,9 @@ extension VideoScanModel {
                                   isSQLiteAuthority: catalogCutover.isSQLiteAuthority)
     }
 
-    /// UI entry point: show an open panel, decide, then (old JSON bundles
-    /// on a catalog.json Mac only) parse, confirm and merge.
-    ///
-    /// POI install is `async` (iCloud materialization polls in the
-    /// background). The open/confirm panels and the final alert run on the
-    /// main actor; the polling loop is `await`ed off the main thread.
+    /// UI entry point: show an open panel, decide, and say why nothing was
+    /// imported (REFUSED line in the one sink + an alert). Nothing in the
+    /// bundle is read beyond manifest.json and which catalog file it holds.
     func importBundleViaPanel() {
         let panel = NSOpenPanel()
         panel.title = "Import Catalog"
@@ -323,378 +330,10 @@ extension VideoScanModel {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        if case .refuse(let words) = bundleImportDecision(for: url) {
+        switch bundleImportDecision(for: url) {
+        case .refuse(let words):
             catalogAuthorityNote("REFUSED Import Catalog of \(url.lastPathComponent) — \(words)")
             Self.showErrorAlert(title: "Not Imported", message: Self.sentence(words))
-            return
         }
-
-        let payload: BundleImporter.Payload
-        do {
-            payload = try BundleImporter.read(from: url)
-        } catch {
-            log("Bundle import failed: \(error.localizedDescription)")
-            Self.showErrorAlert(title: "Import Failed", message: error.localizedDescription)
-            return
-        }
-        guard Self.confirmLegacyImport(payload) else {
-            log("Bundle import canceled.")
-            return
-        }
-        // Hand off to async — POI install does iCloud polling that must not
-        // block the main actor.
-        Task { @MainActor in
-            let result = await applyBundlePayload(payload, bundleURL: url)
-            presentImportResult(result, payload: payload, url: url)
-        }
-    }
-
-    /// Confirmation dialog — bundles can be sizeable and this overwrites
-    /// POI folders, so make the user opt in deliberately.
-    private static func confirmLegacyImport(_ payload: BundleImporter.Payload) -> Bool {
-        let confirm = NSAlert()
-        confirm.messageText = "Import This Catalog Backup?"
-        confirm.informativeText = """
-        From: \(payload.manifest.exportedFromHost) on \(Self.shortDate(payload.manifest.exportedAt))
-        App: v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
-
-        • \(payload.manifest.counts.records) catalog record(s)
-        • \(payload.manifest.counts.volumes) volume(s) of metadata
-        • \(payload.manifest.counts.people) person profile(s) (\(payload.manifest.counts.referencePhotos) photo(s))
-
-        Catalog records merge by content identity (no duplicates). \
-        Volume metadata for matching paths is overwritten. \
-        For each person, the version with MORE reference photos wins \
-        (ties broken by newest first) — but details like birthdays and \
-        notes are kept from both copies either way. Replaced POI folders \
-        are moved to ~/dev/VideoScan/.trash/ for recovery.
-        """
-        confirm.addButton(withTitle: "Import")
-        confirm.addButton(withTitle: "Cancel")
-        return confirm.runModal() == .alertFirstButtonReturn
-    }
-
-    /// The post-import log line and alert.
-    private func presentImportResult(_ result: BundleImportResult, payload: BundleImporter.Payload, url: URL) {
-        if let refusal = result.refusal {
-            Self.showErrorAlert(title: "Not Imported", message: Self.sentence(refusal))
-            return
-        }
-        log("Imported bundle from \(payload.manifest.exportedFromHost): " +
-            "\(result.recordsAdded) new records, \(result.recordsSkipped) duplicates skipped, " +
-            "\(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) added, " +
-            "\(result.peopleInstalled.count) person profile(s) installed, " +
-            "\(result.peopleSkipped.count) skipped, \(result.peopleFailed.count) failed, " +
-            "\(result.peopleFieldMerged.count) with details filled in from the other copy.")
-
-        // Build the user-visible alert body with all the POI buckets,
-        // plus the audit log path.
-        let installedLine = Self.formatPOIBucket(label: "Installed",
-                                                 count: result.peopleInstalled.count,
-                                                 names: result.peopleInstalled)
-        let skippedLine = Self.formatPOIBucket(label: "Skipped (local copy preferred)",
-                                               count: result.peopleSkipped.count,
-                                               names: result.peopleSkipped.map { $0.name })
-        let mergedLine = Self.formatFieldMerges(result.peopleFieldMerged)
-        let failedLine = Self.formatPOIFailures(result.peopleFailed)
-        var body = """
-        Imported from \(url.lastPathComponent).
-
-        • \(result.recordsAdded) new catalog record(s) (skipped \(result.recordsSkipped) already here)
-        • \(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) new volume(s) added
-        • \(installedLine)
-        • \(skippedLine)
-        • \(mergedLine)
-        """
-        if !failedLine.isEmpty {
-            body += "\n• \(failedLine)"
-        }
-        if let auditURL = result.auditLogURL {
-            body += "\n\nAudit log: \(auditURL.path)"
-        }
-        body += "\n\nPerson Finder settings will take effect after relaunching VideoScan."
-
-        let done = NSAlert()
-        done.messageText = "Backup Imported"
-        done.informativeText = body
-        done.addButton(withTitle: "OK")
-        done.runModal()
-    }
-
-    struct BundleImportResult {
-        var recordsAdded: Int
-        var recordsSkipped: Int
-        var volumesUpdated: Int
-        var volumesAdded: Int
-        /// POI folder names that won and were installed.
-        var peopleInstalled: [String]
-        /// POI folder names where the local copy was preferred (reason).
-        var peopleSkipped: [(name: String, reason: String)]
-        /// POI folder names that errored during materialize/copy/validate.
-        var peopleFailed: [(name: String, reason: String)]
-        /// POIs where identity details (birthdate, notes, …) from the losing
-        /// side filled gaps on the winning side — the 2026-07-10 lost-birthdate
-        /// fix. Surfaced in the alert so merges never hide in the log again.
-        var peopleFieldMerged: [(name: String, fields: [String])]
-        /// Path to the per-import audit log under ~/Library/Logs/VideoScan/.
-        /// nil only if writing the log itself failed.
-        var auditLogURL: URL?
-        /// Set when nothing was merged (catalog.sqlite is this Mac's
-        /// catalog): the words why. Every count above is then zero.
-        var refusal: String? = nil
-
-        /// Back-compat shim: callers / tests that asked for `peopleInstalled`
-        /// as an Int can use this. The new structured form is preferred.
-        var peopleInstalledCount: Int { peopleInstalled.count }
-    }
-
-    /// Merge a parsed (catalog.json) bundle payload into live model state.
-    /// Async because POI install does iCloud-aware polling. Separated from
-    /// `importBundleViaPanel` so tests can call it directly.
-    ///
-    /// Refuses outright — nothing merged, nothing installed, nothing saved —
-    /// while catalog.sqlite is this Mac's catalog: JSON records are never
-    /// merged into the database (the panel already refuses; this is the
-    /// door's own guard for any other caller).
-    @discardableResult
-    func applyBundlePayload(_ payload: BundleImporter.Payload,
-                            bundleURL: URL) async -> BundleImportResult {
-        if catalogCutover.isSQLiteAuthority {
-            let words = Self.jsonBundleUnderSQLiteWords
-            catalogAuthorityNote("REFUSED Import Catalog of \(bundleURL.lastPathComponent) — \(words)")
-            return BundleImportResult(recordsAdded: 0, recordsSkipped: 0, volumesUpdated: 0, volumesAdded: 0,
-                                      peopleInstalled: [], peopleSkipped: [], peopleFailed: [],
-                                      peopleFieldMerged: [], auditLogURL: nil, refusal: words)
-        }
-        // Catalog — seed identity set from existing records, dedup on insert.
-        var seen = Set<String>()
-        var localsByKey: [String: [VideoRecord]] = [:]
-        for rec in records {
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
-        }
-        let effectiveHost = payload.catalog.savedFromHost.isEmpty
-            ? payload.manifest.exportedFromHost
-            : payload.catalog.savedFromHost
-        var added = 0
-        var skipped = 0
-        var addedRecords: [VideoRecord] = []
-        var idRemap: [UUID: UUID] = [:]
-        for rec in payload.catalog.records {
-            if let key = Self.identityKey(for: rec), seen.contains(key) {
-                skipped += 1
-                if let local = Self.localStandIn(for: rec, candidates: localsByKey[key] ?? []),
-                   local.id != rec.id { idRemap[rec.id] = local.id }
-                continue
-            }
-            if rec.sourceHost.isEmpty {
-                rec.sourceHost = effectiveHost
-            }
-            records.append(rec)
-            addedRecords.append(rec)
-            if let key = Self.identityKey(for: rec) { seen.insert(key); localsByKey[key, default: []].append(rec) }
-            added += 1
-        }
-        // Archive copies whose source was deduped keep a resolvable
-        // derivedFrom (codex R4-D).
-        Self.relinkImportedProvenance(addedRecords, idRemap: idRemap)
-        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
-        if invalidPairEndpoints > 0 {
-            log("Bundle import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")
-        }
-        // Master Archive designation rides the bundle's catalog.json (§3).
-        adoptImportedMasterArchive(payload.catalog.masterArchive)
-
-        let volumes = mergeBundleVolumes(payload.volumes.volumes)
-
-        // Settings — merge portable fields onto current settings, save back.
-        var current = PersonFinderSettings.restored()
-        payload.settings.apply(to: &current)
-        current.save()
-
-        // POIs — safe install with iCloud materialization, validation, and
-        // conflict resolution. Failures here are logged but don't roll back
-        // the catalog/volumes/settings work above. See
-        // `BundleImporter.installPOIs` for the gory details.
-        let poiResult = await BundleImporter.installPOIs(
-            from: payload.poiFoldersInBundle,
-            bundleExportedAt: payload.bundleExportedAt
-        )
-
-        // Write per-import audit log so Rick can review every POI decision.
-        let auditURL = Self.writeImportAuditLog(bundleURL: bundleURL,
-                                                 payload: payload,
-                                                 poiResult: poiResult)
-        // Mirror the audit summary into the dashboard log too.
-        for line in poiResult.auditLines {
-            log(line)
-        }
-
-        saveCatalogNow()
-        return BundleImportResult(
-            recordsAdded: added,
-            recordsSkipped: skipped,
-            volumesUpdated: volumes.updated,
-            volumesAdded: volumes.added,
-            peopleInstalled: poiResult.installed,
-            peopleSkipped: poiResult.skipped,
-            peopleFailed: poiResult.failed,
-            peopleFieldMerged: poiResult.fieldMerged,
-            auditLogURL: auditURL
-        )
-    }
-
-    /// Merge a bundle's volume metadata: overwrite metadata on path match;
-    /// add as an offline target when the path isn't present locally so the
-    /// volume shows up in the sidebar (grayed out until the drive is
-    /// connected on this Mac). Returns how many were updated / added.
-    private func mergeBundleVolumes(_ snapshots: [VolumeMetadataSnapshot]) -> (updated: Int, added: Int) {
-        var updated = 0
-        var added = 0
-        // Screen the RAM-disk scratch volume — the exporter has excluded it
-        // since 2026-05, but bundles written by older builds may still
-        // carry a VideoScan_Temp snapshot.
-        for snap in snapshots where !CatalogScanTarget.isScratchVolumePath(snap.searchPath) {
-            if let existing = scanTargets.first(where: { $0.searchPath == snap.searchPath }) {
-                // codex m5: the designated Master Archive keeps its role
-                // whatever an older snapshot says; an existing target never
-                // gets a retiredAt stamp from a legacy "Retired" role
-                // string (only from an explicit retiredAt field).
-                ScanTargetPersistence.applyVolumeSnapshot(
-                    snap, to: existing,
-                    isNewTarget: false,
-                    preserveRole: isMasterArchive(existing))
-                updated += 1
-            } else {
-                let t = CatalogScanTarget(searchPath: snap.searchPath)
-                applyVolumeSnapshot(snap, to: t)
-                scanTargets.append(t)
-                added += 1
-            }
-        }
-        if updated > 0 || added > 0 {
-            // Imported snapshots may carry pre-taxonomy roles (legacy
-            // "Archive" on a non-master volume) — same idempotent pass
-            // the launch path runs.
-            migrateVolumeRoles()
-            persistScanTargets()
-            persistScanDates()
-            notifyTargetsChanged()
-        }
-        return (updated, added)
-    }
-
-    // MARK: - Bundle import: formatting helpers
-
-    /// Render an "Installed: 8 (donna, timmy, ...)" style bucket. Truncates
-    /// long lists with an ellipsis so the alert stays readable.
-    fileprivate static func formatPOIBucket(label: String,
-                                            count: Int,
-                                            names: [String]) -> String {
-        if count == 0 { return "\(label): 0" }
-        let shown = names.prefix(8).joined(separator: ", ")
-        if names.count > 8 {
-            return "\(label): \(count) (\(shown), …)"
-        }
-        return "\(label): \(count) (\(shown))"
-    }
-
-    /// Render the field-merge bucket: which people got details (birthday,
-    /// notes, …) filled in from whichever copy lost the folder contest.
-    /// Casual wording on purpose — this is good news, not a warning.
-    fileprivate static func formatFieldMerges(_ merges: [(name: String, fields: [String])]) -> String {
-        let label = "Details filled in from the other copy"
-        if merges.isEmpty { return "\(label): 0" }
-        let shown = merges.prefix(8)
-            .map { "\($0.name): \($0.fields.joined(separator: ", "))" }
-            .joined(separator: "; ")
-        if merges.count > 8 {
-            return "\(label): \(merges.count) (\(shown); …see audit log)"
-        }
-        return "\(label): \(merges.count) (\(shown))"
-    }
-
-    /// Render the failed bucket with reasons inline — Rick needs the "why"
-    /// to know whether to retry or investigate.
-    fileprivate static func formatPOIFailures(_ failures: [(name: String, reason: String)]) -> String {
-        guard !failures.isEmpty else { return "" }
-        let shown = failures.prefix(5)
-            .map { "\($0.name): \($0.reason)" }
-            .joined(separator: "; ")
-        if failures.count > 5 {
-            return "Failed: \(failures.count) (\(shown); …see audit log)"
-        }
-        return "Failed: \(failures.count) (\(shown))"
-    }
-
-    /// Write a one-shot per-import audit log under
-    /// `~/Library/Logs/VideoScan/import-<ISO8601-date>.log`. Returns the URL
-    /// (or nil if writing failed — never throws to the caller).
-    ///
-    /// The audit log captures every POI decision verbatim plus a summary
-    /// header — Rick wants to be able to answer "why didn't 'matt' come
-    /// across?" weeks later. Format matches `PersistentLog` loosely but is
-    /// written all-at-once (the import is short enough that crash-resilient
-    /// streaming isn't worth the complexity).
-    fileprivate static func writeImportAuditLog(bundleURL: URL,
-                                                payload: BundleImporter.Payload,
-                                                poiResult: BundleImporter.POIInstallResult) -> URL? {
-        let stampFmt = DateFormatter()
-        stampFmt.dateFormat = "yyyyMMdd-HHmmss"
-        stampFmt.timeZone = TimeZone(secondsFromGMT: 0)
-        let stamp = stampFmt.string(from: Date())
-        let url = PersistentLog.logDir.appendingPathComponent("import-\(stamp).log")
-
-        var body = """
-        VideoScan import audit log
-        ─────────────────────────────────────────────
-        Started:        \(ISO8601DateFormatter().string(from: Date()))
-        Bundle path:    \(bundleURL.path)
-        Bundle host:    \(payload.manifest.exportedFromHost)
-        Bundle date:    \(ISO8601DateFormatter().string(from: payload.manifest.exportedAt))
-        Bundle app:     v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
-        Counts:         \(payload.manifest.counts.records) records, \
-        \(payload.manifest.counts.volumes) volumes, \
-        \(payload.manifest.counts.people) people, \
-        \(payload.manifest.counts.referencePhotos) photos
-        ─────────────────────────────────────────────
-        POI decisions:
-
-        """
-        for line in poiResult.auditLines {
-            body += line + "\n"
-        }
-        body += """
-
-        ─────────────────────────────────────────────
-        Summary:
-          installed: \(poiResult.installed.count) — \(poiResult.installed.joined(separator: ", "))
-          skipped:   \(poiResult.skipped.count) — \(poiResult.skipped.map { "\($0.name) (\($0.reason))" }.joined(separator: "; "))
-          merged:    \(poiResult.fieldMerged.count) — \(poiResult.fieldMerged.map { "\($0.name): \($0.fields.joined(separator: ", "))" }.joined(separator: "; "))
-          failed:    \(poiResult.failed.count) — \(poiResult.failed.map { "\($0.name): \($0.reason)" }.joined(separator: "; "))
-        ─────────────────────────────────────────────
-        """
-
-        do {
-            try FileManager.default.createDirectory(at: PersistentLog.logDir,
-                                                    withIntermediateDirectories: true)
-            try body.write(to: url, atomically: true, encoding: .utf8)
-            return url
-        } catch {
-            // Best-effort: log to dashboard via NSLog so we don't lose this
-            // failure. Returning nil tells the alert to omit the audit line.
-            NSLog("VideoScan: failed to write import audit log at \(url.path): \(error)")
-            return nil
-        }
-    }
-
-    fileprivate func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot, to t: CatalogScanTarget) {
-        ScanTargetPersistence.applyVolumeSnapshot(s, to: t)
-    }
-
-    fileprivate static func shortDate(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f.string(from: d)
     }
 }

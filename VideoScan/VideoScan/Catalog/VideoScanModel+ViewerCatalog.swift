@@ -2,8 +2,8 @@
 // The model's two seams for CatalogSync phase 2 (2026-10-19):
 //   - viewer: `showViewerCatalog` swaps in the records of the master's
 //     sealed catalog.sqlite (read-only, through CatalogViewerSnapshot.load —
-//     the master's own read path), or keeps the frozen catalog.json on
-//     screen with the "older catalog" label;
+//     the master's own read path); with no snapshot it says "nothing synced
+//     from the master yet" (catalog.json is never read — slice 2b);
 //   - master: `viewerSnapshotSource` lends the session's store and its
 //     commit-first door to CatalogSnapshotPublisher.
 //

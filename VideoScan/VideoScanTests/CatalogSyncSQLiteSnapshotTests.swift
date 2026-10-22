@@ -402,6 +402,28 @@ struct CatalogSyncSQLiteSnapshotViewerTests {
         }
     }
 
+    /// QA r1 MINOR 1 on slice 2b (2026-10-21): once a snapshot is on screen,
+    /// a synced folder that loses its latch (a half-done swap) must not be
+    /// reported as "nothing synced" — the records shown are the last good
+    /// catalog, and the words say so.
+    @Test("TRUTH: a snapshot already on screen is never called 'nothing synced' when the folder loses its latch")
+    func aShownSnapshotIsNeverCalledNothingSynced() async throws {
+        try await SnapshotWorld.with("latch_gone") { world in
+            try await world.publish()
+            let adopted = Adopted()
+            let viewer = world.viewer(SnapshotStubRsync(source: world.masterLive), adopted: adopted)
+            await viewer.syncFromMaster()
+            #expect(viewer.state.isSynced)
+            try FileManager.default.removeItem(at: CatalogViewerSnapshot.latchURL(in: world.viewerPaths.liveDir))
+            await viewer.refreshViewerCatalog()
+            #expect(adopted.loads == 1, "nothing new was swapped in")
+            #expect(viewer.state.viewerCatalog.words != CatalogViewerSnapshot.nothingSyncedWords,
+                    Comment(rawValue: viewer.state.viewerCatalog.words ?? "nil"))
+            #expect(viewer.state.viewerCatalog.words?.contains("kept the previous catalog") == true,
+                    Comment(rawValue: viewer.state.viewerCatalog.words ?? "nil"))
+        }
+    }
+
     @Test("an unchanged snapshot is not reloaded on the next sync")
     func unchangedSnapshotIsNotReloaded() async throws {
         try await SnapshotWorld.with("unchanged") { world in
@@ -450,12 +472,15 @@ struct CatalogSyncSQLiteSnapshotViewerTests {
 
 // MARK: - The legacy (JSON-only) folder
 
+/// JSON gone, slice 2b (2026-10-21): a viewer never reads catalog.json — a
+/// folder holding only the frozen catalog.json shows "nothing synced from
+/// the master yet", and the file is left exactly as it was.
 @MainActor
 @Suite("CatalogSyncSQLiteSnapshot legacy JSON", .serialized)
 struct CatalogSyncSQLiteSnapshotLegacyTests {
 
-    @Test("a viewer whose folder has only the old catalog.json shows it, labelled 'older catalog'")
-    func jsonOnlyFolderShowsTheLegacyLabel() async throws {
+    @Test("a viewer whose folder has only the old catalog.json never reads it: 'nothing synced from the master yet'")
+    func jsonOnlyFolderShowsNothingSynced() async throws {
         try await SnapshotWorld.with("legacy") { world in
             let json = world.viewerPaths.liveDir.appendingPathComponent("catalog.json")
             try Data("{\"version\":4,\"records\":[]}".utf8).write(to: json)
@@ -464,14 +489,14 @@ struct CatalogSyncSQLiteSnapshotLegacyTests {
             let viewer = world.viewer(SnapshotStubRsync(source: world.masterLive), adopted: adopted)
 
             await viewer.refreshViewerCatalog()
-            #expect(viewer.state.viewerCatalog == .legacyJSON)
-            #expect(viewer.state.viewerCatalog.words == "older catalog — the master has moved to the new database; update the master")
+            #expect(viewer.state.viewerCatalog == .none)
+            #expect(viewer.state.viewerCatalog.words == "nothing synced from the master yet")
             #expect(adopted.loads == 0)
             #expect(try sha256(json) == before)
         }
     }
 
-    @Test("a master on an older build (catalog.json only) is refused in words; the viewer keeps its catalog.json, labelled")
+    @Test("a master on an older build (catalog.json only) is refused in words; the viewer's catalog.json is never read and stays as it was")
     func olderMasterIsRefusedWithWords() async throws {
         try await SnapshotWorld.with("oldmaster") { world in
             // The old master: catalog.json + its phase-1 manifest, no snapshot.
@@ -488,7 +513,7 @@ struct CatalogSyncSQLiteSnapshotLegacyTests {
             }
             #expect(reason.contains("publishes no catalog.sqlite"))
             #expect(viewer.state.refusal != nil)
-            #expect(viewer.state.viewerCatalog == .legacyJSON)
+            #expect(viewer.state.viewerCatalog == .none)
             #expect(try sha256(json) == before, "the frozen catalog.json is left exactly as it was")
         }
     }

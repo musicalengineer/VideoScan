@@ -81,7 +81,9 @@ struct CatalogRealityBucketTests {
         for rule in R.allCases {
             #expect(IntegrityRealityFacts.bucket(finding(rule.tier, rule.rawValue)) == .breakRule, "\(rule)")
         }
-        #expect(IntegrityRealityFacts.bucket(finding(5, VerifyCatalogTiers.catalogFileRule)) == .breakRule)
+        // The retired catalog.json hash's rule (no run writes it since
+        // 2026-10-21; a report from before may still be beside the catalog).
+        #expect(IntegrityRealityFacts.bucket(finding(5, "catalogFileChanged")) == .breakRule)
         #expect(IntegrityRealityFacts.bucket(finding(0, "anything")) == .skipped)
     }
 

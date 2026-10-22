@@ -50,8 +50,10 @@ enum CatalogViewerSnapshot {
     static let databaseRelativePath = directoryName + "/" + databaseFileName
     static let latchRelativePath = directoryName + "/" + latchFileName
 
-    /// The label a viewer shows while all it has is the frozen catalog.json.
-    static let legacyWords = "older catalog — the master has moved to the new database; update the master"
+    /// What a viewer shows while no snapshot + latch has arrived. A
+    /// catalog.json in the synced folder is never read (JSON gone, slice 2b,
+    /// 2026-10-21 — it used to be shown read-only, labelled "older catalog").
+    static let nothingSyncedWords = "nothing synced from the master yet"
 
     nonisolated static func directory(in liveDir: URL) -> URL {
         liveDir.appendingPathComponent(directoryName, isDirectory: true)
@@ -174,9 +176,9 @@ enum CatalogViewerSnapshot {
     enum Source: Equatable, Sendable {
         /// The master's sealed catalog.sqlite AND its latch arrived.
         case snapshot(URL)
-        /// Only the old catalog.json (the master never published a snapshot here).
-        case legacyJSON
-        /// Neither (a brand-new viewer that has never synced).
+        /// No snapshot with its latch: a brand-new viewer, a snapshot that
+        /// arrived without its latch, or a folder holding only the frozen
+        /// catalog.json (never read).
         case none
     }
 
@@ -186,7 +188,6 @@ enum CatalogViewerSnapshot {
         if fm.fileExists(atPath: db.path), fm.fileExists(atPath: latchURL(in: liveDir).path) {
             return .snapshot(db)
         }
-        if fm.fileExists(atPath: liveDir.appendingPathComponent("catalog.json").path) { return .legacyJSON }
         return .none
     }
 
@@ -207,18 +208,15 @@ enum CatalogViewerSnapshot {
     }
 
     /// What a viewer shows for `source`: the snapshot's records handed to
-    /// `adopt` (the model swaps them in), or the legacy label, or — when the
-    /// snapshot will not open — nothing adopted and the words. `note` is
-    /// the one sink (console, catalog.log, videoscan.log).
+    /// `adopt` (the model swaps them in), or "nothing synced" (`.none`), or —
+    /// when the snapshot will not open — nothing adopted and the words.
+    /// `note` is the one sink (console, catalog.log, videoscan.log).
     @MainActor
     static func show(_ source: Source, note: (String) -> Void,
                      adopt: (SQLiteCatalogLoader.LoadResult) -> Void) async -> ViewerCatalogStatus {
         switch source {
         case .none:
             return .none
-        case .legacyJSON:
-            note("viewer: showing the frozen catalog.json, read-only — \(legacyWords)")
-            return .legacyJSON
         case .snapshot(let url):
             switch await load(url) {
             case .refused(let why):
@@ -267,21 +265,19 @@ enum CatalogViewerSnapshot {
 enum ViewerCatalogStatus: Equatable, Sendable {
     /// Not decided yet this session.
     case unknown
-    /// Nothing synced yet.
+    /// Nothing synced yet (no snapshot with its latch; catalog.json is never read).
     case none
     /// The master's catalog.sqlite, at this generation.
     case snapshot(generation: Int, records: Int)
-    /// Only the frozen catalog.json — shown read-only, labelled.
-    case legacyJSON
     /// A snapshot arrived but would not open; the previous catalog is still shown.
     case refused(String)
 
     var words: String? {
         switch self {
-        case .unknown, .none: return nil
+        case .unknown: return nil
+        case .none: return CatalogViewerSnapshot.nothingSyncedWords
         case .snapshot(let generation, let records):
             return "catalog.sqlite · generation \(generation) · \(records) records"
-        case .legacyJSON: return CatalogViewerSnapshot.legacyWords
         case .refused(let why): return "kept the previous catalog — \(why)"
         }
     }

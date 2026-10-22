@@ -99,28 +99,6 @@ struct StalePairValidationTests {
         #expect(staleAudio.pairGroupID == nil && staleAudio.pairConfidence == nil)
     }
 
-    @Test func catalogImportClearsKnownIncompatiblePair() throws {
-        let directory = scratchDir()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let sourceStore = CatalogStore(directory: directory)
-        let video = makeRecord("00001.V14D1BBD3F.mxf", streamType: .videoOnly,
-                               duration: 3808.271)
-        let audio = makeRecord("00047.PHYSA01.8D8520.mxf", streamType: .audioOnly,
-                               duration: 125.6255)
-        link(video, audio)
-        sourceStore.saveNow(records: [video, audio])
-
-        let model = VideoScanModel()
-        let result = try model.importCatalog(
-            from: URL(fileURLWithPath: sourceStore.fileLocation))
-
-        #expect(result.added == 2)
-        #expect(model.records.allSatisfy { $0.pairedWith == nil })
-        #expect(model.records.allSatisfy {
-            $0.pairGroupID == nil && $0.pairConfidence == nil
-        })
-    }
-
     @Test func preferredPairRejectsStaleLinkAndReturnsCompatibleAlternative() throws {
         let video = makeRecord("00001.V14D1BBD3F.mxf", streamType: .videoOnly,
                                duration: 3808.271)

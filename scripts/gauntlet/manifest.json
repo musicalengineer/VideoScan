@@ -6601,19 +6601,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/BundleImportLegacyManifestTests.swift",
-      "stage": "unit",
-      "suites": [
-        "BundleImportLegacyManifestTests"
-      ],
-      "tests": [
-        "readStillRejectsCatalogMissing",
-        "readToleratesMissingManifest"
-      ]
-    },
-    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CICanaryTests.swift",
@@ -8097,7 +8084,8 @@
         "CatalogSyncSQLiteSnapshotLegacyTests"
       ],
       "tests": [
-        "jsonOnlyFolderShowsTheLegacyLabel",
+        "aShownSnapshotIsNeverCalledNothingSynced",
+        "jsonOnlyFolderShowsNothingSynced",
         "manifestMismatchKeepsTheOldSnapshot",
         "olderMasterIsRefusedWithWords",
         "productionScopeCarriesTheSnapshotNotTheJSON",
@@ -8152,7 +8140,6 @@
       "path": "VideoScan/VideoScanTests/CatalogTests.swift",
       "stage": "unit",
       "suites": [
-        "CatalogImportExportTests",
         "ScanContextTests",
         "CatalogSkipSetTests",
         "PersonScanPrefilterTests",
@@ -8183,10 +8170,8 @@
         "emptyFullPathRecordsIgnored",
         "emptyInputReturnsEmptyResult",
         "emptyResolutionDoesNotTriggerLowRes",
-        "exportThenImportIntoEmptyCatalogAddsEverything",
         "fallbackMatchesByNameAndSize",
         "identicalFilesAreAlreadySafe",
-        "importSkipsRecordsAlreadyPresentByContentIdentity",
         "isPopulatedFlipsOnAnyField",
         "isRemoteMountDetectsNetworkFilesystems",
         "junkScoredBucketCatchesHighScores",
@@ -18358,8 +18343,6 @@
         "barrierFailuresAreNotClaimed",
         "containedHelpers",
         "csvFormulaNeutralized",
-        "identityKeyForArchiveCopies",
-        "importKeepsArchiveCopiesAndRelinks",
         "intermediateSymlinkDirRefused",
         "manifestBarrierFailureThenConverge",
         "manifestSymlinkRefused",
@@ -24002,7 +23985,6 @@
         "StalePairValidationTests"
       ],
       "tests": [
-        "catalogImportClearsKnownIncompatiblePair",
         "catalogLoadClearsKnownIncompatiblePersistedPairSymmetrically",
         "catalogLoadPreservesPersistedPairWhenDurationIsUnknown",
         "incrementalCorrelateReleasesStalePairAndUsesCompatibleAlternative",
@@ -25837,7 +25819,7 @@
         "rewritePathPrefixHonorsComponentBoundaries",
         "spotCheckCountsMissingAndSizeMismatchAsDirty",
         "spotCheckSamplingIsDeterministicAndBounded",
-        "undoRestoresPreMigrationCatalogByteIdentically",
+        "undoFromAJSONSafetyCopyIsRefusedAndChangesNothing",
         "uuidMatchWithZeroCleanSamplesAsksInsteadOfActing"
       ]
     },
@@ -28539,7 +28521,6 @@
         "aRunWritesTheReportAndLogs",
         "auditLaunchLineFromBeforeTheSwitch",
         "auditStampNamesItsVolume",
-        "catalogFileHashStreams",
         "checkAt100k",
         "datedCopyFailureFailsTheJobAndKeepsTheLatest",
         "datedCopyFirstThenLatest",
@@ -28550,15 +28531,13 @@
         "eventFactsFromTheDecisionSnapshot",
         "eventMembersExist",
         "factsFromAReport",
-        "findingsAndHashDescribeOneGeneration",
-        "hashComparisonWords",
         "identityFromTheStamps",
         "identityWordsSplitByConnectivity",
         "lineageTargetsExist",
         "lineageToARemovedRowIsUnverifiedNotADecision",
         "notBuiltAndStopped",
         "oneLiveRowPerPath",
-        "oneWriterOneRead",
+        "oneWriterNoFileHandle",
         "pathAliasByCase",
         "poisonedLatestReport",
         "presenceFromBeforeTheSwitchIsNotRun",
@@ -28587,12 +28566,12 @@
         "strictReader",
         "supersessionCycle",
         "supersessionToARemovedRowIsADecision",
+        "theJobNeverHashesCatalogJSON",
         "theP0ShapesProduceFindings",
         "theP0ShapesProduceFindingsThroughTheJob",
-        "theSecondRunComparesTheCatalogHash",
         "tier3JudgesOnlyCurrentStamps",
+        "tierFiveNeverReadsCatalogJSON",
         "uniqueIDs",
-        "unreadableCatalogFileIsCouldNotCheck",
         "verdictFromTheBuiltTiers",
         "wholeFileDigestsAreWhole",
         "writeLatestAndDated"
@@ -29797,7 +29776,7 @@
         "AdvVolumeRenameUndoSQLiteTests"
       ],
       "tests": [
-        "jsonAuthorityUndo",
+        "jsonSafetyCopyIsRefused",
         "revertScale",
         "undoKeepsWhatChangedSince",
         "undoLeavesARecordChangedSinceAlone",
@@ -30175,7 +30154,8 @@
       "tests": [
         "theLiveReloadIsGone",
         "theReadersAreReviewed",
-        "theSQLiteLaunchNeverLoadsTheJSON"
+        "theSQLiteLaunchNeverLoadsTheJSON",
+        "theViewerNeverLooksForCatalogJSON"
       ]
     },
     {
@@ -31038,10 +31018,6 @@
         },
         {
           "name": "VideoScan/VideoScanTests/BundleImportFieldMergeTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/BundleImportLegacyManifestTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -32785,7 +32761,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2845,
+      "expected_floor": 2843,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33566,7 +33542,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 238,
+      "expected_floor": 239,
       "name": "regression",
       "package_expected_floor": 198,
       "package_selectors": [

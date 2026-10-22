@@ -48,7 +48,9 @@ private func exportRec(
 @Suite("Catalog scope — exports carry set-aside records")
 struct CatalogScopeExportTests {
 
-    @Test("catalog export → import round-trips a set-aside record with its reason; purged stays local")
+    /// Slice 2b (2026-10-21): the app's catalog.json import is retired, so
+    /// the export is read back here by the test's own decoder.
+    @Test("catalog export carries a set-aside record with its reason; purged stays local")
     func exportImportRoundTripPreservesSetAside() throws {
         let source = VideoScanModel()
         source.records = [
@@ -63,16 +65,17 @@ struct CatalogScopeExportTests {
         defer { try? FileManager.default.removeItem(at: url) }
         try source.exportCatalog(to: url)
 
-        let dest = VideoScanModel()
-        let result = try dest.importCatalog(from: url)
-        #expect(result.added == 2, "export must carry active + set-aside, never purged")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let exported = try decoder.decode(CatalogSnapshot.self, from: Data(contentsOf: url)).records
+        #expect(exported.count == 2, "export must carry active + set-aside, never purged")
 
-        let imported = dest.records.first { $0.filename == "donna_song.mp3" }
+        let imported = exported.first { $0.filename == "donna_song.mp3" }
         #expect(imported != nil,
                 "set-aside record was silently dropped by the export (RED pre-fix)")
         #expect(imported?.setAsideReason == "music-format",
                 "the set-aside REASON must round-trip, not just the record")
-        #expect(dest.records.first { $0.filename == "trash.mov" } == nil,
+        #expect(exported.first { $0.filename == "trash.mov" } == nil,
                 "purged records are local-only and must never travel")
     }
 

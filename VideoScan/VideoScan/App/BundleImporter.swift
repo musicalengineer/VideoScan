@@ -1,10 +1,17 @@
 // BundleImporter.swift
 // The import half of the bundle "whole shebang" feature — extracted verbatim
-// from BundleExportImport.swift (refactor 2026-06-25). Reads the bundle JSON,
-// then safely installs POI folders with iCloud materialization, richer-wins
-// conflict resolution, and copy-validate-swap semantics. The import-safety
-// invariants (post May-2026 incident) are load-bearing and were moved
-// byte-for-byte — see the file-header comment in BundleExportImport.swift.
+// from BundleExportImport.swift (refactor 2026-06-25). Says which catalog a
+// bundle holds, and safely installs POI folders with iCloud materialization,
+// richer-wins conflict resolution, and copy-validate-swap semantics. The
+// import-safety invariants (post May-2026 incident) are load-bearing and were
+// moved byte-for-byte — see the file-header comment in BundleExportImport.swift.
+//
+// JSON gone, slice 2b (2026-10-21): the bundle JSON reader (`read` — the
+// catalog.json, volumes.json and settings.json decode, and the placeholder
+// manifest for a bundle without one) is retired with the JSON merge; a
+// catalog.json bundle is refused in words (`bundleImportDecision`). The POI
+// install below has no caller until a Restore of catalog.sqlite bundles is
+// designed; it and its tests stay for that door.
 // (Swift `enum` with only static members ≈ a C++ namespace of free functions.)
 
 import Foundation
@@ -14,24 +21,12 @@ import AppKit
 
 enum BundleImporter {
 
-    struct Payload {
-        var manifest: BundleManifest
-        var catalog: CatalogSnapshot
-        var volumes: VolumesSnapshot
-        var settings: SettingsSnapshot
-        var poiFoldersInBundle: [URL]
-        /// Manifest export timestamp — falls back to manifest.exportedAt when
-        /// per-file mtimes aren't available (e.g. all-iCloud-evicted source).
-        var bundleExportedAt: Date
-    }
-
-    /// What catalog a bundle holds — decided BEFORE anything is decoded, so
-    /// a v2 (catalog.sqlite) bundle is never fed to the JSON reader and a
-    /// v1 (catalog.json) bundle is never merged into catalog.sqlite.
+    /// What catalog a bundle holds — decided from file names (and the small
+    /// manifest.json) alone; a v1 (catalog.json) bundle is never decoded.
     enum CatalogKind: Equatable, Sendable {
         /// Bundle v2: a sealed catalog.sqlite; the manifest's generation when readable.
         case sqlite(generation: Int?)
-        /// Bundle v1 (before the database switch): catalog.json.
+        /// Bundle v1 (before the database switch): catalog.json — refused, never read.
         case legacyJSON
         /// Neither — not a VideoScan backup.
         case none
@@ -55,132 +50,6 @@ enum BundleImporter {
     /// Per-POI conflict-resolution timeout for iCloud materialization.
     /// 60s per POI is generous; the typical POI is a few MB of HEIC photos.
     static let iCloudMaterializeTimeoutSeconds: TimeInterval = 60
-
-    /// Read and decode a bundle directory. Returns the parsed payload — the
-    /// caller (VideoScanModel) is responsible for merging into live state.
-    /// Throws if the bundle is malformed or from a newer format version.
-    ///
-    /// Tolerates bundles without `manifest.json` (legacy or partial exports
-    /// where the manifest write was interrupted): a placeholder manifest is
-    /// synthesized so the rest of the import flow works. A bundle without
-    /// `catalog.json` is still considered malformed and rejects below.
-    static func read(from bundleURL: URL) throws -> Payload {
-        let fm = FileManager.default
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
-        let manifest: BundleManifest
-        if fm.fileExists(atPath: manifestURL.path) {
-            do {
-                let data = try Data(contentsOf: manifestURL)
-                manifest = try decoder.decode(BundleManifest.self, from: data)
-            } catch {
-                throw BundleError.decode("manifest.json — \(error.localizedDescription)")
-            }
-            guard manifest.bundleVersion <= BundleManifest.currentVersion else {
-                throw BundleError.manifestVersionUnsupported(manifest.bundleVersion)
-            }
-        } else {
-            manifest = synthesizeLegacyManifest(bundleURL: bundleURL, fm: fm)
-        }
-
-        let catalog: CatalogSnapshot = try decode(decoder, at: bundleURL.appendingPathComponent("catalog.json"),
-                                                  label: "catalog.json")
-        let volumes: VolumesSnapshot = try decode(decoder, at: bundleURL.appendingPathComponent("volumes.json"),
-                                                  label: "volumes.json")
-        let settings: SettingsSnapshot = try decode(decoder, at: bundleURL.appendingPathComponent("settings.json"),
-                                                    label: "settings.json")
-
-        // Resolve pairedWith back-references inside the imported records,
-        // matching the standalone import path.
-        let importedByID = Dictionary(uniqueKeysWithValues: catalog.records.map { ($0.id, $0) })
-        for rec in catalog.records {
-            if let pid = rec.pendingPairedWithID {
-                rec.pairedWith = importedByID[pid]
-                rec.pendingPairedWithID = nil
-            }
-        }
-
-        // Enumerate people/* subfolders.
-        let peopleDir = bundleURL.appendingPathComponent("people", isDirectory: true)
-        let poiFolders: [URL]
-        if let kids = try? fm.contentsOfDirectory(at: peopleDir,
-                                                  includingPropertiesForKeys: [.isDirectoryKey]) {
-            poiFolders = kids.filter {
-                (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-            }
-        } else {
-            poiFolders = []
-        }
-
-        return Payload(manifest: manifest,
-                       catalog: catalog,
-                       volumes: volumes,
-                       settings: settings,
-                       poiFoldersInBundle: poiFolders,
-                       bundleExportedAt: manifest.exportedAt)
-    }
-
-    private static func decode<T: Decodable>(_ decoder: JSONDecoder,
-                                             at url: URL,
-                                             label: String) throws -> T {
-        do {
-            let data = try Data(contentsOf: url)
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            throw BundleError.decode("\(label) — \(error.localizedDescription)")
-        }
-    }
-
-    /// Build a placeholder `BundleManifest` for a bundle that lacks one. Used
-    /// for legacy bundles produced before the manifest was added, and for
-    /// bundles whose export was interrupted before the final manifest write.
-    /// Fields are populated from filesystem inspection so the rest of the
-    /// import flow has reasonable values (counts/sizes drive the success
-    /// alert; `exportedAt` is the mtime tiebreaker on the bundle side).
-    private static func synthesizeLegacyManifest(bundleURL: URL,
-                                                 fm: FileManager) -> BundleManifest {
-        let peopleDir = bundleURL.appendingPathComponent("people", isDirectory: true)
-        var peopleCount = 0
-        var refPhotoCount = 0
-        var refPhotoBytes: Int64 = 0
-        if let kids = try? fm.contentsOfDirectory(at: peopleDir,
-                                                  includingPropertiesForKeys: [.isDirectoryKey]) {
-            for kid in kids where (try? kid.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                peopleCount += 1
-                if let enumerator = fm.enumerator(at: kid,
-                                                  includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
-                    for case let url as URL in enumerator {
-                        let rv = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-                        guard rv?.isRegularFile == true else { continue }
-                        if url.lastPathComponent == "profile.json" { continue }
-                        refPhotoCount += 1
-                        refPhotoBytes += Int64(rv?.fileSize ?? 0)
-                    }
-                }
-            }
-        }
-
-        let totalBytes = BundleExporter.directorySize(bundleURL)
-        let bundleMtime = (try? bundleURL.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? Date()
-
-        return BundleManifest(
-            bundleVersion: 0,
-            exportedAt: bundleMtime,
-            exportedFromHost: "unknown (legacy bundle, no manifest)",
-            appVersion: "legacy",
-            appBuild: "legacy",
-            counts: BundleManifest.Counts(records: 0,
-                                          volumes: 0,
-                                          people: peopleCount,
-                                          referencePhotos: refPhotoCount),
-            sizes: BundleManifest.Sizes(totalBytes: totalBytes,
-                                        referencePhotoBytes: refPhotoBytes)
-        )
-    }
 
     // MARK: - Result types
 
