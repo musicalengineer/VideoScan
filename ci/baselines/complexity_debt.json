@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 397,
+ "entry_count": 387,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -48,7 +48,7 @@
   },
   "VideoScan/VideoScan/App/SettingsView.swift::SettingsTabView.body": {
    "ccn": 1,
-   "nloc": 133
+   "nloc": 131
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::AppDelegate.applicationShouldTerminate": {
    "ccn": 24,
@@ -149,10 +149,6 @@
   "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::VideoScanModel.registerPromotedCopy": {
    "ccn": 9,
    "nloc": 82
-  },
-  "VideoScan/VideoScan/Archive/VideoScanModel+MediaLedger.swift::VideoScanModel.archiveCopySnapshots": {
-   "ccn": 24,
-   "nloc": 56
   },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::ArchiveAngelJob.selectFromEvidence": {
    "ccn": 39,
@@ -1074,10 +1070,6 @@
    "ccn": 8,
    "nloc": 96
   },
-  "VideoScan/VideoScan/MediaOps/PruneApplyJob.swift::PruneApplyJob.run": {
-   "ccn": 23,
-   "nloc": 80
-  },
   "VideoScan/VideoScan/MediaOps/RebuildAudioJob.swift::RebuildAudioJob.runRebuild": {
    "ccn": 27,
    "nloc": 138
@@ -1129,22 +1121,6 @@
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.deletionTierCandidates": {
    "ccn": 16,
    "nloc": 40
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.preparePrune": {
-   "ccn": 18,
-   "nloc": 85
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.pruneOneCopy": {
-   "ccn": 23,
-   "nloc": 88
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.pruneOverlap": {
-   "ccn": 16,
-   "nloc": 35
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.pruneTargets": {
-   "ccn": 16,
-   "nloc": 57
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift::VideoScanModel.runRelocate scope : [ VideoRecord ] , options : RelocateOptions , jobID : UUID": {
    "ccn": 31,
@@ -1525,22 +1501,6 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess": {
    "ccn": 8,
    "nloc": 90
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::ArchiveCopyFamilies.group": {
-   "ccn": 16,
-   "nloc": 41
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::Family.logLine": {
-   "ccn": 26,
-   "nloc": 44
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::Family.selection": {
-   "ccn": 16,
-   "nloc": 38
-  },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::PrunePlan.plan": {
-   "ccn": 52,
-   "nloc": 108
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/RecordDateResolver.swift::RecordDateResolver.resolve": {
    "ccn": 17,

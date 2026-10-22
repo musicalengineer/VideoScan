@@ -293,18 +293,18 @@ struct MediaLedgerHookTests {
         #expect(Set(offer.recordIDs) == Set(recs.map(\.id)), "the sources are the outside-archive copies; the archive copies and the unrelated record are not")
         #expect(offer.protection.archive == .verified)
         #expect(offer.totalBytes == recs.reduce(0) { $0 + $1.sizeBytes })
-        // The dry-run plan for that backlog: every family has one working
-        // copy (the source) and no attestation → not covered under the
-        // default bar (the archive copy is ★★★).
-        let plan = await model.prunePlan(for: offer.recordIDs, options: .init())
-        #expect(plan.families.count == 2)
-        #expect(plan.notCoveredCount == 2)
-        #expect(plan.trashCount == 0 && plan.extraCount == 2)
-        // Attest a cloud copy → covered; the single working copy is the keeper, nothing goes.
+        // The plan for that backlog: each source is byte-identical to its
+        // archive file, so it is offered (checked by default); the person
+        // decides. Attestations only advise: with none, both files would be
+        // archive-only and the sentence names them.
+        let plan = await model.prunePlan(batch: Set(offer.recordIDs))
+        #expect(plan.items.count == 2)
+        #expect(plan.offeredIDs == Set(recs.map(\.id)))
+        #expect(plan.adviceSentence(after: plan.offeredIDs)?.contains("No cloud or off-site copy is recorded for") == true)
+        // Attest a cloud copy → still offered (advice only); the warning drops the names.
         await model.recordAttestation(kind: .cloud, answer: .yes, label: "iCloud", for: offer.recordIDs).flush?.value
-        let covered = await model.prunePlan(for: offer.recordIDs, options: .init())
-        #expect(covered.notCoveredCount == 0)
-        #expect(covered.keeperRequiredCount == 2 && covered.trashCount == 0)
-        #expect(Set(covered.families.compactMap(\.keeper?.id)) == Set(recs.map(\.id)))
+        let attested = await model.prunePlan(batch: Set(offer.recordIDs))
+        #expect(attested.offeredIDs == Set(recs.map(\.id)))
+        #expect(attested.adviceSentence(after: attested.offeredIDs) == "2 files will exist only in the Master Archive after this.")
     }
 }

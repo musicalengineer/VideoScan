@@ -122,6 +122,18 @@ private func expectHeld(_ job: DeleteDuplicatesJob, _ rig: Rig, containing words
 @MainActor
 struct DeleteDuplicatesTargetGateTests {
 
+    /// The length rule (moved here from the retired ExcessCopiesPlan, 2026-10-21 —
+    /// same tolerance, same words).
+    @Test func theLengthRuleTable() {
+        typealias G = DeleteDuplicatesTargetGate
+        #expect(G.lengthVerdict(copy: 3_600.9, master: 3_600) == .fits)
+        #expect(G.lengthVerdict(copy: 3_601.5, master: 3_600) == .longer)
+        #expect(G.lengthVerdict(copy: 1_800, master: 3_600) == .fits, "shorter loses nothing")
+        #expect(G.lengthVerdict(copy: 0, master: 3_600) == .unknown)
+        #expect(G.lengthVerdict(copy: 3_600, master: 0) == .unknown)
+        #expect(G.longerFlag.contains("LONGER than the archive master"))
+    }
+
     @Test func aCopyOnANetworkShareIsNeverATarget() async throws {
         let rig = Rig("network"); defer { rig.cleanup() }
         let gatedPath = rig.gated.fullPath
@@ -133,7 +145,7 @@ struct DeleteDuplicatesTargetGateTests {
         let rig = Rig("avpair"); defer { rig.cleanup() }
         rig.gated.pairGroupID = UUID()
         let job = await rig.run()
-        try expectHeld(job, rig, containing: ExcessCopiesPlan.pairReason)
+        try expectHeld(job, rig, containing: DeleteDuplicatesTargetGate.pairReason)
     }
 
     @Test func aCopyLongerThanTheArchiveMasterIsNeverATarget() async throws {

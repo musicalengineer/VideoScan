@@ -417,15 +417,14 @@ struct P0TruthRegressionTests {
 
     @Test("Source sensor (every app .swift file): archivedCopy(of:) — whose third leg is a SAMPLED match — is called only by the allowlisted worklist/badge/advice sites; every other site asks provenArchivedCopy(of:)")
     func onlyWorklistSitesAskTheSampledArchivedCopy() throws {
-        // Rick's rulings keep the sampled leg here (Promote worklist, Tidy
-        // badges); Copies & Advice lists the link but grades every copy's
+        // Rick's rulings keep the sampled leg here (Promote worklist); Copies & Advice lists the link but grades every copy's
         // bytes itself (CopiesAdviceAssessor: sampled = "check first").
         let allowed: [(file: String, signature: String)] = [
             ("VideoScan/Archive/VideoScanModel+MasterArchive.swift", "func archivedCopy(of record"),
             ("VideoScan/Catalog/CatalogContent+Promote.swift", "func isArchived(_ rec"),
             ("VideoScan/Catalog/CatalogContent+Promote.swift", "func isArchivedExceptPath(_ rec"),
             ("VideoScan/Catalog/CatalogContent+Promote.swift", "func pfHasMasterCopy(_ rec"),
-            ("VideoScan/Catalog/VideoScanModel+TidyCatalog.swift", "hasArchivedCopy: !archiveSelf && archivedCopy(of: rec)"),
+            // (Tidy's "Copies of archived media" left this list 2026-10-21: it counts the prune plan's byte-proven offer.)
             ("VideoScan/Catalog/CopiesAdvice+Projection.swift", "static func archiveLink(of rec"),
         ]
         var allowedLines: [String: Set<Int>] = [:]

@@ -609,12 +609,6 @@ struct MediaFileOperationRow: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
-
-            if isExpanded, let excess = job as? ExcessCopiesJob {
-                ExcessCopiesDetailView(job: excess)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
         }
         .background(rowBackground)
         .onReceive(job.objectWillChange) { _ in

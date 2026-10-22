@@ -199,13 +199,9 @@ struct SettingsTabView: View {
                         .padding(.horizontal, 10)
                 }
 
-                Divider()
-
-                // Protection bar (promote-and-prune stage 2, Rick
-                // 2026-09-12): copies required per importance level before
-                // extra copies may go. @AppStorage-backed; the plan reads
-                // ImportanceBar.load(defaults:).
-                PruneBarSettingsSection()
+                // (The "Protection bar" section retired with the simple prune
+                // plan, 2026-10-21: identical copies are offered on their
+                // bytes alone; attestations only advise.)
 
                 Divider()
 

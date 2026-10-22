@@ -559,10 +559,7 @@ struct FixityStampVolumeIdentityTests {
             // `captureStamps` map taken LIVE at plan freeze / job start (both
             // callers) — never the stored `keeperStamp` on the entry.
             "VideoScan/MediaOps/DeleteDuplicatesReviewedPlan.swift": 1,
-            // Excess Copies survivor alias (codex F1, 10/8): survivor vs
-            // target / archive file, all from ONE `captureStamps` pass LIVE
-            // at the job's turn (`prepareExcess`) — never a stored stamp.
-            "VideoScan/MediaOps/VideoScanModel+ExcessCopies.swift": 1,
+            // (Excess Copies survivor alias retired with the simple prune plan, 2026-10-21.)
             // Cleanup disk probe (Triage ▸ Cleanup v1, 10/12): the classic
             // ismount test — "/Volumes/<name>" vs "/Volumes", two LIVE stats
             // of the same instant, answering "is a drive mounted here NOW".

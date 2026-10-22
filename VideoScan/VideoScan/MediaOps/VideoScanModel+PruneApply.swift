@@ -1,125 +1,35 @@
 // VideoScanModel+PruneApply.swift
-// "Archived — what next?" → Apply (promote-and-prune stage 2, turned on
-// 2026-09-19). Rick: "we should be deleting dups if user wants once a file
-// is promoted." Until then Apply was a disabled button with an empty
-// action — the dry run he ruled on 9/12 — and after a week of real batches
-// it acts.
+// "Move N copies to the Trash" — the one apply path for the one prune plan
+// (docs/design/pruneplan_simple_2026-10-21.md). "Archived — what next?" and
+// Triage ▸ Clean up ▸ Excess copies both start a PruneApplyJob, which runs
+// these three steps; `applyPrune` runs them back to back (tests).
 //
-// 2026-09-20 — the sheet became a per-copy CHECKLIST ("I want to see a
-// list of dups and decide which ones to delete, maybe leave one behind,
-// maybe not"). The bar ADVISES; the person's checks are the truth. So
-// Apply takes `selected` — the copy record ids the person checked — and
-// no longer intersects "the plan the user saw" with "the fresh plan's
-// trash": a family the bar does not cover (★★★ with no cloud copy
-// attested) used to hide its copies; now they are offered, and a choice
-// that goes against the bar is recorded as such (`override` on the
-// approval line) rather than refused.
+//   1. `preparePrune` — at the batch's TURN, never at enqueue: a FRESH plan;
+//      a checked copy goes on only if the plan the person saw offered it
+//      AND the fresh plan still offers it against the same archive file and
+//      digest at the same path (I5). Anything else is held, named. A copy
+//      the batch before already moved is skipped, named, never read.
+//   2. `pruneOneCopy` — ONE copy, in order: the live catalog (active, same
+//      path, the one bulk-delete gate, Archive backup, A/V pair, the archive
+//      file still the verified one); the archive file read in full ONCE per
+//      archive file per batch; the copy read in full; both digests equal the
+//      archive's verified digest (I1); then the ONE Trash routine,
+//      `deleteConfirmedJunk(… mode: .toTrash …)`, behind a JunkDeletionGuard
+//      that re-checks the proof in the live catalog and both stat stamps on
+//      disk immediately before the file's own Trash.
+//   3. `finishPrune` — ONE `approval` ledger line per batch with the ACTUAL
+//      count; the Trash routine writes a `copyTrashed` line per file moved.
 //
-// v3 (2026-09-20, Rick's ruling after using it): versions (trimmed /
-// balanced / transcoded) and copies with a note are offered too. The
-// note is CARRIED to the archive copy's record (the same union rules as
-// duplicate deletion and repair adoption, `applyHumanMetadataInheritance`)
-// before the file goes; a note ADDED since the list was shown holds the
-// copy — the person did not see it. A version's archive copy is its
-// FAMILY's (it has no promote link of its own), so the family from the
-// fresh plan names the archive copy for the disk check and the carry.
+// This file adds NO file operation of its own, and has no mode parameter:
+// the Trash is the only destination (I3). Notes, stars and tags are not
+// carried: they are keyed by the whole-file digest (CatalogCommit.digest),
+// and R1 requires the copy's digest to BE the archive file's (I8).
 //
-// v4 (2026-09-20 evening, codex follow-up #1/#2/#3/#6 + Rick: "the app
-// blocks when post-promote delete of big files"): the work is a PIPELINE
-// of three steps that two drivers share —
-//   `preparePrune`   the fresh plan, the person's checks, the cheap stat
-//                    checks → the list of copies to work through;
-//   `pruneOneCopy`   ONE copy: archive evidence → byte verdict → carry →
-//                    the guarded Trash (verify → re-stat → live catalog
-//                    re-authorization → move), nothing batched;
-//   `finishPrune`    the approval ledger line with the ACTUAL counts.
-// `applyPrune` runs them back to back (tests, and any caller that wants
-// the whole thing in one await); `PruneApplyJob` runs them as a Media
-// File Operation, one file at a time, with pause/cancel between files —
-// nothing long runs behind a modal.
+// Outcomes (PruneCopyResult): trashed · held(reason) · failed(error) ·
+// alreadyMissing · skippedOffline. Only `trashed` means the file left.
 //
-// This is a DELETE path, so like ⌘⌫ (VideoScanModel+TrashSelection) it
-// adds NO file-deletion code of its own. It is a plan in front of the ONE
-// existing Trash routine, `deleteConfirmedJunk(_:mode:guard:)`, which
-// already leaves Master Archive files alone, skips offline drives, stamps
-// purgedAt + .trashed, publishes, and writes a `copyTrashed` Media Ledger
-// line per file that actually left the disk.
-//
-// What the plan adds, because this is the one delete that runs on files
-// the user did not pick one by one in the table:
-//   1. FRESH PLAN — the plan is recomputed with the same options at the
-//      moment of Apply; a checked copy may go only if the fresh plan still
-//      offers it as CHECKABLE: `isCandidate` (online, not a pair member,
-//      not inside the archive) in a family with a FIXITY-VERIFIED archive
-//      copy — AND the family's bar verdict is the one the person confirmed
-//      (an override that appeared or grew since the sheet was read holds
-//      the family's checked copies) — AND no note appeared on it since.
-//      A drive unplugged, an archive copy that lost its fixity, an
-//      attestation withdrawn since the sheet opened → that copy is held,
-//      and named with the fresh reason.
-//   2. ON-DISK SAFETY, per copy: the working copy the plan would keep
-//      (the row hinted `.keeper`, if NOT itself checked) exists at its
-//      recorded size; the copy itself is still its recorded size (a file
-//      rewritten in place is a different file). Any failure holds the
-//      copy, with the reason.
-//   3. ARCHIVE EVIDENCE, once per archive copy per batch (codex follow-up
-//      2026-09-20 #2 / #6): the family's fixity-verified archive copy must
-//      be, NOW, the bytes its read-back digest describes — its stored
-//      stamp reproduces to the ctime, or it is read in full and matches.
-//      Anything else holds every copy in that family, named "archive copy
-//      changed". The fresh fixity is stored on the archive record and
-//      reused by every later copy in the batch (one archive read, not N).
-//   4. BYTE-FOR-BYTE, per copy (VideoScanModel+PruneVerification): a
-//      DUPLICATE is read in full against the archive copy's current
-//      fixity (`SignatureVerification.verifyAgainstStoredKeeper`, off-
-//      main); the promotion ORIGINAL is trusted unread only while its
-//      current stat reproduces the stamp Promote bound to its digest
-//      (codex #1 — never on the strength of a later archive audit), else
-//      it is read like a duplicate; a VERSION goes on provenance — that IS
-//      the ruling; it never claimed identical bytes. Every verdict yields
-//      a `PruneProof`: the target's and the archive copy's identity stamps
-//      plus the catalog facts it rests on.
-//   5. THE PROOF TRAVELS TO THE MUTATION (codex #3): the Trash routine's
-//      `JunkDeletionGuard` re-checks the file's proof twice — the live
-//      catalog on the main actor just before the off-main hop (record
-//      active, same path, same family, archive copy active with the same
-//      fixity), and both stat stamps immediately before the file's own
-//      trashItem. A mismatch holds the file, named; nothing moves.
-//   6. An `approval` ledger line when the batch is done: "Rick approved N
-//      copies to Trash" with the ACTUAL count moved — and `override` when
-//      the choice went against the bar ("2 copies — ★★★ / Important — no
-//      cloud or off-site copy attested").
-//   7. THE COPIES YOU LEFT UNCHECKED ARE STILL THERE (2026-09-22, when a
-//      second "Move to Trash" batch began to QUEUE behind the first). The
-//      confirmation says "so is every copy you left unchecked". The fresh
-//      plan drops a purged copy and elects a new keeper, so without this a
-//      batch whose working copy was moved by the batch before it (or went
-//      missing, or went offline) would take the family down to the archive
-//      copy alone — which is not what the person confirmed. Any unchecked
-//      copy that is gone from the fresh plan, or is now missing or offline,
-//      holds every checked copy in its family, named. Judged on the fresh
-//      plan (the catalog and a real stat), never on what a queue says.
-//      A checked copy the batch before already moved is skipped and named
-//      ("already moved to the Trash by the batch before") — never read,
-//      never counted twice, not a hold.
-//      AND AT THE MOVE (codex #1642 P2-b, 2026-09-23): the check above runs
-//      when the batch starts, but a tape capture takes minutes to verify,
-//      and a survivor can leave in that time. So each checked copy carries
-//      its family's survivor requirements — the unchecked copies' record
-//      ids, paths and identity stamps taken at prepare — to the mutation:
-//      the guard re-asks the live catalog (active, same path) on main, and
-//      re-STATS each survivor (stat only, never a read) immediately before
-//      the copy's own Trash. Gone, changed or on a drive no longer
-//      connected → the checked copy is held, named. Also asked cheaply
-//      before the copy's verdict read, so a family already broken is not
-//      read for nothing.
-// The PrunePlan rules themselves (fixity-verified archive copy, online,
-// not a pair member, never inside the archive) are PrunePlan.compute's,
-// unchanged. Unchecked copies are NEVER moved, even when the plan's
-// default would have trashed them: the selection is the truth.
-//
-// Memory: O(copies in the batch's families). Whole-file reads stream in
-// 1 MiB blocks off the main actor; nothing is held in memory.
+// Memory: O(copies in the batch); whole-file reads stream in 1 MiB blocks
+// off the main actor.
 
 import Foundation
 import VideoScanCore
@@ -131,33 +41,25 @@ extension VideoScanModel {
         var trashedBytes: Int64 = 0
         var alreadyMissing = 0
         var skippedOffline = 0
-        /// Copies that went against the bar (from the approval's `override`).
-        var overrideCount = 0
-        /// Copies whose human metadata was carried to the archive copy.
-        var carried = 0
-        /// Copies read in full and found byte-identical to the archive copy.
+        /// Copies read in full and found byte-identical to the archive file.
         var verified = 0
-        /// Archive copies read in full for their evidence (no usable stamp
-        /// yet) — at most one per archive copy per batch.
+        /// Archive files read in full (once each per batch).
         var archiveReads = 0
-        /// "filename — reason" for copies Apply would not touch.
+        /// "filename — reason" for copies that were not moved.
         var held: [String] = []
         /// "filename — error" for copies the Trash routine could not move.
         var failed: [String] = []
-        /// Checked here, but the batch before in the queue already moved
-        /// them — skipped, never read, never counted as moved here.
+        /// Checked here, but the batch before in the queue already moved them.
         var movedByEarlierBatch = 0
 
         var summary: String {
             var parts = ["Moved \(trashed) cop\(trashed == 1 ? "y" : "ies") to the Trash (\(MediaBytes.display(trashedBytes)))"]
             if movedByEarlierBatch > 0 { parts.append("\(movedByEarlierBatch) already moved by the batch before") }
-            if overrideCount > 0 { parts.append("\(overrideCount) against the bar you set") }
-            if verified > 0 { parts.append("\(verified) checked byte-for-byte against the archive") }
+            if verified > 0 { parts.append("\(verified) read in full and matched the archive") }
             if archiveReads > 0 { parts.append("\(archiveReads) archive cop\(archiveReads == 1 ? "y" : "ies") read in full") }
-            if carried > 0 { parts.append("notes and marks from \(carried) carried to the archive copy") }
             if alreadyMissing > 0 { parts.append("\(alreadyMissing) already gone") }
             if skippedOffline > 0 { parts.append("\(skippedOffline) on a drive that isn't connected") }
-            if !held.isEmpty { parts.append("\(held.count) held back — changed since the list was shown") }
+            if !held.isEmpty { parts.append("\(held.count) held back") }
             if !failed.isEmpty { parts.append("\(failed.count) could not be moved") }
             return parts.joined(separator: " · ")
         }
@@ -166,7 +68,6 @@ extension VideoScanModel {
         mutating func absorb(_ o: PruneCopyOutcome, item: PruneItem) {
             if o.readInFull { verified += 1 }
             if o.archiveReadInFull { archiveReads += 1 }
-            if o.carried { carried += 1 }
             switch o.result {
             case .trashed(let bytes): trashed += 1; trashedBytes += bytes
             case .held(let why): held.append("\(item.filename) — \(why)")
@@ -177,259 +78,21 @@ extension VideoScanModel {
         }
     }
 
-    /// A copy held back, with why.
-    struct PruneHeld: Equatable {
-        let copy: PrunePlan.CopyRef
-        let reason: String
-        var line: String { "\(copy.filename) — \(reason)" }
-    }
-
-    /// Which of the copies the person checked may go: those the FRESH plan
-    /// still offers as checkable, in families whose bar VERDICT is what
-    /// the person confirmed. Order = the rows of the plan the person saw.
-    /// A checked id that the shown plan never offered (an archive copy —
-    /// never a row — or a disabled row) is held, not trusted; one the
-    /// fresh plan no longer knows is held too; one that gained a NOTE
-    /// since the sheet was read is held (the person did not see it); and
-    /// a family whose fresh verdict carries an override the shown one did
-    /// not (an attestation withdrawn in another window, a device gone)
-    /// holds every checked copy in it — a verdict that got stricter since
-    /// the sheet was read is a change, not a decision (QA 2026-09-20,
-    /// MAJOR 1). Ids that match nothing the sheet listed are ignored.
-    nonisolated static func pruneTargets(shown: PrunePlan, selected: Set<UUID>, fresh: PrunePlan)
-        -> (go: [PrunePlan.CopyRef], held: [PruneHeld]) {
-        guard !selected.isEmpty else { return ([], []) }
-        var freshRows: [UUID: PrunePlan.CopyRow] = [:]
-        var freshFamilyOf: [UUID: Int] = [:]
-        for (i, family) in fresh.families.enumerated() {
-            for row in family.rows { freshRows[row.id] = row; freshFamilyOf[row.id] = i }
-        }
-        var go: [PrunePlan.CopyRef] = [], held: [PruneHeld] = []
-        /// The verdict the person confirmed, per copy (its SHOWN family).
-        var shownVerdictOf: [UUID: PrunePlan.Selection] = [:]
-        for family in shown.families {
-            // The archive side is never a row; a check on it is a bug
-            // upstream, and it is named rather than trusted.
-            for a in family.archive + family.versionArchive where selected.contains(a.id) {
-                held.append(PruneHeld(copy: a, reason: "was never offered: \(PrunePlan.KeepReason.archiveCopy.displayText)"))
-            }
-            var verdict: PrunePlan.Selection?
-            for row in family.rows where selected.contains(row.id) {
-                guard row.checkable else {
-                    held.append(PruneHeld(copy: row.copy, reason: "was never offered: \(row.reasonText ?? "not a candidate")"))
-                    continue
-                }
-                guard let now = freshRows[row.id] else {
-                    held.append(PruneHeld(copy: row.copy, reason: "no longer in the plan"))
-                    continue
-                }
-                guard now.checkable else {
-                    held.append(PruneHeld(copy: now.copy,
-                                          reason: "changed since the list was shown: \(now.reasonText ?? "no longer a candidate")"))
-                    continue
-                }
-                if now.hasNote, !row.hasNote {
-                    held.append(PruneHeld(copy: now.copy,
-                                          reason: "changed since the list was shown: \(PrunePlan.KeepReason.humanNote.displayText)"))
-                    continue
-                }
-                go.append(now.copy)
-                if verdict == nil { verdict = family.selection(selected) }
-                shownVerdictOf[row.id] = verdict
-            }
-        }
-        // The bar's verdict on what would actually go, per FRESH family,
-        // against what the sheet said when it was confirmed.
-        let goIDs = Set(go.map(\.id))
-        var verdictChanged = Set<Int>()
-        for copy in go {
-            guard let i = freshFamilyOf[copy.id], !verdictChanged.contains(i) else { continue }
-            let now = fresh.families[i].selection(goIDs)
-            let then = shownVerdictOf[copy.id] ?? .empty
-            if now.overrideCount > 0, now.overrideShortfalls != then.overrideShortfalls {
-                verdictChanged.insert(i)
-            }
-        }
-        if !verdictChanged.isEmpty {
-            let kept = go.filter { freshFamilyOf[$0.id].map { !verdictChanged.contains($0) } ?? true }
-            held += go.filter { freshFamilyOf[$0.id].map(verdictChanged.contains) ?? false }
-                .map { PruneHeld(copy: $0, reason: "the bar's verdict changed since the list was shown") }
-            go = kept
-        }
-        return (go, held)
-    }
-
-    /// Row reason for a checked copy the batch before in the queue moved.
-    nonisolated static let pruneMovedEarlierReason = "already moved to the Trash by the batch before"
-
-    /// Rule 7 (see the header): the overlap with batches that ran before
-    /// this one, judged on the FRESH plan at this batch's turn.
-    ///   A. a checked copy in `movedEarlier` leaves `go` and `held` and is
-    ///      returned in `movedEarlier` — skipped, named, never read;
-    ///   B. a shown family in which a copy the person LEFT UNCHECKED (a
-    ///      checkable row then) is now gone from the fresh plan, missing or
-    ///      offline holds every checked copy in it — the survivors the
-    ///      confirmation promised are not all there any more.
-    /// Pure, so it is table-testable. O(rows in the shown families).
-    nonisolated static func pruneOverlap(shown: PrunePlan, selected: Set<UUID>, fresh: PrunePlan,
-                                         go: [PrunePlan.CopyRef], held: [PruneHeld], movedEarlier: Set<UUID>)
-        -> (go: [PrunePlan.CopyRef], held: [PruneHeld], movedEarlier: [PrunePlan.CopyRef]) {
-        var freshRows: [UUID: PrunePlan.CopyRow] = [:]
-        for family in fresh.families { for row in family.rows { freshRows[row.id] = row } }
-
-        // A. Moved by the batch before — out of the way first, so it is
-        // never mistaken for a hold (or read) below.
-        var already: [PrunePlan.CopyRef] = []
-        let alreadyIDs = selected.intersection(movedEarlier)
-        if !alreadyIDs.isEmpty {
-            for family in shown.families {
-                for row in family.rows where alreadyIDs.contains(row.id) { already.append(row.copy) }
-            }
-        }
-        var go = go.filter { !alreadyIDs.contains($0.id) }
-        var held = held.filter { !alreadyIDs.contains($0.copy.id) }
-
-        // B. The unchecked survivors must all still be there.
-        for family in shown.families {
-            let members = Set(family.rows.map(\.id))
-            guard go.contains(where: { members.contains($0.id) }) else { continue }
-            var gone: (row: PrunePlan.CopyRow, why: String)?
-            for row in family.rows where row.checkable && !selected.contains(row.id) {
-                guard let now = freshRows[row.id] else {
-                    gone = (row, movedEarlier.contains(row.id) ? "was moved to the Trash by the batch before"
-                                                               : "is no longer in the catalog")
-                    break
-                }
-                if now.role == .kept(.fileMissing) { gone = (row, "is no longer on disk"); break }
-                if now.role == .kept(.offline) { gone = (row, "is on a drive that is no longer connected"); break }
-            }
-            guard let gone else { continue }
-            let reason = "\(gone.row.copy.filename), a copy you left unchecked to keep, \(gone.why) — "
-                + "the list you confirmed has changed, so nothing in this family is moved"
-            held += go.filter { members.contains($0.id) }.map { PruneHeld(copy: $0, reason: reason) }
-            go.removeAll { members.contains($0.id) }
-        }
-        return (go, held, already)
-    }
-
-    /// One copy's on-disk safety check, as plain paths and sizes so it can
-    /// run off the main actor.
-    struct PruneDiskCheck: Sendable {
-        let copyID: UUID
-        let filename: String
-        let path: String
-        let size: Int64
-        let archivePath: String?
-        let archiveSize: Int64
-        let keeperPath: String?
-        let keeperSize: Int64
-    }
-
-    /// Nil when the copy may go on to its evidence checks; otherwise why
-    /// not. (The archive copy's REAL check — identity and digest — is
-    /// `pruneArchiveVerdict`; this is the cheap first line.)
-    nonisolated static func pruneDiskProblem(_ c: PruneDiskCheck, fileManager fm: FileManager = .default) -> String? {
-        func size(_ path: String) -> Int64? {
-            ((try? fm.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value
-        }
-        guard let archivePath = c.archivePath else { return "its archive copy is not in the catalog" }
-        guard let archived = size(archivePath) else { return "its archive copy is not on disk" }
-        guard archived == c.archiveSize else { return "its archive copy is not the size the catalog recorded" }
-        if let keeper = c.keeperPath {
-            guard let kept = size(keeper) else { return "the working copy to keep is not on disk" }
-            guard kept == c.keeperSize else { return "the working copy to keep is not the size the catalog recorded" }
-        }
-        // Missing is judged at the verdict ("is not on disk where the
-        // catalog says"); a different size is a different file now.
-        if let now = size(c.path), now != c.size { return "it changed on disk since it was cataloged" }
-        return nil
-    }
-
-    // MARK: The pipeline — step 1: prepare
-
-    /// One copy the pipeline will work through.
+    /// One copy the pipeline will work through, with the archive file it was
+    /// offered against.
     struct PruneItem: Sendable, Identifiable, Equatable {
         var id: UUID { copyID }
         let copyID: UUID
         let filename: String
         let path: String
         let sizeBytes: Int64
-        let kind: PrunePlan.CopyRow.Kind
         let archiveID: UUID
         let archivePath: String
         let archiveFilename: String
-        /// The copies in this copy's family the person LEFT UNCHECKED —
-        /// the "so is every copy you left unchecked" promise — re-checked
-        /// at the move (rule 7, codex #1642 P2-b).
-        var survivors: [PruneSurvivor] = []
-        /// Read the archive copy IN FULL in this batch before this copy may
-        /// go — a reproducing stamp is not enough (delete-excess lane, C05
-        /// amendment 2: set when this is the last copy outside the archive).
-        var forceArchiveRead = false
+        let archiveDigest: String
     }
 
-    /// A lane's own refusals on top of the pipeline's (the delete-excess
-    /// lane, 2026-10-07: Angel holds, Rick's holds, network mounts,
-    /// Archive backup drives). `catalog` is asked on the main actor before
-    /// the copy is read AND again in the guard's live-catalog check just
-    /// before the move (so a hold that appears mid-job still holds);
-    /// `disk` is asked off-main immediately before the file's own Trash.
-    /// nil (every older caller) = the pipeline exactly as it was.
-    /// (For Rick: two callbacks, one per thread — the JunkDeletionGuard shape.)
-    struct PruneLaneGuard: Sendable {
-        let catalog: @MainActor @Sendable (VideoRecord) -> String?
-        let disk: @Sendable (String) -> String?
-    }
-
-    /// One unchecked copy a checked copy's move depends on: its catalog
-    /// identity and the stat stamp it had when the batch began.
-    struct PruneSurvivor: Sendable, Equatable {
-        let recordID: UUID
-        let filename: String
-        let path: String
-        let stamp: FileIdentityStamp
-
-        /// "X, a copy you left unchecked to keep, <why> — …" — rule 7's words.
-        func reason(_ why: String) -> String {
-            "\(filename), a copy you left unchecked to keep, \(why) — the list you confirmed has changed, so nothing moved"
-        }
-    }
-
-    /// Off-main, stat only (never a read): every survivor is still on disk
-    /// as the same file. nil = go. Offline = the stat fails = held.
-    nonisolated static func pruneSurvivorProblemOnDisk(_ survivors: [PruneSurvivor]) -> String? {
-        for s in survivors {
-            guard let now = FileIdentityStamp.capture(path: s.path) else {
-                return s.reason("is no longer on disk, or its drive is no longer connected")
-            }
-            guard now == s.stamp else { return s.reason("changed on disk since the batch began") }
-        }
-        return nil
-    }
-
-    /// Both survivor checks, now: the catalog on main, then one stat per
-    /// survivor off-main. nil = go (and nil at once for no survivors).
-    func pruneSurvivorProblemNow(_ survivors: [PruneSurvivor]) async -> String? {
-        guard !survivors.isEmpty else { return nil }
-        if let why = pruneSurvivorProblemInCatalog(survivors) { return why }
-        return await Task.detached(priority: .userInitiated) {
-            Self.pruneSurvivorProblemOnDisk(survivors)
-        }.value
-    }
-
-    /// On main: every survivor is still an active catalog record at the
-    /// path it had when the batch began. nil = go.
-    func pruneSurvivorProblemInCatalog(_ survivors: [PruneSurvivor]) -> String? {
-        for s in survivors {
-            guard let live = record(forID: s.recordID), live.purgedAt == nil else {
-                return s.reason("is no longer an active catalog record")
-            }
-            guard live.fullPath == s.path else { return s.reason("moved in the catalog since the batch began") }
-        }
-        return nil
-    }
-
-    /// A copy `preparePrune` would not even try, with why.
+    /// A copy the batch will not even try, with why.
     struct PruneHeldCopy: Sendable, Equatable {
         let copyID: UUID
         let filename: String
@@ -440,64 +103,61 @@ extension VideoScanModel {
 
     /// The batch, ready to run.
     struct PrunePrepared {
-        let fresh: PrunePlan
-        let items: [PruneItem]
-        let held: [PruneHeldCopy]
+        var items: [PruneItem] = []
+        var held: [PruneHeldCopy] = []
         /// Checked copies the batch before in the queue already moved.
         var movedEarlier: [PruneHeldCopy] = []
-        static let nothing = PrunePrepared(fresh: .empty, items: [], held: [])
+        static let nothing = PrunePrepared()
     }
 
-    /// Rule 7's survivors, per checked copy: the rows of its SHOWN family
-    /// that were checkable and left unchecked (the same set pruneOverlap
-    /// judged), with their live names and paths. A survivor that is no
-    /// longer an active record holds its family (`notActive`, per copy).
-    /// Stamps are taken off-main by the caller. O(rows in shown families).
-    func pruneSurvivorRequirements(shown: PrunePlan, selected: Set<UUID>, goIDs: Set<UUID>)
-        -> (idsOf: [UUID: [UUID]], pathOf: [UUID: (filename: String, path: String)], notActive: [UUID: String]) {
-        var survivorIDsOf: [UUID: [UUID]] = [:]
-        for family in shown.families {
-            let members = family.rows.filter { goIDs.contains($0.id) }.map(\.id)
-            guard !members.isEmpty else { continue }
-            let unchecked = family.rows.filter { $0.checkable && !selected.contains($0.id) }.map(\.id)
-            for id in members { survivorIDsOf[id] = unchecked }
-        }
-        var survivorPath: [UUID: (filename: String, path: String)] = [:]
-        var survivorNotActive: [UUID: String] = [:]
-        for (copyID, ids) in survivorIDsOf {
-            for sid in ids {
-                guard let r = record(forID: sid), r.purgedAt == nil else {
-                    let name = shown.families.lazy.flatMap(\.rows).first { $0.id == sid }?.copy.filename ?? "a copy"
-                    survivorNotActive[copyID] = "\(name), a copy you left unchecked to keep, is no longer an active catalog record — "
-                        + "the list you confirmed has changed, so nothing in this family is moved"
-                    break
+    nonisolated static let pruneMovedEarlierReason = "already moved to the Trash by the batch before"
+
+    // MARK: Step 1 — prepare (I5)
+
+    /// The person's checks against the plan they saw AND a fresh plan. Pure;
+    /// O(rows shown + rows in the fresh plan). Ids that were never a row of
+    /// the shown plan are ignored — nothing unlisted is ever moved.
+    nonisolated static func pruneTargets(shown: PrunePlan, selected: Set<UUID>, fresh: PrunePlan,
+                                         movedEarlier: Set<UUID> = []) -> PrunePrepared {
+        var out = PrunePrepared()
+        let now = fresh.locator()
+        for item in shown.items {
+            for row in item.rows where selected.contains(row.id) {
+                let held = { (why: String) in
+                    PruneHeldCopy(copyID: row.id, filename: row.filename, sizeBytes: row.sizeBytes, reason: why)
                 }
-                survivorPath[sid] = (r.filename, r.fullPath)
+                if movedEarlier.contains(row.id) {
+                    out.movedEarlier.append(held(pruneMovedEarlierReason))
+                } else if let why = pruneChange(row, in: item, now: now[row.id]) {
+                    out.held.append(held(why))
+                } else if let digest = item.digest {
+                    out.items.append(PruneItem(copyID: row.id, filename: row.filename, path: row.fullPath,
+                                               sizeBytes: row.sizeBytes, archiveID: item.archive.id,
+                                               archivePath: item.archive.fullPath,
+                                               archiveFilename: item.archive.filename, archiveDigest: digest))
+                }
             }
         }
-        return (survivorIDsOf, survivorPath, survivorNotActive)
+        return out
     }
 
-    /// Per-batch evidence: the archive copies already proven current
-    /// (their fixity, reused by every later copy — codex #6), and those
-    /// that failed (every copy of theirs is held without another read).
-    @MainActor
-    final class PruneBatchState {
-        var archiveFixityNow: [UUID: ContentFixity] = [:]
-        var archiveProblem: [UUID: String] = [:]
-        /// Archive copies read end to end IN THIS BATCH — what a
-        /// `forceArchiveRead` item requires (a stamp-only verdict does not count).
-        var archiveReadInFull: Set<UUID> = []
-        init() {}
+    /// nil = the fresh plan still offers this row exactly as it was shown.
+    private nonisolated static func pruneChange(_ row: PrunePlan.Row, in item: PrunePlan.Item,
+                                        now: PrunePlan.Located?) -> String? {
+        if let reason = row.reason { return "was never offered: \(reason.text)" }
+        guard let now else { return "changed since the list was shown: no longer listed" }
+        if let reason = now.row.reason { return "changed since the list was shown: \(reason.text)" }
+        guard now.item.archive.id == item.archive.id, now.item.archive.fullPath == item.archive.fullPath,
+              now.item.digest == item.digest, now.row.fullPath == row.fullPath else {
+            return "changed since the list was shown: it no longer matches the same archive file"
+        }
+        return nil
     }
 
-    /// The fresh plan, the person's checks against it, and the cheap
-    /// stat checks → the copies to work through, in the order the sheet
-    /// listed them, plus what is held before any byte is read.
-    /// `movedEarlier` = copies the batches before this one in the queue
-    /// moved (rule 7). Called at the batch's TURN, never at enqueue.
-    func preparePrune(shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID],
-                      options: PrunePlan.Options, movedEarlier: Set<UUID> = []) async -> PrunePrepared {
+    /// The fresh plan and the person's checks → the copies to work through.
+    /// `batch` is the scope the shown plan was built for (nil = the catalog).
+    func preparePrune(shown: PrunePlan, selected: Set<UUID>, batch: Set<UUID>?,
+                      movedEarlier: Set<UUID> = []) async -> PrunePrepared {
         guard !isReadOnly else {
             log("Archived — what next?: Apply refused — read-only viewer mode.")
             return .nothing
@@ -506,94 +166,14 @@ extension VideoScanModel {
             log("Archived — what next?: nothing checked — nothing to move.")
             return .nothing
         }
-        let fresh = await prunePlan(for: recordIDs, options: options)
-        let targets = Self.pruneTargets(shown: shown, selected: selected, fresh: fresh)
-        let (go, changed, already) = Self.pruneOverlap(shown: shown, selected: selected, fresh: fresh,
-                                                       go: targets.go, held: targets.held,
-                                                       movedEarlier: movedEarlier)
-        let movedBefore = already.map { PruneHeldCopy(copyID: $0.id, filename: $0.filename, sizeBytes: $0.sizeBytes,
-                                                      reason: Self.pruneMovedEarlierReason) }
-        for m in movedBefore { log("Archived — what next?: skipped \(m.line)") }
-        var held = changed.map { PruneHeldCopy(copyID: $0.copy.id, filename: $0.copy.filename,
-                                               sizeBytes: $0.copy.sizeBytes, reason: $0.reason) }
-
-        // Family context from the FRESH plan: the family's fixity-VERIFIED
-        // archive copy (`verifiedArchive` — a version has no promote link
-        // of its own, the family names it; QA MINOR 3), and the working
-        // copy the plan would keep, to protect on disk — the row hinted
-        // `.keeper`, NOT `family.keeper`, which is nil in a family the bar
-        // does not cover (QA 2026-09-20, MAJOR 2) — unless the person
-        // checked it too (then there is no keeper, and the confirmation
-        // said so). Every row's kind decides its verdict path.
-        let goIDs = Set(go.map(\.id))
-        let (survivorIDsOf, survivorPath, survivorNotActive) = pruneSurvivorRequirements(shown: shown, selected: selected, goIDs: goIDs)
-        var keeperOf: [UUID: PrunePlan.CopyRef] = [:]
-        var archiveOf: [UUID: PrunePlan.CopyRef] = [:]
-        var kindOf: [UUID: PrunePlan.CopyRow.Kind] = [:]
-        for family in fresh.families {
-            let keeper = family.rows.first(where: { $0.planKeeps == .keeper })?.copy
-            for row in family.rows where row.checkable {
-                if let keeper, !goIDs.contains(keeper.id) { keeperOf[row.id] = keeper }
-                if let archive = family.verifiedArchive { archiveOf[row.id] = archive }
-                kindOf[row.id] = row.kind
-            }
-        }
-        var checks: [PruneDiskCheck] = []
-        var itemOf: [UUID: PruneItem] = [:]
-        for copy in go {
-            guard let rec = record(forID: copy.id), rec.purgedAt == nil else {
-                held.append(PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes,
-                                          reason: "no longer an active catalog record"))
-                continue
-            }
-            if let why = survivorNotActive[copy.id] {
-                held.append(PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes, reason: why))
-                continue
-            }
-            let archive = archiveOf[copy.id].flatMap { record(forID: $0.id) }
-            let keeper = keeperOf[copy.id].flatMap { record(forID: $0.id) }
-            checks.append(PruneDiskCheck(copyID: copy.id, filename: copy.filename, path: rec.fullPath,
-                                         size: rec.sizeBytes, archivePath: archive?.fullPath,
-                                         archiveSize: archive?.sizeBytes ?? 0,
-                                         keeperPath: keeper?.fullPath, keeperSize: keeper?.sizeBytes ?? 0))
-            if let archive, let kind = kindOf[copy.id] {
-                itemOf[copy.id] = PruneItem(copyID: copy.id, filename: copy.filename, path: rec.fullPath,
-                                            sizeBytes: rec.sizeBytes, kind: kind,
-                                            archiveID: archive.id, archivePath: archive.fullPath,
-                                            archiveFilename: archive.filename)
-            }
-        }
-        let problems = await Task.detached(priority: .userInitiated) {
-            checks.compactMap { c in Self.pruneDiskProblem(c).map { (c.copyID, c.filename, c.size, $0) } }
-        }.value
-        var refused = Set(problems.map(\.0))
-        held += problems.map { PruneHeldCopy(copyID: $0.0, filename: $0.1, sizeBytes: $0.2, reason: $0.3) }
-        // The survivors' identity stamps, stat only, off-main — the baseline
-        // the move re-checks against (codex #1642 P2-b).
-        let stamps = await Self.captureStamps(paths: Array(Set(survivorPath.values.map(\.path))))
-        let items = checks.compactMap { c -> PruneItem? in
-            guard !refused.contains(c.copyID), var item = itemOf[c.copyID] else { return nil }
-            var survivors: [PruneSurvivor] = []
-            for sid in survivorIDsOf[c.copyID] ?? [] {
-                guard let known = survivorPath[sid] else { continue }
-                let name = known.filename, path = known.path
-                guard let stamp = stamps[path] else {
-                    refused.insert(c.copyID)
-                    held.append(PruneHeldCopy(copyID: c.copyID, filename: c.filename, sizeBytes: c.size,
-                                              reason: "\(name), a copy you left unchecked to keep, is no longer on disk, or its drive is no longer connected — "
-                                                + "the list you confirmed has changed, so nothing in this family is moved"))
-                    return nil
-                }
-                survivors.append(PruneSurvivor(recordID: sid, filename: name, path: path, stamp: stamp))
-            }
-            item.survivors = survivors
-            return item
-        }
-        for h in held { log("Archived — what next?: held back \(h.line)") }
-        return PrunePrepared(fresh: fresh, items: items, held: held, movedEarlier: movedBefore)
+        let fresh = await prunePlan(batch: batch)
+        let prepared = Self.pruneTargets(shown: shown, selected: selected, fresh: fresh, movedEarlier: movedEarlier)
+        for m in prepared.movedEarlier { log("Archived — what next?: skipped \(m.line)") }
+        for h in prepared.held { log("Archived — what next?: held back \(h.line)") }
+        return prepared
     }
 
-    // MARK: Step 2: one copy
+    // MARK: Step 2 — one copy
 
     enum PruneCopyResult: Sendable, Equatable {
         case trashed(bytes: Int64)
@@ -603,13 +183,8 @@ extension VideoScanModel {
         case skippedOffline
 
         /// Non-nil when the MOVE itself went wrong — an error, not a
-        /// decision (codex #1642, Rick 2026-09-22: "an error drops the line
-        /// too, only a normal finish hands on"). The Trash routine threw
-        /// (permission, I/O, no Trash on the volume); the file vanished
-        /// between the guard's last stat and the move (a guarded file is
-        /// only ever "already gone" in that window); or its drive went away
-        /// between its verdict and its move. A HOLD — rule 7, a safety
-        /// refusal, a changed stamp, a Stop — is a decision and is nil.
+        /// decision (codex #1642: "an error drops the line too, only a
+        /// normal finish hands on"). A HOLD is a decision and is nil.
         var errorText: String? {
             switch self {
             case .failed(let why): return why
@@ -622,150 +197,132 @@ extension VideoScanModel {
 
     struct PruneCopyOutcome: Sendable, Equatable {
         let result: PruneCopyResult
-        /// The copy was read in full and matched the archive copy.
-        let readInFull: Bool
-        /// The archive copy was read in full for its evidence (this copy
-        /// was the first of its family in the batch, and it had no stamp).
-        let archiveReadInFull: Bool
-        /// Human metadata was carried to the archive copy.
-        let carried: Bool
+        /// The copy was read in full and matched the archive file.
+        var readInFull = false
+        /// The archive file was read in full for this copy (first of its batch).
+        var archiveReadInFull = false
 
-        static func held(_ why: String, readInFull: Bool = false, archiveReadInFull: Bool = false) -> PruneCopyOutcome {
-            PruneCopyOutcome(result: .held(why), readInFull: readInFull, archiveReadInFull: archiveReadInFull, carried: false)
+        static func held(_ why: String, archiveReadInFull: Bool = false) -> PruneCopyOutcome {
+            PruneCopyOutcome(result: .held(why), archiveReadInFull: archiveReadInFull)
         }
     }
 
-    /// Everything that happens to ONE copy, in order: the live catalog is
-    /// re-read; the archive copy's evidence is established (once per
-    /// archive copy per batch) and reused; the copy's verdict is reached
-    /// off-main; the person's marks are carried; the ONE Trash routine
-    /// moves the file behind the proof's guard. Any doubt at any step
-    /// holds the copy, named. `hooks.shouldCancel` is honoured before
-    /// every read and again before the move.
+    /// Per-batch evidence (I1): archive files read in full IN THIS BATCH, and
+    /// those whose read failed (their copies are held without another read).
+    @MainActor
+    final class PruneBatchState {
+        fileprivate var archiveReadings: [UUID: PruneArchiveReading] = [:]
+        fileprivate var archiveProblem: [UUID: String] = [:]
+        init() {}
+    }
+
+    /// Everything that happens to ONE copy (see the header). Any doubt at
+    /// any step holds the copy, named. `hooks.shouldCancel` is honoured
+    /// before every read and again before the move.
     func pruneOneCopy(_ item: PruneItem, batch: PruneBatchState,
-                      mode: JunkDeletionMode, hooks: PruneVerifyHooks = .live,
-                      laneGuard: PruneLaneGuard? = nil) async -> PruneCopyOutcome {
-        guard let rec = record(forID: item.copyID), rec.purgedAt == nil else {
-            return .held("no longer an active catalog record")
+                      hooks: PruneVerifyHooks = .live) async -> PruneCopyOutcome {
+        let rec: VideoRecord
+        switch pruneLiveRecord(item) {
+        case .success(let live): rec = live
+        case .failure(let hold): return .held(hold.text)
         }
-        guard rec.fullPath == item.path else {
-            return .held("moved in the catalog since the list was worked out")
+        let archive = await pruneArchiveReading(item, batch: batch, hooks: hooks)
+        let archiveRead = archive.readNow
+        guard case .success(let reading) = archive.result else {
+            return .held(archive.result.holdText, archiveReadInFull: archiveRead)
         }
-        // The ONE bulk-delete rule, before a byte is read (Rick
-        // 2026-09-22: nothing on the Master Archive's volume is ever moved
-        // to the Trash by a bulk verb). deleteConfirmedJunk re-asks it at
-        // the moment of the move; this saves reading a file for nothing.
+        let verdict = await Task.detached(priority: .userInitiated) {
+            Self.pruneCandidateProof(item, archive: reading, hooks: hooks)
+        }.value
+        guard case .success(let proof) = verdict else {
+            return .held(verdict.holdText, archiveReadInFull: archiveRead)
+        }
+        log("Archived — what next?: \(item.filename) read in full — byte-identical to \(item.archiveFilename)")
+        hooks.beforeMutation?(item.path)
+        guard !hooks.shouldCancel() else {
+            return PruneCopyOutcome(result: .held("stopped before it was moved"), readInFull: true,
+                                    archiveReadInFull: archiveRead)
+        }
+        let result = await pruneMove(rec, proof: proof, hooks: hooks)
+        return PruneCopyOutcome(result: result, readInFull: true, archiveReadInFull: archiveRead)
+    }
+
+    /// The live catalog, before a byte is read: the copy is the same active
+    /// row at the same path; the one bulk-delete rule, the Archive backup
+    /// marks and the A/V pairing do not hold it; its archive file is still
+    /// the active, verified file it was offered against.
+    private func pruneLiveRecord(_ item: PruneItem) -> Result<VideoRecord, PruneHold> {
+        guard let rec = record(forID: item.copyID), rec.removal == nil else {
+            return .failure(PruneHold("no longer an active catalog record"))
+        }
+        guard rec.fullPath == item.path else { return .failure(PruneHold("moved in the catalog since the list was shown")) }
+        guard CatalogCommit.digest(of: rec) == item.archiveDigest else {   // R1, live (codex P2)
+            return .failure(PruneHold(Self.catalogDigestChangedReason))
+        }
         let archiveVolume = archiveVolumeProtection()
         if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
-            return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume"))
+            return .failure(PruneHold(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume")))
         }
-        if let why = laneGuard?.catalog(rec) { return .held(why) }
-        guard let archive = record(forID: item.archiveID), archive.purgedAt == nil,
-              archive.fullPath == item.archivePath else {
-            return .held("its archive copy is no longer an active catalog record at the verified path")
+        if let why = pruneLiveHold(rec) { return .failure(PruneHold(why)) }
+        guard let archive = record(forID: item.archiveID), archive.removal == nil,
+              archive.fullPath == item.archivePath, Self.verifiedArchiveDigest(archive) == item.archiveDigest else {
+            return .failure(PruneHold("its archive copy is no longer the verified file the list showed"))
         }
-        guard let archiveFixity = archive.archiveFixity else {
-            return .held("its archive copy is not fixity-verified any more")
-        }
-        if let why = batch.archiveProblem[archive.id] { return .held(why) }
+        return .success(rec)
+    }
 
-        // ARCHIVE EVIDENCE (#2), once per archive copy per batch (#6) — or
-        // read in full now when the item demands it (C05 amendment 2).
-        let evidence = await pruneArchiveEvidenceNow(item: item, archive: archive, archiveFixity: archiveFixity,
-                                                     batch: batch, hooks: hooks)
-        let archiveReadInFull = evidence.readInFull
-        if let why = evidence.problem { return .held(why, archiveReadInFull: archiveReadInFull) }
-        guard let archiveFixityNow = batch.archiveFixityNow[archive.id] else {
-            return .held("its archive copy presented no evidence", archiveReadInFull: archiveReadInFull)
-        }
+    /// The holds that can appear while a batch runs (R4's Archive backup
+    /// mark, R5), asked of the LIVE record. nil = nothing holds it.
+    private func pruneLiveHold(_ rec: VideoRecord) -> String? {
+        if archiveBackupProtection().verdict(forPath: rec.fullPath) != nil { return PruneReason.driveProtected.text }
+        return CatalogScopePolicy.isPairProtected(rec) ? PruneReason.pairHalf.text : nil
+    }
 
-        // The unchecked survivors, before this copy is read (codex #1642
-        // P2-b): a family already broken is not read for nothing. Catalog
-        // on main, stat off-main. The guard asks again at the move.
-        if let why = await pruneSurvivorProblemNow(item.survivors) {
-            return .held(why, archiveReadInFull: archiveReadInFull)
-        }
-
-        // VERDICT (#1, #3), off-main.
-        let check = PruneByteCheck(copyID: item.copyID, filename: item.filename, path: item.path, kind: item.kind,
-                                   archiveID: archive.id, archivePath: archive.fullPath,
-                                   archiveFixity: archiveFixityNow,
-                                   ownFixity: item.kind == .original ? rec.contentFixity : nil,
-                                   contentKey: rec.contentHash, derivedFrom: rec.derivedFrom)
-        let verdict = await Task.detached(priority: .userInitiated) {
-            Self.pruneByteVerdict(check, hooks: hooks)
+    /// The archive file's full read for this batch — taken once and reused
+    /// (I1); a failed read holds every later copy of it without another read
+    /// (a cancel is the copy's alone). `readNow` = this call did the read.
+    private func pruneArchiveReading(_ item: PruneItem, batch: PruneBatchState, hooks: PruneVerifyHooks) async
+        -> (result: Result<PruneArchiveReading, PruneHold>, readNow: Bool) {
+        if let done = batch.archiveReadings[item.archiveID] { return (.success(done), false) }
+        if let why = batch.archiveProblem[item.archiveID] { return (.failure(PruneHold(why)), false) }
+        log("Archived — what next?: reading \(item.archiveFilename) (archive copy) in full…")
+        let result = await Task.detached(priority: .userInitiated) {
+            Self.readArchiveInFull(id: item.archiveID, path: item.archivePath, digest: item.archiveDigest, hooks: hooks)
         }.value
-        if let problem = verdict.problem {
-            return .held(problem, readInFull: false, archiveReadInFull: archiveReadInFull)
+        switch result {
+        case .success(let reading): batch.archiveReadings[item.archiveID] = reading
+        case .failure(let hold): if !hooks.shouldCancel() { batch.archiveProblem[item.archiveID] = hold.text }
         }
-        guard let proof = verdict.proof else {
-            return .held("no proof was produced", archiveReadInFull: archiveReadInFull)
-        }
-        if verdict.readInFull {
-            log("Archived — what next?: \(item.filename) is byte-identical to the archive copy")
-        } else if item.kind == .original {
-            log("Archived — what next?: \(item.filename) is the promotion source, unchanged since Promote read it — trusted on its promotion stamp")
-        }
-        // The verdict-to-mutation boundary (tests act here).
-        hooks.beforeMutation?(item.path)
+        return (result, true)
+    }
 
-        // Stop between the verdict and the move: a Stop that lands here
-        // leaves the file (done stays done, nothing half-done).
-        guard !hooks.shouldCancel() else {
-            return .held("stopped before it was moved", readInFull: verdict.readInFull, archiveReadInFull: archiveReadInFull)
-        }
-
-        // The ONE existing Trash routine does the file operation — with
-        // the proof re-checked at the last moment (#3): the live catalog on
-        // main just before the hop, both stat stamps immediately before
-        // the file's own Trash.
-        // The unchecked survivors travel with the proof (codex #1642 P2-b):
-        // live catalog on main, a fresh stat of each immediately before the
-        // move — a keeper that left during a long verification holds this copy.
-        let survivors = item.survivors
+    /// The ONE Trash routine moves the file, behind the proof's guard: the
+    /// live catalog on main just before the hop, the network probe and both
+    /// stat stamps immediately before the file's own Trash.
+    private func pruneMove(_ rec: VideoRecord, proof: PruneProof, hooks: PruneVerifyHooks) async -> PruneCopyResult {
+        let isNetwork = hooks.isNetworkMount
         let fileGuard = JunkDeletionGuard(
-            authorize: { [weak self] rec in
+            authorize: { [weak self] live in
                 guard let self else { return "the catalog went away — nothing moved" }
-                return self.pruneProofProblemInCatalog(proof, record: rec)
-                    ?? self.pruneSurvivorProblemInCatalog(survivors)
-                    ?? laneGuard?.catalog(rec).map { "\($0) — nothing moved" }
+                return self.pruneProofProblemInCatalog(proof, record: live)
+                    ?? self.pruneLiveHold(live).map { "\($0) — nothing moved" }
             },
             beforeRemoval: { path in
-                guard path == proof.path else { return "was never verified in this batch — nothing moved" }
-                return Self.pruneProofProblemOnDisk(proof) ?? Self.pruneSurvivorProblemOnDisk(survivors)
-                    ?? laneGuard?.disk(path)
+                guard path == proof.path else { return "was never read in this batch — nothing moved" }
+                if isNetwork(path) { return "\(PruneReason.driveProtected.text) (a network drive) — nothing moved" }
+                return Self.pruneProofProblemOnDisk(proof)
             },
             remove: hooks.removeFile)
+        let mode: JunkDeletionMode = .toTrash
         let result = await deleteConfirmedJunk([rec], mode: mode, reason: .prune, guard: fileGuard)
-
-        // Carry the person's marks (note, tags, people, stars…) to the
-        // family's archive copy — the same union rules as duplicate
-        // deletion; nothing on the archive copy is ever clobbered — ONLY
-        // once the file has actually gone (QA 2026-09-20 MINOR: a carry
-        // before the guard's last check wrote a held copy's marks onto the
-        // archive copy). A held copy keeps its own marks.
-        var carried = false
-        if result.succeeded == 1, archive.id != rec.id {
-            let fields = applyHumanMetadataInheritance(from: rec, to: archive)
-            if !fields.isEmpty {
-                carried = true
-                searchIndex.update(archive)
-                log("Archived — what next?: carried to \(archive.filename) from \(rec.filename): " + fields.joined(separator: ", "))
-            }
-        } else if result.succeeded == 0, archive.id != rec.id, !rec.userNotes.isEmpty {
-            log("Archived — what next?: \(rec.filename) keeps its note and marks (copy held)")
-        }
-
-        let outcome = Self.pruneCopyResult(result, bytes: rec.sizeBytes)
         if let refused = result.refused.first {
-            log("Archived — what next?: held back at the last moment: \(item.filename) — \(refused.reason)")
+            log("Archived — what next?: held back at the last moment: \(rec.filename) — \(refused.reason)")
         }
-        return PruneCopyOutcome(result: outcome, readInFull: verdict.readInFull,
-                                archiveReadInFull: archiveReadInFull, carried: carried)
+        return Self.pruneCopyResult(result, bytes: rec.sizeBytes)
     }
 
     /// The Trash routine's answer for ONE record, as this copy's result.
-    nonisolated static func pruneCopyResult(_ result: JunkDeletionResult, bytes: Int64) -> PruneCopyResult {
+    private nonisolated static func pruneCopyResult(_ result: JunkDeletionResult, bytes: Int64) -> PruneCopyResult {
         if let refused = result.refused.first { return .held(refused.reason) }
         if let failure = result.failed.first { return .failed(failure.error.localizedDescription) }
         if result.succeeded == 1 { return .trashed(bytes: bytes) }
@@ -774,104 +331,50 @@ extension VideoScanModel {
         return .held("the Trash routine did not move it")
     }
 
-    /// The archive copy's CURRENT evidence for this batch (#2, #6): taken
-    /// once per archive copy and reused — unless `item.forceArchiveRead`
-    /// and the archive copy has not yet been read IN FULL in this batch, in
-    /// which case its stored stamp is ignored and it is read end to end now
-    /// (C05 amendment 2). `problem` non-nil = nothing in its family may go.
-    func pruneArchiveEvidenceNow(item: PruneItem, archive: VideoRecord, archiveFixity: ArchiveFixity,
-                                 batch: PruneBatchState, hooks: PruneVerifyHooks) async
-        -> (problem: String?, readInFull: Bool) {
-        let mustRead = item.forceArchiveRead && !batch.archiveReadInFull.contains(archive.id)
-        guard batch.archiveFixityNow[archive.id] == nil || mustRead else { return (nil, false) }
-        let evidence = PruneArchiveEvidence(archiveID: archive.id, archivePath: archive.fullPath,
-                                            archiveFixity: archiveFixity,
-                                            contentFixity: mustRead ? nil : archive.contentFixity)
-        if evidence.contentFixity == nil {
-            log("Archived — what next?: reading \(archive.filename) (archive copy) in full — "
-                + (mustRead ? "the last copy outside the archive is about to go" : "no stamp yet") + "…")
-        }
-        let verdict = await Task.detached(priority: .userInitiated) {
-            Self.pruneArchiveVerdict(evidence, hooks: hooks)
-        }.value
-        switch verdict {
-        case .current(let fixity, let readInFull):
-            batch.archiveFixityNow[archive.id] = fixity
-            if readInFull {
-                batch.archiveReadInFull.insert(archive.id)
-                storeContentFixity(recordID: archive.id, path: archive.fullPath, fixity: fixity)
-                log("Archived — what next?: \(archive.filename) (archive copy) read in full — matches its verified fixity; stamp stored")
-            }
-            return (nil, readInFull)
-        case .problem(let why):
-            // A cancel is this copy's alone; anything else is the archive
-            // copy's, and holds the rest of its family unread. A forced read
-            // that failed must not leave an earlier stamp-only verdict behind.
-            batch.archiveFixityNow[archive.id] = nil
-            if !hooks.shouldCancel() { batch.archiveProblem[archive.id] = why }
-            return (why, false)
-        }
-    }
+    // MARK: Step 3 — finish
 
-    // MARK: Step 3: finish
-
-    /// The approval line, once, with the ACTUAL counts — "Rick approved N
-    /// copies to Trash", `override` when the choice went against the bar
-    /// (judged on the fresh plan, over the copies that actually went).
-    /// Nothing moved → no approval. Returns the override count.
-    @discardableResult
-    func finishPrune(fresh: PrunePlan, trashed: [VideoRecord], batchID: String?, mode: JunkDeletionMode) -> Int {
-        guard let first = trashed.first else { return 0 }
-        let judged = fresh.selection(Set(trashed.map(\.id)))
+    /// The approval line, once per batch, with the ACTUAL counts. Nothing
+    /// moved → no approval.
+    func finishPrune(trashed: [VideoRecord], batchID: String?) {
+        guard let first = trashed.first else { return }
         let bytes = trashed.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        var detail: [String: String] = [
+        let detail: [String: String] = [
             MediaLedgerEvent.Detail.count: String(trashed.count),
             MediaLedgerEvent.Detail.bytes: String(bytes),
             MediaLedgerEvent.Detail.files: trashed.map(\.filename).joined(separator: "\n"),
-            MediaLedgerEvent.Detail.action: mode.isOutrightRemoval ? "delete" : "trash",
+            MediaLedgerEvent.Detail.action: "trash",
         ]
-        if let against = judged.overrideText {
-            detail[MediaLedgerEvent.Detail.barOverride] = against
-            log("Archived — what next?: against the bar — \(against)")
-        }
-        if let only = judged.archiveOnlySentence {
-            log("Archived — what next?: \(only)")
-        }
         ledgerAppend([ledgerEvent(.approval, for: first, by: .rick, batchID: batchID, detail: detail)])
-        return judged.overrideCount
     }
 
     // MARK: The three steps back to back
 
-    /// Apply the person's checklist in one await — the pipeline above,
-    /// copy after copy. `shown` is the plan the sheet listed, `selected`
-    /// the copy record ids checked in it. `mode` is `.toTrash` in the app;
-    /// tests pass `.permanent` (the test target's removal seam, the only
-    /// non-Trash mode) so fixtures never reach the real Trash.
-    /// `hooks` are the verification seams (tests count file opens and act
-    /// between verdict and mutation). The sheet itself does not call this
-    /// — it starts a `PruneApplyJob`, which runs the same steps as a Media
-    /// File Operation.
-    func applyPrune(shown: PrunePlan, selected: Set<UUID>, recordIDs: [UUID], options: PrunePlan.Options,
-                    batchID: String?, mode: JunkDeletionMode = .toTrash,
+    /// Apply the person's checks in one await (tests; the sheet and the pane
+    /// start a PruneApplyJob, which runs the same steps). `shown` is the plan
+    /// the person saw, `batch` its scope.
+    func applyPrune(shown: PrunePlan, selected: Set<UUID>, batch: Set<UUID>?, batchID: String?,
                     hooks: PruneVerifyHooks = .live) async -> PruneApplyOutcome {
         var outcome = PruneApplyOutcome()
-        let prepared = await preparePrune(shown: shown, selected: selected, recordIDs: recordIDs, options: options)
+        let prepared = await preparePrune(shown: shown, selected: selected, batch: batch)
         outcome.held = prepared.held.map(\.line)
-        guard !prepared.items.isEmpty else {
-            if !selected.isEmpty, !isReadOnly { log("Archived — what next?: " + outcome.summary) }
-            return outcome
-        }
-        let batch = PruneBatchState()
-        var trashedRecords: [VideoRecord] = []
+        let state = PruneBatchState()
+        var trashed: [VideoRecord] = []
         for item in prepared.items {
-            let one = await pruneOneCopy(item, batch: batch, mode: mode, hooks: hooks)
+            let one = await pruneOneCopy(item, batch: state, hooks: hooks)
             outcome.absorb(one, item: item)
-            if case .trashed = one.result, let rec = record(forID: item.copyID) { trashedRecords.append(rec) }
+            if case .trashed = one.result, let rec = record(forID: item.copyID) { trashed.append(rec) }
             if case .held(let why) = one.result { log("Archived — what next?: held back \(item.filename) — \(why)") }
         }
-        outcome.overrideCount = finishPrune(fresh: prepared.fresh, trashed: trashedRecords, batchID: batchID, mode: mode)
-        log("Archived — what next?: " + outcome.summary)
+        finishPrune(trashed: trashed, batchID: batchID)
+        if !selected.isEmpty, !isReadOnly { log("Archived — what next?: " + outcome.summary) }
         return outcome
+    }
+}
+
+extension Result where Failure == VideoScanModel.PruneHold {
+    /// The hold's words ("" for a success — never asked then).
+    fileprivate var holdText: String {
+        if case .failure(let hold) = self { return hold.text }
+        return ""
     }
 }

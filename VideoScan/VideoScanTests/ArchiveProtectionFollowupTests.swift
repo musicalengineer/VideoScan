@@ -636,23 +636,6 @@ struct CatalogRemovalUnprovableQATests {
         let text = await consoleText(model)
         #expect(text.contains("Tidy Catalog: set aside 1 file(s) — 1 photos,"), "\(text)")
     }
-
-    @Test func whatNextNamesOnlyTheRowsItRemoved() async throws {
-        let sb = try MasterArchiveTestSupport.makeSandbox("whatnext"); defer { sb.cleanup() }
-        let model = MasterArchiveTestSupport.makeModel(sb)
-        try MasterArchiveTestSupport.initialize(model, in: sb)
-        let onArch = MasterArchiveTestSupport.makeRecord(
-            path: sb.archiveVolume.appendingPathComponent("MoviesExpansion/test_gone_arch.mov").path)
-        let elsewhere = MasterArchiveTestSupport.makeRecord(path: sb.sources.appendingPathComponent("test_gone_src.mov").path)
-        model.records = [onArch, elsewhere]
-        let n = await model.removeMissingCopiesFromCatalog(recordIDs: [onArch.id, elsewhere.id], fileExists: { _ in false })
-        #expect(n == 1)
-        #expect(onArch.purgedAt == nil && elsewhere.purgedAt != nil)
-        let text = await consoleText(model)
-        let removedLine = text.split(separator: "\n").first { $0.contains("what-next: removed") }.map(String.init) ?? ""
-        #expect(removedLine.contains("test_gone_src.mov") && !removedLine.contains("test_gone_arch.mov"), "\(removedLine)")
-        #expect(text.contains("what-next: left 1 missing row in the catalog — on the Master Archive volume"), "\(text)")
-    }
 }
 
 @Suite("QA archfu — publish leftovers and failure wording", .serialized)

@@ -30,9 +30,9 @@
 //                                  it before the move); again at the removal
 //                                  (the one hop)
 //   a copy LONGER than an archive  `duplicateTargetHold` at the row's turn —
-//   master of its content (or one  the Tier 1 rule, `ExcessCopiesPlan
-//   whose length cannot be         .lengthVerdict`; not asked when the keeper
-//   compared)                      IS the archive copy (identical bytes)
+//   master of its content (or one  `DeleteDuplicatesTargetGate.lengthVerdict`;
+//   whose length cannot be         not asked when the keeper IS the archive
+//   compared)                      copy (identical bytes)
 //   a keeper (any name)            the plan (`DeleteDuplicatesReview.holds`)
 //                                  and the verifier (`.samePath`, by inode)
 //   this Mac in viewer mode        the job refuses to start
@@ -48,6 +48,25 @@ import VideoScanCore
 
 enum DeleteDuplicatesTargetGate {
 
+    // The words and the length rule (moved here from the retired
+    // ExcessCopiesPlan, 2026-10-21 — same strings, same tolerance).
+    fileprivate static let networkReason = "on a network drive — this cleanup never removes files over the network"
+    static let pairReason = "part of a recovered A/V pair Combine still needs"
+    fileprivate static let unknownLengthReason = "its length could not be compared with the archive master — left alone"
+    static let longerFlag = "this copy is LONGER than the archive master: the archive may be missing footage"
+
+    /// A copy longer than the master by more than this is never a target.
+    static let durationToleranceSeconds: Double = 1.0
+
+    enum LengthVerdict: Equatable, Sendable { case fits, longer, unknown }
+
+    /// Rick's decision 2 (2026-10-07): longer than the master loses footage;
+    /// a length that cannot be compared is left alone.
+    static func lengthVerdict(copy: Double, master: Double) -> LengthVerdict {
+        guard copy > 0, master > 0, copy.isFinite, master.isFinite else { return .unknown }
+        return copy > master + durationToleranceSeconds ? .longer : .fits
+    }
+
     /// The network gate: true when `path` is on a network share. The live
     /// probe is the archive protection's (statfs, not MNT_LOCAL).
     static let liveIsNetworkMount: @Sendable (String) -> Bool = { ArchiveVolumeProtection.isNetworkMount($0) }
@@ -56,7 +75,7 @@ enum DeleteDuplicatesTargetGate {
     /// the probe: statfs in production, a seam in tests).
     static func networkHold(_ path: String,
                             isNetworkMount: @Sendable (String) -> Bool = liveIsNetworkMount) -> String? {
-        isNetworkMount(path) ? ExcessCopiesPlan.networkReason : nil
+        isNetworkMount(path) ? DeleteDuplicatesTargetGate.networkReason : nil
     }
 }
 
@@ -69,15 +88,15 @@ extension VideoScanModel {
     /// Master Archive copies (`DeletionTierCandidates`). nil = none holds.
     func duplicateTargetHold(record rec: VideoRecord, keeper: VideoRecord,
                              archiveMasterDurations: [Double]) -> String? {
-        if CatalogScopePolicy.isPairProtected(rec) { return ExcessCopiesPlan.pairReason }
+        if CatalogScopePolicy.isPairProtected(rec) { return DeleteDuplicatesTargetGate.pairReason }
         // The keeper IS the archive copy: the copy is proven byte-identical
         // to it before anything moves, so it cannot be longer.
         guard !isArchiveCopy(keeper) else { return nil }
         for master in archiveMasterDurations {
-            switch ExcessCopiesPlan.lengthVerdict(copy: rec.durationSeconds, master: master) {
+            switch DeleteDuplicatesTargetGate.lengthVerdict(copy: rec.durationSeconds, master: master) {
             case .fits: continue
-            case .longer: return ExcessCopiesPlan.longerFlag
-            case .unknown: return ExcessCopiesPlan.unknownLengthReason
+            case .longer: return DeleteDuplicatesTargetGate.longerFlag
+            case .unknown: return DeleteDuplicatesTargetGate.unknownLengthReason
             }
         }
         return nil
@@ -87,6 +106,6 @@ extension VideoScanModel {
     /// during a read without a catalog rescan): the A/V pairing.
     func duplicateTargetHoldAtRemoval(recordID: UUID) -> String? {
         guard let rec = record(forID: recordID), CatalogScopePolicy.isPairProtected(rec) else { return nil }
-        return ExcessCopiesPlan.pairReason
+        return DeleteDuplicatesTargetGate.pairReason
     }
 }

@@ -88,7 +88,7 @@ struct PruneApplyDetailView: View {
             Text(job.subtitle)
                 .font(.system(size: 14))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Each copy goes only after its archive copy is proven current and the copy itself is proven identical to it (a duplicate is read in full; the promotion original is trusted on the stamp Promote bound to it; a version goes on provenance) — and both are re-checked the instant before the move. Anything in doubt is held, and says why.")
+            Text("Each copy goes only after it and its archive copy have both been read in full in this batch and match the archive's verified fingerprint — and both are re-checked the instant before the move. Trash only. Anything in doubt is held, and says why.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
