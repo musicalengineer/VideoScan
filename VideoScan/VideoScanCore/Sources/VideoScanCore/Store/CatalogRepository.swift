@@ -395,6 +395,11 @@ public protocol CatalogRepository: Sendable {
     /// any thread. A Reopen in-session would open the REPLACEMENT, so the
     /// committer refuses it while this is non-nil.
     var fileStopWords: String? { get }
+
+    /// What the last `close()` said that a person must see (GH #359 QA r2-2:
+    /// the -wal quarantine's START / OUTCOME lines). The app logs them
+    /// through its one sink after it closes the store; empty otherwise.
+    var lastCloseNotes: [String] { get }
 }
 
 extension CatalogRepository {
@@ -405,6 +410,9 @@ extension CatalogRepository {
 
     /// A store with no file guard never stops for a moved file (test fakes).
     public var fileStopWords: String? { nil }
+
+    /// A store that never quarantines has nothing to say at close (test fakes).
+    public var lastCloseNotes: [String] { [] }
 
     /// A store with no latch notion opens as `open(at:)` does (test fakes).
     public func open(at url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome {

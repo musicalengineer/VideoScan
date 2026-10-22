@@ -134,6 +134,27 @@ struct AdvVolumeRenameUndoSQLiteTests {
         #expect(reloaded.records.contains { $0.id == added.id }, "the added record was purged from catalog.sqlite")
     }
 
+    @Test("SENSOR (#359 QA r2): reading the .sqlite safety copy for Undo changes not one byte of it and creates nothing beside it")
+    func undoReadLeavesTheSafetyCopyByteIdentical() async throws {
+        let scene = try CutoverScene.make("adv_vr_undo_bytes"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let snapshot = try #require(scene.model.snapshotCatalog(prefix: "pre-volume-rename"))
+        let url = URL(fileURLWithPath: snapshot)
+        let before = try CornerFiles.sha256(url)
+        let folderBefore = try FileManager.default.contentsOfDirectory(atPath: scene.folder.path).sorted()
+        let witnessesBefore = CornerFiles.catalogFingerprint(scene.databaseURL)
+        let copy = await scene.model.loadSafetyCopy(atPath: snapshot)
+        #expect(copy?.isEmpty == false, "the safety copy did not read")
+        #expect(try CornerFiles.sha256(url) == before, "reading the safety copy changed it")
+        for suffix in ["-wal", "-shm", "-journal"] {
+            #expect(!FileManager.default.fileExists(atPath: snapshot + suffix), "reading the safety copy created \(url.lastPathComponent)\(suffix)")
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: scene.folder.path).sorted() == folderBefore,
+                "reading the safety copy changed the catalog folder")
+        #expect(CornerFiles.catalogFingerprint(scene.databaseURL) == witnessesBefore,
+                "reading the safety copy moved catalog.sqlite's high-water witnesses (they sit in the same folder)")
+    }
+
     @Test("a record moved since the migration is left alone and counted")
     func undoLeavesARecordChangedSinceAlone() async throws {
         let scene = try CutoverScene.make("adv_vr_undo_moved"); defer { scene.cleanup() }

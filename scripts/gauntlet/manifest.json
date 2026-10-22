@@ -29812,6 +29812,7 @@
         "revertScale",
         "undoKeepsWhatChangedSince",
         "undoLeavesARecordChangedSinceAlone",
+        "undoReadLeavesTheSafetyCopyByteIdentical",
         "undoReadsTheSafetyCopyItWasGiven"
       ]
     },
@@ -30121,6 +30122,7 @@
         "adoptAfterTheFileMovedIsRefused",
         "closeAfterSwapQuarantinesTheSessionsWAL",
         "closeLeavesSomeoneElsesWALAlone",
+        "closeNotesCarryTheQuarantineLines",
         "corruptCatalogIsRefusedAndNeverWritten",
         "databaseMovedAwayStaysStopped",
         "databaseReplacedUnderneath",
@@ -30128,7 +30130,10 @@
         "newerSchemaIsRefused",
         "noLatchAtOpenIsNotWatched",
         "openRequiringTheLatchRefusesWithoutIt",
+        "quarantineFallsBackToAnInPlaceRename",
+        "quarantineThatCannotMoveSaysWhatToMove",
         "readOnlyFileIsNotWritten",
+        "skippedQuarantineSaysWhatToMove",
         "writeLockHeldElsewhere"
       ]
     },
@@ -30186,6 +30191,7 @@
         "damagedOrNewerCatalogIsRefusedAndUntouched",
         "latchVanishesMidSession",
         "masterWithoutLatch",
+        "quitAfterReplaceQuarantinesAndSaysSo",
         "replacedCatalogRefusesReopen",
         "viewerWithoutLatch"
       ]
@@ -33612,9 +33618,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 239,
+      "expected_floor": 241,
       "name": "regression",
-      "package_expected_floor": 214,
+      "package_expected_floor": 218,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

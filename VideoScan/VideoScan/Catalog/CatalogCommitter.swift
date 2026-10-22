@@ -445,6 +445,7 @@ final class CatalogCommitter {
         reopening = true
         cancelTimer()
         await repository.close()
+        for line in repository.lastCloseNotes { sink(line) }        // GH #359 QA r2-2
         let opened = await repository.open(at: url, requiringLatch: true)   // QA r1 D (#359): no latch, no reopen
         reopening = false
         switch opened {

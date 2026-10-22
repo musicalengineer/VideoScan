@@ -200,6 +200,27 @@ enum CatalogQuitRecovery {
         return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline)
     }
 
+    /// GH #359 (QA r2-2), at quit and ONLY after a file-stop: close the store
+    /// so this session's -wal is checkpointed into catalog.sqlite (still the
+    /// session's file — a latch-only stop) or quarantined (catalog.sqlite was
+    /// replaced or moved — the replacement must never replay it), and say
+    /// what happened through the one sink. Without a stop this is a no-op and
+    /// the quit path is unchanged. Blocks the main thread on the store's own
+    /// queue — the launch's `CatalogLaunchWait` pattern; nothing inside
+    /// touches the main actor. True when it closed the store.
+    @discardableResult
+    static func closeAfterFileStop(model: VideoScanModel) -> Bool {
+        guard let repository = model.catalogCutover.committer?.repository,
+              let stop = repository.fileStopWords else { return false }
+        model.catalogAuthorityNote("START closing catalog.sqlite at quit after the file check stopped saving — \(stop)")
+        CatalogLaunchWait.run { await repository.close() }
+        let notes = repository.lastCloseNotes
+        for line in notes { model.catalogAuthorityNote(line.replacingOccurrences(of: "Catalog store: ", with: "")) }
+        model.catalogAuthorityNote("OUTCOME closed catalog.sqlite at quit — "
+            + (notes.isEmpty ? "it is still this session's file, so its -wal stays with it" : "see the quarantine lines above"))
+        return true
+    }
+
     /// Why the terminal save failed: under catalog.sqlite the committer's
     /// words (the JSON store's error is not the session's), else the store's.
     private static func failureWords(_ model: VideoScanModel) -> String {

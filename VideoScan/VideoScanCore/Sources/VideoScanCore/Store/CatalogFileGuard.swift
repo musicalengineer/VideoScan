@@ -185,14 +185,19 @@ enum CatalogSidecarQuarantine {
         return found
     }
 
-    /// After the pool closed on a stopped session: rename the -wal / -shm at
-    /// the path into `catalog-wal-quarantine-<stamp>/` beside the catalog —
-    /// ONLY those still this session's own files (`own`). Anything else at
-    /// the path is someone else's and is left alone. Never deletes. Returns
-    /// the log lines (START / OUTCOME), already written to the store log.
+    /// After the pool closed, when catalog.sqlite at the path is NOT this
+    /// session's file: rename the -wal / -shm at the path into
+    /// `catalog-wal-quarantine-<stamp>/` beside the catalog — ONLY those still
+    /// this session's own files (`own`); anything else is someone else's and
+    /// is left alone. If the folder cannot be made, each file is renamed in
+    /// place to `<name>-wal.quarantined-<stamp>` (QA r2-3); if even that
+    /// fails, the words name exactly what to move away before reopening.
+    /// Never deletes. Returns the START / OUTCOME lines (also written to the
+    /// store log) for the app's sink.
     @discardableResult
+    /// `folder`: a test seam only (a folder that cannot be made, QA r2-3).
     static func quarantine(besideDatabaseAt url: URL, own: [String: CatalogFileIdentity], why: String,
-                           now: Date = Date()) -> [String] {
+                           now: Date = Date(), folder override: URL? = nil) -> [String] {
         var lines: [String] = []
         func say(_ line: String) { lines.append(line); guardLog.notice("\(line, privacy: .public)") }
         let name = url.lastPathComponent
@@ -203,34 +208,65 @@ enum CatalogSidecarQuarantine {
             if let recorded = own[suffix], recorded == identity {
                 mine.append(suffix)
             } else {
-                say("catalog store QUARANTINE: \(name)\(suffix) at the path is not this session's file — left where it is")
+                say("Catalog store: QUARANTINE — \(name)\(suffix) at the path is not this session's file; left where it is")
             }
         }
         guard !mine.isEmpty else { return lines }
-        let folder = folderName(beside: url, now: now)
-        say("catalog store QUARANTINE START: moving this session's \(mine.map { name + $0 }.joined(separator: " and ")) "
+        let folder = override ?? folderName(beside: url, now: now)
+        say("Catalog store: START quarantine of this session's \(mine.map { name + $0 }.joined(separator: " and ")) "
             + "into \(folder.lastPathComponent) (\(why)) — renamed, never deleted")
+        var folderMade = true
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
-            for suffix in mine {
-                try FileManager.default.moveItem(at: URL(fileURLWithPath: url.path + suffix),
-                                                 to: folder.appendingPathComponent(name + suffix))
-            }
-            say("catalog store QUARANTINE OUTCOME: \(mine.count) file(s) moved to \(folder.path). They hold the moved-aside "
-                + "catalog's last commits: put \(name)-wal beside that file under its own name + \"-wal\" to complete it.")
         } catch {
-            say("catalog store QUARANTINE OUTCOME: FAILED — \(error.localizedDescription). Nothing was deleted; "
-                + "move \(name)-wal and \(name)-shm away by hand BEFORE opening VideoScan again.")
+            folderMade = false
+            say("Catalog store: QUARANTINE — \(folder.lastPathComponent) could not be made (\(error.localizedDescription)); renaming in place instead")
+        }
+        var moved: [String] = []
+        var stuck: [String] = []
+        for suffix in mine {
+            let source = URL(fileURLWithPath: url.path + suffix)
+            let target = folderMade
+                ? folder.appendingPathComponent(name + suffix)
+                : URL(fileURLWithPath: source.path + ".quarantined-" + stamp(now))
+            do {
+                try FileManager.default.moveItem(at: source, to: target)
+                moved.append(target.path)
+            } catch {
+                stuck.append("\(source.path) (\(error.localizedDescription))")
+            }
+        }
+        if stuck.isEmpty {
+            say("Catalog store: OUTCOME quarantine — \(moved.count) file(s) moved: \(moved.joined(separator: ", ")). They hold the "
+                + "moved-aside catalog's last commits: put \(name)-wal beside that file under its own name + \"-wal\" to complete it.")
+        } else {
+            say("Catalog store: OUTCOME quarantine FAILED — nothing was deleted, but these could not be moved: "
+                + stuck.joined(separator: "; ") + ". Move them out of \(url.deletingLastPathComponent().path) BEFORE opening VideoScan "
+                + "again, or the catalog.sqlite there will take another catalog's commits."
+                + (moved.isEmpty ? "" : " Moved: \(moved.joined(separator: ", "))."))
         }
         return lines
     }
 
-    /// `catalog-wal-quarantine-<yyyyMMdd-HHmmss>`, with `-2`, `-3`… if taken.
-    static func folderName(beside url: URL, now: Date) -> URL {
+    /// The pool did not close (QA r2 nit): nothing is renamed while a
+    /// connection may still hold the files — the words say what to move.
+    static func skipped(besideDatabaseAt url: URL, because why: String) -> [String] {
+        let line = "Catalog store: OUTCOME quarantine SKIPPED — \(why). catalog.sqlite is not this session's file: move "
+            + "\(url.path)-wal and \(url.path)-shm (if present) out of the folder BEFORE opening VideoScan again."
+        guardLog.error("\(line, privacy: .public)")
+        return [line]
+    }
+
+    static func stamp(_ now: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let base = "catalog-wal-quarantine-\(formatter.string(from: now))"
+        return formatter.string(from: now)
+    }
+
+    /// `catalog-wal-quarantine-<yyyyMMdd-HHmmss>`, with `-2`, `-3`… if taken.
+    static func folderName(beside url: URL, now: Date) -> URL {
+        let base = "catalog-wal-quarantine-\(stamp(now))"
         let parent = url.deletingLastPathComponent()
         var candidate = parent.appendingPathComponent(base, isDirectory: true)
         var n = 2
@@ -240,6 +276,21 @@ enum CatalogSidecarQuarantine {
         }
         return candidate
     }
+}
+
+/// QA r2-2: the last close's quarantine lines, for the app's sink. For
+/// Rick: a mutex around a vector of strings.
+final class CatalogCloseNotes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    var current: [String] { lock.withLock { lines } }
+    func set(_ new: [String]) { lock.withLock { lines = new } }
+}
+
+extension GRDBCatalogRepository {
+    /// What the last close() said about quarantining this session's -wal /
+    /// -shm (START / OUTCOME lines); empty when there was nothing to say.
+    public nonisolated var lastCloseNotes: [String] { closeNotes.current }
 }
 
 extension WriterSession {

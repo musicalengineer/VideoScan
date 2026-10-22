@@ -148,6 +148,32 @@ struct CatalogAuthorityCornerTests {
         // read-after-swap issue (Manager, 10/21), not this one.
     }
 
+    @Test("fail-fast (#359, QA r2-2): quit after catalog.sqlite was replaced — the store is closed, the session's -wal is quarantined, and the START / OUTCOME lines reach the catalog log; without a stop the quit close is a no-op")
+    func quitAfterReplaceQuarantinesAndSaysSo() async throws {
+        let scene = try CutoverScene.make("corner_quit_quarantine"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        #expect(!CatalogQuitRecovery.closeAfterFileStop(model: scene.model), "no stop: the quit close must not run")
+        try scene.record(.healthy).userNotes = "committed before the restore"
+        #expect(scene.model.saveCatalogNow())
+        let committer = try #require(scene.model.catalogCutover.committer)
+        let copy = scene.folder.appendingPathComponent("restored.sqlite")
+        #expect(committer.repository.sealedCopyBlocking(to: copy) == nil)
+        try FileManager.default.moveItem(at: scene.databaseURL, to: scene.folder.appendingPathComponent("moved-aside.sqlite"))
+        try FileManager.default.moveItem(at: copy, to: scene.databaseURL)
+        #expect(!scene.model.saveCatalogNow() || committer.repository.fileStopWords != nil)
+        #expect(committer.repository.fileStopWords != nil, "the swap was not noticed")
+
+        #expect(CatalogQuitRecovery.closeAfterFileStop(model: scene.model))
+        let log = scene.sandbox.catalogLogText()
+        let folders = try FileManager.default.contentsOfDirectory(atPath: scene.folder.path).filter { $0.hasPrefix("catalog-wal-quarantine-") }
+        #expect(folders.count == 1, "\(folders)")
+        #expect(!FileManager.default.fileExists(atPath: scene.databaseURL.path + "-wal"), "the session's -wal is still beside the replacement")
+        #expect(log.contains("START closing catalog.sqlite at quit"), Comment(rawValue: log))
+        #expect(log.contains("START quarantine of this session's catalog.sqlite-wal"), Comment(rawValue: log))
+        #expect(log.contains("OUTCOME quarantine — "), Comment(rawValue: log))
+        #expect(log.contains("OUTCOME closed catalog.sqlite at quit"), Comment(rawValue: log))
+    }
+
     // MARK: - Cases 10 and 11 at the launch
 
     enum Damage: String, CaseIterable, Sendable, CustomStringConvertible {

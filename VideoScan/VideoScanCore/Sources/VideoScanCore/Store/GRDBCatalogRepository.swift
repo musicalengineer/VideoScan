@@ -129,6 +129,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
     private var mode: Mode = .closed { didSet { publishGate() } }
     /// GH #359: the identities recorded at open, checked before each commit.
     private var fileGuard: CatalogFileGuard? { didSet { publishGate() } }
+    /// QA r2-2: what the last close said (quarantine START / OUTCOME).
+    let closeNotes = CatalogCloseNotes()
     /// The generation this session last loaded or committed, and whether
     /// a reopen is owed — read and updated inside the serialized write.
     private let session = WriterSession()
@@ -851,17 +853,19 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public func close() async {
         guard let pool else { return }
-        // GH #359, QA r1 F3 (the earlier "keep the checkpoint" decision was
-        // reversed by evidence): after a file-stop Apple SQLite refuses or
-        // silently skips the checkpoint, and the session's committed frames
-        // stay in the -wal at the PATH, where the replacement's next open
-        // replays them into itself. So: no checkpoint after a stop; once the
-        // pool is closed, this session's own -wal / -shm are renamed into a
-        // quarantine folder (CatalogSidecarQuarantine — never deleted).
+        // GH #359 — decided by the DATABASE AT THE PATH, not by the stop
+        // (QA r2-1). Still the session's inode (a latch-only stop, a file
+        // moved away and back): the normal checkpoint, and if it fails the
+        // -wal stays at the path, where the right file replays it. Missing or
+        // another file (QA r1 F3): no checkpoint (Apple SQLite refuses or
+        // skips it), and once the pool is closed this session's own -wal /
+        // -shm are renamed into quarantine (CatalogSidecarQuarantine — never
+        // deleted), so the replacement never replays them. The lines are kept
+        // for the app's sink (`lastCloseNotes`, QA r2-2).
         let stop = fileGuard.flatMap { session.fileStop($0) }
-        let quarantineSidecars = stop != nil && mode == .readWrite
+        let databaseMoved = fileGuard.map { CatalogFileIdentity.read($0.databaseURL) != .file($0.database) } ?? false
         if let stop {
-            storeLog.error("catalog store CLOSE after the file check failed — no checkpoint: \(stop, privacy: .public)")
+            storeLog.error("catalog store CLOSE after the file check failed (\(databaseMoved ? "catalog.sqlite is not this session's file — no checkpoint" : "catalog.sqlite is still this session's file — checkpointed as usual", privacy: .public)): \(stop, privacy: .public)")
         }
         // Fold the write-ahead log into the database file BEFORE the pool
         // closes (2026-10-17): GRDB closes the writer before its readers, so
@@ -870,21 +874,27 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // catalog.sqlite alone would then hold no tables at all (pinned by
         // CatalogCloseCheckpointTests). TRUNCATE leaves a zero-length -wal.
         // A read-only session has nothing of its own to fold in.
-        if mode == .readWrite && stop == nil {
+        if mode == .readWrite && !databaseMoved {
             do {
                 try await pool.writeWithoutTransaction { try $0.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)") }
             } catch {
                 storeLog.error("catalog store CLOSE checkpoint: \(Self.words(error), privacy: .public)")
             }
         }
+        var poolClosed = true
         do {
             try pool.close()
         } catch {
+            poolClosed = false
             storeLog.error("catalog store CLOSE: \(Self.words(error), privacy: .public)")
         }
-        if quarantineSidecars, let databaseURL, let stop {
-            CatalogSidecarQuarantine.quarantine(besideDatabaseAt: databaseURL, own: session.sidecars, why: stop)
+        var notes: [String] = []
+        if mode == .readWrite, databaseMoved, let databaseURL {
+            notes = poolClosed
+                ? CatalogSidecarQuarantine.quarantine(besideDatabaseAt: databaseURL, own: session.sidecars, why: stop ?? "catalog.sqlite moved")
+                : CatalogSidecarQuarantine.skipped(besideDatabaseAt: databaseURL, because: "the catalog's connections did not close")
         }
+        closeNotes.set(notes)
         self.pool = nil
         databaseURL = nil
         fileGuard = nil

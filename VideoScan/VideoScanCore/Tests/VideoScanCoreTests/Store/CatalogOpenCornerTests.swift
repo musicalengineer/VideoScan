@@ -366,6 +366,83 @@ struct CatalogOpenCornerTests {
         #expect(try Self.sha256(wal) == theirs, "someone else's -wal was touched")
     }
 
+    /// Two stand-in sidecars and their identities, as a session records them.
+    static func standInSidecars(_ database: URL) throws -> [String: CatalogFileIdentity] {
+        try Data("frames".utf8).write(to: URL(fileURLWithPath: database.path + "-wal"))
+        try Data("index".utf8).write(to: URL(fileURLWithPath: database.path + "-shm"))
+        return CatalogSidecarQuarantine.identities(besideDatabaseAt: database)
+    }
+
+    @Test("fail-fast (#359, QA r2-3): the quarantine folder cannot be made — each sidecar is renamed in place (.quarantined-<stamp>), never deleted, and the OUTCOME says where")
+    func quarantineFallsBackToAnInPlaceRename() throws {
+        let folder = try StoreFixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let database = folder.appendingPathComponent("catalog.sqlite")
+        let own = try Self.standInSidecars(database)
+        let walBytes = try Self.sha256(URL(fileURLWithPath: database.path + "-wal"))
+        let unmakeable = folder.appendingPathComponent("no-such-parent/catalog-wal-quarantine-x", isDirectory: true)
+        let lines = CatalogSidecarQuarantine.quarantine(besideDatabaseAt: database, own: own, why: "test", folder: unmakeable)
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        let renamedWAL = names.first { $0.hasPrefix("catalog.sqlite-wal.quarantined-") }
+        #expect(renamedWAL != nil, "\(names)")
+        #expect(names.contains { $0.hasPrefix("catalog.sqlite-shm.quarantined-") }, "\(names)")
+        #expect(!names.contains("catalog.sqlite-wal") && !names.contains("catalog.sqlite-shm"))
+        if let renamedWAL { #expect(try Self.sha256(folder.appendingPathComponent(renamedWAL)) == walBytes) }
+        #expect(lines.contains { $0.contains("START quarantine") }, "\(lines)")
+        #expect(lines.contains { $0.contains("OUTCOME quarantine — 2 file(s) moved") && $0.contains(".quarantined-") }, "\(lines)")
+    }
+
+    @Test("fail-fast (#359, QA r2-3): nothing can be renamed (read-only folder) — the OUTCOME names exactly which files to move away before reopening; nothing deleted")
+    func quarantineThatCannotMoveSaysWhatToMove() throws {
+        let folder = try StoreFixture.temporaryDirectory()
+        let database = folder.appendingPathComponent("catalog.sqlite")
+        let own = try Self.standInSidecars(database)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let lines = CatalogSidecarQuarantine.quarantine(besideDatabaseAt: database, own: own, why: "test")
+        let outcome = lines.last ?? ""
+        #expect(outcome.contains("OUTCOME quarantine FAILED"), Comment(rawValue: outcome))
+        #expect(outcome.contains(database.path + "-wal") && outcome.contains(database.path + "-shm"), Comment(rawValue: outcome))
+        #expect(outcome.contains("BEFORE opening VideoScan"), Comment(rawValue: outcome))
+        #expect(FileManager.default.fileExists(atPath: database.path + "-wal"), "a sidecar vanished")
+    }
+
+    @Test("fail-fast (#359, QA r2 nit): when the catalog's connections did not close, nothing is renamed and the words say what to move")
+    func skippedQuarantineSaysWhatToMove() {
+        let database = URL(fileURLWithPath: "/tmp/somewhere/catalog.sqlite")
+        let lines = CatalogSidecarQuarantine.skipped(besideDatabaseAt: database, because: "the catalog's connections did not close")
+        #expect(lines.count == 1)
+        #expect(lines[0].contains("OUTCOME quarantine SKIPPED — the catalog's connections did not close"), Comment(rawValue: lines[0]))
+        #expect(lines[0].contains("/tmp/somewhere/catalog.sqlite-wal") && lines[0].contains("BEFORE opening VideoScan"), Comment(rawValue: lines[0]))
+    }
+
+    @Test("fail-fast (#359, QA r2-2): close after a swap keeps its quarantine lines for the app (lastCloseNotes); a clean close has none")
+    func closeNotesCarryTheQuarantineLines() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let copy = fixture.directory.appendingPathComponent("copy.sqlite")
+        #expect(repository.sealedCopyBlocking(to: copy) == nil)
+        #expect(await repository.write(as: .ui) { _ in } == .committed(generation: 3))
+        try FileManager.default.moveItem(at: fixture.url, to: fixture.directory.appendingPathComponent("moved-aside.sqlite"))
+        try FileManager.default.moveItem(at: copy, to: fixture.url)
+        await repository.close()
+        let notes = repository.lastCloseNotes
+        #expect(notes.contains { $0.contains("START quarantine") }, "\(notes)")
+        #expect(notes.contains { $0.contains("OUTCOME quarantine — ") }, "\(notes)")
+
+        let clean = GRDBCatalogRepository(host: "corner-test", durability: .volatileForTests)
+        let other = try await StoreFixture.make(.grdb, generation: 1)
+        defer { other.remove() }
+        _ = await clean.open(at: other.url)
+        await clean.close()
+        #expect(clean.lastCloseNotes.isEmpty)
+    }
+
     @Test("fail-fast (#359, QA r1 D): an open that requires the latch refuses without it, in GH #354's words, and writes nothing")
     func openRequiringTheLatchRefusesWithoutIt() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 2)
