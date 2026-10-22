@@ -33618,7 +33618,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 241,
+      "expected_floor": 242,
       "name": "regression",
       "package_expected_floor": 218,
       "package_selectors": [
