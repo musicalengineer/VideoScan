@@ -76,8 +76,12 @@ public struct RelatedEvidence: Sendable, Equatable {
         public var folderLabel: String?
         /// This file IS the archive's (promoted copy, inside the root).
         public var isArchiveFile: Bool
-        /// The archive holds this content (this file, or an identical one).
+        /// The archive holds this content (this file, or an identical one)
+        /// — PROVEN: the promote link or a matching whole-file SHA-256.
         public var isArchived: Bool
+        /// Only a sampled `v1:` signature matches an archive copy: worded
+        /// "possibly archived (sampled)", never counted as archived (GH #327).
+        public var isPossiblyArchivedSampled: Bool = false
         public var codec: CodecGeneration
         public var frameHeight: Int?
         public var bitRate: Int64?

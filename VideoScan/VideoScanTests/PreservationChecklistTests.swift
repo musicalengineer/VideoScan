@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 // MARK: - Preservation checklist (Rick's idea, 2026-08-12)
@@ -15,8 +16,11 @@ import Testing
 //     file where there is nothing to do, because a checklist that is
 //     permanently incomplete gets ignored, and then it protects nothing.
 
+/// `signature` is the SAMPLED `v1:` content hash; `fullHash` adds a
+/// whole-file SHA-256 content fixity — the only thing that signs (GH #327).
 private func pcRec(
     signature: String = "",
+    fullHash: Bool = false,
     stage: ArchiveStage = .none,
     backups: [BackupEntry] = []
 ) -> VideoRecord {
@@ -25,6 +29,10 @@ private func pcRec(
     r.fullPath = "/Volumes/V/clip.mov"
     r.sizeBytes = 1_000
     r.contentHash = signature
+    if fullHash {
+        r.contentFixity = ContentFixity(digest: String(repeating: "b", count: 64), byteCount: 1_000,
+                                        stamp: FileIdentityStamp(device: 1, inode: 1, size: 1_000, mtimeNs: 1))
+    }
     r.archiveStage = stage
     r.backupDestinations = backups
     return r
@@ -47,17 +55,29 @@ struct PreservationChecklistTests {
         #expect(PreservationChecklist.nextAction(for: pcRec())?.contains("signature") == true)
     }
 
-    @Test func signatureTicksTheSignedStep() {
-        let steps = PreservationChecklist.steps(for: pcRec(signature: sig))
+    @Test func aWholeFileSHA256TicksTheSignedStep() {
+        let steps = PreservationChecklist.steps(for: pcRec(signature: sig, fullHash: true))
         #expect(steps[1].done)
-        #expect(PreservationChecklist.completion(for: pcRec(signature: sig)) == 0.5)
+        #expect(steps[1].title == "Signed")
+        #expect(PreservationChecklist.completion(for: pcRec(signature: sig, fullHash: true)) == 0.5)
+    }
+
+    /// GH #327 (Rick 2026-10-23): a sampled `v1:` signature reads three
+    /// small pieces of the file — it is named for what it is, and Signed
+    /// stays open until the whole file is read.
+    @Test func aSampledSignatureIsNotSigned() {
+        let step = PreservationChecklist.steps(for: pcRec(signature: sig))[1]
+        #expect(!step.done)
+        #expect(step.title == "Sampled signature — not verified")
+        #expect(step.todo.contains("Fill In Full Hashes"))
+        #expect(PreservationChecklist.completion(for: pcRec(signature: sig)) == 0.25)
     }
 
     /// THE honesty test. Three copies that never leave the house are not
     /// a 3-2-1 backup — a fire takes all of them. A local copy must
     /// never satisfy the offsite step.
     @Test func localCopiesAloneNeverReachSafe() {
-        let rec = pcRec(signature: sig, backups: [
+        let rec = pcRec(signature: sig, fullHash: true, backups: [
             BackupEntry(name: "LTA_Crucial", kind: .local, date: Date()),
             BackupEntry(name: "Master RAID", kind: .local, date: Date()),
         ])
@@ -72,7 +92,7 @@ struct PreservationChecklistTests {
     /// which is the only property that matters against fire and theft.
     @Test func cloudOrOffsiteBothSatisfyTheAwayCopy() {
         for kind in [BackupEntry.BackupKind.cloud, .offsite] {
-            let rec = pcRec(signature: sig, backups: [
+            let rec = pcRec(signature: sig, fullHash: true, backups: [
                 BackupEntry(name: "local", kind: .local, date: Date()),
                 BackupEntry(name: "away", kind: kind, date: Date()),
             ])
@@ -88,7 +108,7 @@ struct PreservationChecklistTests {
     /// nagging someone to redo work they already did is how a checklist
     /// loses their trust.
     @Test func archivedStageSatisfiesLocalWithoutABackupEntry() {
-        let steps = PreservationChecklist.steps(for: pcRec(signature: sig, stage: .archived))
+        let steps = PreservationChecklist.steps(for: pcRec(signature: sig, fullHash: true, stage: .archived))
         #expect(steps[2].done)
     }
 
@@ -97,7 +117,7 @@ struct PreservationChecklistTests {
     /// box would sit grey forever on perfectly safe media. Every SCORED
     /// step must be one a fully-protected file can actually complete.
     @Test func aFullyProtectedFileScoresOneHundredPercent() {
-        let rec = pcRec(signature: sig, stage: .archived, backups: [
+        let rec = pcRec(signature: sig, fullHash: true, stage: .archived, backups: [
             BackupEntry(name: "Master RAID", kind: .local, date: Date()),
             BackupEntry(name: "Backblaze", kind: .cloud, date: Date()),
         ])

@@ -11,9 +11,12 @@
 //
 //  STORAGE: the person's profile.json (`POIProfile.featuredVideos`) — the
 //  People tab is the source of truth for the inner circle. Each pick keeps
-//  the record id, its path, its filename and its content hash, so it is
-//  found again after a rename, a move or a promote into the Master Archive
-//  (the archive copy carries the same content hash). Every write reloads
+//  the record id, its path + size, its filename and its whole-file SHA-256,
+//  so it is found again after a rename or a move; a promoted pick shows its
+//  PROVEN archive copy. The sampled `v1:` content hash is kept for the
+//  record but never used to find a pick: it can match a different video
+//  (GH #327, Rick 2026-10-23) — a pick with no other identity is reported
+//  not found, never bound to a guess. Every write reloads
 //  the profile from disk first, so a pick never overwrites an edit made
 //  elsewhere, and posts `FeaturedVideos.changed` so the People panel
 //  refreshes.
@@ -27,8 +30,17 @@ struct FeaturedVideo: Codable, Equatable, Hashable, Sendable {
     var recordID: UUID
     var path: String
     var filename: String
+    /// The SAMPLED `v1:` signature at pick time. Kept in the profile for
+    /// the record; never used to find the pick again (GH #327).
     var contentHash: String?
     var addedAt: Date
+    /// The whole-file SHA-256 at pick time (GH #327, Rick 2026-10-23) —
+    /// the only content identity a pick is re-found by. nil for picks made
+    /// before it was stored, or of a file with no full hash yet.
+    var fullDigest: String? = nil
+    /// The file's size at pick time — with the path, the identity a moved
+    /// row is re-found by. nil for older picks.
+    var sizeBytes: Int64? = nil
 }
 
 enum FeaturedVideos {
@@ -56,11 +68,19 @@ enum FeaturedVideos {
     /// Posted after a pick is added or removed (object: the profile uuid).
     static let changed = Notification.Name("VideoScan.featuredVideosChanged")
 
-    /// Does `pick` refer to `rec`? Id, then path, then content hash.
+    /// Does `pick` refer to `rec`? Id; then path + size (a pick saved
+    /// before sizes were stored matches on its path); then the whole-file
+    /// SHA-256. Never the sampled hash (GH #327).
     static func matches(_ pick: FeaturedVideo, _ rec: VideoRecord) -> Bool {
-        if pick.recordID == rec.id || pick.path == rec.fullPath { return true }
-        if let hash = pick.contentHash, !hash.isEmpty, hash == rec.contentHash { return true }
+        if pick.recordID == rec.id { return true }
+        if pick.path == rec.fullPath, sameSize(pick, rec) { return true }
+        if let digest = pick.fullDigest, !digest.isEmpty, digest == VideoScanModel.storedFullDigest(rec) { return true }
         return false
+    }
+
+    /// The pick's size agrees with the row's (or the pick predates sizes).
+    static func sameSize(_ pick: FeaturedVideo, _ rec: VideoRecord) -> Bool {
+        pick.sizeBytes.map { $0 == rec.sizeBytes } ?? true
     }
 
     static func isFeatured(_ rec: VideoRecord, in profile: POIProfile) -> Bool {
@@ -79,7 +99,8 @@ enum FeaturedVideos {
             if on, !present {
                 picks.append(FeaturedVideo(
                     recordID: rec.id, path: rec.fullPath, filename: rec.filename,
-                    contentHash: rec.contentHash.isEmpty ? nil : rec.contentHash, addedAt: Date()))
+                    contentHash: rec.contentHash.isEmpty ? nil : rec.contentHash, addedAt: Date(),
+                    fullDigest: VideoScanModel.storedFullDigest(rec), sizeBytes: rec.sizeBytes))
                 count += 1
             } else if !on, present {
                 picks.removeAll { matches($0, rec) }
@@ -147,10 +168,12 @@ enum FeaturedVideos {
         var seen: Set<UUID> = []
         var missing = 0
         for pick in picks {
-            var rec = model.record(forID: pick.recordID) ?? model.record(forPath: pick.path)
-            if rec == nil, let hash = pick.contentHash, !hash.isEmpty {
+            var rec = model.record(forID: pick.recordID)
+            if rec == nil, let atPath = model.record(forPath: pick.path), sameSize(pick, atPath) { rec = atPath }
+            if rec == nil, let digest = pick.fullDigest, !digest.isEmpty {
                 // Rare fallback (renamed AND re-scanned): ≤ ~10 picks a person.
-                rec = model.records.first { $0.contentHash == hash && !$0.isPurged }
+                // The whole-file SHA-256 only — a sampled hash may be another video.
+                rec = model.records.first { !$0.isPurged && VideoScanModel.storedFullDigest($0) == digest }
             }
             guard var found = rec, !found.isPurged else { missing += 1; continue }
             // Only a PROVEN archive copy stands in for the pick (GH #327): a

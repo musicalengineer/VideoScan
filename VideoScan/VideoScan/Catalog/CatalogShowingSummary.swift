@@ -182,10 +182,23 @@ enum CatalogShowingSummary {
     }
 
     /// The banner's words. One sentence, count first, no jargon.
-    static func archivedHitsMessage(count: Int) -> String {
-        count == 1
-            ? "1 match is already in the Archive."
-            : "\(count.formatted()) matches are already in the Archive."
+    /// `sampled` of the `count` hidden hits are hidden only by a sampled
+    /// `v1:` match (GH #327, Rick 2026-10-23): they are "possibly archived
+    /// (sampled)", never "already in the Archive".
+    static func archivedHitsMessage(count: Int, sampled: Int = 0) -> String {
+        let sampled = min(max(0, sampled), count)
+        let proven = count - sampled
+        let maybe = "possibly archived (sampled) — not yet verified."
+        guard sampled > 0 else {
+            return proven == 1
+                ? "1 match is already in the Archive."
+                : "\(proven.formatted()) matches are already in the Archive."
+        }
+        guard proven > 0 else {
+            return sampled == 1 ? "1 match is \(maybe)" : "\(sampled.formatted()) matches are \(maybe)"
+        }
+        let head = proven == 1 ? "1 match is already in the Archive" : "\(proven.formatted()) matches are already in the Archive"
+        return head + "; \(sampled.formatted()) more \(sampled == 1 ? "is" : "are") \(maybe)"
     }
 }
 
@@ -245,11 +258,14 @@ extension CatalogContent {
     @ViewBuilder
     var archivedHitsBanner: some View {
         if !archivedSearchHitIDs.isEmpty, !searchText.isEmpty {
+            // Green seal only when at least one hidden hit is PROVEN archived.
+            let allSampled = archivedSearchSampledHitCount >= archivedSearchHitIDs.count
             HStack(spacing: 10) {
-                Image(systemName: "checkmark.seal.fill")
+                Image(systemName: allSampled ? "archivebox" : "checkmark.seal.fill")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.green)
-                Text(CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count))
+                    .foregroundColor(allSampled ? .secondary : .green)
+                Text(CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count,
+                                                               sampled: archivedSearchSampledHitCount))
                     .font(.system(size: 13))
                     .foregroundColor(.primary)
                 Button("Show in Archive") {

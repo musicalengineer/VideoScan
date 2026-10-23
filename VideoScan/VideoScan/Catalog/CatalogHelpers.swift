@@ -49,6 +49,10 @@ struct CatalogContent: View {
     /// `archivedHitsBanner`. Empty whenever no search is active or the
     /// Not-yet-archived filter is off.
     @State var archivedSearchHitIDs: [UUID] = []
+    /// How many of those were hidden ONLY by a sampled `v1:` match — the
+    /// banner words them "possibly archived (sampled)" (GH #327). Written
+    /// beside `archivedSearchHitIDs`, never in a view body.
+    @State var archivedSearchSampledHitCount: Int = 0
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
@@ -668,6 +672,7 @@ struct CatalogContent: View {
             if searchText.isEmpty {
                 out = out.filter { model.pfNotYetArchived($0) }
                 archivedSearchHitIDs = []
+                archivedSearchSampledHitCount = 0
             } else {
                 // Same predicate, but remember what it hid: a search for
                 // an archived file must never dead-end at "No matches"
@@ -676,9 +681,11 @@ struct CatalogContent: View {
                 let split = CatalogShowingSummary.splitArchivedHits(out) { !model.pfNotYetArchived($0) }
                 out = split.shown
                 archivedSearchHitIDs = split.archived.map(\.id)
+                archivedSearchSampledHitCount = split.archived.filter(model.isPossiblyArchivedSampled).count
             }
         } else {
             archivedSearchHitIDs = []
+            archivedSearchSampledHitCount = 0
         }
         if viewFilters.contains(.hasMasterCopy) {
             out = out.filter { model.pfHasMasterCopy($0) }
@@ -718,7 +725,8 @@ struct CatalogContent: View {
     private var noMatchesHint: String {
         archivedSearchHitIDs.isEmpty
             ? "Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated."
-            : CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count) + " Use Show in Archive above."
+            : CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count, sampled: archivedSearchSampledHitCount)
+                + " Use Show in Archive above."
     }
 
     /// Archive Angel Assessment verdict for the selected record — O(1)

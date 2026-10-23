@@ -20889,7 +20889,7 @@
         "aDamagedPickRowSurvivesAnOrdinarySave",
         "aFamilySavesAndLoadsInTheTestSandbox",
         "aPhotoIsCopiedInDownsizedAndRemembered",
-        "aPickIsFoundByIdPathOrContentHash",
+        "aPickIsFoundByIdPathOrFullDigestNeverTheSampledHash",
         "aStaleCopySavedLaterKeepsThePicks",
         "aliasesCountAndNamesAreExactNotSubstrings",
         "cropRoundTripsAndOldFilesDefaultToUncropped",
@@ -20993,12 +20993,13 @@
       ],
       "tests": [
         "aFullyProtectedFileScoresOneHundredPercent",
+        "aSampledSignatureIsNotSigned",
+        "aWholeFileSHA256TicksTheSignedStep",
         "archivedStageSatisfiesLocalWithoutABackupEntry",
         "cloudOrOffsiteBothSatisfyTheAwayCopy",
         "everyIncompleteStepCarriesAnAction",
         "freshRecordIsCataloguedOnly",
-        "localCopiesAloneNeverReachSafe",
-        "signatureTicksTheSignedStep"
+        "localCopiesAloneNeverReachSafe"
       ]
     },
     {
@@ -28579,6 +28580,22 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/P0TruthRemainingTests.swift",
+      "stage": "regression",
+      "suites": [
+        "P0TruthRemainingTests"
+      ],
+      "tests": [
+        "eachRemainingSurfaceAsksTheProof",
+        "exactCopyNeedsEqualFullDigests",
+        "featuredPickIsNeverRefoundBySampledHash",
+        "sampledEqualityIsNeverRoleCopy",
+        "sampledMatchHidesButNeverCounts",
+        "sampledSignatureIsNeverSigned"
+      ]
+    },
+    {
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
       "stage": "unit",
@@ -32915,7 +32932,7 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2845,
+      "expected_floor": 2846,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33789,6 +33806,7 @@
         "VideoScanTests/CutoverManyEditsTests",
         "VideoScanTests/P0TruthFixtureTests",
         "VideoScanTests/P0TruthRegressionTests",
+        "VideoScanTests/P0TruthRemainingTests",
         "VideoScanTests/AdvRescanEditDuringScanTests",
         "VideoScanTests/AdvSQLiteSafetyCopyTests",
         "VideoScanTests/AdvVolumeRenameUndoSQLiteTests",

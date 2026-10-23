@@ -7,6 +7,8 @@
 // NO NEW "SAME CONTENT" MATCHING. A copy to watch is what the catalog's
 // existing engines already decided, nothing weaker:
 //   exact copies ....... the duplicate engine's group (duplicateGroupID)
+//                        AND equal whole-file SHA-256s — the group alone
+//                        may rest on a sampled signature (GH #327)
 //   same footage ....... Find Similar Footage's group (footage.groupID)
 //   the archive copy ... VideoScanModel.provenArchivedCopy(of:) (promote
 //                        link / whole-file SHA-256 — never a sampled v1:
@@ -285,10 +287,15 @@ enum SoundCopyFinder {
     }
 
     /// ONE pass, four compares per record (two UUIDs, the stream type, one
-    /// folder string). Removed and set-aside records never count.
+    /// folder string) — plus a digest compare for a duplicate-group member.
+    /// Removed and set-aside records never count. "exact copy" needs EQUAL
+    /// whole-file SHA-256s (GH #327, Rick 2026-10-23): a duplicate group
+    /// alone is not proof. Without them the member counts only if Find
+    /// Similar Footage grouped it ("same footage").
     @MainActor
     static func members(of rec: VideoRecord, in records: [VideoRecord]) -> Members {
         let dup = rec.duplicateGroupID
+        let digest = VideoScanModel.storedFullDigest(rec)
         let foot = rec.footage?.groupID
         let folder = rec.directory
         let audioOnly = StreamType.audioOnly.rawValue
@@ -300,7 +307,7 @@ enum SoundCopyFinder {
                 let inFolder = !folder.isEmpty && r.directory == folder
                 if inFolder || inFootage { out.soundFiles.append((r, inFolder, inFootage)) }
             } else if hasSound(r) {
-                if dup != nil, r.duplicateGroupID == dup {
+                if dup != nil, r.duplicateGroupID == dup, let digest, VideoScanModel.storedFullDigest(r) == digest {
                     out.sameContent.append((r, "exact copy"))
                 } else if inFootage {
                     out.sameContent.append((r, "same footage"))

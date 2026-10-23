@@ -74,9 +74,8 @@ public enum FootageConfidence: String, Codable, Sendable, CaseIterable, Comparab
 /// What a member is relative to the group's likely original.
 public enum FootageRole: String, Codable, Sendable, CaseIterable {
     case original
-    /// Probably the same bytes as the likely original (a current whole-file
-    /// digest, or a sampled signature nobody contradicts — the group's
-    /// confidence and the evidence line say which).
+    /// The same bytes as the likely original, PROVEN by current, equal
+    /// whole-file SHA-256s. A sampled signature never earns it (GH #327).
     case copy
     /// Re-encoded (HandBrake / ffmpeg / the Angel's .vs.* outputs, another codec).
     case reEncode

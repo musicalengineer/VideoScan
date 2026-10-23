@@ -55,8 +55,11 @@ extension VideoScanModel {
     /// match off the main actor. Never called from a view body.
     func relatedAnswer(a: VideoRecord, b: VideoRecord) async -> RelatedAnswer {
         let now = Date()
-        var sideA = Self.relatedSide(a, isArchiveFile: isArchiveCopy(a) || isInsideMasterArchive(path: a.fullPath), isArchived: isArchived(a), now: now)
-        var sideB = Self.relatedSide(b, isArchiveFile: isArchiveCopy(b) || isInsideMasterArchive(path: b.fullPath), isArchived: isArchived(b), now: now)
+        // Archived = PROVEN (GH #327); a sampled-only match is its own words.
+        var sideA = Self.relatedSide(a, isArchiveFile: isArchiveCopy(a) || isInsideMasterArchive(path: a.fullPath), isArchived: isProvenArchived(a), now: now)
+        var sideB = Self.relatedSide(b, isArchiveFile: isArchiveCopy(b) || isInsideMasterArchive(path: b.fullPath), isArchived: isProvenArchived(b), now: now)
+        sideA.isPossiblyArchivedSampled = isPossiblyArchivedSampled(a)
+        sideB.isPossiblyArchivedSampled = isPossiblyArchivedSampled(b)
         let known = Set(a.confirmedByUserPeople.map(\.name) + b.confirmedByUserPeople.map(\.name) + a.detectedPeople + b.detectedPeople)
         sideA.namesSaid = Self.namesSaid(in: a.audioTranscript, known: known)
         sideB.namesSaid = Self.namesSaid(in: b.audioTranscript, known: known)

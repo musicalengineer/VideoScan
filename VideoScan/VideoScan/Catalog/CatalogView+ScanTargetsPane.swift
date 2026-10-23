@@ -284,7 +284,7 @@ extension CatalogView {
         // 2026-10-04 perf: the path half of `isArchived` (the Master Archive
         // containment test, 0.3 s per pass in Rick's trace) is asked in
         // the detached task with the root captured here.
-        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isArchivedExceptPath($0) }
+        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isProvenArchivedExceptPath($0) }
         let archiveRoot = model.masterArchiveRootPath
         sizeTotalsTask = Task {
             // (`Task.detached` ≈ a worker thread that does NOT inherit

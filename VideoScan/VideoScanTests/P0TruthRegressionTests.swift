@@ -421,9 +421,10 @@ struct P0TruthRegressionTests {
         // bytes itself (CopiesAdviceAssessor: sampled = "check first").
         let allowed: [(file: String, signature: String)] = [
             ("VideoScan/Archive/VideoScanModel+MasterArchive.swift", "func archivedCopy(of record"),
+            // `isArchived` HIDES only (Rick 2026-10-23); every count/badge asks
+            // `isProvenArchived` (P0TruthRemainingTests' sensor). The size line's
+            // `isArchivedExceptPath` and Has Master Copy left this list then.
             ("VideoScan/Catalog/CatalogContent+Promote.swift", "func isArchived(_ rec"),
-            ("VideoScan/Catalog/CatalogContent+Promote.swift", "func isArchivedExceptPath(_ rec"),
-            ("VideoScan/Catalog/CatalogContent+Promote.swift", "func pfHasMasterCopy(_ rec"),
             // (Tidy's "Copies of archived media" left this list 2026-10-21: it counts the prune plan's byte-proven offer.)
             ("VideoScan/Catalog/CopiesAdvice+Projection.swift", "static func archiveLink(of rec"),
         ]

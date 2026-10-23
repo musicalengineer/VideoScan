@@ -119,16 +119,23 @@ struct FeaturedVideosTests {
         return r
     }
 
-    @Test func aPickIsFoundByIdPathOrContentHash() {
+    /// GH #327 (2026-10-23): a pick is found by id, path (+ size when the
+    /// pick stored one) or the whole-file SHA-256 — never by the sampled
+    /// content hash, which can match a different video.
+    @Test func aPickIsFoundByIdPathOrFullDigestNeverTheSampledHash() {
         let r = rec("/Volumes/X/a.mov", hash: "abc")
         let byID = FeaturedVideo(recordID: r.id, path: "/old/elsewhere.mov", filename: "", contentHash: nil, addedAt: Date())
         let byPath = FeaturedVideo(recordID: UUID(), path: "/Volumes/X/a.mov", filename: "", contentHash: nil, addedAt: Date())
-        let byHash = FeaturedVideo(recordID: UUID(), path: "/renamed.mov", filename: "", contentHash: "abc", addedAt: Date())
+        let bySampledHash = FeaturedVideo(recordID: UUID(), path: "/renamed.mov", filename: "", contentHash: "abc", addedAt: Date())
         let none = FeaturedVideo(recordID: UUID(), path: "/nope.mov", filename: "", contentHash: "", addedAt: Date())
         #expect(FeaturedVideos.matches(byID, r))
         #expect(FeaturedVideos.matches(byPath, r))
-        #expect(FeaturedVideos.matches(byHash, r))
+        #expect(!FeaturedVideos.matches(bySampledHash, r), "the sampled hash is no identity")
         #expect(!FeaturedVideos.matches(none, r), "an empty hash never matches an unhashed record")
+        r.sizeBytes = 10
+        var sized = byPath
+        sized.sizeBytes = 11
+        #expect(!FeaturedVideos.matches(sized, r), "path + a different size is another file")
     }
 
     @Test func olderAndDamagedProfilesStillLoad() throws {

@@ -401,8 +401,16 @@ enum CompareMediaWords {
             fact("date", date, otherDate),
             fact("sound", sound, otherSound),
             Fact(name: "people", value: side.people.isEmpty ? "—" : side.people.sorted().joined(separator: ", "), differs: side.people != other.people),
-            fact("archive", side.isArchiveFile ? "archive file" : side.isArchived ? "content archived" : "not archived",
-                 other.isArchiveFile ? "archive file" : other.isArchived ? "content archived" : "not archived"),
+            fact("archive", archiveWords(side), archiveWords(other)),
         ]
+    }
+
+    /// The card's `archive` fact. "content archived" only when PROVEN; a
+    /// sampled-only match says so (GH #327, Rick 2026-10-23).
+    static func archiveWords(_ side: RelatedEvidence.Side) -> String {
+        if side.isArchiveFile { return "archive file" }
+        if side.isArchived { return "content archived" }
+        if side.isPossiblyArchivedSampled { return "possibly archived (sampled)" }
+        return "not archived"
     }
 }

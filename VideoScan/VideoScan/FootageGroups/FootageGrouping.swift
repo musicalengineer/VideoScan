@@ -192,17 +192,10 @@ struct FootageInput: Sendable, Equatable {
         return f == g
     }
 
-    /// PROBABLY byte copies — the same current digest, or the same sampled
-    /// key with no recorded digest disagreeing. Drives only the displayed
-    /// role ("copy"); the evidence line and the confidence stay honest
-    /// ("same sampled signature … (not yet verified)", Likely).
-    func probablySameBytes(as o: FootageInput) -> Bool {
-        if sameBytes(as: o) { return true }
-        if let f = storedDigest, let g = o.storedDigest, f != g { return false }
-        if !contentHash.isEmpty, contentHash == o.contentHash { return true }
-        if !contentHash.isEmpty, !o.contentHash.isEmpty { return false }
-        return !partialMD5.isEmpty && partialMD5 == o.partialMD5 && sizeBytes > 0 && sizeBytes == o.sizeBytes
-    }
+    // (`probablySameBytes` — a sampled `v1:` / partial-MD5 equality standing
+    // in for the role "copy" — was removed 2026-10-23, GH #327: the role is
+    // shown as a fact, so only `sameBytes` earns it. A sampled pair keeps
+    // its group and its honest evidence line, with a hedged role.)
 }
 
 // MARK: - The core
@@ -212,7 +205,9 @@ enum FootageGrouping {
     /// Bump when a rule changes: every record's answer is then rewritten.
     /// 2 = codex #1674 (sampled ≠ Identical, component dates, bounded window).
     /// 3 = the duplicate check's likeness across different digests (2026-10-19).
-    static let algorithmVersion = 3
+    /// 4 = role "copy" only from current, equal whole-file digests — never a
+    ///     sampled signature (GH #327, 2026-10-23); stored "copy" answers redone.
+    static let algorithmVersion = 4
     static let defaultCap = 64
     /// Reasons kept per member (the sheet shows them as chips).
     static let maxReasons = 6
@@ -816,15 +811,17 @@ enum FootageGrouping {
         let oVerdict = verdicts[o] ?? none
         let groupID = m.map { xs[$0].id }.min { $0.uuidString < $1.uuidString } ?? xs[o].id
 
-        // Roles; probable byte copies share the most specific one. (The
-        // "copy" role is a display label; the evidence line and the
-        // group's confidence say whether the bytes were proven.)
+        // Roles. "copy" is stated as a fact, so it needs PROVEN bytes —
+        // current, equal whole-file digests (GH #327); a sampled match is
+        // grouped with its honest evidence line but gets a hedged role.
+        // Probable byte copies (one identity key) then share the most
+        // specific non-copy role.
         var roles: [Int: FootageRole] = [:]
         for i in m {
             roles[i] = i == o ? .original : FootageOriginality.role(
                 of: xs[i], analysis: p.analyses[i], verdict: verdicts[i] ?? none,
                 original: xs[o], originalVerdict: oVerdict,
-                identicalToOriginal: xs[i].probablySameBytes(as: xs[o]))
+                identicalToOriginal: xs[i].sameBytes(as: xs[o]))
         }
         var byIdentity: [String: [Int]] = [:]
         for i in m where i != o && roles[i] != .copy && !xs[i].identityKey.isEmpty {

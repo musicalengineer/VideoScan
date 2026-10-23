@@ -342,6 +342,10 @@ struct PreservationChecklistContentTests {
     @Test func md5CopyNeverCompletesArchivedLocally() throws {
         let source = rec("/Users/rickb/Movies/X.mov")
         source.contentHash = "v1:" + JourneyFixture.sha
+        // Signed needs a WHOLE-FILE SHA-256 (GH #327, 2026-10-23); the v1:
+        // hash alone would leave Signed open too.
+        source.contentFixity = ContentFixity(digest: JourneyFixture.sha, byteCount: 0,
+                                             stamp: FileIdentityStamp(device: 1, inode: 1, size: 0, mtimeNs: 1))
         source.backupDestinations = [BackupEntry(name: "Backblaze", kind: .cloud, date: Date())]
         let copy = rec("/Volumes/FamilyArchive/A/1990_X.mov")
         copy.archiveFixity = ArchiveFixity(algorithm: "md5", digest: "d41d8cd98f00b204e9800998ecf8427e", verifiedAt: Date(), sizeBytes: 10)

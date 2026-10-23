@@ -100,20 +100,13 @@ extension VideoScanModel {
 
     /// The record ITSELF is archived (no provenance hop): a promoted copy,
     /// inside the Master Archive root, or its content has a master copy.
+    /// HIDES only (GH #327, Rick 2026-10-23): its third leg may be a
+    /// sampled match, so no count, badge or sentence reads it — those ask
+    /// `isProvenArchived` / `isPossiblyArchivedSampled` below.
     func isArchived(_ rec: VideoRecord) -> Bool {
         isArchiveCopy(rec)
             || isInsideMasterArchive(path: rec.fullPath)
             || archivedCopy(of: rec) != nil
-    }
-
-    /// `isArchived` WITHOUT its path half — the two record lookups (a
-    /// promoted copy; content with a master copy). For a pass that asks the
-    /// path half off the main actor with the root captured
-    /// (`VideoScanModel.isInsideMasterArchive(path:root:)`; the Catalog's
-    /// size line, 2026-10-04 perf). The two halves OR'd ARE `isArchived` —
-    /// pinned record for record by CatalogOffMainTotalsTests.
-    func isArchivedExceptPath(_ rec: VideoRecord) -> Bool {
-        isArchiveCopy(rec) || archivedCopy(of: rec) != nil
     }
 
     /// Derivation kinds that FIX damaged media rather than re-express
@@ -140,8 +133,44 @@ extension VideoScanModel {
         return false
     }
 
-    /// "Has Master Copy": a source that has been promoted.
+    /// "Has Master Copy": a source whose master copy is PROVEN (GH #327,
+    /// Rick 2026-10-23) — the promote link or a matching whole-file
+    /// SHA-256. The filter SHOWS files as having a master copy, and Hallie
+    /// says it aloud, so a sampled match never earns it.
     func pfHasMasterCopy(_ rec: VideoRecord) -> Bool {
-        archivedCopy(of: rec) != nil
+        provenArchivedCopy(of: rec) != nil
+    }
+
+    // MARK: Proven vs possibly archived (GH #327, Rick 2026-10-23)
+    //
+    // `isArchived` above HIDES a file from the Promote/Tidy worklists, and
+    // may lean on a sampled `v1:` match (three 1 MiB windows) to do it —
+    // the conservative direction for a to-do list. Anything that COUNTS or
+    // STATES "archived" asks `isProvenArchived` instead; a file hidden only
+    // by the sampled leg is worded "possibly archived (sampled)" and never
+    // counts toward an archived figure.
+
+    /// The record ITSELF is proven archived: a promoted copy, inside the
+    /// Master Archive root, or its content has a PROVEN master copy
+    /// (`provenArchivedCopy`). O(1) + a prefix test.
+    func isProvenArchived(_ rec: VideoRecord) -> Bool {
+        isArchiveCopy(rec)
+            || isInsideMasterArchive(path: rec.fullPath)
+            || provenArchivedCopy(of: rec) != nil
+    }
+
+    /// `isProvenArchived` WITHOUT its path half — for the Catalog's size
+    /// line, which asks the path half off the main actor with the root
+    /// captured (`VideoScanModel.isInsideMasterArchive(path:root:)`). The
+    /// two halves OR'd ARE `isProvenArchived` (CatalogOffMainTotalsTests).
+    func isProvenArchivedExceptPath(_ rec: VideoRecord) -> Bool {
+        isArchiveCopy(rec) || provenArchivedCopy(of: rec) != nil
+    }
+
+    /// Hidden from the worklist ONLY by a sampled match: `isArchived` says
+    /// yes, nothing proves it. The words for it are "possibly archived
+    /// (sampled)". O(1).
+    func isPossiblyArchivedSampled(_ rec: VideoRecord) -> Bool {
+        isArchived(rec) && !isProvenArchived(rec)
     }
 }

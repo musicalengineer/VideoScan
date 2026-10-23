@@ -199,7 +199,8 @@ extension VideoScanModel {
             duplicateGroupID: r.duplicateGroupID,
             isHidden: r.isPurged || r.isSetAside,
             isSuperseded: r.isSuperseded,
-            isArchived: isArchived(r),
+            // Counted as "archived" in the folder line: PROVEN only (GH #327).
+            isArchived: isProvenArchived(r),
             isArchiveFile: isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath),
             codec: Self.codecGeneration(video: r.videoCodec, audio: r.audioCodec),
             frameHeight: Self.frameHeight(fromResolution: r.resolution),

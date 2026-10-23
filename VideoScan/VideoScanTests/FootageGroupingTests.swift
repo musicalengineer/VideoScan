@@ -449,7 +449,10 @@ struct FootageKnownCaseSensorTests {
         #expect(r.memberships[g.lacie.id]?.originalInCatalog == false, "camera clips were never cataloged")
         #expect(r.memberships[g.lacie.id]?.role == .transcode)
         #expect(r.memberships[g.projects.id]?.role == .transcode)
-        #expect(r.memberships[g.x9.id]?.role == .copy || r.memberships[g.cheese.id]?.role == .copy)
+        // GH #327 (2026-10-23): x9 and cheese share only a partial MD5 + size
+        // (no whole-file digest), so neither is stated as a "copy".
+        #expect(r.memberships[g.x9.id] != nil && r.memberships[g.x9.id]?.role != .copy)
+        #expect(r.memberships[g.cheese.id] != nil && r.memberships[g.cheese.id]?.role != .copy)
         #expect(r.memberships[g.lacie.id]?.confidence == .likely)
     }
 
@@ -512,7 +515,9 @@ struct FootageKnownCaseSensorTests {
         #expect(r.memberships[balancedArch.id]?.role == .restored, "byte copies share the specific role")
         #expect(r.memberships[access.id]?.role == .reEncode)
         #expect(r.memberships[preserve.id]?.role == .reEncode)
-        #expect(r.memberships[promoted.id]?.role == .copy)
+        // GH #327 (2026-10-23): the promoted copy matches only by its sampled
+        // v1: signature here (no fixity on the inputs) — grouped, never "copy".
+        #expect(r.memberships[promoted.id] != nil && r.memberships[promoted.id]?.role != .copy)
     }
 }
 

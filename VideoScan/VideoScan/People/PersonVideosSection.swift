@@ -62,8 +62,16 @@ struct PersonVideoRow: Identifiable, Equatable, Sendable {
     let year: Int?
     let durationSeconds: Double
     let tier: PersonVideoTier
+    /// PROVEN archived (GH #327): the green "In the Archive" badge and the
+    /// header's count read only this.
     let isArchived: Bool
     let volume: String
+    /// Hidden from the to-do view only by a sampled `v1:` match — shown as
+    /// "Possibly archived (sampled)", never counted (Rick 2026-10-23).
+    var isPossiblyArchived: Bool = false
+
+    /// The badge words for `isPossiblyArchived` (one place, pinned by test).
+    static let possiblyArchivedWords = "Possibly archived (sampled)"
 
     var decadeLabel: String {
         guard let year else { return "Date unknown" }
@@ -145,8 +153,9 @@ enum PersonVideos {
             id: rec.id, path: rec.fullPath,
             title: (rec.filename as NSString).deletingPathExtension,
             year: date.year, durationSeconds: rec.durationSeconds, tier: tier,
-            isArchived: model.isArchived(rec),
-            volume: VolumeReachability.displayLabel(forPath: rec.fullPath))
+            isArchived: model.isProvenArchived(rec),
+            volume: VolumeReachability.displayLabel(forPath: rec.fullPath),
+            isPossiblyArchived: model.isPossiblyArchivedSampled(rec))
     }
 
     /// Rick 2026-10-04: "Donna wasn't alive in 1947." A row dated before
@@ -361,6 +370,11 @@ struct PersonVideoRowView: View {
                 Label("In the Archive", systemImage: "archivebox.fill")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.green)
+            } else if row.isPossiblyArchived {
+                Label(PersonVideoRow.possiblyArchivedWords, systemImage: "archivebox")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .help("Its sampled signature matches a file in the Archive — not yet verified by a full SHA-256.")
             }
             Text(row.tier.label)
                 .font(.system(size: 12, weight: .medium))

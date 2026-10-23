@@ -112,7 +112,8 @@ struct CatalogOffMainTotalsEquivalenceTests {
         #expect(!reference.isEmpty && reference.count < records.count)
     }
 
-    /// The size line: `isArchivedExceptPath || inside(root)` IS `isArchived`.
+    /// The size line: `isProvenArchivedExceptPath || inside(root)` IS
+    /// `isProvenArchived` (GH #327: ARCHIVED counts proven copies only).
     @Test func theSplitArchivedPredicateIsIsArchived() async {
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: FileManager.default.temporaryDirectory
@@ -131,16 +132,16 @@ struct CatalogOffMainTotalsEquivalenceTests {
         let root = model.masterArchiveRootPath
         var kinds = Set<String>()
         for r in records {
-            let byRecord = model.isArchivedExceptPath(r)
+            let byRecord = model.isProvenArchivedExceptPath(r)
             let byPath = VideoScanModel.isInsideMasterArchive(path: r.fullPath, root: root)
-            #expect(model.isArchived(r) == (byRecord || byPath), "\(r.fullPath)")
+            #expect(model.isProvenArchived(r) == (byRecord || byPath), "\(r.fullPath)")
             if byRecord { kinds.insert("record") }
             if byPath && !byRecord { kinds.insert("path") }
             if !byRecord && !byPath { kinds.insert("neither") }
         }
         #expect(kinds == ["record", "path", "neither"], "covered: \(kinds.sorted())")
-        let reference = CatalogSizeTotals.compute(CatalogSizeTotals.project(model.records) { model.isArchived($0) })
-        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isArchivedExceptPath($0) }
+        let reference = CatalogSizeTotals.compute(CatalogSizeTotals.project(model.records) { model.isProvenArchived($0) })
+        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isProvenArchivedExceptPath($0) }
         let offMain = await Task.detached(priority: .utility) { CatalogSizeTotals.compute(entries, archiveRoot: root) }.value
         #expect(offMain == reference)
         #expect(reference.archivedCount >= 3)
@@ -180,10 +181,10 @@ struct CatalogOffMainTotalsScaleTests {
             targetPath: "/Volumes/LaCie", rootPath: "/Volumes/LaCie/Family", volumeUUID: nil)
         model.records = records
         start = clock.now
-        let oldEntries = CatalogSizeTotals.project(model.records) { model.isArchived($0) }
+        let oldEntries = CatalogSizeTotals.project(model.records) { model.isProvenArchived($0) }
         let oldSizeMain = clock.now - start
         start = clock.now
-        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isArchivedExceptPath($0) }
+        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isProvenArchivedExceptPath($0) }
         let newSizeMain = clock.now - start
         let root = model.masterArchiveRootPath
         let sizeOff = await Task.detached(priority: .utility) { CatalogSizeTotals.compute(entries, archiveRoot: root) }.value
@@ -221,7 +222,7 @@ struct CatalogOffMainTotalsSensorTests {
                 "the footer arithmetic runs in the detached task")
         let size = try #require(src.range(of: "func scheduleSizeTotals() {"))
         let sizeBody = String(src[size.upperBound...].prefix(1_200))
-        #expect(sizeBody.contains("CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isArchivedExceptPath($0) }"))
+        #expect(sizeBody.contains("CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isProvenArchivedExceptPath($0) }"))
         #expect(sizeBody.contains("CatalogSizeTotals.compute(entries, archiveRoot: archiveRoot)"))
         #expect(!sizeBody.contains("model.isArchived($0)"), "the full archived predicate is asked per record on the main actor again")
     }

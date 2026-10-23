@@ -19,8 +19,11 @@
 // each one genuinely actionable:
 //
 //   Catalogued        we know the file exists
-//   Signed            it has a content signature — the prerequisite for
-//                     both duplicate detection and verified copying
+//   Signed            it has a whole-file SHA-256 — the prerequisite for
+//                     verified copying. A sampled `v1:` signature (three
+//                     1 MiB windows) is NOT this: the step then reads
+//                     "Sampled signature — not verified" and stays open
+//                     (GH #327, Rick 2026-10-23).
 //   Archived locally  a second copy on local archival media
 //   Archived offsite  a third copy somewhere the house fire is not
 //
@@ -56,10 +59,14 @@ struct PreservationStep: Identifiable, Equatable {
     /// What to do about it, shown when the step is NOT done. This is the
     /// difference between a scold and an instruction.
     let todo: String
+    /// Words that replace the title when the evidence is weaker than the
+    /// step — "Sampled signature — not verified" for Signed (GH #327).
+    var titleOverride: String? = nil
 
     var id: String { kind.rawValue }
 
     var title: String {
+        if let titleOverride { return titleOverride }
         switch kind {
         case .catalogued:      return "Catalogued"
         case .signed:          return "Signed"
@@ -99,6 +106,8 @@ enum PreservationChecklist {
         // is the only property that matters against fire and theft.
         let away = rec.backupDestinations.first { Self.isAway($0) }
         let signature = contentSignature(of: rec, archivedCopy: archivedCopy)
+        // Only a sampled `v1:` signature: say so, never "Signed" (GH #327).
+        let sampledOnly = !signature.done && rec.hasContentSignature
         let local = localArchive(of: rec, archivedCopy: archivedCopy, presence: archivedCopyPresence)
 
         return [
@@ -111,8 +120,10 @@ enum PreservationChecklist {
                 kind: .signed,
                 done: signature.done,
                 date: signature.date,
-                todo: "Compute a file signature so copies can be verified "
-                    + "and duplicates found."),
+                todo: sampledOnly ? sampledSignatureTodo
+                    : "Compute a file signature so copies can be verified "
+                    + "and duplicates found.",
+                titleOverride: sampledOnly ? sampledSignatureTitle : nil),
             PreservationStep(
                 kind: .archivedLocally,
                 done: local.done,
@@ -126,12 +137,17 @@ enum PreservationChecklist {
         ]
     }
 
-    /// Signed answers for the CONTENT: this row's own signature (the
-    /// segmented content hash, or a whole-file SHA-256 fixity), else its
-    /// archived copy's — the read-back digest Promote recorded, or the
-    /// copy's whole-file fixity. Pure; no disk.
+    /// The Signed step's words when the row carries only a sampled `v1:`
+    /// signature (GH #327, Rick 2026-10-23).
+    static let sampledSignatureTitle = "Sampled signature — not verified"
+    static let sampledSignatureTodo = "Read the whole file for a full SHA-256 (Catalog ▸ Fill In Full Hashes…) — "
+        + "a sampled signature reads only three small pieces of it."
+
+    /// Signed answers for the CONTENT, by a WHOLE-FILE SHA-256 only: this
+    /// row's own (its content fixity), else its archived copy's — the
+    /// read-back digest Promote recorded, or the copy's whole-file fixity.
+    /// The sampled `v1:` signature never signs (GH #327). Pure; no disk.
     static func contentSignature(of rec: VideoRecord, archivedCopy: VideoRecord?) -> (done: Bool, date: Date?) {
-        if rec.hasContentSignature { return (true, rec.contentHashAt) }
         for holder in [rec, archivedCopy].compactMap({ $0 })
         where ArchivePromotionIndex.verifiedDigest(of: holder) != nil {
             return (true, holder.archiveFixity?.verifiedAt ?? holder.contentFixity?.computedAt)

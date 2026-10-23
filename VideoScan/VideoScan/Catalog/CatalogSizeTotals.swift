@@ -20,10 +20,12 @@
 //                  stages. The whole catalog. (This is the 11,431-record
 //                  / 10.69 TB figure Rick measured on 2026-09-11.)
 //
-//   ARCHIVED       Sum over active records where `model.isArchived(rec)`
+//   ARCHIVED       Sum over active records where `model.isProvenArchived(rec)`
 //                  is true: a promoted archive copy, anything living
 //                  inside the Master Archive root, or a record whose
-//                  content already has a master copy. Each record is
+//                  content has a PROVEN master copy (the promote link or a
+//                  matching whole-file SHA-256 — never a sampled `v1:`
+//                  match, GH #327, Rick 2026-10-23). Each record is
 //                  counted ONCE at its own size — so an original and its
 //                  archive copy both contribute when both are active.
 //                  The predicate is injected (a closure), so this file
@@ -177,7 +179,7 @@ struct CatalogSizeTotals: Equatable, Sendable {
     }
 
     /// The production projection (2026-10-04 perf): the record half of the
-    /// archived predicate here (`model.isArchivedExceptPath` — two O(1)
+    /// archived predicate here (`model.isProvenArchivedExceptPath` — two O(1)
     /// index lookups), the path half deferred to `compute(_:archiveRoot:)`
     /// off the main actor. Only a record the record half did not already
     /// call archived carries its path (a copy-on-write share).
@@ -284,7 +286,8 @@ extension CatalogSizeTotals {
 
     var archivedTooltip: String {
         "\(archivedCount.formatted()) of those files are already safe in the Master Archive: "
-            + "promoted copies, files inside the archive tree, and originals whose content has a master copy."
+            + "promoted copies, files inside the archive tree, and originals whose master copy is proven "
+            + "(promoted, or the same full SHA-256). A sampled match alone is never counted."
     }
 
     var uniqueTooltip: String {
