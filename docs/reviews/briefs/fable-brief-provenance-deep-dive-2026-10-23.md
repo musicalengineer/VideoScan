@@ -51,6 +51,14 @@ metadata → **identify / correlate / confirm** → **archive**.
    SHA-256 and by footage groups, let the machine draft with evidence, and rank what to ask by payoff
    (archive Masters first, then the oldest generations). Estimate Rick's minutes for the 142 Masters and the July batch.
 
+## Rick's rulings so far (10/22 evening)
+
+- **Tape year rule:** each tape spans one year ± 6 months. A tape is classified by its *first* event's year
+  ("Cape Cod 1994" → 1994 even if it ends with Christmas or early 1995); write "1994–95" only when needed.
+  Individual events on the tape may carry their own dates within that span.
+- Catalog DB = source of truth; the archive's travelling copy is a separate `00_Index/Provenance.csv`
+  (the v3 manifest is never rewritten). Rick leans yes; confirm or argue.
+
 ## Baseline (catalog backup, morning of 2026-10-22; live videos, distinct content)
 
 | | All videos (4,948) | Archive Masters (142) |
