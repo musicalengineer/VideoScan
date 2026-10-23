@@ -114,7 +114,7 @@ extension GRDBTransaction {
         return values
     }
 
-    func replaceArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow?) throws {
+    func replaceArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow?, replacing: [String]) throws {
         guard let copy else {
             try db.execute(sql: "DELETE FROM archive_copies WHERE file_id = ?", arguments: [fileID])
             return
@@ -123,11 +123,33 @@ extension GRDBTransaction {
             UPDATE archive_copies SET source_row_id = ?, archived_at = ?, fixity_verified_at = ? WHERE file_id = ?
             """, arguments: [copy.sourceRowID, copy.archivedAt, copy.fixityVerifiedAt, fileID])
         guard db.changesCount == 0 else { return }
-        // A new copy is Promote's: it names its source row (the DDL refuses one that does not).
+        // A new copy: the provenance of the row it replaces (a rescan re-mints
+        // the record under a new id; P0 2026-10-22 — 95 import-era copies were
+        // refused as sourceless 'promote'), else Promote's, which names its
+        // stored source (the DDL refuses one that does not).
+        let inherited = try inheritedArchiveProvenance(replacing)
         try db.execute(sql: """
             INSERT INTO archive_copies (file_id, source_file_id, source_row_id, archived_at, fixity_verified_at, promoted_by)
-            VALUES (?, (SELECT id FROM files WHERE id = ?), ?, ?, ?, 'promote')
-            """, arguments: [fileID, copy.sourceRowID, copy.sourceRowID, copy.archivedAt, copy.fixityVerifiedAt])
+            VALUES (?, COALESCE((SELECT id FROM files WHERE id = ?), ?), ?, ?, ?, ?)
+            """, arguments: [fileID, copy.sourceRowID, inherited?.sourceFileID, copy.sourceRowID, copy.archivedAt,
+                             copy.fixityVerifiedAt, (inherited?.promotedBy ?? .promote).rawValue])
+    }
+
+    /// The archive provenance of the first replaced row that is an archive
+    /// copy — one naming a stored source first, then in `replacing` order.
+    /// nil when none of them is (the new copy is then Promote's).
+    private func inheritedArchiveProvenance(_ replacing: [String])
+        throws -> (promotedBy: CatalogDDL.PromotedBy, sourceFileID: String?)? {
+        var fallback: (promotedBy: CatalogDDL.PromotedBy, sourceFileID: String?)?
+        for id in replacing {
+            guard let row = try Row.fetchOne(db, sql: "SELECT promoted_by, source_file_id FROM archive_copies WHERE file_id = ?",
+                                             arguments: [id]),
+                  let by = CatalogDDL.PromotedBy(rawValue: row[0]) else { continue }
+            let source: String? = row[1]
+            if source != nil { return (by, source) }
+            if fallback == nil { fallback = (by, nil) }
+        }
+        return fallback
     }
 
     func replaceBackupDestinations(fileID: String, _ rows: [CatalogRecordDTO.BackupDestinationRow]) throws {

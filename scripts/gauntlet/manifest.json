@@ -30303,7 +30303,24 @@
         "CatalogRescanRefusedReplacementTests"
       ],
       "tests": [
-        "refusedArchiveReplacementKeepsOriginalRow"
+        "importEraReplacementLands",
+        "refusedReplacementKeepsOriginalRow"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitArchiveProvenanceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitArchiveProvenanceTests"
+      ],
+      "tests": [
+        "importEraReplacementLands",
+        "liveInsertHasNoBarePromoteLiteral",
+        "newPromoteWithoutSourceRefused",
+        "promoteReplacementKeepsSource",
+        "replacementOfPlainRowInheritsNothing",
+        "scaleHundredImportEraReplacements"
       ]
     },
     {
@@ -33679,9 +33696,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 249,
+      "expected_floor": 256,
       "name": "regression",
-      "package_expected_floor": 234,
+      "package_expected_floor": 240,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33719,7 +33736,8 @@
         "VideoScanCoreTests.CatalogFileGuardQAR2Tests",
         "VideoScanCoreTests.CatalogFileGuardCodex117Tests",
         "VideoScanCoreTests.CatalogCommitReplacementTests",
-        "VideoScanCoreTests.CatalogCommitRelationTests"
+        "VideoScanCoreTests.CatalogCommitRelationTests",
+        "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

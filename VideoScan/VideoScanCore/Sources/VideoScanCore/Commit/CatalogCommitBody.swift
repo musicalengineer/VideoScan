@@ -164,7 +164,7 @@ struct CatalogCommitBody {
         do {
             try tx.inSavepoint {
                 purgeRows = ids.map { purge($0) }
-                itemRows = group.itemIndices.map { commit(plan.items[$0]) }
+                itemRows = group.itemIndices.map { commit(plan.items[$0], replacing: ids) }
                 if !itemRows.isEmpty, !itemRows.contains(where: { Self.keepsRecord($0.0) }) {
                     throw ReplacementNotStored(words: Self.refusalWords(itemRows.last?.0.landing))
                 }
@@ -231,7 +231,9 @@ struct CatalogCommitBody {
     // MARK: - One record
 
     /// The row's result, and whether anything was written for it.
-    private func commit(_ item: CatalogCommit.Item) -> (CatalogCommit.RowResult, Bool) {
+    /// `replacing`: the ids this record replaces (its replacement group's
+    /// purges) — a NEW archive copy takes their provenance (P0 2026-10-22).
+    private func commit(_ item: CatalogCommit.Item, replacing: [UUID] = []) -> (CatalogCommit.RowResult, Bool) {
         var result = CatalogCommit.RowResult(id: item.id, fingerprint: item.fingerprint, digest: nil, landing: .unchanged)
         let current: CatalogRecordDTO
         do {
@@ -248,7 +250,7 @@ struct CatalogCommitBody {
             return (result, false)
         case .known(let digest, _):
             result.digest = digest
-            result = land(current, digest: digest, item: item, into: result)
+            result = land(current, digest: digest, item: item, replacing: replacing, into: result)
             return (result, result.landing.landed)
         }
     }
@@ -271,7 +273,7 @@ struct CatalogCommitBody {
         }
     }
 
-    private func land(_ mapped: CatalogRecordDTO, digest: String, item: CatalogCommit.Item,
+    private func land(_ mapped: CatalogRecordDTO, digest: String, item: CatalogCommit.Item, replacing: [UUID],
                       into result: CatalogCommit.RowResult) -> CatalogCommit.RowResult {
         var result = result
         do {
@@ -295,7 +297,8 @@ struct CatalogCommitBody {
             }
             var written = Written()
             try tx.inSavepoint {
-                written = try write(current, digest: digest, stored: stored, diff: diff, baseline: item.sharedBaseline)
+                written = try write(current, digest: digest, stored: stored, diff: diff, baseline: item.sharedBaseline,
+                                    replacing: replacing)
             }
             // A field in conflict is not shared: each copy keeps its own value (F2).
             let inConflict = conflicts.fields(of: digest)
@@ -326,7 +329,7 @@ struct CatalogCommitBody {
     }
 
     private func write(_ current: CatalogRecordDTO, digest: String, stored: CatalogRecordDTO?,
-                       diff: CatalogRecordDiff, baseline: CatalogSharedCurated?) throws -> Written {
+                       diff: CatalogRecordDiff, baseline: CatalogSharedCurated?, replacing: [UUID]) throws -> Written {
         let id = current.file.id
         if let stored {
             if diff.file || diff.marker { try updateRow(current, stored: stored, diff: diff) }
@@ -335,7 +338,11 @@ struct CatalogCommitBody {
             _ = try tx.removePendingRow(id: id)
         }
         var written = Written()
-        if diff.archiveCopy { try tx.replaceArchiveCopy(fileID: id, current.archiveCopy) }
+        // A new archive copy keeps the provenance of the row it replaces (an
+        // import-era copy stays 'import'); the app's record never carries it.
+        if diff.archiveCopy {
+            try tx.replaceArchiveCopy(fileID: id, current.archiveCopy, replacing: replacing.map(\.uuidString))
+        }
         if diff.backups { try tx.replaceBackupDestinations(fileID: id, current.backupDestinations) }
         if diff.footageDecisions { try tx.replaceFootageDecisions(rowID: id, digest: digest, current.curated.footageDecisions) }
         if diff.duplicate, let words = try tx.replaceDuplicateMember(fileID: id, current.duplicateMember) { written.notes.append(words) }

@@ -273,8 +273,13 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, Ca
     /// marker only when `markerChanged` (its tombstone must already be in);
     /// the audit stamp last, after the path trigger has run.
     func updateFile(_ file: CatalogRecordDTO.FileRow, markerChanged: Bool) throws
-    /// The row's archive copy as `copy` says (nil = none).
-    func replaceArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow?) throws
+    /// The row's archive copy as `copy` says (nil = none). An existing row
+    /// keeps its provenance. A NEW row takes `promoted_by` and the source
+    /// from the archive copy of a row in `replacing` (the ids this record
+    /// replaces — P0 2026-10-22: an import-era copy stays 'import'); with
+    /// none, it is Promote's and must name its stored source (the DDL
+    /// refuses it otherwise).
+    func replaceArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow?, replacing: [String]) throws
     func replaceBackupDestinations(fileID: String, _ rows: [CatalogRecordDTO.BackupDestinationRow]) throws
     func replaceFootageDecisions(rowID: String, digest: String, _ rows: [CatalogRecordDTO.FootageDecisionRow]) throws
     /// Duplicate analysis is rebuildable: a member the DDL cannot hold is
