@@ -86,6 +86,10 @@ extension GRDBTransaction {
         return .pendingPurged
     }
 
+    func storedLivePath(id: String) throws -> String? {
+        try String.fetchOne(db, sql: "SELECT full_path FROM files WHERE id = ? AND removal_state IS NULL", arguments: [id])
+    }
+
     func purgeFile(id: String, since: Int64, writtenAt: Int64, door: String) throws -> CatalogRow.PurgeLanding {
         guard let row = try Row.fetchOne(db, sql: "SELECT removal_state, removal_reason, removal_revision FROM files WHERE id = ?",
                                          arguments: [id]) else {

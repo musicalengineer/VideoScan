@@ -61,15 +61,40 @@ struct CatalogCommitBody {
         }
     }
 
+    /// Order (P0 2026-10-22): lone purges first (they free the live paths
+    /// as before); then each REPLACED row together with the record that
+    /// replaces it at the same path, in ONE savepoint — when the
+    /// replacement is not stored (refused, or not held for a hash), the
+    /// purge is undone with it and the old row stays live; then every
+    /// other record in plan order. The ledger still lists purges first,
+    /// then items, each in plan order (the app's baseline zips by order).
+    ///
+    /// Before this, every purge landed first and on its own: a rescan of
+    /// FamilyArchive purged 641 replaced rows while the store refused 95
+    /// of their replacements (archive copies whose source row it did not
+    /// hold) — 95 archived Masters left the catalog with their files on
+    /// disk (generation 681).
     func run() throws {
         var landed = 0
-        for id in plan.purges {
-            let row = purge(id)
+        let successors = try replacementPairs()
+        var purgeRows = [CatalogCommit.RowResult?](repeating: nil, count: plan.purges.count)
+        var itemRows = [(CatalogCommit.RowResult, Bool)?](repeating: nil, count: plan.items.count)
+        for (index, id) in plan.purges.enumerated() where successors[index] == nil {
+            purgeRows[index] = purge(id)
+        }
+        for (purgeIndex, itemIndex) in successors.sorted(by: { $0.key < $1.key }) {
+            let pair = replace(plan.purges[purgeIndex], with: plan.items[itemIndex])
+            purgeRows[purgeIndex] = pair.purge
+            itemRows[itemIndex] = pair.item
+        }
+        for (index, item) in plan.items.enumerated() where itemRows[index] == nil {
+            itemRows[index] = commit(item)
+        }
+        for row in purgeRows.compactMap({ $0 }) {
             if row.landing.landed { landed += 1 }
             ledger.record(row)
         }
-        for item in plan.items {
-            let (row, wrote) = commit(item)
+        for (row, wrote) in itemRows.compactMap({ $0 }) {
             if wrote { landed += 1 }
             ledger.record(row)
         }
@@ -78,6 +103,91 @@ struct CatalogCommitBody {
         guard landed > 0 || designationLanded else {
             ledger.noteNothingLanded()
             throw NothingLanded()
+        }
+    }
+
+    // MARK: - A replaced row and its replacement (P0 2026-10-22)
+
+    /// purge index → the index of the item that replaces it: the first
+    /// item, under another id, at the purged row's live path (compared
+    /// NFC + case-folded, the store's own path identity). An item sent
+    /// more than once in this plan is not paired (its snapshots must run
+    /// in order, gap 2). A purge of a held (pending) row has no live path
+    /// and stays a lone purge — its payload is kept in `pending_purges`.
+    private func replacementPairs() throws -> [Int: Int] {
+        guard !plan.purges.isEmpty, !plan.items.isEmpty else { return [:] }
+        var sent: [UUID: Int] = [:]
+        for item in plan.items { sent[item.id, default: 0] += 1 }
+        let purged = Set(plan.purges)
+        var byPath: [String: Int] = [:]
+        for (index, item) in plan.items.enumerated()
+        where sent[item.id] == 1 && !purged.contains(item.id) {
+            let key = Self.pathKey(item.snapshot.fullPath)
+            if byPath[key] == nil { byPath[key] = index }
+        }
+        var pairs: [Int: Int] = [:]
+        var taken = Set<Int>()
+        for (index, id) in plan.purges.enumerated() {
+            guard let path = try tx.storedLivePath(id: id.uuidString),
+                  let itemIndex = byPath[Self.pathKey(path)], taken.insert(itemIndex).inserted else { continue }
+            pairs[index] = itemIndex
+        }
+        return pairs
+    }
+
+    /// The store's path identity (files.path_fold): NFC, then case folding.
+    static func pathKey(_ path: String) -> String {
+        path.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive], locale: nil)
+    }
+
+    private struct ReplacementNotStored: Error {
+        let words: String
+    }
+
+    /// The purge and its replacement in ONE savepoint: both land, or the
+    /// purge is undone and the old row stays live (the replacement's own
+    /// refusal is reported on it, as before).
+    private func replace(_ id: UUID, with item: CatalogCommit.Item)
+        -> (purge: CatalogCommit.RowResult, item: (CatalogCommit.RowResult, Bool)) {
+        var purgeRow = CatalogCommit.RowResult(id: id, fingerprint: 0, digest: nil, landing: .removed(.absent))
+        var itemRow = (CatalogCommit.RowResult(id: item.id, fingerprint: item.fingerprint, digest: nil,
+                                               landing: .refused("not attempted")), false)
+        do {
+            try tx.inSavepoint {
+                purgeRow = purge(id)
+                itemRow = commit(item)
+                if !Self.keepsRecord(itemRow.0) {
+                    throw ReplacementNotStored(words: Self.refusalWords(itemRow.0.landing))
+                }
+            }
+        } catch let kept as ReplacementNotStored {
+            purgeRow.landing = .refused(CatalogCommitWords.replacementNotStored(kept.words))
+            purgeRow.keptForReplacement = true
+            itemRow.0.heldPending = false
+            itemRow.1 = false
+        } catch {
+            let words = CatalogCommitWords.engine(error)
+            purgeRow.landing = .refused(words)
+            itemRow = (CatalogCommit.RowResult(id: item.id, fingerprint: item.fingerprint, digest: nil,
+                                               landing: .refused(words)), false)
+        }
+        return (purgeRow, itemRow)
+    }
+
+    /// The replacement now holds the record in the store: written (whole or
+    /// partial), already there, or held in `pending_rows` for its hash.
+    static func keepsRecord(_ row: CatalogCommit.RowResult) -> Bool {
+        switch row.landing {
+        case .written, .partial, .unchanged: return true
+        case .deferred: return row.heldPending
+        case .refused, .removed: return false
+        }
+    }
+
+    private static func refusalWords(_ landing: CatalogCommit.Landing) -> String {
+        switch landing {
+        case .refused(let words), .deferred(let words): return words
+        default: return "it was not stored"
         }
     }
 
@@ -383,6 +493,12 @@ enum CatalogCommitWords {
 
     static func engine(_ error: Error) -> String {
         String(describing: error)
+    }
+
+    /// A replaced row kept live because its replacement was not stored (P0 2026-10-22).
+    static func replacementNotStored(_ why: String) -> String {
+        "kept in the catalog — the record that replaces it at the same path could not be stored (\(why)); "
+            + "the row stays live, so its file is never left without a catalog row"
     }
 
     /// The row carries the purge marker (gap 3).

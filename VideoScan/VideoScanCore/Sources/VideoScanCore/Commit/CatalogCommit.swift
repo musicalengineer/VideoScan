@@ -150,6 +150,13 @@ public enum CatalogCommit {
         /// came back (the app sets it on the record so the next change
         /// follows on from it).
         public var adoptedRevision: Int?
+        /// A purge the store did NOT apply because the record replacing the
+        /// row at its path could not be stored (P0 2026-10-22): the row
+        /// stays live. The app must not send this purge again on its own —
+        /// a later commit without the replacement would purge the row with
+        /// nothing in its place, which is exactly how 95 archived Masters
+        /// lost their catalog rows.
+        public var keptForReplacement = false
         /// Written rows of a content whose shared sets (tags, people,
         /// attestations) this commit changed: the sets the store ENDS with
         /// (cutover B2.4). nil = no set of the content was written.

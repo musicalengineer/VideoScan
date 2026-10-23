@@ -678,6 +678,11 @@ final class CatalogCommitter {
         markerDirty.subtract(rows.filter { $0.landing.landed || $0.landing == .unchanged }.map(\.id))
         markerDirty.subtract(plan.purges)
         for id in plan.purges where !baseline.holds(id) { purgeRequested[id] = nil }
+        // P0 2026-10-22: the store kept a row because its replacement could
+        // not be stored. Never send that purge again on its own — a later
+        // commit would purge the row with nothing in its place. The row
+        // stays live; its absence from memory is named once (noteUnpurged).
+        for row in rows.prefix(plan.purges.count) where row.keptForReplacement { purgeRequested[row.id] = nil }
         let records = input().records
         if !report.revisions.isEmpty { adoptRevisions(report.revisions, records: records) }
         if !report.shared.isEmpty, baseline.propagate(report.shared, records: records) { onCopiesUpdated() }

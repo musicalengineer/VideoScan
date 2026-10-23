@@ -753,7 +753,14 @@ nonisolated func pfTriageBandCounts(
 /// correlate / analysis candidate — the repaired copy is the record
 /// that participates now.
 nonisolated func pfActiveRecords(_ records: [VideoRecord]) -> [VideoRecord] {
-    records.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
+    records.filter(pfIsActive)
+}
+
+/// The ONE predicate behind `pfActiveRecords`, for a single record (the
+/// Archive snapshot asks it of an archive copy's source — a source that is
+/// not active no longer represents its asset, P0 2026-10-22).
+nonisolated func pfIsActive(_ record: VideoRecord) -> Bool {
+    !record.isPurged && !record.isSetAside && !record.isSuperseded
 }
 
 /// Return the records that EXPORTS and BACKUPS carry: everything except

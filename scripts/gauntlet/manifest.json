@@ -30243,6 +30243,51 @@
         "theOneDoorIsTheTrash",
         "theProofComesOnlyFromBothFullReads"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitReplacementTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitReplacementTests"
+      ],
+      "tests": [
+        "archiveCopyWithoutStoredSourceKeepsOldRow",
+        "bodyPairsPurgesWithReplacements",
+        "heldReplacementPurges",
+        "landedReplacementPurges",
+        "lonePurgeLands",
+        "refusedReplacementKeepsOldRow",
+        "scaleAllRefusedNonePurged"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveTimelineCompletenessSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveTimelineCompletenessSensorTests"
+      ],
+      "tests": [
+        "everyInactiveSourceStateLeavesTheCopy",
+        "everyLiveArchiveCopyIsOnTheTimeline",
+        "liveSourceStillRepresents",
+        "promotedThenPrunedShowsUnder1998",
+        "scaleAllSourcesTrashed",
+        "snapshotAsksSourceRepresents"
+      ],
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter"
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRescanRefusedReplacementTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRescanRefusedReplacementTests"
+      ],
+      "tests": [
+        "refusedArchiveReplacementKeepsOriginalRow"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32797,6 +32842,10 @@
         {
           "name": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveTimelineCompletenessSensorTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
       "expected_floor": 2845,
@@ -33580,9 +33629,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 246,
+      "expected_floor": 247,
       "name": "regression",
-      "package_expected_floor": 220,
+      "package_expected_floor": 227,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33618,7 +33667,8 @@
         "VideoScanCoreTests.CatalogOpenCornerTests",
         "VideoScanCoreTests.CatalogFileGuardQAR1Tests",
         "VideoScanCoreTests.CatalogFileGuardQAR2Tests",
-        "VideoScanCoreTests.CatalogFileGuardCodex117Tests"
+        "VideoScanCoreTests.CatalogFileGuardCodex117Tests",
+        "VideoScanCoreTests.CatalogCommitReplacementTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -33690,7 +33740,8 @@
         "VideoScanTests/CatalogQuitCornerTests",
         "VideoScanTests/CatalogAuthorityCornerTests",
         "VideoScanTests/CatalogCommitterFailFastTests",
-        "VideoScanTests/CatalogViewerPublishCornerTests"
+        "VideoScanTests/CatalogViewerPublishCornerTests",
+        "VideoScanTests/CatalogRescanRefusedReplacementTests"
       ]
     },
     {

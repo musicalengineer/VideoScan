@@ -149,9 +149,14 @@ struct ArchiveCategorySnapshot {
         snap.notYetArchived.reserveCapacity(active.count)
         for rec in active {
             if model.isArchiveCopy(rec) {
-                // Orphan copy stands in for its vanished source; a copy
-                // with a live source is represented BY that source.
-                if model.promotionSource(of: rec) == nil {
+                // A copy stands in for its asset when its source is gone OR
+                // no longer active (P0 2026-10-22: Prune trashes the
+                // outside copies of a promoted file — the source is then
+                // `inTrash`, out of `active`, and the copy was skipped as
+                // "represented by its source", so the archived Master
+                // vanished from the Archive tab). A copy with an ACTIVE
+                // source is represented BY that source.
+                if !Self.sourceRepresents(rec, model: model) {
                     snap.archived.append(rec)
                     snap.activeAssetCount += 1
                     if let d = rec.resolvedArchivedAt { snap.archivedDates[rec.id] = d }
@@ -184,6 +189,17 @@ struct ArchiveCategorySnapshot {
         }
         snap.volumeFileCounts = counts
         return snap
+    }
+
+    /// True when `copy`'s promotion source is in the catalog AND active —
+    /// then the SOURCE row is the asset's one row in `archived`. Otherwise
+    /// (source gone, trashed, removed, set aside, superseded) the copy is.
+    /// Lock-step with `pfActiveRecords` through `pfIsActive`, so the
+    /// source is in `active` exactly when this says it represents. O(1).
+    @MainActor
+    static func sourceRepresents(_ copy: VideoRecord, model: VideoScanModel) -> Bool {
+        guard let source = model.promotionSource(of: copy) else { return false }
+        return pfIsActive(source)
     }
 
     /// The SAME resolver the promote flow uses for placement, so this list

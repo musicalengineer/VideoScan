@@ -308,6 +308,11 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, Ca
     /// The record left the app's catalog: the purge marker on its `files`
     /// row (tombstone first; never a DELETE), or its pending row dropped.
     func purgeFile(id: String, since: Int64, writtenAt: Int64, door: String) throws -> CatalogRow.PurgeLanding
+    /// The `full_path` of the LIVE `files` row `id` (nil when absent or
+    /// already removed) — one indexed read, so a commit can pair each purge
+    /// with the record that replaces it at the same path (P0 2026-10-22:
+    /// a purge never lands when its replacement does not).
+    func storedLivePath(id: String) throws -> String?
     /// The people a person changed on one copy, as a delta on the content's
     /// display rows: `removed` rows deleted only where name, kind AND
     /// confirmed_at all match (the exact row the copy saw — B2.6), `added` rows
