@@ -981,6 +981,7 @@ printf '%s\n' \
     '#!/bin/sh' \
     'printf "%s\n" "$*" > "$CORE_FAKE_ARGS"' \
     'cat "$CORE_FAKE_LOG"' \
+    '[ -n "${CORE_FAKE_HANG:-}" ] && exec sleep "$CORE_FAKE_HANG"' \
     'exit "$CORE_FAKE_RC"' > "$CORE_BIN/swift"
 chmod +x "$CORE_BIN/swift"
 ZW=$(printf '\342\200\213')   # U+200B, the indent Swift Testing really prints
@@ -1057,6 +1058,32 @@ else
     case "$got" in
         "failed|failed-tests:2|"*) pass "an already-red app verdict keeps its own reason; core_* still say what Core did" ;;
         *) fail "app reason was rewritten by the Core lane: '$got'" ;;
+    esac
+    # 2026-10-22: a hung Core test is stopped by the output-stall watchdog
+    # in seconds (here 2 s; the nightly uses 900 s), not at the deadline,
+    # the row says test-stall, and the group was sampled before the kill.
+    cat > "$SANDBOX/core-hang.log" <<CHL
+Test Case '-[VideoScanCoreTests.FileBackedCatalogSourceTests testMissingCatalogYieldsEmpty]' passed (0.000 seconds).
+Test Case '-[VideoScanCoreTests.FileBackedCatalogSourceTests testReachabilityIsARuntimeCheckInsideTheImpl]' started.
+CHL
+    hang_start=$(date +%s)
+    got=$(
+        export CORE_FAKE_HANG=600
+        export VIDEOSCAN_NIGHTLY_CORE_TIMEOUT_SECONDS=300
+        export VIDEOSCAN_NIGHTLY_CORE_STALL_SECONDS=2
+        export NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS=1 VIDEOSCAN_NIGHTLY_TERM_GRACE_SECONDS=1
+        export VIDEOSCAN_NIGHTLY_CORE_SAMPLE_FILE="$SANDBOX/core-hang-sample.txt"
+        run_core_case "$SANDBOX/core-hang.log" 0 ok ""
+    )
+    hang_elapsed=$(( $(date +%s) - hang_start ))
+    case "$got" in
+        "failed|core-test-stall:2s|7|7|failed|test-stall:2s|1|0|0|1|"*)
+            if [ "$hang_elapsed" -lt 120 ] && grep -q "watchdog stall:2s stop" "$SANDBOX/core-hang-sample.txt" 2>/dev/null; then
+                pass "a hung Core test is stopped by the stall watchdog in ${hang_elapsed}s (not the deadline), reads test-stall, stacks sampled"
+            else
+                fail "stall stop took ${hang_elapsed}s or left no sample file"
+            fi ;;
+        *) fail "hung Core lane: got '$got'" ;;
     esac
     notrun=$(
         # shellcheck disable=SC1090

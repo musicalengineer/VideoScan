@@ -110,7 +110,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-10-22-core-lane-sampler-r1"
+NIGHTLY_SCRIPT_VERSION="2026-10-22-core-lane-stall-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -367,6 +367,8 @@ print(json.dumps(base, separators=(",", ":")))
 # budget read 12.9 ms). GitHub CI keeps parallel + non-strict.
 NIGHTLY_CORE_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_TIMEOUT_SECONDS:-3600}"
 NIGHTLY_CORE_LOG="${VIDEOSCAN_NIGHTLY_CORE_LOG:-/tmp/nightly-core-test-output.log}"
+NIGHTLY_CORE_STALL_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_STALL_SECONDS:-900}"
+NIGHTLY_CORE_SAMPLE_FILE="${VIDEOSCAN_NIGHTLY_CORE_SAMPLE_FILE:-${LOGFILE:-$NIGHTLY_CORE_LOG}.core-hang-sample.txt}"
 CORE_STATUS="not-run"
 CORE_REASON="lane-not-reached"
 CORE_TEST_JSON='{"core_status":"not-run","core_reason":"lane-not-reached"}'
@@ -395,9 +397,20 @@ run_core_package_tests() {
     # test that was running, and nothing said what the machine was doing.
     # NSUnbufferedIO makes XCTest write each line as it happens; the sampler
     # logs load, swap and the busiest processes every 5 min of the lane.
+    # 10/22 the lane sat silent for 56 min after one test and was killed at
+    # the 3,600 s deadline. With unbuffered output every test prints when it
+    # starts and ends, and the longest Core test takes ~105 s (100k
+    # advances, M4 under load), so no output for NIGHTLY_CORE_STALL_SECONDS
+    # (default 900 s, ~9x that) means a hang: stop there, name the test that
+    # was running, and leave `sample` stacks of the test process beside the
+    # nightly log so the next hang is diagnosable from the morning.
     sample_core_lane_environment &
     local sampler_pid=$!
-    NSUnbufferedIO=YES run_with_process_group_watchdog \
+    rm -f "$NIGHTLY_CORE_SAMPLE_FILE"
+    NSUnbufferedIO=YES \
+    VIDEOSCAN_WATCHDOG_STALL_SECONDS="$NIGHTLY_CORE_STALL_SECONDS" \
+    VIDEOSCAN_WATCHDOG_SAMPLE_FILE="$NIGHTLY_CORE_SAMPLE_FILE" \
+    run_with_process_group_watchdog \
         "$NIGHTLY_CORE_TIMEOUT_SECONDS" \
         "${NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS:-10}" \
         "$NIGHTLY_CORE_LOG" \
@@ -419,6 +432,13 @@ run_core_package_tests() {
         "$total" "$FAILED" false "$rc" "${CRASHED:-0}"
     CORE_STATUS="$STATUS"
     CORE_REASON="$REASON"
+    if $NIGHTLY_WATCHDOG_STALLED; then
+        CORE_REASON="test-stall:${NIGHTLY_CORE_STALL_SECONDS}s"
+        log "Core lane STALLED: no output for ${NIGHTLY_CORE_STALL_SECONDS}s; last test started: $(grep -E "started\.?$" "$NIGHTLY_CORE_LOG" 2>/dev/null | tail -n 1)"
+    fi
+    if $timed_out && [ -s "$NIGHTLY_CORE_SAMPLE_FILE" ]; then
+        log "Core lane stacks at the stop: $NIGHTLY_CORE_SAMPLE_FILE"
+    fi
     CORE_TEST_JSON=$(CORE_STATUS="$CORE_STATUS" CORE_REASON="$CORE_REASON" \
         CORE_PASSED="$PASSED" CORE_FAILED="$FAILED" CORE_SKIPPED="$SKIPPED" \
         CORE_TOTAL="$total" CORE_KNOWN="$KNOWN_ISSUE_TESTS" CORE_ELAPSED="$elapsed" \
