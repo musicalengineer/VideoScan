@@ -92,15 +92,58 @@ struct FamilyTreeCardInvalidationSensorTests {
         window.contentView = host
         window.orderOut(nil)
         host.layoutSubtreeIfNeeded()
-        // Settle: the tree's background fills (flags, documents, owner)
-        // land after the first frames. Wait until the card builds stop.
-        var last = -1
-        for _ in 0..<20 where model.researchLinksEvaluations != last {
-            last = model.researchLinksEvaluations
-            try await Task.sleep(for: .milliseconds(150))
-            pump(0.35)
-        }
+        try await settle(model)
         return Mounted(box: box, model: model, catalog: catalog, window: window)
+    }
+
+    /// Quiet intervals in a row before the mount counts as settled, and the
+    /// most a mount may take. Measured 2026-10-22: idle, the mount builds
+    /// 30 → 90 card menus in 3–4 passes of 15 (one extra pass — 105 — on the
+    /// first mount in a process) and is quiet within ~1 s.
+    static let quietIntervalsRequired = 8
+    static let settleCap: Duration = .seconds(30)
+
+    /// Wait until the tree's mount-time work has stopped building cards.
+    ///
+    /// The background fills (load-on-appear, CyberBrain, birth-country
+    /// flags at .utility priority, document counts) hop back to the main
+    /// actor, and those hops run ONLY while this test is suspended: `pump`
+    /// is a nested run loop inside a main-actor job, which does not drain
+    /// the main queue. The old settle ("unchanged across one 150 ms sleep")
+    /// was fooled under load (GH #307 sensor flake, 2026-10-22): in the
+    /// parallel sensor lane other @MainActor tests hold the main queue and
+    /// the pool is busy, a fill lands after one quiet window, and its pass
+    /// of 15 card builds was counted against the catalog publishes
+    /// ("105 vs 90"). Reproduced exactly by a main-actor hog.
+    ///
+    /// Now: the load is done, the flags build has finished, AND the counter
+    /// has not moved for `quietIntervalsRequired` intervals in a row, each
+    /// of which suspends (so pending hops can land) and pumps (so SwiftUI
+    /// can render). Hitting the cap is a failure, never a pass.
+    private static func settle(_ model: FamilyTreeLiveModel) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now + settleCap
+        var last = model.researchLinksEvaluations
+        var quiet = 0
+        while quiet < quietIntervalsRequired {
+            guard clock.now < deadline else {
+                // `Issue.record` + throw ≈ ADD_FAILURE() then return: the
+                // test stops here, red, with the reason.
+                let reason = "mount never settled: card builds still moving (\(model.researchLinksEvaluations)) "
+                    + "after \(settleCap); loadState=\(model.loadState), "
+                    + "flags build pending=\(model.birthCountriesTask != nil)"
+                Issue.record("\(reason)")
+                throw CancellationError()
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            pump(0.05)
+            let now = model.researchLinksEvaluations
+            var loaded = false
+            if case .loaded = model.loadState { loaded = true }
+            let pipelineIdle = loaded && model.birthCountriesTask == nil
+            quiet = (now == last && pipelineIdle) ? quiet + 1 : 0
+            last = now
+        }
     }
 
     /// Fire `count` publishes, each in its own run-loop turn (SwiftUI
