@@ -11377,10 +11377,9 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ExternalPlayerAudioRouteTests.swift",
-      "stage": "integration",
+      "stage": "regression",
       "suites": [
         "ExternalPlayerAudioRouteLogicTests",
         "ExternalPlayerAudioRouteMediaMatrixTests",
@@ -27753,6 +27752,7 @@
         "test_publish_metrics.py"
       ],
       "tests": [
+        "test_a_folder_deleted_since_it_was_published_does_not_wedge_the_publish",
         "test_adversarial_rows_are_per_night_counts",
         "test_cli_kill_switch_is_a_no_op",
         "test_cli_out_dir_writes_sanitized_files_without_git",
@@ -27813,7 +27813,7 @@
         "test_summary_gate_refuses_anything_off_the_allowlist",
         "test_summary_object_validates_and_leaks_nothing",
         "test_summary_with_everything_failing_is_still_valid",
-        "test_the_real_rota_takes_the_m1_out_and_keeps_the_m4_and_m5"
+        "test_the_real_rota_runs_the_nightly_on_mac_studios_only"
       ]
     },
     {
@@ -30298,7 +30298,7 @@
     {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveTimelineCompletenessSensorTests.swift",
-      "stage": "unit",
+      "stage": "regression",
       "suites": [
         "ArchiveTimelineCompletenessSensorTests"
       ],
@@ -30309,8 +30309,7 @@
         "promotedThenPrunedShowsUnder1998",
         "scaleAllSourcesTrashed",
         "snapshotAsksSourceRepresents"
-      ],
-      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter"
+      ]
     },
     {
       "kind": "xcode",
@@ -30348,13 +30347,16 @@
         "CatalogCommitRelationTests"
       ],
       "tests": [
+        "alreadyPurgedReplacementUnchangedKeepsTheOldRow",
         "caseSensitiveSiblingDoesNotSatisfyThePurge",
         "incidentShapeLosesNothing",
         "oneOfTwoSnapshotsLanding",
         "pendingPredecessorKept",
         "repeatedSnapshotsKeepTheOldRow",
         "replacementAbsentAndUnstoredKeeps",
-        "replacementAlreadyStoredPurges"
+        "replacementAlreadyStoredPurges",
+        "replacementEndingInTrashLetsThePurgeStand",
+        "replacementPurgedLaterInTheGroupKeepsTheOldRow"
       ]
     },
     {
@@ -30366,6 +30368,8 @@
       ],
       "tests": [
         "correctedReplacementCompletesThePair",
+        "keptPurgeFollowsTheNextReplacement",
+        "removedReplacementReleasesTheKeptRow",
         "swapDoorsNameTheirReplacement"
       ]
     },
@@ -30381,7 +30385,7 @@
         "importEraArchiveCopyReplacementLands",
         "rescanKeepsEveryArchivedMastersRow"
       ],
-      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter"
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32940,10 +32944,6 @@
         {
           "name": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/ArchiveTimelineCompletenessSensorTests.swift",
-          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
       "expected_floor": 2846,
@@ -33728,12 +33728,12 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
-          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 256,
+      "expected_floor": 275,
       "name": "regression",
-      "package_expected_floor": 240,
+      "package_expected_floor": 243,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33847,7 +33847,11 @@
         "VideoScanTests/CatalogCommitterFailFastTests",
         "VideoScanTests/CatalogViewerPublishCornerTests",
         "VideoScanTests/CatalogRescanRefusedReplacementTests",
-        "VideoScanTests/CatalogKeptPurgeRetryTests"
+        "VideoScanTests/CatalogKeptPurgeRetryTests",
+        "VideoScanTests/ArchiveTimelineCompletenessSensorTests",
+        "VideoScanTests/ExternalPlayerAudioRouteLogicTests",
+        "VideoScanTests/ExternalPlayerAudioRouteMediaMatrixTests",
+        "VideoScanTests/ExternalPlayerAudioRouteSourceSensor"
       ]
     },
     {
@@ -33978,10 +33982,6 @@
         },
         {
           "name": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/ExternalPlayerAudioRouteTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
