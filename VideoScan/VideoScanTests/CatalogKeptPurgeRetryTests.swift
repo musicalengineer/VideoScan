@@ -4,6 +4,16 @@
 // pair goes again together: the replacement lands and the old row is
 // purged — never a permanent live-path collision, never two rows.
 //
+// codex #124 F2 (P2): the kept purge's dependency follows the doors.
+//   * a later rescan swaps the unstored B for a fresh C: A now waits on C
+//     and goes with it (A→C), so C never collides with A's live path;
+//   * B is removed outright (gone from disk — the merge's plain purge):
+//     A's dependency is RELEASED. A is NOT purged on B's account (nothing
+//     proved A's own file gone); it stays live, catalog.log names it, and
+//     its own case is decided by its own evidence after a reload.
+// Both were red at 3197ef431 (A stayed tied to B: C collided; the release
+// was silent).
+//
 // Suites (filter by SUITE): CatalogKeptPurgeRetryTests
 
 import Foundation
@@ -46,6 +56,59 @@ struct CatalogKeptPurgeRetryTests {
         let atPath = reloaded.records.filter { $0.fullPath == path }
         #expect(atPath.map(\.id) == [b.id], "the replacement lands and the old row is purged — one row")
         #expect(atPath.first?.userNotes == "corrected")
+    }
+
+    /// A at its path, a rescan's B refused by a trigger, A kept. Returns A, B, path, root.
+    private func keptPair(_ scene: CutoverScene) async throws -> (a: VideoRecord, b: VideoRecord, path: String, root: String) {
+        try await scene.launchOnSQLite()
+        let a = try scene.record(.healthy)
+        #expect(scene.model.saveCatalogNow())
+        let path = a.fullPath
+        let root = (path as NSString).deletingLastPathComponent
+        let b = try scene.probe(of: a)
+        b.contentFixity = a.contentFixity
+        try scene.execSQL("""
+            CREATE TRIGGER test_refuse_b BEFORE INSERT ON files WHEN NEW.id = '\(b.id.uuidString)'
+            BEGIN SELECT RAISE(ABORT, 'injected refusal'); END
+            """)
+        await scene.model.commitScanResults(root: root, volName: "Fixture", targetRecords: [b], scanWasComplete: false)
+        _ = scene.model.saveCatalogNow()
+        let kept = try await scene.sqliteLoad().records.filter { $0.fullPath == path }.map(\.id)
+        #expect(kept == [a.id], "precondition: while B is refused, A keeps the file's row")
+        return (a, b, path, root)
+    }
+
+    @Test("#124 F2: A kept for unstored B; a later rescan swaps B for a fresh C → C stored, A purged, one row")
+    func keptPurgeFollowsTheNextReplacement() async throws {
+        let scene = try CutoverScene.make("codex124_f2_c"); defer { scene.cleanup() }
+        let (a, b, path, root) = try await keptPair(scene)
+        let c = try scene.probe(of: b)                  // a fresh UUID, never refused
+        c.contentFixity = a.contentFixity
+        await scene.model.commitScanResults(root: root, volName: "Fixture", targetRecords: [c], scanWasComplete: false)
+        _ = scene.model.saveCatalogNow()
+
+        let reloaded = try await scene.sqliteLoad()
+        let atPath = reloaded.records.filter { $0.fullPath == path }
+        #expect(atPath.map(\.id) == [c.id], "C holds the path; A went with it — one row, no collision")
+        #expect(!reloaded.records.contains { $0.id == b.id }, "the refused B was never stored")
+    }
+
+    @Test("#124 F2: A kept for unstored B; B removed (gone from disk) → A's dependency released: A stays live, named, not purged")
+    func removedReplacementReleasesTheKeptRow() async throws {
+        let scene = try CutoverScene.make("codex124_f2_gone"); defer { scene.cleanup() }
+        let (a, b, path, root) = try await keptPair(scene)
+        // What a COMPLETE rescan does when B's file is gone: B leaves memory
+        // and the merge purges its id with no replacement (a plain removal).
+        scene.model.records.removeAll { $0.id == b.id }
+        scene.model.purgeCatalogRows(ids: [b.id], reason: "rescan of \(root): replaced by a fresh record or gone from disk")
+        _ = scene.model.saveCatalogNow()
+
+        let reloaded = try await scene.sqliteLoad()
+        let atPath = reloaded.records.filter { $0.fullPath == path }
+        #expect(atPath.map(\.id) == [a.id], "A is not purged on B's account")
+        #expect(atPath.first?.removal == nil, "and stays live")
+        #expect(scene.sandbox.catalogLogText().contains("KEPT \(a.id.uuidString)"),
+                "catalog.log names the released row and why it stays")
     }
 
     /// Source pin (joins the sensor lane): every door that SWAPS a record

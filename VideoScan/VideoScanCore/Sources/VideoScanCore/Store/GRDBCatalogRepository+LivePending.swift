@@ -87,8 +87,16 @@ extension GRDBTransaction {
     }
 
     func storedRecordPresent(id: String) throws -> Bool {
-        if try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM files WHERE id = ? AND removal_state IS NULL)",
-                             arguments: [id]) == true { return true }
+        // A `files` row stands for its file unless it carries the purge
+        // marker (the load skips exactly those). In the Trash, missing, or
+        // removed by a person, it is still the file's row — a rescan's fresh
+        // record inherits that marker (codex #124 F1).
+        if try Bool.fetchOne(db, sql: """
+            SELECT EXISTS (SELECT 1 FROM files WHERE id = ?
+                              AND NOT (removal_state IS ? AND removal_reason IS ?))
+            """, arguments: [id, CatalogDDL.RemovalState.removedFromCatalog.rawValue, CatalogRow.purgeReason]) == true {
+            return true
+        }
         return try Bool.fetchOne(db, sql: """
             SELECT EXISTS (SELECT 1 FROM pending_rows WHERE id = ? AND id NOT IN (SELECT id FROM pending_purges))
             """, arguments: [id]) == true

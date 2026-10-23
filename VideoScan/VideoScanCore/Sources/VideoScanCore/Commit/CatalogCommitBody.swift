@@ -67,7 +67,8 @@ struct CatalogCommitBody {
     /// paths); then each REPLACEMENT GROUP in one savepoint — every purge
     /// the plan says this record replaces, then every snapshot of the
     /// record, in plan order. The purges stand only when the group leaves
-    /// the record stored or held; otherwise the savepoint is undone and the
+    /// the record stored or held — read back from the store after the
+    /// group (codex #124 F1); otherwise the savepoint is undone and the
     /// old rows (live or pending) stay. A group whose record is not in this
     /// commit purges only when the store already holds the record. Then
     /// every other record in plan order. The ledger lists purges first,
@@ -145,11 +146,16 @@ struct CatalogCommitBody {
         let words: String
     }
 
-    /// The group in ONE savepoint: its purges stand only when the record is
-    /// stored or held afterwards; otherwise everything in it is undone, the
-    /// old rows stay (live or pending), and the purges say why
-    /// (`keptForReplacement`). The record's own refusal is reported on its
-    /// rows, as before.
+    /// The group in ONE savepoint: its purges stand only when the record
+    /// ENDS the group stored or held — checked in the store after every
+    /// snapshot ran, not read off the snapshots' results (codex #124 F1: a
+    /// live snapshot followed by the record's purge snapshot, or a record
+    /// already purged sent unchanged, both "landed" while the record ended
+    /// purged). Otherwise everything in it is undone: the old rows stay
+    /// (live or pending), the purges say why (`keptForReplacement`), and a
+    /// snapshot that had landed is reported refused — the savepoint took it
+    /// back, so the app keeps the record changed. A snapshot refused on its
+    /// own keeps its own words.
     private func replace(_ group: ReplacementGroup)
         throws -> (purges: [CatalogCommit.RowResult], items: [(CatalogCommit.RowResult, Bool)]) {
         let ids = group.purgeIndices.map { plan.purges[$0] }
@@ -159,14 +165,15 @@ struct CatalogCommitBody {
             try tx.inSavepoint {
                 purgeRows = ids.map { purge($0) }
                 itemRows = group.itemIndices.map { commit(plan.items[$0]) }
-                if itemRows.isEmpty {
-                    // The record is not in this commit: purge only if the
-                    // store already holds it (an earlier commit stored it).
-                    guard try tx.storedRecordPresent(id: group.replacement.uuidString) else {
-                        throw ReplacementNotStored(words: "it is not stored or held yet")
-                    }
-                } else if !itemRows.contains(where: { Self.keepsRecord($0.0) }) {
+                if !itemRows.isEmpty, !itemRows.contains(where: { Self.keepsRecord($0.0) }) {
                     throw ReplacementNotStored(words: Self.refusalWords(itemRows.last?.0.landing))
+                }
+                // The record is not in this commit (an earlier commit stored
+                // it), or its snapshots ran: either way it must be in the
+                // store NOW, not carrying the purge marker.
+                guard try tx.storedRecordPresent(id: group.replacement.uuidString) else {
+                    throw ReplacementNotStored(words: itemRows.isEmpty
+                        ? "it is not stored or held yet" : CatalogCommitWords.replacementEndsRemoved)
                 }
             }
         } catch let kept as ReplacementNotStored {
@@ -176,6 +183,10 @@ struct CatalogCommitBody {
                 purgeRows[index].keptForReplacement = true
             }
             for index in itemRows.indices {
+                if Self.keepsRecord(itemRows[index].0) {
+                    itemRows[index].0.landing = .refused(CatalogCommitWords.replacementUndone(ids, kept.words))
+                    itemRows[index].0.adoptedRevision = nil
+                }
                 itemRows[index].0.heldPending = false
                 itemRows[index].1 = false
             }
@@ -509,6 +520,17 @@ enum CatalogCommitWords {
     static func replacementNotStored(_ replacement: UUID, _ why: String) -> String {
         "kept in the catalog — the record that replaces it (\(replacement.uuidString)) is not stored: \(why); "
             + "the row stays, so its file is never left without a catalog row"
+    }
+
+    /// The replacement's snapshots ran but it ends the save purged (codex #124 F1).
+    static let replacementEndsRemoved = "it ends this save removed from the catalog (purged) — "
+        + "a later snapshot took it out, or it was already purged"
+
+    /// A replacement's snapshot that had landed, undone with the purges it
+    /// would have let stand (codex #124 F1): the app keeps it changed.
+    static func replacementUndone(_ replaced: [UUID], _ why: String) -> String {
+        "not saved — it replaces \(replaced.map(\.uuidString).joined(separator: ", ")) and \(why); "
+            + "the old row stays and this save of it is undone with the purge"
     }
 
     /// The row carries the purge marker (gap 3).

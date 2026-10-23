@@ -308,10 +308,12 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, Ca
     /// The record left the app's catalog: the purge marker on its `files`
     /// row (tombstone first; never a DELETE), or its pending row dropped.
     func purgeFile(id: String, since: Int64, writtenAt: Int64, door: String) throws -> CatalogRow.PurgeLanding
-    /// True when the store holds record `id`: a LIVE `files` row, or a
-    /// `pending_rows` payload that is not purged. Two indexed reads. A
-    /// purge whose replacement is not in this commit lands only when this
-    /// says yes (P0 2026-10-22, codex #123).
+    /// True when the store holds record `id`: a `files` row that does not
+    /// carry the purge marker (live, or In the Trash / missing / removed by
+    /// a person — still the file's row), or a `pending_rows` payload that is
+    /// not purged. Two indexed reads. A replacement group's purges stand
+    /// only when this says yes AFTER the group's snapshots ran (P0
+    /// 2026-10-22, codex #123; #124 F1).
     func storedRecordPresent(id: String) throws -> Bool
     /// The people a person changed on one copy, as a delta on the content's
     /// display rows: `removed` rows deleted only where name, kind AND

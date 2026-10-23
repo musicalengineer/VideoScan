@@ -14,6 +14,13 @@
 //       the exact refusal reason on every kept purge;
 //   NOT-IN-COMMIT  a replacement absent from the commit: kept while the store
 //       does not hold it; purged once it does.
+// codex #124 (docs/reviews/codex/codex-review-p0-purge-relation-verify-2026-10-23.md):
+//   F1  a replacement whose snapshots land but END purged (a live snapshot
+//       then a purge snapshot; an already-purged row sent unchanged) never
+//       lets the old row go — red at 3197ef431;
+//   F3  the INCIDENT mix now has pending predecessors and repeated refused
+//       snapshots, and counts written / held / refused separately — red by
+//       mutation against the path-paired design's blind spots.
 // (F4 — the committer keeps the relation — is app side: CatalogKeptPurgeRetryTests.)
 // Each of F1–F3 was RED at f59f6d841 (old API, path-inferred pairing).
 //
@@ -163,7 +170,13 @@ struct CatalogCommitRelationTests {
         #expect(notes == "second snapshot", "snapshots ran in order")
     }
 
-    @Test("INCIDENT: one generation, 100 writes + 100 holds + 100 REAL-trigger refusals — zero rows lost, exact reason")
+    /// The incident's mix, in ONE generation, in the shapes the path-paired
+    /// design (f59f6d841) could not see (codex #124 finding 3): half of every
+    /// group's predecessors are PENDING rows (held, no hash — no live path to
+    /// pair on), and every refused replacement is sent as TWO snapshots
+    /// (repeated snapshots were never paired). Groups of 100: written · held
+    /// · refused by the real `archive_copies_need_source` trigger.
+    @Test("INCIDENT: one generation, 100 written + 100 held + 100 REAL-trigger refusals, pending predecessors, repeated snapshots — zero rows lost")
     func incidentShapeLosesNothing() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let (template, _, digest) = try await base(s)
@@ -171,38 +184,121 @@ struct CatalogCommitRelationTests {
         var olds: [VideoRecord] = []
         for i in 0..<(3 * n) {
             let r = try FreshRecord.copy(template, path: "/Volumes/Fixture/FamilyArchive/30_Video/m\(i).mkv")
-            FreshRecord.giveDigest(r, digest)
+            if (i / 3) % 2 == 0 { FreshRecord.giveDigest(r, digest) }      // live row; else a pending predecessor
             olds.append(r)
         }
         _ = try await s.commit(olds, purges: [])
-        var fresh: [VideoRecord] = []
+        let pendingOlds: Int? = try s.scalar("SELECT count(*) FROM pending_rows")
+        #expect(pendingOlds == 3 * n / 2, "precondition: half the predecessors are pending rows")
+        var items: [CatalogCommit.Item] = []
+        var repeats: [CatalogCommit.Item] = []
         var relation: [UUID: UUID] = [:]
+        var writtenIDs = Set<UUID>(), heldIDs = Set<UUID>(), refusedIDs = Set<UUID>()
         for (i, old) in olds.enumerated() {
             let f: VideoRecord
             switch i % 3 {
-            case 0: f = try FreshRecord.copy(old, path: old.fullPath); FreshRecord.giveDigest(f, digest)   // written
-            case 1: f = try FreshRecord.copy(old, path: old.fullPath)                                       // held
-            default: f = try incidentCopy(of: old, path: old.fullPath, digest: digest)                      // refused
+            case 0:
+                f = try FreshRecord.copy(old, path: old.fullPath); FreshRecord.giveDigest(f, digest)
+                writtenIDs.insert(f.id)
+            case 1:
+                f = try FreshRecord.copy(old, path: old.fullPath)
+                heldIDs.insert(f.id)
+            default:
+                f = try incidentCopy(of: old, path: old.fullPath, digest: digest)
+                refusedIDs.insert(f.id)
             }
-            fresh.append(f)
+            items.append(CommitScene.item(f))
+            if i % 3 == 2 {
+                f.userNotes = "second snapshot"
+                repeats.append(CommitScene.item(f))
+            }
             relation[old.id] = f.id
         }
-        let outcome = try await s.commit(fresh, purges: olds.map(\.id), replacements: relation)
+        let outcome = try await s.commitItems(items + repeats, purges: olds.map(\.id), replacements: relation)
 
         let lost = try olds.filter { try s.representedAt($0.fullPath) != 1 }
         #expect(lost.isEmpty, "\(lost.count) paths lost their catalog row (or doubled)")
-        let purgeRows = outcome.rows.prefix(olds.count)
+        let purgeRows = Array(outcome.rows.prefix(olds.count))
+        let itemRows = Array(outcome.rows.dropFirst(olds.count))
+        #expect(itemRows.count == 4 * n)
+        let reason = "an archive copy names its source"
+
+        let written = itemRows.filter { if case .written = $0.landing { return true }; return false }
+        #expect(written.count == n, "exactly 100 replacements written")
+        #expect(Set(written.map(\.id)) == writtenIDs)
+        let held = itemRows.filter { if case .deferred = $0.landing { return $0.heldPending }; return false }
+        #expect(held.count == n, "exactly 100 replacements held for their hash")
+        #expect(Set(held.map(\.id)) == heldIDs)
+        let refused = itemRows.filter { if case .refused(let w) = $0.landing { return w.contains(reason) }; return false }
+        #expect(refused.count == 2 * n, "both snapshots of each of the 100 refused replacements are refused by the trigger")
+        #expect(Set(refused.map(\.id)) == refusedIDs)
+
         let kept = purgeRows.filter(\.keptForReplacement)
         #expect(kept.count == n, "exactly the 100 refused replacements kept their old rows")
-        let reason = "an archive copy names its source"
+        #expect(Set(kept.map(\.id)) == Set(olds.enumerated().filter { $0.offset % 3 == 2 }.map(\.element.id)))
         #expect(kept.allSatisfy { if case .refused(let w) = $0.landing { return w.contains(reason) }; return false },
                 "every kept purge names the trigger's reason")
-        let refusedItems = outcome.rows.dropFirst(olds.count).filter { if case .refused = $0.landing { return true }; return false }
-        #expect(refusedItems.count == n)
-        #expect(refusedItems.allSatisfy { if case .refused(let w) = $0.landing { return w.contains(reason) }; return false })
-        #expect(purgeRows.filter { $0.landing == .removed(.purged(revision: 1)) }.count == 2 * n,
-                "written and held replacements let their purges stand")
+        #expect(purgeRows.filter { $0.landing == .removed(.purged(revision: 1)) }.count == n,
+                "the live predecessors of written and held replacements are purged")
+        #expect(purgeRows.filter { $0.landing == .removed(.pendingPurged) }.count == n,
+                "the pending predecessors of written and held replacements are tombstoned")
         #expect(outcome.isCommitted)
+    }
+
+    // MARK: - codex #124 finding 1: the replacement must END stored
+
+    @Test("#124 F1: the replacement's live snapshot then its purge snapshot — the old row stays, the pair is refused")
+    func replacementPurgedLaterInTheGroupKeepsTheOldRow() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let (a, path, digest) = try await base(s)
+        let b = try FreshRecord.copy(a, path: path)
+        FreshRecord.giveDigest(b, digest)
+        let live = CommitScene.item(b)
+        b.removal = .removedFromCatalog(at: Date(timeIntervalSince1970: 1_790_300_000), reason: .purged)
+        b.removalRevision = 1
+        let outcome = try await s.commitItems([live, CommitScene.item(b)], purges: [a.id], replacements: [a.id: b.id])
+        #expect(try s.representedAt(path) == 1, "the file keeps a catalog row")
+        let state: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [healthyID])
+        #expect(state == nil, "and it is A's, live")
+        #expect(outcome.rows.first?.keptForReplacement == true)
+        let bRows: Int? = try s.scalar("SELECT count(*) FROM files WHERE id = ?", [b.id.uuidString])
+        #expect(bRows == 0, "B's snapshots were undone with the purge")
+        #expect(outcome.rows.dropFirst().allSatisfy { if case .refused = $0.landing { return true }; return false },
+                "B's rows are not reported stored (the app keeps them changed)")
+    }
+
+    @Test("#124 F1: an already-purged replacement sent unchanged never lets the old row go")
+    func alreadyPurgedReplacementUnchangedKeepsTheOldRow() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let (a, path, digest) = try await base(s)
+        let b = try FreshRecord.copy(a, path: "/Volumes/Fixture/Clips/elsewhere.mov")
+        FreshRecord.giveDigest(b, digest)
+        _ = try await s.commit([b], purges: [])
+        b.removal = .removedFromCatalog(at: Date(timeIntervalSince1970: 1_790_300_000), reason: .purged)
+        b.removalRevision = 1
+        _ = try await s.commit([b], purges: [])
+        let bState: String? = try s.scalar("SELECT removal_reason FROM files WHERE id = ?", [b.id.uuidString])
+        #expect(bState == CatalogRow.purgeReason, "precondition: B's stored row carries the purge marker")
+        let outcome = try await s.commit([b], purges: [a.id], replacements: [a.id: b.id])
+        #expect(try s.representedAt(path) == 1, "A keeps the row for its file")
+        #expect(outcome.rows.first?.keptForReplacement == true)
+    }
+
+    @Test("#124 F1 control: a replacement that ends In the Trash is still the file's row — the purge stands")
+    func replacementEndingInTrashLetsThePurgeStand() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let (a, path, digest) = try await base(s)
+        let b = try FreshRecord.copy(a, path: path)
+        FreshRecord.giveDigest(b, digest)
+        let live = CommitScene.item(b)
+        b.removal = .inTrash(movedAt: Date(timeIntervalSince1970: 1_790_300_000), trashPath: nil, reason: .catalogTrash)
+        b.lifecycleStage = .trashed
+        b.removalRevision = 1
+        let outcome = try await s.commitItems([live, CommitScene.item(b)], purges: [a.id], replacements: [a.id: b.id])
+        #expect(outcome.rows.first?.landing == .removed(.purged(revision: 1)))
+        #expect(outcome.rows.last?.landing.landed == true, "the Trash snapshot lands")
+        let bState: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [b.id.uuidString])
+        #expect(bState == CatalogDDL.RemovalState.inTrash.rawValue, "B is stored, In the Trash")
     }
 
     @Test("NOT-IN-COMMIT: a replacement absent from this commit and not stored keeps the old row")

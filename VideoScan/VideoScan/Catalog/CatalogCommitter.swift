@@ -161,6 +161,9 @@ final class CatalogCommitter {
     /// Of `purgeRequested`: purged id → the record that replaces it
     /// (P0 2026-10-22, codex #123 F4 — kept while the store keeps the row).
     private var replacedBy: [UUID: UUID] = [:]
+    /// Of `replacedBy`: kept purges already named as waiting on a
+    /// replacement that is gone (said once each, codex #124 F2).
+    private var notedUnresolved: Set<UUID> = []
     /// Reopen / Adopt is closing and opening the store: no commit runs.
     private var reopening = false
     private var heldBy: String?
@@ -205,6 +208,7 @@ final class CatalogCommitter {
         markerDirty = []
         purgeRequested = [:]
         replacedBy = [:]
+        notedUnresolved = []
     }
 
     /// Refuse every commit until a person reopens (a read-only open).
@@ -419,15 +423,51 @@ final class CatalogCommitter {
     /// fresh instance), from the door that made the swap — the store then
     /// purges the old row only together with a stored or held replacement
     /// (P0 2026-10-22, codex #123). Absent = a plain removal.
+    ///
+    /// The kept relations are reconciled FIRST, over every id the door
+    /// names — stored or not (codex #124 F2): a kept purge waiting on a
+    /// replacement the store never took follows what happens to that
+    /// replacement (`reconcileKept`).
     func purge(ids: Set<UUID>, reason: String, replacements: [UUID: UUID] = [:]) {
+        let reconciled = reconcileKept(removed: ids, replacements: replacements)
         let known = ids.filter { baseline.holds($0) }
-        guard !known.isEmpty else { return }
+        guard !known.isEmpty || reconciled else { return }
         for id in known {
             purgeRequested[id] = reason
             if let r = replacements[id], r != id { replacedBy[id] = r }
         }
-        sink("Catalog store: START purge of \(known.count) row(s) — \(reason)")
+        if !known.isEmpty { sink("Catalog store: START purge of \(known.count) row(s) — \(reason)") }
         commit(.save, owner: nil, scope: .everything)
+    }
+
+    /// A kept purge (A, waiting on B) when a door removes B before the
+    /// store took it (codex #124 F2). True when a relation changed.
+    ///   * B is swapped for C (`replacements[B] = C`): A now waits on C and
+    ///     goes with it — so C never meets A's live row at the same path.
+    ///   * B is removed outright (no replacement — gone from disk, Delete
+    ///     All): A's dependency is RELEASED, and so is its purge request.
+    ///     A is NOT purged on B's account: nothing proved A's own file
+    ///     gone, and the old row may go only beside a stored replacement.
+    ///     A stays in the catalog, named here (and once more as a record
+    ///     that left memory without a purge); after a reload its own
+    ///     evidence decides it.
+    /// A relation to a replacement the store DOES hold is left alone: that
+    /// dependency is already met (`duePurges` sends A).
+    private func reconcileKept(removed ids: Set<UUID>, replacements: [UUID: UUID]) -> Bool {
+        let waiting = replacedBy.filter { ids.contains($0.value) && !baseline.holds($0.value) }
+        for (old, gone) in waiting.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            if let next = replacements[gone], next != gone, next != old {
+                replacedBy[old] = next
+                sink("Catalog store: row \(old.uuidString) now waits for \(next.uuidString), "
+                     + "which replaced \(gone.uuidString) before it was stored")
+            } else {
+                replacedBy[old] = nil
+                purgeRequested[old] = nil
+                sink("Catalog store: KEPT \(old.uuidString) — the record that was to replace it (\(gone.uuidString)) "
+                     + "left the catalog before it was stored; the row stays and is not purged on its account")
+            }
+        }
+        return !waiting.isEmpty
     }
 
     private func commitFromTimer() {
@@ -631,8 +671,9 @@ final class CatalogCommitter {
     /// A purge with a replacement (P0 2026-10-22, codex #123) is due only
     /// when the replacement is sent in this commit or the store already
     /// holds it — never alone while the replacement waits (refused). If a
-    /// door removed the replacement itself, the relation is void and the
-    /// purge is a plain one again.
+    /// door removed a replacement the store HOLDS, the dependency was met
+    /// and the purge is a plain one again; one the store never took was
+    /// already reconciled at the door (`reconcileKept`, codex #124 F2).
     private func duePurges(present: Set<UUID>, sent: Set<UUID>) -> [UUID] {
         let doomed = Set(purgeRequested.keys)
         for id in purgeRequested.keys.filter({ present.contains($0) || !baseline.holds($0) }) {
@@ -641,13 +682,32 @@ final class CatalogCommitter {
         }
         let requested = Set(purgeRequested.keys)
         noteUnpurged(baseline.unpurgedAbsences(present: present, requested: requested))
-        return baseline.purges(requested: requested, present: present).filter { id in
+        let due = baseline.purges(requested: requested, present: present).filter { id in
             guard let replacement = replacedBy[id] else { return true }
             if doomed.contains(replacement) {
                 replacedBy[id] = nil
                 return true
             }
             return sent.contains(replacement) || baseline.holds(replacement)
+        }
+        noteUnresolved(present: present)
+        return due
+    }
+
+    /// Kept purges whose replacement is neither in memory nor in the store
+    /// (it left memory without a door's purge): each named ONCE — the row
+    /// stays, waiting (codex #124 F2: visible, never silent).
+    private func noteUnresolved(present: Set<UUID>) {
+        let unresolved = replacedBy.filter { !present.contains($0.value) && !baseline.holds($0.value) }
+        notedUnresolved.formIntersection(unresolved.keys)
+        let fresh = unresolved.keys.filter { !notedUnresolved.contains($0) }.sorted { $0.uuidString < $1.uuidString }
+        notedUnresolved.formUnion(fresh)
+        for id in fresh.prefix(Self.unpurgedLinesPerCommit) {
+            sink("Catalog store: KEPT \(id.uuidString) — waiting for \(unresolved[id]?.uuidString ?? "?"), "
+                 + "which is no longer in memory and was never stored")
+        }
+        if fresh.count > Self.unpurgedLinesPerCommit {
+            sink("Catalog store: … and \(fresh.count - Self.unpurgedLinesPerCommit) more row(s) KEPT waiting for a replacement that is gone")
         }
     }
 
