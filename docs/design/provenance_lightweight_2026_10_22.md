@@ -57,6 +57,18 @@ or bytes — allowed by the archived-is-read-only rule. 🔴 But it means **rewr
 in `00_Index`** for those Masters (v3 → v4). That needs your OK; the alternative is a separate
 `00_Index/Provenance.csv` keyed by SHA-256 that leaves the v3 manifest untouched.
 
+## Logging (Rick, 10/22: "a good log is always part of the best practices")
+
+The catalog is the truth and `Provenance.csv` the archive's copy, but every provenance change is also
+logged plainly, through the one sink (console, catalog.log, videoscan.log), plus a ledger event:
+
+- **At ingest of new media:** `START provenance draft — 3 new captures in Converted_VHS_Tapes_2027/Cape-1996`,
+  then one line per file: what the machine inferred, from what evidence, with what confidence.
+- **Every assertion change:** field, old → new, state (inferred → confirmed / corrected / rejected),
+  who (Rick / machine rule + version), and the evidence. A rejection is logged with the value it forbids.
+- **Promote:** the provenance that went into the archive, and whether it was confirmed or archived-unknown (with the reason).
+- **OUTCOME** line per batch: N confirmed · N corrected · N rejected · N still inferred.
+
 ## Phases
 
 1. Schema v13 + Needs-provenance filter + Provenance sheet + July backfill drafts. *(Rick confirms ~15 tapes.)*
