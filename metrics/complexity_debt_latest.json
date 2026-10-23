@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-22T09:44:32Z",
- "sha": "1a2e4344",
+ "ts": "2026-10-23T09:40:34Z",
+ "sha": "50a95958",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 402,
- "baseline_before": 397,
- "baseline_after": 397,
+ "offenders": 392,
+ "baseline_before": 387,
+ "baseline_after": 387,
  "new": [
   {
    "key": "VideoScan/VideoScan/App/ContentView.swift::CatalogView.withCatalogObservers",
@@ -82,6 +82,16 @@
    "lang": "swift",
    "base_ccn": 11,
    "base_nloc": 149
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/TidyCatalogSheet.swift::TidyCatalogSheet.body",
+   "file": "VideoScan/VideoScan/Catalog/TidyCatalogSheet.swift",
+   "function": "TidyCatalogSheet.body",
+   "ccn": 10,
+   "nloc": 115,
+   "lang": "swift",
+   "base_ccn": 8,
+   "base_nloc": 108
   },
   {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",
