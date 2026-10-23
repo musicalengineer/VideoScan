@@ -250,9 +250,10 @@ def grab_thumbs(path, duration_s, n=4, width=160, budget_s=25.0):
 
 # ----------------------------------------------------------------------------- catalog
 def load_catalog(db_path):
-    uri = f"file:{db_path}?mode=ro"
-    con = sqlite3.connect(uri, uri=True)
-    con.row_factory = sqlite3.Row
+    # Read-only by construction (URI mode=ro + query_only), the one door for scripts.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import catalog_db  # noqa: E402
+    con = catalog_db.connect(db_path)
     cat = {}
     cat["files"] = [dict(r) for r in con.execute(
         "SELECT id, content_digest, full_path, filename, ext, directory, size_bytes, fs_created_at, "
@@ -1193,7 +1194,9 @@ def main():
     args = ap.parse_args()
 
     db = os.path.abspath(args.db)
-    if "Application Support/VideoScan/catalog.sqlite" in db:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import catalog_db  # noqa: E402
+    if os.path.abspath(str(catalog_db.DEFAULT_DATABASE)) == db:
         sys.exit("refusing to open the live catalog; pass a backup copy")
     out_dir = args.out_dir or os.path.join(os.path.dirname(db), "prov")
     os.makedirs(out_dir, exist_ok=True)

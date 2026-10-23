@@ -312,7 +312,7 @@ public enum CatalogRealityPolicy {
         guard let first = reasons.first else { return "The catalog is reconciled" }
         let more = reasons.count > 1 ? " · \(reasons.count - 1) more" : ""
         let summary = words(first, now: now)
-        guard colour == .red else { return summary.prefix(1).uppercased() + summary.dropFirst() + more }
+        guard colour == .red else { return summary.prefix(1).uppercased() + String(summary.dropFirst()) + more }
         return "Needs attention: \(summary)\(more)"
     }
 

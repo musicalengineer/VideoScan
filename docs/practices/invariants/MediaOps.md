@@ -28,8 +28,6 @@ paths:
   - VideoScan/VideoScan/MediaOps/VideoScanModel+CatalogAudit.swift
   - VideoScan/VideoScan/Integrity/*.swift
   - VideoScan/VideoScan/MediaOps/ImportToSQLite*.swift
-  - VideoScan/VideoScan/MediaOps/ImportDryRunMarker.swift
-  - VideoScan/VideoScan/Catalog/ImportToSQLiteMenuItems.swift
   - VideoScan/VideoScanCore/Sources/VideoScanCore/Import/CatalogImporter*.swift
   - VideoScan/VideoScan/App/CatalogAuditCLI.swift
   - VideoScan/VideoScan/MediaOps/CombineEngine.swift
