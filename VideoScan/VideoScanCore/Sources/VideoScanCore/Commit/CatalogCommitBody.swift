@@ -4,7 +4,8 @@
 // to the store only through `CatalogTransaction`'s doors, so no SQL and no
 // GRDB type appears here.
 //
-// First the purges (B2.1 gap 3), each in its own savepoint. Then per record
+// First the plain purges (B2.1 gap 3), each in its own savepoint; then each
+// replaced row together with its replacement (`run`, P0 2026-10-22). Then per record
 // (its own savepoint): no whole-file digest → held in `pending_rows`
 // (B2.1 gap 1); else insert or update the `files` row (an insert drops the
 // record's pending row), the tombstone FIRST when the removal marker moved
@@ -61,31 +62,35 @@ struct CatalogCommitBody {
         }
     }
 
-    /// Order (P0 2026-10-22): lone purges first (they free the live paths
-    /// as before); then each REPLACED row together with the record that
-    /// replaces it at the same path, in ONE savepoint — when the
-    /// replacement is not stored (refused, or not held for a hash), the
-    /// purge is undone with it and the old row stays live; then every
-    /// other record in plan order. The ledger still lists purges first,
+    /// Order (P0 2026-10-22, codex #123): first the plain purges (no
+    /// replacement — "gone from disk", Delete All; they also free live
+    /// paths); then each REPLACEMENT GROUP in one savepoint — every purge
+    /// the plan says this record replaces, then every snapshot of the
+    /// record, in plan order. The purges stand only when the group leaves
+    /// the record stored or held; otherwise the savepoint is undone and the
+    /// old rows (live or pending) stay. A group whose record is not in this
+    /// commit purges only when the store already holds the record. Then
+    /// every other record in plan order. The ledger lists purges first,
     /// then items, each in plan order (the app's baseline zips by order).
     ///
-    /// Before this, every purge landed first and on its own: a rescan of
-    /// FamilyArchive purged 641 replaced rows while the store refused 95
-    /// of their replacements (archive copies whose source row it did not
-    /// hold) — 95 archived Masters left the catalog with their files on
-    /// disk (generation 681).
+    /// The relation comes from the door that made the swap (the scan merge
+    /// knows which old id each fresh record replaces) — never inferred from
+    /// paths: a path match missed pending predecessors, folded case on
+    /// case-sensitive volumes and skipped repeated snapshots (codex #123
+    /// F1–F3). Before any of this, a FamilyArchive rescan purged 641 rows
+    /// while 95 replacements were refused (generation 681).
     func run() throws {
         var landed = 0
-        let successors = try replacementPairs()
         var purgeRows = [CatalogCommit.RowResult?](repeating: nil, count: plan.purges.count)
         var itemRows = [(CatalogCommit.RowResult, Bool)?](repeating: nil, count: plan.items.count)
-        for (index, id) in plan.purges.enumerated() where successors[index] == nil {
+        let groups = replacementGroups()
+        for (index, id) in plan.purges.enumerated() where plan.replacements[id] == nil || plan.replacements[id] == id {
             purgeRows[index] = purge(id)
         }
-        for (purgeIndex, itemIndex) in successors.sorted(by: { $0.key < $1.key }) {
-            let pair = replace(plan.purges[purgeIndex], with: plan.items[itemIndex])
-            purgeRows[purgeIndex] = pair.purge
-            itemRows[itemIndex] = pair.item
+        for group in groups {
+            let result = try replace(group)
+            for (index, row) in zip(group.purgeIndices, result.purges) { purgeRows[index] = row }
+            for (index, row) in zip(group.itemIndices, result.items) { itemRows[index] = row }
         }
         for (index, item) in plan.items.enumerated() where itemRows[index] == nil {
             itemRows[index] = commit(item)
@@ -106,76 +111,81 @@ struct CatalogCommitBody {
         }
     }
 
-    // MARK: - A replaced row and its replacement (P0 2026-10-22)
+    // MARK: - A replaced row and its replacement (P0 2026-10-22, codex #123)
 
-    /// purge index → the index of the item that replaces it: the first
-    /// item, under another id, at the purged row's live path (compared
-    /// NFC + case-folded, the store's own path identity). An item sent
-    /// more than once in this plan is not paired (its snapshots must run
-    /// in order, gap 2). A purge of a held (pending) row has no live path
-    /// and stays a lone purge — its payload is kept in `pending_purges`.
-    private func replacementPairs() throws -> [Int: Int] {
-        guard !plan.purges.isEmpty, !plan.items.isEmpty else { return [:] }
-        var sent: [UUID: Int] = [:]
-        for item in plan.items { sent[item.id, default: 0] += 1 }
-        let purged = Set(plan.purges)
-        var byPath: [String: Int] = [:]
-        for (index, item) in plan.items.enumerated()
-        where sent[item.id] == 1 && !purged.contains(item.id) {
-            let key = Self.pathKey(item.snapshot.fullPath)
-            if byPath[key] == nil { byPath[key] = index }
-        }
-        var pairs: [Int: Int] = [:]
-        var taken = Set<Int>()
-        for (index, id) in plan.purges.enumerated() {
-            guard let path = try tx.storedLivePath(id: id.uuidString),
-                  let itemIndex = byPath[Self.pathKey(path)], taken.insert(itemIndex).inserted else { continue }
-            pairs[index] = itemIndex
-        }
-        return pairs
+    /// One replacement: the record, the purges it replaces, its snapshots.
+    struct ReplacementGroup {
+        let replacement: UUID
+        var purgeIndices: [Int] = []
+        var itemIndices: [Int] = []
     }
 
-    /// The store's path identity (files.path_fold): NFC, then case folding.
-    static func pathKey(_ path: String) -> String {
-        path.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive], locale: nil)
+    /// The plan's replacement relation, grouped by the replacing record, in
+    /// the order of each group's first purge. Every snapshot of the record
+    /// joins its group (ordered snapshots are part of the contract, gap 2).
+    func replacementGroups() -> [ReplacementGroup] {
+        var order: [UUID] = []
+        var byReplacement: [UUID: ReplacementGroup] = [:]
+        for (index, id) in plan.purges.enumerated() {
+            guard let replacement = plan.replacements[id], replacement != id else { continue }
+            if byReplacement[replacement] == nil {
+                order.append(replacement)
+                byReplacement[replacement] = ReplacementGroup(replacement: replacement)
+            }
+            byReplacement[replacement]?.purgeIndices.append(index)
+        }
+        guard !order.isEmpty else { return [] }
+        for (index, item) in plan.items.enumerated() where byReplacement[item.id] != nil {
+            byReplacement[item.id]?.itemIndices.append(index)
+        }
+        return order.compactMap { byReplacement[$0] }
     }
 
     private struct ReplacementNotStored: Error {
         let words: String
     }
 
-    /// The purge and its replacement in ONE savepoint: both land, or the
-    /// purge is undone and the old row stays live (the replacement's own
-    /// refusal is reported on it, as before).
-    private func replace(_ id: UUID, with item: CatalogCommit.Item)
-        -> (purge: CatalogCommit.RowResult, item: (CatalogCommit.RowResult, Bool)) {
-        var purgeRow = CatalogCommit.RowResult(id: id, fingerprint: 0, digest: nil, landing: .removed(.absent))
-        var itemRow = (CatalogCommit.RowResult(id: item.id, fingerprint: item.fingerprint, digest: nil,
-                                               landing: .refused("not attempted")), false)
+    /// The group in ONE savepoint: its purges stand only when the record is
+    /// stored or held afterwards; otherwise everything in it is undone, the
+    /// old rows stay (live or pending), and the purges say why
+    /// (`keptForReplacement`). The record's own refusal is reported on its
+    /// rows, as before.
+    private func replace(_ group: ReplacementGroup)
+        throws -> (purges: [CatalogCommit.RowResult], items: [(CatalogCommit.RowResult, Bool)]) {
+        let ids = group.purgeIndices.map { plan.purges[$0] }
+        var purgeRows = ids.map { CatalogCommit.RowResult(id: $0, fingerprint: 0, digest: nil, landing: .removed(.absent)) }
+        var itemRows: [(CatalogCommit.RowResult, Bool)] = []
         do {
             try tx.inSavepoint {
-                purgeRow = purge(id)
-                itemRow = commit(item)
-                if !Self.keepsRecord(itemRow.0) {
-                    throw ReplacementNotStored(words: Self.refusalWords(itemRow.0.landing))
+                purgeRows = ids.map { purge($0) }
+                itemRows = group.itemIndices.map { commit(plan.items[$0]) }
+                if itemRows.isEmpty {
+                    // The record is not in this commit: purge only if the
+                    // store already holds it (an earlier commit stored it).
+                    guard try tx.storedRecordPresent(id: group.replacement.uuidString) else {
+                        throw ReplacementNotStored(words: "it is not stored or held yet")
+                    }
+                } else if !itemRows.contains(where: { Self.keepsRecord($0.0) }) {
+                    throw ReplacementNotStored(words: Self.refusalWords(itemRows.last?.0.landing))
                 }
             }
         } catch let kept as ReplacementNotStored {
-            purgeRow.landing = .refused(CatalogCommitWords.replacementNotStored(kept.words))
-            purgeRow.keptForReplacement = true
-            itemRow.0.heldPending = false
-            itemRow.1 = false
-        } catch {
-            let words = CatalogCommitWords.engine(error)
-            purgeRow.landing = .refused(words)
-            itemRow = (CatalogCommit.RowResult(id: item.id, fingerprint: item.fingerprint, digest: nil,
-                                               landing: .refused(words)), false)
+            let words = CatalogCommitWords.replacementNotStored(group.replacement, kept.words)
+            for index in purgeRows.indices {
+                purgeRows[index].landing = .refused(words)
+                purgeRows[index].keptForReplacement = true
+            }
+            for index in itemRows.indices {
+                itemRows[index].0.heldPending = false
+                itemRows[index].1 = false
+            }
         }
-        return (purgeRow, itemRow)
+        return (purgeRows, itemRows)
     }
 
-    /// The replacement now holds the record in the store: written (whole or
-    /// partial), already there, or held in `pending_rows` for its hash.
+    /// The record is now in the store: written (whole or partial), already
+    /// there, or held in `pending_rows` for its hash (the pending row
+    /// carries the whole record across a relaunch).
     static func keepsRecord(_ row: CatalogCommit.RowResult) -> Bool {
         switch row.landing {
         case .written, .partial, .unchanged: return true
@@ -184,9 +194,9 @@ struct CatalogCommitBody {
         }
     }
 
-    private static func refusalWords(_ landing: CatalogCommit.Landing) -> String {
+    private static func refusalWords(_ landing: CatalogCommit.Landing?) -> String {
         switch landing {
-        case .refused(let words), .deferred(let words): return words
+        case .refused(let words)?, .deferred(let words)?: return words
         default: return "it was not stored"
         }
     }
@@ -495,10 +505,10 @@ enum CatalogCommitWords {
         String(describing: error)
     }
 
-    /// A replaced row kept live because its replacement was not stored (P0 2026-10-22).
-    static func replacementNotStored(_ why: String) -> String {
-        "kept in the catalog — the record that replaces it at the same path could not be stored (\(why)); "
-            + "the row stays live, so its file is never left without a catalog row"
+    /// A replaced row kept because its replacement is not stored (P0 2026-10-22, codex #123).
+    static func replacementNotStored(_ replacement: UUID, _ why: String) -> String {
+        "kept in the catalog — the record that replaces it (\(replacement.uuidString)) is not stored: \(why); "
+            + "the row stays, so its file is never left without a catalog row"
     }
 
     /// The row carries the purge marker (gap 3).

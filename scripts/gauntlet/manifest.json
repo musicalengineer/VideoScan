@@ -30288,6 +30288,35 @@
       "tests": [
         "refusedArchiveReplacementKeepsOriginalRow"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitRelationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitRelationTests"
+      ],
+      "tests": [
+        "caseSensitiveSiblingDoesNotSatisfyThePurge",
+        "incidentShapeLosesNothing",
+        "oneOfTwoSnapshotsLanding",
+        "pendingPredecessorKept",
+        "repeatedSnapshotsKeepTheOldRow",
+        "replacementAbsentAndUnstoredKeeps",
+        "replacementAlreadyStoredPurges"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogKeptPurgeRetryTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogKeptPurgeRetryTests"
+      ],
+      "tests": [
+        "correctedReplacementCompletesThePair",
+        "swapDoorsNameTheirReplacement"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -33629,9 +33658,9 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 247,
+      "expected_floor": 249,
       "name": "regression",
-      "package_expected_floor": 227,
+      "package_expected_floor": 234,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -33668,7 +33697,8 @@
         "VideoScanCoreTests.CatalogFileGuardQAR1Tests",
         "VideoScanCoreTests.CatalogFileGuardQAR2Tests",
         "VideoScanCoreTests.CatalogFileGuardCodex117Tests",
-        "VideoScanCoreTests.CatalogCommitReplacementTests"
+        "VideoScanCoreTests.CatalogCommitReplacementTests",
+        "VideoScanCoreTests.CatalogCommitRelationTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -33741,7 +33771,8 @@
         "VideoScanTests/CatalogAuthorityCornerTests",
         "VideoScanTests/CatalogCommitterFailFastTests",
         "VideoScanTests/CatalogViewerPublishCornerTests",
-        "VideoScanTests/CatalogRescanRefusedReplacementTests"
+        "VideoScanTests/CatalogRescanRefusedReplacementTests",
+        "VideoScanTests/CatalogKeptPurgeRetryTests"
       ]
     },
     {

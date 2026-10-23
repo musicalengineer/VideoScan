@@ -546,7 +546,13 @@ extension VideoScanModel {
                 && (newPaths.contains($0.fullPath) || gonePaths.contains($0.fullPath))
                 && !keptHistory.contains(ObjectIdentifier($0))
         }
-        let replacedIDs = Set(records.lazy.filter(leaving).map(\.id))
+        let leavingRecords = records.filter(leaving)
+        let replacedIDs = Set(leavingRecords.map(\.id))
+        let adoptedNewPaths = Set(adoptions.keys)
+        // P0 2026-10-22 (codex #123): which fresh record took each re-seen
+        // path — the store purges an old row only with its replacement.
+        let replacedBy = Self.replacementRelation(leavingRecords,
+                                                  fresh: targetRecords.filter { !adoptedNewPaths.contains($0.fullPath) })
         records.removeAll(where: leaving)
         // Adopted paths are NOT appended: the moved file's record is the OLD
         // instance, relocated in place right after — its id survives, so
@@ -554,7 +560,6 @@ extension VideoScanModel {
         if adoptions.isEmpty {
             records.append(contentsOf: targetRecords)
         } else {
-            let adoptedNewPaths = Set(adoptions.keys)
             records.append(contentsOf: targetRecords.filter { !adoptedNewPaths.contains($0.fullPath) })
             applyMoveAdoptions(adoptions, targetRecords: targetRecords)
             // ONE summary line per merge (fa24921) — never per-record spam.
@@ -571,7 +576,8 @@ extension VideoScanModel {
         // Cutover B2.3: the ids this merge took out — re-seen (their fresh
         // record carries the preserved values) or gone from disk — are
         // purged explicitly, in this same turn. Nothing else is.
-        purgeCatalogRows(ids: replacedIDs, reason: "rescan of \(root): replaced by a fresh record or gone from disk")
+        purgeCatalogRows(ids: replacedIDs, reason: "rescan of \(root): replaced by a fresh record or gone from disk",
+                         replacedBy: replacedBy)
         scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed, \(outcome.liveValuesApplied) took live values), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
         appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed, \(outcome.liveValuesApplied) took the catalog's live values), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
         return outcome
@@ -680,11 +686,15 @@ extension VideoScanModel {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
                 && !keptHistory.contains(ObjectIdentifier($0))
         }
-        let replacedIDs = Set(records.lazy.filter(leaving).map(\.id))
+        let leavingRecords = records.filter(leaving)
+        let replacedIDs = Set(leavingRecords.map(\.id))
+        let replacedBy = Self.replacementRelation(leavingRecords, fresh: targetRecords)
         records.removeAll(where: leaving)
         records.append(contentsOf: targetRecords)
-        // Cutover B2.3: the re-seen records' old ids, purged explicitly.
-        purgeCatalogRows(ids: replacedIDs, reason: "partial rescan of \(root): replaced by a fresh record")
+        // Cutover B2.3: the re-seen records' old ids, purged explicitly —
+        // each with the fresh record that replaces it (codex #123).
+        purgeCatalogRows(ids: replacedIDs, reason: "partial rescan of \(root): replaced by a fresh record",
+                         replacedBy: replacedBy)
         let pairsCarried = rewirePairCarryover(pairCarry, targetRecords: targetRecords)
         if pairsCarried > 0 {
             log("  ↪ \(pairsCarried) A/V pairing(s) carried across the partial rescan.")
@@ -766,6 +776,19 @@ extension VideoScanModel {
     /// is the only row for that path, and the merge treats it as before.
     /// Identity-keyed (ObjectIdentifier — the C++ analogue is a set of
     /// object addresses), O(records), no I/O.
+    /// old id → the fresh record at the SAME path (the merge's own
+    /// re-seen match). A record leaving because its file is gone has no
+    /// fresh record at its path and gets no entry: a plain purge. O(n).
+    static func replacementRelation(_ leaving: [VideoRecord], fresh: [VideoRecord]) -> [UUID: UUID] {
+        var byPath: [String: UUID] = [:]
+        for rec in fresh where byPath[rec.fullPath] == nil { byPath[rec.fullPath] = rec.id }
+        var out: [UUID: UUID] = [:]
+        for old in leaving {
+            if let replacement = byPath[old.fullPath], replacement != old.id { out[old.id] = replacement }
+        }
+        return out
+    }
+
     static func historyRowsKeptAtReseenPaths(_ records: [VideoRecord], root: String,
                                              newPaths: Set<String>) -> Set<ObjectIdentifier> {
         var successorPaths = Set<String>()

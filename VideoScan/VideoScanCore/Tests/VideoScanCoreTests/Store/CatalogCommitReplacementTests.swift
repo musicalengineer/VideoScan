@@ -54,7 +54,8 @@ struct CatalogCommitReplacementTests {
                 BEGIN SELECT RAISE(ABORT, 'injected refusal of the replacement'); END
                 """)
         }
-        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))])
+        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))],
+                                          replacements: [try #require(UUID(uuidString: healthyID)): fresh.id])
         let state: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [healthyID])
         #expect(state == nil)
         #expect(try liveRows(s, path: path) == 1)
@@ -72,9 +73,14 @@ struct CatalogCommitReplacementTests {
         fresh.derivedFrom = UUID()   // a source row catalog.sqlite never held (quarantined at import)
         fresh.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(timeIntervalSince1970: 1_792_000_000),
                                             sizeBytes: fresh.sizeBytes)
-        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))])
+        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))],
+                                          replacements: [try #require(UUID(uuidString: healthyID)): fresh.id])
         let freshLanding = outcome.landing(fresh.id.uuidString)
-        #expect(freshLanding.map { if case .refused = $0 { return true }; return false } == true)
+        #expect(freshLanding.map { if case .refused(let w) = $0 { return w.contains("an archive copy names its source") }; return false } == true,
+                "refused by archive_copies_need_source, nothing else")
+        let kept = outcome.rows.first
+        #expect(kept?.keptForReplacement == true)
+        #expect(kept.map { if case .refused(let w) = $0.landing { return w.contains("an archive copy names its source") }; return false } == true)
         let state: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [healthyID])
         #expect(state == nil)
         #expect(try liveRows(s, path: path) == 1)
@@ -85,7 +91,8 @@ struct CatalogCommitReplacementTests {
     func landedReplacementPurges() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let (fresh, path, _) = try await reseen(s)
-        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))])
+        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))],
+                                          replacements: [try #require(UUID(uuidString: healthyID)): fresh.id])
         #expect(outcome.rows.first?.landing == .removed(.purged(revision: 1)))
         #expect(outcome.rows.first?.keptForReplacement == false)
         #expect(outcome.landing(fresh.id.uuidString)?.landed == true)
@@ -99,7 +106,8 @@ struct CatalogCommitReplacementTests {
         let path: String = try #require(try s.scalar("SELECT full_path FROM files WHERE id = ?", [healthyID]))
         let loaded = try await s.load()
         let fresh = try FreshRecord.copy(try #require(loaded.records[healthyID]), path: path)   // no digest
-        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))])
+        let outcome = try await s.commit([fresh], purges: [try #require(UUID(uuidString: healthyID))],
+                                          replacements: [try #require(UUID(uuidString: healthyID)): fresh.id])
         #expect(outcome.rows.first?.landing == .removed(.purged(revision: 1)))
         let held: Int? = try s.scalar("SELECT count(*) FROM pending_rows WHERE id = ?", [fresh.id.uuidString])
         #expect(held == 1)
@@ -115,7 +123,7 @@ struct CatalogCommitReplacementTests {
         #expect(outcome.rows.first?.landing == .removed(.purged(revision: 1)))
     }
 
-    @Test("sensor (source): the commit body pairs each purge with its replacement — no purge loop runs ahead of the items")
+    @Test("sensor (source): the commit body groups each purge with its explicit replacement — no path matching")
     func bodyPairsPurgesWithReplacements() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -124,9 +132,10 @@ struct CatalogCommitReplacementTests {
         let start = try #require(text.range(of: "func run() throws {"))
         let end = try #require(text.range(of: "try settleSets()", range: start.upperBound..<text.endIndex))
         let body = String(text[start.upperBound..<end.lowerBound])
-        #expect(body.contains("replacementPairs()"), "run() must pair purges with the records that replace them")
-        #expect(body.contains("replace(plan.purges["), "a replaced row is purged only together with its replacement")
+        #expect(body.contains("replacementGroups()"), "run() must group purges with the records that replace them")
+        #expect(body.contains("replace(group)"), "a replaced row is purged only together with its replacement")
         #expect(!body.contains("for id in plan.purges {"), "the old unconditional purge loop is back (P0 2026-10-22)")
+        #expect(!text.contains("pathKey"), "the replacement is the plan's explicit relation, never a path match (codex #123)")
     }
 
     @Test("scale: 2,000 replaced rows whose replacements are ALL refused — none purged, within budget")
@@ -157,7 +166,9 @@ struct CatalogCommitReplacementTests {
         }
         let clock = ContinuousClock()
         let started = clock.now
-        let outcome = try await s.commit(fresh, purges: stored.map(\.id))
+        var relation: [UUID: UUID] = [:]
+        for (old, new) in zip(stored, fresh) { relation[old.id] = new.id }
+        let outcome = try await s.commit(fresh, purges: stored.map(\.id), replacements: relation)
         let elapsed = clock.now - started
         let live: Int? = try s.scalar("SELECT count(*) FROM files WHERE full_path LIKE '/Volumes/Fixture/Scale/%' AND removal_state IS NULL")
         #expect(live == count)

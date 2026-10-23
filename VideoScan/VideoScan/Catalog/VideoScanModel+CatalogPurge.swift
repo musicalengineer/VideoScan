@@ -50,11 +50,17 @@ extension VideoScanModel {
     /// Under catalog.sqlite their rows are purged now (one synchronous
     /// commit); an id that is still in `records` (it came back under the
     /// same id) is never purged. Nothing to do under catalog.json.
-    func purgeCatalogRows(ids: Set<UUID>, reason: String) {
+    ///
+    /// `replacedBy`: removed id → the record that took its place (a rescan's
+    /// fresh instance, a job output at the path). Say it whenever a door
+    /// SWAPS a record: the store then purges the old row only together with
+    /// a stored or held replacement (P0 2026-10-22, codex #123). Omit it for
+    /// a plain removal (gone from disk, Delete All).
+    func purgeCatalogRows(ids: Set<UUID>, reason: String, replacedBy: [UUID: UUID] = [:]) {
         guard let committer = catalogCutover.committer, !ids.isEmpty else { return }
         let gone = ids.subtracting(records.lazy.map(\.id))
         guard !gone.isEmpty else { return }
-        committer.purge(ids: gone, reason: reason)
+        committer.purge(ids: gone, reason: reason, replacements: replacedBy)
     }
 
     /// Put `newRec` at `path` — the one door for a job's output landing in
@@ -126,7 +132,7 @@ extension VideoScanModel {
                             + "the catalog's history")
         }
         records[index] = heir
-        purgeCatalogRows(ids: [old.id], reason: reason)
+        purgeCatalogRows(ids: [old.id], reason: reason, replacedBy: [old.id: heir.id])
     }
 
     /// Different (or unknown) bytes: the old record stays, removed from the
@@ -142,7 +148,8 @@ extension VideoScanModel {
         // do not pile up at an output path.
         if !CatalogReplacedRecord.carriesCuration(old) {
             records[index] = newRec
-            purgeCatalogRows(ids: [old.id], reason: "a new file replaced an uncurated record at \(path)")
+            purgeCatalogRows(ids: [old.id], reason: "a new file replaced an uncurated record at \(path)",
+                             replacedBy: [old.id: newRec.id])
             return
         }
         let carried = CatalogReplacedRecord.describe(old)

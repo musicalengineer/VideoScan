@@ -81,15 +81,23 @@ public enum CatalogCommit {
         public var designation: Designation
         /// Ids the app no longer holds (B2.1 gap 3): purged, never deleted.
         public var purges: [UUID]
+        /// purged id → the id of the record that REPLACES it (a rescan's
+        /// fresh instance, a job output landing at the path) — said by the
+        /// door that made the swap, never inferred (P0 2026-10-22, codex
+        /// #123). Such a purge lands only when its replacement is stored or
+        /// held; a purge with no entry is a plain removal ("gone from disk",
+        /// Delete All) and runs on its own, as before.
+        public var replacements: [UUID: UUID]
         /// Unix seconds stamped on what this commit writes.
         public var now: Int64
 
         public init(door: CatalogWriter, items: [Item], designation: Designation = .leave, purges: [UUID] = [],
-                    now: Int64 = Int64(Date().timeIntervalSince1970)) {
+                    replacements: [UUID: UUID] = [:], now: Int64 = Int64(Date().timeIntervalSince1970)) {
             self.door = door
             self.items = items
             self.designation = designation
             self.purges = purges
+            self.replacements = replacements
             self.now = now
         }
     }
@@ -151,11 +159,9 @@ public enum CatalogCommit {
         /// follows on from it).
         public var adoptedRevision: Int?
         /// A purge the store did NOT apply because the record replacing the
-        /// row at its path could not be stored (P0 2026-10-22): the row
-        /// stays live. The app must not send this purge again on its own —
-        /// a later commit without the replacement would purge the row with
-        /// nothing in its place, which is exactly how 95 archived Masters
-        /// lost their catalog rows.
+        /// row (`Plan.replacements`) is not stored or held (P0 2026-10-22):
+        /// the row stays live. The app keeps the request and sends it again
+        /// together with its replacement — never on its own.
         public var keptForReplacement = false
         /// Written rows of a content whose shared sets (tags, people,
         /// attestations) this commit changed: the sets the store ENDS with

@@ -158,6 +158,9 @@ final class CatalogCommitter {
     private var markerDirty: Set<UUID> = []
     /// Ids a door removed from the catalog, not yet purged (id → why).
     private var purgeRequested: [UUID: String] = [:]
+    /// Of `purgeRequested`: purged id → the record that replaces it
+    /// (P0 2026-10-22, codex #123 F4 — kept while the store keeps the row).
+    private var replacedBy: [UUID: UUID] = [:]
     /// Reopen / Adopt is closing and opening the store: no commit runs.
     private var reopening = false
     private var heldBy: String?
@@ -201,6 +204,7 @@ final class CatalogCommitter {
         baseline.adopt(records, held: held)
         markerDirty = []
         purgeRequested = [:]
+        replacedBy = [:]
     }
 
     /// Refuse every commit until a person reopens (a read-only open).
@@ -411,10 +415,17 @@ final class CatalogCommitter {
     /// .purgeCatalogRows): their rows are purged in one synchronous commit
     /// now — or, while the store is held or blocked, at the first commit
     /// that can run. The ONLY way a row is purged (B2.3).
-    func purge(ids: Set<UUID>, reason: String) {
+    /// `replacements`: purged id → the record that replaces it (a rescan's
+    /// fresh instance), from the door that made the swap — the store then
+    /// purges the old row only together with a stored or held replacement
+    /// (P0 2026-10-22, codex #123). Absent = a plain removal.
+    func purge(ids: Set<UUID>, reason: String, replacements: [UUID: UUID] = [:]) {
         let known = ids.filter { baseline.holds($0) }
         guard !known.isEmpty else { return }
-        for id in known { purgeRequested[id] = reason }
+        for id in known {
+            purgeRequested[id] = reason
+            if let r = replacements[id], r != id { replacedBy[id] = r }
+        }
         sink("Catalog store: START purge of \(known.count) row(s) — \(reason)")
         commit(.save, owner: nil, scope: .everything)
     }
@@ -600,12 +611,15 @@ final class CatalogCommitter {
         guard case .everything = scope else {
             return detected.items.isEmpty ? nil : Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items), designationJSON: nil)
         }
-        let purges = duePurges(present: Set(now.records.map(\.id)))
+        let purges = duePurges(present: Set(now.records.map(\.id)), sent: Set(detected.items.map(\.id)))
         let json = Self.json(now.designation)
         let designation: CatalogCommit.Designation = Self.sameJSON(json, storedDesignationJSON)
             ? .leave : .current(json: json, clearAuthorized: now.clearAuthorized)
         guard !detected.items.isEmpty || designation != .leave || !purges.isEmpty else { return nil }
-        return Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items, designation: designation, purges: purges),
+        var replacements: [UUID: UUID] = [:]
+        for id in purges { if let r = replacedBy[id] { replacements[id] = r } }
+        return Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items, designation: designation, purges: purges,
+                                                 replacements: replacements),
                         designationJSON: json)
     }
 
@@ -613,13 +627,28 @@ final class CatalogCommitter {
     /// row, memory does not). A request whose record came back under the
     /// same id, or that the store does not hold, is dropped. Every other
     /// absence is named once and KEPT.
-    private func duePurges(present: Set<UUID>) -> [UUID] {
+    ///
+    /// A purge with a replacement (P0 2026-10-22, codex #123) is due only
+    /// when the replacement is sent in this commit or the store already
+    /// holds it — never alone while the replacement waits (refused). If a
+    /// door removed the replacement itself, the relation is void and the
+    /// purge is a plain one again.
+    private func duePurges(present: Set<UUID>, sent: Set<UUID>) -> [UUID] {
+        let doomed = Set(purgeRequested.keys)
         for id in purgeRequested.keys.filter({ present.contains($0) || !baseline.holds($0) }) {
             purgeRequested[id] = nil
+            replacedBy[id] = nil
         }
         let requested = Set(purgeRequested.keys)
         noteUnpurged(baseline.unpurgedAbsences(present: present, requested: requested))
-        return baseline.purges(requested: requested, present: present)
+        return baseline.purges(requested: requested, present: present).filter { id in
+            guard let replacement = replacedBy[id] else { return true }
+            if doomed.contains(replacement) {
+                replacedBy[id] = nil
+                return true
+            }
+            return sent.contains(replacement) || baseline.holds(replacement)
+        }
     }
 
     private func noteUnpurged(_ ids: [UUID]) {
@@ -677,12 +706,13 @@ final class CatalogCommitter {
         for line in report.lines { sink(line) }
         markerDirty.subtract(rows.filter { $0.landing.landed || $0.landing == .unchanged }.map(\.id))
         markerDirty.subtract(plan.purges)
-        for id in plan.purges where !baseline.holds(id) { purgeRequested[id] = nil }
-        // P0 2026-10-22: the store kept a row because its replacement could
-        // not be stored. Never send that purge again on its own — a later
-        // commit would purge the row with nothing in its place. The row
-        // stays live; its absence from memory is named once (noteUnpurged).
-        for row in rows.prefix(plan.purges.count) where row.keptForReplacement { purgeRequested[row.id] = nil }
+        for id in plan.purges where !baseline.holds(id) {
+            purgeRequested[id] = nil
+            replacedBy[id] = nil
+        }
+        // A purge kept for its replacement (P0 2026-10-22, codex #123 F4)
+        // stays requested WITH its relation: `duePurges` sends it again
+        // only together with the replacement (or once the store holds it).
         let records = input().records
         if !report.revisions.isEmpty { adoptRevisions(report.revisions, records: records) }
         if !report.shared.isEmpty, baseline.propagate(report.shared, records: records) { onCopiesUpdated() }
