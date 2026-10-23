@@ -27383,6 +27383,23 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_migrate_data.py",
+      "stage": "unit",
+      "suites": [
+        "test_migrate_data.py"
+      ],
+      "tests": [
+        "test_catalog_without_files_table_fails",
+        "test_database_open_on_source_refuses",
+        "test_dry_run_writes_nothing_on_either_side",
+        "test_go_copies_hot_wal_and_proves_it",
+        "test_masters_disagree_is_not_success",
+        "test_ssh_failure_listing_ignored_files_aborts"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_migrate_people_folders.py",
       "stage": "unit",
       "suites": [
@@ -32614,6 +32631,10 @@
         },
         {
           "name": "tests/test_adversarial_confirm.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_migrate_data.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
