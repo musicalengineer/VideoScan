@@ -1,254 +1,45 @@
-# VideoScan Project
+# VideoScan
 
-## Manager role
-When operating in this repo, you are the Manager. Read .claude/MANAGER.md for your protocol. Manager directs the activity of the sub-agents so the director (Rick) of this project can maintain the high-level view and direct agents to perform in their respective areas. Most especially, the QA and testing sub agents need to make sure we have no regressions and they can also look on GH for stats and CI and code metrics. 
+macOS app (Swift 6 / SwiftUI, macOS 15+) that finds every family media file on every drive, tells the truth about each one, helps Rick date and repair it, promotes the keepers into a read-only archive filed by decade, lets excess copies go safely, knows who is in the footage and how the family is related, and answers plain questions about all of it. Workflow spine: **INGEST → MANAGE → ARCHIVE** (the shape of PBCore/PREMIS at family scale). ~790K lines of Swift, ~14,000 tests, one developer plus agents since March 2026.
 
-## Overview
-Personal video cataloging and person-finding suite for organizing family home videos across multiple storage volumes. Three components work together to catalog, search by face, and compile clips.
+Read first: `docs/Purpose-and-Charter.md` (Rick's purpose, workflow and process expectations, in his words), `docs/ARCHITECTURE.md` (how it is built), `docs/STATUS.md` (what is in flight), `docs/PROCESS.md` (how work moves). `docs/DECISIONS.md` is settled; do not relitigate it.
 
-## Components
+## Who owns what
+- **Rick** (director): workflow and UI/UX, checked against Apple HIG and best-in-class apps; product and archival policy; anything irreversible against real data.
+- **Claude**: implementation, data models, algorithms, code quality, tests. For module-internal design (schema, algorithms, concurrency, storage) research the domain's best practice, propose with trade-offs, then proceed. Do not ask Rick to pick internals; he weighs in after.
+- **Codex**: independent adversarial reviewer for data-risk paths; helps with tests. One command: `tools/codex_review.py`. Scope rules in `docs/PROCESS.md` §Review.
 
-### 1. VideoScan.py (Python CLI)
-- Scans volumes/folders recursively for video files (40+ formats)
-- Extracts metadata via ffprobe (duration, codecs, resolution, frame rate, bitrate, color space, etc.)
-- Generates Excel spreadsheet with catalog, summary stats, and skipped files
-- Partial MD5 hashing for duplicate detection
-- Color-coded rows by stream type (video+audio, video-only, audio-only)
+## Hard rules
+1. **Integrity first.** A shown fact comes from evidence (stat, SHA-256, fixity, decode), never from a field that was once written. An unverified fact in the UI is a P0.
+2. **Never lose media.** Trash, never unlink; prove the surviving copy by full hash at the moment of removal; refuse rather than guess; never auto-delete; the archive volume is protected at one choke point. Rows are never deleted; a removal marker records state.
+3. **Archived means fixed.** Only Rick changes an archived name or date, through Update…; background jobs add metadata only.
+4. **One engine per action.** A verb may have buttons in several tabs; it has one code path, one proof, one log line.
+5. **Long work is an MFO job**: progress, Pause/Stop, START/OUTCOME through the one log sink. Nothing runs silently. No O(records) work in SwiftUI view bodies.
+6. **Identity is whole-file SHA-256**, never the path. Writes go through the one commit door; schema changes are additive, through a migration, and Rick approves them.
+7. **Every bug fix ships a regression test seen red before the fix** (red/green table in the commit). Severe bugs also get a production-shape test on a `.backup` copy and a seat in the gauntlet regression stage.
+8. **Every feature ships tests on five dimensions** where they apply: logic · scale (100k rows + time budget) · media matrix (mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv) · isolation (poisoned state) · sensor — plus a **truth** test for anything that shows a fact, and for catalog writers: an edit inside the debounce window, during a write hold, across a role flip, then relaunch.
+9. **"Done" means** `scripts/run_sensors.sh` is GREEN, the suites you touched are green, and the counts are quoted (a zero-test run is red; a lane that prints no number is red). Red is fixed now, never left for the nightly. Out-of-scope work becomes an issue, never an edit.
+10. **Data-risk code** (`Archive/`, the delete/prune/relocate parts of `MediaOps/`, FamilyTree writers, `ArchiveAngel/Promote/`, volume retire; map in `docs/ARCHITECTURE.md` §Data-risk) follows the `safety-critical` skill and gets a scoped Codex pass before merge.
+11. **`~/dev/VideoScan` is Rick's checkout.** Never switch its branch, leave it dirty, or build into its DerivedData. Agents work in a `git worktree` with their own `-derivedDataPath`. Never force-push or rewrite main. Never delete; move to `.trash/`.
+12. **No new `extension VideoScanModel`.** New state lives in a feature store behind a seam (`#337`).
+13. **Privacy.** No family media or App Support data in git; nothing of living immediate family (pixels, audio) goes to a cloud model.
 
-### 2. PersonFinder.swift (Swift CLI)
-- Standalone command-line face recognition tool
-- Uses Apple Vision framework for face detection and feature printing
-- Scans videos frame-by-frame, matches faces against reference photos
-- Extracts clips containing matched person via ffmpeg
-- Compiles clips into single video or decade-based chapter videos
-- Configurable: match threshold (0.52), face confidence (0.55), frame step (5), concurrency (4)
+## Ideas, rulings, state: where they go (not here, not in memory)
+- An **idea** → one line in `docs/BACKLOG.md` (or a GH issue labelled `idea`), then back to the task. Rick thinks out loud; parking is the correct response, not a design.
+- A **ruling** → one dated line in `docs/DECISIONS.md`.
+- **What is in flight / next** → `docs/STATUS.md`, rewritten, never appended.
+- A **rule that must survive `/clear`** → a change to this file or `docs/PROCESS.md`, reviewed by Rick. Memory files are not a rulebook.
+- **Briefs, research, review transcripts** → `.scratch/` (ignored). A review verdict Rick wants kept goes in `docs/reviews/<area>.md`, overwritten, not multiplied. Design docs are written after Rick says "design it", into `docs/design/`, and retired to `docs/archive/` when built.
 
-### 3. VideoScan macOS App (SwiftUI)
-- **Tab 1 - Catalog:** Scan volumes, display searchable results, correlate audio/video-only files, combine tracks, export CSV
-- **Tab 2 - Person Finder:** Multi-job parallel face recognition, Apple Photos integration, configurable thresholds, real-time console per job, results table with Finder reveal
-- Targets macOS 13+
+## Build and test
+- App: `VideoScan/VideoScan.xcodeproj`, scheme `VideoScan` (Debug) / `VideoScan-Release`. Core: `VideoScan/VideoScanCore` (`swift test --package-path <abs>`). Python tooling: `venv/` (3.14), `venv-mlx/`.
+- **Debug** for iteration (5–15 s incremental); **Release** for gauntlet, TestDriver, perf, demos, nightly.
+- Pre-merge: `scripts/run_sensors.sh --derived-data <your dd>` (~550 tests, ~70 s). Catalog work: `scripts/run_catalog_tests.sh`. Full suite and gauntlet run on the fleet in Rick's away window (`docs/PROCESS.md` §Machines), never on his machine while he works.
+- Truth on disk: `~/Library/Application Support/VideoScan/catalog.sqlite` (one committer; copy it only with sqlite `.backup`). Logs: `~/Library/Logs/VideoScan/{videoscan,catalog}.log`.
+- ffmpeg/ffprobe from Homebrew (`Brewfile`). Dev bring-up on a clean Mac: `scripts/install_dev_tools.sh`.
 
-## Key Files
+## Command shape (every permission prompt interrupts Rick)
+The matcher reads the command's first token. Never `cd X && …`; never lead with `VAR=`, `for`/`if`/`while`/`until`, `time`, `sleep`, `date;`, or a subshell. Use `git -C <path>`, `xcodebuild -project <abs> -derivedDataPath <abs>`, `swift test --package-path <abs>`, or one `python3 - <<'PY'` heredoc. Never pipe a build or test into `tail`/`head` (it masks the exit status; redirect to a log). Prefer Read/Grep/Glob over cat/grep/find. A prompt means an allowlist gap: add the pattern to `.claude/settings.json`; `deny` outranks `allow`. Never `pkill`/`kill` a process on Rick's machines without asking.
 
-| File | Purpose |
-|------|---------|
-| `scripts/VideoScan.py` | Python video catalog generator |
-| `scripts/VideoScan.sh` | Bash wrapper for Python script |
-| `scripts/face_recognize.py` | dlib-based face recognition engine (called by Swift app) |
-| `scripts/fd_diagnostic.py` | Tier-1 dlib vs FaceNet confusion-matrix diagnostic; emits embeddings.npz |
-| `scripts/fd_scan_volume.py` | Tier-1 single-volume person scanner using FaceNet+MTCNN |
-| `scripts/find_person.py` | Multi-volume interactive person search CLI (CSV+HTML output) |
-| `swift_cli/PersonFinder.swift` | Standalone Swift CLI for person finding |
-| `swift_cli/FaceDetect.swift` | Face detection utilities |
-| `swift_cli/FaceDiagnose.swift` | Face detection diagnostics CLI |
-| `VideoScan/VideoScan/App/VideoScanApp.swift` | SwiftUI app entry point, about window |
-| `VideoScan/VideoScan/App/ContentView.swift` | Tab UI, catalog view, combine dialog |
-| `VideoScan/VideoScan/Model/VideoScanModel.swift` | Core scanning, ffprobe, CSV export, audio/video correlation |
-| `VideoScan/VideoScan/People/PersonFinderModel.swift` | Multi-job face recognition engine, reference loading, job lifecycle |
-| `VideoScan/VideoScan/People/PersonFinderView.swift` | Person finder UI (reference bar, settings, jobs, results) |
-| `docs/guides/source_layout.md` | Which feature folder under `VideoScan/VideoScan/` holds what; data-risk folders for review |
-| `tests/run_personfinder_tests.py` | Manifest-driven test runner for face recognition |
-| `tests/personfinder_cases.json` | Test case definitions and expectations |
-
-## Tech Stack
-- **Languages:** Python 3, Swift 5
-- **Frameworks:** SwiftUI, Vision, AVFoundation, CoreImage, CoreGraphics, Combine
-- **External tools:** ffmpeg, ffprobe (via subprocess/Process)
-- **Python libs:** openpyxl (Excel), hashlib (MD5)
-- **Build:** Xcode
-
-## Data & Reference Files
-- `tests/fixtures/photos/` — Reference photos for unit tests
-- `tests/fixtures/videos/` — Test video clips
-- `assets/app_photos/` — Sample photos for app UI and about screen collage
-- `assets/icon_previews/` — App icon concept previews
-- Generated outputs: Excel catalogs (`.xlsx`), CSV reports (`Donna_report_*.csv`)
-
-## Primary Use Case
-Finding "Donna" across a large family home video collection. The project is dedicated to/inspired by Donna.
-
-## Architecture Notes
-- Person Finder uses parallel job processing — each scan target (volume/folder) runs as an independent job
-- Face matching uses Vision framework's feature print distance (lower = closer match)
-- Clip extraction groups consecutive face hits into segments, then uses ffmpeg to trim
-- Video compilation uses ffmpeg concat demuxer
-- Decade-chapter generation infers decade from file metadata/path
-
-## Current Status
-<!-- Update this section as work progresses -->
-- Active development as of March 2026
-- Core features operational: cataloging, face detection, clip extraction, compilation
-- Recent work focused on PersonFinderModel and PersonFinderView
-
-## Feature-test checklist (adopted 2026-07-05 — see docs/practices/testing_retrospective_2026_07_05.md)
-Every feature/fix ships with tests along FIVE dimensions, not just the first:
-1. **Logic** — ordinary unit tests
-2. **Scale** — if it iterates `records`: 100k synthetic records + explicit time budget
-3. **Media matrix** — if it opens media files: mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv (synthetic ffmpeg fixtures, `test_*` prefix)
-4. **Isolation** — if it reads global state (UserDefaults/shared caches/real paths): a poisoned-state test
-5. **Sensor** — leave a regression sensor pinning the fixed behavior at production scale
-
-Rationale: escaped bugs are boundary bugs (environment, cost, capability) — the suite already catches function-level logic errors. NO O(records) work in view bodies. Integration-test ladder: GH #105–#108.
-
-## Pre-merge sensor lane (Rick, GH #360, 2026-10-21) — MANDATORY
-Before any agent reports done, and before anything merges to main, run:
-
-    scripts/run_sensors.sh        # from the checkout/worktree being merged
-
-It runs every source-scan / architecture sensor and nothing else: each test
-that reads the repo's own Swift source (`SourceTree.…`, a `#filePath` walk of
-the tree, or a helper that does) plus the `*Sensor*` / `*Ratchet*` suites whose
-file reads source — in VideoScanTests (`xcodebuild -only-testing`, Debug,
-parallel) and VideoScanCore (`swift test --filter`). Scale/timing tests and
-real-global-state isolation tests are left to the nightly. ~550 tests, ~70 s
-on the M4 once built; pass `--derived-data <the DerivedData you already built
-with>` to stay incremental (the default, ~/Library/Caches/videoscan-sensor-dd/
-<checkout>, costs one cold Debug build per new worktree). The list is DISCOVERED from the test source each run
-(`python3 scripts/sensor_lane.py list`), so a new sensor joins the lane the day
-it is written. Exit 1 names every red sensor; a lane that ran zero tests is red
-too. A red sensor is fixed (code or a reviewed sensor update) before merge —
-never merged red "for the nightly to sort out": one stayed red 11 nights.
-Not a git hook: a hook would need an app build inside `git merge` (minutes when
-cold, and concurrent merges would fight over one DerivedData), so it is a
-mandatory step instead, in every implementing agent's definition.
-
-## Long operations (Rick, 2026-09-27)
-Anything that can run longer than about a minute is an **MFO job** (Media File
-Operations window), whether Rick starts it or it runs overnight on the M4:
-- Collapsed row: coloured verb chip · what it's doing now · "N of M" ·
-  current file · time left · progress bar · Pause / Stop.
-- Double-click: the per-item detail (each item with its result and reason)
-  and running totals.
-- Finished: a one-line summary stays on the row; details stay one
-  double-click away. Overnight runs appear the same way in the morning.
-- START / progress / OUTCOME lines to the console, catalog.log and
-  videoscan.log through one sink.
-No long operation gets its own ad-hoc progress UI or runs silently.
-
-## Known Issues / TODOs
-<!-- Add items here as they come up -->
-- Beachballs on Correlate All / catalog-wide dup detection — parked, GH #104 (fix template: VolumeStatusCache pattern)
-
-## Design Decisions
-<!-- Document non-obvious choices here -->
--
-
-## Notes for Claude
-<!-- Instructions for AI assistance -->
-- This is a personal project — prioritize reliability with large video libraries
-- macOS-native capabilities preferred (Vision, AVFoundation) over cross-platform alternatives
-- ffmpeg/ffprobe are required external dependencies
-
-## Command shape (agents and Manager alike)
-
-Every permission prompt interrupts Rick, and the matcher keys on the **leading
-token** of the command string. `cd /path && xcodebuild ...` is matched as a `cd`
-command, so none of the `Bash(xcodebuild:*)` rules apply and Rick gets asked —
-even though the allowlist already covers the real work. Measured 2026-09-03:
-4,134 of ~53,000 recorded bash segments began with `cd`, `for`, `if` or `while`,
-and **no allowlist entry can ever match those**.
-
-So:
-- **Never** write `cd <path> && <command>`. Use the tool's own path flag:
-  `git -C <path> ...` (explicitly allowed), `xcodebuild -project <abs path>
-  -derivedDataPath <abs path>`, `swift test --package-path <abs path>`.
-- **Never** lead with shell control flow (`for … done`, `if [ … ]`, `until`,
-  `while`). Put the logic in one `python3 - <<'PY'` heredoc; `Bash(python3:*)`
-  is allowed. To wait on something, use the Monitor tool or `run_in_background`.
-- **Never** lead with a variable assignment (`R=/path; git -C $R …`,
-  `D=…; xcodebuild …`), a subshell `( … )`, `time …`, `sleep N; …` or
-  `date; …`. Measured 2026-09-26: of 1,155 Bash calls in one day, 151 matched
-  NO allow rule — 101 began `VAR=`, 23 `until`, 12 `date;`, 9 `sleep` — and
-  they only ran because auto mode was on. Three of the six overnight stalls
-  in the previous nine nights began `VAR=`; two began `cd`; one was `rm -rf`
-  (an `ask` rule). Write the path inline, or inside the python heredoc.
-- Prefer the Grep/Read/Glob tools over shell `grep`/`cat`/`find`.
-- If something still prompts, it is a genuine allowlist gap — add the rule to
-  `.claude/settings.json`; don't route around it and don't ask Rick.
-- `deny` outranks `allow`: to permit something denied, the deny entry must be
-  removed, not merely added to `allow`.
-
-## Build mode policy
-
-- **Debug** for rapid dev iteration — Rick's solo edit/build/run loops AND paired RD sessions with Claude. Incremental compiles are 5–15s instead of ~3 min. Default when in doubt.
-- **Release** for: (1) automated tests where production parity matters (TestDriver Smoke/Diagnostic, CI, perf baselines, the gauntlet, and the 2 AM nightly on the M4 — Rick's ruling 2026-09-29), (2) manual demo / family-facing runs, (3) bugs that only reproduce under the optimizer.
-- Build-settings notes: Debug's `ONLY_ACTIVE_ARCH` should be `YES` (M1/M4 → arm64 only). Release keeps `SWIFT_COMPILATION_MODE = wholemodule` — that's the right call for production but is why Release rebuilds are slow on a one-line change.
-- Adopted 2026-05-23 after a slow-Xcode investigation. Supersedes the prior "always Release" practice.
-
-
-# VideoScan — Agent Team Configuration
-
-This section augments the existing project CLAUDE.md. Append it (or merge as appropriate).
-
-## Operating model
-
-Rick is the Director (CTO). The main Claude Code session is the Manager. Six specialized subagents handle specific concerns:
-
-- `feature-dev` — Swift/SwiftUI implementation
-- `bug-fix` — diagnostic and remediation work
-- `testing` — XCTest / Swift Testing
-- `qa` — code review (read-only)
-- `performance` — profiling and optimization
-- `metrics` — codebase measurements
-
-Subagent definitions are in `.claude/agents/`. The Manager protocol is in `.claude/agents/MANAGER.md`.
-
-## Autonomy
-
-Subagents operate in **full auto** within `~/dev/VideoScan` and `~/Library/Logs/VideoScan/`. They will not:
-- Touch files outside those paths, except the codex review state under
-  `~/Library/Application Support/VideoScan/review-cycles/` (written by `tools/codex_review.py`)
-- Run `git push` or other remote git operations
-- Delete files (move to repo `.trash/` instead)
-- Run unbounded memory operations
-
-## Reporting style
-
-Manager uses **adaptive** reporting: verbose for novel work, summary for routine work. Rick can switch modes mid-session by saying "verbose" or "summary."
-
-## When to invoke each agent
-
-Direct invocation by Rick uses the `/` form (slash commands defined in `.claude/commands/`). Manager invocation uses the Task tool with the agent name.
-
-Common patterns:
-- New feature → feature-dev → testing → qa → performance
-- Bug report → bug-fix → testing (regression) → qa
-- Hardening → metrics → qa → performance (Manager triages findings)
-- Quick health check → metrics only
-
-## Escalation
-
-Manager stops and asks Rick before:
-- Architectural decisions (new deps, threading model, schema changes)
-- Non-additive SQLite schema changes
-- Replacing the ExecuteShellCommand pattern
-- Anything affecting existing recovered MXF pair data
-- Anything affecting log file paths or formats
-
-## Codex spend policy (Rick, 2026-09-26)
-
-Codex runs on the Pro 5x plan plus pay-per-token extra credits; there is no
-higher plan on Rick's account. Codex's value is its independence and its
-accumulated knowledge of this repo, and every pass costs real money. So:
-
-- **When:** codex adversarial passes go ONLY to paths where a miss costs data —
-  delete / move / rewrite of media, the ledger, resume/recovery, the archive,
-  fixity. UI polish, wording, Angel ranking heuristics, docs, tests-only
-  changes = in-house `qa` agent + Rick's spot test. Rick triggers each pass;
-  ask him first ("ready for a codex pass on X, ~N files").
-- **Cadence:** one pass per batch of merged SHAs, never per commit. Bundle.
-- **Cheap tiers first, in order:** compiler/strict concurrency + SwiftLint +
-  analyzer → local model triage (verify every claim against the source before
-  relaying) → fresh-context Claude `/code-review` or `qa` agent → codex.
-- **Brief shape (keeps codex from wandering the repo):** SHA range, the exact
-  files/functions in scope, the invariant to attack (e.g. "prove the surviving
-  copy exists before unlink"), the test evidence already run, and the artifact
-  path for the verdict. Say explicitly "do not explore outside these files."
-  Run it with `tools/codex_review.py` (the brief also carries the first-line
-  contract `Credits spent: … | Finding count: N` + `Verdict:`); usage is in
-  the tool's docstring.
-- **Close the loop:** each finding is closed against a pinning test or
-  explicitly declined with a reason, in the review doc.
-- **Record spend:** put the credit cost of the pass and the finding count in
-  the header of `docs/reviews/codex/codex-review-*.md` (findings per dollar) so the
-  end-of-October review of this policy is evidence-based.
+## Working with Rick
+Direct and terse; push back when he is wrong; one question at a time; 🔴 at the top for anything blocking. Give a one-line C++ analogy where a Swift idiom is non-obvious. Rick builds and spot-tests the app himself: say Debug or Release and why. Say what you did, not how hard it was.

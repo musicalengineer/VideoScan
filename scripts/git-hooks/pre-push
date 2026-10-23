@@ -1,0 +1,36 @@
+#!/bin/bash
+# pre-push — a push to main must carry a commit whose tree the sensor lane saw
+# GREEN (CLAUDE.md hard rule 9; scripts/run_sensors.sh writes the stamp).
+#
+# For every ref pushed to refs/heads/main: the commit's tree hash must appear in
+# <git common dir>/sensor-lane-green. If the lane ran on a different tree (you
+# edited after it, or never ran it), the push is refused with the command to run.
+#
+# Waiver (Rick's call, recorded): SENSOR_LANE_WAIVED="reason" git push …
+# Pushes to other branches are not checked. Installed by scripts/install-git-hooks.sh.
+
+remote="$1"
+stamp="$(git rev-parse --git-common-dir)/sensor-lane-green"
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$remote_ref" = "refs/heads/main" ] || continue
+    [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue   # branch delete: denied elsewhere
+    tree="$(git rev-parse "$local_sha^{tree}" 2>/dev/null)"
+    if [ -f "$stamp" ] && grep -q "^$tree " "$stamp"; then
+        echo "pre-push: sensor lane GREEN recorded for tree ${tree:0:12} ✓"
+        continue
+    fi
+    if [ -n "${SENSOR_LANE_WAIVED:-}" ]; then
+        echo "pre-push: sensor lane WAIVED for ${local_sha:0:12}: $SENSOR_LANE_WAIVED"
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $local_sha waived: $SENSOR_LANE_WAIVED" >> "$(dirname "$stamp")/sensor-lane-waivers"
+        continue
+    fi
+    echo "pre-push REFUSED: no sensor-lane GREEN recorded for the tree of $local_ref (${local_sha:0:12})."
+    echo "  Run:  scripts/run_sensors.sh --derived-data <your dd>   on this exact tree, then push."
+    echo "  (If you edited after the lane ran, the stamp no longer matches: run it again.)"
+    echo "  Rick only:  SENSOR_LANE_WAIVED=\"reason\" git push …   (recorded in .git/sensor-lane-waivers)"
+    status=1
+done
+
+exit $status

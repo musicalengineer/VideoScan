@@ -127,3 +127,7 @@ default.profraw
 tests/fixtures/hallie_snapshots/*.actual.json
 # Dossier batch characterization: a mismatch writes <case>.actual.txt beside the golden (never commit)
 VideoScan/VideoScanTests/*.actual.txt
+.scratch/
+.worktrees/
+.codex-worktrees/
+docs/archive/*.zip

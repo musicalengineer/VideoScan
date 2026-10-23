@@ -205,49 +205,8 @@
   "VideoScan/VideoScanTests/VolumeRoleTests.swift": {
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "docs/briefs/cloud/C03-python-run-and-review.md": {
-    "docs/reviews/cloud/C03-python-run-and-review.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
-  },
-  "docs/briefs/cloud/C07-angel-floors-plan.md": {
-    "docs/reviews/cloud/C07-angel-floors-plan.md": "cloud brief names the review doc the cloud run will write"
-  },
-  "docs/briefs/cloud/C08-av-sync-check-prototype.md": {
-    "docs/reviews/cloud/C08-av-sync-check-prototype.md": "cloud brief names the review doc the cloud run will write"
-  },
-  "docs/design/analysis_ledger_design.md": {
-    "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/design/archive_angel_curation_direction.md": {
-    "docs/archive_angel_uniqueness_direction.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/design/family-tagging-and-search-roadmap.md": {
-    "docs/family_media_training_model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/media_longterm_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/design/gauntlet-design-codex-2026-09-27.md": {
-    "docs/codex-ui-testing-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/metrics": "Historical brief text describing where the dashboard might publish; the dashboard lives on the metrics branch."
-  },
-  "docs/design/hallie_proposer_with_tools_design.md": {
-    "docs/hallie_tools.schema.json": "Proposed schema artifact in the retained Hallie design; not implemented."
-  },
-  "docs/design/hallie_two_mode_design.md": {
-    "docs/hallie_intent_recognizer_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/hallie_titled_ancestors_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
   "docs/design/nightly_adversarial_review_design_2026-10-01.md": {
     "docs/reviews/adversarial/declined.jsonl": "Planned generated ledger in the proposed nightly adversarial design; no implementation exists yet."
-  },
-  "docs/design/overnight_review_plan_2026_09_12.md": {
-    "docs/overnight-refactor-assessment-20260912": "Historical report branch name, not a document target."
-  },
-  "docs/design/web_interface.md": {
-    "../../VideoScan/VideoScan/HallieWebBridge.swift": "Dated design citation to a source-file location predating the feature-folder layout; outside the docs-path rewrite scope.",
-    "../../VideoScan/VideoScan/HallieWebServer.swift": "Dated design citation to a source-file location predating the feature-folder layout; outside the docs-path rewrite scope."
-  },
-  "docs/guides/documentation-map.md": {
-    "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "docs/guides/facial-recognition.md": {
     "docs/catalog-aided-face-detection.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
@@ -303,59 +262,6 @@
     "docs/runbook_2026_08_18_catalog_cleanup.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
     "docs/video_classification.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/ops/codex_restart_handoff_2026_09_13.md": {
-    "docs/overnight-refactor-assessment-20260912": "Historical report branch name, not a document target."
-  },
-  "docs/ops/findings_2026_09_14_overnight.md": {
-    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/ops/morning_brief_2026-09-08.md": {
-    "docs/hallie_intent_recognizer_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/hallie_tree_aggregate_queries.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/practices/overnight_themes.md": {
-    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/practices/software_dev_policy.md": {
-    "docs/team-operations/rick-availability.local.md": "Optional local availability policy, not a tracked public document."
-  },
-  "docs/research/Media_Analyzer.md": {
-    "docs/issue-06-custom-face-model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/media_longterm_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/research/pronunciation_training_research.md": {
-    "docs/pronunciation_drill_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/reviews/briefs/catalog-versioning-167-2026-10-02-brief.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/briefs/catalog-versioning-167-r2-2026-10-02-brief.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/briefs/catalog-versioning-167-r3-2026-10-02-brief.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/briefs/codex-brief-excess-tier1-2026-10-07.md": {
-    "docs/reviews/codex/codex-review-excess-tier1-2026-10-07.md": "Verdict path the codex brief names before codex writes it; remove when the review lands."
-  },
-  "docs/reviews/briefs/codex-brief-p1-287-2026-10-06.md": {
-    "docs/reviews/codex/codex-review-batch-2026-10-07.md": "Verdict path the codex brief names before codex writes it; remove when the review lands."
-  },
-  "docs/reviews/briefs/docs-reorg-brief.md": {
-    "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",
-    "docs/metrics": "The reorganization brief names the pre-reorganization folders it moved.",
-    "docs/perf": "The reorganization brief names the pre-reorganization folders it moved.",
-    "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
-  },
-  "docs/reviews/codex/codex-review-catalog-versioning-167-2026-10-02.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/codex/codex-review-catalog-versioning-167-r2-2026-10-02.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/codex/codex-review-catalog-versioning-167-r3-2026-10-02.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
   },
   "scripts/find_donna_scan.py": {
     "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."

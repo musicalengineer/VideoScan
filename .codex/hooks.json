@@ -1,12 +1,12 @@
 {
-  "description": "Session-start digest (the team-channel message hook was retired 2026-10-02).",
+  "description": "Session-start status (docs/STATUS.md header, P0/P1 counts, red lanes). Same script Claude Code runs.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash /Users/rickb/dev/VideoScan/.claude/scripts/session_morning_hook.sh"
+            "command": "bash /Users/rickb/dev/VideoScan/.claude/scripts/session_start.sh"
           }
         ]
       }

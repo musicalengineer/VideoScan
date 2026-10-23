@@ -56,6 +56,9 @@ def references(source: str, text: str) -> list[tuple[int, str, str]]:
 
 def missing_references(root: Path, files: list[str], exceptions: dict) -> list[str]:
     missing = []
+    retired_file = root / "docs/archive/RETIRED.txt"
+    retired = set(l.strip() for l in retired_file.read_text().splitlines()
+                  if l.strip() and not l.startswith("#")) if retired_file.exists() else set()
     for source in files:
         if Path(source).suffix not in SUFFIXES and source != "CLAUDE.md":
             continue
@@ -66,6 +69,8 @@ def missing_references(root: Path, files: list[str], exceptions: dict) -> list[s
         for line, citation, target in references(source, path.read_text()):
             if (root / target).exists():
                 continue
+            if target in retired:
+                continue  # retired 2026-10-23: in git history (tag pre-reset-2026-10-23); code comments keep old paths
             if exceptions.get(source, {}).get(citation):
                 continue
             missing.append(f"{source}:{line}: {citation} -> {target}")
