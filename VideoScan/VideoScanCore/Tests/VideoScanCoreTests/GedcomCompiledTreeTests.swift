@@ -380,7 +380,12 @@ final class GedcomCompiledTreeTests: XCTestCase {
             results.set(i, promoted == nil ? "FAILED" : "ok")
         }
         stop.set(0, "stop")
-        while results.values.count < n + 1 { usleep(1_000) }
+        // Bounded (2026-10-22): an unbounded spin here would hold the whole
+        // Core lane until the nightly's deadline if the reader never
+        // reported. 120 s is ~100x the measured run; a miss fails, named.
+        let readerDeadline = Date().addingTimeInterval(120)
+        while results.values.count < n + 1 && Date() < readerDeadline { usleep(1_000) }
+        XCTAssertEqual(results.values.count, n + 1, "reader thread did not report within 120 s: \(results.values)")
         XCTAssertEqual(results.values.filter { $0 == "ok" }.count, n, "\(results.values)")
         XCTAssertTrue(results.values.contains { $0.hasPrefix("reader ok") }, "\(results.values)")
 
