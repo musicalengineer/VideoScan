@@ -30368,6 +30368,20 @@
         "correctedReplacementCompletesThePair",
         "swapDoorsNameTheirReplacement"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeRescanSensorTests"
+      ],
+      "tests": [
+        "archiveTabCountsEveryLiveArchiveCopyOnce",
+        "importEraArchiveCopyReplacementLands",
+        "rescanKeepsEveryArchivedMastersRow"
+      ],
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter"
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -33711,6 +33725,10 @@
         {
           "name": "tests/test_gauntlet_package_adapter.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
       "expected_floor": 256,
