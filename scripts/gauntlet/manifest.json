@@ -20917,6 +20917,30 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonPageHideCollapseTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonPageHideCollapseTests",
+        "PersonPageCollapseSensorTests"
+      ],
+      "tests": [
+        "aConfirmedSameFootagePairCollapses",
+        "aDerivedFromChainCollapsesUnderTheKeeper",
+        "aFoldedSourceAndArchiveCopyAreBothHidden",
+        "aHideListOfUnknownsIsIgnoredAndKept",
+        "aHideSurvivesAReloadAndAStaleSave",
+        "byteCopiesCollapseAndTheArchivedFileLeads",
+        "collapseUsesOnlyProvenEvidence",
+        "everyRowOffersTheHideAndTheWordsAreNeutral",
+        "hidingAPickDropsThePickAndKeepsTheTag",
+        "hidingATaggedRowLeavesTagsAndFaceMatchesUntouched",
+        "hundredThousandRecordsPageInBudget",
+        "notTheSameAndSampledGroupsNeverCollapse",
+        "putBackRestoresTheRow"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonVideoRemovalTests.swift",
       "stage": "unit",
       "suites": [
@@ -33039,7 +33063,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2888,
+      "expected_floor": 2901,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33322,6 +33346,8 @@
         "VideoScanTests/PeopleGalleryKeyboardNavigationTests",
         "VideoScanTests/PeopleSortKeyTests",
         "VideoScanTests/PeopleTagsTests",
+        "VideoScanTests/PersonPageCollapseSensorTests",
+        "VideoScanTests/PersonPageHideCollapseTests",
         "VideoScanTests/PersonVideoRemovalTests",
         "VideoScanTests/PerceptualStatisticsTests",
         "VideoScanTests/PerceptualVerdictFoldTests",
