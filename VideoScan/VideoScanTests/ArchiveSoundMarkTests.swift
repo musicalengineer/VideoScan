@@ -269,7 +269,8 @@ struct ArchiveSoundMarkGetInfoTests {
 
     private func shown(_ r: VideoRecord) -> (SoundPresence, MediaCheckVerdict, String) {
         let presence = CheckMediaRules.getInfoSoundPresence(record: r, probed: nil)
-        let card = r.mediaReportCard!
+        let card = r.mediaReportCard ?? MediaReportCard(tier: .quick, checkedAt: Date(), fileSizeBytes: 0,
+                                                        headline: "no card", checks: [])
         return (presence, SoundPresencePolicy.displayVerdict(card: card, presence: presence),
                 SoundPresencePolicy.displayHeadline(card: card, presence: presence))
     }
