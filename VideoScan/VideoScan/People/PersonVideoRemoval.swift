@@ -104,7 +104,7 @@ enum PersonVideoRemoval {
                         model: VideoScanModel) {
         let recs = rowRecords(rec, in: model)
         if action == .notInVideo { untag(recs, profile: profile, model: model) }
-        _ = FeaturedVideos.set(recs, on: false, for: profile.uuid)
+        FeaturedVideos.remove(resolvingTo: recs, for: profile.uuid, in: model)
         appLog.write("People tab: \(action.title(profile.displayName)) — \(rec.filename) (\(recs.count) record(s))")
     }
 }

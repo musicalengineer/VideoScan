@@ -124,6 +124,28 @@ struct PersonVideoRemovalTests {
         #expect(PersonVideos.rows(for: donna(), in: m).isEmpty, "the row does not come back from the source")
     }
 
+    /// Codex round 2 (2026-10-24): removal must follow the page's own
+    /// identity order (id, then path + size, then whole-file SHA-256). A
+    /// pick of video A, renamed, whose OLD path now holds video B, still
+    /// shows A; taking B off the page must leave A's pick alone.
+    @Test func aReusedPathNeverRemovesAnotherVideosPick() {
+        let a = rec("reused.mov")
+        var picks = [FeaturedVideo(recordID: a.id, path: a.fullPath, filename: a.filename,
+                                   contentHash: nil, addedAt: Date())]
+        a.fullPath = "/Volumes/test_T/renamed-A.mov"
+        let b = rec("reused.mov")
+        b.detectedPeople = ["Donna"]
+        let m = model([a, b])
+        #expect(FeaturedVideos.resolve(picks, in: m).videos.map(\.id) == [a.id], "precondition: the pick shows A")
+        #expect(PersonVideos.rows(for: donna(), in: m).map(\.id) == [b.id], "precondition: B is tagged")
+
+        FeaturedVideos.removePicks(resolvingTo: PersonVideoRemoval.rowRecords(b, in: m), from: &picks, in: m)
+        #expect(picks.map(\.recordID) == [a.id], "A's pick survives taking B off the page")
+
+        FeaturedVideos.removePicks(resolvingTo: PersonVideoRemoval.rowRecords(a, in: m), from: &picks, in: m)
+        #expect(picks.isEmpty, "taking A off removes A's pick")
+    }
+
     @Test func anotherPersonOnTheSameVideoIsUntouched() {
         let r = rec("both.mov")
         r.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date()),
