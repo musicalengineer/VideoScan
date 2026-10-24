@@ -164,6 +164,7 @@ struct ArchiveSoundMarkCardTests {
             classification: .trueStereo,
             measurements: AudioBalanceMeasurements(channels: channels, differenceRMSDBFS: nil),
             shape: shape, programStreamCount: 1, programStreamIndex: 1, droppedStreamIndices: [])
+        d.balanceAnalysis?.levelsComplete = true
         return d
     }
 
@@ -232,6 +233,58 @@ struct ArchiveSoundMarkCardTests {
         #expect(measured(p + "Channel: 1\n" + p + "Peak level dB: -inf\n" + p + "RMS level dB: -inf\n") == true,
                 "an explicit -inf is real digital silence")
         #expect(measured(p + "Channel: 1\n" + p + "Peak level dB: -50\n" + p + "RMS level dB: -66.2\n") == true)
+    }
+
+    /// Codex round 2 (2026-10-24), P0-2: "nan" parses as a Double but is
+    /// not a level; never silence.
+    @Test func nanIsNotAMeasurement() {
+        let p = "[Parsed_astats_0 @ 0x1] "
+        let channels = AstatsOutputParser.perChannelLevels(fromStderr: p + "Channel: 1\n" + p + "RMS level dB: nan\n")
+        #expect(CheckMediaRules.soundMeasuredSilent(CheckMediaFullInputs(audio: .success(Self.diagnosis(channels)))) == nil)
+    }
+
+    /// Codex round 2, P0-1: the levels pass measured EVERY audio stream and
+    /// every declared channel, or the file is not measured — a silent stream
+    /// 0 beside an unreadable stream 1 is not "measured silent".
+    @Test func aPartialMultiStreamMeasurementIsNotSilence() {
+        let silent = AudioChannelLevels(rmsDBFS: -.infinity, peakDBFS: -.infinity)
+        let gap = AudioChannelLevels(rmsDBFS: -.infinity, peakDBFS: -.infinity, rmsMeasured: false)
+        #expect(!AudioBalanceProbe.levelsComplete(perStream: [[silent, silent], [gap, gap]], declaredChannels: [2, 2]),
+                "stream 1 never reported RMS")
+        #expect(!AudioBalanceProbe.levelsComplete(perStream: [[silent]], declaredChannels: [2]),
+                "a declared trailing channel is missing")
+        #expect(!AudioBalanceProbe.levelsComplete(perStream: [[silent, silent]], declaredChannels: [2, 2]),
+                "a declared stream was never measured")
+        #expect(!AudioBalanceProbe.levelsComplete(perStream: [], declaredChannels: []), "nothing measured")
+        #expect(AudioBalanceProbe.levelsComplete(perStream: [[silent, silent], [silent]], declaredChannels: [2, 0]),
+                "every stream, every declared channel (0 = unknown count)")
+        var d = Self.diagnosis([silent, silent])
+        d.balanceAnalysis?.levelsComplete = false
+        #expect(CheckMediaRules.soundMeasuredSilent(CheckMediaFullInputs(audio: .success(d))) == nil,
+                "an incomplete levels pass is not stored as silence")
+    }
+
+    /// Codex round 2, P0-3: Verify's own Sound row never calls an
+    /// unmeasured channel "silent".
+    @Test func verifysSoundRowNeverCallsAGapSilent() throws {
+        let p = "[Parsed_astats_0 @ 0x1] "
+        let channels = AstatsOutputParser.perChannelLevels(fromStderr: p + "Channel: 1\n" + p + "Peak level dB: -4.0\n")
+        let row = CheckMediaRules.checkSound(.success(Self.diagnosis(channels)), facts: Self.facts())
+        #expect(!row.sentence.lowercased().contains("silent"), "\(row.sentence)")
+        #expect(!row.evidence.contains { $0.value == "silent" }, "\(row.evidence)")
+        #expect(row.verdict != .ok && row.verdict != .warning, "not measured is not a verdict: \(row.verdict)")
+    }
+
+    /// Codex round 2, P1-4: a Problem card is never hidden behind the
+    /// yellow no-sound banner.
+    @Test func aProblemCardIsNotHiddenByTheNoSoundBanner() {
+        let card = MediaReportCard(tier: .full, checkedAt: Date(), fileSizeBytes: 1_000, headline: "The picture is damaged.",
+                                   checks: [MediaCheck(kind: .decode, verdict: .problem, sentence: "The picture is damaged.")])
+        #expect(DiagnosticBanner.noSound(recordID: UUID(), card: card, presence: .silentTrack(year: 1990, source: .userDate),
+                                         advice: nil) == nil)
+        let warnOnly = MediaReportCard(tier: .full, checkedAt: Date(), fileSizeBytes: 1_000, headline: "x", checks: [])
+        #expect(DiagnosticBanner.noSound(recordID: UUID(), card: warnOnly, presence: .silentTrack(year: 1990, source: .userDate),
+                                         advice: nil) != nil, "without a Problem the banner still shows")
     }
 
     @Test func theFieldRoundTripsAndOldCardsDecodeNil() throws {
@@ -312,6 +365,26 @@ struct ArchiveSoundMarkGetInfoTests {
         let r = record("test_dvd.m2v", stream: .videoOnly, year: "2004")
         r.mediaReportCard = fullCard(soundRow: .notRun(.sound, because: "this file has no sound track"), silent: false)
         #expect(shown(r).2 == "No sound — this copy has no audio track.")
+    }
+}
+
+/// Codex round 2, P1-6: every app surface asks the MEASURED answer; the
+/// unmeasured `catalogSoundPresence` is only the bridge's building block.
+@Suite("Archive sound mark — one question everywhere")
+struct ArchiveSoundMarkOneQuestionTests {
+    @Test func noAppSurfaceAsksTheUnmeasuredPresence() throws {
+        let appRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("VideoScan")
+        let files = try #require(FileManager.default.enumerator(at: appRoot, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        try #require(files.count > 100, "the app source folder moved (\(files.count) files)")
+        let stray = try files.flatMap { url in
+            try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
+                .enumerated().filter { $0.element.contains(".catalogSoundPresence")
+                    && !$0.element.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .map { "\(url.lastPathComponent):\($0.offset + 1)" }
+        }
+        #expect(stray.isEmpty, "use measuredSoundPresence (stored measurement + live date): \(stray)")
     }
 }
 

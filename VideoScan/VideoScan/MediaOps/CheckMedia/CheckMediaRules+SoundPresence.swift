@@ -67,8 +67,8 @@ extension CheckMediaRules {
     /// levels pass never reported (a parse gap is not silence; Codex P0
     /// 2026-10-24).
     static func soundMeasuredSilent(_ full: CheckMediaFullInputs) -> Bool? {
-        guard case .success(let d)? = full.audio,
-              let channels = d.balanceAnalysis?.measurements.channels, !channels.isEmpty,
+        guard case .success(let d)? = full.audio, let analysis = d.balanceAnalysis, analysis.levelsComplete,
+              case let channels = analysis.measurements.channels, !channels.isEmpty,
               channels.allSatisfy(\.rmsMeasured) else { return nil }
         return !channels.contains(where: AudioBalanceClassifier.carriesProgram)
     }

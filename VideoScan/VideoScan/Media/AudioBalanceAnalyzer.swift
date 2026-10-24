@@ -237,7 +237,8 @@ enum AstatsOutputParser {
         let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
         if s == "-inf" || s == "-infinity" { return -.infinity }
         if s == "inf" || s == "infinity" { return .infinity }
-        return Double(s)
+        guard let v = Double(s), !v.isNaN else { return nil }
+        return v
     }
 
     static func parseDB(_ raw: String) -> Double {

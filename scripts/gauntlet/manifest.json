@@ -5082,6 +5082,7 @@
       "suites": [
         "ArchiveSoundMarkCardTests",
         "ArchiveSoundMarkGetInfoTests",
+        "ArchiveSoundMarkOneQuestionTests",
         "ArchiveSoundMarkPolicyTests",
         "ArchiveSoundMarkScaleTests",
         "ArchiveSoundMarkTruthTests"
@@ -5092,8 +5093,10 @@
         "aFullCardMeasuredSilentMarksAPost1980Video",
         "aKnownSoundPartnerExcusesASilentTrack",
         "aNoTrackFileKeepsItsOwnWords",
+        "aPartialMultiStreamMeasurementIsNotSilence",
         "aPost1980VideoWithNoTrackIsMarkedFromTheCatalogAlone",
         "aPre1980SilentVideoIsNotMarked",
+        "aProblemCardIsNotHiddenByTheNoSoundBanner",
         "aSourceRowIsJudgedByItsArchiveCopy",
         "before1980ASilentTrackIsNormal",
         "before1980TheRowIsOK",
@@ -5101,6 +5104,8 @@
         "damagedSoundIsNeverSoftenedByARedate",
         "from1980ASilentTrackIsAWarningWithItsOwnWords",
         "hundredThousandRowsInsideTheBudget",
+        "nanIsNotAMeasurement",
+        "noAppSurfaceAsksTheUnmeasuredPresence",
         "noMeasurementIsNeverSilence",
         "notMeasuredLeavesTheSoundPassRow",
         "post1980TheRowIsAWarningAndKeepsTheLevels",
@@ -5111,7 +5116,8 @@
         "theMeasurementIsReadFromTheLevelsPassAtTheAppsFloor",
         "theNoTrackCellsAreUnchanged",
         "theProbedPathCarriesTheMeasurementToo",
-        "undatedIsTreatedAsAfter1980"
+        "undatedIsTreatedAsAfter1980",
+        "verifysSoundRowNeverCallsAGapSilent"
       ]
     },
     {
@@ -32985,7 +32991,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2871,
+      "expected_floor": 2876,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33056,6 +33062,7 @@
         "VideoScanTests/ArchiveSortPolicyTests",
         "VideoScanTests/ArchiveSoundMarkCardTests",
         "VideoScanTests/ArchiveSoundMarkGetInfoTests",
+        "VideoScanTests/ArchiveSoundMarkOneQuestionTests",
         "VideoScanTests/ArchiveSoundMarkPolicyTests",
         "VideoScanTests/ArchiveSoundMarkScaleTests",
         "VideoScanTests/ArchiveSoundMarkTruthTests",

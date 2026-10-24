@@ -74,7 +74,9 @@ extension DiagnosticBanner {
                         advice: SoundCopyAdvice?) -> DiagnosticBanner? {
         let flagged = (presence?.isWarning ?? false)
             || (card.map(CheckMediaRules.hasNoSoundRow) ?? false)
-        guard flagged else { return nil }
+        // A Problem on the card is the worse news; the banner never hides
+        // it (Codex round 2, 2026-10-24).
+        guard flagged, (card?.verdict.rank ?? 0) < MediaCheckVerdict.problem.rank else { return nil }
         return DiagnosticBanner(id: noSoundID, severity: .warning, symbol: noSoundSymbol,
                                 headline: noSoundHeadline, nextStep: noSoundStep(advice),
                                 action: .repair(MediaRepairPrefill(recordID: recordID, advice: advice)))

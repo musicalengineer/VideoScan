@@ -328,7 +328,7 @@ struct MediaRepairSheet: View {
     }
 
     static func needsSound(_ rec: VideoRecord, card: MediaReportCard?) -> Bool {
-        card.map(CheckMediaRules.hasNoSoundRow) ?? rec.catalogSoundPresence.isWarning
+        card.map(CheckMediaRules.hasNoSoundRow) ?? rec.measuredSoundPresence.isWarning
     }
 
     // MARK: The picture plan (header only, off the main actor)
