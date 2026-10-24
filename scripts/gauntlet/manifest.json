@@ -20868,6 +20868,24 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonVideoRemovalTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonVideoRemovalTests"
+      ],
+      "tests": [
+        "aFoldedSourceAndCopyAreBothUntagged",
+        "aRowStandsForItsSourceAndItsCopyEachOnce",
+        "anotherPersonOnTheSameVideoIsUntouched",
+        "everyNameOnceInOrder",
+        "isntInThisVideoClearsConfirmedAndRejectsAFaceMatchUnderEveryName",
+        "removeFromPageDropsOnlyThePick",
+        "scale10kTaggedVideosInBudget",
+        "theWords"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonVideosTests.swift",
@@ -32946,7 +32964,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2846,
+      "expected_floor": 2854,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33222,6 +33240,7 @@
         "VideoScanTests/PeopleGalleryKeyboardNavigationTests",
         "VideoScanTests/PeopleSortKeyTests",
         "VideoScanTests/PeopleTagsTests",
+        "VideoScanTests/PersonVideoRemovalTests",
         "VideoScanTests/PerceptualStatisticsTests",
         "VideoScanTests/PerceptualVerdictFoldTests",
         "VideoScanTests/PerceptualVerdictGateTests",

@@ -1,0 +1,131 @@
+// PersonVideoRemovalTests.swift
+// People tab ▸ right-click a video ▸ "Remove from Donna's Page" /
+// "Donna Isn't in This Video" (Rick 2026-10-23).
+//
+//   LOGIC     the words; every name the person is known by; a confirmed tag
+//             goes, a face match becomes Rejected; removing a pick keeps tags.
+//   TRUTH     a row that stands for a source AND its archive copy changes
+//             both, so the row cannot come straight back from the other one.
+//   ISOLATION another person's tags on the same video are untouched.
+//   SCALE     a person with 10k tagged videos, untagged in budget.
+//   (Media matrix: not applicable — tags are catalog metadata, no file I/O.)
+
+import Foundation
+import Testing
+import VideoScanCore
+@testable import VideoScan
+
+@MainActor
+@Suite("People tab — take a video off a person")
+struct PersonVideoRemovalTests {
+
+    private func rec(_ name: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = "/Volumes/test_T/\(name)"
+        r.filename = name
+        r.directory = "/Volumes/test_T"
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        return r
+    }
+
+    private func donna() -> POIProfile {
+        var p = POIProfile(name: "Donna", referencePath: "")
+        p.aliases = ["Donna Breen", "donna", "  "]
+        return p
+    }
+
+    private func model(_ recs: [VideoRecord]) -> VideoScanModel {
+        let m = VideoScanModel()
+        m.records = recs
+        m.searchIndex.rebuild(records: recs)
+        return m
+    }
+
+    @Test func theWords() {
+        #expect(PersonVideoRemovalAction.removeFromPage.title("Donna") == "Remove from Donna\u{2019}s Page")
+        #expect(PersonVideoRemovalAction.notInVideo.title("Donna") == "Donna Isn\u{2019}t in This Video")
+        #expect(PersonVideoRemovalAction.removeFromPage.help("Donna").contains("Tags for Donna stay"))
+        #expect(PersonVideoRemovalAction.notInVideo.help("Donna").contains("No file is changed"))
+    }
+
+    @Test func everyNameOnceInOrder() {
+        #expect(PersonVideoRemoval.names(of: donna()) == ["Donna", "Donna Breen"],
+                "display name = name here; the lowercase alias and the blank one collapse")
+    }
+
+    @Test func aRowStandsForItsSourceAndItsCopyEachOnce() {
+        let a = rec("a.mov"), s = rec("s.mov"), c = rec("c.mov")
+        #expect(PersonVideoRemoval.records(a, source: nil, copy: nil).map(\.filename) == ["a.mov"])
+        #expect(PersonVideoRemoval.records(c, source: s, copy: nil).map(\.filename) == ["c.mov", "s.mov"])
+        #expect(PersonVideoRemoval.records(s, source: nil, copy: c).map(\.filename) == ["s.mov", "c.mov"])
+        #expect(PersonVideoRemoval.records(a, source: a, copy: a).count == 1)
+    }
+
+    @Test func isntInThisVideoClearsConfirmedAndRejectsAFaceMatchUnderEveryName() {
+        let confirmed = rec("confirmed.mov")
+        confirmed.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date())]
+        let byFace = rec("face.mov")
+        byFace.detectedPeople = ["Donna Breen"]
+        byFace.suspectedPeople = ["Donna"]
+        let m = model([confirmed, byFace])
+        let keys = PersonVideos.tagKeys(for: donna())
+
+        PersonVideoRemoval.untag([confirmed, byFace], profile: donna(), model: m)
+
+        for r in [confirmed, byFace] {
+            #expect(PersonVideos.tier(of: r, keys: keys) == nil, "\(r.filename) no longer lists Donna")
+        }
+        #expect(confirmed.rejectedPeople.isEmpty, "removing your own confirmation is not a rejection")
+        #expect(byFace.rejectedPeople.contains { $0.caseInsensitiveCompare("Donna Breen") == .orderedSame },
+                "a face match is recorded as wrong so a scan does not re-add it")
+        #expect(m.searchIndex.paths(forPersonNamesExactly: keys).isEmpty, "the People page's index agrees now")
+    }
+
+    @Test func aFoldedSourceAndCopyAreBothUntagged() {
+        let source = rec("source.mov"), copy = rec("1987-xx-xx_copy.mov")
+        for r in [source, copy] { r.detectedPeople = ["Donna"] }
+        let m = model([source, copy])
+        PersonVideoRemoval.untag(PersonVideoRemoval.records(copy, source: source, copy: nil), profile: donna(), model: m)
+        let keys = PersonVideos.tagKeys(for: donna())
+        #expect(PersonVideos.tier(of: source, keys: keys) == nil, "the source would otherwise bring the row back")
+        #expect(PersonVideos.tier(of: copy, keys: keys) == nil)
+    }
+
+    @Test func anotherPersonOnTheSameVideoIsUntouched() {
+        let r = rec("both.mov")
+        r.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date()),
+                                   ConfirmedTag(name: "Dan", confirmedAt: Date())]
+        r.detectedPeople = ["Donna", "Rick"]
+        let m = model([r])
+        PersonVideoRemoval.untag([r], profile: donna(), model: m)
+        #expect(r.confirmedByUserPeople.map(\.name) == ["Dan"])
+        #expect(r.detectedPeople == ["Rick"])
+        #expect(!r.rejectedPeople.contains("Dan") && !r.rejectedPeople.contains("Rick"))
+    }
+
+    @Test func removeFromPageDropsOnlyThePick() {
+        let r = rec("pick.mov")
+        r.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date())]
+        var picks: [FeaturedVideo] = []
+        _ = FeaturedVideos.apply([r], on: true, to: &picks)
+        #expect(FeaturedVideos.isFeatured(r, in: picks))
+        // The pick half of both actions (the disk write is FeaturedVideos.set, its own tests).
+        #expect(FeaturedVideos.apply([r], on: false, to: &picks) == 1)
+        #expect(!FeaturedVideos.isFeatured(r, in: picks))
+        #expect(r.confirmedByUserPeople.map(\.name) == ["Donna"], "the tag stays: it moves to 'More videos tagged'")
+    }
+
+    @Test func scale10kTaggedVideosInBudget() {
+        let recs = (0..<10_000).map { i -> VideoRecord in
+            let r = rec("v\(i).mov")
+            r.detectedPeople = ["Donna"]
+            return r
+        }
+        let m = model(recs)
+        let elapsed = ContinuousClock().measure {
+            PersonVideoRemoval.untag(recs, profile: donna(), model: m)
+        }
+        #expect(recs.allSatisfy { $0.detectedPeople.isEmpty })
+        #expect(elapsed < .seconds(3), "10k records untagged in \(elapsed) (Debug budget 3 s)")
+    }
+}

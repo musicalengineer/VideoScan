@@ -230,7 +230,7 @@ struct PersonVideosSection: View {
                         if featured.isEmpty {
                             pickHint
                         } else {
-                            ForEach(featured) { row in rowView(row) }
+                            ForEach(featured) { row in rowView(row, isPick: true) }
                         }
                         if missingPicks > 0 {
                             Text("\(missingPicks) picked video\(missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
@@ -318,7 +318,7 @@ struct PersonVideosSection: View {
                         Text(group.decade)
                             .font(.system(size: 14, weight: .semibold))
                             .padding(.horizontal, 14).padding(.top, 6)
-                        ForEach(group.rows) { row in rowView(row) }
+                        ForEach(group.rows) { row in rowView(row, isPick: false) }
                     }
                 }
             } label: {
@@ -330,17 +330,35 @@ struct PersonVideosSection: View {
         }
     }
 
-    private func rowView(_ row: PersonVideoRow) -> some View {
-        PersonVideoRowView(row: row, catalogModel: catalogModel, onShowInCatalog: onShowInCatalog)
+    /// `isPick`: the row is a hand pick ("Videos of …"); a tagged row
+    /// offers only "Isn't in This Video" (there is no pick to remove).
+    private func rowView(_ row: PersonVideoRow, isPick: Bool) -> some View {
+        PersonVideoRowView(row: row, catalogModel: catalogModel, onShowInCatalog: onShowInCatalog,
+                           removal: PersonVideoRowRemoval(
+                               personName: profile.displayName,
+                               actions: isPick ? [.removeFromPage, .notInVideo] : [.notInVideo],
+                               perform: { action, rec in
+                                   PersonVideoRemoval.perform(action, rec: rec, profile: profile, model: catalogModel)
+                                   refreshTick += 1
+                               }))
     }
 }
 
 // MARK: - One row
 
+/// What a person's page offers to take a row off it (PersonVideoRemoval).
+struct PersonVideoRowRemoval {
+    let personName: String
+    let actions: [PersonVideoRemovalAction]
+    let perform: @MainActor (PersonVideoRemovalAction, VideoRecord) -> Void
+}
+
 struct PersonVideoRowView: View {
     let row: PersonVideoRow
     let catalogModel: VideoScanModel
     let onShowInCatalog: (String) -> Void
+    /// nil on pages that offer no removal (a family's page).
+    var removal: PersonVideoRowRemoval? = nil
 
     @State private var thumbnail: NSImage?
     @State private var hovering = false
@@ -395,6 +413,13 @@ struct PersonVideoRowView: View {
             }
             Button("Show in Catalog") { onShowInCatalog(row.title) }
             Divider()
+            if let removal, let rec = catalogModel.record(forPath: row.path) {
+                ForEach(removal.actions, id: \.self) { action in
+                    Button(action.title(removal.personName)) { removal.perform(action, rec) }
+                        .help(action.help(removal.personName))
+                }
+                Divider()
+            }
             ShowInPeopleTabMenu(records: catalogModel.record(forPath: row.path).map { [$0] } ?? [])
         }
         .help("Double-click to play")
