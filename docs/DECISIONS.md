@@ -170,3 +170,4 @@
 5. Folders rule 4 ("a file may be in several folders") vs Events v1 non-overlap of confirmed events.
 6. Master counts quoted in docs disagree (198 / 143 / 142); the catalog is the source of truth, docs should not carry counts.
 - **2026-10-24 — Rapid dev mode iterations:** between look-and-tweak rounds on main, no test runs — Claude edits, Rick rebuilds and looks. The first pass (red/green tests) and one `scripts/run_sensors.sh` run when Rick says "happy" stay. Rick 2026-10-24.
+- **2026-10-24 — People tab vs Catalog:** a person's page in the People tab is a short, curated list (10–15) of that person's best videos, never duplicates; the full machine-assisted set (face matches, all versions) belongs in the Catalog, reached by a Person ▾ picker beside the generic search (one person; the search box unchanged). Rick 2026-10-24.

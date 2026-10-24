@@ -133,9 +133,5 @@
 - Adversarial 10/18 findings #4–#7 (deferred to the Import removal): close with pinning tests or decline with reasons.
 - Fleet roles on the Ultra: a resource plan (cores/RAM per job, weekly calendar), not just a role list.
 
-## People tab
-- Curated person page (Rick 10/24): "Videos of <name>" is the first list anyone sees for a person — keep it short (10–15 best), hand-curated; the full set lives in the Catalog. How to choose/rank/cap is open.
-- Catalog: a "Person ▾" picker to the left of the generic search (one person for now), filtering by person tags only; the generic search box stays as is (Rick 10/24).
-
 ## Docs still to write (when their subject is live)
 Catalog schema and commit model for readers (replaces `database_design.md`; carry its POI layout, bundle contents and recovery runbook) · MFO job lifecycle and how to add a job · the removal lanes today and the one-engine target · Archive Angel: what stays (after Q8) · Family Tree read model (after Q3) · splitting `VideoScanModel` (after Q11) · family viewer mode · P0 retrospective: how integrity fell off the table · final provenance design after Rick's four rulings · post-cutover stability baseline · segments decision record.
