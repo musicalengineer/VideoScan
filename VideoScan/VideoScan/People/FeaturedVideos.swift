@@ -154,6 +154,43 @@ enum FeaturedVideos {
         return true
     }
 
+    /// Remove every pick that RESOLVES (`resolveOne`: id, then path + size,
+    /// then whole-file SHA-256, then the proven archive copy) to one of
+    /// `recs` — the inverse of what the page shows, so a pick of another
+    /// video that merely shares an old path is never touched (Codex round 2,
+    /// 2026-10-24). Returns how many were removed.
+    @MainActor @discardableResult
+    static func removePicks(resolvingTo recs: [VideoRecord], from picks: inout [FeaturedVideo],
+                            in model: VideoScanModel) -> Int {
+        let before = picks.count
+        picks.removeAll { pick in
+            guard let shown = resolveOne(pick, in: model) else { return false }
+            return recs.contains { $0 === shown }
+        }
+        return before - picks.count
+    }
+
+    /// The People page's removal: `removePicks(resolvingTo:)` on the saved
+    /// profile, then save, log and notify, like `set(_:on:for:)`.
+    @MainActor @discardableResult
+    static func remove(resolvingTo recs: [VideoRecord], for profileUUID: UUID, in model: VideoScanModel) -> Bool {
+        guard var profile = POIProfile.listAll().first(where: { $0.uuid == profileUUID }) else {
+            appLog.write("People tab: could not find that person's profile — nothing changed")
+            return false
+        }
+        let count = removePicks(resolvingTo: recs, from: &profile.featuredVideos, in: model)
+        guard count > 0 else { return true }
+        do {
+            try profile.save(writingFeaturedVideos: true)
+        } catch {
+            appLog.write("People tab: could not save \(profile.displayName)'s page — \(error.localizedDescription)")
+            return false
+        }
+        appLog.write("People tab: removed \(count) video(s) from \(profile.displayName)'s page (\(profile.featuredVideos.count) now)")
+        NotificationCenter.default.post(name: Self.changed, object: profileUUID)
+        return true
+    }
+
     /// The records behind a person's picks, in pick order. A pick whose
     /// video has a Master Archive copy shows the archive copy. Picks that
     /// can no longer be found are skipped (and counted).
@@ -168,20 +205,29 @@ enum FeaturedVideos {
         var seen: Set<UUID> = []
         var missing = 0
         for pick in picks {
-            var rec = model.record(forID: pick.recordID)
-            if rec == nil, let atPath = model.record(forPath: pick.path), sameSize(pick, atPath) { rec = atPath }
-            if rec == nil, let digest = pick.fullDigest, !digest.isEmpty {
-                // Rare fallback (renamed AND re-scanned): ≤ ~10 picks a person.
-                // The whole-file SHA-256 only — a sampled hash may be another video.
-                rec = model.records.first { !$0.isPurged && VideoScanModel.storedFullDigest($0) == digest }
-            }
-            guard var found = rec, !found.isPurged else { missing += 1; continue }
-            // Only a PROVEN archive copy stands in for the pick (GH #327): a
-            // sampled `v1:` match may be a different video.
-            if !model.isArchiveCopy(found), let copy = model.provenArchivedCopy(of: found) { found = copy }
+            guard let found = resolveOne(pick, in: model) else { missing += 1; continue }
             if seen.insert(found.id).inserted { out.append(found) }
         }
         return (out, missing)
+    }
+
+    /// The record ONE pick shows, or nil when it can't be found: its id,
+    /// then its path when the size agrees, then its whole-file SHA-256;
+    /// then that record's proven archive copy stands in.
+    @MainActor
+    static func resolveOne(_ pick: FeaturedVideo, in model: VideoScanModel) -> VideoRecord? {
+        var rec = model.record(forID: pick.recordID)
+        if rec == nil, let atPath = model.record(forPath: pick.path), sameSize(pick, atPath) { rec = atPath }
+        if rec == nil, let digest = pick.fullDigest, !digest.isEmpty {
+            // Rare fallback (renamed AND re-scanned): ≤ ~10 picks a person.
+            // The whole-file SHA-256 only — a sampled hash may be another video.
+            rec = model.records.first { !$0.isPurged && VideoScanModel.storedFullDigest($0) == digest }
+        }
+        guard let found = rec, !found.isPurged else { return nil }
+        // Only a PROVEN archive copy stands in for the pick (GH #327): a
+        // sampled `v1:` match may be a different video.
+        if !model.isArchiveCopy(found), let copy = model.provenArchivedCopy(of: found) { return copy }
+        return found
     }
 }
 

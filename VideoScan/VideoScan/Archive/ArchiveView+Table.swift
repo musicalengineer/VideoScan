@@ -279,9 +279,27 @@ extension ArchiveView {
             case .notArchived:
                 Text(status.label).foregroundColor(.secondary)
             }
+            soundMark(rec)
         }
         .font(.system(size: 14))
         .help(statusHelp(status))
+    }
+
+    /// Yellow "no sound" mark (Rick 2026-10-23): a video dated 1980 or
+    /// later, or undated, whose catalog says it has no sound track, or whose
+    /// stored full Verify MEASURED the track silent. Before 1980 silence is
+    /// normal and nothing is drawn. Nothing measured → nothing drawn; the
+    /// mark never guesses. O(1) per row (SoundPresencePolicy, the one rule).
+    @ViewBuilder
+    private func soundMark(_ rec: VideoRecord) -> some View {
+        let presence = ArchiveSoundMark.presence(for: rec, model: model)
+        if presence.isWarning, let sentence = presence.sentence {
+            Image(systemName: "speaker.slash.fill")
+                .foregroundColor(.yellow)
+                .help(sentence)
+                .accessibilityLabel(presence.headline ?? "No sound")
+                .accessibilityIdentifier("archive.row.noSound")
+        }
     }
 
     private func statusHelp(_ status: ArchiveRowStatus) -> String {

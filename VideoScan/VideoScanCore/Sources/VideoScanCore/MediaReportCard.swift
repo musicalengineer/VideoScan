@@ -204,6 +204,16 @@ public struct MediaReportCard: Codable, Sendable, Equatable {
     /// "Combine with its sound" needs it to match a sound file by length.
     /// nil on quick cards and on cards saved before this field existed.
     public var measuredPictureSeconds: Double?
+    /// What the full check's levels pass MEASURED on the sound track
+    /// (Rick 2026-10-23, the archive sound check): true = every channel sat
+    /// below the program floor (AudioBalanceClassifier, −60 dBFS RMS) —
+    /// a track that is there but silent; false = at least one channel
+    /// carries sound. nil = not measured (quick tier, no sound track, the
+    /// levels pass did not run, or a card saved before this field).
+    /// Additive like `measuredPictureSeconds`. SoundPresencePolicy judges
+    /// it against the file's date at display time, so a later date change
+    /// never leaves a stale verdict.
+    public var soundMeasuredSilent: Bool?
 
     public init(tier: Tier, checkedAt: Date, fileSizeBytes: Int64,
                 headline: String, checks: [MediaCheck], repairedCopy: MediaRepairLink? = nil,

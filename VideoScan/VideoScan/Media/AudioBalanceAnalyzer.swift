@@ -86,6 +86,12 @@ enum AudioChannelClass: String, Sendable, Equatable {
 struct AudioChannelLevels: Sendable, Equatable {
     var rmsDBFS: Double
     var peakDBFS: Double
+    /// False when astats never reported a readable RMS for this channel
+    /// (a parse gap: `rmsDBFS` then holds the parser's −∞ default, which
+    /// is NOT a measurement). Codex P0 2026-10-24: only a measured channel
+    /// may count as "silent" evidence. Defaults true for values built
+    /// directly (tests, other producers).
+    var rmsMeasured: Bool = true
 }
 
 /// Everything the classifier consumes. Built by AudioBalanceProbe from
@@ -190,7 +196,7 @@ enum AstatsOutputParser {
                 if let n = Int(channelValue), n >= 1 {
                     while levels.count < n {
                         levels.append(AudioChannelLevels(
-                            rmsDBFS: -.infinity, peakDBFS: -.infinity))
+                            rmsDBFS: -.infinity, peakDBFS: -.infinity, rmsMeasured: false))
                     }
                     currentIndex = n - 1
                 } else {
@@ -207,6 +213,7 @@ enum AstatsOutputParser {
 
             if let v = value(of: "RMS level dB:", in: payload) {
                 levels[idx].rmsDBFS = parseDB(v)
+                levels[idx].rmsMeasured = parsedDB(v) != nil
             } else if let v = value(of: "Peak level dB:", in: payload) {
                 levels[idx].peakDBFS = parseDB(v)
             }
@@ -224,6 +231,16 @@ enum AstatsOutputParser {
 
     /// "-inf" → −∞; otherwise a plain Double, defaulting to silence on
     /// garbage (a parse failure must never read as a loud channel).
+    /// The value when the text IS a level ("-inf" or a number); nil for
+    /// garbage. Tells a measurement from the parser's −∞ default.
+    static func parsedDB(_ raw: String) -> Double? {
+        let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        if s == "-inf" || s == "-infinity" { return -.infinity }
+        if s == "inf" || s == "infinity" { return .infinity }
+        guard let v = Double(s), !v.isNaN else { return nil }
+        return v
+    }
+
     static func parseDB(_ raw: String) -> Double {
         let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
         if s == "-inf" || s == "-infinity" { return -.infinity }

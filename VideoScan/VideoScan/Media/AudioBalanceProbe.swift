@@ -107,8 +107,21 @@ struct AudioBalanceStreamShape: Sendable, Equatable {
 /// balance job consumes. The stream-selection verdict (which stream
 /// carries program, which get dropped) is decided HERE, at analyze
 /// time, so the sheet can promise exactly what the job will do.
+extension AudioBalanceStreamShape {
+    /// ffprobe's channel count for each audio stream, by audio ordinal
+    /// (0 = not declared). What a complete levels pass must cover.
+    var declaredChannelsPerStream: [Int] {
+        (0..<audioStreams).map { $0 < audioStreamInfos.count ? audioStreamInfos[$0].channels : 0 }
+    }
+}
+
 struct AudioBalanceAnalysis: Sendable, Equatable {
     var classification: AudioChannelClass
+    /// True only when the levels pass measured EVERY audio stream and every
+    /// declared channel with a readable RMS (`levelsComplete(perStream:…)`).
+    /// Defaults false: an analysis nobody proved complete is never silence
+    /// evidence (Codex round 2, 2026-10-24).
+    var levelsComplete: Bool = false
     /// Levels of the PROGRAM stream (the first stream when none, or
     /// more than one, carries program).
     var measurements: AudioBalanceMeasurements
@@ -193,6 +206,18 @@ enum AudioBalanceProbe {
         guard bytes > 0 else { return levelsDeadlineFloorSeconds }
         let scaled = (Double(bytes) / levelsDemuxBudgetBytesPerSecond).rounded(.up)
         return min(max(levelsDeadlineFloorSeconds, scaled), levelsDeadlineCapSeconds)
+    }
+
+    /// Did the levels pass measure every audio stream ffprobe declared,
+    /// every declared channel of each (0 = channel count unknown), each
+    /// with a readable RMS? Pure.
+    static func levelsComplete(perStream: [[AudioChannelLevels]], declaredChannels: [Int]) -> Bool {
+        guard !perStream.isEmpty, perStream.count == declaredChannels.count else { return false }
+        for (channels, declared) in zip(perStream, declaredChannels) {
+            guard !channels.isEmpty, declared <= 0 || channels.count >= declared,
+                  channels.allSatisfy(\.rmsMeasured) else { return false }
+        }
+        return true
     }
 
     // MARK: Pure argument builders (unit-tested, no I/O)
@@ -444,12 +469,16 @@ enum AudioBalanceProbe {
             channels: channels, differenceRMSDBFS: difference)
         let classification = AudioBalanceClassifier.classify(measurements)
         balanceLog.info("analyze: \((path as NSString).lastPathComponent, privacy: .public) → \(classification.rawValue, privacy: .public) (audioStreams=\(shape.audioStreams), programStreams=\(programOrdinals.count), program=#\(absoluteIndex(chosenOrdinal)), drop=[\(dropped.map(String.init).joined(separator: ","), privacy: .public)], channels=\(channels.count), diff=\(difference.map { String(format: "%.1f", $0) } ?? "n/a", privacy: .public) dBFS)")
-        return AudioBalanceAnalysis(
+        var analysis = AudioBalanceAnalysis(
             classification: classification,
             measurements: measurements,
             shape: shape,
             programStreamCount: programOrdinals.count,
             programStreamIndex: absoluteIndex(chosenOrdinal),
             droppedStreamIndices: dropped)
+        analysis.levelsComplete = levelsComplete(
+            perStream: perStream,
+            declaredChannels: shape.declaredChannelsPerStream)
+        return analysis
     }
 }

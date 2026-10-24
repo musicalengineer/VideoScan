@@ -192,7 +192,7 @@ struct CopiesAdviceSheet: View {
     /// (SoundCopyFinder: one pass on main, decision off main).
     private func loadSound() async {
         guard let rec = model.record(forID: request.recordID) else { sound = nil; return }
-        let presence = rec.catalogSoundPresence
+        let presence = rec.measuredSoundPresence
         let copy = presence.isWarning ? await SoundCopyFinder.load(recordID: request.recordID, model: model) : nil
         sound = (presence, copy)
     }
