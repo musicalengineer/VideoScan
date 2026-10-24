@@ -5076,6 +5076,38 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveSoundMarkTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveSoundMarkCardTests",
+        "ArchiveSoundMarkPolicyTests",
+        "ArchiveSoundMarkScaleTests",
+        "ArchiveSoundMarkTruthTests"
+      ],
+      "tests": [
+        "aDateChangeAfterTheCheckIsJudgedLive",
+        "aFullCardMeasuredSilentMarksAPost1980Video",
+        "aKnownSoundPartnerExcusesASilentTrack",
+        "aPost1980VideoWithNoTrackIsMarkedFromTheCatalogAlone",
+        "aPre1980SilentVideoIsNotMarked",
+        "aSourceRowIsJudgedByItsArchiveCopy",
+        "before1980ASilentTrackIsNormal",
+        "before1980TheRowIsOK",
+        "damagedSoundIsNeverSoftened",
+        "from1980ASilentTrackIsAWarningWithItsOwnWords",
+        "hundredThousandRowsInsideTheBudget",
+        "noMeasurementIsNeverSilence",
+        "notMeasuredLeavesTheSoundPassRow",
+        "post1980TheRowIsAWarningAndKeepsTheLevels",
+        "soundThatWasHeardOrNeverMeasuredIsNotApplicable",
+        "theFieldRoundTripsAndOldCardsDecodeNil",
+        "theMeasurementIsReadFromTheLevelsPassAtTheAppsFloor",
+        "theNoTrackCellsAreUnchanged",
+        "undatedIsTreatedAsAfter1980"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveTimelineMenuLayoutTests.swift",
@@ -32946,7 +32978,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2846,
+      "expected_floor": 2865,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33015,6 +33047,10 @@
         "VideoScanTests/ArchiveOccasionTagTests",
         "VideoScanTests/ArchiveProgressTests",
         "VideoScanTests/ArchiveSortPolicyTests",
+        "VideoScanTests/ArchiveSoundMarkCardTests",
+        "VideoScanTests/ArchiveSoundMarkPolicyTests",
+        "VideoScanTests/ArchiveSoundMarkScaleTests",
+        "VideoScanTests/ArchiveSoundMarkTruthTests",
         "VideoScanTests/ArchiveTimelineBuildTests",
         "VideoScanTests/ArchiveTimelinePathTests",
         "VideoScanTests/ArchivedAtBackfillTests",

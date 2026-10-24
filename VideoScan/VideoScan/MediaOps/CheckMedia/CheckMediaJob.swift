@@ -230,6 +230,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         var video = CheckMediaRules.conclusiveVideoDiagnosis(quick)
         var audio: AudioVerifyDiagnosis?
         var measuredPicture: Double?
+        var measuredSilent: Bool?
         if tier == .full {
             setStep("decoding every frame", index: index, within: 0.1)
             // Each phase fills its own slice of this file's bar (FullPhase.span).
@@ -244,6 +245,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
             if case .success(let d)? = full.video { video = d }
             if case .success(let d)? = full.audio { audio = d }
             measuredPicture = CheckMediaRules.measuredPictureSeconds(full)
+            measuredSilent = CheckMediaRules.soundMeasuredSilent(full)
             items[index].durationEstimate = DurationEstimate.make(facts: quick.facts, census: full.census)
         } else {
             setStep("checking frame windows", index: index, within: 0.9)
@@ -251,10 +253,14 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         }
         // A picture with no sound track: the one policy decides the Sound
         // row (Rick 2026-10-10). The record's date + pairing, O(1).
+        // A track that is there but measured silent follows the same rule
+        // (Rick 2026-10-23); the measurement is kept on the card.
         checks = CheckMediaRules.applyingSoundPresence(checks, facts: quick.facts,
+                                                       soundMeasuredSilent: measuredSilent,
                                                        context: currentRecord(rec).soundPresenceContext)
         var card = CheckMediaRules.card(tier: tier, checks: checks, quick: quick, at: Date())
         card.measuredPictureSeconds = measuredPicture
+        card.soundMeasuredSilent = measuredSilent
         persist(card: card, video: video, audio: audio, on: rec, index: index)
         await lookUpSound(for: card, recordID: rec.id, index: index)
     }
