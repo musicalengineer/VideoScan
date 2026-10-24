@@ -15,17 +15,23 @@ import SwiftUI
 /// + accent colour shift when a remediation pass is touching the volume.
 struct VolumeStatusView: View {
     let status: VolumeUIStatus
+    /// The row is selected: text goes white on the selection (HIG — a
+    /// selected row's text takes the selection's foreground; a fixed
+    /// colour on the blue highlight is unreadable).
+    var isSelected = false
+
+    private var tint: Color { isSelected ? .white : status.color }
 
     var body: some View {
         HStack(spacing: 6) {
             Text(status.label)
                 .font(.system(size: 15, weight: .bold, design: .monospaced))
-                .foregroundColor(status.color)
+                .foregroundColor(tint)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(status.color.opacity(0.12))
+                        .fill(tint.opacity(isSelected ? 0.22 : 0.12))
                 )
 
             if status.isActive {

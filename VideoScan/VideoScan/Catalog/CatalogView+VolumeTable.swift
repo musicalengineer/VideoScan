@@ -178,7 +178,7 @@ extension CatalogView {
             TableColumn("Status") { row in
                 // Pill + cycling spinner when a remediation pass is active.
                 // See VolumeStatusView.swift / VolumeUIStatus.swift.
-                VolumeStatusView(status: row.uiStatus)
+                VolumeStatusView(status: row.uiStatus, isSelected: selectedVolumeIDs.contains(row.id))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .width(min: 70, ideal: 110)
@@ -272,13 +272,13 @@ extension CatalogView {
                             .font(.system(size: 15))
                     }
                 }
-                .foregroundColor(
+                .foregroundColor(onSelection(row.id,
                     row.status.isActive
                         ? .orange
                         : (target(for: row.id)?.isRetired == true
                            ? .purple
                            : row.phase.color)
-                )
+                ))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .measuresVolumeColumn(VolumeColumnID.phase)
             }
@@ -292,7 +292,8 @@ extension CatalogView {
             // yellow and .unreliable is red. Sortable on the role's
             // raw value.
             TableColumn("Role", value: \VolumeRow.role.rawValue) { row in
-                roleTrustCell(role: row.role, trust: row.trust, isRetired: row.isRetired)
+                roleTrustCell(role: row.role, trust: row.trust, isRetired: row.isRetired,
+                              isSelected: selectedVolumeIDs.contains(row.id))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .width(min: 90, ideal: 130)
@@ -995,6 +996,12 @@ extension CatalogView {
             .sorted()
     }
 
+    /// A coloured cell on a selected row takes the selection's white (HIG);
+    /// unselected rows keep their colour. O(1).
+    private func onSelection(_ id: UUID, _ color: Color) -> Color {
+        selectedVolumeIDs.contains(id) ? .white : color
+    }
+
     /// One-cell renderer for the Role column. Two flavors:
     ///   - quiet: just the role label in its own color (no trust word)
     ///   - degraded: "Role · Trust" with each word in its color, so a
@@ -1002,7 +1009,9 @@ extension CatalogView {
     /// Unassigned + unknown trust renders as the universal "—" so empty
     /// rows don't shout for attention.
     @ViewBuilder
-    private func roleTrustCell(role: VolumeRole, trust: VolumeTrust, isRetired: Bool = false) -> some View {
+    private func roleTrustCell(role: VolumeRole, trust: VolumeTrust, isRetired: Bool = false,
+                               isSelected: Bool = false) -> some View {
+        let tint: (Color) -> Color = { isSelected ? .white : $0 }
         if role == .unassigned && (trust == .unknown || trust == .reliable) && !isRetired {
             Text("—")
                 .font(.system(size: 14, design: .monospaced))
@@ -1011,7 +1020,7 @@ extension CatalogView {
             HStack(spacing: 4) {
                 Text(role.rawValue)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(role.color)
+                    .foregroundColor(tint(role.color))
                     .lineLimit(1)
                 if trust == .aging || trust == .unreliable {
                     Text("·")
@@ -1019,7 +1028,7 @@ extension CatalogView {
                         .foregroundColor(.secondary)
                     Text(trust.rawValue)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(trust.color)
+                        .foregroundColor(tint(trust.color))
                         .lineLimit(1)
                 }
                 // Retirement is a badge on any role, never a role
@@ -1030,7 +1039,7 @@ extension CatalogView {
                         .foregroundColor(.secondary)
                     Text("Retired")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.brown)
+                        .foregroundColor(tint(.brown))
                         .lineLimit(1)
                 }
             }

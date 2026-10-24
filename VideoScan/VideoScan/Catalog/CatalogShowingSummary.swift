@@ -285,24 +285,33 @@ struct CatalogShowingBox: View {
     private let toDoGreen = Color(red: 0.10, green: 0.62, blue: 0.30)
     private let allBlue = Color(red: 0.13, green: 0.45, blue: 0.85)
 
-    private var fill: Color {
-        guard state.hasMasterArchive else { return Color.secondary.opacity(0.18) }
-        return state.viewFilters.contains(.notYetArchived) ? toDoGreen : allBlue
+    /// The view's meaning as a glyph + its colour (2026-10-24, Rick: solid
+    /// fills with white text were hard on the eyes) — the chip itself is
+    /// neutral, so only the volume pill is tinted. nil = no Master Archive.
+    private var mark: (symbol: String, color: Color)? {
+        guard state.hasMasterArchive else { return nil }
+        return state.viewFilters.contains(.notYetArchived)
+            ? ("checklist", toDoGreen) : ("archivebox.fill", allBlue)
     }
-    private var foreground: Color { state.hasMasterArchive ? .white : .primary }
 
     var body: some View {
         let pills = CatalogShowingSummary.boxPills(for: state)
         HStack(spacing: 6) {
+            if let mark {
+                Image(systemName: mark.symbol)
+                    .imageScale(.small)
+                    .foregroundStyle(mark.color)
+            }
             Text(pills.map(\.text).joined(separator: " · "))
                 .font(Self.font)
-                .foregroundColor(foreground)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 7).fill(fill))
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.secondary.opacity(0.14)))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.secondary.opacity(0.28), lineWidth: 1))
         .contentShape(RoundedRectangle(cornerRadius: 7))
         .help(state.hasMasterArchive
               ? (state.viewFilters.contains(.notYetArchived)
@@ -319,9 +328,9 @@ struct CatalogShowingBox: View {
 
 /// The accent pill in front of the Showing box while the Volumes pane has a
 /// selection: drive glyph · name · clear glyph. The whole pill is the
-/// button; a click empties the selection (back to the whole catalog). White
-/// on the accent colour is the system's own prominent-button pairing, so it
-/// reads in light and dark mode. Pure layout over one Pill — no records.
+/// button; a click empties the selection (back to the whole catalog). A
+/// tinted token — accent wash + outline, primary text — reads in light and
+/// dark mode. Pure layout over one Pill — no records.
 struct CatalogVolumePill: View {
     /// The Volumes-pane selection's labels; empty draws nothing.
     let labels: [String]
@@ -338,18 +347,22 @@ struct CatalogVolumePill: View {
             HStack(spacing: 5) {
                 Image(systemName: "externaldrive.fill")
                     .imageScale(.small)
+                    .foregroundStyle(Color.accentColor)
                 Text(CatalogShowingSummary.shortVolumeLabel(pill.text))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "xmark.circle.fill")
                     .imageScale(.medium)
-                    .opacity(0.85)
+                    .foregroundStyle(Color.accentColor.opacity(0.8))
             }
             .font(CatalogShowingBox.font)
-            .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.accentColor))
+            // A tinted token (Finder's search scope), not a solid fill: the
+            // accent wash ties it to the selected rows in the Volumes pane.
+            .background(RoundedRectangle(cornerRadius: 7).fill(Color.accentColor.opacity(0.18)))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
