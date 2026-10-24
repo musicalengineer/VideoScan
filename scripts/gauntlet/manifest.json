@@ -30503,6 +30503,43 @@
         "toolbarDrawsThePillAndClearsThroughTheParent",
         "twoOrMoreReadSelectedVolumesWithTheNamesInTheTooltip"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPersonFilterTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPersonFilterLogicTests",
+        "CatalogPersonPillTests",
+        "CatalogPersonFilterStoreTests",
+        "CatalogPersonFilterScaleTests",
+        "CatalogPersonFilterSensorTests"
+      ],
+      "tests": [
+        "aChosenPersonWhoseProfileDisappearsFallsBackToEveryone",
+        "aConfirmedTagWinsOverAStaleRejection",
+        "aNamelessProfileListsAndMatchesNothing",
+        "aPersonChosenBeforeTheListLoadedIsKept",
+        "aRenamedPersonStaysChosenUnderTheNewName",
+        "agreesWithThePeopleTabTierRuleOnEveryRecord",
+        "anEmptyTableNamesThePerson",
+        "choosingAPersonAndEveryone",
+        "clickingThePillClearsToEveryoneAndNothingElseDoes",
+        "computeFilteredAppliesItAfterTheSearchBeforeTheVolumeFilter",
+        "everyoneIsTheIdentity",
+        "focusModeOverridesThePersonPillToo",
+        "hundredThousandRecordsWithinTheCatalogFilterBudget",
+        "keepsTaggedAndFaceMatchedDropsTheRest",
+        "launchIsEveryone",
+        "listsThePeopleTabsProfilesInItsOrderByDisplayName",
+        "noPersonNoPill",
+        "oneMatcherAndNoPersistence",
+        "theParentOwnsOneSessionStoreAndTheTableRefreshesOnIt",
+        "thePersonPillFollowsTheVolumePillThenTheBox",
+        "theSpokenSentenceCarriesIt",
+        "theTokenViewIsSharedNotCopied",
+        "toolbarDrawsTheMenuLeftOfTheSearchAndThePillAfterTheVolumePill"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -33063,7 +33100,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2901,
+      "expected_floor": 2924,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33348,6 +33385,11 @@
         "VideoScanTests/PeopleTagsTests",
         "VideoScanTests/PersonPageCollapseSensorTests",
         "VideoScanTests/PersonPageHideCollapseTests",
+        "VideoScanTests/CatalogPersonFilterLogicTests",
+        "VideoScanTests/CatalogPersonPillTests",
+        "VideoScanTests/CatalogPersonFilterStoreTests",
+        "VideoScanTests/CatalogPersonFilterScaleTests",
+        "VideoScanTests/CatalogPersonFilterSensorTests",
         "VideoScanTests/PersonVideoRemovalTests",
         "VideoScanTests/PerceptualStatisticsTests",
         "VideoScanTests/PerceptualVerdictFoldTests",

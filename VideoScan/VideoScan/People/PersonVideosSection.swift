@@ -105,12 +105,30 @@ enum PersonVideos {
                       .filter { !$0.isEmpty })
     }
 
-    /// Which tier a record puts this person in (strongest wins).
+    /// Which tier a record puts this person in (strongest wins). A
+    /// confirmed tag is Rick's word and always wins; otherwise a rejection
+    /// ("<name> Isn't in This Video") vetoes the machine tiers, even when a
+    /// stale face match is still on the record (2026-10-24).
     static func tier(of rec: VideoRecord, keys: Set<String>) -> PersonVideoTier? {
         if rec.confirmedByUserPeople.contains(where: { keys.contains($0.name.lowercased()) }) { return .tagged }
+        if !rec.rejectedPeople.isEmpty, rec.rejectedPeople.contains(where: { keys.contains($0.lowercased()) }) {
+            return nil
+        }
         if rec.detectedPeople.contains(where: { keys.contains($0.lowercased()) }) { return .foundByFace }
         if rec.suspectedPeople.contains(where: { keys.contains($0.lowercased()) }) { return .maybe }
         return nil
+    }
+
+    /// The Catalog's Person picker association (2026-10-24): tagged or
+    /// found by face — never a maybe, never a rejected one. The SAME tier
+    /// rule as this page, so the two can never disagree. Pure; a row with
+    /// no people pays three empty-array reads.
+    static func associates(_ rec: VideoRecord, keys: Set<String>) -> Bool {
+        if rec.confirmedByUserPeople.isEmpty && rec.detectedPeople.isEmpty { return false }
+        switch tier(of: rec, keys: keys) {
+        case .tagged?, .foundByFace?: return true
+        case .maybe?, nil: return false
+        }
     }
 
     /// Rows for one person. O(that person's videos), never O(catalog).

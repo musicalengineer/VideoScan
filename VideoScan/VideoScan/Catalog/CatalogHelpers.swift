@@ -58,6 +58,10 @@ struct CatalogContent: View {
     /// no volume filter) — for the Folders Only empty note's words only.
     /// Defaulted so the memberwise init's existing callers stay valid.
     var selectedVolumeLabels: [String] = []
+    /// The Person ▾ picker's choice (2026-10-24, CatalogPersonFilter.swift);
+    /// nil = Everyone. A value, not the store: the table refreshes when it
+    /// changes (CatalogContent+Table.swift).
+    var personFilter: CatalogPerson? = nil
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
     /// Reachable-only is the DEFAULT catalog baseline (2026-07-20): the table
@@ -602,6 +606,12 @@ struct CatalogContent: View {
         } else {
             searchHitCount = 0
         }
+        // Person ▾ picker (2026-10-24): AFTER the search, so the badge keeps
+        // counting the whole catalog's hits (the volume filter's contract
+        // above), and BEFORE the volume filter, which then walks only this
+        // person's rows. One O(rows) pass of the People tab's own matcher
+        // (PersonVideos.associates); Everyone is the identity.
+        out = CatalogPersonFilter.apply(out, person: personFilter)
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
             // Match records by CURRENT physical location only. A relocated file
@@ -727,7 +737,10 @@ struct CatalogContent: View {
     /// Extracted (2026-09-09): the ternary + concatenation inside Text
     /// tipped this body over the type-checker's budget on the CI toolchain.
     private var noMatchesHint: String {
-        archivedSearchHitIDs.isEmpty
+        if archivedSearchHitIDs.isEmpty, let name = personFilter?.name {
+            return CatalogShowingSummary.personSearchHint(name: name)
+        }
+        return archivedSearchHitIDs.isEmpty
             ? "Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated."
             : CatalogShowingSummary.archivedHitsMessage(count: archivedSearchHitIDs.count, sampled: archivedSearchSampledHitCount)
                 + " Use Show in Archive above."
@@ -748,12 +761,31 @@ struct CatalogContent: View {
     private var catalogEmptyNote: some View {
         switch CatalogEmptyNote.pick(rowsEmpty: tableData.isEmpty, searching: !searchText.isEmpty,
                                      foldersOnlyFindsNothing: showFootageFolders && tableState.folderScope == nil
-                                         && tableState.foldersOnlyFindsNothing) {
+                                         && tableState.foldersOnlyFindsNothing,
+                                     personChosen: personFilter != nil) {
         case .noMatches: noMatchesOverlay
-        case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels,
+        case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels, personName: personFilter?.name,
                                               foldersExist: !model.footageFolders.index.folders.isEmpty)
+        case .noPerson: personEmptyNote
         case .none: EmptyView()
         }
+    }
+
+    /// The empty table while the Person picker names someone: says who.
+    private var personEmptyNote: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 28))
+                .foregroundColor(.secondary)
+            Text(CatalogShowingSummary.personEmptyNote(name: personFilter?.name ?? CatalogPerson.unnamed))
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .padding(.horizontal, 16)
+        }
+        .padding(40)
+        .accessibilityIdentifier("catalog.person.empty")
     }
 
     private var noMatchesOverlay: some View {

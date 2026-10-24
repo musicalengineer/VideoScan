@@ -96,6 +96,12 @@ struct CatalogToolbar<Dashboard: View>: View {
     let selectedVolumeLabels: [String]
     /// The volume pill's click: the parent empties its selection.
     let onClearVolumeSelection: () -> Void
+    /// The Person ▾ picker (2026-10-24, CatalogPersonFilter.swift): the
+    /// People tab's people, the choice (nil = Everyone), and the pick —
+    /// plain values; the parent owns the session store.
+    let people: [CatalogPerson]
+    let selectedPerson: CatalogPerson?
+    let onSelectPerson: (UUID?) -> Void
 
     /// True when the View menu holds any non-default state — an active
     /// filter, one of the hidden-record reveals that moved into the
@@ -118,7 +124,8 @@ struct CatalogToolbar<Dashboard: View>: View {
             footageFolders: showFootageFolders,
             foldersOnly: showFoldersOnly,
             hasMasterArchive: model.masterArchive != nil,
-            selectedVolumeLabels: selectedVolumeLabels)
+            selectedVolumeLabels: selectedVolumeLabels,
+            selectedPersonName: selectedPerson?.name)
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
 
@@ -137,7 +144,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     //
     // Bigger = further right. Tune these two and rebuild; nothing else in
     // the row needs touching. Rick 2026-08-14.
-    static var searchLeftInset: CGFloat { 460 }
+    /// 460 before the Person ▾ menu (2026-10-24) took its fixed width and
+    /// one spacing from the gap, so the magnifier stays where it was.
+    static var searchLeftInset: CGFloat { 460 - CatalogPersonMenu.width - 10 }
     static var archivistGap: CGFloat { 70 }
 
     /// Search-syntax help popover toggled by the `?` button next to
@@ -482,6 +491,11 @@ struct CatalogToolbar<Dashboard: View>: View {
             // colour, and clicking it clears the selection (Rick
             // 2026-10-24: a forgotten selection hid 14 of 17 folders).
             CatalogVolumePill(labels: selectedVolumeLabels, onClear: onClearVolumeSelection)
+            // The Person ▾ choice (2026-10-24): after the volume, before the
+            // box; a click clears to Everyone.
+            CatalogPersonPill(name: selectedPerson?.name) {
+                onSelectPerson(CatalogShowingSummary.personSelection(after: .clearPerson, selectedPerson?.id))
+            }
             CatalogShowingBox(state: showingState)
                 .onTapGesture {
                     if viewFilters.contains(.notYetArchived) {
@@ -515,6 +529,10 @@ struct CatalogToolbar<Dashboard: View>: View {
             // column. Tune HERE — the flexible Spacer that pushes the
             // Archivist away lives further down, so the two do not fight.
             Spacer().frame(width: Self.searchLeftInset)
+
+            // Person ▾ — one person at a time, LEFT of the search box (Rick
+            // 2026-10-24); the search box itself is unchanged.
+            CatalogPersonMenu(people: people, selected: selectedPerson, onSelect: onSelectPerson)
 
             HStack(spacing: 6) {
                 // Deliberately oversized (18pt semibold vs the old 13pt
