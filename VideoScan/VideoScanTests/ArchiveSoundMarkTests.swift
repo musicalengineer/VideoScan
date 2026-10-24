@@ -388,6 +388,30 @@ struct ArchiveSoundMarkOneQuestionTests {
     }
 }
 
+/// Codex round 3 (2026-10-24), P1: Repair looks for sound for a verified
+/// silent track too, not only for a missing one.
+@MainActor
+@Suite("Archive sound mark — Repair looks for sound")
+struct ArchiveSoundMarkRepairTests {
+    @Test func repairRecognizesAVerifiedSilentTrack() {
+        let r = record("test_clip.mov", year: "1990")
+        var c = card(silent: true)
+        c.checks = [MediaCheck(kind: .sound, verdict: .warning, sentence: SoundPresencePolicy.silentTrackTitle + ".")]
+        r.mediaReportCard = c
+        #expect(r.measuredSoundPresence.isWarning)
+        #expect(MediaRepairSheet.needsSound(r, card: c))
+    }
+
+    @Test func repairStaysQuietForSoundAndForPre1980Silence() {
+        let heard = record("test_ok.mov", year: "1990")
+        heard.mediaReportCard = card(silent: false)
+        #expect(!MediaRepairSheet.needsSound(heard, card: heard.mediaReportCard))
+        let film = record("test_reel.mov", year: "1965")
+        film.mediaReportCard = card(silent: true)
+        #expect(!MediaRepairSheet.needsSound(film, card: film.mediaReportCard))
+    }
+}
+
 @Suite("Archive sound mark — scale")
 struct ArchiveSoundMarkScaleTests {
 

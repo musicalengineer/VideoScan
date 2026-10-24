@@ -327,8 +327,12 @@ struct MediaRepairSheet: View {
         selection = MediaRepairSelection(offers: Self.offers(for: request, soundSource: found))
     }
 
+    /// Look for sound when the live answer says the file should have it
+    /// (no track, or a verified silent track, by today's date) or the card
+    /// carries the no-track row. A present card never hides the live
+    /// answer (Codex round 3, 2026-10-24).
     static func needsSound(_ rec: VideoRecord, card: MediaReportCard?) -> Bool {
-        card.map(CheckMediaRules.hasNoSoundRow) ?? rec.measuredSoundPresence.isWarning
+        rec.measuredSoundPresence.isWarning || (card.map(CheckMediaRules.hasNoSoundRow) ?? false)
     }
 
     // MARK: The picture plan (header only, off the main actor)

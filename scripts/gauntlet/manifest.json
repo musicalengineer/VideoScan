@@ -5084,6 +5084,7 @@
         "ArchiveSoundMarkGetInfoTests",
         "ArchiveSoundMarkOneQuestionTests",
         "ArchiveSoundMarkPolicyTests",
+        "ArchiveSoundMarkRepairTests",
         "ArchiveSoundMarkScaleTests",
         "ArchiveSoundMarkTruthTests"
       ],
@@ -5111,6 +5112,8 @@
         "post1980TheRowIsAWarningAndKeepsTheLevels",
         "redatedFrom1975To1990GetInfoWarnsLikeTheArchive",
         "redatedFrom1990To1975GetInfoNoLongerWarns",
+        "repairRecognizesAVerifiedSilentTrack",
+        "repairStaysQuietForSoundAndForPre1980Silence",
         "soundThatWasHeardOrNeverMeasuredIsNotApplicable",
         "theFieldRoundTripsAndOldCardsDecodeNil",
         "theMeasurementIsReadFromTheLevelsPassAtTheAppsFloor",
@@ -32991,7 +32994,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2876,
+      "expected_floor": 2878,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33063,6 +33066,7 @@
         "VideoScanTests/ArchiveSoundMarkCardTests",
         "VideoScanTests/ArchiveSoundMarkGetInfoTests",
         "VideoScanTests/ArchiveSoundMarkOneQuestionTests",
+        "VideoScanTests/ArchiveSoundMarkRepairTests",
         "VideoScanTests/ArchiveSoundMarkPolicyTests",
         "VideoScanTests/ArchiveSoundMarkScaleTests",
         "VideoScanTests/ArchiveSoundMarkTruthTests",
