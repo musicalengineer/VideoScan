@@ -91,6 +91,39 @@ struct PersonVideoRemovalTests {
         #expect(PersonVideos.tier(of: copy, keys: keys) == nil)
     }
 
+    /// Codex P1 (2026-10-24): an archive copy whose `derivedFrom` names a
+    /// source nobody has, and a catalog source with the SAME whole-file
+    /// SHA-256. The People page folds the source into the copy by digest
+    /// (provenArchivedCopy), so removal must reach the source too — for
+    /// the tags and for an old pick saved under the source's id/path.
+    @Test func aSourceFoldedByDigestIsReachedToo() {
+        let digest = String(repeating: "a1", count: 32)
+        let stamp = FileIdentityStamp(device: 1, inode: 2, size: 4_096, mtimeNs: 3)
+        let source = rec("source_by_digest.mov")
+        source.sizeBytes = 4_096
+        source.contentFixity = ContentFixity(digest: digest, byteCount: 4_096, stamp: stamp)
+        let copy = rec("1988-xx-xx_copy.mov")
+        copy.sizeBytes = 4_096
+        copy.derivedFrom = UUID()   // a source row this catalog does not have
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: 4_096)
+        for r in [source, copy] { r.detectedPeople = ["Donna"] }
+        let m = model([source, copy])
+        #expect(PersonVideos.rows(for: donna(), in: m).map(\.id) == [copy.id], "precondition: one folded row")
+
+        let recs = PersonVideoRemoval.rowRecords(copy, in: m)
+        #expect(recs.contains { $0 === source }, "the digest-folded source belongs to the row")
+
+        var picks: [FeaturedVideo] = [FeaturedVideo(recordID: source.id, path: source.fullPath, filename: source.filename,
+                                                    contentHash: nil, addedAt: Date(), fullDigest: nil, sizeBytes: nil)]
+        _ = FeaturedVideos.apply(recs, on: false, to: &picks)
+        #expect(picks.isEmpty, "an old pick saved under the source is removed from the copy's row")
+
+        PersonVideoRemoval.untag(recs, profile: donna(), model: m)
+        m.searchIndex.rebuild(records: m.records)
+        #expect(PersonVideos.rows(for: donna(), in: m).isEmpty, "the row does not come back from the source")
+    }
+
     @Test func anotherPersonOnTheSameVideoIsUntouched() {
         let r = rec("both.mov")
         r.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date()),

@@ -79,12 +79,30 @@ enum PersonVideoRemoval {
         }
     }
 
+    /// Every record the People row for `rec` stands for: the row, its
+    /// promotion source, its proven archive copy — and, for an archive-copy
+    /// row, every live source the page FOLDED into it by the same rule the
+    /// page uses (`PersonVideos.foldsIntoArchiveCopy` → `provenArchivedCopy`,
+    /// which also matches by whole-file SHA-256, not only by `derivedFrom`;
+    /// Codex P1 2026-10-24). One pass over the catalog on a click, never in
+    /// a view body.
+    static func rowRecords(_ rec: VideoRecord, in model: VideoScanModel) -> [VideoRecord] {
+        let source = model.promotionSource(of: rec)
+        let copy = model.isArchiveCopy(rec) ? nil : model.provenArchivedCopy(of: rec)
+        var out = records(rec, source: source, copy: copy)
+        let row = copy ?? rec
+        guard model.isArchiveCopy(row) else { return out }
+        for other in model.records where !other.isPurged && !model.isArchiveCopy(other)
+            && !out.contains(where: { $0 === other }) && model.provenArchivedCopy(of: other) === row {
+            out.append(other)
+        }
+        return out
+    }
+
     /// Run `action` for the row whose record is `rec`.
     static func perform(_ action: PersonVideoRemovalAction, rec: VideoRecord, profile: POIProfile,
                         model: VideoScanModel) {
-        let source = model.promotionSource(of: rec)
-        let copy = model.isArchiveCopy(rec) ? nil : model.provenArchivedCopy(of: rec)
-        let recs = records(rec, source: source, copy: copy)
+        let recs = rowRecords(rec, in: model)
         if action == .notInVideo { untag(recs, profile: profile, model: model) }
         _ = FeaturedVideos.set(recs, on: false, for: profile.uuid)
         appLog.write("People tab: \(action.title(profile.displayName)) — \(rec.filename) (\(recs.count) record(s))")

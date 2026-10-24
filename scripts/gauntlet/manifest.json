@@ -20877,6 +20877,7 @@
       "tests": [
         "aFoldedSourceAndCopyAreBothUntagged",
         "aRowStandsForItsSourceAndItsCopyEachOnce",
+        "aSourceFoldedByDigestIsReachedToo",
         "anotherPersonOnTheSameVideoIsUntouched",
         "everyNameOnceInOrder",
         "isntInThisVideoClearsConfirmedAndRejectsAFaceMatchUnderEveryName",
@@ -32964,7 +32965,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2854,
+      "expected_floor": 2855,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
