@@ -3,19 +3,22 @@
 // (Rick 2026-10-23: "a simple right-click: do not show this video for this
 // person, or simpler verbiage").
 //
-// Two ways a video reaches a person's page, so two words:
-//   * "Remove from Donna's Page" — a hand pick (Show in People tab ▸).
-//     Only the pick goes; her tags stay, so a tagged video moves down to
-//     "More videos tagged Donna".
-//   * "Donna Isn't in This Video" — the tags go too: a confirmed tag is
+// Three words, on every row (Rick 2026-10-24):
+//   * "Remove from Donna's Page" — a NEUTRAL hide (PersonPageHides): the
+//     video stops showing on Donna's page; nothing is said about who is in
+//     it. Her tags, face matches and rejections stay. A pick is dropped
+//     too. Listed under "N hidden — Show" at the bottom of the page.
+//   * "Put Back on Donna's Page" — the inverse, from that list.
+//   * "Donna Isn't in This Video" — the identity claim: a confirmed tag is
 //     removed, a face match is recorded as Rejected so the next scan does
 //     not put it back. The SAME engine as the Catalog's People ▸ uncheck
 //     (VideoScanModel.setPerson), once per name she is known by.
 //
-// A row can stand for two records — a source and its Master Archive copy
-// (PersonVideos folds them into one row). Both are changed, or the other
-// one would bring the row straight back. Tags and picks are catalog and
-// profile metadata; no file is touched.
+// A row can stand for several records — a source and its Master Archive
+// copy (PersonVideos folds them into one row), and on a collapsed row every
+// version of the footage (PersonVideoFamilies). All are changed, or another
+// would bring the row straight back. Tags, picks and hides are catalog and
+// profile metadata; no file is touched. One log line per action.
 //
 // (For Rick: a caseless `enum` with statics ≈ a C++ namespace of free
 // functions.)
@@ -26,22 +29,27 @@ import VideoScanCore
 enum PersonVideoRemovalAction: Sendable, Equatable {
     case removeFromPage
     case notInVideo
+    case putBackOnPage
 
     /// The menu words. `name` is the person's display name.
     func title(_ name: String) -> String {
         switch self {
         case .removeFromPage: return "Remove from \(name)\u{2019}s Page"
         case .notInVideo: return "\(name) Isn\u{2019}t in This Video"
+        case .putBackOnPage: return "Put Back on \(name)\u{2019}s Page"
         }
     }
 
     func help(_ name: String) -> String {
         switch self {
         case .removeFromPage:
-            return "Take this video off \(name)\u{2019}s page. Tags for \(name) stay. No file is changed."
+            return "Stop showing this video on \(name)\u{2019}s page. Tags for \(name) stay, and it can be put back "
+                + "from the hidden list at the bottom of the page. No file is changed."
         case .notInVideo:
             return "Remove \(name)\u{2019}s tag from this video and mark a face match as wrong, "
                 + "so a later scan does not add it back. No file is changed."
+        case .putBackOnPage:
+            return "Show this video on \(name)\u{2019}s page again. No file is changed."
         }
     }
 }
@@ -99,12 +107,39 @@ enum PersonVideoRemoval {
         return out
     }
 
-    /// Run `action` for the row whose record is `rec`.
+    /// Every record the given rows stand for (`rowRecords` of each), once.
+    static func rowRecords(_ recs: [VideoRecord], in model: VideoScanModel) -> [VideoRecord] {
+        var out: [VideoRecord] = []
+        for rec in recs {
+            for r in rowRecords(rec, in: model) where !out.contains(where: { $0 === r }) { out.append(r) }
+        }
+        return out
+    }
+
+    /// Run `action` for the rows whose records are `recs` (one row, or a
+    /// collapsed row's every version). One log line.
+    static func perform(_ action: PersonVideoRemovalAction, recs rows: [VideoRecord], profile: POIProfile,
+                        model: VideoScanModel) {
+        guard let first = rows.first else { return }
+        let recs = rowRecords(rows, in: model)
+        let what = "\(first.filename)\(rows.count > 1 ? " +\(rows.count - 1) version(s)" : "") (\(recs.count) record(s))"
+        let title = action.title(profile.displayName)
+        switch action {
+        case .removeFromPage, .putBackOnPage:
+            let hide = action == .removeFromPage
+            guard let out = PersonPageHides.set(recs, hidden: hide, for: profile.uuid, in: model) else { return }
+            appLog.write("People tab: \(title) — \(what): \(out.entriesChanged) \(hide ? "hidden" : "put back")"
+                + (out.picksDropped > 0 ? ", \(out.picksDropped) pick(s) dropped" : "") + "; tags untouched")
+        case .notInVideo:
+            untag(recs, profile: profile, model: model)
+            FeaturedVideos.remove(resolvingTo: recs, for: profile.uuid, in: model)
+            appLog.write("People tab: \(title) — \(what)")
+        }
+    }
+
+    /// One row's record (the menu's single-row form).
     static func perform(_ action: PersonVideoRemovalAction, rec: VideoRecord, profile: POIProfile,
                         model: VideoScanModel) {
-        let recs = rowRecords(rec, in: model)
-        if action == .notInVideo { untag(recs, profile: profile, model: model) }
-        FeaturedVideos.remove(resolvingTo: recs, for: profile.uuid, in: model)
-        appLog.write("People tab: \(action.title(profile.displayName)) — \(rec.filename) (\(recs.count) record(s))")
+        perform(action, recs: [rec], profile: profile, model: model)
     }
 }

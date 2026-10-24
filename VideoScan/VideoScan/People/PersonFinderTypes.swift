@@ -514,6 +514,15 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// Pick rows this build could not read, kept verbatim and written back
     /// (same rule as `kinshipsQuarantined`).
     var featuredVideosQuarantined: [JSONValue] = []
+    /// Videos hidden from this person's page (Rick 2026-10-24: "just don't
+    /// show this video for this person"). Neutral: no claim about who is
+    /// in it; tags and face matches are untouched. Keyed by whole-file
+    /// SHA-256 (record id only where none). Same one writer as the picks
+    /// (`PersonPageHides.set` → `save(writingFeaturedVideos: true)`).
+    /// Additive: absent in older profile.json ⇒ [].
+    var hiddenVideos: [HiddenVideo] = []
+    /// Hidden rows this build could not read, kept verbatim and written back.
+    var hiddenVideosQuarantined: [JSONValue] = []
     /// The folder this profile lived in before the uuid migration
     /// (2026-09-12) — audit only, so "what happened to X and when" can be
     /// answered from the JSON alone. nil for profiles created after.
@@ -707,6 +716,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case photoChosenAt
         case legacyFolderName
         case featuredVideos, featuredVideosQuarantined
+        case hiddenVideos, hiddenVideosQuarantined
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -776,6 +786,11 @@ struct POIProfile: Codable, Identifiable, Equatable {
         featuredVideos    = picks.readable
         featuredVideosQuarantined = (Self.decodeIdentityField([JSONValue].self, forKey: .featuredVideosQuarantined, from: c) ?? [])
             + picks.quarantined
+        // Hidden from the page (2026-10-24), row by row like the picks.
+        let hides = PersonPageHides.decodeRows(Self.decodeIdentityField(JSONValue.self, forKey: .hiddenVideos, from: c))
+        hiddenVideos = hides.readable
+        hiddenVideosQuarantined = (Self.decodeIdentityField([JSONValue].self, forKey: .hiddenVideosQuarantined, from: c) ?? [])
+            + hides.quarantined
         // Family-name fields (2026-09-04). decodeIfPresent so older files
         // load unchanged, and cleaned on the way in so a blank written by any
         // path — an older build, a hand-edited json — is absent, not "".
@@ -871,10 +886,11 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// this: the folder is named by `uuid`, so changing `name` changes
     /// nothing on disk but the JSON (Rick's ruling 2026-09-12). The file
     /// store still refuses a destination folder owned by another uuid.
-    /// `writingFeaturedVideos` — ONLY FeaturedVideos.set passes true. Every
-    /// other save keeps the hand-picked People-tab videos already on disk
-    /// (2026-10-04): callers save in-memory copies that predate a pick, and
-    /// must never wipe one.
+    /// `writingFeaturedVideos` — ONLY the page writers (FeaturedVideos.set /
+    /// .remove, PersonPageHides.set) pass true. Every other save keeps the
+    /// person's page lists already on disk — the hand-picked videos
+    /// (2026-10-04) and the hidden ones (2026-10-24): callers save in-memory
+    /// copies that predate a pick or a hide, and must never wipe one.
     func save(writingFeaturedVideos: Bool = false) throws {
         // Remote viewer (Phase 1): POI/ is synced FROM the master; never
         // written here (the kinship attestations ride in profile.json).
@@ -936,6 +952,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
            let onDisk = try? JSONDecoder().decode(POIProfile.self, from: data) {
             copy.featuredVideos = onDisk.featuredVideos
             copy.featuredVideosQuarantined = onDisk.featuredVideosQuarantined
+            copy.hiddenVideos = onDisk.hiddenVideos
+            copy.hiddenVideosQuarantined = onDisk.hiddenVideosQuarantined
         }
         // The single writer is also the single place blank collapses to
         // absent on disk (2026-09-04): "" and "   " never reach profile.json.

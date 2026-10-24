@@ -69,6 +69,9 @@ struct PersonVideoRow: Identifiable, Equatable, Sendable {
     /// Hidden from the to-do view only by a sampled `v1:` match — shown as
     /// "Possibly archived (sampled)", never counted (Rick 2026-10-23).
     var isPossiblyArchived: Bool = false
+    /// The stored whole-file SHA-256 (nil: none yet) — the identity a
+    /// "Remove from <name>'s Page" hide matches on (PersonPageHides).
+    var digest: String? = nil
 
     /// The badge words for `isPossiblyArchived` (one place, pinned by test).
     static let possiblyArchivedWords = "Possibly archived (sampled)"
@@ -155,7 +158,36 @@ enum PersonVideos {
             year: date.year, durationSeconds: rec.durationSeconds, tier: tier,
             isArchived: model.isProvenArchived(rec),
             volume: VolumeReachability.displayLabel(forPath: rec.fullPath),
-            isPossiblyArchived: model.isPossiblyArchivedSampled(rec))
+            isPossiblyArchived: model.isPossiblyArchivedSampled(rec),
+            digest: VideoScanModel.storedFullDigest(rec))
+    }
+
+    /// Everything a person's page shows, built once per reload: the picks
+    /// and the tagged rows, one row per piece of footage
+    /// (PersonVideoFamilies), the hidden ones apart (PersonPageHides).
+    /// O(that person's videos), never O(catalog).
+    @MainActor
+    static func page(for profile: POIProfile, in model: VideoScanModel, now: Date = Date()) -> PersonVideoPage {
+        let resolved = FeaturedVideos.resolve(profile, in: model)
+        let pickRows = resolved.videos.map { row($0, tier: .tagged, in: model, now: now) }
+        let born = profile.birthdate.map { Calendar.current.component(.year, from: $0) }
+        let all = rows(for: profile, in: model, now: now)
+        let plausibleRows = all.filter { plausible($0, bornYear: born) }
+        let pickIDs = Set(pickRows.map(\.id))
+        var shown: [PersonVideoRow] = []
+        var hidden: [PersonVideoRow] = []
+        let hides = PersonPageHides.Lookup(profile.hiddenVideos)
+        for r in plausibleRows where !pickIDs.contains(r.id) {
+            if hides.hides(r) { hidden.append(r) } else { shown.append(r) }
+        }
+        let pageRecs = (pickRows + shown + hidden).compactMap { model.record(forID: $0.id) }
+        let groups = PersonVideoFamilies.groups(PersonVideoFamilies.evidence(for: pageRecs, in: model))
+        let withMaybes = PersonVideoFamilies.collapse(picks: pickRows, tagged: shown, groups: groups)
+        let strong = PersonVideoFamilies.collapse(picks: pickRows, tagged: shown.filter { $0.tier != .maybe }, groups: groups)
+        let hiddenGroups = PersonVideoFamilies.collapse(picks: [], tagged: hidden, groups: groups).tagged
+        return PersonVideoPage(picks: withMaybes.picks, picksWithoutMaybes: strong.picks, missingPicks: resolved.missing,
+                               tagged: strong.tagged, taggedWithMaybes: withMaybes.tagged, hidden: hiddenGroups,
+                               hiddenBeforeBirth: all.count - plausibleRows.count)
     }
 
     /// Rick 2026-10-04: "Donna wasn't alive in 1947." A row dated before
@@ -178,6 +210,19 @@ enum PersonVideos {
         }
     }
 
+    /// The same for a page's groups, by their lead row (already sorted).
+    static func byDecade(_ groups: [PersonVideoGroup]) -> [(decade: String, groups: [PersonVideoGroup])] {
+        var out: [(decade: String, groups: [PersonVideoGroup])] = []
+        for g in groups {
+            if out.last?.decade == g.lead.decadeLabel {
+                out[out.count - 1].groups.append(g)
+            } else {
+                out.append((g.lead.decadeLabel, [g]))
+            }
+        }
+        return out
+    }
+
     /// Consecutive rows grouped by decade label (rows already sorted).
     static func byDecade(_ rows: [PersonVideoRow]) -> [(decade: String, rows: [PersonVideoRow])] {
         var out: [(decade: String, rows: [PersonVideoRow])] = []
@@ -192,32 +237,57 @@ enum PersonVideos {
     }
 }
 
+/// A person's page, as values (PersonVideos.page).
+struct PersonVideoPage: Equatable, Sendable {
+    /// Picks with every tagged version under them (maybes included).
+    var picks: [PersonVideoGroup] = []
+    /// The same, maybes left out of the versions.
+    var picksWithoutMaybes: [PersonVideoGroup] = []
+    var missingPicks = 0
+    /// Tagged and found by face, one row per piece of footage.
+    var tagged: [PersonVideoGroup] = []
+    /// The same with the maybes.
+    var taggedWithMaybes: [PersonVideoGroup] = []
+    /// Hidden from this page ("N hidden — Show").
+    var hidden: [PersonVideoGroup] = []
+    var hiddenBeforeBirth = 0
+
+    static let empty = PersonVideoPage()
+
+    /// Rows only a maybe brought here.
+    var maybeCount: Int { taggedWithMaybes.count - tagged.count }
+
+    /// "12" or "12 videos · 31 files" — the header counts count rows (one
+    /// per piece of footage); the files only when they differ.
+    static func countWords(_ groups: [PersonVideoGroup]) -> String {
+        let files = groups.reduce(0) { $0 + $1.fileCount }
+        guard files != groups.count else { return "\(groups.count)" }
+        return "\(groups.count) video\(groups.count == 1 ? "" : "s") · \(files) files"
+    }
+}
+
 // MARK: - The section
 
 struct PersonVideosSection: View {
     let profile: POIProfile
     /// A plain reference — NOT observed (the catalog model publishes many
     /// times a second during long jobs). Refresh is by person, on appear,
-    /// when a pick changes, and by the ↻ button.
+    /// when a pick or a hide changes, and by the ↻ button.
     let catalogModel: VideoScanModel
     let onShowInCatalog: (String) -> Void
 
-    /// Hand-picked (primary).
-    @State private var featured: [PersonVideoRow] = []
-    @State private var missingPicks = 0
-    /// Automatic, from tags (secondary, folded away).
-    @State private var tagged: [PersonVideoRow] = []
-    @State private var hiddenBeforeBirth = 0
+    /// Built once per reload (PersonVideos.page) — the body only reads it.
+    @State private var page = PersonVideoPage.empty
     @State private var loaded = false
     @State private var refreshTick = 0
+    /// Groups whose "+N versions" is open.
+    @State private var openVersions: Set<UUID> = []
+    @State private var showHidden = false
     @AppStorage("people.videos.showMaybes") private var showMaybes = false
     @AppStorage("people.videos.showTagged") private var showTagged = false
 
-    private var maybeCount: Int { tagged.filter { $0.tier == .maybe }.count }
-    private var taggedShown: [PersonVideoRow] {
-        let featuredIDs = Set(featured.map(\.id))
-        return tagged.filter { !featuredIDs.contains($0.id) && (showMaybes || $0.tier != .maybe) }
-    }
+    private var featured: [PersonVideoGroup] { showMaybes ? page.picks : page.picksWithoutMaybes }
+    private var taggedShown: [PersonVideoGroup] { showMaybes ? page.taggedWithMaybes : page.tagged }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -230,14 +300,15 @@ struct PersonVideosSection: View {
                         if featured.isEmpty {
                             pickHint
                         } else {
-                            ForEach(featured) { row in rowView(row, isPick: true) }
+                            ForEach(featured) { group in groupView(group) }
                         }
-                        if missingPicks > 0 {
-                            Text("\(missingPicks) picked video\(missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
+                        if page.missingPicks > 0 {
+                            Text("\(page.missingPicks) picked video\(page.missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                                 .padding(.horizontal, 14)
                         }
                         taggedDisclosure
+                        hiddenFooter
                     }
                     .padding(.bottom, 8)
                 }
@@ -254,16 +325,12 @@ struct PersonVideosSection: View {
         // Fresh from disk: a pick made in the Catalog saved profile.json,
         // and the People tab's copy of the profile may predate it.
         let current = POIProfile.listAll().first { $0.uuid == profile.uuid } ?? profile
-        let picks = FeaturedVideos.resolve(current, in: catalogModel)
-        featured = picks.videos.map { PersonVideos.row($0, tier: .tagged, in: catalogModel) }
-        missingPicks = picks.missing
-        let born = current.birthdate.map { Calendar.current.component(.year, from: $0) }
-        let all = PersonVideos.rows(for: current, in: catalogModel)
-        tagged = all.filter { PersonVideos.plausible($0, bornYear: born) }
-        hiddenBeforeBirth = all.count - tagged.count
+        page = PersonVideos.page(for: current, in: catalogModel)
         loaded = true
-        appLog.write("People: \(current.displayName)'s page — \(featured.count) picked, "
-            + "\(tagged.count) tagged (\(hiddenBeforeBirth) dated before birth hidden, \(maybeCount) maybe)")
+        appLog.write("People: \(current.displayName)'s page — \(page.picks.count) picked, "
+            + "\(page.tagged.count) tagged (\(PersonVideoPage.countWords(page.taggedWithMaybes)) with maybes; "
+            + "\(page.hiddenBeforeBirth) dated before birth hidden, \(page.maybeCount) maybe, "
+            + "\(page.hidden.count) hidden from the page)")
     }
 
     private var header: some View {
@@ -271,9 +338,9 @@ struct PersonVideosSection: View {
             Text("Videos of \(profile.displayName)")
                 .font(.system(size: 17, weight: .semibold))
             if loaded, !featured.isEmpty {
-                Text("\(featured.count)")
+                Text(PersonVideoPage.countWords(featured))
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                let archived = featured.filter(\.isArchived).count
+                let archived = featured.filter(\.lead.isArchived).count
                 if archived > 0 {
                     Label("\(archived) in the Archive", systemImage: "archivebox.fill")
                         .font(.system(size: 13)).foregroundStyle(.green)
@@ -299,30 +366,30 @@ struct PersonVideosSection: View {
 
     /// The automatic list, folded away: it is evidence, not the page.
     @ViewBuilder private var taggedDisclosure: some View {
-        let rows = taggedShown
-        if !rows.isEmpty || maybeCount > 0 {
+        let groups = taggedShown
+        if !groups.isEmpty || page.maybeCount > 0 {
             DisclosureGroup(isExpanded: $showTagged) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
-                        if maybeCount > 0 {
-                            Toggle("Include \(maybeCount) maybe\(maybeCount == 1 ? "" : "s")", isOn: $showMaybes)
+                        if page.maybeCount > 0 {
+                            Toggle("Include \(page.maybeCount) maybe\(page.maybeCount == 1 ? "" : "s")", isOn: $showMaybes)
                                 .toggleStyle(.checkbox)
                         }
-                        if hiddenBeforeBirth > 0 {
-                            Text("\(hiddenBeforeBirth) dated before \(profile.displayName) was born — not shown")
+                        if page.hiddenBeforeBirth > 0 {
+                            Text("\(page.hiddenBeforeBirth) dated before \(profile.displayName) was born — not shown")
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                     }
                     .padding(.horizontal, 14)
-                    ForEach(PersonVideos.byDecade(rows), id: \.decade) { group in
-                        Text(group.decade)
+                    ForEach(PersonVideos.byDecade(groups), id: \.decade) { decade in
+                        Text(decade.decade)
                             .font(.system(size: 14, weight: .semibold))
                             .padding(.horizontal, 14).padding(.top, 6)
-                        ForEach(group.rows) { row in rowView(row, isPick: false) }
+                        ForEach(decade.groups) { group in groupView(group) }
                     }
                 }
             } label: {
-                Text("More videos tagged \(profile.displayName) (\(rows.count))")
+                Text("More videos tagged \(profile.displayName) (\(PersonVideoPage.countWords(groups)))")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -330,15 +397,55 @@ struct PersonVideosSection: View {
         }
     }
 
-    /// `isPick`: the row is a hand pick ("Videos of …"); a tagged row
-    /// offers only "Isn't in This Video" (there is no pick to remove).
-    private func rowView(_ row: PersonVideoRow, isPick: Bool) -> some View {
+    /// "3 hidden — Show": the way back from "Remove from <name>'s Page".
+    @ViewBuilder private var hiddenFooter: some View {
+        if !page.hidden.isEmpty {
+            HStack(spacing: 6) {
+                Text("\(page.hidden.count) hidden from \(profile.displayName)\u{2019}s page")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                Button(showHidden ? "Hide" : "Show") { showHidden.toggle() }
+                    .buttonStyle(.link).font(.system(size: 12))
+            }
+            .padding(.horizontal, 14).padding(.top, 12)
+            if showHidden {
+                ForEach(page.hidden) { group in
+                    rowView(group.lead, scope: group.rows, actions: [.putBackOnPage])
+                        .opacity(0.7)
+                }
+            }
+        }
+    }
+
+    /// One piece of footage: its lead row, then "+N versions" (closed by
+    /// default). A right-click on the lead acts on every file of the
+    /// footage; on a version, on that file alone.
+    @ViewBuilder private func groupView(_ group: PersonVideoGroup) -> some View {
+        rowView(group.lead, scope: group.rows, actions: [.removeFromPage, .notInVideo])
+        if !group.versions.isEmpty {
+            DisclosureGroup(isExpanded: Binding(
+                get: { openVersions.contains(group.id) },
+                set: { if $0 { openVersions.insert(group.id) } else { openVersions.remove(group.id) } })) {
+                ForEach(group.versions) { v in rowView(v, scope: [v], actions: [.removeFromPage, .notInVideo]) }
+            } label: {
+                Text(group.versionsWords)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .help(PersonVideoGroup.evidenceHelp)
+            }
+            .padding(.leading, 140).padding(.trailing, 14)
+        }
+    }
+
+    /// `scope`: the rows a right-click acts on (the whole footage on a
+    /// lead, one file on a version).
+    private func rowView(_ row: PersonVideoRow, scope: [PersonVideoRow],
+                         actions: [PersonVideoRemovalAction]) -> some View {
         PersonVideoRowView(row: row, catalogModel: catalogModel, onShowInCatalog: onShowInCatalog,
                            removal: PersonVideoRowRemoval(
                                personName: profile.displayName,
-                               actions: isPick ? [.removeFromPage, .notInVideo] : [.notInVideo],
-                               perform: { action, rec in
-                                   PersonVideoRemoval.perform(action, rec: rec, profile: profile, model: catalogModel)
+                               actions: actions,
+                               perform: { action in
+                                   let recs = scope.compactMap { catalogModel.record(forID: $0.id) }
+                                   PersonVideoRemoval.perform(action, recs: recs, profile: profile, model: catalogModel)
                                    refreshTick += 1
                                }))
     }
@@ -350,7 +457,8 @@ struct PersonVideosSection: View {
 struct PersonVideoRowRemoval {
     let personName: String
     let actions: [PersonVideoRemovalAction]
-    let perform: @MainActor (PersonVideoRemovalAction, VideoRecord) -> Void
+    /// The section resolves the row's records at the click.
+    let perform: @MainActor (PersonVideoRemovalAction) -> Void
 }
 
 struct PersonVideoRowView: View {
@@ -413,9 +521,9 @@ struct PersonVideoRowView: View {
             }
             Button("Show in Catalog") { onShowInCatalog(row.title) }
             Divider()
-            if let removal, let rec = catalogModel.record(forPath: row.path) {
+            if let removal {
                 ForEach(removal.actions, id: \.self) { action in
-                    Button(action.title(removal.personName)) { removal.perform(action, rec) }
+                    Button(action.title(removal.personName)) { removal.perform(action) }
                         .help(action.help(removal.personName))
                 }
                 Divider()
