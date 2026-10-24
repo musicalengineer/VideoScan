@@ -123,6 +123,13 @@ extension CheckMediaRules {
 
     /// Silent / clipping from the astats per-channel levels.
     private static func levelsCheck(_ channels: [AudioChannelLevels], evidence: [MediaEvidence]) -> MediaCheck {
+        // A channel whose RMS was never read is not measured — never
+        // "silent", never "healthy" (Codex round 2, 2026-10-24).
+        if channels.contains(where: { !$0.rmsMeasured }) {
+            return MediaCheck(kind: .sound, verdict: .notRun(reason: "the sound level could not be read on every channel"),
+                              sentence: "Not checked — the sound level could not be read on every channel.",
+                              evidence: evidence)
+        }
         if !channels.isEmpty, !channels.contains(where: AudioBalanceClassifier.carriesProgram) {
             return MediaCheck(kind: .sound, verdict: .warning,
                               sentence: "The sound track is silent.", evidence: evidence,
@@ -146,6 +153,7 @@ extension CheckMediaRules {
 
     /// "−18 dB average, −1 dB peak" / "silent".
     static func levelText(_ c: AudioChannelLevels) -> String {
+        guard c.rmsMeasured else { return "not measured" }
         guard c.rmsDBFS.isFinite else { return "silent" }
         let peak = c.peakDBFS.isFinite ? String(format: ", %.0f dB peak", c.peakDBFS) : ""
         return String(format: "%.0f dB average", c.rmsDBFS) + peak

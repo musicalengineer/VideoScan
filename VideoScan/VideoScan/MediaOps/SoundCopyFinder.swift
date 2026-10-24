@@ -340,7 +340,7 @@ enum SoundCopyFinder {
     @MainActor
     static func load(recordID: UUID, model: VideoScanModel, flagged: Bool? = nil) async -> SoundCopyAdvice {
         guard let rec = model.record(forID: recordID),
-              flagged ?? rec.catalogSoundPresence.isWarning else { return .none }
+              flagged ?? rec.measuredSoundPresence.isWarning else { return .none }
         let input = gather(for: rec, model: model)
         return await decideOffMain(input)
     }

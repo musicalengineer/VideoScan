@@ -7,6 +7,13 @@
 // than 1980; before 1980, silent home movies (8 mm / Super 8) are normal.
 // An unknown date is treated as after 1980, and the words say so.
 //
+// Extended 2026-10-23 (Rick: "every file in archive has audio … only
+// videos from 1980 and after should follow that rule"): a sound track that
+// is THERE but measured silent (the full Verify's levels pass, every
+// channel under the program floor) is judged by the same rule — before
+// 1980 silent is normal, 1980 or later / undated it is a warning. The
+// measurement comes from the stored report card, never from a guess.
+//
 // Two exceptions never read as broken:
 //   * a known A/V half — a video-only file with a correlated sound partner
 //     (the Correlate / Find Missing Audio pairing): "Video half of a pair —
@@ -59,6 +66,9 @@ public enum SoundPresence: Sendable, Equatable {
     case silentFilmEra(year: Int, source: RecordDateResolution.Source)
     /// Picture only, dated 1980 or later, or undated — a WARNING.
     case noSound(year: Int?, source: RecordDateResolution.Source)
+    /// A sound track that was decoded and measured silent, dated 1980 or
+    /// later, or undated — a WARNING (2026-10-23).
+    case silentTrack(year: Int?, source: RecordDateResolution.Source)
 
     /// The card verdict for the "Sound track" row. nil = leave the row as
     /// the sound checks wrote it (there IS a sound track to check).
@@ -66,7 +76,7 @@ public enum SoundPresence: Sendable, Equatable {
         switch self {
         case .notApplicable: return nil
         case .videoHalfOfPair, .silentFilmEra: return .ok
-        case .noSound: return .warning
+        case .noSound, .silentTrack: return .warning
         }
     }
 
@@ -80,6 +90,7 @@ public enum SoundPresence: Sendable, Equatable {
         case .videoHalfOfPair(let file): return "Video half of a pair — its sound is in \(file)"
         case .silentFilmEra: return SoundPresencePolicy.silentFilmTitle
         case .noSound: return SoundPresencePolicy.noSoundTitle
+        case .silentTrack: return SoundPresencePolicy.silentTrackTitle
         }
     }
 
@@ -92,10 +103,10 @@ public enum SoundPresence: Sendable, Equatable {
             return "Play or combine the two together."
         case .silentFilmEra(let year, let source):
             return "Dated \(year), from \(SoundPresencePolicy.words(for: source))."
-        case .noSound(let year?, let source):
+        case .noSound(let year?, let source), .silentTrack(let year?, let source):
             return "It dates from \(year) (from \(SoundPresencePolicy.words(for: source))), "
                 + "and home video after 1980 normally has sound."
-        case .noSound(nil, _):
+        case .noSound(nil, _), .silentTrack(nil, _):
             return "Its date is unknown, so it is treated as after 1980, when home video normally has sound."
         }
     }
@@ -108,7 +119,11 @@ public enum SoundPresence: Sendable, Equatable {
 
     /// What to do about it ("" when nothing needs doing).
     public var fix: String {
-        isWarning ? SoundPresencePolicy.noSoundFix : ""
+        switch self {
+        case .noSound: return SoundPresencePolicy.noSoundFix
+        case .silentTrack: return SoundPresencePolicy.silentTrackFix
+        default: return ""
+        }
     }
 }
 
@@ -119,22 +134,33 @@ public enum SoundPresencePolicy {
 
     public static let noSoundTitle = "No sound — this copy has no audio track"
     public static let silentFilmTitle = "Silent (normal for film before 1980)"
+    public static let silentTrackTitle = "No sound — the sound track is silent"
+    public static let silentTrackFix =
+        "Listen to confirm, then look for a copy with sound (Find Matching Audio) "
+        + "or an earlier transfer of the same tape."
     public static let noSoundFix =
         "Watch a copy with sound instead (Get Info lists one when the catalog has it), "
         + "or combine this picture with its sound."
 
     /// THE rule. `hasPicture` / `hasSound` come from the probe when one
     /// ran (Verify, Get Info), else from the catalog's stream type.
-    public static func assess(hasPicture: Bool, hasSound: Bool,
+    /// `soundMeasuredSilent`: the full check decoded the sound track and
+    /// every channel was below the program floor (MediaReportCard
+    /// .soundMeasuredSilent). Only meaningful when `hasSound`.
+    public static func assess(hasPicture: Bool, hasSound: Bool, soundMeasuredSilent: Bool = false,
                               context: SoundPresenceContext) -> SoundPresence {
-        guard hasPicture, !hasSound else { return .notApplicable }
+        guard hasPicture else { return .notApplicable }
+        let silentTrack = hasSound && soundMeasuredSilent
+        guard !hasSound || silentTrack else { return .notApplicable }
         if let partner = context.soundPartnerName, !partner.isEmpty {
             return .videoHalfOfPair(soundFile: partner)
         }
         if let year = context.recordedYear, year < silentFilmCutoffYear {
             return .silentFilmEra(year: year, source: context.yearSource)
         }
-        return .noSound(year: context.recordedYear, source: context.yearSource)
+        return silentTrack
+            ? .silentTrack(year: context.recordedYear, source: context.yearSource)
+            : .noSound(year: context.recordedYear, source: context.yearSource)
     }
 
     /// Where a year came from, in family words.
@@ -153,19 +179,37 @@ public enum SoundPresencePolicy {
     /// The headline Get Info shows over a stored report card. A card saved
     /// before this rule existed may say "Looks healthy" for a picture with
     /// no sound; the live assessment wins over a stale all-clear, so Get
-    /// Info never calls a post-1980 video-only file fine.
+    /// Info never calls a post-1980 video without sound fine. A card whose
+    /// silent track was judged with an older date (before or after 1980)
+    /// is judged again with today's date (Codex P0 2026-10-24).
     public static func displayHeadline(card: MediaReportCard, presence: SoundPresence) -> String {
-        guard presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank else {
-            return card.displayHeadline
+        if presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank {
+            return (presence.headline ?? noSoundTitle) + "."
         }
-        return noSoundTitle + "."
+        if let relaxed = relaxedSilentTrackVerdict(card: card, presence: presence),
+           relaxed.rank < card.verdict.rank, let headline = presence.headline {
+            return headline + "."
+        }
+        return card.displayHeadline
     }
 
     /// The verdict icon to draw beside `displayHeadline`: never better than
-    /// Warning while the file has no sound and should.
+    /// Warning while the file has no sound and should; a stale silent-track
+    /// warning on a file now dated before 1980 is lifted. Damaged sound
+    /// (a Problem row) is never softened.
     public static func displayVerdict(card: MediaReportCard, presence: SoundPresence) -> MediaCheckVerdict {
-        guard presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank else { return card.verdict }
-        return .warning
+        if presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank { return .warning }
+        return relaxedSilentTrackVerdict(card: card, presence: presence) ?? card.verdict
+    }
+
+    /// The card's verdict with its Sound row re-judged by `presence`, when
+    /// the card MEASURED a silent track, the row is no worse than Warning,
+    /// and the live answer is no longer a warning. nil otherwise.
+    static func relaxedSilentTrackVerdict(card: MediaReportCard, presence: SoundPresence) -> MediaCheckVerdict? {
+        guard card.soundMeasuredSilent == true, !presence.isWarning, let live = presence.verdict,
+              let row = card.check(.sound), row.verdict.rank <= MediaCheckVerdict.warning.rank else { return nil }
+        let others = card.checks.filter { $0.kind != .sound }.map(\.verdict) + [live]
+        return others.max { $0.rank < $1.rank }
     }
 }
 
@@ -195,6 +239,28 @@ extension VideoRecord {
     public var soundPartner: VideoRecord? {
         guard let p = pairedWith, p.purgedAt == nil, p.streamType == .audioOnly else { return nil }
         return p
+    }
+
+    /// The stored full Verify measured this file's sound track silent: a
+    /// FULL card for this file's current size (the card is keyed by content
+    /// SHA-256 in the store; the size guard is the card's own staleness
+    /// rule). False when not measured — absence of a measurement is never
+    /// read as silence. O(1).
+    public var soundMeasuredSilent: Bool {
+        guard let card = mediaReportCard, card.tier == .full,
+              card.isCurrent(forSizeBytes: sizeBytes) else { return false }
+        return card.soundMeasuredSilent == true
+    }
+
+    /// The policy's answer from the catalog's stream type plus the stored
+    /// sound measurement (2026-10-23): "no track" or "silent track", judged
+    /// against the record's CURRENT date. The Archive tab's yellow mark. O(1).
+    public var measuredSoundPresence: SoundPresence {
+        let s = streamType
+        return SoundPresencePolicy.assess(hasPicture: s == .videoOnly || s == .videoAndAudio,
+                                          hasSound: s == .videoAndAudio || s == .audioOnly,
+                                          soundMeasuredSilent: soundMeasuredSilent,
+                                          context: soundPresenceContext)
     }
 
     /// The policy's answer from the catalog's own stream type (no probe).
