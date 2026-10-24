@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-23T09:40:55Z",
- "sha": "50a95958",
+ "ts": "2026-10-24T09:13:20Z",
+ "sha": "ccf547e5",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -417,17 +417,31 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Archive/PreservationChecklist.swift::PreservationChecklist.contentSignature",
-   "file": "VideoScan/VideoScan/Archive/PreservationChecklist.swift",
-   "name": "PreservationChecklist.contentSignature",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/Archive/PreservationChecklist.swift::PreservationChecklist.localArchive",
    "file": "VideoScan/VideoScan/Archive/PreservationChecklist.swift",
    "name": "PreservationChecklist.localArchive",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Archive/PreservationChecklist.swift::PreservationChecklist.sampledSignatureTitle",
+   "file": "VideoScan/VideoScan/Archive/PreservationChecklist.swift",
+   "name": "PreservationChecklist.sampledSignatureTitle",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Archive/PreservationChecklist.swift::PreservationChecklist.sampledSignatureTodo",
+   "file": "VideoScan/VideoScan/Archive/PreservationChecklist.swift",
+   "name": "PreservationChecklist.sampledSignatureTodo",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Archive/PreservationChecklist.swift::PreservationStep.titleOverride",
+   "file": "VideoScan/VideoScan/Archive/PreservationChecklist.swift",
+   "name": "PreservationStep.titleOverride",
+   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -4309,6 +4323,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/People/FeaturedVideos.swift::FeaturedVideos.sameSize",
+   "file": "VideoScan/VideoScan/People/FeaturedVideos.swift",
+   "name": "FeaturedVideos.sameSize",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/People/FeaturedVideos.swift::ShowInPeopleTabMenu.addToNewFamily",
    "file": "VideoScan/VideoScan/People/FeaturedVideos.swift",
    "name": "ShowInPeopleTabMenu.addToNewFamily",
@@ -4603,6 +4624,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift::VideoScanModel.replacementRelation",
+   "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift",
+   "name": "VideoScanModel.replacementRelation",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift::VideoScanModel.sharedPathRank",
    "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift",
    "name": "VideoScanModel.sharedPathRank",
@@ -4820,10 +4848,38 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitBody.ReplacementGroup",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitBody.ReplacementGroup",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitBody.ReplacementGroup.itemIndices",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitBody.ReplacementGroup.itemIndices",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitBody.ReplacementGroup.purgeIndices",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitBody.ReplacementGroup.purgeIndices",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitBody.deltaFields",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
    "name": "CatalogCommitBody.deltaFields",
    "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitBody.keepsRecord",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitBody.keepsRecord",
+   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -4844,6 +4900,27 @@
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitWords.notHeld",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
    "name": "CatalogCommitWords.notHeld",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitWords.replacementEndsRemoved",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitWords.replacementEndsRemoved",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitWords.replacementNotStored",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitWords.replacementNotStored",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift::CatalogCommitWords.replacementUndone",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogCommitBody.swift",
+   "name": "CatalogCommitWords.replacementUndone",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -5324,13 +5401,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/LineageTrail.swift::LineageTrail.satisfies",
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/LineageTrail.swift",
-   "name": "LineageTrail.satisfies",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Load/DisplayValueDerivation.swift::DisplayParse.AttestationKey",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Load/DisplayValueDerivation.swift",
    "name": "DisplayParse.AttestationKey",
@@ -5730,8 +5800,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 102,
+ "fixed": 105,
  "baseline_before": 2456,
- "baseline_after": 2354,
+ "baseline_after": 2351,
  "shrink_skipped": false
 }

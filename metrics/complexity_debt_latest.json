@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-23T09:40:34Z",
- "sha": "50a95958",
+ "ts": "2026-10-24T09:12:59Z",
+ "sha": "ccf547e5",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
@@ -32,7 +32,7 @@
    "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift",
    "function": "VideoScanModel.commitScanResults",
    "ccn": 14,
-   "nloc": 81,
+   "nloc": 85,
    "lang": "swift"
   },
   {
