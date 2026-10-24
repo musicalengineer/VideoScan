@@ -5081,29 +5081,36 @@
       "stage": "unit",
       "suites": [
         "ArchiveSoundMarkCardTests",
+        "ArchiveSoundMarkGetInfoTests",
         "ArchiveSoundMarkPolicyTests",
         "ArchiveSoundMarkScaleTests",
         "ArchiveSoundMarkTruthTests"
       ],
       "tests": [
+        "aChannelWhoseLoudnessWasNeverReadIsNotMeasured",
         "aDateChangeAfterTheCheckIsJudgedLive",
         "aFullCardMeasuredSilentMarksAPost1980Video",
         "aKnownSoundPartnerExcusesASilentTrack",
+        "aNoTrackFileKeepsItsOwnWords",
         "aPost1980VideoWithNoTrackIsMarkedFromTheCatalogAlone",
         "aPre1980SilentVideoIsNotMarked",
         "aSourceRowIsJudgedByItsArchiveCopy",
         "before1980ASilentTrackIsNormal",
         "before1980TheRowIsOK",
         "damagedSoundIsNeverSoftened",
+        "damagedSoundIsNeverSoftenedByARedate",
         "from1980ASilentTrackIsAWarningWithItsOwnWords",
         "hundredThousandRowsInsideTheBudget",
         "noMeasurementIsNeverSilence",
         "notMeasuredLeavesTheSoundPassRow",
         "post1980TheRowIsAWarningAndKeepsTheLevels",
+        "redatedFrom1975To1990GetInfoWarnsLikeTheArchive",
+        "redatedFrom1990To1975GetInfoNoLongerWarns",
         "soundThatWasHeardOrNeverMeasuredIsNotApplicable",
         "theFieldRoundTripsAndOldCardsDecodeNil",
         "theMeasurementIsReadFromTheLevelsPassAtTheAppsFloor",
         "theNoTrackCellsAreUnchanged",
+        "theProbedPathCarriesTheMeasurementToo",
         "undatedIsTreatedAsAfter1980"
       ]
     },
@@ -32978,7 +32985,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2865,
+      "expected_floor": 2871,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33048,6 +33055,7 @@
         "VideoScanTests/ArchiveProgressTests",
         "VideoScanTests/ArchiveSortPolicyTests",
         "VideoScanTests/ArchiveSoundMarkCardTests",
+        "VideoScanTests/ArchiveSoundMarkGetInfoTests",
         "VideoScanTests/ArchiveSoundMarkPolicyTests",
         "VideoScanTests/ArchiveSoundMarkScaleTests",
         "VideoScanTests/ArchiveSoundMarkTruthTests",

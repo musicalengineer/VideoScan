@@ -215,6 +215,25 @@ struct ArchiveSoundMarkCardTests {
         }
     }
 
+    /// Codex P0-1 (2026-10-24): the astats parser fills a channel whose
+    /// RMS line is missing or unreadable with −∞. That is a parse gap, not
+    /// a measurement, and must never become "measured silent".
+    @Test func aChannelWhoseLoudnessWasNeverReadIsNotMeasured() {
+        func measured(_ stderr: String) -> Bool? {
+            let channels = AstatsOutputParser.perChannelLevels(fromStderr: stderr)
+            return CheckMediaRules.soundMeasuredSilent(CheckMediaFullInputs(audio: .success(Self.diagnosis(channels))))
+        }
+        let p = "[Parsed_astats_0 @ 0x1] "
+        #expect(measured(p + "Channel: 1\n" + p + "Peak level dB: -4.0\n") == nil, "no RMS line")
+        #expect(measured(p + "Channel: 1\n" + p + "Peak level dB: -4.0\n" + p + "RMS level dB: garbled\n") == nil,
+                "an unreadable RMS value")
+        #expect(measured(p + "Channel: 2\n" + p + "Peak level dB: -inf\n" + p + "RMS level dB: -inf\n") == nil,
+                "channel 1 was never reported")
+        #expect(measured(p + "Channel: 1\n" + p + "Peak level dB: -inf\n" + p + "RMS level dB: -inf\n") == true,
+                "an explicit -inf is real digital silence")
+        #expect(measured(p + "Channel: 1\n" + p + "Peak level dB: -50\n" + p + "RMS level dB: -66.2\n") == true)
+    }
+
     @Test func theFieldRoundTripsAndOldCardsDecodeNil() throws {
         let enc = JSONEncoder(), dec = JSONDecoder()
         let c = card(silent: true)
@@ -223,6 +242,75 @@ struct ArchiveSoundMarkCardTests {
         old.removeValue(forKey: "soundMeasuredSilent")
         let decoded = try dec.decode(MediaReportCard.self, from: JSONSerialization.data(withJSONObject: old))
         #expect(decoded.soundMeasuredSilent == nil)
+    }
+}
+
+/// Codex P0-2 (2026-10-24): Get Info must judge a measured-silent track
+/// against the CURRENT date, as the Archive mark does — in both directions —
+/// and must never soften damaged sound.
+@MainActor
+@Suite("Archive sound mark — Get Info agrees")
+struct ArchiveSoundMarkGetInfoTests {
+
+    private func fullCard(soundRow: MediaCheck, silent: Bool = true) -> MediaReportCard {
+        var c = MediaReportCard(tier: .full, checkedAt: Date(timeIntervalSince1970: 1_800_000_000), fileSizeBytes: 1_000,
+                                headline: soundRow.verdict == .ok ? "Looks healthy." : soundRow.sentence,
+                                checks: [MediaCheck(kind: .decode, verdict: .ok, sentence: "Every frame decoded cleanly."),
+                                         soundRow])
+        c.soundMeasuredSilent = silent
+        return c
+    }
+
+    private static let okSilentFilmRow = MediaCheck(kind: .sound, verdict: .ok,
+                                                    sentence: "Silent (normal for film before 1980). Dated 1975, from your date.")
+    private static let warnSilentRow = MediaCheck(kind: .sound, verdict: .warning,
+                                                  sentence: "No sound — the sound track is silent. It dates from 1990 (from your date), "
+                                                  + "and home video after 1980 normally has sound.")
+
+    private func shown(_ r: VideoRecord) -> (SoundPresence, MediaCheckVerdict, String) {
+        let presence = CheckMediaRules.getInfoSoundPresence(record: r, probed: nil)
+        let card = r.mediaReportCard!
+        return (presence, SoundPresencePolicy.displayVerdict(card: card, presence: presence),
+                SoundPresencePolicy.displayHeadline(card: card, presence: presence))
+    }
+
+    @Test func redatedFrom1975To1990GetInfoWarnsLikeTheArchive() {
+        let r = record("test_reel.mov", year: "1990")
+        r.mediaReportCard = fullCard(soundRow: Self.okSilentFilmRow)
+        let (presence, verdict, headline) = shown(r)
+        #expect(presence == r.measuredSoundPresence, "Get Info and the Archive mark ask the same question")
+        #expect(presence.isWarning)
+        #expect(verdict == .warning)
+        #expect(headline == "No sound — the sound track is silent.")
+    }
+
+    @Test func redatedFrom1990To1975GetInfoNoLongerWarns() {
+        let r = record("test_reel.mov", year: "1975")
+        r.mediaReportCard = fullCard(soundRow: Self.warnSilentRow)
+        let (presence, verdict, headline) = shown(r)
+        #expect(!presence.isWarning)
+        #expect(verdict == .ok, "the stale silent-track warning is judged with today's date")
+        #expect(headline == "Silent (normal for film before 1980).")
+    }
+
+    @Test func damagedSoundIsNeverSoftenedByARedate() {
+        let r = record("test_reel.mov", year: "1975")
+        r.mediaReportCard = fullCard(soundRow: MediaCheck(kind: .sound, verdict: .problem, sentence: "The sound is damaged: x."))
+        #expect(shown(r).1 == .problem)
+    }
+
+    @Test func theProbedPathCarriesTheMeasurementToo() {
+        let r = record("test_reel.mov", year: "1990")
+        r.mediaReportCard = fullCard(soundRow: Self.okSilentFilmRow)
+        var f = MediaFacts()
+        f.streams = [MediaStreamFacts(index: 0, kind: .video), MediaStreamFacts(index: 1, kind: .audio)]
+        #expect(CheckMediaRules.getInfoSoundPresence(record: r, probed: f) == .silentTrack(year: 1990, source: .userDate))
+    }
+
+    @Test func aNoTrackFileKeepsItsOwnWords() {
+        let r = record("test_dvd.m2v", stream: .videoOnly, year: "2004")
+        r.mediaReportCard = fullCard(soundRow: .notRun(.sound, because: "this file has no sound track"), silent: false)
+        #expect(shown(r).2 == "No sound — this copy has no audio track.")
     }
 }
 

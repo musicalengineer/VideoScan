@@ -49,12 +49,27 @@ extension CheckMediaRules {
         return checks.map { $0.kind == .sound ? row : $0 }
     }
 
+    /// Get Info's answer: the probe's streams once it has read the header,
+    /// else the catalog's stream type — with the stored full-Verify sound
+    /// measurement and the CURRENT date, the same question the Archive mark
+    /// asks (Codex P0 2026-10-24). O(1).
+    @MainActor
+    static func getInfoSoundPresence(record: VideoRecord, probed: MediaFacts?) -> SoundPresence {
+        guard let f = probed else { return record.measuredSoundPresence }
+        return SoundPresencePolicy.assess(hasPicture: f.video != nil, hasSound: f.audio != nil,
+                                          soundMeasuredSilent: record.soundMeasuredSilent,
+                                          context: record.soundPresenceContext)
+    }
+
     /// What the full check MEASURED on the sound track: true when every
     /// channel sits below the program floor, false when one carries sound,
-    /// nil when the levels pass gave no channels (not measured).
+    /// nil when not measured — no channels, or any channel whose RMS the
+    /// levels pass never reported (a parse gap is not silence; Codex P0
+    /// 2026-10-24).
     static func soundMeasuredSilent(_ full: CheckMediaFullInputs) -> Bool? {
         guard case .success(let d)? = full.audio,
-              let channels = d.balanceAnalysis?.measurements.channels, !channels.isEmpty else { return nil }
+              let channels = d.balanceAnalysis?.measurements.channels, !channels.isEmpty,
+              channels.allSatisfy(\.rmsMeasured) else { return nil }
         return !channels.contains(where: AudioBalanceClassifier.carriesProgram)
     }
 

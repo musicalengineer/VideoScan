@@ -179,19 +179,37 @@ public enum SoundPresencePolicy {
     /// The headline Get Info shows over a stored report card. A card saved
     /// before this rule existed may say "Looks healthy" for a picture with
     /// no sound; the live assessment wins over a stale all-clear, so Get
-    /// Info never calls a post-1980 video-only file fine.
+    /// Info never calls a post-1980 video without sound fine. A card whose
+    /// silent track was judged with an older date (before or after 1980)
+    /// is judged again with today's date (Codex P0 2026-10-24).
     public static func displayHeadline(card: MediaReportCard, presence: SoundPresence) -> String {
-        guard presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank else {
-            return card.displayHeadline
+        if presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank {
+            return (presence.headline ?? noSoundTitle) + "."
         }
-        return noSoundTitle + "."
+        if let relaxed = relaxedSilentTrackVerdict(card: card, presence: presence),
+           relaxed.rank < card.verdict.rank, let headline = presence.headline {
+            return headline + "."
+        }
+        return card.displayHeadline
     }
 
     /// The verdict icon to draw beside `displayHeadline`: never better than
-    /// Warning while the file has no sound and should.
+    /// Warning while the file has no sound and should; a stale silent-track
+    /// warning on a file now dated before 1980 is lifted. Damaged sound
+    /// (a Problem row) is never softened.
     public static func displayVerdict(card: MediaReportCard, presence: SoundPresence) -> MediaCheckVerdict {
-        guard presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank else { return card.verdict }
-        return .warning
+        if presence.isWarning, card.verdict.rank < MediaCheckVerdict.warning.rank { return .warning }
+        return relaxedSilentTrackVerdict(card: card, presence: presence) ?? card.verdict
+    }
+
+    /// The card's verdict with its Sound row re-judged by `presence`, when
+    /// the card MEASURED a silent track, the row is no worse than Warning,
+    /// and the live answer is no longer a warning. nil otherwise.
+    static func relaxedSilentTrackVerdict(card: MediaReportCard, presence: SoundPresence) -> MediaCheckVerdict? {
+        guard card.soundMeasuredSilent == true, !presence.isWarning, let live = presence.verdict,
+              let row = card.check(.sound), row.verdict.rank <= MediaCheckVerdict.warning.rank else { return nil }
+        let others = card.checks.filter { $0.kind != .sound }.map(\.verdict) + [live]
+        return others.max { $0.rank < $1.rank }
     }
 }
 

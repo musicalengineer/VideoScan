@@ -162,11 +162,9 @@ struct MediaInfoSheet: View {
     /// header, else from the catalog's stream type. O(1) — one date
     /// resolution and one pointer hop; nothing here scans the catalog.
     private var soundPresence: SoundPresence {
-        let context = request.record.soundPresenceContext
-        if case .loaded(let f) = load {
-            return SoundPresencePolicy.assess(hasPicture: f.video != nil, hasSound: f.audio != nil, context: context)
-        }
-        return request.record.catalogSoundPresence
+        var probed: MediaFacts?
+        if case .loaded(let f) = load { probed = f }
+        return CheckMediaRules.getInfoSoundPresence(record: request.record, probed: probed)
     }
 
     /// The pair / silent-film note (quiet); for "No sound" (the banner
