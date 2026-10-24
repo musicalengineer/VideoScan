@@ -731,12 +731,18 @@ enum CatalogEmptyNote: Equatable {
 /// (the search's own "No matches" overlay wins when the search empties
 /// the table outright).
 struct FoldersOnlyEmptyNote: View {
+    /// The Volumes-pane selection's labels (empty = none) and whether the
+    /// join holds any folder at all — together they say whether the
+    /// selection is why nothing shows. Plain values; no records.
+    var volumeLabels: [String] = []
+    var foldersExist = false
+
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: FootageFolderWords.folderSymbol)
                 .font(.system(size: 28))
                 .foregroundColor(.secondary)
-            Text(FootageFolderWords.foldersOnlyEmpty)
+            Text(FootageFolderWords.foldersOnlyEmpty(volumeLabels: volumeLabels, foldersExist: foldersExist))
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

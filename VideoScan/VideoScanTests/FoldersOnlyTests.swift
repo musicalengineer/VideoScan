@@ -236,7 +236,7 @@ struct FoldersOnlySensorTests {
     @Test func emptyNoteShowsOnlyAtTheTopWithTheFolderView() throws {
         let helpers = try code("CatalogHelpers.swift")
         #expect(helpers.contains("foldersOnlyFindsNothing: showFootageFolders && tableState.folderScope == nil"))
-        #expect(helpers.contains("case .noFolders: FoldersOnlyEmptyNote()"))
+        #expect(helpers.contains("case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels"))
         #expect(FootageFolderWords.foldersOnlyEmpty.hasPrefix("No folders match"))
     }
 

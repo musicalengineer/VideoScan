@@ -54,6 +54,10 @@ struct CatalogContent: View {
     /// beside `archivedSearchHitIDs`, never in a view body.
     @State var archivedSearchSampledHitCount: Int = 0
     let filterTargetPaths: Set<String>
+    /// The Volumes-pane labels behind `filterTargetPaths` (sorted; empty =
+    /// no volume filter) — for the Folders Only empty note's words only.
+    /// Defaulted so the memberwise init's existing callers stay valid.
+    var selectedVolumeLabels: [String] = []
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
     /// Reachable-only is the DEFAULT catalog baseline (2026-07-20): the table
@@ -746,7 +750,8 @@ struct CatalogContent: View {
                                      foldersOnlyFindsNothing: showFootageFolders && tableState.folderScope == nil
                                          && tableState.foldersOnlyFindsNothing) {
         case .noMatches: noMatchesOverlay
-        case .noFolders: FoldersOnlyEmptyNote()
+        case .noFolders: FoldersOnlyEmptyNote(volumeLabels: selectedVolumeLabels,
+                                              foldersExist: !model.footageFolders.index.folders.isEmpty)
         case .none: EmptyView()
         }
     }

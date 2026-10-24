@@ -494,6 +494,15 @@ struct CatalogView: View {
     private var filterTargetPaths: Set<String> {
         Set(selectedVolumeIDs.compactMap { target(for: $0)?.searchPath })
     }
+    /// The same selection in the Volumes pane's own words, for the Showing
+    /// line's volume pill and the Folders Only empty note. O(selected ×
+    /// targets) over ~15 targets; the label read is the cached
+    /// `displayLabel` the pane itself uses — never a records pass.
+    private var selectedVolumeLabels: [String] {
+        selectedVolumeIDs.compactMap { target(for: $0) }
+            .map { VolumeReachability.displayLabel(forPath: $0.searchPath) }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
     /// The searchPath of the volume containing the currently selected file.
     /// Used to highlight the matching volume row in the Scan Targets pane.
     @State private var highlightedTargetPath: String = ""
@@ -745,6 +754,10 @@ struct CatalogView: View {
             showSuperseded: $showSuperseded,
             showFootageFolders: $showFootageFolders,
             showFoldersOnly: $showFoldersOnly,
+            selectedVolumeLabels: selectedVolumeLabels,
+            onClearVolumeSelection: {
+                selectedVolumeIDs = CatalogShowingSummary.volumeSelection(after: .clearVolumes, selectedVolumeIDs)
+            },
             dashboardContent: {
                 if model.isScanning || model.isCombining {
                     CompactDashboard(
@@ -774,6 +787,7 @@ struct CatalogView: View {
             searchText: debouncedSearchText,
             searchHitCount: $searchHitCount,
             filterTargetPaths: filterTargetPaths,
+            selectedVolumeLabels: selectedVolumeLabels,
             showPairsOnly: showPairsOnly,
             viewFilters: catalogViewFilters,
             showDisconnectedMedia: showDisconnectedMedia,
