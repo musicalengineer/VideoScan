@@ -169,3 +169,4 @@
 4. FamilyArchive per-item trash (10/09, 10/12 option b) vs the absolute MOPS-3 / ARCH-12 wording; amend the invariants or the rulings.
 5. Folders rule 4 ("a file may be in several folders") vs Events v1 non-overlap of confirmed events.
 6. Master counts quoted in docs disagree (198 / 143 / 142); the catalog is the source of truth, docs should not carry counts.
+- **2026-10-24 — Rapid dev mode iterations:** between look-and-tweak rounds on main, no test runs — Claude edits, Rick rebuilds and looks. The first pass (red/green tests) and one `scripts/run_sensors.sh` run when Rick says "happy" stay. Rick 2026-10-24.
