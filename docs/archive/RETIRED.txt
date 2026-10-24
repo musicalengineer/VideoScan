@@ -336,3 +336,6 @@ docs/reviews/swift-expert/2026-10-07-graph-executor.md
 docs/README.md
 tests/test_local_review_morning_line.py
 tests/test_adversarial_morning_line.py
+# directories emptied by the 2026-10-23 retirement (cited as folders)
+docs/briefs/local/
+docs/ops/analysis
