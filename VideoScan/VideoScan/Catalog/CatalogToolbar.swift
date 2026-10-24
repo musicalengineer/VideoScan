@@ -90,6 +90,12 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// CatalogFoldersOnlyRule); remembered by the parent
     /// (CatalogFoldersOnlySetting). Off by default.
     @Binding var showFoldersOnly: Bool
+    /// The Volumes-pane selection as the pane's own labels (sorted; empty =
+    /// whole catalog). Computed by the parent from the selected scan
+    /// targets — O(selected volumes), never records.
+    let selectedVolumeLabels: [String]
+    /// The volume pill's click: the parent empties its selection.
+    let onClearVolumeSelection: () -> Void
 
     /// True when the View menu holds any non-default state — an active
     /// filter, one of the hidden-record reveals that moved into the
@@ -111,7 +117,8 @@ struct CatalogToolbar<Dashboard: View>: View {
             showSuperseded: showSuperseded,
             footageFolders: showFootageFolders,
             foldersOnly: showFoldersOnly,
-            hasMasterArchive: model.masterArchive != nil)
+            hasMasterArchive: model.masterArchive != nil,
+            selectedVolumeLabels: selectedVolumeLabels)
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
 
@@ -471,6 +478,10 @@ struct CatalogToolbar<Dashboard: View>: View {
             // looking at lots of data need bright clear reminders").
             // Green = the to-do view (archived hidden), blue = archived
             // included. Click flips between the two.
+            // A Volumes-pane selection is the FIRST pill, in the accent
+            // colour, and clicking it clears the selection (Rick
+            // 2026-10-24: a forgotten selection hid 14 of 17 folders).
+            CatalogVolumePill(labels: selectedVolumeLabels, onClear: onClearVolumeSelection)
             CatalogShowingBox(state: showingState)
                 .onTapGesture {
                     if viewFilters.contains(.notYetArchived) {

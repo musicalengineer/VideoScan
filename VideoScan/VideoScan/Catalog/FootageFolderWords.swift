@@ -40,6 +40,15 @@ enum FootageFolderWords {
     static let foldersOnlySettingKey = "catalog.foldersOnly"
     /// The table's line when Folders Only is on and no folder matches.
     static let foldersOnlyEmpty = "No folders match — make one with right-click \u{25B8} New Folder with Selection"
+    /// The same line when a Volumes-pane selection is why nothing shows:
+    /// folders exist, but none has a file on the selected volume(s). No
+    /// selection, or no folders at all → today's line.
+    static func foldersOnlyEmpty(volumeLabels: [String], foldersExist: Bool) -> String {
+        guard foldersExist, !volumeLabels.isEmpty else { return foldersOnlyEmpty }
+        let which = volumeLabels.count == 1 ? CatalogShowingSummary.volumePill(labels: volumeLabels)?.text ?? ""
+                                            : "the selected volumes"
+        return "No folders on \(which) match — click the volume pill in the Showing line to see the whole catalog"
+    }
 
     // MARK: Glyphs (one per relation, as the design names them)
 

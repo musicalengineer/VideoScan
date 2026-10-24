@@ -30454,6 +30454,31 @@
         "rescanKeepsEveryArchivedMastersRow"
       ],
       "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogVolumePillTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogVolumePillLogicTests",
+        "CatalogVolumePillRegressionTests",
+        "CatalogVolumePillSensorTests"
+      ],
+      "tests": [
+        "aBlankLabelNeverDrawsAnEmptyPill",
+        "clearingViaThePillEmptiesTheSelection",
+        "emptyFolderNoteNamesTheVolumeWhenTheSelectionIsWhy",
+        "emptyNoteGetsTheLabels",
+        "longNamesShortenInTheMiddleAndShortOnesStay",
+        "noSelectionHasNoVolumePill",
+        "oneVolumeIsTheFirstPillByItsPaneLabel",
+        "oneVolumeSelectedShowsExactlyItsFoldersAndTheLineSaysSo",
+        "parentFeedsPaneLabelsAndClearsThroughTheOneSeam",
+        "theBoxTextLeavesTheVolumeToItsOwnPill",
+        "theSpokenSentenceCarriesTheVolumePill",
+        "toolbarDrawsThePillAndClearsThroughTheParent",
+        "twoOrMoreReadSelectedVolumesWithTheNamesInTheTooltip"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -33807,7 +33832,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 275,
+      "expected_floor": 288,
       "name": "regression",
       "package_expected_floor": 243,
       "package_selectors": [
@@ -33927,7 +33952,10 @@
         "VideoScanTests/ArchiveTimelineCompletenessSensorTests",
         "VideoScanTests/ExternalPlayerAudioRouteLogicTests",
         "VideoScanTests/ExternalPlayerAudioRouteMediaMatrixTests",
-        "VideoScanTests/ExternalPlayerAudioRouteSourceSensor"
+        "VideoScanTests/ExternalPlayerAudioRouteSourceSensor",
+        "VideoScanTests/CatalogVolumePillLogicTests",
+        "VideoScanTests/CatalogVolumePillRegressionTests",
+        "VideoScanTests/CatalogVolumePillSensorTests"
       ]
     },
     {
