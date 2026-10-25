@@ -32,8 +32,8 @@ struct InspectorFamilyTagsView: View {
     @State private var showNewPersonPrompt = false
     @State private var newPersonName = ""
 
-    private var poiNames: [String] {
-        POIProfile.listAll().map(\.name).sorted()
+    private var people: [PersonPickerNames.Option] {
+        PersonPickerNames.options(POIProfile.listAll())
     }
 
     var body: some View {
@@ -156,10 +156,15 @@ struct InspectorFamilyTagsView: View {
             // profile yet (the tag still joins people: search
             // immediately; a POI profile can adopt it later).
             Menu {
-                ForEach(poiNames, id: \.self) { name in
-                    Button(name) { confirmTag(name: name) }
+                let options = people
+                ForEach(options) { person in
+                    Button(person.label) {
+                        if let name = person.tagName { confirmTag(name: name) }
+                    }
+                    .disabled(person.tagName == nil)
+                    .help(person.help)
                 }
-                if !poiNames.isEmpty { Divider() }
+                if !options.isEmpty { Divider() }
                 Button("New Person…") {
                     newPersonName = ""
                     showNewPersonPrompt = true

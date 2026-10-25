@@ -1,11 +1,12 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-24. Rick corrects this file; agents read it at session start.*
+*Updated 2026-10-25. Rick corrects this file; agents read it at session start.*
 
 ## This week's theme
 **Stability before the Ultra** (Rick, 10/19: "very strong code, stable code by the time I come back with the Ultra on Tuesday"). Feature work is paused except provenance design. No FamilyArchive rescan until Rick says so.
 
 ## In flight
+- **#375 nickname tagging — branch prepared, not merge-ready.** `fix/375-person-nicknames` in `/private/tmp/videoscan-375`: Catalog menus display and write the first nonblank People alias; duplicate labels carry birth years; shared tagging names require a distinct nickname. 13 regression tests added to the unit gauntlet. Standalone production naming code: 15 checks passed with synthetic model fixtures; 3 source-wiring checks passed; changed Swift files parse. Independent review: 0 remaining findings. Full Debug build and hosted tests/sensors have not run: this Codex sandbox denies Xcode's `/Library/Developer/PrivateFrameworks/CoreSimulator.framework` and SwiftPM cache writes. Needs a permitted build/test session, hosted red/green evidence, sensor/catalog lanes, and Rick's Catalog/People spot test before merge. No live data changed.
 - **P0 rescan purge (10/22) — recovered.** 95 archived Masters' rows restored 10/23 14:59 (`p0_restore_95.py`, backup in `App Support/VideoScan/backups/pre-p0-restore-2026-10-23/`). Root cause fixed and merged (`8ddfa80d6`); production-shape sensors merged (`4fe01d31e`); P0 suites in the gauntlet regression stage (`ccf547e50`). **Waiting on Rick:** spot test of the Archive tab (expect 144 Masters). Follow-up GH #366 (P2).
 - **Merged 10/24 (`9d28d3c99`), waiting on Rick's Debug spot test:** Archive no-sound mark (#345; the mark shows only after a Full-tier Verify of the archived files) and People tab right-click "Remove from <name>'s Page" / "<name> Isn't in This Video". Codex merge verdicts, 0 findings; related suites 42/42; sensors GREEN 558. Not pushed. Read-only archive sound check 10/23: 141/144 have sound; the 3 silent are the `CapeCodAndMuseum1991` copies (#345). Several archived names carry a doubled date prefix (Rick's to rename via Update…). Follow-ups #368–#371.
 - **Nightly 10/24 GREEN:** app 12,271 passed / 0 failed; Core 1,872 / 0. Hallie strict 57/67 (60→58→57; failing cases churn night to night).

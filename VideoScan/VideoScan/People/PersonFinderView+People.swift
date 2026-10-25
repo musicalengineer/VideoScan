@@ -183,6 +183,7 @@ extension PersonFinderView {
         // once (memoised on tree generation + kinship signature) and each
         // card takes its own entry out of the map.
         let warnings = kinshipCenter.warnings(among: model.savedProfiles)
+        let personLabels = PersonPickerNames.labels(model.savedProfiles)
         // The ONE selected entry, person or family (PeopleEntry.swift) —
         // read once here (O(families)); each card compares against it.
         let selected = selectedPeopleEntry
@@ -341,6 +342,7 @@ extension PersonFinderView {
                             ForEach(displayedProfiles) { profile in
                                 personCardEntry(
                                     profile,
+                                    displayLabel: personLabels[profile.uuid],
                                     isBeingScanned: scanningIDs.contains(profile.uuid),
                                     isSelected: selected == .person(profile.uuid),
                                     warnings: warnings[profile.id] ?? [],
@@ -564,6 +566,7 @@ extension PersonFinderView {
     /// plain call here. Pure move — no behaviour, identifiers or ordering changed.
     @ViewBuilder
     func personCardEntry(_ profile: POIProfile,
+                         displayLabel: String?,
                          isBeingScanned: Bool,
                          isSelected: Bool,
                          warnings: [KinshipWarning],
@@ -572,6 +575,7 @@ extension PersonFinderView {
         let isActive = isBeingScanned
         PersonCard(profile: profile,
                    isActive: isActive,
+                   displayLabel: displayLabel,
                    justSaved: justSavedProfileID == profile.id,
                    saveProblem: profileSaveProblem?.profileID == profile.id
                        ? profileSaveProblem?.message : nil,

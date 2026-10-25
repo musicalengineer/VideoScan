@@ -231,28 +231,35 @@ extension CatalogContent {
                 set: { model.setPerson("Family", on: selectedRecs, present: $0) }
             ))
             Divider()
-            let poiNames = POIProfile.listAll().map(\.name).sorted()
-            if poiNames.isEmpty {
+            let people = PersonPickerNames.options(POIProfile.listAll())
+            if people.isEmpty {
                 Text("No people in the People database yet")
             } else {
-                ForEach(poiNames, id: \.self) { name in
+                ForEach(people) { person in
                     // Checkmark reflects the STRONG tier
                     // (confirmed ∪ detected) — what the
                     // People column shows — so toggling
                     // off a wrong auto-detection reads
                     // checked → unchecked, not phantom.
-                    let allHave = selectedRecs.allSatisfy { rec in
-                        rec.taggedPeople.contains {
-                            $0.compare(name, options: .caseInsensitive) == .orderedSame
-                        }
-                    }
-                    Toggle(name, isOn: Binding(
+                    let allHave = selectedRecs.allSatisfy { person.isTagged(in: $0) }
+                    Toggle(person.label, isOn: Binding(
                         get: { allHave },
-                        set: { model.setPerson(name, on: selectedRecs, present: $0) }
+                        set: { present in
+                            guard let name = person.tagName else { return }
+                            if present {
+                                model.setPerson(name, on: selectedRecs, present: true)
+                            } else {
+                                for key in person.uniqueKeys {
+                                    model.setPerson(key, on: selectedRecs, present: false)
+                                }
+                            }
+                        }
                     ))
+                    .disabled(person.tagName == nil)
+                    .help(person.help)
                 }
             }
-            otherTagItems(selectedRecs: selectedRecs, poiNames: poiNames)
+            otherTagItems(selectedRecs: selectedRecs, poiNames: people.flatMap { $0.uniqueKeys })
             peopleClearItems(selectedRecs: selectedRecs)
             Divider()
             ShowInPeopleTabMenu(records: selectedRecs)

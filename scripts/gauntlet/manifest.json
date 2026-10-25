@@ -30506,6 +30506,30 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPersonNamingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPersonNamingTests",
+        "CatalogPersonNamingSensorTests"
+      ],
+      "tests": [
+        "blankAliasesFallBackAndWhitespaceIsTrimmed",
+        "duplicateNamesShowBirthYears",
+        "duplicateNicknamesAndMissingDatesRemainDistinctAndStable",
+        "duplicateNicknamesCannotWriteAnAmbiguousTag",
+        "emptyNameAndFamilyWildcardAreNotPersonTags",
+        "galleryAndCatalogShareDisambiguation",
+        "labelDecorationsNeverBecomeTagsOrChangeProfiles",
+        "narrowCardsExposeTheFullDisambiguatedName",
+        "nicknameIsTheWrittenTagAndDoesNotTagTheNamesake",
+        "nicknameWinsAndSelectionKeepsItsIdentity",
+        "sharedFormalTagDoesNotCheckBothNicknames",
+        "tagMenusDoNotDiscardProfileIdentityOrNicknames",
+        "uniqueLegacyFormalTagCanStillBeUnchecked"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogPersonFilterTests.swift",
       "stage": "unit",
       "suites": [
@@ -33122,7 +33146,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2934,
+      "expected_floor": 2947,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33408,6 +33432,8 @@
         "VideoScanTests/PersonPageCollapseSensorTests",
         "VideoScanTests/PersonPageHideCollapseTests",
         "VideoScanTests/CatalogPersonFilterLogicTests",
+        "VideoScanTests/CatalogPersonNamingTests",
+        "VideoScanTests/CatalogPersonNamingSensorTests",
         "VideoScanTests/CatalogPersonPillTests",
         "VideoScanTests/CatalogPersonFilterStoreTests",
         "VideoScanTests/CatalogPersonFilterScaleTests",

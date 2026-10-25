@@ -74,7 +74,11 @@ final class CatalogPersonFilterStore: ObservableObject {
     /// whose profile is gone falls back to Everyone; a renamed one keeps
     /// the selection under the new name. O(people).
     func reload(_ profiles: [POIProfile]) {
-        let fresh = profiles.map(CatalogPerson.init)
+        let labels = PersonPickerNames.labels(profiles)
+        let fresh = profiles.map { profile in
+            CatalogPerson(id: profile.uuid, name: labels[profile.uuid] ?? profile.displayName,
+                          keys: PersonVideos.tagKeys(for: profile))
+        }
         if fresh != people { people = fresh }
         guard let chosen = selected else { return }
         let now = fresh.first { $0.id == chosen.id }
