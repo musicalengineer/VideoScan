@@ -142,9 +142,10 @@ struct ArchivistAggregateRecordSnapshot: Sendable, Equatable {
         self.confirmedPeople = confirmedPeople
     }
 
-    // `@MainActor` ≈ "read this UI-owned object on the UI thread"; the
-    // resulting value is immutable and safe to pass to Task.detached.
-    @MainActor
+    // Nonisolated since Swift 6 stage 5 (see ArchivistPresenceRecordSnapshot):
+    // the non-Sendable `VideoRecord` can only arrive from the isolation that
+    // owns it; the resulting value is immutable and safe to pass to
+    // Task.detached.
     init(record: VideoRecord) {
         self.init(
             id: record.id,
@@ -154,7 +155,7 @@ struct ArchivistAggregateRecordSnapshot: Sendable, Equatable {
             confirmedPeople: record.confirmedByUserPeople)
     }
 
-    @MainActor
+    /// Runs in the caller's isolation (see ArchivistPresenceRecordSnapshot.capture).
     static func capture(
         _ records: [VideoRecord],
         batchSize requestedBatchSize: Int = maxCaptureBatchSize

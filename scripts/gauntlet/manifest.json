@@ -24426,6 +24426,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/Swift6IsolationStage567Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "Swift6IsolationStage567Tests"
+      ],
+      "tests": [
+        "aRangedStreamWalksEveryChunkInOrder",
+        "aRequestArrivingInTwoSegmentsIsReassembled",
+        "bundlePartsEqualTheirSerialBuilders",
+        "snapshotCaptureIsOrderPreservingFromAnyIsolation"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/T3VExtensionlessSurvivalTests.swift",
@@ -33209,7 +33223,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2941,
+      "expected_floor": 2945,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33690,6 +33704,7 @@
         "VideoScanTests/PutBackStaysPutBackTests",
         "VideoScanTests/SplitUnknownDigestHoldTests",
         "VideoScanTests/SideStoreAuthorityTests",
+        "VideoScanTests/Swift6IsolationStage567Tests",
         "VideoScanTests/ValidateCatalogOutcomeTests",
         "VideoScanTests/ValidateCatalogJobTests",
         "VideoScanTests/ValidateCatalogMenuSensorTests",

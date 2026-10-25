@@ -405,7 +405,10 @@ final class HallieSpeaker: NSObject, ObservableObject {
                     }
                     guard let node else { return }
                     let id = playbackID
-                    let onPlayed: AVAudioPlayerNodeCompletionHandler = { [weak self] _ in
+                    // @Sendable: AVAudioPlayerNode calls this on its own
+                    // thread; it captures only the UUID and a weak ref to
+                    // this @MainActor object, and hops back before touching state.
+                    let onPlayed: @Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void = { [weak self] _ in
                         Task { @MainActor in
                             guard let self, self.neuralPlaybackID == id else { return }
                             if self.neuralLedger.notePlayed() { self.finishNeuralPlayback() }
@@ -571,8 +574,12 @@ enum HallieSpeakerError: LocalizedError {
 
 extension HallieSpeaker: AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        // The delegate's `synthesizer` IS `self.synthesizer` (the only one
+        // this object registers on); reading it through `self` after the
+        // hop asks the same object the same question without sending the
+        // non-Sendable parameter across the actor boundary.
         Task { @MainActor in
-            if !synthesizer.isSpeaking { self.setSpeaking(false) }
+            if !self.synthesizer.isSpeaking { self.setSpeaking(false) }
         }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {

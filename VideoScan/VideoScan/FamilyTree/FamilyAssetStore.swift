@@ -609,7 +609,16 @@ struct FamilyCrest: Sendable, Equatable, Identifiable {
 /// is designated it is Application Support's `family-tree/assets` directory.
 /// `cacheRoot` is always Application Support's `family-tree/thumbs` and may
 /// contain only derived, replaceable thumbnails.
-struct FamilyAssetStore {
+/// Swift 6: `@unchecked` only for `fileManager`. Every other stored
+/// property is a value (URLs, enums, sets, the identity directory, a
+/// `@Sendable` clock); `identity` and `peopleFolderSnapshot` are per-copy
+/// memo fields (a struct copy is a separate value, as it always was).
+/// FileManager: Apple's docs — "the methods of the shared FileManager object
+/// can be called from multiple threads safely"; the only caveat is a
+/// delegate, and nothing in this app sets one (grep `ileManager.delegate`).
+/// The SDK has not marked the class Sendable yet, and a retroactive
+/// conformance would make every FileManager subclass restate it.
+struct FamilyAssetStore: @unchecked Sendable {
     struct Roots: Sendable, Equatable {
         let assets: URL
         let thumbnailCache: URL

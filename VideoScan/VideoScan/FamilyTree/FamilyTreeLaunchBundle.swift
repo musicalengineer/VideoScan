@@ -16,6 +16,7 @@
 // settings).
 
 import Foundation
+import os
 import VideoScanCore
 
 struct FamilyTreeLaunchBundle: Sendable {
@@ -48,54 +49,62 @@ struct FamilyTreeLaunchBundle: Sendable {
         }
     }
 
-    /// Build every part, in parallel. Pure; safe on any thread.
-    nonisolated static func build(graph: GedcomFamilyGraph, settings: Settings) -> FamilyTreeLaunchBundle {
+    /// The four jobs' results while they build. Each job computes its part
+    /// on its own thread and assigns it under the lock once (four lock
+    /// acquisitions per build; the arrays are copy-on-write, so no part is
+    /// deep-copied — memory is the same one bundle as before).
+    private struct Partial: Sendable {
         var rows: [FamilyTreePersonSummary] = []
         var identity: FamilyAssetIdentityDirectory?
         var anchors: [FamilyTreeAnchor] = []
         var caption: String?
         var indexes: [String: GedcomFamilyGraph.AncestorIndex] = [:]
         var search: FamilyTreeNameSearch?
-        // Four independent jobs; each writes its own variable only.
-        withUnsafeMutablePointer(to: &rows) { rowsOut in
-            withUnsafeMutablePointer(to: &identity) { identityOut in
-                withUnsafeMutablePointer(to: &anchors) { anchorsOut in
-                    withUnsafeMutablePointer(to: &caption) { captionOut in
-                        withUnsafeMutablePointer(to: &indexes) { indexesOut in
-                            withUnsafeMutablePointer(to: &search) { searchOut in
-                                DispatchQueue.concurrentPerform(iterations: 4) { job in
-                                    switch job {
-                                    case 0:
-                                        rowsOut.pointee = FamilyTreeLiveModel.sidebarRows(of: graph)
-                                    case 1:
-                                        identityOut.pointee = FamilyAssetIdentityDirectory(graph: graph, speakers: settings.speakers)
-                                    case 2:
-                                        searchOut.pointee = FamilyTreeNameSearch(graph: graph)
-                                    default:
-                                        let owner = settings.ownerFamilySearchID
-                                        let found = FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: owner)
-                                        anchorsOut.pointee = found
-                                        captionOut.pointee = FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: owner)
-                                        // One BFS per anchor, themselves in parallel (2–4 anchors).
-                                        var built = [GedcomFamilyGraph.AncestorIndex?](repeating: nil, count: found.count)
-                                        built.withUnsafeMutableBufferPointer { slots in
-                                            DispatchQueue.concurrentPerform(iterations: found.count) { i in
-                                                slots[i] = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: found[i].id)
-                                            }
-                                        }
-                                        indexesOut.pointee = Dictionary(uniqueKeysWithValues: zip(found.map(\.id), built.map { $0! }))
-                                    }
-                                }
-                            }
-                        }
-                    }
+    }
+
+    /// Build every part, in parallel. Pure; safe on any thread.
+    ///
+    /// Swift 6: the lock owns the partial result (C++: a mutex-guarded
+    /// struct the worker threads fill), replacing the six nested
+    /// `withUnsafeMutablePointer` slots a `@Sendable` closure may not capture.
+    nonisolated static func build(graph: GedcomFamilyGraph, settings: Settings) -> FamilyTreeLaunchBundle {
+        let partial = OSAllocatedUnfairLock(initialState: Partial())
+        // Four independent jobs; each writes its own field only.
+        DispatchQueue.concurrentPerform(iterations: 4) { job in
+            switch job {
+            case 0:
+                let rows = FamilyTreeLiveModel.sidebarRows(of: graph)
+                partial.withLock { $0.rows = rows }
+            case 1:
+                let identity = FamilyAssetIdentityDirectory(graph: graph, speakers: settings.speakers)
+                partial.withLock { $0.identity = identity }
+            case 2:
+                let search = FamilyTreeNameSearch(graph: graph)
+                partial.withLock { $0.search = search }
+            default:
+                let owner = settings.ownerFamilySearchID
+                let found = FamilyTreeLiveModel.anchors(in: graph, ownerFamilySearchID: owner)
+                let caption = FamilyTreeLiveModel.staleOwnerPinCaption(in: graph, ownerFamilySearchID: owner)
+                // One BFS per anchor, themselves in parallel (2–4 anchors);
+                // each lands in the dictionary under its own lock take.
+                let built = OSAllocatedUnfairLock(initialState: [String: GedcomFamilyGraph.AncestorIndex]())
+                DispatchQueue.concurrentPerform(iterations: found.count) { i in
+                    let index = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: found[i].id)
+                    built.withLock { $0[found[i].id] = index }
+                }
+                let indexes = built.withLock { $0 }
+                partial.withLock {
+                    $0.anchors = found
+                    $0.caption = caption
+                    $0.indexes = indexes
                 }
             }
         }
-        return FamilyTreeLaunchBundle(graph: graph, rows: rows, identity: identity!,
+        let parts = partial.withLock { $0 }
+        return FamilyTreeLaunchBundle(graph: graph, rows: parts.rows, identity: parts.identity!,
                                       ownerFamilySearchID: settings.ownerFamilySearchID,
-                                      anchors: anchors, anchorsCaption: caption, anchorIndexes: indexes,
-                                      search: search!)
+                                      anchors: parts.anchors, anchorsCaption: parts.caption,
+                                      anchorIndexes: parts.indexes, search: parts.search!)
     }
 
     // MARK: Process-wide memo
@@ -140,7 +149,7 @@ struct FamilyTreeLaunchBundle: Sendable {
     /// (and Hallie's first question) find everything warm. Logs one line.
     /// Any later configuration change is a cache-key miss and reloads;
     /// nothing here is authoritative.
-    static func prewarm(log: @escaping (String) -> Void = { appLog.write($0) }) {
+    static func prewarm(log: @escaping @Sendable (String) -> Void = { appLog.write($0) }) {
         Task.detached(priority: .utility) {
             let clock = ContinuousClock()
             let start = clock.now

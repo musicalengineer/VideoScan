@@ -742,7 +742,7 @@ extension HallieWebBridge {
     /// Largest document the endpoint will serve (48 MB, the same bound the
     /// store puts on a photo import). Worst-case memory: one 48 MB buffer
     /// per in-flight request; the file is read only after its size passes.
-    static let maxDocumentBytes = 48 << 20
+    nonisolated static let maxDocumentBytes = 48 << 20   // immutable; read by the nonisolated reader
 
     /// One token per file per launch, bounded FIFO (codex #1369,
     /// 2026-09-12): past `maxAttachmentTokens` the OLDEST token is evicted,

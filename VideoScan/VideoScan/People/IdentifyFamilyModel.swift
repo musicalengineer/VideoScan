@@ -240,10 +240,13 @@ final class IdentifyFamilyModel: ObservableObject {
                 executable: executable,
                 arguments: arguments,
                 environment: env,
-                stdoutLine: { line in
+                // `[weak self]` on these @Sendable callbacks too: the outer
+                // Task's weak `self` is a captured var, which a concurrent
+                // closure may not reference (Swift 6).
+                stdoutLine: { [weak self] line in
                     Task { @MainActor [weak self] in self?.handleStdoutLine(line) }
                 },
-                stderrLine: { line in
+                stderrLine: { [weak self] line in
                     Task { @MainActor [weak self] in self?.appendConsole(line) }
                 },
                 stdoutLimitBytes: 256 * 1024

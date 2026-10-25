@@ -129,8 +129,9 @@ extension HallieTurnExecutor {
         }
 
         let execute = dependencies.executeRelationship
+        let chosenSubjects = subjects   // frozen: a `var` may not be read from the detached closure
         let result = try await detached {
-            execute(query, inputs, subjects, .unresolved)
+            execute(query, inputs, chosenSubjects, .unresolved)
         }
         return relationshipAnswer(result, notes: notes, queryDescription: queryDescription)
     }

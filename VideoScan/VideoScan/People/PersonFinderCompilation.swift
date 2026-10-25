@@ -81,15 +81,9 @@ private func pfExtractClip(asset: AVURLAsset, start: Double, end: Double, to url
     guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else { return false }
     session.timeRange = CMTimeRangeMake(start: CMTimeMakeWithSeconds(start, preferredTimescale: 600),
                                         duration: CMTimeMakeWithSeconds(end - start, preferredTimescale: 600))
-    if #available(macOS 15.0, *) {
-        do { try await session.export(to: url, as: .mov); return true } catch { return false }
-    } else {
-        session.outputURL = url
-        session.outputFileType = .mov
-        return await withCheckedContinuation { cont in
-            session.exportAsynchronously { cont.resume(returning: session.status == .completed) }
-        }
-    }
+    // Deployment target is macOS 26: the pre-15 `exportAsynchronously`
+    // branch was dead code (and captured the non-Sendable session).
+    do { try await session.export(to: url, as: .mov); return true } catch { return false }
 }
 
 // MARK: - Concatenation

@@ -40,7 +40,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     }
 
     /// What a GEDCOM file amounts to, for the side-by-side.
-    struct TreeSummary: Equatable {
+    struct TreeSummary: Equatable, Sendable {
         let fileName: String
         let people: Int
         let families: Int
