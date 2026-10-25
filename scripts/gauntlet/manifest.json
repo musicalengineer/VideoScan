@@ -24596,6 +24596,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TidyCatalogSheetLayoutTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TidyCatalogSheetLayoutTests"
+      ],
+      "tests": [
+        "noObviousChoicesLineWrapsInsideTheSheetWidth",
+        "withoutTheLineTheBlockAlreadyFits"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TranscodeTests.swift",
       "stage": "unit",
       "suites": [
@@ -33327,7 +33339,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2961,
+      "expected_floor": 2963,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33829,7 +33841,8 @@
         "VideoScanTests/CatalogNoCatalogDoorsTests",
         "VideoScanTests/QASlice2RedTests",
         "VideoScanTests/CatalogCodexSlice2Tests",
-        "VideoScanTests/PruneSensorTests"
+        "VideoScanTests/PruneSensorTests",
+        "VideoScanTests/TidyCatalogSheetLayoutTests"
       ]
     },
     {

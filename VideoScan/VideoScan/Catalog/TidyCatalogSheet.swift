@@ -53,39 +53,7 @@ struct TidyCatalogSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-                    if !plan.rows.isEmpty {
-                        countRow("photo.stack", .orange,
-                                 "Photos and camera images", plan.stillCount)
-                        countRow("music.note", .pink,
-                                 "Music files", plan.musicCount)
-                        countRow("waveform.slash", .gray,
-                                 "Audio with no matching video", plan.unlinkedAudioCount)
-                        countRow("livephoto", .teal,
-                                 "Live Photo movie halves (Photos owns them)", plan.livePhotoComplementCount)
-                        countRow("arrow.uturn.backward", .orange,
-                                 "Junk that came back (set aside before, found again elsewhere)", plan.junkCameBackCount)
-                        Divider().padding(.vertical, 4)
-                        countRow("checkmark.circle", .green,
-                                 "Audio kept — belongs to a video", plan.keptLinkedAudio)
-                        countRow("link.circle", .blue,
-                                 "Kept — part of a recovered A/V pair", plan.keptPairProtected)
-                        Divider().padding(.vertical, 4)
-                    }
-                    // A number only in THIS sheet — never set aside here. The
-                    // review button below opens the checklist that acts on them.
-                    countRow("archivebox", .indigo,
-                             "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive",
-                             plan.archivedCopyCount)
-                    if !plan.archivedNoObviousChoices.isEmpty {
-                        Text("No obvious choices: " + plan.archivedNoObviousChoices.joined(separator: " · "))
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("tidy.archivedNoObviousChoices")
-                    }
-                }
-                .font(.system(size: 14))
+                TidyCatalogCountsGrid(plan: plan)
 
                 // Stage 2 (Rick 2026-09-12): the same "Archived — what next?"
                 // sheet Promote shows, for the backlog. It is live: the
@@ -169,6 +137,76 @@ struct TidyCatalogSheet: View {
         }
     }
 
+    private func exportCSV(_ plan: VideoScanModel.TidyCatalogPlan) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "TidyCatalog_dry_run.csv"
+        panel.title = "Save Tidy Catalog List"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try VideoScanModel.tidyPlanCSV(plan).write(to: url, atomically: true, encoding: .utf8)
+            csvSavedTo = url.path
+        } catch {
+            csvSavedTo = "save failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - Counts grid
+
+/// The tallies block of the Tidy sheet, a view of its own so a layout test
+/// can host it alone and measure it. Must fit the width the sheet proposes:
+/// the sheet is `.frame(width: 580)` and a child wider than that is clipped
+/// on both sides (Rick's screenshot, 2026-10-25).
+struct TidyCatalogCountsGrid: View {
+    let plan: VideoScanModel.TidyCatalogPlan
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                if !plan.rows.isEmpty {
+                    countRow("photo.stack", .orange,
+                             "Photos and camera images", plan.stillCount)
+                    countRow("music.note", .pink,
+                             "Music files", plan.musicCount)
+                    countRow("waveform.slash", .gray,
+                             "Audio with no matching video", plan.unlinkedAudioCount)
+                    countRow("livephoto", .teal,
+                             "Live Photo movie halves (Photos owns them)", plan.livePhotoComplementCount)
+                    countRow("arrow.uturn.backward", .orange,
+                             "Junk that came back (set aside before, found again elsewhere)", plan.junkCameBackCount)
+                    Divider().padding(.vertical, 4)
+                    countRow("checkmark.circle", .green,
+                             "Audio kept — belongs to a video", plan.keptLinkedAudio)
+                    countRow("link.circle", .blue,
+                             "Kept — part of a recovered A/V pair", plan.keptPairProtected)
+                    Divider().padding(.vertical, 4)
+                }
+                // A number only in THIS sheet — never set aside here. The
+                // review button below opens the checklist that acts on them.
+                countRow("archivebox", .indigo,
+                         "Copies of archived media — \(Formatting.humanSize(plan.archivedCopyBytes)) outside the Master Archive",
+                         plan.archivedCopyCount)
+            }
+            .font(.system(size: 14))
+
+            // BELOW the Grid, never inside it (Rick's screenshot 2026-10-25):
+            // a bare Text inside a Grid spans every column, and the Grid
+            // sizes that span from the text's single-line ideal width —
+            // ~845 pt here — so nothing wraps and the sheet clips both
+            // sides. In the stack it wraps at the sheet's width like the
+            // captions below it. Pinned by TidyCatalogSheetLayoutTests.
+            if !plan.archivedNoObviousChoices.isEmpty {
+                Text("No obvious choices: " + plan.archivedNoObviousChoices.joined(separator: " · "))
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 32)   // under the label column (icon 18 + spacing 14)
+                    .accessibilityIdentifier("tidy.archivedNoObviousChoices")
+            }
+        }
+    }
+
     @ViewBuilder
     private func countRow(_ icon: String, _ color: Color, _ label: String, _ count: Int) -> some View {
         GridRow {
@@ -184,17 +222,4 @@ struct TidyCatalogSheet: View {
         }
     }
 
-    private func exportCSV(_ plan: VideoScanModel.TidyCatalogPlan) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "TidyCatalog_dry_run.csv"
-        panel.title = "Save Tidy Catalog List"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try VideoScanModel.tidyPlanCSV(plan).write(to: url, atomically: true, encoding: .utf8)
-            csvSavedTo = url.path
-        } catch {
-            csvSavedTo = "save failed: \(error.localizedDescription)"
-        }
-    }
 }
