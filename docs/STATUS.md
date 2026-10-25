@@ -1,30 +1,34 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-25. Rick corrects this file; agents read it at session start.*
+*Updated 2026-10-25 (evening). Rick corrects this file; agents read it at session start.*
 
 ## This week's theme
-**Stability before the Ultra** (Rick, 10/19: "very strong code, stable code by the time I come back with the Ultra on Tuesday") **and Swift 6 everywhere** (Rick, 10/25: Swift 6 language mode, in stages, within about a week — `docs/design/swift6_migration_2026_10_25.md`). Feature work is paused except provenance design. No FamilyArchive rescan until Rick says so.
+**Stability before the Ultra** (Rick, 10/19) **and Swift 6 everywhere** (Rick, 10/25: Swift 6 language mode, in stages, within about a week — `docs/design/swift6_migration_2026_10_25.md`, tracking #376). Feature work is paused except provenance design. No FamilyArchive rescan until Rick says so.
 
-## In flight
-- **Swift 6 migration (10/25).** Stage 0 (warning ratchet in the sensor lane, baseline, morning progress line from the session-start hook) and stage 1 (Core in Swift 6 mode) merged 10/25. Stage 2 (nightly static-analysis lane: clean build + `warning_ratchet.py update --clean`, sanitizer passes, `swiftlint analyze`, Periphery, escape-hatch count) is next; stages 3–7 are worker slices by warning category (brief in the design doc §8), Codex on data-risk slices; stage 8 flips the app target. The progress figure is measured by `scripts/warning_ratchet.py progress`, never estimated. Language mode is the same day and night; only the extra analysis is nightly.
-- **P0 rescan purge (10/22) — recovered.** 95 archived Masters' rows restored 10/23 14:59 (`p0_restore_95.py`, backup in `App Support/VideoScan/backups/pre-p0-restore-2026-10-23/`). Root cause fixed and merged (`8ddfa80d6`); production-shape sensors merged (`4fe01d31e`); P0 suites in the gauntlet regression stage (`ccf547e50`). **The LaCieWorkspace rescan of 10/24 (5,642 cataloged, 5,640 hashed in full, 5,526 rows refreshed with their user fields carried over) left all 144 FamilyArchive Masters intact** — the fix held in production. **Waiting on Rick:** spot test of the Archive tab (expect 144 Masters). Follow-up GH #366 (P2).
-- **Merged 10/24 (`9d28d3c99`), waiting on Rick's Debug spot test:** Archive no-sound mark (#345; the mark shows only after a Full-tier Verify of the archived files) and People tab right-click "Remove from <name>'s Page" / "<name> Isn't in This Video". Codex merge verdicts, 0 findings; related suites 42/42; sensors GREEN 558. Not pushed. Read-only archive sound check 10/23: 141/144 have sound; the 3 silent are the `CapeCodAndMuseum1991` copies (#345). Several archived names carry a doubled date prefix (Rick's to rename via Update…). Follow-ups #368–#371.
-- **Nightly 10/24 GREEN:** app 12,271 passed / 0 failed; Core 1,872 / 0. Hallie strict 57/67 (60→58→57; failing cases churn night to night).
-- **#375 (bug, 10/25):** Catalog people tagging lists "Timothy, Timothy" — nicknames ignored, duplicates indistinguishable. Needs its own session with a red/green test.
-- **M4 `powerd` wedge recurred 10/24** (IOPM assertion −536870211; `caffeinate -i -t 1` fails): `sudo killall powerd` cleared it without a reboot.
-- **`test/gauntlet-prodshape`** (locked worktree): gauntlet Runner takes a read-only `.backup` of the live catalog (`VIDEOSCAN_LIVE_CATALOG_COPY`). Rick approved the design; not yet merged. Leave it to its owner session.
-- **Provenance** (design under review): `docs/design/provenance_lightweight_2026_10_22.md` + `docs/research/provenance_deep_dive_2026-10-23.md`. Phase 0 harvester ran read-only (143 Masters + July VHS batch). Needs Rick's four answers (manifest v4 vs `Provenance.csv`; role list; hard or soft Promote gate; July device chain) before Phase 1 (schema v13, Needs-provenance filter, Provenance sheet).
-- **Step G (JSON gone):** the read path is being removed; `CatalogStore.swift` and Core `Import/` were still compiled on 10/23. Finish or schedule. Cutover-audit P1s still open as of the last docs: #338 (near-full high-water), #339 (quarantine door), the stale-JSON-reader item.
-- **VideoScanModel split (#337, P1):** plan and estimate first (architecture escalation); slices 0–1 landed (PreviewService). No new `extension VideoScanModel`. Coordinate with Swift 6 stages 5–6 (same files).
+## Swift 6 migration — where it stands (the session-start hook prints the measured line)
+- **Stages 0, 1, 2, 3, 4 merged and pushed 10/25.** Start: 460 warnings in 168 files (299 Swift 6 errors). After stage 3+4: **228 remain (50 %)** — sendable-capture 140 · main-actor 54 · sendable-conformance 27 · other 6 · deprecated 1. Core is in Swift 6 language mode (1,873 tests / 0). The app flips (stage 8) at 0.
+- **In flight (worktrees, workers):** stages 5–7 split by module — A: People/ FamilyTree/ Hallie/ Model/ Shared/ (87); B: Media/ Catalog/ MediaOps/ ArchiveAngel/ Archive/ Volumes/ (47) + all test-target warnings (94). Each slice: fresh-eyes reviewer, Codex on rule-10 files, related suites, sensors GREEN, then the merging session lowers the baseline from the slice's clean logs.
+- **The floor:** `scripts/warning_ratchet.py` runs inside the sensor lane (per file × category; nothing may rise). The committed baseline moves only at a merge. Every opt-out carries a `// Swift 6:` comment (`grep -rn "// Swift 6:" VideoScan/` is the audit list); the nightly census counts them.
+- **Stage 2 nightly analysis lane** (merged 10/25): `scripts/nightly_analysis_lane.sh` — ratchet verify + progress, escape-hatch census, Periphery, `-strict-memory-safety`, one sanitizer kind per night (TSan / ASan+UBSan via `weekly_sanitizer.py`). **Not installed yet:** Rick runs `bash scripts/install_analysis_lane.sh` on the M4 when he wants the 04:30 slot live (rota `"analysis"`); the weekly sanitizer agents stay until the lane has run green for a week. `swiftlint analyze` is opt-in only (O(files²), >25 min).
+- **Process bugs fixed on the way (10/25):** the sensor-lane GREEN stamp had never been written (empty `mktemp` index) and then never matched a commit (tracked-but-ignored files) — no push to main had passed the hook since 10/23. Fixed, red/green, `scripts/sensor_lane_stamp.sh`. Main is pushed.
+- **Rulings still wanted from Rick (Charter review 10/25):** (a) §8 sampled hash is a hint only, identity is whole-file SHA-256 — one DECISIONS line; (b) provenance gate at ingest or at Promote. Rick's Charter edits + the new §3.8 Development Modes are uncommitted in his checkout.
+
+## In flight (other)
+- **P0 rescan purge (10/22) — recovered;** the 10/24 LaCieWorkspace rescan (5,642 cataloged, 5,640 hashed in full) left all 144 FamilyArchive Masters intact. **Waiting on Rick:** spot test of the Archive tab (expect 144 Masters). Follow-up #366 (P2).
+- **Merged 10/24, waiting on Rick's Debug spot test:** Archive no-sound mark (#345) and People tab row removal. Follow-ups #368–#371.
+- **Spot-test targets from today's slices:** Catalog People column and Relocate summary sheet text (interpolation replaced `Text +`), filmstrip / Find Person frame seeking (async image generator), People tab first load (migration state read under the run lock).
+- **Nightly 10/24 GREEN:** app 12,271 / 0; Core 1,872 / 0. Hallie strict 57/67.
+- **New issues 10/25:** #375 nickname bug (Catalog people tagging lists "Timothy, Timothy"); #377 two stale gauntlet manifest assignments; #378 two People tests assert a raw 500 ms budget (every weekly sanitizer run reads tests-failed); #379 CI publishes `periphery_aggressive: 0` while a local scan finds 1,440.
+- **`test/gauntlet-prodshape`** (locked worktree): leave it to its owner session.
+- **Provenance** (design under review): needs Rick's four answers before Phase 1.
+- **Step G (JSON gone):** finish or schedule. Cutover-audit P1s: #338, #339, the stale-JSON-reader item.
+- **VideoScanModel split (#337, P1):** coordinate with Swift 6 stages 5–7 (same files).
 
 ## Next (in order)
-1. Swift 6 stage 2 (nightly analysis lane) and the first stage 3/4 worker slices on the fleet.
-2. Rick's Archive-tab spot test → close the P0 thread.
-3. Merge `test/gauntlet-prodshape`; confirm the nightly runs the P0 suites and the catalog tests.
-4. #375 nickname bug.
-5. Provenance Phase 1 after Rick's four rulings.
-6. Step G to completion (remove `CatalogStore`, Core `Import/`, `JSONCatalogRepository`; keep the frozen JSON as history).
-7. #337 plan → Rick's go → slices in worktrees at night.
+1. Merge slices A and B (reviewer → Codex on rule-10 → baseline → lane → merge → push); then stage 8: `SWIFT_VERSION = 6`, full suite on the fleet, Codex on the flip.
+2. Rick: Archive-tab spot test; the two Charter rulings; install the analysis lane when ready.
+3. #378 (two-line fix, unblocks the sanitizer lanes); #375 nickname bug.
+4. Provenance Phase 1 after Rick's rulings; Step G; #337.
 
 ## Ultra (arrives Tue 10/27; dev setup Wed 10/28)
 `scripts/install_dev_tools.sh` on a clean Mac (Rick: Xcode, GUI apps, Homebrew, `gh auth login` first). Then TB5 bridge + 10 GbE to the M4. **Before the catalog moves:** `migrate_data.sh --from <M4 TB-bridge IP>` (its catalog checks are uncommitted and need their Codex pass); verify how the catalog identifies a volume moved between Macs (UUID vs device number); `defaults write Rick-Breen.VideoScan CatalogSyncMasterHostname RicksUltra.local` or the Ultra launches as a viewer; recreate the STEAM symlink. Open decision: which fleet roles move to the Ultra (bring a resource plan). The M4 stays untouched as fallback until the Ultra has run green for a week.
@@ -34,10 +38,10 @@
 - 2026-11-05: cloud session credits expire.
 
 ## Open rulings wanted from Rick
-0. Two places where the Charter (10/23) and recent rulings differ: (a) provenance gate at **ingest** (Charter §2.2) or at **Promote** (10/22 ruling, provenance design); (b) **Triage** "of questionable value" (Charter §1) vs the 10/11 tab charter making it the side-lane lens and the only bulk-removal door — keep, fold into Catalog, or cut?
-1. Provenance: the four questions above.
+0. Charter vs rulings: (a) sampled hash = hint only (rule 6) — DECISIONS line; (b) provenance gate at **ingest** (Charter §2.2) or at **Promote** (10/22 ruling); (c) **Triage** "of questionable value" (Charter §1) vs the 10/11 tab charter — keep, fold into Catalog, or cut?
+1. Provenance: the four questions.
 2. #327 remainder: Promote/Tidy on a sampled match; "Signed" on a sampled hash.
-3. People engines: freeze at Vision + native Find & Tag, or cut further (POI search across footage is no longer the strategy).
+3. People engines: freeze at Vision + native Find & Tag, or cut further.
 4. Archive Angel: keep as recommender, shrink to "ready" badges, or cut.
 5. Hallie: detach behind a read model, or stay in-process and shed voice/web/shell until the family viewer is real.
 6. Conflict policy for two copies edited differently within one 2 s window (keep both vs latest wins).

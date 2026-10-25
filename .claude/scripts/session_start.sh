@@ -24,8 +24,11 @@ fi
 echo
 
 # 1b. Swift 6 migration: the measured morning figure (docs/design/swift6_migration_2026_10_25.md)
+#     and last night's analysis lane (stage 2), when this Mac ran it: its one
+#     numbers line, the red reasons if any, 🟡 if it has not run for 36 h.
 if [ -f "$REPO_ROOT/scripts/warnings_baseline.tsv" ]; then
   python3 "$REPO_ROOT/scripts/warning_ratchet.py" progress 2>/dev/null || echo "Swift 6 progress: (warning_ratchet.py failed — run it by hand)"
+  python3 "$REPO_ROOT/scripts/analysis_lane.py" alert 2>/dev/null || true
   echo
 fi
 
