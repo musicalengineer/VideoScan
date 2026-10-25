@@ -20,6 +20,7 @@
 //             computed once per batch, under a budget.
 
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -204,14 +205,17 @@ struct BackupAttestationModelTests {
 
     /// Record-scoped `.videoScanCatalogMutated` posts, captured for the
     /// duration of `body`.
-    private func capturingMutations(_ body: () -> Void) -> [VideoRecord] {
-        var seen: [VideoRecord] = []
+    /// The filenames of the record-scoped posts, in post order.
+    /// Swift 6: the observer block is @Sendable and `VideoRecord` is not,
+    /// so the lock owns the Sendable fact the assertions read.
+    private func capturingMutations(_ body: () -> Void) -> [String] {
+        let seen = OSAllocatedUnfairLock(initialState: [String]())
         let token = NotificationCenter.default.addObserver(forName: .videoScanCatalogMutated, object: nil, queue: nil) { note in
-            if let r = note.object as? VideoRecord { seen.append(r) }
+            if let r = note.object as? VideoRecord { seen.withLock { $0.append(r.filename) } }
         }
         body()
         NotificationCenter.default.removeObserver(token)
-        return seen
+        return seen.withLock { $0 }
     }
 
     @Test("replaces the same kind, keeps the others, trims the label, skips unknown ids, posts one record-scoped mutation per record, journals one line per record")
@@ -233,7 +237,7 @@ struct BackupAttestationModelTests {
         }
         let written = write?.records ?? []
         #expect(written.map(\.filename) == ["a.mov", "b.mov"], "unknown id skipped")
-        #expect(posted.map(\.filename) == ["a.mov", "b.mov"], "one RECORD-SCOPED post per written record")
+        #expect(posted == ["a.mov", "b.mov"], "one RECORD-SCOPED post per written record")
         #expect(a.backupAttestations.map(\.token) == ["cloud=yes 'iCloud'", "drive=yes 'MyBook'"], "cloud replaced, drive kept, kind order")
         #expect(b.backupAttestations.map(\.token) == ["cloud=yes 'iCloud'"])
         #expect(a.backupAttestation(for: .cloud)?.attestedAt == at)

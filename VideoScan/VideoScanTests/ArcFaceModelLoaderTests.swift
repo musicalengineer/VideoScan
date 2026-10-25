@@ -110,7 +110,7 @@ import CoreML
         let group = DispatchGroup()
 
         for i in 0..<threadCount {
-            let model = models[i]
+            let model = ArcFaceSharedModel(models[i])
             group.enter()
             Thread.detachNewThread {
                 defer { group.leave() }
@@ -128,7 +128,7 @@ import CoreML
                 // pre-fix singleton bug, all threads share `model` and race
                 // here, crashing the process inside MLE5BindEmptyMemoryObjectToPort.
                 for _ in 0..<predictionsPerThread {
-                    _ = arcfaceEmbedding(from: testImage, model: model)
+                    _ = arcfaceEmbedding(from: testImage, model: model.model)
                 }
             }
         }

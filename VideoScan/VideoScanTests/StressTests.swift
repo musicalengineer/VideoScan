@@ -388,20 +388,23 @@ struct PipelineStressTests {
         let memBefore = processResidentMemoryMB()
 
         // Phase 1: Parallel probe + hash (simulates catalog scan)
-        var records: [VideoRecord] = []
-        await withTaskGroup(of: VideoRecord.self) { group in
+        // Swift 6: the children return the Sendable `ProbeOutcome` carrier
+        // (what `probeFile` wraps); the records are built from it here.
+        var outcomes: [ProbeOutcome] = []
+        await withTaskGroup(of: ProbeOutcome.self) { group in
             for path in generatedPaths {
                 group.addTask {
                     let url = URL(fileURLWithPath: path)
-                    let rec = await model.probeFile(url: url)
-                    rec.partialMD5 = FileHasher.partialMD5(path: path)
-                    return rec
+                    var outcome = await model.reprobeFileOutcome(url: url).outcome
+                    outcome.partialMD5 = FileHasher.partialMD5(path: path)
+                    return outcome
                 }
             }
-            for await rec in group {
-                records.append(rec)
+            for await outcome in group {
+                outcomes.append(outcome)
             }
         }
+        let records: [VideoRecord] = outcomes.map { let r = VideoRecord(); r.apply($0); return r }
         #expect(records.count == generatedPaths.count)
 
         // Phase 2: Concurrent searches while still "scanning"
@@ -414,10 +417,12 @@ struct PipelineStressTests {
                     _ = await model.runFFProbe(url: url)
                 }
             }
-            // Simultaneous searches
+            // Simultaneous searches (each child builds its own records from
+            // the Sendable outcomes — ten rows, so the cost is nil).
             for query in ["mp4", "h264", "aac", "test_gen", "video"] {
                 group.addTask {
-                    _ = pfRecordsMatchingQuery(records, query: query)
+                    let searchable: [VideoRecord] = outcomes.map { let r = VideoRecord(); r.apply($0); return r }
+                    _ = pfRecordsMatchingQuery(searchable, query: query)
                 }
             }
             for await _ in group {}

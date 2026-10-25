@@ -59,6 +59,13 @@ enum CatalogMarkerRelay {
     /// …" and the change must NOT be made.
     nonisolated static func markerWillChange(_ record: VideoRecord, kind: CatalogMarkerChange = .request) -> String? {
         guard Thread.isMainThread else { return nil }
+        // Swift 6: the relay is nonisolated BY DESIGN so the nonisolated doors
+        // (`stampRemoval`, `revertRemoval`) can ask; the guard above proves we
+        // are on the main thread, `record` is main-actor state every door
+        // mutates there, and the closure is synchronous and non-escaping — so
+        // handing the record to the main actor cannot race. The committer
+        // needs the object itself (`owns` compares by identity).
+        nonisolated(unsafe) let record = record
         return MainActor.assumeIsolated {
             for entry in committers {
                 if let why = entry.committer?.markerWillChange(record, kind: kind) { return why }

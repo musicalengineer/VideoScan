@@ -189,30 +189,33 @@ struct GeneratedMediaPerformanceTests {
             skipHashing: skipHashing
         )
         let elapsed = CFAbsoluteTimeGetCurrent() - start
-        let playable = records.filter { $0.streamType != .ffprobeFailed }.count
+        let playable = records.filter { $0.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue }.count
         return (elapsed, records.count, playable)
     }
 
+    /// Swift 6: the children return the Sendable `ProbeOutcome` carrier
+    /// (what `probeFile` wraps) instead of a `VideoRecord`, which could
+    /// not cross from a child task into this main-actor suite.
     private static func probeBatch(
         paths: [String],
         concurrency: Int,
         model: VideoScanModel,
         skipHashing: Bool
-    ) async -> [VideoRecord] {
+    ) async -> [ProbeOutcome] {
         guard !paths.isEmpty else { return [] }
         let limit = max(1, concurrency)
-        var results = [VideoRecord]()
+        var results = [ProbeOutcome]()
         results.reserveCapacity(paths.count)
 
-        await withTaskGroup(of: VideoRecord.self) { group in
+        await withTaskGroup(of: ProbeOutcome.self) { group in
             var submitted = 0
             for _ in 0..<min(limit, paths.count) {
                 let path = paths[submitted]
                 group.addTask {
-                    await model.probeFile(
+                    await model.reprobeFileOutcome(
                         url: URL(fileURLWithPath: path),
                         skipHashing: skipHashing
-                    )
+                    ).outcome
                 }
                 submitted += 1
             }
@@ -222,10 +225,10 @@ struct GeneratedMediaPerformanceTests {
                 if submitted < paths.count {
                     let path = paths[submitted]
                     group.addTask {
-                        await model.probeFile(
+                        await model.reprobeFileOutcome(
                             url: URL(fileURLWithPath: path),
                             skipHashing: skipHashing
-                        )
+                        ).outcome
                     }
                     submitted += 1
                 }

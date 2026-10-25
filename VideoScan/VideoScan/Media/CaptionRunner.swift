@@ -557,10 +557,6 @@ actor MLXVLMCaptionRunner: CaptionRunner {
             case .success(let cg):
                 let ciImage = CIImage(cgImage: cg)
                 let images: [UserInput.Image] = [.ciImage(ciImage)]
-                let chat: [Chat.Message] = [
-                    .system("You are an image understanding model capable of describing the salient features of any image."),
-                    .user(kCaptionPrompt, images: images, videos: [])
-                ]
 
                 do {
                     // `runMLX` wraps the entire MLX/MLXVLM/MLXLMCommon
@@ -571,6 +567,12 @@ actor MLXVLMCaptionRunner: CaptionRunner {
                     // See MLXSafety.swift for the underlying mechanism.
                     let text: String = try await runMLX {
                         try await container.perform { context in
+                            // Swift 6: `Chat.Message` is not Sendable — built
+                            // here, inside the closure, never captured.
+                            let chat: [Chat.Message] = [
+                                .system("You are an image understanding model capable of describing the salient features of any image."),
+                                .user(kCaptionPrompt, images: images, videos: [])
+                            ]
                             var userInput = UserInput(chat: chat)
                             userInput.processing.resize = .init(width: 448, height: 448)
                             let lmInput = try await context.processor.prepare(input: userInput)
@@ -678,13 +680,16 @@ actor MLXVLMCaptionRunner: CaptionRunner {
                     case .text:  return textParams
                     }
                 }()
-                let chat: [Chat.Message] = [
-                    .system("You are an image understanding model capable of describing the salient features of any image."),
-                    .user(kind.promptText, images: images, videos: [])
-                ]
+                let prompt = kind.promptText
                 do {
                     let text: String = try await runMLX {
                         try await container.perform { context in
+                            // Swift 6: same as above — the non-Sendable chat
+                            // is built inside the closure.
+                            let chat: [Chat.Message] = [
+                                .system("You are an image understanding model capable of describing the salient features of any image."),
+                                .user(prompt, images: images, videos: [])
+                            ]
                             var userInput = UserInput(chat: chat)
                             userInput.processing.resize = .init(width: 448, height: 448)
                             let lmInput = try await context.processor.prepare(input: userInput)

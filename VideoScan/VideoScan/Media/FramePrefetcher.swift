@@ -47,9 +47,11 @@ final class FramePrefetcher: @unchecked Sendable {
     }
 
     func frames() -> AsyncStream<PrefetchedFrame> {
-        let output = self.trackOutput
+        // Swift 6: `AVAssetReader` / `AVAssetReaderTrackOutput` are not
+        // Sendable, so the producer reaches them through `self` (the class
+        // is `@unchecked Sendable` for exactly this: one producer queue owns
+        // the reader for the stream's life) instead of capturing them.
         let interval = self.frameInterval
-        let assetReader = self.reader
         let sem = self.slots
         let flag = self.cancelFlag
         let owed = self.outstandingSlots
@@ -73,7 +75,9 @@ final class FramePrefetcher: @unchecked Sendable {
                 sem.signal()
             }
 
-            queue.async {
+            queue.async { [self] in
+                let assetReader = self.reader
+                let output = self.trackOutput
                 var lastEmittedTime = -interval
 
                 while assetReader.status == .reading {

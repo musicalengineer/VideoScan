@@ -215,7 +215,11 @@ final class ThumbnailPrecacher {
 
         precacheLog.info("Prewarm start — \(label, privacy: .public): \(items.count) candidates, concurrency \(bound)")
 
-        task = Task.detached(priority: .utility) { [weak model, weak self] in
+        // Swift 6: `[weak model]` would make `model` a captured var, which
+        // the task group's children may not read; a let-bound WeakRef is
+        // the same weak semantics the checker can prove (WeakRef.swift).
+        let model = WeakRef(model)
+        task = Task.detached(priority: .utility) { [weak self] in
             let started = CFAbsoluteTimeGetCurrent()
 
             // Generate one thumbnail; returns true on a cache store.
@@ -236,8 +240,8 @@ final class ThumbnailPrecacher {
                    let diskHit = diskCache.lookup(path: item.path,
                                                   mtime: signature.mtime,
                                                   size: signature.size) {
-                    await MainActor.run { [weak model] in
-                        model?.storePrecachedThumbnail(diskHit, forPath: item.path)
+                    await MainActor.run {
+                        model.object?.storePrecachedThumbnail(diskHit, forPath: item.path)
                     }
                     // Best-tier entries are terminal. A fast-tier hit is
                     // published above for instant browsing, then falls
@@ -286,8 +290,8 @@ final class ThumbnailPrecacher {
                                     size: signature.size,
                                     tier: .best)
                 }
-                await MainActor.run { [weak model] in
-                    model?.storePrecachedThumbnail(cg, forPath: item.path)
+                await MainActor.run {
+                    model.object?.storePrecachedThumbnail(cg, forPath: item.path)
                 }
                 return true
             }

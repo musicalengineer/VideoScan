@@ -144,7 +144,7 @@ extension VideoScanModel {
 
     /// The production offline predicate: an external /Volumes path whose
     /// drive is not mounted (VolumeReachability's 5 s cache).
-    static func isRecordOnOfflineVolume(_ rec: VideoRecord) -> Bool {
+    nonisolated static func isRecordOnOfflineVolume(_ rec: VideoRecord) -> Bool {
         isExternalVolumePath(rec.fullPath) && !VolumeReachability.isReachable(path: rec.fullPath)
     }
 

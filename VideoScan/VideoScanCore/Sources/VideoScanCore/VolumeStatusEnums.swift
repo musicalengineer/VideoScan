@@ -181,7 +181,7 @@ public enum VolumeTrust: String, CaseIterable, Codable, Sendable {
 
 // MARK: - Volume Media Technology
 
-public enum VolumeMediaTech: String, CaseIterable, Codable {
+public enum VolumeMediaTech: String, CaseIterable, Codable, Sendable {
     case unknown = "Unknown"
     case ssd     = "SSD"
     case hdd     = "HDD"

@@ -119,7 +119,7 @@ struct ProbeGroupBoundedChildrenTests {
     /// saved preference (128 on the M4, 32 on the M5 as of 2026-09-23), so
     /// the bound, the timing and the teardown size are the same on every
     /// host. 32 → bound 128; 100k × 1 ms / 32 ≈ 3 s of stubbed probe time.
-    static let pinnedProbes = 32
+    nonisolated static let pinnedProbes = 32
 
     /// Isolation (2026-09-23, battery flake: fsync 213 > 200): the run's
     /// gated lines go to `log` through the model's own sink seam — the
@@ -247,10 +247,13 @@ struct ProbeGroupBoundedChildrenTests {
         let (model, gauge, bound) = makeModel(log: log)
 
         let target = CatalogScanTarget(searchPath: root.path)
-        let scanTask = Task { @MainActor in
-            await model.runTargetProbeGroup(
+        let scanTask = Task { @MainActor () -> (discovered: Int, completed: Int) in
+            // Swift 6: `[VideoRecord]` may not leave the main actor through
+            // `Task.value`; this test reads only the counts.
+            let r = await model.runTargetProbeGroup(
                 target: target, root: root.path, volName: "GH163",
                 rootIsNetwork: false, ramMountPoint: nil)
+            return (r.discovered, r.completed)
         }
 
         // Wait for roughly half the files to be probed (filesScanned ticks

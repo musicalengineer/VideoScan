@@ -13,7 +13,7 @@ import VideoScanCore
 @Suite("GH #184 routes through the shell", .serialized)
 struct HallieGH184RoutesShellTests {
 
-    private static let tree = GedcomFamilyGraph(gedcomText: """
+    nonisolated private static let tree = GedcomFamilyGraph(gedcomText: """
     0 HEAD
     0 @I1@ INDI
     1 NAME Hallie Mae /McGill/

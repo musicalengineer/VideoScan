@@ -1,15 +1,27 @@
 import Foundation
 import SQLite3
+import os
 
 /// Persistent SQLite cache of ffprobe metadata.
 /// Keyed by (path, fileSize, modDate) — if a file hasn't changed, we skip ffprobe entirely.
 /// Stored at ~/Library/Application Support/VideoScan/metadata_cache.sqlite
 /// in production; under unit tests the default redirects to a per-process
 /// temp sandbox (see `defaultPath`), and tests can inject any path.
-/// Thread-safe: NSLock serializes all SQLite access so probeFile can run off the main thread.
-final class MetadataCache {
-    private var db: OpaquePointer?
-    private let lock = NSLock()
+/// Thread-safe: one lock serializes all SQLite access so probeFile can run off the main thread.
+///
+/// Swift 6: `Sendable` because the only mutable field — the `sqlite3*`
+/// handle — lives inside `connection`, an `OSAllocatedUnfairLock` that OWNS
+/// it (C++: a `std::mutex` whose guarded field is reachable only through a
+/// `lock_guard`, enforced by the compiler rather than by convention). The
+/// handle has no Sendable conformance, hence `uncheckedState` /
+/// `withLockUnchecked`: it is touched only inside the lock, which is
+/// SQLite's documented-safe condition for one connection shared by threads.
+/// Same shape as `PersonFinderCache` (stage 4).
+final class MetadataCache: Sendable {
+    private struct Connection {
+        var db: OpaquePointer?
+    }
+    private let connection: OSAllocatedUnfairLock<Connection>
 
     /// Where this instance's database actually lives. Read-only; exposed so
     /// tests can assert isolation and diagnostics can report the location.
@@ -51,10 +63,12 @@ final class MetadataCache {
 
     init(path: String = MetadataCache.defaultPath) {
         self.dbPath = path
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
-            db = nil
+        var handle: OpaquePointer?
+        guard sqlite3_open(path, &handle) == SQLITE_OK else {
+            connection = OSAllocatedUnfairLock(uncheckedState: Connection(db: nil))
             return
         }
+        connection = OSAllocatedUnfairLock(uncheckedState: Connection(db: handle))
         exec("PRAGMA journal_mode=WAL")
         exec("PRAGMA synchronous=NORMAL")
         exec("""
@@ -139,21 +153,26 @@ final class MetadataCache {
     /// only: nothing is rewritten, dropped, or reordered — the
     /// positional `SELECT *` decoding depends on that.
     private func migrateAddColumn(_ name: String, type: String) {
-        guard let db = db else { return }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA table_info(probe_cache)", -1, &stmt, nil) == SQLITE_OK
-        else { return }
-        var hasColumn = false
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            if let c = sqlite3_column_text(stmt, 1),
-               String(cString: c) == name { hasColumn = true; break }
+        connection.withLockUnchecked { c in
+            guard let db = c.db else { return }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "PRAGMA table_info(probe_cache)", -1, &stmt, nil) == SQLITE_OK
+            else { return }
+            var hasColumn = false
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let text = sqlite3_column_text(stmt, 1),
+                   String(cString: text) == name { hasColumn = true; break }
+            }
+            sqlite3_finalize(stmt)
+            // Not `exec` — the lock is not recursive.
+            if !hasColumn { sqlite3_exec(db, "ALTER TABLE probe_cache ADD COLUMN \(name) \(type)", nil, nil, nil) }
         }
-        sqlite3_finalize(stmt)
-        if !hasColumn { exec("ALTER TABLE probe_cache ADD COLUMN \(name) \(type)") }
     }
 
     deinit {
-        if let db = db { sqlite3_close(db) }
+        connection.withLockUnchecked { c in
+            if let db = c.db { sqlite3_close(db); c.db = nil }
+        }
     }
 
     // MARK: - Public API
@@ -167,121 +186,123 @@ final class MetadataCache {
     /// onto the returned outcome, which is what removed the last off-actor
     /// VideoRecord mutation. (Swift value-struct return ≈ C++ return-by-value.)
     func lookup(path: String, fileSize: Int64, modDate: Date) -> ProbeOutcome? {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return nil }
-        let sql = "SELECT * FROM probe_cache WHERE path = ? AND file_size = ? AND mod_date = ? AND stream_type != 'ffprobe failed'"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-        defer { sqlite3_finalize(stmt) }
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return nil }
+            let sql = "SELECT * FROM probe_cache WHERE path = ? AND file_size = ? AND mod_date = ? AND stream_type != 'ffprobe failed'"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, nil)
-        sqlite3_bind_int64(stmt, 2, fileSize)
-        sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 1, (path as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(stmt, 2, fileSize)
+            sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
-        var o = ProbeOutcome()
-        o.fullPath              = path
-        o.filename              = col(stmt, 3)
-        o.ext                   = col(stmt, 4)
-        o.probe.streamTypeRaw   = col(stmt, 5)
-        o.size                  = col(stmt, 6)
-        o.sizeBytes             = fileSize
-        o.probe.duration        = col(stmt, 7)
-        o.probe.durationSeconds = sqlite3_column_double(stmt, 8)
-        o.dateCreated           = col(stmt, 9)
-        o.dateModified          = col(stmt, 10)
-        let dcRaw               = sqlite3_column_double(stmt, 11)
-        let dmRaw               = sqlite3_column_double(stmt, 12)
-        o.dateCreatedRaw        = dcRaw > 0 ? Date(timeIntervalSince1970: dcRaw) : nil
-        o.dateModifiedRaw       = dmRaw > 0 ? Date(timeIntervalSince1970: dmRaw) : nil
-        o.probe.container       = col(stmt, 13)
-        o.probe.videoCodec      = col(stmt, 14)
-        o.probe.resolution      = col(stmt, 15)
-        o.probe.frameRate       = col(stmt, 16)
-        o.probe.videoBitrate    = col(stmt, 17)
-        o.probe.totalBitrate    = col(stmt, 18)
-        o.probe.colorSpace      = col(stmt, 19)
-        o.probe.bitDepth        = col(stmt, 20)
-        o.probe.scanType        = col(stmt, 21)
-        o.probe.audioCodec      = col(stmt, 22)
-        o.probe.audioChannels   = col(stmt, 23)
-        o.probe.audioSampleRate = col(stmt, 24)
-        o.probe.timecode        = col(stmt, 25)
-        o.probe.tapeName        = col(stmt, 26)
-        o.probe.isPlayable      = col(stmt, 27)
-        o.partialMD5            = col(stmt, 28)
-        o.contentHash           = col(stmt, 31)
-        let chAt                = sqlite3_column_double(stmt, 32)
-        o.contentHashAt         = chAt > 0 ? Date(timeIntervalSince1970: chAt) : nil
-        o.directory             = col(stmt, 29)
-        o.notes                 = col(stmt, 30)
-        let ecd                 = sqlite3_column_double(stmt, 33)
-        o.probe.embeddedCreationDate   = ecd != 0 ? Date(timeIntervalSince1970: ecd) : nil
-        o.probe.embeddedCreationSource = optCol(stmt, 34)
-        o.probe.originMake             = optCol(stmt, 35)
-        o.probe.originModel            = optCol(stmt, 36)
-        o.probe.originEncoder          = optCol(stmt, 37)
-        o.probe.proAppsMediaIdentifier = optCol(stmt, 38)
-        return o
+            var o = ProbeOutcome()
+            o.fullPath              = path
+            o.filename              = col(stmt, 3)
+            o.ext                   = col(stmt, 4)
+            o.probe.streamTypeRaw   = col(stmt, 5)
+            o.size                  = col(stmt, 6)
+            o.sizeBytes             = fileSize
+            o.probe.duration        = col(stmt, 7)
+            o.probe.durationSeconds = sqlite3_column_double(stmt, 8)
+            o.dateCreated           = col(stmt, 9)
+            o.dateModified          = col(stmt, 10)
+            let dcRaw               = sqlite3_column_double(stmt, 11)
+            let dmRaw               = sqlite3_column_double(stmt, 12)
+            o.dateCreatedRaw        = dcRaw > 0 ? Date(timeIntervalSince1970: dcRaw) : nil
+            o.dateModifiedRaw       = dmRaw > 0 ? Date(timeIntervalSince1970: dmRaw) : nil
+            o.probe.container       = col(stmt, 13)
+            o.probe.videoCodec      = col(stmt, 14)
+            o.probe.resolution      = col(stmt, 15)
+            o.probe.frameRate       = col(stmt, 16)
+            o.probe.videoBitrate    = col(stmt, 17)
+            o.probe.totalBitrate    = col(stmt, 18)
+            o.probe.colorSpace      = col(stmt, 19)
+            o.probe.bitDepth        = col(stmt, 20)
+            o.probe.scanType        = col(stmt, 21)
+            o.probe.audioCodec      = col(stmt, 22)
+            o.probe.audioChannels   = col(stmt, 23)
+            o.probe.audioSampleRate = col(stmt, 24)
+            o.probe.timecode        = col(stmt, 25)
+            o.probe.tapeName        = col(stmt, 26)
+            o.probe.isPlayable      = col(stmt, 27)
+            o.partialMD5            = col(stmt, 28)
+            o.contentHash           = col(stmt, 31)
+            let chAt                = sqlite3_column_double(stmt, 32)
+            o.contentHashAt         = chAt > 0 ? Date(timeIntervalSince1970: chAt) : nil
+            o.directory             = col(stmt, 29)
+            o.notes                 = col(stmt, 30)
+            let ecd                 = sqlite3_column_double(stmt, 33)
+            o.probe.embeddedCreationDate   = ecd != 0 ? Date(timeIntervalSince1970: ecd) : nil
+            o.probe.embeddedCreationSource = optCol(stmt, 34)
+            o.probe.originMake             = optCol(stmt, 35)
+            o.probe.originModel            = optCol(stmt, 36)
+            o.probe.originEncoder          = optCol(stmt, 37)
+            o.probe.proAppsMediaIdentifier = optCol(stmt, 38)
+            return o
+        }
     }
 
     /// Store a probed outcome in the cache. The transient `wasCacheHit` /
     /// `scanContext` carrier fields are intentionally NOT persisted — only the
     /// stable identity + metadata columns are written (schema unchanged).
     func store(outcome o: ProbeOutcome, fileSize: Int64, modDate: Date) {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return }
-        let sql = """
-            INSERT OR REPLACE INTO probe_cache VALUES (
-                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
-            )
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return }
+            let sql = """
+                INSERT OR REPLACE INTO probe_cache VALUES (
+                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                )
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
 
-        bind(stmt, 1, o.fullPath)
-        sqlite3_bind_int64(stmt, 2, fileSize)
-        sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
-        bind(stmt, 4, o.filename)
-        bind(stmt, 5, o.ext)
-        bind(stmt, 6, o.probe.streamTypeRaw)
-        bind(stmt, 7, o.size)
-        bind(stmt, 8, o.probe.duration)
-        sqlite3_bind_double(stmt, 9, o.probe.durationSeconds)
-        bind(stmt, 10, o.dateCreated)
-        bind(stmt, 11, o.dateModified)
-        sqlite3_bind_double(stmt, 12, o.dateCreatedRaw?.timeIntervalSince1970 ?? 0)
-        sqlite3_bind_double(stmt, 13, o.dateModifiedRaw?.timeIntervalSince1970 ?? 0)
-        bind(stmt, 14, o.probe.container)
-        bind(stmt, 15, o.probe.videoCodec)
-        bind(stmt, 16, o.probe.resolution)
-        bind(stmt, 17, o.probe.frameRate)
-        bind(stmt, 18, o.probe.videoBitrate)
-        bind(stmt, 19, o.probe.totalBitrate)
-        bind(stmt, 20, o.probe.colorSpace)
-        bind(stmt, 21, o.probe.bitDepth)
-        bind(stmt, 22, o.probe.scanType)
-        bind(stmt, 23, o.probe.audioCodec)
-        bind(stmt, 24, o.probe.audioChannels)
-        bind(stmt, 25, o.probe.audioSampleRate)
-        bind(stmt, 26, o.probe.timecode)
-        bind(stmt, 27, o.probe.tapeName)
-        bind(stmt, 28, o.probe.isPlayable)
-        bind(stmt, 29, o.partialMD5)
-        bind(stmt, 30, o.directory)
-        bind(stmt, 31, o.notes)
-        bind(stmt, 32, o.contentHash)
-        sqlite3_bind_double(stmt, 33, o.contentHashAt?.timeIntervalSince1970 ?? 0)
-        sqlite3_bind_double(stmt, 34, o.probe.embeddedCreationDate?.timeIntervalSince1970 ?? 0)
-        bindOpt(stmt, 35, o.probe.embeddedCreationSource)
-        bindOpt(stmt, 36, o.probe.originMake)
-        bindOpt(stmt, 37, o.probe.originModel)
-        bindOpt(stmt, 38, o.probe.originEncoder)
-        bindOpt(stmt, 39, o.probe.proAppsMediaIdentifier)
+            bind(stmt, 1, o.fullPath)
+            sqlite3_bind_int64(stmt, 2, fileSize)
+            sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
+            bind(stmt, 4, o.filename)
+            bind(stmt, 5, o.ext)
+            bind(stmt, 6, o.probe.streamTypeRaw)
+            bind(stmt, 7, o.size)
+            bind(stmt, 8, o.probe.duration)
+            sqlite3_bind_double(stmt, 9, o.probe.durationSeconds)
+            bind(stmt, 10, o.dateCreated)
+            bind(stmt, 11, o.dateModified)
+            sqlite3_bind_double(stmt, 12, o.dateCreatedRaw?.timeIntervalSince1970 ?? 0)
+            sqlite3_bind_double(stmt, 13, o.dateModifiedRaw?.timeIntervalSince1970 ?? 0)
+            bind(stmt, 14, o.probe.container)
+            bind(stmt, 15, o.probe.videoCodec)
+            bind(stmt, 16, o.probe.resolution)
+            bind(stmt, 17, o.probe.frameRate)
+            bind(stmt, 18, o.probe.videoBitrate)
+            bind(stmt, 19, o.probe.totalBitrate)
+            bind(stmt, 20, o.probe.colorSpace)
+            bind(stmt, 21, o.probe.bitDepth)
+            bind(stmt, 22, o.probe.scanType)
+            bind(stmt, 23, o.probe.audioCodec)
+            bind(stmt, 24, o.probe.audioChannels)
+            bind(stmt, 25, o.probe.audioSampleRate)
+            bind(stmt, 26, o.probe.timecode)
+            bind(stmt, 27, o.probe.tapeName)
+            bind(stmt, 28, o.probe.isPlayable)
+            bind(stmt, 29, o.partialMD5)
+            bind(stmt, 30, o.directory)
+            bind(stmt, 31, o.notes)
+            bind(stmt, 32, o.contentHash)
+            sqlite3_bind_double(stmt, 33, o.contentHashAt?.timeIntervalSince1970 ?? 0)
+            sqlite3_bind_double(stmt, 34, o.probe.embeddedCreationDate?.timeIntervalSince1970 ?? 0)
+            bindOpt(stmt, 35, o.probe.embeddedCreationSource)
+            bindOpt(stmt, 36, o.probe.originMake)
+            bindOpt(stmt, 37, o.probe.originModel)
+            bindOpt(stmt, 38, o.probe.originEncoder)
+            bindOpt(stmt, 39, o.probe.proAppsMediaIdentifier)
 
-        sqlite3_step(stmt)
+            sqlite3_step(stmt)
+        }
     }
 
     /// Write a backfilled embedded date + origin onto an existing cache
@@ -291,37 +312,39 @@ final class MetadataCache {
     /// unchanged file. Updates only — never inserts.
     func updateEmbeddedDate(path: String, date: Date?, source: String?,
                             make: String?, model: String?, encoder: String?) {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return }
-        let sql = """
-            UPDATE probe_cache SET embedded_creation_date = ?, embedded_creation_source = ?,
-                origin_make = ?, origin_model = ?, origin_encoder = ? WHERE path = ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, date?.timeIntervalSince1970 ?? 0)
-        bindOpt(stmt, 2, source)
-        bindOpt(stmt, 3, make)
-        bindOpt(stmt, 4, model)
-        bindOpt(stmt, 5, encoder)
-        bind(stmt, 6, path)
-        sqlite3_step(stmt)
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return }
+            let sql = """
+                UPDATE probe_cache SET embedded_creation_date = ?, embedded_creation_source = ?,
+                    origin_make = ?, origin_model = ?, origin_encoder = ? WHERE path = ?
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_double(stmt, 1, date?.timeIntervalSince1970 ?? 0)
+            bindOpt(stmt, 2, source)
+            bindOpt(stmt, 3, make)
+            bindOpt(stmt, 4, model)
+            bindOpt(stmt, 5, encoder)
+            bind(stmt, 6, path)
+            sqlite3_step(stmt)
+        }
     }
 
     /// Write a backfilled FCP media identifier onto an existing cache row
     /// (Find Similar Footage, 2026-09-23). Same write-through rationale as
     /// `updateEmbeddedDate`. Updates only — never inserts.
     func updateMediaIdentifier(path: String, identifier: String?) {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return }
-        let sql = "UPDATE probe_cache SET proapps_media_identifier = ? WHERE path = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        bindOpt(stmt, 1, identifier)
-        bind(stmt, 2, path)
-        sqlite3_step(stmt)
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return }
+            let sql = "UPDATE probe_cache SET proapps_media_identifier = ? WHERE path = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindOpt(stmt, 1, identifier)
+            bind(stmt, 2, path)
+            sqlite3_step(stmt)
+        }
     }
 
     /// Write a computed signature back onto an existing cache row.
@@ -338,24 +361,26 @@ final class MetadataCache {
     /// nothing to preserve, and inventing a row here would fabricate a
     /// cache entry with no ffprobe data behind it.
     func updateContentHash(path: String, hash: String, at date: Date) {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db, !hash.isEmpty else { return }
-        let sql = "UPDATE probe_cache SET content_hash = ?, content_hash_at = ? WHERE path = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        bind(stmt, 1, hash)
-        sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
-        bind(stmt, 3, path)
-        sqlite3_step(stmt)
+        return connection.withLockUnchecked { c in
+            guard let db = c.db, !hash.isEmpty else { return }
+            let sql = "UPDATE probe_cache SET content_hash = ?, content_hash_at = ? WHERE path = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bind(stmt, 1, hash)
+            sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
+            bind(stmt, 3, path)
+            sqlite3_step(stmt)
+        }
     }
 
     /// Delete all cached records.
     func clearAll() {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return }
-        sqlite3_exec(db, "DELETE FROM probe_cache", nil, nil, nil)
-        sqlite3_exec(db, "VACUUM", nil, nil, nil)
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return }
+            sqlite3_exec(db, "DELETE FROM probe_cache", nil, nil, nil)
+            sqlite3_exec(db, "VACUUM", nil, nil, nil)
+        }
     }
 
     /// Delete cached records whose path begins with `prefix`. Returns the number deleted.
@@ -363,39 +388,40 @@ final class MetadataCache {
     /// is forced through ffprobe again instead of returning instantly from cache.
     @discardableResult
     func clearForPathPrefix(_ prefix: String) -> Int {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return 0 }
-        // Normalize prefix so that "/Volumes/Foo" matches "/Volumes/Foo/..." and not "/Volumes/Foobar/...".
-        let normalized = prefix.hasSuffix("/") ? prefix : prefix + "/"
-        let like = normalized.replacingOccurrences(of: "%", with: #"\%"#)
-                             .replacingOccurrences(of: "_", with: #"\_"#) + "%"
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return 0 }
+            // Normalize prefix so that "/Volumes/Foo" matches "/Volumes/Foo/..." and not "/Volumes/Foobar/...".
+            let normalized = prefix.hasSuffix("/") ? prefix : prefix + "/"
+            let like = normalized.replacingOccurrences(of: "%", with: #"\%"#)
+                                 .replacingOccurrences(of: "_", with: #"\_"#) + "%"
 
-        // First count, then delete (so we can report).
-        var stmt: OpaquePointer?
-        var deleted = 0
-        let countSQL = #"SELECT COUNT(*) FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
-        if sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt, 1, (prefix as NSString).utf8String, -1,
-                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-            sqlite3_bind_text(stmt, 2, (like as NSString).utf8String, -1,
-                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-            if sqlite3_step(stmt) == SQLITE_ROW {
-                deleted = Int(sqlite3_column_int64(stmt, 0))
+            // First count, then delete (so we can report).
+            var stmt: OpaquePointer?
+            var deleted = 0
+            let countSQL = #"SELECT COUNT(*) FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
+            if sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, (prefix as NSString).utf8String, -1,
+                                  unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                sqlite3_bind_text(stmt, 2, (like as NSString).utf8String, -1,
+                                  unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    deleted = Int(sqlite3_column_int64(stmt, 0))
+                }
             }
-        }
-        sqlite3_finalize(stmt)
+            sqlite3_finalize(stmt)
 
-        let delSQL = #"DELETE FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
-        var del: OpaquePointer?
-        if sqlite3_prepare_v2(db, delSQL, -1, &del, nil) == SQLITE_OK {
-            sqlite3_bind_text(del, 1, (prefix as NSString).utf8String, -1,
-                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-            sqlite3_bind_text(del, 2, (like as NSString).utf8String, -1,
-                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-            sqlite3_step(del)
+            let delSQL = #"DELETE FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
+            var del: OpaquePointer?
+            if sqlite3_prepare_v2(db, delSQL, -1, &del, nil) == SQLITE_OK {
+                sqlite3_bind_text(del, 1, (prefix as NSString).utf8String, -1,
+                                  unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                sqlite3_bind_text(del, 2, (like as NSString).utf8String, -1,
+                                  unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                sqlite3_step(del)
+            }
+            sqlite3_finalize(del)
+            return deleted
         }
-        sqlite3_finalize(del)
-        return deleted
     }
 
     /// Load every cached record whose path starts with `prefix`. Used to
@@ -403,88 +429,92 @@ final class MetadataCache {
     /// earlier build (before catalog.json existed) so the user can still
     /// browse / filter / View-Catalog them when the volume is unmounted.
     func allRecordsWithPrefix(_ prefix: String) -> [VideoRecord] {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return [] }
-        let normalized = prefix.hasSuffix("/") ? prefix : prefix + "/"
-        let like = normalized.replacingOccurrences(of: "%", with: #"\%"#)
-                             .replacingOccurrences(of: "_", with: #"\_"#) + "%"
-        let sql = #"SELECT * FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (prefix as NSString).utf8String, -1,
-                          unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        sqlite3_bind_text(stmt, 2, (like as NSString).utf8String, -1,
-                          unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return [] }
+            let normalized = prefix.hasSuffix("/") ? prefix : prefix + "/"
+            let like = normalized.replacingOccurrences(of: "%", with: #"\%"#)
+                                 .replacingOccurrences(of: "_", with: #"\_"#) + "%"
+            let sql = #"SELECT * FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, (prefix as NSString).utf8String, -1,
+                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 2, (like as NSString).utf8String, -1,
+                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
 
-        var out: [VideoRecord] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let rec = VideoRecord()
-            rec.fullPath        = col(stmt, 0)
-            rec.sizeBytes       = sqlite3_column_int64(stmt, 1)
-            let modRaw          = sqlite3_column_double(stmt, 2)
-            rec.filename        = col(stmt, 3)
-            rec.ext             = col(stmt, 4)
-            rec.streamTypeRaw   = col(stmt, 5)
-            rec.size            = col(stmt, 6)
-            rec.duration        = col(stmt, 7)
-            rec.durationSeconds = sqlite3_column_double(stmt, 8)
-            rec.dateCreated     = col(stmt, 9)
-            rec.dateModified    = col(stmt, 10)
-            let dcRaw           = sqlite3_column_double(stmt, 11)
-            let dmRaw           = sqlite3_column_double(stmt, 12)
-            rec.dateCreatedRaw  = dcRaw  > 0 ? Date(timeIntervalSince1970: dcRaw)  : nil
-            rec.dateModifiedRaw = dmRaw  > 0 ? Date(timeIntervalSince1970: dmRaw)
-                                             : (modRaw > 0 ? Date(timeIntervalSince1970: modRaw) : nil)
-            rec.container       = col(stmt, 13)
-            rec.videoCodec      = col(stmt, 14)
-            rec.resolution      = col(stmt, 15)
-            rec.frameRate       = col(stmt, 16)
-            rec.videoBitrate    = col(stmt, 17)
-            rec.totalBitrate    = col(stmt, 18)
-            rec.colorSpace      = col(stmt, 19)
-            rec.bitDepth        = col(stmt, 20)
-            rec.scanType        = col(stmt, 21)
-            rec.audioCodec      = col(stmt, 22)
-            rec.audioChannels   = col(stmt, 23)
-            rec.audioSampleRate = col(stmt, 24)
-            rec.timecode        = col(stmt, 25)
-            rec.tapeName        = col(stmt, 26)
-            rec.isPlayable      = col(stmt, 27)
-            rec.partialMD5      = col(stmt, 28)
-            rec.contentHash     = col(stmt, 31)
-            let chAt2           = sqlite3_column_double(stmt, 32)
-            rec.contentHashAt   = chAt2 > 0 ? Date(timeIntervalSince1970: chAt2) : nil
-            rec.directory       = col(stmt, 29)
-            rec.notes           = col(stmt, 30)
-            let ecd             = sqlite3_column_double(stmt, 33)
-            rec.embeddedCreationDate   = ecd != 0 ? Date(timeIntervalSince1970: ecd) : nil
-            rec.embeddedCreationSource = optCol(stmt, 34)
-            rec.originMake             = optCol(stmt, 35)
-            rec.originModel            = optCol(stmt, 36)
-            rec.originEncoder          = optCol(stmt, 37)
-            rec.proAppsMediaIdentifier = optCol(stmt, 38)
-            out.append(rec)
+            var out: [VideoRecord] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let rec = VideoRecord()
+                rec.fullPath        = col(stmt, 0)
+                rec.sizeBytes       = sqlite3_column_int64(stmt, 1)
+                let modRaw          = sqlite3_column_double(stmt, 2)
+                rec.filename        = col(stmt, 3)
+                rec.ext             = col(stmt, 4)
+                rec.streamTypeRaw   = col(stmt, 5)
+                rec.size            = col(stmt, 6)
+                rec.duration        = col(stmt, 7)
+                rec.durationSeconds = sqlite3_column_double(stmt, 8)
+                rec.dateCreated     = col(stmt, 9)
+                rec.dateModified    = col(stmt, 10)
+                let dcRaw           = sqlite3_column_double(stmt, 11)
+                let dmRaw           = sqlite3_column_double(stmt, 12)
+                rec.dateCreatedRaw  = dcRaw  > 0 ? Date(timeIntervalSince1970: dcRaw)  : nil
+                rec.dateModifiedRaw = dmRaw  > 0 ? Date(timeIntervalSince1970: dmRaw)
+                                                 : (modRaw > 0 ? Date(timeIntervalSince1970: modRaw) : nil)
+                rec.container       = col(stmt, 13)
+                rec.videoCodec      = col(stmt, 14)
+                rec.resolution      = col(stmt, 15)
+                rec.frameRate       = col(stmt, 16)
+                rec.videoBitrate    = col(stmt, 17)
+                rec.totalBitrate    = col(stmt, 18)
+                rec.colorSpace      = col(stmt, 19)
+                rec.bitDepth        = col(stmt, 20)
+                rec.scanType        = col(stmt, 21)
+                rec.audioCodec      = col(stmt, 22)
+                rec.audioChannels   = col(stmt, 23)
+                rec.audioSampleRate = col(stmt, 24)
+                rec.timecode        = col(stmt, 25)
+                rec.tapeName        = col(stmt, 26)
+                rec.isPlayable      = col(stmt, 27)
+                rec.partialMD5      = col(stmt, 28)
+                rec.contentHash     = col(stmt, 31)
+                let chAt2           = sqlite3_column_double(stmt, 32)
+                rec.contentHashAt   = chAt2 > 0 ? Date(timeIntervalSince1970: chAt2) : nil
+                rec.directory       = col(stmt, 29)
+                rec.notes           = col(stmt, 30)
+                let ecd             = sqlite3_column_double(stmt, 33)
+                rec.embeddedCreationDate   = ecd != 0 ? Date(timeIntervalSince1970: ecd) : nil
+                rec.embeddedCreationSource = optCol(stmt, 34)
+                rec.originMake             = optCol(stmt, 35)
+                rec.originModel            = optCol(stmt, 36)
+                rec.originEncoder          = optCol(stmt, 37)
+                rec.proAppsMediaIdentifier = optCol(stmt, 38)
+                out.append(rec)
+            }
+            return out
         }
-        return out
     }
 
     /// Number of cached records.
     var count: Int {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return 0 }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM probe_cache", -1, &stmt, nil) == SQLITE_OK
-        else { return 0 }
-        defer { sqlite3_finalize(stmt) }
-        return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        return connection.withLockUnchecked { c in
+            guard let db = c.db else { return 0 }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM probe_cache", -1, &stmt, nil) == SQLITE_OK
+            else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
     }
 
     // MARK: - Private Helpers
 
     private func exec(_ sql: String) {
-        guard let db = db else { return }
-        sqlite3_exec(db, sql, nil, nil, nil)
+        connection.withLockUnchecked { c in
+            guard let db = c.db else { return }
+            sqlite3_exec(db, sql, nil, nil, nil)
+        }
     }
 
     private func col(_ stmt: OpaquePointer?, _ idx: Int32) -> String {

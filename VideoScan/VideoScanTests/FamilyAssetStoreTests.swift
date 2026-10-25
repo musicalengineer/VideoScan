@@ -438,8 +438,10 @@ struct FamilyAssetStoreTests {
         let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
         try fileManager.createDirectory(at: elsewhere, withIntermediateDirectories: true)
         var racing = store
-        let fm = fileManager
         racing.importClock = {
+            // Swift 6: FileManager.default is thread-safe (Apple docs) but not
+            // marked Sendable — reach it here, not through a capture.
+            let fm = FileManager.default
             try? fm.removeItem(at: folder)
             try? fm.createSymbolicLink(at: folder, withDestinationURL: elsewhere)
             return Date(timeIntervalSince1970: 1_756_140_000)

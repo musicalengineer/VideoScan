@@ -368,16 +368,18 @@ struct ArchiveGateBootSurvivorRedTests {
     /// unplugged; realpath fails on it as on a gone folder, and the climb
     /// used to reach TestProjects and clear the file by that drive's UUID.
     @Test func danglingSymlinkOnAnotherDriveIntoUnpluggedArchiveIsNotCleared() throws {
-        var disk = rickDisk(archiveMounted: false)
-        disk.dangling.insert("/Volumes/TestProjects/link")
+        var unplugged = rickDisk(archiveMounted: false)
+        unplugged.dangling.insert("/Volumes/TestProjects/link")
+        let disk = unplugged
         let p = try protection(disk)
         let v = ArchiveVolumeProtection.$symlinkProbe.withValue({ disk.isSymlink($0) }) {
             p.verdictAtRemoval(path: "/Volumes/TestProjects/link/x/a.mov", probe: disk.probe, identity: disk.identity)
         }
         #expect(v == .unprovable, "a file behind a dangling link into the unplugged archive: \(v)")
         // Archive mounted, link dangling all the same: no proof either.
-        var mounted = rickDisk()
-        mounted.dangling.insert("/Volumes/TestProjects/link")
+        var mountedWithLink = rickDisk()
+        mountedWithLink.dangling.insert("/Volumes/TestProjects/link")
+        let mounted = mountedWithLink
         let pm = try protection(mounted)
         let vm = ArchiveVolumeProtection.$symlinkProbe.withValue({ mounted.isSymlink($0) }) {
             pm.verdictAtRemoval(path: "/Volumes/TestProjects/link/x/a.mov", probe: mounted.probe, identity: mounted.identity)
@@ -386,8 +388,9 @@ struct ArchiveGateBootSurvivorRedTests {
     }
 
     @Test func danglingSymlinkOnAnotherDriveIntoUnpluggedReadOnlyDriveIsHeld() {
-        var disk = rickDisk()
-        disk.dangling.insert("/Volumes/TestProjects/sanlink")
+        var withLink = rickDisk()
+        withLink.dangling.insert("/Volumes/TestProjects/sanlink")
+        let disk = withLink
         let marks = [ReadOnlyVolumeProtection.Mark(searchPath: "/Volumes/TestSanDisk", volumeUUID: "TEST-RO")]
         let readOnly = ReadOnlyVolumeProtection.make(marks: marks, mountedRoots: { ["/Volumes/TestProjects", "/Volumes/TestFamilyArchive"] },
                                                      probe: disk.probe, identity: disk.identity, networkRoots: { [] })
@@ -400,8 +403,9 @@ struct ArchiveGateBootSurvivorRedTests {
     /// The junk lane end to end: the dangling-link file is HELD, never
     /// stamped missing; Rick's link-free Chrome shape is still missing.
     @Test func junkTurnHoldsTheDanglingLinkFileAndStillReportsRicksShapeMissing() throws {
-        var disk = rickDisk(archiveMounted: false)
-        disk.dangling.insert("/Volumes/TestProjects/link")
+        var unplugged = rickDisk(archiveMounted: false)
+        unplugged.dangling.insert("/Volumes/TestProjects/link")
+        let disk = unplugged
         let protections = JunkTurnProtections(archiveVolume: try protection(disk), readOnlyVolumes: .none)
         let t = JunkDiskTurn(mode: .removeThroughTestSeam({ url in Issue.record("moved \(url.path)") }),
                              uuidProbe: { disk.probe($0) }, beforeRemoval: nil, remove: { url in Issue.record("moved \(url.path)") })

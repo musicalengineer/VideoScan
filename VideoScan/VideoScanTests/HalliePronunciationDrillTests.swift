@@ -24,7 +24,7 @@ struct HalliePronunciationDrillTests {
 
     /// Two roots (Rick and Donna, `_VS_ROOT`), Rick's parents and a
     /// grandfather, Donna's mother; a far cousin line with many descendants.
-    private static let gedcom = """
+    nonisolated private static let gedcom = """
     0 HEAD
     1 _VS_ROOT @I1@
     1 _VS_ROOT @I2@
@@ -93,9 +93,9 @@ struct HalliePronunciationDrillTests {
     0 TRLR
     """
 
-    private static let graph = GedcomFamilyGraph(gedcomText: gedcom)
+    nonisolated private static let graph = GedcomFamilyGraph(gedcomText: gedcom)
 
-    private static let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
+    nonisolated private static let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
         .init(stableID: "tim", canonicalName: "Timmy Breen",
               kinships: [Kinship(relation: .child, relativeTo: .profileName("Rick"))]),
         .init(stableID: "rick", canonicalName: "Rick Breen", aliases: ["Dicky"],
@@ -106,10 +106,10 @@ struct HalliePronunciationDrillTests {
               kinships: [Kinship(relation: .parent, relativeTo: .profileName("Rick"))]),
     ]
 
-    private static let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
+    nonisolated private static let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
 
     /// The voice's table for these tests: only "Latta" already taught.
-    private static let lexicon = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "LAT-uh")])
+    nonisolated private static let lexicon = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "LAT-uh")])
 
     private final class Recorder: @unchecked Sendable {
         private let lock = NSLock()

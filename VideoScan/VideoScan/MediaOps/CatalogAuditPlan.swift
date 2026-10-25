@@ -183,7 +183,7 @@ enum CatalogAuditPlanner {
 
     /// The production lane rule: "/Volumes/X" or "/". Tests pass a rule
     /// that makes a sandbox folder a lane root of its own.
-    static let productionLaneRoot: @Sendable (String) -> String = { MediaVolumeGatePolicy.volumeRoot(forPath: $0) }
+    nonisolated static let productionLaneRoot: @Sendable (String) -> String = { MediaVolumeGatePolicy.volumeRoot(forPath: $0) }
 
     static func plan(records: [VideoRecord],
                      laneRoot: @Sendable (String) -> String = CatalogAuditPlanner.productionLaneRoot) -> CatalogAuditPlan {

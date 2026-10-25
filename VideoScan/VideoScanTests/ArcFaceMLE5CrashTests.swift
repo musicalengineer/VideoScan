@@ -3,6 +3,21 @@ import CoreML
 import CoreGraphics
 import os.lock
 import Testing
+
+/// Swift 6: `MLModel.prediction(from:)` is documented thread-safe (Apple,
+/// "Making Predictions with Core ML": an MLModel may be used from multiple
+/// threads) and a CVPixelBuffer is only READ here, but the SDK marks
+/// neither Sendable. These tests exist to share one instance across raw
+/// threads (the MLE5 crash), so the sharing is the subject, not an accident.
+struct ArcFaceSharedModel: @unchecked Sendable {
+    let model: MLModel
+    init(_ model: MLModel) { self.model = model }
+}
+
+struct ArcFaceSharedPixelBuffer: @unchecked Sendable {
+    let buffer: CVPixelBuffer
+    init(_ buffer: CVPixelBuffer) { self.buffer = buffer }
+}
 @testable import VideoScan
 
 /// Regression tests for the MLE5BindEmptyMemoryObjectToPort crash.
@@ -177,7 +192,7 @@ struct ArcFaceMLE5CrashTests {
         let completedPredictions = OSAllocatedUnfairLock(initialState: 0)
 
         for i in 0..<threadCount {
-            let model = models[i]
+            let model = ArcFaceSharedModel(models[i])
             group.enter()
             Thread.detachNewThread {
                 defer { group.leave() }
@@ -193,7 +208,7 @@ struct ArcFaceMLE5CrashTests {
                 startBarrier.wait()
 
                 for _ in 0..<predictionsPerThread {
-                    _ = arcfaceEmbedding(from: testImage, model: model)
+                    _ = arcfaceEmbedding(from: testImage, model: model.model)
                     completedPredictions.withLock { $0 += 1 }
                 }
             }
@@ -211,6 +226,7 @@ struct ArcFaceMLE5CrashTests {
     func sharedModelDoesNotCrash() async throws {
         let (model, _) = await ArcFaceModelLoader.shared.getModel()
         guard let model else { return }
+        let shared = ArcFaceSharedModel(model)
         guard let testImage = makeSyntheticFaceImage() else { return }
 
         let threadCount = 8
@@ -240,7 +256,7 @@ struct ArcFaceMLE5CrashTests {
                 // inside arcfaceEmbedding + ObjC exception catcher must
                 // prevent SIGABRT.
                 for _ in 0..<predictionsPerThread {
-                    _ = arcfaceEmbedding(from: testImage, model: model)
+                    _ = arcfaceEmbedding(from: testImage, model: shared.model)
                     completed.withLock { $0 += 1 }
                 }
             }

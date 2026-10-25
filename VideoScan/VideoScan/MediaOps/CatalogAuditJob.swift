@@ -238,7 +238,10 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         let ticker = startTicker(model: model)
         await withTaskGroup(of: Void.self) { group in
             for lane in split.online {
-                group.addTask { @MainActor in await self.runLane(lane, model: model) }
+                // Swift 6: no `@MainActor in` here — `runLane` is main-actor
+                // isolated, so the `await` hops; the explicit annotation was a
+                // pattern the region-isolation checker refuses to analyse.
+                group.addTask { await self.runLane(lane, model: model) }
             }
         }
         ticker.cancel()

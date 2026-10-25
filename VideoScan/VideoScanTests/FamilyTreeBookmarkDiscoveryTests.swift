@@ -13,7 +13,7 @@ struct FamilyTreeBookmarkDiscoveryTests {
     private static let settings = FamilyTreeLaunchBundle.Settings(
         speakers: .none, ownerFamilySearchID: nil)
 
-    private static let tree = """
+    nonisolated private static let tree = """
     0 HEAD
     1 SOUR VideoScanTests
     1 _VS_ROOT @I1@

@@ -14,13 +14,13 @@ struct HalliePronunciationPickerTests {
 
     // MARK: - Fixtures
 
-    private static let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
+    nonisolated private static let profiles: [HallieTurnExecutor.ProfileSnapshot] = [
         .init(stableID: "rick", canonicalName: "Rick Breen"),
         .init(stableID: "donna", canonicalName: "Donna Foley"),
     ]
-    private static let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
+    nonisolated private static let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
     /// The voice's table: Latta already has the shipped respelling.
-    private static let lexicon = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "LAT-uh")])
+    nonisolated private static let lexicon = HalliePronunciationLexicon(entries: [.init(written: "Latta", spoken: "LAT-uh")])
 
     private final class Recorder: @unchecked Sendable {
         private let lock = NSLock()

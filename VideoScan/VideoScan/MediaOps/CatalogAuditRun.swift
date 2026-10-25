@@ -326,7 +326,7 @@ struct CatalogAuditRunRecord: Codable, Equatable, Sendable {
 @MainActor
 final class CatalogAuditRunMarker: ObservableObject {
 
-    static let fileName = "catalog-audit.json"
+    nonisolated static let fileName = "catalog-audit.json"
 
     /// The last run the marker knows (nil = never ran, or unreadable).
     @Published private(set) var lastRun: CatalogAuditRunRecord?

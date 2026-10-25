@@ -34,8 +34,8 @@ import SwiftUI
 /// happens (no throw, no log spam).
 @MainActor
 enum MediaFileOperationsWindowOpener {
-    static let sceneID = "combine"   // legacy "Combine & Render" scene id
-    static let title = "Media File Operations"
+    nonisolated static let sceneID = "combine"   // legacy "Combine & Render" scene id
+    nonisolated static let title = "Media File Operations"
 
     /// Pure predicate, so the window-identity rule is table-testable.
     nonisolated static func isJobWindow(identifier: String?, title: String) -> Bool {

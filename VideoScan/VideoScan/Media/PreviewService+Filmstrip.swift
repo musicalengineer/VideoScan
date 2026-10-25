@@ -243,6 +243,10 @@ extension PreviewService {
         filmstripTaskIsInteractive = interactive
         filmstripLatestProgress = (0, 0)
         let diskCache = previewDiskCache
+        // Swift 6: the renderer's progress callback runs concurrently with
+        // this task's body, so it may not read the task's `[weak self]` var;
+        // a let-bound WeakRef carries the same weak reference (WeakRef.swift).
+        let service = WeakRef(self)
 
         filmstripTask = Task.detached(priority: interactive ? .userInitiated : .background) { [weak self] in
             // Cancellation guard BEFORE any disk I/O (QA 🟠 2026-07-27:
@@ -304,9 +308,9 @@ extension PreviewService {
                     likelyUnanalyzable: item.likelyUnanalyzable,
                     durationSeconds: item.durationSeconds,
                     onFrameProgress: { done, total in
-                        Task { @MainActor [weak self] in
-                            self?.noteFilmstripProgress(runID: runID, path: item.path,
-                                                        done: done, total: total)
+                        Task { @MainActor in
+                            service.object?.noteFilmstripProgress(runID: runID, path: item.path,
+                                                                  done: done, total: total)
                         }
                     })
                 await MainActor.run { [weak self] in

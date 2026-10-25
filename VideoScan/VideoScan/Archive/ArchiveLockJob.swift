@@ -51,7 +51,7 @@ import os
 @MainActor
 final class ArchiveLockJob: @MainActor MediaFileOperationJob {
 
-    static let title = "Lock files already in the archive"
+    nonisolated static let title = "Lock files already in the archive"
 
     struct Item: Identifiable, Equatable, Sendable {
         enum Kind: Equatable, Sendable { case changed, already, failed, skipped, busy }

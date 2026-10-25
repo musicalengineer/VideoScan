@@ -43,7 +43,7 @@ struct JunkProtectionsPerFileTests {
 
         let trash = sb.root.appendingPathComponent("trash", isDirectory: true)
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
-        nonisolated(unsafe) let live = model
+        let live = model
         let sandbox = sb
         let operation: @Sendable (URL) throws -> Void = { url in
             try FileManager.default.moveItem(at: url, to: trash.appendingPathComponent(url.lastPathComponent))

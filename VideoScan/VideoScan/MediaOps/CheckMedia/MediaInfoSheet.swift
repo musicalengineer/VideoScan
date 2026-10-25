@@ -21,12 +21,13 @@ struct MediaInfoRequest: Identifiable {
     /// This session's Verify Audio / Check Media sound diagnosis, if any —
     /// carries the per-channel levels and the Balance / Rebuild offers.
     let audioDiagnosis: AudioVerifyDiagnosis?
-    let onCheckMedia: () -> Void
+    /// Swift 6: catalog actions a SwiftUI sheet fires — main-actor by type.
+    let onCheckMedia: @MainActor () -> Void
     /// Opens the Repair sheet (the plan) — Get Info's banner buttons. The
     /// argument is the sound file the "No sound" banner found (nil = the
     /// sheet looks itself).
     var onRepair: ((MediaRepairSoundSource?) -> Void)?
-    let onSoundDetails: (() -> Void)?
+    let onSoundDetails: (@MainActor () -> Void)?
     /// "A copy with sound is here" (Rick 2026-10-10): the lookup and its
     /// actions, supplied by the presenter (which owns the model). nil =
     /// the sheet still shows the no-sound warning, without the lookup.
@@ -280,7 +281,7 @@ struct MediaInfoSheet: View {
         .controlSize(.large)
     }
 
-    private func handOff(_ action: @escaping () -> Void) {
+    private func handOff(_ action: @escaping @MainActor () -> Void) {
         VerifyAudioDismissHandoff.perform(dismiss: { dismiss() }, action: action)
     }
 

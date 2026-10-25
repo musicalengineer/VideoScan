@@ -213,7 +213,7 @@ struct ArchiveAngelEvidenceFile: Codable, Sendable, Equatable {
 @MainActor
 final class ArchiveAngelEvidenceStore: ObservableObject {
 
-    static let filename = "evidence.json"
+    nonisolated static let filename = "evidence.json"
 
     /// App Support/VideoScan/archive-angel/ — the production home; under a
     /// test host a per-process scratch folder. The formula and the reason

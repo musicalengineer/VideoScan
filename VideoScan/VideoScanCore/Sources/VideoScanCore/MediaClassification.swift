@@ -11,7 +11,7 @@ import Foundation
 
 // MARK: - Stream Type
 
-public enum StreamType: String, Codable {
+public enum StreamType: String, Codable, Sendable {
     case videoAndAudio = "Video+Audio"
     case videoOnly     = "Video only"
     case audioOnly     = "Audio only"
