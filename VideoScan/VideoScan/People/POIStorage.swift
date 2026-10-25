@@ -538,7 +538,7 @@ enum POIStorage {
     /// Drives `legacyWritesPermitted`: the read-path uuid writers may touch
     /// a not-yet-migrated (legacy) folder only when a verified backup exists
     /// or there was never anything to move.
-    enum MigrationState: Equatable {
+    enum MigrationState: Equatable, Sendable {
         /// No legacy folders at all.
         case clean
         /// Legacy folders remain but none will move (all skipped); nothing
@@ -559,15 +559,69 @@ enum POIStorage {
     /// callers see one run.
     private static let uuidMigrationLock = NSLock()
 
-    /// Per-root state (keyed by standardized path).
-    private static var migrationStates: [String: MigrationState] = [:]
+    /// The per-process bookkeeping a run writes and readers consult.
+    /// Swift 6: the lock OWNS these three (they were `static var`s beside
+    /// `uuidMigrationLock`, which the checker cannot connect to them).
+    /// LOCK ORDER: `uuidMigrationLock` → `bookkeeping`, always. A run holds
+    /// `uuidMigrationLock` for its whole duration and takes `bookkeeping` for
+    /// one field access at a time (a leaf); `migrationState` takes both in
+    /// that order so a reader waits for an in-flight run and sees ITS result.
+    /// Nothing takes `bookkeeping` and then `uuidMigrationLock`.
+    /// Memory: one state per root (a handful), the undrained log lines of
+    /// one run, and one key per skipped folder.
+    private struct Bookkeeping {
+        /// Per-root state (keyed by standardized path).
+        var migrationStates: [String: MigrationState] = [:]
+        /// Summary lines for catalog.log, buffered until DashboardState has
+        /// opened the file (the migration can run before the dashboard
+        /// exists — PersonFinderModel's `savedProfiles` initializer calls
+        /// `listAll()`). Drained by `drainPendingCatalogLogLines()`.
+        var pendingCatalogLogLines: [String] = []
+        /// Folders that were reported as skipped this process, so a skipped
+        /// folder is logged once per launch — not on every `listAll()`.
+        var reportedSkips = Set<String>()
+    }
+    private static let bookkeeping = OSAllocatedUnfairLock(initialState: Bookkeeping())
+
+    private static func setMigrationState(_ state: MigrationState?, forRootPath path: String) {
+        bookkeeping.withLock { $0.migrationStates[path] = state }
+    }
+
+    private static func appendPendingCatalogLogLines(_ lines: [String]) {
+        bookkeeping.withLock { $0.pendingCatalogLogLines.append(contentsOf: lines) }
+    }
+
+    /// True the first time `key` is seen this process.
+    private static func markSkipReported(_ key: String) -> Bool {
+        bookkeeping.withLock { $0.reportedSkips.insert(key).inserted }
+    }
+
+    /// Test-only pause seam between the backup clone and its verification —
+    /// the window in which a reader must still wait for the run (see
+    /// `migrationState`). Called with the backup URL, on the run's thread,
+    /// while `uuidMigrationLock` is held. Lock-owned, so it is not a global
+    /// `var`; production never sets it. (Same shape as
+    /// `CatalogStore.testAfterWriteBeforeVerify`.)
+    static let testAfterCloneBeforeVerify = OSAllocatedUnfairLock<(@Sendable (URL) -> Void)?>(initialState: nil)
+
+    /// The point between a successful clone and its verification. Production:
+    /// a no-op. Tests: the parked window `migrationState` must wait through.
+    private static func cloneVerifyCheckpoint(_ backup: URL) {
+        testAfterCloneBeforeVerify.withLock { $0 }?(backup)
+    }
 
     /// The last known state for `root`, nil when no run has looked at it in
-    /// this process.
+    /// this process. WAITS for an in-flight run: a reader must see that
+    /// run's result, never the previous state — between the backup clone and
+    /// its verify, `legacyWritesPermitted` answering from a stale `.backedUp`
+    /// would let a uuid write land in a legacy folder mid-clone. Lock order
+    /// `uuidMigrationLock` → `bookkeeping` (see `Bookkeeping`); a run never
+    /// calls this, so there is no re-entrancy on the non-recursive NSLock.
     static func migrationState(root: URL? = nil) -> MigrationState? {
+        let path = (root ?? storeDir).standardizedFileURL.path
         uuidMigrationLock.lock()
         defer { uuidMigrationLock.unlock() }
-        return migrationStates[(root ?? storeDir).standardizedFileURL.path]
+        return bookkeeping.withLock { $0.migrationStates[path] }
     }
 
     /// May a read path (`POIProfile.load`, `listAll`'s uuid persistence)
@@ -582,23 +636,14 @@ enum POIStorage {
         }
     }
 
-    /// Summary lines for catalog.log, buffered until DashboardState has
-    /// opened the file (the migration can run before the dashboard exists —
-    /// PersonFinderModel's `savedProfiles` initializer calls `listAll()`).
-    /// Drained by `drainPendingCatalogLogLines()`.
-    private static var pendingCatalogLogLines: [String] = []
-
+    /// The buffered catalog.log lines (see `Bookkeeping`), emptied on return.
     static func drainPendingCatalogLogLines() -> [String] {
-        uuidMigrationLock.lock()
-        defer { uuidMigrationLock.unlock() }
-        let lines = pendingCatalogLogLines
-        pendingCatalogLogLines.removeAll()
-        return lines
+        bookkeeping.withLock { b in
+            let lines = b.pendingCatalogLogLines
+            b.pendingCatalogLogLines.removeAll()
+            return lines
+        }
     }
-
-    /// Folders that were reported as skipped this process, so a skipped
-    /// folder is logged once per launch — not on every `listAll()`.
-    private static var reportedSkips = Set<String>()
 
     /// Why a legacy folder under `root` is still there, from the audit file:
     /// the skip reason and detail, or "not migrated yet" when the audit does
@@ -646,11 +691,11 @@ enum POIStorage {
         // 1. Refuse the real store under a test host — same predicate the
         // file store uses — and any viewer (POI/ is synced from the master).
         do { try POIProfileFileStore.guardRoot(root) } catch {
-            migrationStates[root.path] = .refused
+            setMigrationState(.refused, forRootPath: root.path)
             return .refused(error.localizedDescription)
         }
         if ViewerWriteGuard.refuse("POIStorage.migrateToUUIDFolders") {
-            migrationStates[root.path] = .refused
+            setMigrationState(.refused, forRootPath: root.path)
             return .refused("viewer")
         }
 
@@ -664,7 +709,7 @@ enum POIStorage {
         let rebasedBefore = Set(previousReport?.linksRebased ?? [])
         let pendingRebase = (previousReport?.mapping ?? [:]).filter { !rebasedBefore.contains($0.key) }
         if candidates.isEmpty && unreconciled.isEmpty && pendingRebase.isEmpty {
-            migrationStates[root.path] = .clean
+            setMigrationState(.clean, forRootPath: root.path)
             return .notNeeded
         }
 
@@ -693,8 +738,7 @@ enum POIStorage {
                 return
             }
             let key = root.path + "/" + folder.lastPathComponent + "#" + reason
-            if !reportedSkips.contains(key) {
-                reportedSkips.insert(key)
+            if markSkipReported(key) {
                 log("skipped '\(folder.lastPathComponent)' (\(reason)): \(detail)")
             }
         }
@@ -702,8 +746,8 @@ enum POIStorage {
             report.finishedAt = Date()
             report.elapsedSeconds = seconds(clock.now - started)
             report.foldersAfter = poiFolders(in: root).count
-            migrationStates[root.path] = state
-            pendingCatalogLogLines.append(contentsOf: lines.map { "People migration: \($0)" })
+            setMigrationState(state, forRootPath: root.path)
+            appendPendingCatalogLogLines(lines.map { "People migration: \($0)" })
             return .ran(report)
         }
 
@@ -824,6 +868,7 @@ enum POIStorage {
         switch cloneOrCopyDirectory(from: root, to: backup) {
         case .success(let method):
             report.backupSeconds = seconds(clock.now - backupStart)
+            cloneVerifyCheckpoint(backup)
             let verified = verifyBackup(of: root, at: backup, folders: plan.map(\.source))
             report.backupPath = backup.path
             report.backupMethod = method
@@ -918,7 +963,7 @@ enum POIStorage {
             + "backup \(format(report.backupSeconds)) s)"
         appLog.write("[people] \(summary)")
         storageLog.notice("\(summary, privacy: .public)")
-        pendingCatalogLogLines.append(summary)
+        appendPendingCatalogLogLines([summary])
         return outcome
     }
 
@@ -997,7 +1042,7 @@ enum POIStorage {
             try writeUUIDMigrationReport(report, root: root)
             appLog.write("[people] rollback: \(restored) folder(s) renamed back; \(remaining.count) entr\(remaining.count == 1 ? "y" : "ies") retained for retry")
         }
-        migrationStates[root.path] = nil
+        setMigrationState(nil, forRootPath: root.path)
         return restored
     }
 

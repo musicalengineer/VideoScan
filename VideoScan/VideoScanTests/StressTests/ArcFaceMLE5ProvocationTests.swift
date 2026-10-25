@@ -326,7 +326,6 @@ struct ArcFaceMLE5ProvocationTests {
         let selectedProfiles = Array(profiles.prefix(jobCount))
         let rounds = 10
 
-        let caughtExceptions = OSAllocatedUnfairLock(initialState: 0)
         let completedOK = OSAllocatedUnfairLock(initialState: 0)
 
         for round in 0..<rounds {

@@ -293,7 +293,7 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
                     appLog.write("Archive Angel: could not save the skip of \(entry.filename) — \(error.localizedDescription)")
                 }
                 await MainActor.run {
-                    self?.model?.forgetArchiveAngelCompanions(of: [entry], in: snapshot, reason: "skipped by you", at: now)
+                    _ = self?.model?.forgetArchiveAngelCompanions(of: [entry], in: snapshot, reason: "skipped by you", at: now)
                 }
             }
         }

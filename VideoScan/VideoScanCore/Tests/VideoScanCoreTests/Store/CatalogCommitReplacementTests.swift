@@ -48,9 +48,10 @@ struct CatalogCommitReplacementTests {
     func refusedReplacementKeepsOldRow() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let (fresh, path, _) = try await reseen(s)
+        let freshID = fresh.id.uuidString          // Swift 6: VideoRecord is not Sendable; only its id crosses
         try await s.queue().write { db in
             try db.execute(sql: """
-                CREATE TRIGGER test_refuse_reseen BEFORE INSERT ON files WHEN NEW.id = '\(fresh.id.uuidString)'
+                CREATE TRIGGER test_refuse_reseen BEFORE INSERT ON files WHEN NEW.id = '\(freshID)'
                 BEGIN SELECT RAISE(ABORT, 'injected refusal of the replacement'); END
                 """)
         }

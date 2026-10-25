@@ -463,6 +463,10 @@ final class FamilyTreeNameSearchTests: XCTestCase {
         let a = FamilyTreeNameSearch(graph: Self.graph)
         let b = FamilyTreeNameSearch(graph: Self.graph)
         XCTAssertEqual(a, b)
+        // The 100k graph builds its row tokens in 25 parallel chunks that write
+        // disjoint ranges of one buffer (Swift 6: a documented `nonisolated(unsafe)`).
+        // A second build equal to the first pins that no chunk touched another's rows.
+        XCTAssertEqual(FamilyTreeNameSearch(graph: Self.big.graph), Self.big.search)
         XCTAssertEqual(a.keys, a.keys.sorted())
         XCTAssertEqual(Set(a.keys).count, a.keys.count, "keys are unique")
         XCTAssertEqual(a.rowByOrdinal.count, Self.graph.people.count)

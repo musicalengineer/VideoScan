@@ -713,7 +713,8 @@ struct FixityInvalidationCodex1593Tests {
         rec.fullPath = keeper.path
         let digest = plainSHA256(keeper)
         rec.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: Int64(size))
-        rec.contentFixity = try #require(ContentFixity.captured(path: keeper.path, digest: digest, byteCount: Int64(size)))
+        let fixity = try #require(ContentFixity.captured(path: keeper.path, digest: digest, byteCount: Int64(size)))
+        rec.contentFixity = fixity
         model.records = [rec]
 
         // Audit says the bytes are wrong: BOTH fixities go.
@@ -723,7 +724,7 @@ struct FixityInvalidationCodex1593Tests {
 
         // A record with ONLY a content fixity (a keeper Delete Duplicates
         // hashed, never promoted) is cleared too.
-        rec.contentFixity = try #require(ContentFixity.captured(path: keeper.path, digest: digest, byteCount: Int64(size)))
+        rec.contentFixity = fixity
         #expect(model.invalidateArchiveFixity(path: rec.fullPath, observedDigest: nil) == .written)
         #expect(rec.contentFixity == nil)
         #expect(model.invalidateArchiveFixity(path: rec.fullPath, observedDigest: nil) == .nothingToClear)

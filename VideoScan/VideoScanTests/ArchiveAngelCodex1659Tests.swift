@@ -62,10 +62,12 @@ struct ArchiveAngelCodex1659Tests {
         for r in [target, donor] {
             r.durationSeconds = 600; r.videoCodec = "h264"; r.audioCodec = "aac"; r.isPlayable = "Yes"
         }
-        target.contentFixity = try #require(ContentFixity.captured(path: a.path, digest: digest, byteCount: size))
-        donor.contentFixity = try #require(ContentFixity.captured(path: b.path, digest: digest, byteCount: size))
+        let targetFixity = try #require(ContentFixity.captured(path: a.path, digest: digest, byteCount: size))
+        let donorFixity = try #require(ContentFixity.captured(path: b.path, digest: digest, byteCount: size))
+        target.contentFixity = targetFixity
+        donor.contentFixity = donorFixity
         if rewriteDonor {
-            Thread.sleep(forTimeInterval: 0.01)          // a distinct ctime
+            try await Task.sleep(for: .milliseconds(10))   // a distinct ctime
             var other = bytes
             other[other.count / 2] ^= 0xFF
             let h = try FileHandle(forWritingTo: b)

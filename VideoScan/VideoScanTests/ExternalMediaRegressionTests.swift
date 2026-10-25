@@ -171,7 +171,7 @@ struct ExternalMediaSuite {
     }
 
     private static func readConfig(path: String) -> String? {
-        try? String(contentsOfFile: path).trimmingCharacters(in: .whitespacesAndNewlines)
+        try? String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

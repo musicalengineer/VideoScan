@@ -244,18 +244,16 @@ struct BalanceAudioDVOutputTests {
     }
 
     @Test("ffmpegArgs: inputArgs land BEFORE -i (demuxer options); empty inputArgs is byte-identical to v1")
-    func ffmpegArgsInputSidePlacement() {
+    func ffmpegArgsInputSidePlacement() throws {
         let withR = BalanceAudioFix.ffmpegArgs(
             input: "/in/clip.dv", output: "/out/clip_balanced.mov",
             mapArgs: ["-map", "0:v?", "-map", "0:1"],
             panFilter: "pan=stereo|c0=c1|c1=c1",
             audioArgs: ["-c:a", "pcm_s16le"],
             inputArgs: ["-r", "30000/1001"])
-        let rIdx = try? #require(withR.firstIndex(of: "-r"))
-        let iIdx = try? #require(withR.firstIndex(of: "-i"))
-        if let rIdx, let iIdx {
-            #expect(rIdx < iIdx, "-r must be an INPUT option (before -i)")
-        }
+        let rIdx = try #require(withR.firstIndex(of: "-r"))
+        let iIdx = try #require(withR.firstIndex(of: "-i"))
+        #expect(rIdx < iIdx, "-r must be an INPUT option (before -i)")
         #expect(withR.contains("30000/1001"))
 
         // Default: no input args — the historical vector, unchanged.

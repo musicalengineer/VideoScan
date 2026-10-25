@@ -61,6 +61,15 @@ struct CatalogStoreAsyncSaveTests {
                                     isDirectory: true)
     }
 
+    /// Blocks the calling (main) thread without suspending the task — the
+    /// test's whole point is that the main-actor completion cannot run
+    /// meanwhile. A synchronous body, so the sleep is not in async code
+    /// (where `Thread.sleep` is unavailable because a task may resume on
+    /// another thread; here nothing resumes).
+    private static func blockMainThread(seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
+    }
+
     private func makeRecord(name: String, notes: String = "") -> VideoRecord {
         let r = VideoRecord()
         r.filename = name
@@ -249,7 +258,7 @@ struct CatalogStoreAsyncSaveTests {
 
         let rec = makeRecord(name: "clip.mov", notes: "v1")
         store.saveAsync(records: [rec])
-        Thread.sleep(forTimeInterval: 0.3)      // write lands; completion starved
+        Self.blockMainThread(seconds: 0.3)      // write lands; completion starved
         let url = dir.appendingPathComponent("catalog.json")
         #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 1, "precondition: async write already on disk")
 
@@ -257,6 +266,36 @@ struct CatalogStoreAsyncSaveTests {
         #expect(store.saveNow(records: [rec]), "refused as stale by our own write: \(String(describing: store.lastWriteError))")
         await waiter.waitForWrites(2)
         #expect(CatalogStore(directory: dir).load().first?.notes == "v2")
+    }
+
+    // MARK: 4c. The write outlives the store
+
+    /// Pins what saveAsync's `[weak self]` write block relies on: the
+    /// background write needs nothing of the store — the snapshot, the
+    /// destination and the test seams are copied before the hop. A store
+    /// whose last reference is dropped right after saveAsync still lands and
+    /// verifies its bytes; only the main-actor completion (`self?`) is lost.
+    @Test
+    func asyncWriteLandsAfterTheStoreIsGone() async throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("catalog.json")
+        weak var dropped: CatalogStore?
+        do {
+            let store = CatalogStore(directory: dir)
+            dropped = store
+            store.testWriteDelay = 0.25          // the queue has not written when the scope ends
+            store.saveAsync(records: [makeRecord(name: "clip.mov", notes: "v1")])
+        }
+        #expect(dropped == nil, "precondition: the scope held the only reference to the store")
+        #expect(CatalogSnapshot.headerProbe(at: url) == nil, "precondition: nothing on disk yet")
+        // Bounded poll: the write lands ~0.25 s after saveAsync.
+        for _ in 0..<200 where CatalogSnapshot.headerProbe(at: url)?.generation != 1 {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 1,
+                "the write must land and verify regardless of the store's lifetime")
+        #expect(CatalogStore(directory: dir).load().first?.notes == "v1")
     }
 
     // MARK: 5a. Clone parity — fully-populated record encodes identically

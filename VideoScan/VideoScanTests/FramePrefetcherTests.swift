@@ -14,7 +14,7 @@ struct FramePrefetcherTests {
         container: String = "mp4",
         duration: Double = 2.0,
         frameRate: Int = 25
-    ) throws -> (path: String, reader: AVAssetReader, output: AVAssetReaderTrackOutput, fps: Double) {
+    ) async throws -> (path: String, reader: AVAssetReader, output: AVAssetReaderTrackOutput, fps: Double) {
         guard TestMediaGenerator.isAvailable else {
             throw TestSkipError()
         }
@@ -26,7 +26,7 @@ struct FramePrefetcherTests {
             prefix: "test_prefetch"
         )
         let asset = AVURLAsset(url: URL(fileURLWithPath: path))
-        guard let track = asset.tracks(withMediaType: .video).first else {
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw TestSetupError(message: "no video track")
         }
         let reader = try AVAssetReader(asset: asset)
@@ -38,13 +38,13 @@ struct FramePrefetcherTests {
         guard reader.startReading() else {
             throw TestSetupError(message: "reader failed to start")
         }
-        return (path, reader, output, Double(track.nominalFrameRate))
+        return (path, reader, output, Double(try await track.load(.nominalFrameRate)))
     }
 
     @Test("Yields frames from a generated MOV",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func yieldsFramesFromMOV() async throws {
-        let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 2.0)
+        let (path, reader, output, fps) = try await makeVideoAndReader(container: "mov", duration: 2.0)
         defer { TestMediaGenerator.cleanup(path) }
 
         let frameInterval = 5.0 / fps
@@ -68,7 +68,7 @@ struct FramePrefetcherTests {
     @Test("Yields frames from a generated MPEG-TS",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func yieldsFramesFromTS() async throws {
-        let (path, reader, output, fps) = try makeVideoAndReader(container: "ts", duration: 2.0)
+        let (path, reader, output, fps) = try await makeVideoAndReader(container: "ts", duration: 2.0)
         defer { TestMediaGenerator.cleanup(path) }
 
         let frameInterval = 5.0 / fps
@@ -88,7 +88,7 @@ struct FramePrefetcherTests {
     @Test("Frame skipping respects frameInterval",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func frameSkipping() async throws {
-        let (path, reader, output, _) = try makeVideoAndReader(container: "mov", duration: 2.0, frameRate: 25)
+        let (path, reader, output, _) = try await makeVideoAndReader(container: "mov", duration: 2.0, frameRate: 25)
         defer { TestMediaGenerator.cleanup(path) }
 
         let largeInterval = 1.0
@@ -111,7 +111,7 @@ struct FramePrefetcherTests {
     @Test("Backpressure: producer blocks when buffer is full",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func backpressure() async throws {
-        let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 3.0, frameRate: 25)
+        let (path, reader, output, fps) = try await makeVideoAndReader(container: "mov", duration: 3.0, frameRate: 25)
         defer { TestMediaGenerator.cleanup(path) }
 
         let bufferSize = 2
@@ -133,7 +133,7 @@ struct FramePrefetcherTests {
     @Test("Cancellation stops the stream",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func cancellation() async throws {
-        let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 5.0, frameRate: 25)
+        let (path, reader, output, fps) = try await makeVideoAndReader(container: "mov", duration: 5.0, frameRate: 25)
         defer { TestMediaGenerator.cleanup(path) }
 
         let prefetcher = FramePrefetcher(
@@ -164,7 +164,7 @@ struct FramePrefetcherTests {
     @Test("Abandoned mid-stream consumer does not crash on dispose",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func abandonedMidStreamDisposesCleanly() async throws {
-        let (path, reader, output, fps) = try makeVideoAndReader(
+        let (path, reader, output, fps) = try await makeVideoAndReader(
             container: "mov", duration: 5.0, frameRate: 25
         )
         defer { TestMediaGenerator.cleanup(path) }
@@ -205,7 +205,7 @@ struct FramePrefetcherTests {
     @Test("Decode time is plausible",
           .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func decodeTimePlausible() async throws {
-        let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 1.0)
+        let (path, reader, output, fps) = try await makeVideoAndReader(container: "mov", duration: 1.0)
         defer { TestMediaGenerator.cleanup(path) }
 
         let prefetcher = FramePrefetcher(

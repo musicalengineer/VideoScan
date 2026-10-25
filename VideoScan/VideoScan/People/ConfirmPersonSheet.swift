@@ -641,7 +641,7 @@ struct ConfirmPersonSheet: View {
                             .foregroundColor(rating.color)
                         Text(rating.rawValue)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("\(rating.keyboardKey)")
+                        Text(String(rating.keyboardKey))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.secondary)
                     }

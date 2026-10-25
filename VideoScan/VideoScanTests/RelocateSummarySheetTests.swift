@@ -425,7 +425,7 @@ struct RelocateSummarySheetTests {
     // MARK: - 6. Bucket E requires at least one safe witness (post-2026-05-30)
 
     @Test
-    func bucketE_requiresAtLeastOneSafeWitness() {
+    func bucketE_requiresAtLeastOneSafeWitness() throws {
         // Rick's framing: a "backup" that lives on a retired or
         // unreliable volume isn't reassuring. The Bucket E classification
         // should refuse to fire on degraded-only witnesses; the record
@@ -500,18 +500,18 @@ struct RelocateSummarySheetTests {
             hash: { _ in "" }
         )
         #expect(result2.safelyRedundant.count == 1)
-        let entry = try? #require(result2.safelyRedundant.first)
+        let entry = try #require(result2.safelyRedundant.first)
         // Safe witness leads the safeWitnesses list.
-        #expect(entry?.safeWitnesses.first?.path == "/Volumes/LaCieWorkspace/clip.mxf")
+        #expect(entry.safeWitnesses.first?.path == "/Volumes/LaCieWorkspace/clip.mxf")
         // Both degraded witnesses are retained on the entry for the
         // "see all matches" disclosure.
-        #expect(entry?.degradedWitnesses.count == 2)
+        #expect(entry.degradedWitnesses.count == 2)
     }
 
     // MARK: - 7. Witness ranking — role dominates trust
 
     @Test
-    func witnessRanking_sortsBySafetyScore_roleDominatesOverTrust() {
+    func witnessRanking_sortsBySafetyScore_roleDominatesOverTrust() throws {
         // Same-record, multiple witnesses, mix of roles/trusts. After
         // ranking, an Archive+Aging witness should outrank a Backup+
         // Reliable one (role weighted 10x trust).
@@ -552,13 +552,13 @@ struct RelocateSummarySheetTests {
             witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: { _ in "" }
         )
-        let entry = try? #require(result.safelyRedundant.first)
+        let entry = try #require(result.safelyRedundant.first)
         // Expected order (highest safetyScore first):
         //   Cloud + Aging    → 6*10 + 2 = 62
         //   Archive + Unknown→ 5*10 + 1 = 51
         //   Backup + Reliable→ 4*10 + 3 = 43
         //   Workspace + Reliable → 3*10 + 3 = 33
-        let safePaths = entry?.safeWitnesses.map(\.path) ?? []
+        let safePaths = entry.safeWitnesses.map(\.path)
         #expect(safePaths == [
             "/Volumes/B/x.bin",   // LTA + Aging
             "/Volumes/C/x.bin",   // Archive + Unknown
@@ -570,7 +570,7 @@ struct RelocateSummarySheetTests {
     // MARK: - 8. Witness ranking — retired/unreliable demoted below safe
 
     @Test
-    func witnessRanking_demotesRetiredAndUnreliableBelowSafeOnes() {
+    func witnessRanking_demotesRetiredAndUnreliableBelowSafeOnes() throws {
         // Mix of one safe + one retired + one unreliable. Reconcile
         // result should split into safeWitnesses (just the safe one)
         // and degradedWitnesses (the other two).
@@ -613,13 +613,13 @@ struct RelocateSummarySheetTests {
             witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: { _ in "" }
         )
-        let entry = try? #require(result.safelyRedundant.first)
-        #expect(entry?.safeWitnesses.map(\.path) == ["/Volumes/MyBook/y.bin"])
+        let entry = try #require(result.safelyRedundant.first)
+        #expect(entry.safeWitnesses.map(\.path) == ["/Volumes/MyBook/y.bin"])
         // Retired + unreliable both demoted. Order within degraded
         // doesn't matter for Rick's UX (it's grey-and-tagged either
         // way), but the count does.
-        #expect(entry?.degradedWitnesses.count == 2)
-        let demotedPaths = Set(entry?.degradedWitnesses.map(\.path) ?? [])
+        #expect(entry.degradedWitnesses.count == 2)
+        let demotedPaths = Set(entry.degradedWitnesses.map(\.path))
         #expect(demotedPaths == [
             "/Volumes/Mini2TB/y.bin",
             "/Volumes/Flaky/y.bin"

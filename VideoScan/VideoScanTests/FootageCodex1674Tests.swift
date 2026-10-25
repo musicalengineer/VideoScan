@@ -134,8 +134,10 @@ struct Footage1674SampledNotIdenticalTests {
         a.fullPath = fa.path
         let b = C4.rec("B.mov", dur: 0, hash: "v1:same", size: 4096)
         b.fullPath = fb.path
-        a.contentFixity = try #require(ContentFixity.captured(path: fa.path, digest: digest, byteCount: 4096))
-        b.contentFixity = try #require(ContentFixity.captured(path: fb.path, digest: digest, byteCount: 4096))
+        let fixityA = try #require(ContentFixity.captured(path: fa.path, digest: digest, byteCount: 4096))
+        let fixityB = try #require(ContentFixity.captured(path: fb.path, digest: digest, byteCount: 4096))
+        a.contentFixity = fixityA
+        b.contentFixity = fixityB
         // b is rewritten in place at the same size after its digest was taken.
         try await Task.sleep(for: .milliseconds(20))
         try Data(repeating: 9, count: 4096).write(to: fb)
@@ -157,8 +159,10 @@ struct Footage1674SampledNotIdenticalTests {
         let a = C4.rec("Reunion.mov", dur: 0, size: 8192), b = C4.rec("Totally other.mov", dur: 0, size: 8192)
         a.fullPath = fa.path
         b.fullPath = fb.path
-        a.contentFixity = try #require(ContentFixity.captured(path: fa.path, digest: digest, byteCount: 8192))
-        b.contentFixity = try #require(ContentFixity.captured(path: fb.path, digest: digest, byteCount: 8192))
+        let fixityA = try #require(ContentFixity.captured(path: fa.path, digest: digest, byteCount: 8192))
+        let fixityB = try #require(ContentFixity.captured(path: fb.path, digest: digest, byteCount: 8192))
+        a.contentFixity = fixityA
+        b.contentFixity = fixityB
         m.records = [a, b]
         let job = await C4.run(m)
         #expect(a.footage?.confidence == .identical && a.footage?.groupID == b.footage?.groupID)
@@ -453,8 +457,10 @@ struct Footage1674DistinctRecordingsSensorTests {
         let b = C4.rec("Tape B.mov", dur: 0, hash: FileHasher.segmentedHash(path: fb.path), size: 6_291_456)
         b.fullPath = fb.path
         b.partialMD5 = "same-sample"
-        a.contentFixity = try #require(ContentFixity.captured(path: fa.path, digest: try C4.sha256(fa), byteCount: 6_291_456))
-        b.contentFixity = try #require(ContentFixity.captured(path: fb.path, digest: try C4.sha256(fb), byteCount: 6_291_456))
+        let fixityA = try #require(ContentFixity.captured(path: fa.path, digest: try C4.sha256(fa), byteCount: 6_291_456))
+        let fixityB = try #require(ContentFixity.captured(path: fb.path, digest: try C4.sha256(fb), byteCount: 6_291_456))
+        a.contentFixity = fixityA
+        b.contentFixity = fixityB
         m.records = [a, b]
         _ = await C4.run(m)
         #expect(angelEligible([a, b]) == [true, true])

@@ -275,7 +275,7 @@ struct GeneratedMediaPerformanceTests {
 
     private static func configInt(_ name: String, default defaultValue: Int) -> Int {
         let path = "/tmp/\(name.lowercased())"
-        guard let raw = try? String(contentsOfFile: path).trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
               let value = Int(raw), value > 0 else {
             return defaultValue
         }
@@ -284,7 +284,7 @@ struct GeneratedMediaPerformanceTests {
 
     private static func configDouble(_ name: String, default defaultValue: Double) -> Double {
         let path = "/tmp/\(name.lowercased())"
-        guard let raw = try? String(contentsOfFile: path).trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
               let value = Double(raw), value > 0 else {
             return defaultValue
         }

@@ -31,11 +31,16 @@ enum HallieModeClassifier {
         let isNamedFile: (String) -> Bool
 
         /// An oracle that knows nobody and no file — tests and clients
-        /// without identity sources.
-        static let none = Oracle(
-            isExactPersonName: { _ in false },
-            isKnownPerson: { _ in false },
-            isNamedFile: { _ in false })
+        /// without identity sources. Computed, not stored: the closures are
+        /// not `@Sendable` (the live ones capture lazily-loaded identity
+        /// sources), so a stored static would be shared non-Sendable state
+        /// under Swift 6; three non-capturing closures cost nothing to make.
+        static var none: Oracle {
+            Oracle(
+                isExactPersonName: { _ in false },
+                isKnownPerson: { _ in false },
+                isNamedFile: { _ in false })
+        }
     }
 
     enum Reason: Equatable, Sendable {

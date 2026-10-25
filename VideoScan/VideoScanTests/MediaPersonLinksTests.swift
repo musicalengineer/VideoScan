@@ -55,7 +55,7 @@ struct MediaPersonLinksTests {
     }
 
     @Test("a detector must NOT downgrade something a person stated")
-    func statedBeatsDetected() {
+    func statedBeatsDetected() throws {
         // The archive's whole approach is evidence with provenance. If
         // Rick says Uncle Bill is on this tape, a later detection pass
         // turning that into a guess would quietly lose a fact.
@@ -63,10 +63,10 @@ struct MediaPersonLinksTests {
         links.link(personID: bill, hash: "abc123", path: "/a.mkv", source: .stated)
         links.link(personID: bill, hash: "abc123", path: "/moved.mkv", source: .detected)
 
-        let link = try? #require(links.media(forPerson: bill).first)
-        #expect(link?.source == .stated, "a human claim was downgraded to a guess")
+        let link = try #require(links.media(forPerson: bill).first)
+        #expect(link.source == .stated, "a human claim was downgraded to a guess")
         // The detector still knows where the file is, and that is useful.
-        #expect(link?.mediaPath == "/moved.mkv")
+        #expect(link.mediaPath == "/moved.mkv")
     }
 
     @Test("a person CAN upgrade a detected link by confirming it")

@@ -60,9 +60,9 @@ struct HallieKinshipApposition: Equatable, Sendable {
     /// Trailing "and tell me about her/him/them" (and kin): a biography
     /// wish on the SAME person, not a second question. Stripped before the
     /// shape is read; the answer is a biography anyway.
-    static let biographyTail = /\s*(?:,|;|and|then|&)?\s*(?:(?:and|then)\s+)?(?:please\s+)?(?:tell\s+(?:me|us)\s+(?:more\s+)?about|describe|talk\s+about)\s+(?:her|him|them|that\s+person|this\s+person|that\s+one)\s*$/
+    static let biographyTail = SendableRegex(/\s*(?:,|;|and|then|&)?\s*(?:(?:and|then)\s+)?(?:please\s+)?(?:tell\s+(?:me|us)\s+(?:more\s+)?about|describe|talk\s+about)\s+(?:her|him|them|that\s+person|this\s+person|that\s+one)\s*$/)
 
-    private static let kinWord = /^(?:grand[a-z]+|father|dad|daddy|papa|pop|mother|mom|mommy|mama|mum|ma|parents?|brother|sister|siblings?|son|daughter|children|kids?|husband|wife|spouse|uncle|aunt|auntie|cousin|nephew|niece|(?:brother|sister|father|mother|son|daughter)[- ]in[- ]law)$/
+    private static let kinWord = SendableRegex(/^(?:grand[a-z]+|father|dad|daddy|papa|pop|mother|mom|mommy|mama|mum|ma|parents?|brother|sister|siblings?|son|daughter|children|kids?|husband|wife|spouse|uncle|aunt|auntie|cousin|nephew|niece|(?:brother|sister|father|mother|son|daughter)[- ]in[- ]law)$/)
 
     /// Words that end the name capture: they mean the phrase goes on
     /// ("… grandfather on his paternal side", "… sister in 1990").
@@ -77,7 +77,7 @@ struct HallieKinshipApposition: Equatable, Sendable {
     /// `(?:^|\s)(owner)\s+(side)?\s+(relation)\s+(name words)$` — the same
     /// owner/side/great-count shape `HallieLineageQuestion.kinshipQuestion`
     /// reads, plus the trailing name that made that parser step aside.
-    private static let shape = /(?:^|\s)(my|our|[a-z][a-z .'-]*?'s?)\s+(?:(maternal|paternal|mother'?s|father'?s)\s+)?((?:(?:\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twelfth)(?:st|nd|rd|th)?[- ]?(?:x|times)?[- ]?great[- ]?|(?:great[- ]?)+)?grand[a-z]+|father|dad|daddy|papa|pop|mother|mom|mommy|mama|mum|ma|parents?|brother|sister|siblings?|son|daughter|children|kids?|husband|wife|spouse|uncle|aunt|auntie|cousin|nephew|niece|(?:brother|sister|father|mother|son|daughter)[- ]in[- ]law)\s+([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,3})$/
+    private static let shape = SendableRegex(/(?:^|\s)(my|our|[a-z][a-z .'-]*?'s?)\s+(?:(maternal|paternal|mother'?s|father'?s)\s+)?((?:(?:\d+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twelfth)(?:st|nd|rd|th)?[- ]?(?:x|times)?[- ]?great[- ]?|(?:great[- ]?)+)?grand[a-z]+|father|dad|daddy|papa|pop|mother|mom|mommy|mama|mum|ma|parents?|brother|sister|siblings?|son|daughter|children|kids?|husband|wife|spouse|uncle|aunt|auntie|cousin|nephew|niece|(?:brother|sister|father|mother|son|daughter)[- ]in[- ]law)\s+([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,3})$/)
 
     static func parse(_ text: String) -> HallieKinshipApposition? {
         var lower = HallieLineageQuestion.normalize(text)

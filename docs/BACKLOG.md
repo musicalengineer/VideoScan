@@ -133,5 +133,7 @@
 - Adversarial 10/18 findings #4–#7 (deferred to the Import removal): close with pinning tests or decline with reasons.
 - Fleet roles on the Ultra: a resource plan (cores/RAM per job, weekly calendar), not just a role list.
 
+- Metrics board: a per-file "Swift 6 warnings" column straight from `scripts/warnings_baseline.tsv`, and watch CCN / grades across the migration (Rick 10/25; stage 2 of `docs/design/swift6_migration_2026_10_25.md`).
+
 ## Docs still to write (when their subject is live)
 Catalog schema and commit model for readers (replaces `database_design.md`; carry its POI layout, bundle contents and recovery runbook) · MFO job lifecycle and how to add a job · the removal lanes today and the one-engine target · Archive Angel: what stays (after Q8) · Family Tree read model (after Q3) · splitting `VideoScanModel` (after Q11) · family viewer mode · P0 retrospective: how integrity fell off the table · final provenance design after Rick's four rulings · post-cutover stability baseline · segments decision record.

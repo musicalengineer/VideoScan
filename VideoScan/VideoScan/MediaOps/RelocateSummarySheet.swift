@@ -397,12 +397,9 @@ struct RelocateSummarySheet: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "info.circle")
                     .foregroundColor(.secondary)
-                Text("Open the Volumes window to retire ")
-                    .foregroundColor(.secondary)
-                + Text(summary.sourceVolumeName)
-                    .font(.body.bold())
-                    .foregroundColor(.primary)
-                + Text(" when you're ready.")
+                // Interpolated Text keeps the bold volume name; `Text + Text`
+                // is deprecated in macOS 26.
+                Text("Open the Volumes window to retire \(Text(summary.sourceVolumeName).font(.body.bold()).foregroundColor(.primary)) when you're ready.")
                     .foregroundColor(.secondary)
                 Spacer()
             }

@@ -363,7 +363,7 @@ struct HallieOfferAcceptanceTests {
             "videos of dad with wife", memory: &memory, context: context,
             translated: .presence(.init(people: ["Richard Harding Breen Sr"], keywords: ["wife"])))
         for text in ["no", "yes but only the 90s", "with donna", "not now"] {
-            var branch = memory
+            let branch = memory
             let pre = Exec.preTranslation(
                 question: text, playAfterAnswer: false, memory: branch,
                 isKnownPerson: { Exec.isKnownPerson($0, context: context) })

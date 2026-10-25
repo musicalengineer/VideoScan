@@ -17,6 +17,7 @@
 // (C++ analogy: a std::shared_ptr copied in an inner loop on 8 threads.)
 
 import Foundation
+import os
 import Testing
 @testable import VideoScanCore
 
@@ -28,19 +29,20 @@ struct GedcomParseContentionSensorTests {
     /// on GCD or the cooperative pool admitting workers.
     private static func cpuSecondsConcurrently(_ copies: [String],
                                                _ body: @escaping @Sendable (String) -> Void) -> [Double] {
-        let lock = NSLock()
-        var out: [Double] = []
+        // Swift 6: a lock-guarded `var` is still a captured var to the
+        // checker; the lock that OWNS the state is Sendable and provable.
+        let out = OSAllocatedUnfairLock(initialState: [Double]())
         let group = DispatchGroup()
         for copy in copies {
             group.enter()
             Thread {
                 let cpu = TimingBudget.measureThreadCPUTime { body(copy) }
-                lock.withLock { out.append(TimingBudget.seconds(cpu)) }
+                out.withLock { $0.append(TimingBudget.seconds(cpu)) }
                 group.leave()
             }.start()
         }
         group.wait()
-        return out
+        return out.withLock { $0 }
     }
 
     @Test(.timeLimit(.minutes(2)))

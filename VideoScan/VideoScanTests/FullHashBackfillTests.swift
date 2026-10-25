@@ -120,11 +120,11 @@ struct FullHashBackfillLogicTests {
     func savesEveryNFiles() async throws {
         let sb = try ShowAgainSandbox.make("fhb_saveN"); defer { sb.cleanup() }
         for i in 0..<5 { try sb.record("f\(i).mov", bytes: 2_000, stage: .none) }
-        let job = await runBackfill(sb.model) { j in
+        let job = await runBackfill(sb.model, configure: { j in
             j.checkpointFiles = 2
             j.checkpointSeconds = 3_600
             j.saveCatalogForTesting = { true }
-        }
+        })
         #expect(job.storedCount == 5)
         #expect(job.saveCount == 3, "after 2, after 4, and the final one for the 5th (got \(job.saveCount))")
     }
@@ -133,11 +133,11 @@ struct FullHashBackfillLogicTests {
     func savesOnTheClock() async throws {
         let sb = try ShowAgainSandbox.make("fhb_saveT"); defer { sb.cleanup() }
         for i in 0..<3 { try sb.record("t\(i).mov", bytes: 2_000, stage: .none) }
-        let job = await runBackfill(sb.model) { j in
+        let job = await runBackfill(sb.model, configure: { j in
             j.checkpointFiles = 10_000
             j.checkpointSeconds = 0
             j.saveCatalogForTesting = { true }
-        }
+        })
         #expect(job.storedCount == 3)
         #expect(job.saveCount >= 2, "time-based checkpoints fired (got \(job.saveCount))")
     }
@@ -157,10 +157,10 @@ struct FullHashBackfillLogicTests {
         let sb = try ShowAgainSandbox.make("fhb_savefail"); defer { sb.cleanup() }
         for i in 0..<4 { try sb.record("s\(i).mov", bytes: 2_000, stage: .none) }
         let marker = FullHashBackfillResumeMarker()
-        let job = await runBackfill(sb.model, marker: marker) { j in
+        let job = await runBackfill(sb.model, marker: marker, configure: { j in
             j.checkpointFiles = 1
             j.saveCatalogForTesting = { false }
-        }
+        })
         #expect(job.saveFailed)
         if case .failed = job.state {} else { Issue.record("expected failed, got \(job.state)") }
         #expect(job.totals.done < 4, "it stopped reading after the failed save")

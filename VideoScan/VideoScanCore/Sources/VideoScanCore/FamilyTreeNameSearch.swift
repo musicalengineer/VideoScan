@@ -134,6 +134,11 @@ public struct FamilyTreeNameSearch: Sendable, Equatable {
         let chunk = 4096
         let chunks = (rows + chunk - 1) / chunk
         perRow.withUnsafeMutableBufferPointer { out in
+            // Swift 6: a buffer pointer is not Sendable, and the `inout`
+            // parameter cannot be captured by the concurrent closure. Each
+            // chunk writes only its own disjoint row range [lo, hi), so the
+            // shared writes cannot race; this copy asserts that to the compiler.
+            nonisolated(unsafe) let slots = out
             DispatchQueue.concurrentPerform(iterations: chunks) { c in
                 let lo = c * chunk, hi = min(rows, lo + chunk)
                 for row in lo..<hi {
@@ -157,7 +162,7 @@ public struct FamilyTreeNameSearch: Sendable, Equatable {
                     }
                     if let year = GedcomFamilyGraph.year(in: person.birthDate) { tokens.year = Int32(year) }
                     tokens.nameCount = Int16(clamping: Self.queryTokens(person.name).count)
-                    out[row] = tokens
+                    slots[row] = tokens
                 }
             }
         }

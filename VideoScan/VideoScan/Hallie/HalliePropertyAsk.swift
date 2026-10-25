@@ -27,7 +27,7 @@ enum HalliePropertyAsk {
         "maiden name", "birthplace", "birthdate", "birthday", "name", "age", "birth", "death",
     ]
 
-    private static let pattern: Regex<AnyRegexOutput> = {
+    private static let pattern: SendableRegex<AnyRegexOutput> = {
         let props = propertyPhrases.joined(separator: "|")
         // Longest lead first: "what is" must win over "what", or the
         // subject swallows "is" ("what is dad's name" → "is dad").
@@ -38,7 +38,7 @@ enum HalliePropertyAsk {
         let more = #"(?:\s*(?:,|and|&|or|plus)\s*(?:(?:his|her|their|my|our|the)\s+)?"# + qualifier + property + #")*"#
         // The phrase list is a literal in this file; a bad pattern is a
         // programming error caught by the suite, not a runtime condition.
-        return try! Regex(lead + subject + qualifier + property + more + #"\s*$"#)
+        return SendableRegex(try! Regex(lead + subject + qualifier + property + more + #"\s*$"#))
     }()
 
     /// The possessive subject as typed ("Dad", "O'Connor"), or "me" for
