@@ -268,6 +268,36 @@ struct CatalogStoreAsyncSaveTests {
         #expect(CatalogStore(directory: dir).load().first?.notes == "v2")
     }
 
+    // MARK: 4c. The write outlives the store
+
+    /// Pins what saveAsync's `[weak self]` write block relies on: the
+    /// background write needs nothing of the store — the snapshot, the
+    /// destination and the test seams are copied before the hop. A store
+    /// whose last reference is dropped right after saveAsync still lands and
+    /// verifies its bytes; only the main-actor completion (`self?`) is lost.
+    @Test
+    func asyncWriteLandsAfterTheStoreIsGone() async throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("catalog.json")
+        weak var dropped: CatalogStore?
+        do {
+            let store = CatalogStore(directory: dir)
+            dropped = store
+            store.testWriteDelay = 0.25          // the queue has not written when the scope ends
+            store.saveAsync(records: [makeRecord(name: "clip.mov", notes: "v1")])
+        }
+        #expect(dropped == nil, "precondition: the scope held the only reference to the store")
+        #expect(CatalogSnapshot.headerProbe(at: url) == nil, "precondition: nothing on disk yet")
+        // Bounded poll: the write lands ~0.25 s after saveAsync.
+        for _ in 0..<200 where CatalogSnapshot.headerProbe(at: url)?.generation != 1 {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 1,
+                "the write must land and verify regardless of the store's lifetime")
+        #expect(CatalogStore(directory: dir).load().first?.notes == "v1")
+    }
+
     // MARK: 5a. Clone parity — fully-populated record encodes identically
 
     @Test

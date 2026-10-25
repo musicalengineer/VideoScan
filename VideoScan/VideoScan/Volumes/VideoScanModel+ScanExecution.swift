@@ -670,11 +670,11 @@ extension VideoScanModel {
         log("Resuming scan of \(volName): re-verifying \(remainingPaths.count) checkpointed file(s) (cache hits skip ffprobe)")
         appLog.write("Resuming catalog scan of volume \(volName) from checkpoint (\(remainingPaths.count) file(s), full-list re-verify)")
 
-        // Weak on the task too, so the keepalive's log closure captures the
-        // same weak reference (Swift 6 capture-consistency check). The
-        // model outlives every scan; the guard only matters in a test host.
-        target.scanTask = Task { [weak self] in
-            guard let self else { return }
+        // Explicit strong capture, like startTarget: the scan task owns the
+        // model for its whole run (status/isScanning/OUTCOME all come from
+        // it). The keepalive's log closure below captures it weakly on
+        // purpose; Swift 6 only asks that the outer capture be spelled out.
+        target.scanTask = Task { [self] in
             let rootIsNetwork = CombineVerifier.isNetworkPath(root)
             let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: rootIsNetwork)
 
