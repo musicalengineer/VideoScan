@@ -73,7 +73,7 @@ enum HallieRepairTurn {
         "ancient", "long dead", "long ago", "too old", "living", "alive",
         "still around", "recent", "modern",
     ]
-    private static let centuryDecade = /\b1[0-9]00s\b/
+    private static let centuryDecade = SendableRegex(/\b1[0-9]00s\b/)
 
     /// Lowercased, curly quotes straightened, whitespace collapsed.
     static func fold(_ text: String) -> String {

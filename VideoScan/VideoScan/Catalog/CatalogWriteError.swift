@@ -213,7 +213,16 @@ enum CatalogWriteJournal {
 
     /// Rotation cap. One rotated generation (`.1`) is kept, so worst case
     /// on disk is ~2x this. Internal so tests can shrink it.
-    static var maxBytes: Int = 1_000_000
+    ///
+    /// Swift 6: a `static var` read by `record(...)` from any thread and
+    /// written by tests is shared mutable state; the lock owns the value
+    /// (`OSAllocatedUnfairLock<Int>` ≈ a std::atomic<int> with a mutex the
+    /// compiler can see). Same `maxBytes = n` syntax for callers.
+    static var maxBytes: Int {
+        get { maxBytesStorage.withLock { $0 } }
+        set { maxBytesStorage.withLock { $0 = newValue } }
+    }
+    private static let maxBytesStorage = OSAllocatedUnfairLock(initialState: 1_000_000)
 
     /// Rename `url` → `url.1` (replacing any older `.1`) once it exceeds
     /// `maxBytes`. Codex #385: the journal was unbounded — a wedged

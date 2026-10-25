@@ -40,22 +40,22 @@ enum HallieTreeStatisticsQuestion: Equatable, Sendable {
 
     // MARK: - Vocabulary
 
-    private static let countAsk = /\bhow\s+many\b|\bhow\s+much\b|\bnumber\s+of\b|\bcount\s+(the|how|people)\b|\btotal\s+number\b/
-    private static let averageAsk = /\baverage\b|\bmean\b|\bmedian\b|\btypical\b/
-    private static let lifespanWord = /\blifespan\b|\blife\s+span\b|\blived?\s+to\b|\bage\s+at\s+death\b|\bhow\s+long\s+.{0,20}\blive[ds]?\b|\bages?\b/
-    private static let groupingAsk = /\bwhich\s+countr(y|ies)\b|\bwhat\s+countr(y|ies)\b|\bcountries\b|\bby\s+country\b|\bwhere\s+were\s+they\s+(all\s+)?born\b/
+    private static let countAsk = SendableRegex(/\bhow\s+many\b|\bhow\s+much\b|\bnumber\s+of\b|\bcount\s+(the|how|people)\b|\btotal\s+number\b/)
+    private static let averageAsk = SendableRegex(/\baverage\b|\bmean\b|\bmedian\b|\btypical\b/)
+    private static let lifespanWord = SendableRegex(/\blifespan\b|\blife\s+span\b|\blived?\s+to\b|\bage\s+at\s+death\b|\bhow\s+long\s+.{0,20}\blive[ds]?\b|\bages?\b/)
+    private static let groupingAsk = SendableRegex(/\bwhich\s+countr(y|ies)\b|\bwhat\s+countr(y|ies)\b|\bcountries\b|\bby\s+country\b|\bwhere\s+were\s+they\s+(all\s+)?born\b/)
     /// The sentence is about the population, not one person.
-    private static let populationWord = /\bpeople\b|\bpersons?\b|\bancestors?\b|\brelatives\b|\beveryone\b|\bthey\b|\bfamily\s+tree\b|\bthe\s+tree\b|\bin\s+the\s+family\b/
-    private static let ancestorScope = /\b(?:my|our)\s+(?:own\s+|direct\s+)?ancestors?\b|\bmy\s+line\b|\bmy\s+own\s+line\b/
+    private static let populationWord = SendableRegex(/\bpeople\b|\bpersons?\b|\bancestors?\b|\brelatives\b|\beveryone\b|\bthey\b|\bfamily\s+tree\b|\bthe\s+tree\b|\bin\s+the\s+family\b/)
+    private static let ancestorScope = SendableRegex(/\b(?:my|our)\s+(?:own\s+|direct\s+)?ancestors?\b|\bmy\s+line\b|\bmy\s+own\s+line\b/)
     /// A SIDE ("my maternal ancestors") is a constraint `Scope.ancestors`
     /// cannot hold; the first version read it as the whole tree (codex #1180).
-    private static let sidedScope = /\b(?:maternal|paternal|mother'?s|father'?s)\s+(?:side|line|ancestors?)\b/
+    private static let sidedScope = SendableRegex(/\b(?:maternal|paternal|mother'?s|father'?s)\s+(?:side|line|ancestors?)\b/)
 
     /// Constraints this recognizer cannot represent. Their presence forces an
     /// ABSTAIN rather than an answer that quietly ignores them — the whole
     /// point of the full-shape rule. "how many people born in Ireland MARRIED
     /// a Breen" is not a place count with the marriage silently dropped.
-    private static let unsupportedConstraint = /\bmarried\b|\bmarriage\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bwith\s+photos?\b|\bin\s+videos?\b|\bphotos?\b|\bvideos?\b|\bper\s+(decade|century|generation)s?\b|\bby\s+(decade|century|generation)s?\b|\bgenerations?\b|\balive\b|\bliving\b|\bstill\s+with\s+us\b|\bdead\b|\bdeceased\b|\bpassed\s+away\b|\bdied\s+(?:before|after|in|young|old)\b/
+    private static let unsupportedConstraint = SendableRegex(/\bmarried\b|\bmarriage\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bwith\s+photos?\b|\bin\s+videos?\b|\bphotos?\b|\bvideos?\b|\bper\s+(decade|century|generation)s?\b|\bby\s+(decade|century|generation)s?\b|\bgenerations?\b|\balive\b|\bliving\b|\bstill\s+with\s+us\b|\bdead\b|\bdeceased\b|\bpassed\s+away\b|\bdied\s+(?:before|after|in|young|old)\b/)
 
     // MARK: - Recognition
 

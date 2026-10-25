@@ -35,4 +35,28 @@ struct ArcFacePredictorTests {
     func settingDefaultsToSerialized() {
         #expect(PersonFinderSettings().arcfaceInferenceConcurrency == 1)
     }
+
+
+    /// Swift 6 stage 4 (#376): the pool moved into `OSAllocatedUnfairLock<Pool>`
+    /// and the class is `Sendable`. Eight tasks reading `concurrency` while
+    /// others call `configure(1)` must always see the serialized pool — the
+    /// state is reachable only through the lock. (Never K>1 here; see the
+    /// header.)
+    @Test("concurrent configure(1) and concurrency reads always see 1")
+    func concurrentReadersAndConfigureAgree() async {
+        let seen = await withTaskGroup(of: Int.self, returning: Set<Int>.self) { group in
+            for lane in 0..<8 {
+                group.addTask {
+                    var worst = 1
+                    for _ in 0..<200 {
+                        if lane % 2 == 0 { await ArcFacePredictor.shared.configure(concurrency: 1) }
+                        worst = max(worst, ArcFacePredictor.shared.concurrency)
+                    }
+                    return worst
+                }
+            }
+            return await group.reduce(into: Set<Int>()) { $0.insert($1) }
+        }
+        #expect(seen == [1])
+    }
 }
