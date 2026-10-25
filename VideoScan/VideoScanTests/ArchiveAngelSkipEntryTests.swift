@@ -319,7 +319,10 @@ struct ArchiveAngelSkipEntryTests {
         }
         let p = plan("/tmp/scale", rows)
         let elapsed = await Task.detached(priority: .utility) { () -> Double in
-            #expect(!Thread.isMainThread, "the walk must not run on the main actor")
+            // pthread_main_np is what Thread.isMainThread reads; the Foundation
+            // property is unavailable in async code (a task may hop threads at
+            // a suspension), but there is none between here and the walk.
+            #expect(pthread_main_np() == 0, "the walk must not run on the main actor")
             let t0 = Date()
             let toPrepare = p.entries.reduce(into: 0) { $0 += ($1.loopAction == .prepare ? 1 : 0) }
             let skipped = p.skippedCount

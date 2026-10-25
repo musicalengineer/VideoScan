@@ -175,7 +175,7 @@ struct CatalogCommitterSerialTests {
     func holdOwnerCompared() async throws {
         let scene = try CutoverScene.make("b21_owner"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
-        await scene.model.catalogStore.holdWrites(reason: "a test job is reading the catalog", owner: CatalogWriteHoldOwner())
+        _ = await scene.model.catalogStore.holdWrites(reason: "a test job is reading the catalog", owner: CatalogWriteHoldOwner())
         try scene.record(.healthy).starRating = 2
         #expect(await scene.model.saveCatalogAcknowledged(asHoldOwner: CatalogWriteHoldOwner()) == false)
         #expect(try await scene.reloaded(.healthy).starRating == 0)

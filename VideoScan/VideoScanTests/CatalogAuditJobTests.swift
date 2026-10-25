@@ -221,9 +221,9 @@ struct CatalogAuditJobLogicTests {
         let c = try sb.live("c.mov", onDisk: false)
         let back = try sb.missingRow("back.mov", onDisk: false)
         let errnos: [String: Int32] = [a.fullPath: EACCES, b.fullPath: EIO, c.fullPath: ETIMEDOUT, back.fullPath: EPERM]
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, configure: { j in
             j.statPaths = { paths in paths.map { .unreadable(errno: errnos[$0] ?? EACCES) } }
-        }
+        })
         #expect(job.totals[.couldNotCheck] == 4 && job.totals[.gone] == 0 && job.totals[.cameBack] == 0, Comment(rawValue: job.totals.line))
         #expect(a.removal == nil && b.removal == nil && c.removal == nil, "an unreadable path is never a gone file")
         #expect(back.removal?.state == .missing, "and never a returned one")
@@ -252,10 +252,10 @@ struct CatalogAuditJobLogicTests {
         sb.model.records.append(away)
         let here = try sb.live("here.mov")
         let stats = CallCounter()
-        let first = await runAudit(sb.model, online: { !$0.hasPrefix(offlineRoot) }) { j in
+        let first = await runAudit(sb.model, online: { !$0.hasPrefix(offlineRoot) }, configure: { j in
             let real = j.statPaths
             j.statPaths = { paths in _ = stats.next(); #expect(!paths.contains { $0.hasPrefix(offlineRoot) }, "an unmounted root is never stat'ed"); return real(paths) }
-        }
+        })
         #expect(first.totals[.notAsked] == 1 && first.totals[.present] == 1, Comment(rawValue: first.totals.line))
         #expect(away.removal == nil, "a row on an unmounted drive is never marked")
         #expect(first.lanes.first { $0.root == offlineRoot }?.phase == .disconnected)
@@ -329,11 +329,11 @@ struct CatalogAuditJobLogicTests {
         let back = try sb.missingRow("back.mov", onDisk: true)
         let kept = try sb.live("kept.mov", onDisk: false, seen: true)
         let marker = CatalogAuditRunMarker()
-        let job = await runAudit(sb.model, marker: marker) { j in
+        let job = await runAudit(sb.model, marker: marker, configure: { j in
             j.chunkSize = 1
             j.checkpointRows = 100
             j.saveCatalogForTesting = { false }
-        }
+        })
         if case .failed(let msg) = job.state { #expect(msg.contains("could not be saved"), Comment(rawValue: msg)) } else { Issue.record("expected failed, got \(job.state)") }
         #expect(job.saveFailed && job.storedCount == 0)
         #expect(gone.allSatisfy { $0.removal == nil } && kept.removal == nil, "every unsaved mark is undone")
@@ -515,9 +515,9 @@ struct CatalogAuditJobIsolationTests {
         sb.model.isReadOnly = true
         let stats = CallCounter()
         let marker = CatalogAuditRunMarker()
-        let job = await runAudit(sb.model, marker: marker) { j in
+        let job = await runAudit(sb.model, marker: marker, configure: { j in
             j.statPaths = { paths in _ = stats.next(); return paths.map { _ in .gone } }
-        }
+        })
         #expect(job.wasRefused)
         if case .failed(let msg) = job.state { #expect(msg.contains("read-only"), Comment(rawValue: msg)) } else { Issue.record("expected refused, got \(job.state)") }
         #expect(stats.value == 0, "no stat ran")
@@ -532,7 +532,7 @@ struct CatalogAuditJobIsolationTests {
             .appendingPathComponent("test_ca_shared_\(UUID().uuidString.prefix(8))", isDirectory: true))
         #expect(model.catalogStore === CatalogStore.shared)
         let stats = CallCounter()
-        let job = await runAudit(model) { j in j.statPaths = { paths in _ = stats.next(); return paths.map { _ in .gone } } }
+        let job = await runAudit(model, configure: { j in j.statPaths = { paths in _ = stats.next(); return paths.map { _ in .gone } } })
         #expect(job.wasRefused && stats.value == 0)
         if case .failed(let msg) = job.state { #expect(msg.contains("shared one"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
     }
@@ -794,7 +794,7 @@ struct CatalogAuditProveAtTheMarkTests {
         let link = try sb.link("drive", to: URL(fileURLWithPath: "/dev"))
         let r = sb.row(at: link.appendingPathComponent("clip.mov").path)
         let files = sb.files
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, configure: { j in
             let real = j.statPaths
             j.statPaths = { paths in
                 let stats = real(paths)                                           // ENOENT on devfs
@@ -802,7 +802,7 @@ struct CatalogAuditProveAtTheMarkTests {
                 try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: files)
                 return stats
             }
-        }
+        })
         #expect(job.totals[.gone] == 0 && job.totals[.couldNotCheck] == 1, Comment(rawValue: job.totals.line))
         #expect(r.removal == nil, "ENOENT on a different filesystem than the one planned is not proof")
         #expect(job.storedCount == 0)
@@ -814,7 +814,7 @@ struct CatalogAuditProveAtTheMarkTests {
     func fileBackAtTheMarkIsPresentNotMarked() async throws {
         let sb = try ShowAgainSandbox.make("ca_transient"); defer { sb.cleanup() }
         let r = try sb.live("flicker.mov")
-        let job = await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }
+        let job = await runAudit(sb.model, configure: { j in j.statPaths = { paths in paths.map { _ in .gone } } })
         #expect(job.totals[.present] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
         #expect(r.removal == nil && job.storedCount == 0, "present at the mark → not marked")
         #expect(r.auditSeenOn?.volumeUUID == sb.volumeUUID && job.stampedCount == 1, "the second look stamps where it found the file")
@@ -829,7 +829,7 @@ struct CatalogAuditProveAtTheMarkTests {
         try Data(repeating: 7, count: 2_000).write(to: URL(fileURLWithPath: r.fullPath))
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
-        let job = await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }
+        let job = await runAudit(sb.model, configure: { j in j.statPaths = { paths in paths.map { _ in .gone } } })
         #expect(job.totals[.couldNotCheck] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
         #expect(r.removal == nil)
         #expect(job.problems.first { $0.path == r.fullPath }?.detail.contains("EACCES") == true,

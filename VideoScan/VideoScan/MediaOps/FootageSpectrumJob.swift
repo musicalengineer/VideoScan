@@ -235,7 +235,7 @@ final class FootageSpectrumJob: @MainActor MediaFileOperationJob {
         }
         if pruneOnStart {
             let store = self.store
-            await Task.detached(priority: .utility) { store.pruneOldRuns() }.value
+            await Task.detached(priority: .utility) { _ = store.pruneOldRuns() }.value
         }
         do {
             try store.prepare(run: id)

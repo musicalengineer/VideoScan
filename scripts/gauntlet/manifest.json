@@ -28300,6 +28300,7 @@
         "test_percent_is_cleared_over_start_and_99_until_the_app_flips",
         "test_swiftpm_evidence_by_file_name_proves_a_fall",
         "test_the_committed_baseline_exists_and_is_well_formed",
+        "test_the_five_messages_stage_3_found_binned_as_other_are_concurrency",
         "test_update_refuses_a_collapse_without_force",
         "test_update_refuses_a_rise_without_force_and_without_clean"
       ]

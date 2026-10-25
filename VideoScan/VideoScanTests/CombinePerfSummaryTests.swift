@@ -138,7 +138,7 @@ struct CombinePerfSummaryTests {
 
         let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         let t1 = t0.addingTimeInterval(4)  // 4s wall, 8 MB → 2.0 MB/s
-        var j = job("test", start: t0, end: t1, phase: .done)
+        let j = job("test", start: t0, end: t1, phase: .done)
         // Override outputPath to the real file we just wrote.
         let jobs = [CombineJobStatus(
             pairIndex: j.pairIndex,

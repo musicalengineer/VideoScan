@@ -149,22 +149,22 @@ struct FamilyTreeResearchLinksIrishPlaceTests {
             .first { $0.title.contains("Census of Ireland") }?.reason
     }
 
-    @Test func bornInBostonDiedInCorkNamesCork() {
-        let reason = try? #require(irishReason(birth: "Boston, Massachusetts",
-                                               death: "Cork, Ireland"))
-        #expect(reason?.contains("Cork") == true,
-                "the Irish census link must name the Irish place: \(reason ?? "nil")")
-        #expect(reason?.contains("Boston") == false,
-                "naming Boston above the Irish census is a false statement about where the record is: \(reason ?? "nil")")
+    @Test func bornInBostonDiedInCorkNamesCork() throws {
+        let reason = try #require(irishReason(birth: "Boston, Massachusetts",
+                                              death: "Cork, Ireland"))
+        #expect(reason.contains("Cork"),
+                "the Irish census link must name the Irish place: \(reason)")
+        #expect(!reason.contains("Boston"),
+                "naming Boston above the Irish census is a false statement about where the record is: \(reason)")
     }
 
     /// The mirror case, which always worked — kept so the fix cannot be
     /// satisfied by simply preferring deathPlace instead.
-    @Test func bornInCorkDiedInBostonStillNamesCork() {
-        let reason = try? #require(irishReason(birth: "Cork, Ireland",
-                                               death: "Boston, Massachusetts"))
-        #expect(reason?.contains("Cork") == true, "\(reason ?? "nil")")
-        #expect(reason?.contains("Boston") == false, "\(reason ?? "nil")")
+    @Test func bornInCorkDiedInBostonStillNamesCork() throws {
+        let reason = try #require(irishReason(birth: "Cork, Ireland",
+                                              death: "Boston, Massachusetts"))
+        #expect(reason.contains("Cork"), "\(reason)")
+        #expect(!reason.contains("Boston"), "\(reason)")
     }
 
     @Test func onlyAnIrishDeathPlaceStillNamesIt() {

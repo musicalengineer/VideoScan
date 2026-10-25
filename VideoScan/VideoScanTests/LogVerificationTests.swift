@@ -142,7 +142,7 @@ import OSLog
 
     @Test func searchWithLogVerification() throws {
         let sink = InMemoryLogSink()
-        try withAppLog(sink) {
+        withAppLog(sink) {
             // Simulate an app session with search — these would normally
             // be emitted by VideoScanModel / search code, exercised here
             // via direct appLog.write calls to keep the test focused on

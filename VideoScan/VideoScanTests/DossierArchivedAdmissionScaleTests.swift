@@ -59,8 +59,8 @@ struct DossierArchivedAdmissionScaleTests {
 
     @Test("admission by stage", arguments: LifecycleStage.allCases)
     func admissionTruthTable(_ stage: LifecycleStage) throws {
-        let expectedDossier = try #require(Self.dossierExpected[stage], "a new LifecycleStage needs a ruling: \(stage)")
-        let expectedCaption = try #require(Self.captionExpected[stage])
+        let expectedDossier = try #require(Self.dossierExpected[stage] as Bool?, "a new LifecycleStage needs a ruling: \(stage)")
+        let expectedCaption = try #require(Self.captionExpected[stage] as Bool?)
         let r = VideoRecord()
         r.fullPath = "/Volumes/TestLacie/a.mov"; r.filename = "a.mov"
         r.streamTypeRaw = StreamType.videoAndAudio.rawValue

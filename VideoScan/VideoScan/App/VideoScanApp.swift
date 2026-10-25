@@ -581,7 +581,13 @@ struct VideoScanApp: App {
                     // start jobs (CatalogView). See
                     // MediaFileOperationsCenterReference.swift (2026-09-22).
                     .environment(\.mediaFileOperationsCenterReference, fileOpsCenter)
-                    .onAppear {
+                    .onAppear { [catalogModel] in
+                        // Explicit strong capture: this one-shot wiring
+                        // closure holds the model the app already owns (no
+                        // cycle possible); the callbacks it installs below
+                        // capture it weakly on purpose. Swift 6 flags a weak
+                        // inner capture of an implicitly captured outer
+                        // reference until the outer capture is spelled out.
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter
                         // A Catalog rename refuses to rewrite the archive

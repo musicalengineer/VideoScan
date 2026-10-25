@@ -152,16 +152,16 @@ struct CatalogAuditRound2Tests {
     func stampsFlushOnTheClockNotPerRow() async throws {
         let sb = try ShowAgainSandbox.make("ca_stamp_cadence"); defer { sb.cleanup() }
         let rows = try (0..<60).map { try sb.live("p\($0).mov") }
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, configure: { j in
             j.chunkSize = 7; j.checkpointRows = 25; j.checkpointSeconds = 3_600
             j.saveCatalogForTesting = { true }
-        }
+        })
         #expect(job.stampedCount == 60 && job.saveCount == 1, "one save at the end (got \(job.saveCount))")
         #expect(rows.allSatisfy { $0.auditSeenOn != nil })
 
         let sb2 = try ShowAgainSandbox.make("ca_stamp_lost"); defer { sb2.cleanup() }
         let r = try sb2.live("lost.mov")
-        let failed = await runAudit(sb2.model) { j in j.saveCatalogForTesting = { false } }
+        let failed = await runAudit(sb2.model, configure: { j in j.saveCatalogForTesting = { false } })
         #expect(failed.saveFailed && failed.stampedCount == 0 && failed.storedCount == 0)
         #expect(r.removal == nil, "nothing to undo for a stamp")
         #expect(sb2.catalogLogText().contains("1 where-seen stamp(s) not saved"), Comment(rawValue: sb2.catalogLogText()))
@@ -227,13 +227,13 @@ struct CatalogAuditRound2Tests {
         let r = sb.row(at: link.appendingPathComponent("clip.mov").path)             // cataloged THROUGH the link
         r.auditSeenOn = sb.stamp
         let files = sb.files
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, configure: { j in
             j.statPaths = { paths in
                 try? FileManager.default.removeItem(at: link)                        // the link now points at a folder without the file…
                 try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: elsewhere)
                 return paths.map { _ in .gone }
             }
-        }
+        })
         // …and back: the file is at the cataloged path again.
         try? FileManager.default.removeItem(at: link)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: files)
@@ -311,14 +311,14 @@ struct CatalogAuditRound2Tests {
         let sb = try ShowAgainSandbox.make("ca_aba_nil"); defer { sb.cleanup() }
         let r = try sb.missingRow("aba.mov", onDisk: true)                           // the audit will restore it (wrote = nil)
         let model = sb.model
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, configure: { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
                 VideoScanModel.stampRemoval(r, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))   // another door: Trash
                 #expect(model.clearRemoval(r) == nil)                                                             // Put Back + Restore → nil again
                 return false
             }
-        }
+        })
         #expect(job.saveFailed)
         #expect(r.removal == nil, "the other door's restore was overwritten by the audit's rollback: \(String(describing: r.removal))")
         #expect(sb.catalogLogText().contains("0 of 1 mark(s) undone"), Comment(rawValue: sb.catalogLogText()))
@@ -329,7 +329,7 @@ struct CatalogAuditRound2Tests {
         let sb = try ShowAgainSandbox.make("ca_aba_same"); defer { sb.cleanup() }
         try sb.live("neighbour.mov")
         let r = try sb.live("same.mov", onDisk: false, seen: true)
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, configure: { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
                 guard let audits = r.removal else { return false }                                               // the audit's Missing marker
@@ -337,7 +337,7 @@ struct CatalogAuditRound2Tests {
                 VideoScanModel.stampRemoval(r, audits)                                                            // …then an equal marker again
                 return false
             }
-        }
+        })
         #expect(job.saveFailed)
         #expect(r.removal?.state == .missing && r.removal?.reason == .missingAtAudit, "the newer, equal marker was cleared: \(String(describing: r.removal))")
         #expect(sb.catalogLogText().contains("0 of 1 mark(s) undone"), Comment(rawValue: sb.catalogLogText()))
@@ -349,7 +349,7 @@ struct CatalogAuditRound2Tests {
         try sb.live("neighbour.mov")
         let gone = try sb.live("gone.mov", onDisk: false, seen: true)
         let back = try sb.missingRow("back.mov", onDisk: true)
-        let job = await runAudit(sb.model) { j in j.chunkSize = 1; j.checkpointRows = 100; j.saveCatalogForTesting = { false } }
+        let job = await runAudit(sb.model, configure: { j in j.chunkSize = 1; j.checkpointRows = 100; j.saveCatalogForTesting = { false } })
         #expect(job.saveFailed)
         #expect(gone.removal == nil && gone.removalRevision == 2, "stamped (1), reverted (2)")
         #expect(back.removal?.reason == .missingOnDisk && back.removalRevision == 3, "stamped by the test (1), restored (2), reverted (3)")
@@ -521,7 +521,7 @@ struct CatalogAuditRound2Tests {
         let scene = try midLinkScene(sb, elsewhereHasTheFile: false)
         scene.row.auditSeenOn = sb.stamp
         let job = await CatalogAuditDirectoryWalk.$betweenTheWalkAndTheOpenForTesting.withValue(scene.substitute) {
-            await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }   // a stale first pass
+            await runAudit(sb.model, configure: { j in j.statPaths = { paths in paths.map { _ in .gone } } })   // a stale first pass
         }
         // The outside actor puts the folder back: the file is at the cataloged path.
         try FileManager.default.removeItem(at: scene.mid)

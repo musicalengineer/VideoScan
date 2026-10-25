@@ -177,11 +177,12 @@ extension ArchiveAngelJob {
                 continue
             case .walk:
                 return nil
-            case .pick(let g):
-                pickID = g.id; pickEvidence = g.evidence; groupCandidate = g.candidate; groupKind = g.kind
-                tier = g.tier
-                rowProjections = g.projections
-                projections += g.projections
+            case .pick(id: let id, evidence: let evidence, candidate: let candidate, kind: let kind,
+                       tier: let pickTier, projections: let pickProjections):
+                pickID = id; pickEvidence = evidence; groupCandidate = candidate; groupKind = kind
+                tier = pickTier
+                rowProjections = pickProjections
+                projections += pickProjections
             }
             // THE effective class (codex #1643 A3): in a batch → skipped;
             // refused live (gone, purged, set aside, superseded, promoted)

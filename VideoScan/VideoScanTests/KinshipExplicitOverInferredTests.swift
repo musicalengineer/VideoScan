@@ -118,7 +118,7 @@ struct KinshipExplicitOverInferredTests {
     /// line: the log now reads `result=warningConfirmationRequired` on the
     /// first press and `result=save` once Rick confirms — never `blocked`.
     @Test func theSaveGateLetsTheRowThrough() {
-        var profiles = Self.oneCardCarriesEverything
+        let profiles = Self.oneCardCarriesEverything
         let benIndex = profiles.firstIndex { $0.name == "Ben" }!
         var ben = profiles[benIndex]
         ben.kinships = [Self.row(.sibling, of: "Ada")]

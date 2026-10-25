@@ -1136,12 +1136,15 @@ final class CatalogStore {
         let dest = fileURL
         let delay = testWriteDelay
         let seam = testAfterWriteBeforeVerify
-        writeQueue.async {
+        // The write needs nothing of `self` (statics and the locals above);
+        // only the completion hop does, and it is weak: a store torn down
+        // mid-write just loses its completion, as before.
+        writeQueue.async { [weak self] in
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             let writeError = Self.encodeAndWrite(payload: payload, to: dest,
                                                  purpose: .liveCatalog,
                                                  afterWriteBeforeVerify: seam)
-            Task { @MainActor [weak self] in
+            Task { @MainActor in
                 self?.asyncSaveDidFinish(success: writeError == nil,
                                          wroteGeneration: nextGeneration,
                                          wroteDesignation: wroteDesignation,

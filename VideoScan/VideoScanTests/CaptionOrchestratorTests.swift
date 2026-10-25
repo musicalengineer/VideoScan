@@ -149,7 +149,6 @@ struct CaptionOrchestratorTests {
     @Test("records already captioned with the current model are skipped")
     func idempotentSkipForAlreadyCaptioned() async {
         let model = VideoScanModel()
-        let target = makeTarget(at: "/tmp/vs-skip-test")
 
         // Two records: one already captioned with "stub-vlm-1", one
         // never captioned. Both backed by a real (empty) tmp file so

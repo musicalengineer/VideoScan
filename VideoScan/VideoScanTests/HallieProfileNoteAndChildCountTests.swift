@@ -226,7 +226,7 @@ struct HallieHonestChildCountTests {
     }
 
     /// The card alone, so the wording is pinned without the overlay.
-    @Test func theSameSentenceIsBuiltByTheCardItself() {
+    @Test func theSameSentenceIsBuiltByTheCardItself() throws {
         let kin = Kin(profileName: "Dad", profileStableID: "dad",
                       children: [child("Beth", "daughter"), child("Ellen", "daughter"),
                                  child("Tim", "son")],
@@ -237,13 +237,13 @@ struct HallieHonestChildCountTests {
             + "the People tab adds Beth and Ellen as daughters and Tim as a son."),
                 Comment(rawValue: card.prose))
         // One claim, citing both sources, promising every name it says.
-        let claim = try? #require(card.plan.claims.first { $0.text.contains("The family tree records") })
-        #expect(claim?.requiredPersonNames.contains("Richard Harding Breen Jr") == true)
+        let claim = try #require(card.plan.claims.first { $0.text.contains("The family tree records") })
+        #expect(claim.requiredPersonNames.contains("Richard Harding Breen Jr"))
         for name in ["Beth", "Ellen", "Tim"] {
-            #expect(claim?.requiredPersonNames.contains(name) == true, Comment(rawValue: name))
+            #expect(claim.requiredPersonNames.contains(name), Comment(rawValue: name))
         }
-        #expect(claim?.evidenceIDs.contains("@R@") == true)
-        #expect(claim?.evidenceIDs.contains("uuid:tim") == true)
+        #expect(claim.evidenceIDs.contains("@R@"))
+        #expect(claim.evidenceIDs.contains("uuid:tim"))
     }
 
     /// The two sources AGREE (the People tab's only child is the tree's, by

@@ -280,7 +280,7 @@ final class FFmpegFrameProvider: @unchecked Sendable {
         guard result.exitCode == 0, let stdout = result.stdout,
               let data = stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            let stderr = (result.stderr ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return .failure(RecipeError("ffprobe failed"
                 + (stderr.isEmpty ? "" : ": \(stderr.suffix(300))")))
         }

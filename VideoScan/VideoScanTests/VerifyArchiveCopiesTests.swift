@@ -977,7 +977,7 @@ struct VerifyArchiveCopiesIsolationTests {
 
     private static func diffKeys(_ a: NSDictionary, _ b: NSDictionary) -> [String] {
         var out: [String] = []
-        for case let k as String in Set(a.allKeys.compactMap { $0 as? String }).union(b.allKeys.compactMap { $0 as? String }) {
+        for k in Set(a.allKeys.compactMap { $0 as? String }).union(b.allKeys.compactMap { $0 as? String }) {
             let x = a[k] as AnyObject?, y = b[k] as AnyObject?
             if !(x?.isEqual(y) ?? (y == nil)) { out.append(k) }
         }
