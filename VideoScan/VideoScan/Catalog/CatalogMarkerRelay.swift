@@ -19,19 +19,18 @@
 // A door that is about to move a FILE asks first (`saveRefusal`, the same
 // question) so a refusal comes before any disk work.
 //
-// The writer is a `nonisolated static` function (some doors have no model
-// at hand), so the relay is process-wide: committers register here
-// (weakly), and each answers only for ITS session's live records (a
-// detached snapshot or another session's record is not its business).
-// Under catalog.json nothing is registered and the relay always says go.
-// Every marker door runs on the main actor today (checked 2026-10-18:
-// VideoScanModel and CaptionOrchestrator are @MainActor; the audit fixer is
-// @MainActor). A change made OFF the main thread cannot be pre-committed
-// (the main thread cannot be waited on from there without a deadlock
-// risk): it is not vetoed, its after-hook is delivered on the main queue,
-// and a second change of the same row before that commit is refused by the
-// store with the "changed N times within one save" words — named, never
-// silent.
+// The writer is a `static` function (some doors have no model at hand), so
+// the relay is process-wide: committers register here (weakly), and each
+// answers only for ITS session's live records (a detached snapshot or
+// another session's record is not its business). Under catalog.json nothing
+// is registered and the relay always says go.
+// The relay and both doors (`stampRemoval`, `revertRemoval`) are `@MainActor`
+// BY TYPE (Swift 6, 2026-10-25): every door into them is already main-actor
+// isolated (VideoScanModel's instance methods, CatalogAuditFixer.apply,
+// CaptionOrchestrator), so the compiler now carries the affinity that a
+// `Thread.isMainThread` guard used to check at run time — and the old
+// silent "off-main: not vetoed" branch no longer exists; an off-main caller
+// is a compile error, not an unvetoed marker change.
 //
 // (For Rick: an observer list of weak pointers — the C++ `std::weak_ptr`
 // subscriber pattern — with a pre-mutation callback that can say no, and a
@@ -57,42 +56,22 @@ enum CatalogMarkerRelay {
     /// The marker of `record` is about to change (its revision not yet
     /// bumped). nil = go; else "the catalog can't save (…); try again when
     /// …" and the change must NOT be made.
-    nonisolated static func markerWillChange(_ record: VideoRecord, kind: CatalogMarkerChange = .request) -> String? {
-        guard Thread.isMainThread else { return nil }
-        // Swift 6: the relay is nonisolated BY DESIGN so the nonisolated doors
-        // (`stampRemoval`, `revertRemoval`) can ask; the guard above proves we
-        // are on the main thread, `record` is main-actor state every door
-        // mutates there, and the closure is synchronous and non-escaping — so
-        // handing the record to the main actor cannot race. The committer
-        // needs the object itself (`owns` compares by identity).
-        nonisolated(unsafe) let record = record
-        return MainActor.assumeIsolated {
-            for entry in committers {
-                if let why = entry.committer?.markerWillChange(record, kind: kind) { return why }
-            }
-            return nil
+    @MainActor static func markerWillChange(_ record: VideoRecord, kind: CatalogMarkerChange = .request) -> String? {
+        for entry in committers {
+            if let why = entry.committer?.markerWillChange(record, kind: kind) { return why }
         }
+        return nil
     }
 
     /// Asked by a door BEFORE it moves a file whose row it will then mark:
     /// would the marker change be refused? Same answer as `markerWillChange`.
-    nonisolated static func saveRefusal(for record: VideoRecord) -> String? {
+    @MainActor static func saveRefusal(for record: VideoRecord) -> String? {
         markerWillChange(record, kind: .request)
     }
 
     /// The marker of `record` just changed (its revision already bumped).
-    nonisolated static func markerChanged(_ record: VideoRecord) {
+    @MainActor static func markerChanged(_ record: VideoRecord) {
         let id = record.id
-        if Thread.isMainThread {
-            MainActor.assumeIsolated { deliver(id) }
-        } else {
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { deliver(id) }
-            }
-        }
-    }
-
-    @MainActor private static func deliver(_ id: UUID) {
         for entry in committers {
             entry.committer?.markerDidChange(id: id)
         }
