@@ -719,11 +719,15 @@ struct FoldersOnlyShowToggle: View {
 /// folder view on — the caller folds those in). Pure, so tests pin it.
 /// (For Rick: an enum class returned by a tiny pure chooser.)
 enum CatalogEmptyNote: Equatable {
-    case none, noMatches, noFolders
+    case none, noMatches, noFolders, noPerson
 
-    static func pick(rowsEmpty: Bool, searching: Bool, foldersOnlyFindsNothing: Bool) -> CatalogEmptyNote {
+    /// `personChosen`: the Person picker names someone (2026-10-24) — an
+    /// empty table then says so, by name, instead of a blank pane.
+    static func pick(rowsEmpty: Bool, searching: Bool, foldersOnlyFindsNothing: Bool,
+                     personChosen: Bool = false) -> CatalogEmptyNote {
         if rowsEmpty && searching { return .noMatches }
-        return foldersOnlyFindsNothing ? .noFolders : .none
+        if foldersOnlyFindsNothing { return .noFolders }
+        return rowsEmpty && personChosen ? .noPerson : .none
     }
 }
 
@@ -735,6 +739,8 @@ struct FoldersOnlyEmptyNote: View {
     /// join holds any folder at all — together they say whether the
     /// selection is why nothing shows. Plain values; no records.
     var volumeLabels: [String] = []
+    /// The Person picker's choice (nil = Everyone) — named when set.
+    var personName: String? = nil
     var foldersExist = false
 
     var body: some View {
@@ -742,7 +748,8 @@ struct FoldersOnlyEmptyNote: View {
             Image(systemName: FootageFolderWords.folderSymbol)
                 .font(.system(size: 28))
                 .foregroundColor(.secondary)
-            Text(FootageFolderWords.foldersOnlyEmpty(volumeLabels: volumeLabels, foldersExist: foldersExist))
+            Text(FootageFolderWords.foldersOnlyEmpty(volumeLabels: volumeLabels, personName: personName,
+                                                     foldersExist: foldersExist))
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

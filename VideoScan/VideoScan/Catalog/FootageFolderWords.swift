@@ -43,7 +43,14 @@ enum FootageFolderWords {
     /// The same line when a Volumes-pane selection is why nothing shows:
     /// folders exist, but none has a file on the selected volume(s). No
     /// selection, or no folders at all → today's line.
-    static func foldersOnlyEmpty(volumeLabels: [String], foldersExist: Bool) -> String {
+    static func foldersOnlyEmpty(volumeLabels: [String], personName: String? = nil, foldersExist: Bool) -> String {
+        // A chosen person (the Catalog's Person picker, 2026-10-24) is named
+        // first: it is the narrower of the two filters.
+        if foldersExist, let personName {
+            let scope = volumeLabels.isEmpty ? "" : " on " + (volumeLabels.count == 1
+                ? CatalogShowingSummary.volumePill(labels: volumeLabels)?.text ?? "" : "the selected volumes")
+            return "No folders with \(personName)\(scope) match — choose Everyone in the Person menu to see the whole catalog"
+        }
         guard foldersExist, !volumeLabels.isEmpty else { return foldersOnlyEmpty }
         let which = volumeLabels.count == 1 ? CatalogShowingSummary.volumePill(labels: volumeLabels)?.text ?? ""
                                             : "the selected volumes"

@@ -21,6 +21,11 @@ struct ContentView: View {
     /// away and back (Rick 2026-09-08: the demo tree flashed for 3-4 s on
     /// every switch while the tab rebuilt its model and reloaded).
     @StateObject private var familyTreeModel = FamilyTreeLiveModel()
+    /// The Catalog's Person ▾ picker (2026-10-24, CatalogPersonFilter.swift).
+    /// Owned HERE, above the tabs, so the People page's "See all … in the
+    /// Catalog →" can set it before the Catalog tab is rebuilt; in memory
+    /// only, so launch always shows Everyone.
+    @StateObject private var catalogPersonFilter = CatalogPersonFilterStore()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     /// Family Tree tab dot: pulsing while a FamilySearch download runs in
     /// Terminal, green when it's ready to install, orange on a problem.
@@ -129,6 +134,8 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .environmentObject(catalogPersonFilter)
+            .environment(\.catalogPersonFilterReference, catalogPersonFilter)
         }
         .frame(minWidth: 900, minHeight: 600)
         // Master Archive (docs/archive_promotion_workflow.md). All three
@@ -309,6 +316,9 @@ enum VolumeFilter: String, CaseIterable, Hashable {
 
 struct CatalogView: View {
     @EnvironmentObject var model: VideoScanModel
+    /// The Person ▾ picker's session store (owned by ContentView). Publishes
+    /// only on a pick or a list change — never during a job.
+    @EnvironmentObject var personFilter: CatalogPersonFilterStore
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     @State private var selectedIDs: Set<UUID> = []
     @State private var showCombineSheet = false
@@ -758,6 +768,9 @@ struct CatalogView: View {
             onClearVolumeSelection: {
                 selectedVolumeIDs = CatalogShowingSummary.volumeSelection(after: .clearVolumes, selectedVolumeIDs)
             },
+            people: personFilter.people,
+            selectedPerson: personFilter.selected,
+            onSelectPerson: { choosePerson($0) },
             dashboardContent: {
                 if model.isScanning || model.isCombining {
                     CompactDashboard(
@@ -778,6 +791,16 @@ struct CatalogView: View {
         )
     }
 
+    /// The one place a person is chosen in the Catalog (the Person ▾ menu,
+    /// the person pill's clear): choose, end any focus set — a focus
+    /// overrides every filter, so it would hide the choice, the same rule as
+    /// a volume click — and say so in the log.
+    private func choosePerson(_ id: UUID?) {
+        personFilter.select(id: id)
+        if id != nil { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
+        appLog.write("Catalog: Person \u{25BE} \(personFilter.selected?.name ?? CatalogPersonMenu.everyone)")
+    }
+
     private var catalogContent: some View {
         CatalogContent(
             records: model.records,
@@ -788,6 +811,7 @@ struct CatalogView: View {
             searchHitCount: $searchHitCount,
             filterTargetPaths: filterTargetPaths,
             selectedVolumeLabels: selectedVolumeLabels,
+            personFilter: personFilter.selected,
             showPairsOnly: showPairsOnly,
             viewFilters: catalogViewFilters,
             showDisconnectedMedia: showDisconnectedMedia,
@@ -904,6 +928,10 @@ struct CatalogView: View {
                 }
             }
             .onAppear {
+                // The Person ▾ menu lists the People tab's people, fresh each
+                // visit (a profile added or deleted there; a chosen person
+                // whose profile is gone falls back to Everyone).
+                personFilter.reload(POIProfile.listAll())
                 loadPersistedViewFiltersIfNeeded()
                 handlePendingCatalogNavigation()
                 handlePendingFolderReveal()

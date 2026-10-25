@@ -32,8 +32,8 @@ enum CatalogShowingSummary {
     /// One pill. `emphasis` picks the colour: the archive pill is the
     /// one that matters most, so it is the only one that goes green.
     struct Pill: Equatable, Identifiable {
-        enum Emphasis: Equatable { case neutral, archiveToDo, archiveAll, reveal, volume }
-        enum Action: Equatable { case none, toggleArchived, toggleDrives, clearVolumes }
+        enum Emphasis: Equatable { case neutral, archiveToDo, archiveAll, reveal, volume, person }
+        enum Action: Equatable { case none, toggleArchived, toggleDrives, clearVolumes, clearPerson }
 
         let text: String
         let emphasis: Emphasis
@@ -73,6 +73,9 @@ enum CatalogShowingSummary {
         /// (`VolumeReachability.displayLabel`), sorted. Empty = no volume
         /// filter = the whole catalog (the launch state; never persisted).
         var selectedVolumeLabels: [String] = []
+        /// The Catalog's Person picker (2026-10-24): the chosen person's
+        /// name; nil = Everyone. Session-only, like the volume selection.
+        var selectedPersonName: String? = nil
     }
 
     // MARK: The volume pill (Rick 2026-10-24)
@@ -120,6 +123,42 @@ enum CatalogShowingSummary {
         action == .clearVolumes ? [] : current
     }
 
+    // MARK: The person pill (Rick 2026-10-24)
+    //
+    // The Person ▾ picker narrows the table to one person's videos. Same
+    // reason as the volume pill: a narrowing nobody sees is a narrowing
+    // somebody forgets. It follows the volume pill and clears to Everyone.
+
+    /// No person → nil (no pill). Otherwise their name.
+    static func personPill(name: String?) -> Pill? {
+        guard let name else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return Pill(trimmed.isEmpty ? CatalogPerson.unnamed : trimmed, .person, action: .clearPerson)
+    }
+
+    /// The person pill's tooltip.
+    static func personHelp(name: String) -> String {
+        "Showing only videos of \(name) — click to show everyone"
+    }
+
+    /// The picker after a pill's click: `.clearPerson` is Everyone (nil);
+    /// every other action leaves it alone.
+    static func personSelection<P>(after action: Pill.Action, _ current: P?) -> P? {
+        action == .clearPerson ? nil : current
+    }
+
+    /// The empty table's line when a person is chosen and nothing shows.
+    static func personEmptyNote(name: String) -> String {
+        "No videos of \(name) here — choose Everyone in the Person menu, or click the \(name) pill, "
+            + "to see the whole catalog"
+    }
+
+    /// The "No matches" hint while a person is chosen: the search ran over
+    /// their videos only.
+    static func personSearchHint(name: String) -> String {
+        "Only videos of \(name) were searched — choose Everyone in the Person menu to search the whole catalog."
+    }
+
     /// "RicksBackups > Ric…Final Copy": a long label keeps its head and tail.
     static func shortVolumeLabel(_ s: String) -> String {
         guard s.count > volumeLabelLimit else { return s }
@@ -157,13 +196,13 @@ enum CatalogShowingSummary {
         }
     }
 
-    /// The pills, in reading order: selected volume(s) · then the box's
-    /// pills. Focus mode overrides every filter, the volume one included.
+    /// The pills, in reading order: selected volume(s) · the chosen person
+    /// · then the box's pills. Focus mode overrides every filter, the volume
+    /// and person ones included.
     static func pills(for s: State) -> [Pill] {
-        guard s.focusLabel == nil, let volume = volumePill(labels: s.selectedVolumeLabels) else {
-            return boxPills(for: s)
-        }
-        return [volume] + boxPills(for: s)
+        guard s.focusLabel == nil else { return boxPills(for: s) }
+        let tokens = [volumePill(labels: s.selectedVolumeLabels), personPill(name: s.selectedPersonName)]
+        return tokens.compactMap { $0 } + boxPills(for: s)
     }
 
     /// The pills the highlighted box draws as text, in reading order: what
@@ -324,31 +363,29 @@ struct CatalogShowingBox: View {
     }
 }
 
-// MARK: - The volume pill
+// MARK: - The filter tokens (volume, person)
 
-/// The accent pill in front of the Showing box while the Volumes pane has a
-/// selection: drive glyph · name · clear glyph. The whole pill is the
-/// button; a click empties the selection (back to the whole catalog). A
-/// tinted token — accent wash + outline, primary text — reads in light and
-/// dark mode. Pure layout over one Pill — no records.
-struct CatalogVolumePill: View {
-    /// The Volumes-pane selection's labels; empty draws nothing.
-    let labels: [String]
+/// One tinted token in front of the Showing box: glyph · words · clear
+/// glyph. The whole token is the button; a click clears that one narrowing.
+/// A tinted token — accent wash + outline, primary text — reads in light
+/// and dark mode (Finder's search scope). The ONE token style: the volume
+/// and person pills are this view with their own words. Pure layout.
+struct CatalogFilterToken: View {
+    let symbol: String
+    let text: String
+    let help: String
+    let accessibilityLabel: String
+    let accessibilityHint: String
+    let identifier: String
     let onClear: () -> Void
 
     var body: some View {
-        if let pill = CatalogShowingSummary.volumePill(labels: labels) {
-            button(pill)
-        }
-    }
-
-    private func button(_ pill: CatalogShowingSummary.Pill) -> some View {
         Button(action: onClear) {
             HStack(spacing: 5) {
-                Image(systemName: "externaldrive.fill")
+                Image(systemName: symbol)
                     .imageScale(.small)
                     .foregroundStyle(Color.accentColor)
-                Text(CatalogShowingSummary.shortVolumeLabel(pill.text))
+                Text(text)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -359,19 +396,57 @@ struct CatalogVolumePill: View {
             .font(CatalogShowingBox.font)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            // A tinted token (Finder's search scope), not a solid fill: the
-            // accent wash ties it to the selected rows in the Volumes pane.
+            // The accent wash ties it to the selected rows / chosen menu line.
             .background(RoundedRectangle(cornerRadius: 7).fill(Color.accentColor.opacity(0.18)))
             .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
-        .help(CatalogShowingSummary.volumeHelp(labels: labels))
+        .help(help)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Volume filter: \(pill.text)")
-        .accessibilityHint("Clears the volume filter and shows the whole catalog")
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
         .accessibilityAddTraits(.isButton)
-        .accessibilityIdentifier("catalog.showingVolumePill")
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// The Volumes-pane selection's token; empty draws nothing. A click empties
+/// the selection (back to the whole catalog).
+struct CatalogVolumePill: View {
+    /// The Volumes-pane selection's labels; empty draws nothing.
+    let labels: [String]
+    let onClear: () -> Void
+
+    var body: some View {
+        if let pill = CatalogShowingSummary.volumePill(labels: labels) {
+            CatalogFilterToken(symbol: "externaldrive.fill",
+                               text: CatalogShowingSummary.shortVolumeLabel(pill.text),
+                               help: CatalogShowingSummary.volumeHelp(labels: labels),
+                               accessibilityLabel: "Volume filter: \(pill.text)",
+                               accessibilityHint: "Clears the volume filter and shows the whole catalog",
+                               identifier: "catalog.showingVolumePill",
+                               onClear: onClear)
+        }
+    }
+}
+
+/// The Person picker's token (2026-10-24); nil draws nothing. A click
+/// clears to Everyone.
+struct CatalogPersonPill: View {
+    let name: String?
+    let onClear: () -> Void
+
+    var body: some View {
+        if let pill = CatalogShowingSummary.personPill(name: name) {
+            CatalogFilterToken(symbol: "person.crop.circle",
+                               text: CatalogShowingSummary.shortVolumeLabel(pill.text),
+                               help: CatalogShowingSummary.personHelp(name: pill.text),
+                               accessibilityLabel: "Person filter: \(pill.text)",
+                               accessibilityHint: "Clears the person filter and shows everyone",
+                               identifier: "catalog.showingPersonPill",
+                               onClear: onClear)
+        }
     }
 }
 

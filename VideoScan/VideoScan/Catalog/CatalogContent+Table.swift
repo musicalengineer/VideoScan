@@ -208,6 +208,7 @@ extension CatalogContent {
             .onChange(of: records.count) { refreshRows() }
             .onChange(of: searchText) { refreshRows() }
             .onChange(of: filterTargetPaths) { refreshRows() }
+            .onChange(of: personFilter) { refreshRows() }
             .onChange(of: showPairsOnly) { refreshRows() }
             .onChange(of: filterByIDs) { refreshRows() }
             .onChange(of: viewFilters) { refreshRows() }

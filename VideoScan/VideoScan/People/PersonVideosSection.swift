@@ -9,6 +9,12 @@
 //  members can stay in this tab, browse here, and ask Hallie. Detail
 //  (columns, metadata, editing) stays in Catalog and Archive.
 //
+//  THE PAGE IS SHORT (Rick 2026-10-24, DECISIONS "People tab vs Catalog"):
+//  at most PersonVideoPage.curatedCap rows — his picks first, in his order
+//  (all of them), then the best of the rest (PersonVideos.ranked), one row
+//  per piece of footage; hidden videos never. The full machine-assisted set
+//  is the Catalog's Person ▾ filter, one click away ("See all … →").
+//
 //  Tiers come straight from the catalog's three people lists:
 //    Tagged        — confirmedByUserPeople (a person said so)
 //    Found by face — detectedPeople (the matcher, strong tier)
@@ -105,12 +111,30 @@ enum PersonVideos {
                       .filter { !$0.isEmpty })
     }
 
-    /// Which tier a record puts this person in (strongest wins).
+    /// Which tier a record puts this person in (strongest wins). A
+    /// confirmed tag is Rick's word and always wins; otherwise a rejection
+    /// ("<name> Isn't in This Video") vetoes the machine tiers, even when a
+    /// stale face match is still on the record (2026-10-24).
     static func tier(of rec: VideoRecord, keys: Set<String>) -> PersonVideoTier? {
         if rec.confirmedByUserPeople.contains(where: { keys.contains($0.name.lowercased()) }) { return .tagged }
+        if !rec.rejectedPeople.isEmpty, rec.rejectedPeople.contains(where: { keys.contains($0.lowercased()) }) {
+            return nil
+        }
         if rec.detectedPeople.contains(where: { keys.contains($0.lowercased()) }) { return .foundByFace }
         if rec.suspectedPeople.contains(where: { keys.contains($0.lowercased()) }) { return .maybe }
         return nil
+    }
+
+    /// The Catalog's Person picker association (2026-10-24): tagged or
+    /// found by face — never a maybe, never a rejected one. The SAME tier
+    /// rule as this page, so the two can never disagree. Pure; a row with
+    /// no people pays three empty-array reads.
+    static func associates(_ rec: VideoRecord, keys: Set<String>) -> Bool {
+        if rec.confirmedByUserPeople.isEmpty && rec.detectedPeople.isEmpty { return false }
+        switch tier(of: rec, keys: keys) {
+        case .tagged?, .foundByFace?: return true
+        case .maybe?, nil: return false
+        }
     }
 
     /// Rows for one person. O(that person's videos), never O(catalog).
@@ -164,30 +188,87 @@ enum PersonVideos {
 
     /// Everything a person's page shows, built once per reload: the picks
     /// and the tagged rows, one row per piece of footage
-    /// (PersonVideoFamilies), the hidden ones apart (PersonPageHides).
+    /// (PersonVideoFamilies), the hidden ones apart (PersonPageHides); the
+    /// curated list drawn from them; and the honest size of the Catalog's
+    /// Person filter for the "See all … in the Catalog →" link.
     /// O(that person's videos), never O(catalog).
     @MainActor
     static func page(for profile: POIProfile, in model: VideoScanModel, now: Date = Date()) -> PersonVideoPage {
         let resolved = FeaturedVideos.resolve(profile, in: model)
-        let pickRows = resolved.videos.map { row($0, tier: .tagged, in: model, now: now) }
+        let hides = PersonPageHides.Lookup(profile.hiddenVideos)
+        let allPicks = resolved.videos.map { row($0, tier: .tagged, in: model, now: now) }
+        let pickRows = allPicks.filter { !hides.hides($0) }   // a hidden video never shows, pick or not
         let born = profile.birthdate.map { Calendar.current.component(.year, from: $0) }
         let all = rows(for: profile, in: model, now: now)
         let plausibleRows = all.filter { plausible($0, bornYear: born) }
-        let pickIDs = Set(pickRows.map(\.id))
+        let pickIDs = Set(allPicks.map(\.id))
         var shown: [PersonVideoRow] = []
-        var hidden: [PersonVideoRow] = []
-        let hides = PersonPageHides.Lookup(profile.hiddenVideos)
+        var hidden = allPicks.filter { hides.hides($0) }
         for r in plausibleRows where !pickIDs.contains(r.id) {
             if hides.hides(r) { hidden.append(r) } else { shown.append(r) }
         }
-        let pageRecs = (pickRows + shown + hidden).compactMap { model.record(forID: $0.id) }
-        let groups = PersonVideoFamilies.groups(PersonVideoFamilies.evidence(for: pageRecs, in: model))
+        // One evidence pass over the page's records AND the Catalog filter's
+        // (folded sources, rows dated before birth): proven groups either way.
+        let associated = associatedRecords(for: profile, in: model)
+        var seen = Set<UUID>()
+        let evidenceRecs = ((pickRows + shown + hidden).compactMap { model.record(forID: $0.id) } + associated)
+            .filter { seen.insert($0.id).inserted }
+        let groups = PersonVideoFamilies.groups(PersonVideoFamilies.evidence(for: evidenceRecs, in: model))
         let withMaybes = PersonVideoFamilies.collapse(picks: pickRows, tagged: shown, groups: groups)
         let strong = PersonVideoFamilies.collapse(picks: pickRows, tagged: shown.filter { $0.tier != .maybe }, groups: groups)
         let hiddenGroups = PersonVideoFamilies.collapse(picks: [], tagged: hidden, groups: groups).tagged
-        return PersonVideoPage(picks: withMaybes.picks, picksWithoutMaybes: strong.picks, missingPicks: resolved.missing,
-                               tagged: strong.tagged, taggedWithMaybes: withMaybes.tagged, hidden: hiddenGroups,
-                               hiddenBeforeBirth: all.count - plausibleRows.count)
+        var page = PersonVideoPage(picks: withMaybes.picks, picksWithoutMaybes: strong.picks,
+                                   missingPicks: resolved.missing, tagged: strong.tagged,
+                                   taggedWithMaybes: withMaybes.tagged, hidden: hiddenGroups,
+                                   hiddenBeforeBirth: all.count - plausibleRows.count)
+        page.curated = curate(picks: strong.picks, tagged: strong.tagged)
+        page.catalogFiles = associated.count
+        page.catalogVideos = PersonVideoFamilies.footageCount(associated.map(\.id), groups: groups)
+        return page
+    }
+
+    /// The records the Catalog's Person filter shows for this person (by
+    /// default — live, not set aside): PersonVideos.associates over the
+    /// person index's paths. O(that person's videos).
+    @MainActor
+    static func associatedRecords(for profile: POIProfile, in model: VideoScanModel) -> [VideoRecord] {
+        let keys = tagKeys(for: profile)
+        var out: [VideoRecord] = []
+        for path in model.searchIndex.paths(forPersonNamesExactly: keys) {
+            guard let rec = model.record(forPath: path), !rec.isPurged, !rec.isSetAside,
+                  associates(rec, keys: keys) else { continue }
+            out.append(rec)
+        }
+        return out
+    }
+
+    // MARK: The curated page (Rick 2026-10-24, DECISIONS "People tab vs Catalog")
+
+    /// Best first: confirmed tags before face matches (the tier is the
+    /// match's confidence — the catalog stores no per-file face score), the
+    /// archived footage before the rest, then the longer, then by title.
+    /// Pure.
+    static func ranked(_ groups: [PersonVideoGroup]) -> [PersonVideoGroup] {
+        // Keys computed once per group (≈ a C++ decorate-sort-undecorate).
+        let keyed = groups.map { g in
+            (group: g,
+             tier: g.rows.map(\.tier).min() ?? .maybe,
+             archived: g.rows.contains(where: \.isArchived),
+             seconds: g.lead.durationSeconds)
+        }
+        return keyed.sorted { a, b in
+            if a.tier != b.tier { return a.tier < b.tier }
+            if a.archived != b.archived { return a.archived }
+            if a.seconds != b.seconds { return a.seconds > b.seconds }
+            return a.group.lead.title.localizedCaseInsensitiveCompare(b.group.lead.title) == .orderedAscending
+        }.map(\.group)
+    }
+
+    /// The page: every pick, in Rick's order (all of them, even past the
+    /// cap — he chose them), then the best of the rest until `cap`. Pure.
+    static func curate(picks: [PersonVideoGroup], tagged: [PersonVideoGroup],
+                       cap: Int = PersonVideoPage.curatedCap) -> [PersonVideoGroup] {
+        picks + ranked(tagged).prefix(max(0, cap - picks.count))
     }
 
     /// Rick 2026-10-04: "Donna wasn't alive in 1947." A row dated before
@@ -251,8 +332,28 @@ struct PersonVideoPage: Equatable, Sendable {
     /// Hidden from this page ("N hidden — Show").
     var hidden: [PersonVideoGroup] = []
     var hiddenBeforeBirth = 0
+    /// What the page SHOWS (2026-10-24): the picks, then the best of the
+    /// rest up to `curatedCap` (PersonVideos.curate).
+    var curated: [PersonVideoGroup] = []
+    /// The honest size of the Catalog's Person filter for this person:
+    /// every live record tagged or found by face (PersonVideos.associates),
+    /// and the pieces of footage they make (same proven evidence).
+    var catalogVideos = 0
+    var catalogFiles = 0
+
+    /// The most rows the page fills to (Rick may change it). Picks beyond
+    /// it are all shown.
+    static let curatedCap = 15
 
     static let empty = PersonVideoPage()
+
+    /// "See all 12 videos · 31 files of Donna in the Catalog →".
+    static func seeAllWords(videos: Int, files: Int, name: String) -> String {
+        guard videos > 0 else { return "" }
+        let what = videos == 1 ? "1 video" : "\(videos) videos"
+        let filesPart = files != videos ? " \u{00B7} \(files) files" : ""
+        return (videos == 1 ? "See " : "See all ") + what + filesPart + " of \(name) in the Catalog \u{2192}"
+    }
 
     /// Rows only a maybe brought here.
     var maybeCount: Int { taggedWithMaybes.count - tagged.count }
@@ -275,6 +376,9 @@ struct PersonVideosSection: View {
     /// when a pick or a hide changes, and by the ↻ button.
     let catalogModel: VideoScanModel
     let onShowInCatalog: (String) -> Void
+    /// "See all … in the Catalog →": the parent goes through
+    /// CatalogPersonLink (Person ▾ picker set, Folders Only off).
+    let onShowAllInCatalog: () -> Void
 
     /// Built once per reload (PersonVideos.page) — the body only reads it.
     @State private var page = PersonVideoPage.empty
@@ -283,11 +387,6 @@ struct PersonVideosSection: View {
     /// Groups whose "+N versions" is open.
     @State private var openVersions: Set<UUID> = []
     @State private var showHidden = false
-    @AppStorage("people.videos.showMaybes") private var showMaybes = false
-    @AppStorage("people.videos.showTagged") private var showTagged = false
-
-    private var featured: [PersonVideoGroup] { showMaybes ? page.picks : page.picksWithoutMaybes }
-    private var taggedShown: [PersonVideoGroup] { showMaybes ? page.taggedWithMaybes : page.tagged }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -297,17 +396,16 @@ struct PersonVideosSection: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        if featured.isEmpty {
-                            pickHint
-                        } else {
-                            ForEach(featured) { group in groupView(group) }
-                        }
+                        // The page (Rick 2026-10-24): his picks first, then the
+                        // best of the rest, at most PersonVideoPage.curatedCap.
+                        if page.picksWithoutMaybes.isEmpty { pickHint }
+                        ForEach(page.curated) { group in groupView(group) }
                         if page.missingPicks > 0 {
                             Text("\(page.missingPicks) picked video\(page.missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                                 .padding(.horizontal, 14)
                         }
-                        taggedDisclosure
+                        seeAllInCatalog
                         hiddenFooter
                     }
                     .padding(.bottom, 8)
@@ -327,20 +425,21 @@ struct PersonVideosSection: View {
         let current = POIProfile.listAll().first { $0.uuid == profile.uuid } ?? profile
         page = PersonVideos.page(for: current, in: catalogModel)
         loaded = true
-        appLog.write("People: \(current.displayName)'s page — \(page.picks.count) picked, "
-            + "\(page.tagged.count) tagged (\(PersonVideoPage.countWords(page.taggedWithMaybes)) with maybes; "
-            + "\(page.hiddenBeforeBirth) dated before birth hidden, \(page.maybeCount) maybe, "
-            + "\(page.hidden.count) hidden from the page)")
+        appLog.write("People: \(current.displayName)'s page — \(page.curated.count) shown "
+            + "(\(page.picksWithoutMaybes.count) picked, cap \(PersonVideoPage.curatedCap)); "
+            + "\(page.catalogVideos) videos / \(page.catalogFiles) files in the Catalog; "
+            + "\(page.hiddenBeforeBirth) dated before birth, \(page.maybeCount) maybe, "
+            + "\(page.hidden.count) hidden from the page")
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Text("Videos of \(profile.displayName)")
                 .font(.system(size: 17, weight: .semibold))
-            if loaded, !featured.isEmpty {
-                Text(PersonVideoPage.countWords(featured))
+            if loaded, !page.curated.isEmpty {
+                Text(PersonVideoPage.countWords(page.curated))
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                let archived = featured.filter(\.lead.isArchived).count
+                let archived = page.curated.filter(\.lead.isArchived).count
                 if archived > 0 {
                     Label("\(archived) in the Archive", systemImage: "archivebox.fill")
                         .font(.system(size: 13)).foregroundStyle(.green)
@@ -364,36 +463,18 @@ struct PersonVideosSection: View {
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
-    /// The automatic list, folded away: it is evidence, not the page.
-    @ViewBuilder private var taggedDisclosure: some View {
-        let groups = taggedShown
-        if !groups.isEmpty || page.maybeCount > 0 {
-            DisclosureGroup(isExpanded: $showTagged) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 12) {
-                        if page.maybeCount > 0 {
-                            Toggle("Include \(page.maybeCount) maybe\(page.maybeCount == 1 ? "" : "s")", isOn: $showMaybes)
-                                .toggleStyle(.checkbox)
-                        }
-                        if page.hiddenBeforeBirth > 0 {
-                            Text("\(page.hiddenBeforeBirth) dated before \(profile.displayName) was born — not shown")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    ForEach(PersonVideos.byDecade(groups), id: \.decade) { decade in
-                        Text(decade.decade)
-                            .font(.system(size: 14, weight: .semibold))
-                            .padding(.horizontal, 14).padding(.top, 6)
-                        ForEach(decade.groups) { group in groupView(group) }
-                    }
-                }
-            } label: {
-                Text("More videos tagged \(profile.displayName) (\(PersonVideoPage.countWords(groups)))")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10).padding(.top, 10)
+    /// "See all 12 videos of Donna in the Catalog →" — the full machine-
+    /// assisted set lives in the Catalog (DECISIONS 2026-10-24).
+    @ViewBuilder private var seeAllInCatalog: some View {
+        let words = PersonVideoPage.seeAllWords(videos: page.catalogVideos, files: page.catalogFiles,
+                                                name: profile.displayName)
+        if !words.isEmpty {
+            Button(words) { onShowAllInCatalog() }
+                .buttonStyle(.link)
+                .font(.system(size: 13))
+                .help("Open the Catalog showing every video tagged \(profile.displayName) or found by face")
+                .accessibilityIdentifier("people.videos.seeAllInCatalog")
+                .padding(.horizontal, 14).padding(.top, 10)
         }
     }
 
