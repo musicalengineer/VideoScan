@@ -64,12 +64,12 @@ final class HallieWebBridge {
     /// Safari plays these straight from the Mac; anything else that is
     /// video goes through the proxy cache (HallieWebProxy) when one is
     /// attached, and is "plays on the Mac only" otherwise.
-    static let browserPlayableExtensions: Set<String> = [
+    nonisolated static let browserPlayableExtensions: Set<String> = [
         "mp4", "m4v", "mp3", "m4a", "aac", "wav", "aif", "aiff",
     ]
     /// .mov is native ONLY when its codec is H.264/HEVC; ProRes/DV-in-MOV
     /// must go through the proxy like any other tape.
-    static let nativeMovCodecs: Set<String> = ["h264", "avc1", "hevc", "hvc1", "h265", "avc"]
+    nonisolated static let nativeMovCodecs: Set<String> = ["h264", "avc1", "hevc", "hvc1", "h265", "avc"]
     static let proxyableExtensions: Set<String> = [
         "mov", "mxf", "dv", "avi", "mkv", "mts", "m2ts", "ts", "mpg", "mpeg", "wmv", "vob", "3gp", "flv", "webm", "m2v",
     ]

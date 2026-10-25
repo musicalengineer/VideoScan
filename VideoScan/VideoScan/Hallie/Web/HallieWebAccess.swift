@@ -12,9 +12,10 @@ final class HallieWebAccess: ObservableObject {
     static let shared = HallieWebAccess()
 
     static let enabledKey = "archivist.webEnabled"
-    static let portKey = "archivist.webPort"
-    static let passphraseKey = "archivist.webPassphrase"
-    static let defaultPort = 8765
+    // Immutable constants, off the actor: read by the web bridge, the viewer client and tests (Swift 6 stage 5).
+    nonisolated static let portKey = "archivist.webPort"
+    nonisolated static let passphraseKey = "archivist.webPassphrase"
+    nonisolated static let defaultPort = 8765
 
     @Published private(set) var isRunning = false
     @Published private(set) var lastError: String?
