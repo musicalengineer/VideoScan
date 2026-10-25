@@ -57,6 +57,21 @@ class Stamp(unittest.TestCase):
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertTrue((r / ".git" / "sensor-lane-green").exists(), "the main repo's file, where the hook looks")
 
+
+    def test_tracked_but_ignored_files_stay_in_the_stamped_tree(self):
+        """2026-10-25 (second flaw): the scratch index started EMPTY, so `git add -A` skipped
+        tracked files that also match .gitignore, and the stamp never equalled the commit's
+        tree — the pre-push hook refused main even after the empty-index fix."""
+        with tempfile.TemporaryDirectory() as d:
+            r = make_repo(Path(d))
+            (r / "kept.log").write_text("tracked\n")
+            git(r, "add", "kept.log"); git(r, "commit", "-qm", "track a log")
+            (r / ".gitignore").write_text("*.log\n")
+            git(r, "add", ".gitignore"); git(r, "commit", "-qm", "then ignore logs")
+            subprocess.run(["bash", str(SCRIPT), str(r)], capture_output=True, text=True, check=True)
+            stamped = (r / ".git" / "sensor-lane-green").read_text().split()[0]
+            self.assertEqual(stamped, git(r, "rev-parse", "HEAD^{tree}"), "the tree a commit of this working tree has")
+
     def test_fifty_lines_are_kept(self):
         with tempfile.TemporaryDirectory() as d:
             r = make_repo(Path(d))

@@ -28104,7 +28104,8 @@
         "test_a_green_run_stamps_the_working_tree_including_untracked_files",
         "test_a_worktree_stamps_the_common_git_dir",
         "test_fifty_lines_are_kept",
-        "test_not_a_repo_is_loud_and_nonzero"
+        "test_not_a_repo_is_loud_and_nonzero",
+        "test_tracked_but_ignored_files_stay_in_the_stamped_tree"
       ]
     },
     {

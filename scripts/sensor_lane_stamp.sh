@@ -27,7 +27,12 @@ case "$common" in /*) ;; *) common="$REPO/$common" ;; esac
 # path to be absent so it can create the index itself.
 tmp_index="$(mktemp)"
 rm -f "$tmp_index"
-tree="$(GIT_INDEX_FILE="$tmp_index" git -C "$REPO" add -A . 2>/dev/null && GIT_INDEX_FILE="$tmp_index" git -C "$REPO" write-tree 2>/dev/null)"
+# Seed the scratch index from HEAD, then `add -A`: an EMPTY scratch index would
+# skip tracked files that also match .gitignore, and the stamp would never
+# equal the tree a commit of this working tree has (second 10/25 flaw).
+tree="$(GIT_INDEX_FILE="$tmp_index" git -C "$REPO" read-tree HEAD 2>/dev/null \
+        && GIT_INDEX_FILE="$tmp_index" git -C "$REPO" add -A . 2>/dev/null \
+        && GIT_INDEX_FILE="$tmp_index" git -C "$REPO" write-tree 2>/dev/null)"
 rm -f "$tmp_index"
 if [ -z "$tree" ]; then
     echo "sensor lane stamp NOT recorded: could not hash the working tree of $REPO (scratch index failed)" >&2
