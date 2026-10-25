@@ -168,7 +168,7 @@ public enum BirthplaceUnitResolver {
     // MARK: - The scan (one place string)
 
     /// What one recognised phrase means.
-    enum Token: Equatable {
+    enum Token: Equatable, Sendable {
         /// A county / state / province of `country`, by canonical name,
         /// with its key precomputed.
         case unit(FamilyMap.Country, name: String, key: String)

@@ -49,6 +49,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))      # scripts/ — also when loaded by importlib (tests)
+from warning_ratchet import check as ratchet_check            # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 APP_TESTS = REPO / "VideoScan" / "VideoScanTests"
 CORE_PKG = REPO / "VideoScan" / "VideoScanCore"
@@ -539,18 +542,30 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     red: List[str] = []
     ran_total = 0
+    produced: List[Path] = []          # this run's logs, for the warning ratchet
     if not a.core_only:
         p, f, names, rc, el = run_app(app, log_dir, dd)
+        produced.append(log_dir / "sensor-lane-app.log")
         ran_total += p + f
         print(f"  app  (xcodebuild -only-testing): {p} passed, {f} failed, rc={rc}, {el:.0f}s", flush=True)
         if f or rc != 0 or p == 0:
             red += [f"VideoScanTests: {n}" for n in names] or [f"VideoScanTests: rc={rc}, {p} passed — see {log_dir}/sensor-lane-app.log"]
     if not a.app_only and core:
         p, f, names, rc, el = run_core(core, log_dir)
+        produced.append(log_dir / "sensor-lane-core.log")
         ran_total += p + f
         print(f"  core (swift test --filter):      {p} passed, {f} failed, rc={rc}, {el:.0f}s", flush=True)
         if f or rc != 0 or p == 0:
             red += [f"VideoScanCoreTests: {n}" for n in names] or [f"VideoScanCoreTests: rc={rc}, {p} passed — see {log_dir}/sensor-lane-core.log"]
+    # Warning ratchet (Swift 6 stage 0, docs/design/swift6_migration_2026_10_25.md):
+    # no (file, category) may carry more compiler warnings than
+    # scripts/warnings_baseline.tsv records. Per file, so this lane's incremental
+    # build is enough; only a clean build rewrites the baseline
+    # (`warning_ratchet.py update --clean`). A missing baseline is one red line.
+    ratchet_red, n_warn, n_files = ratchet_check(produced)
+    print(f"  warning ratchet:                 {n_warn} warning(s) in {n_files} compiled file(s), "
+          f"{'RED' if ratchet_red else 'green'} against the baseline", flush=True)
+    red += [f"warning ratchet: {r}" for r in ratchet_red]
     if red:
         print("\nSENSOR LANE RED — fix these before merging / reporting done:", file=sys.stderr)
         for r in red:

@@ -650,18 +650,23 @@ struct GRDBCatalogRepositoryTests {
 
     // MARK: - Codex C′ #6: two writes queued on one repository both commit
 
-    @Test func twoWritesQueuedOnOneRepositoryCommitSixThenSeven() async throws {
+    @Test(.timeLimit(.minutes(1)))      // a refused write before A's body would otherwise hang, not fail
+    func twoWritesQueuedOnOneRepositoryCommitSixThenSeven() async throws {
         let (fixture, repository) = try await openAtFive()
         defer { fixture.remove() }
-        let entered = DispatchSemaphore(value: 0)
+        // Swift 6: a semaphore may not block an async context (it could park a
+        // cooperative-pool thread), so "A has entered" is an async signal; the
+        // hold on the writer stays a semaphore because the body is synchronous.
+        let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
         let release = DispatchSemaphore(value: 0)
         let first = Task {
             await repository.write(as: .ui) { _ in
-                entered.signal()
+                enteredSignal.yield()
                 release.wait()
             }
         }
-        entered.wait()                                                // A's body is running on the writer
+        var enteredEvents = entered.makeAsyncIterator()
+        _ = await enteredEvents.next()                                // A's body is running on the writer
         let second = Task { await repository.write(as: .rescan) { _ in } }
         try await Task.sleep(for: .milliseconds(200))                // B reaches the actor and queues
         release.signal()

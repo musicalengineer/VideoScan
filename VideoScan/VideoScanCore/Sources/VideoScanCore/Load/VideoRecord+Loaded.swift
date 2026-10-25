@@ -100,7 +100,9 @@ extension VideoRecord {
 
     // MARK: probe_extra (§a `X`), by key
 
-    private static let probeStrings: [(String, ReferenceWritableKeyPath<VideoRecord, String>)] = [
+    // `& Sendable`: a key-path literal is Sendable (SE-0418); naming it in the
+    // type is what lets a static table of them be read from any isolation.
+    private static let probeStrings: [(String, ReferenceWritableKeyPath<VideoRecord, String> & Sendable)] = [
         ("resolution", \.resolution), ("frameRate", \.frameRate), ("videoBitrate", \.videoBitrate),
         ("totalBitrate", \.totalBitrate), ("colorSpace", \.colorSpace), ("bitDepth", \.bitDepth), ("scanType", \.scanType),
         ("audioChannels", \.audioChannels), ("audioSampleRate", \.audioSampleRate), ("timecode", \.timecode),
@@ -110,7 +112,7 @@ extension VideoRecord {
         ("materialPackageUMID", \.materialPackageUMID),
     ]
 
-    private static let probeOptionalStrings: [(String, ReferenceWritableKeyPath<VideoRecord, String?>)] = [
+    private static let probeOptionalStrings: [(String, ReferenceWritableKeyPath<VideoRecord, String?> & Sendable)] = [
         ("originMake", \.originMake), ("originModel", \.originModel), ("originEncoder", \.originEncoder),
         ("proAppsMediaIdentifier", \.proAppsMediaIdentifier),
     ]

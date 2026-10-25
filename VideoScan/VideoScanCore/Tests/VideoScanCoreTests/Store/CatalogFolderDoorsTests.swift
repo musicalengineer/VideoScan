@@ -105,11 +105,12 @@ struct CatalogFolderDoorsTests {
         defer { fixture.remove() }
         let repository = try await open(fixture)
         _ = await repository.write(as: .ui) { tx in try tx.upsertFolder(Self.folder(at: 1_700_000_000)) }
-        var later = Self.folder(name: "Synthetic Picnic 1990", kind: "other", state: "dismissed", at: 1_800_000_000)
+        let later = Self.folder(name: "Synthetic Picnic 1990", kind: "other", state: "dismissed", at: 1_800_000_000)
         _ = await repository.write(as: .ui) { tx in try tx.upsertFolder(later) }
         let read = try await readAll(repository)
-        later.createdAt = 1_700_000_000
-        #expect(read.folders == [later])
+        var expected = later                         // Swift 6: the write body may not capture a `var`
+        expected.createdAt = 1_700_000_000
+        #expect(read.folders == [expected])
         await repository.close()
     }
 

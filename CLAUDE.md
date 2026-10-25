@@ -1,6 +1,6 @@
 # VideoScan
 
-macOS app (Swift 6 / SwiftUI, macOS 15+) that finds every family media file on every drive, tells the truth about each one, helps Rick date and repair it, promotes the keepers into a read-only archive filed by decade, lets excess copies go safely, knows who is in the footage and how the family is related, and answers plain questions about all of it. Workflow spine: **INGEST → MANAGE → ARCHIVE** (the shape of PBCore/PREMIS at family scale). ~790K lines of Swift, ~14,000 tests, one developer plus agents since March 2026.
+macOS app (Swift 6 toolchain; Swift 6 language mode in Core, the app target migrating in stages per `docs/design/swift6_migration_2026_10_25.md`; SwiftUI, macOS 15+) that finds every family media file on every drive, tells the truth about each one, helps Rick date and repair it, promotes the keepers into a read-only archive filed by decade, lets excess copies go safely, knows who is in the footage and how the family is related, and answers plain questions about all of it. Workflow spine: **INGEST → MANAGE → ARCHIVE** (the shape of PBCore/PREMIS at family scale). ~790K lines of Swift, ~14,000 tests, one developer plus agents since March 2026.
 
 Read first: `docs/Purpose-and-Charter.md` (Rick's purpose, workflow and process expectations, in his words), `docs/ARCHITECTURE.md` (how it is built), `docs/STATUS.md` (what is in flight), `docs/PROCESS.md` (how work moves). `docs/DECISIONS.md` is settled; do not relitigate it.
 

@@ -71,8 +71,8 @@ extension TreeWalk {
             let task = Task.detached(priority: .userInitiated) {
                 do {
                     let result = try walk(graph, options: options,
-                                          isCancelled: { Task.isCancelled },
-                                          emit: { continuation.yield($0) })
+                                          emit: { continuation.yield($0) },
+                                          isCancelled: { Task.isCancelled })
                     continuation.yield(.finished(result))
                 } catch WalkError.cancelled {
                     continuation.yield(.cancelled)
@@ -90,11 +90,17 @@ extension TreeWalk {
     /// The whole walk, synchronously, on the calling thread (tests; the
     /// app goes through `events`). `emit` receives the events in order;
     /// `isCancelled` is polled at phase and generation boundaries.
+    ///
+    /// `emit` comes before `isCancelled` on purpose: a trailing closure binds
+    /// to the FIRST closure-typed parameter (SE-0286), and Swift 6 mode drops
+    /// the Swift 5 heuristic that skipped a defaulted `() -> Bool` for a
+    /// closure taking one argument. `walk(g, options:) { event in … }` must
+    /// keep meaning `emit`.
     public static func walk(_ graph: GedcomFamilyGraph,
                             options: Options,
                             now: Date = Date(),
-                            isCancelled: () -> Bool = { false },
-                            emit: (Event) -> Void = { _ in }) throws -> Result {
+                            emit: (Event) -> Void = { _ in },
+                            isCancelled: () -> Bool = { false }) throws -> Result {
         let clock = ContinuousClock()
         let t0 = clock.now
         func checkpoint() throws { if isCancelled() { throw WalkError.cancelled } }
