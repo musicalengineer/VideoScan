@@ -16,6 +16,16 @@ enum PersonPickerNames {
             record.taggedPeople.contains { uniqueKeys.contains($0.lowercased()) }
         }
 
+        /// The spellings `records` actually carry for this person — what an
+        /// uncheck hands the engine, so a rejection keeps the record's own
+        /// case (#375 review 2026-10-25: a lowercased key written to
+        /// `rejectedPeople` could never be un-rejected by an exact match).
+        func spellings(in records: [VideoRecord]) -> Set<String> {
+            Set(records.flatMap { record in
+                record.taggedPeople.filter { uniqueKeys.contains($0.lowercased()) }
+            })
+        }
+
         var help: String {
             tagName.map { "Tag as \($0)" }
                 ?? "Give this person a distinct nickname in the People tab before tagging."

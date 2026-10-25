@@ -249,8 +249,12 @@ extension CatalogContent {
                             if present {
                                 model.setPerson(name, on: selectedRecs, present: true)
                             } else {
-                                for key in person.uniqueKeys {
-                                    model.setPerson(key, on: selectedRecs, present: false)
+                                // One engine call per spelling the rows carry
+                                // (usually one), never one per lookup key: one
+                                // proof, one log line (rule 4), and the record's
+                                // own case reaches the engine.
+                                for spelling in person.spellings(in: selectedRecs) {
+                                    model.setPerson(spelling, on: selectedRecs, present: false)
                                 }
                             }
                         }

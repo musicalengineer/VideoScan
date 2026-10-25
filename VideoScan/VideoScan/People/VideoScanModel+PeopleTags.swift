@@ -56,11 +56,19 @@ extension VideoScanModel {
                 let wasAuto = rec.detectedPeople.contains(where: same)
                     || rec.suspectedPeople.contains(where: same)
                 guard hasConfirmed || wasAuto else { continue }
+                // Reject under the record's OWN spelling, never the caller's:
+                // a lowercased lookup key ("richard") written beside a
+                // confirmed "Richard" is one the Inspector's exact-case
+                // compare could never un-reject (#375 review, 2026-10-25).
+                let ownSpelling = rec.detectedPeople.first(where: same)
+                    ?? rec.suspectedPeople.first(where: same)
+                    ?? rec.confirmedByUserPeople.first { same($0.name) }?.name
+                    ?? trimmed
                 rec.confirmedByUserPeople.removeAll { same($0.name) }
                 rec.detectedPeople.removeAll(where: same)
                 rec.suspectedPeople.removeAll(where: same)
                 if wasAuto, !rec.rejectedPeople.contains(where: same) {
-                    rec.rejectedPeople.append(trimmed)
+                    rec.rejectedPeople.append(ownSpelling)
                 }
                 changed.append(rec)
             }

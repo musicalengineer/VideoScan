@@ -26,6 +26,33 @@ struct CatalogPersonNamingTests {
         #expect(store.selected?.name == "Timmy")
     }
 
+    /// #375 review (2026-10-25): unchecking handed the engine a lowercased
+    /// lookup key, and the engine stored THAT in `rejectedPeople` ("richard"
+    /// beside a confirmed "Richard"), which the Inspector's exact-case
+    /// compare could never un-reject. RED on e6d617288; GREEN once the
+    /// engine rejects under the record's own spelling.
+    @Test func uncheckKeepsTheRecordsSpelling() {
+        let option = PersonPickerNames.options([person("Richard", alias: "Rick")])[0]
+        let model = VideoScanModel()
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/test_T/r.mov"
+        rec.filename = "r.mov"
+        rec.detectedPeople = ["Richard"]
+        model.records = [rec]
+        model.searchIndex.rebuild(records: model.records)
+        for key in option.uniqueKeys { model.setPerson(key, on: [rec], present: false) }
+        #expect(rec.rejectedPeople == ["Richard"])
+        #expect(option.spellings(in: [rec]).isEmpty, "nothing left to uncheck")
+    }
+
+    @Test func uncheckHandsTheEngineTheRowsOwnSpellings() {
+        let option = PersonPickerNames.options([person("Richard", alias: "Rick")])[0]
+        let rec = VideoRecord()
+        rec.detectedPeople = ["Richard"]
+        #expect(option.spellings(in: [rec]) == ["Richard"])
+        #expect(option.isTagged(in: rec))
+    }
+
     @Test func duplicateNamesShowBirthYears() {
         let store = CatalogPersonFilterStore()
         store.reload([person("Richard", year: 1930), person("Richard", year: 1960)])
