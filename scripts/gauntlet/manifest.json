@@ -7020,7 +7020,7 @@
         "CatalogPaneFocusSensorTests",
         "CatalogPromoteScopeSensorTests",
         "CatalogInfoShortcutSensorTests",
-        "CatalogTableClickFocusTests",
+        "TableClickFocusTests",
         "CatalogPromoteScopeTests",
         "CatalogClickFocusWindowScopeTests"
       ],
@@ -7035,7 +7035,7 @@
         "hiddenSelectionPromotesNothing",
         "hookGuardsOnTheWindowAndCleansUp",
         "importCatalogMovedOffCommandI",
-        "installedOnlyByCatalogViewLifetime",
+        "installedOnceAtTheWindowRoot",
         "keepsOnlyVisibleInRowOrder",
         "leavesItAloneWhenItOrAChildAlreadyHasIt",
         "menuNoLongerReadsTheSelectionMirror",
@@ -18106,6 +18106,19 @@
         "verifierKnowsTheSubjectsShortAndBridgedNames",
         "verifierLeavesTheDepartedAndUnknownAlone",
         "verifierRejectsAFinishedLifeForALivingSubject"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ListKeyboardNavigationSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ListKeyboardNavigationSensorTests"
+      ],
+      "tests": [
+        "clickFocusHookLivesAtTheWindowRoot",
+        "peopleVideoListsAreSelectableLists",
+        "triageAndStorageBindASelection"
       ]
     },
     {
@@ -33376,7 +33389,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2976,
+      "expected_floor": 2979,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33885,7 +33898,8 @@
         "VideoScanTests/EditorCacheTidyTests",
         "VideoScanTests/EditorCacheAuditTruthTests",
         "VideoScanTests/EditorCacheScaleTests",
-        "VideoScanTests/EditorCacheScanRootReviewTests"
+        "VideoScanTests/EditorCacheScanRootReviewTests",
+        "VideoScanTests/ListKeyboardNavigationSensorTests"
       ]
     },
     {
