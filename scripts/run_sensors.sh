@@ -25,19 +25,12 @@ REPO="$(cd "$HERE/.." && pwd)"
 python3 "$HERE/sensor_lane.py" run "$@"
 rc=$?
 if [ "$rc" -eq 0 ]; then
-    common="$(git -C "$REPO" rev-parse --git-common-dir 2>/dev/null)"
-    if [ -n "$common" ]; then
-        case "$common" in /*) ;; *) common="$REPO/$common" ;; esac
-        # Tree hash of the WORKING tree (tracked + untracked-but-not-ignored),
-        # computed in a scratch index so the real index is untouched.
-        tmp_index="$(mktemp)"
-        tree="$(GIT_INDEX_FILE="$tmp_index" git -C "$REPO" add -A . >/dev/null 2>&1 && GIT_INDEX_FILE="$tmp_index" git -C "$REPO" write-tree 2>/dev/null)"
-        rm -f "$tmp_index"
-        if [ -n "$tree" ]; then
-            stamp="$common/sensor-lane-green"
-            { [ -f "$stamp" ] && tail -n 49 "$stamp"; echo "$tree $(date -u +%Y-%m-%dT%H:%M:%SZ)"; } > "$stamp.tmp" && mv "$stamp.tmp" "$stamp"
-            echo "sensor lane stamp: tree $tree recorded"
-        fi
-    fi
+    # The stamp lives in scripts/sensor_lane_stamp.sh (tested by
+    # tests/test_sensor_lane_stamp.py). 2026-10-25: the inline version built
+    # its scratch index on an EMPTY mktemp file, git refused it, and the stamp
+    # was skipped silently — no push to main passed the hook for two days. A
+    # failed stamp is now loud and makes the lane red: green that cannot be
+    # proven to the hook is not green.
+    bash "$HERE/sensor_lane_stamp.sh" "$REPO" || rc=1
 fi
 exit "$rc"
