@@ -68,13 +68,13 @@ final class MergedExportRebaseTests: XCTestCase {
         XCTAssertEqual(merged.sourceProvenance.count, 3, "three pulls, two files")
 
         var store = box.store()
-        var log: [String] = []
+        let log = GedcomCompiledTreeTests.LineSink()
         store.log = { log.append($0) }
         XCTAssertNil(store.ingest(graph: merged, sources: [s.refreshedExport, s.donna]),
                      "the bind must refuse a graph whose provenance does not match the files")
         XCTAssertNil(store.readPointer(), "a refused ingest must promote nothing")
-        XCTAssertTrue(log.contains { $0.contains("REFUSED") },
-                      "the refusal must say so: \(log)")
+        XCTAssertTrue(log.contains("REFUSED"),
+                      "the refusal must say so: \(log.all)")
     }
 
     /// THE WAY THROUGH, and the thing Rick's tree is actually built on:

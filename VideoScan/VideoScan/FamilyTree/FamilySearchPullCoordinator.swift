@@ -84,7 +84,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     private var installTask: Task<Void, Never>?
     private let scriptURL: URL
     private let locator: FamilySearchToolLocator
-    private let fileManager: FileManager
+    /// Computed, not stored (Swift 6): nothing ever injected one, and
+    /// FileManager is not marked Sendable in this SDK; the detached merge
+    /// below reads `.default` itself.
+    private var fileManager: FileManager { .default }
     private let workspace: FamilySearchPullLauncher
 
     /// Only a file at least this recent counts as "the one we just asked
@@ -123,7 +126,6 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         scriptURL: URL? = nil,
         stagingDirectory: URL? = nil,
         locator: FamilySearchToolLocator = FamilySearchToolLocator(),
-        fileManager: FileManager = .default,
         launcher: FamilySearchPullLauncher = WorkspaceLauncher(),
         pollInterval: Duration = .seconds(2),
         timeout: Duration = FamilySearchPullCoordinator.defaultTimeout,
@@ -132,17 +134,16 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         self.parseDelay = parseDelay
         self.gedcomDirectory = gedcomDirectory
         self.locator = locator
-        self.fileManager = fileManager
         self.workspace = launcher
         self.pollInterval = pollInterval
         self.timeout = timeout
-        self.scriptURL = scriptURL ?? Self.defaultScriptURL(fileManager: fileManager)
+        self.scriptURL = scriptURL ?? Self.defaultScriptURL()
         self.stagingDirectory = stagingDirectory
-            ?? Self.defaultScriptURL(fileManager: fileManager).deletingLastPathComponent()
+            ?? Self.defaultScriptURL().deletingLastPathComponent()
                 .appendingPathComponent("staging", isDirectory: true)
         self.request = FamilySearchPullRequest(
             username: defaultUsername,
-            outputURL: Self.defaultOutputURL(fileManager: fileManager))
+            outputURL: Self.defaultOutputURL())
     }
 
     // MARK: Defaults
@@ -582,8 +583,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// A non-promoting loader decodes the promoted generation and stops.
     private func currentTreeLoader(promoting: Bool = true,
                                    usingStore: Bool = true) -> FamilyGraphFileLoader {
-        var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory,
-                                           fileManager: fileManager)
+        var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory)
         loader.compiledStore = usingStore ? compiledStore() : nil
         loader.readOnly = !promoting && usingStore
         // The production store's logger is a no-op, so anything the loader
@@ -661,7 +661,6 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             installTask = nil
         }
         let gedcomDirectory = self.gedcomDirectory
-        let fileManager = self.fileManager
         let stamp = Self.timestampFormatter.string(from: Date())
         let verb = policy == .refreshFromNewer ? "refreshed" : "merged"
         let fileName = "familysearch-\(verb)-\(stamp).ged"
@@ -684,6 +683,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // skipped; the manifest still reports every source.
         let baselineGeneration = self.compiledStore()?.loadCurrentManifest()
         let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
+            let fileManager = FileManager.default
             guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
             }

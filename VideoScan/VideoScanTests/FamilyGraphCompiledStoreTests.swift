@@ -27,7 +27,7 @@ struct FamilyGraphCompiledStoreTests {
             try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
             logLines = LogCapture()
         }
-        func store(verify: ((GedcomFamilyGraph, GedcomFamilyGraph) -> [String])? = nil) -> FamilyGraphCompiledStore {
+        func store(verify: (@Sendable (GedcomFamilyGraph, GedcomFamilyGraph) -> [String])? = nil) -> FamilyGraphCompiledStore {
             var store = FamilyGraphCompiledStore(root: compiled)
             store.log = { logLines.append($0) }
             if let verify { store.verify = verify }
@@ -53,6 +53,7 @@ struct FamilyGraphCompiledStoreTests {
         private let lock = NSLock()
         private var lines: [String] = []
         func append(_ line: String) { lock.withLock { lines.append(line) } }
+        func removeAll() { lock.withLock { lines.removeAll() } }
         var all: [String] { lock.withLock { lines } }
         func contains(_ needle: String) -> Bool { all.contains { $0.contains(needle) } }
     }
@@ -545,13 +546,13 @@ struct FamilyGraphCompiledStoreTests {
         #expect(box.logLines.contains("promoted"))
 
         // Third load: hit, no parse, no new generation.
-        var phases: [String] = []
+        let phases = LogCapture()
         var loader = box.loader(store)
         loader.progress = { phases.append($0) }
         let again = loader.loadNewestOutcome()
         #expect(again.compiled == true)
         #expect(again.graph?.people.count == artifact.people)
-        #expect(phases.isEmpty, "a hit must not read or compile: \(phases)")
+        #expect(phases.all.isEmpty, "a hit must not read or compile: \(phases.all)")
         #expect(store.readPointer()?.current == pointer.current)
         #expect(store.generations().count == 2)
     }
@@ -570,7 +571,7 @@ struct FamilyGraphCompiledStoreTests {
         let merged = try box.write(artifact.text, as: "familysearch-merged-20260828-120000.ged")
         let store = box.store()
 
-        var phases: [String] = []
+        let phases = LogCapture()
         var loader = box.loader(store)
         loader.progress = { phases.append($0) }
         let first = loader.loadNewestOutcome()
@@ -578,7 +579,7 @@ struct FamilyGraphCompiledStoreTests {
         #expect(first.selectedURL?.resolvingSymlinksInPath() == merged.resolvingSymlinksInPath())
         #expect(first.graph?.people.count == artifact.people)
         #expect(first.graph?.sourceProvenance.map(\.name) == ["a.ged", "b.ged"])
-        #expect(phases.contains { $0.hasPrefix("Reading") })
+        #expect(phases.all.contains { $0.hasPrefix("Reading") })
         let pointer = try #require(store.readPointer())
         #expect(pointer.previous == nil)
         #expect(pointer.sourceKeys == [try GedcomCompiledTree.fullSHA256(of: merged)])
@@ -589,7 +590,7 @@ struct FamilyGraphCompiledStoreTests {
         #expect(second.compiled == true)
         #expect(second.graph?.people.count == artifact.people)
         #expect(second.graph?.isMergedArtifact == true)
-        #expect(phases.isEmpty, "second load must not parse: \(phases)")
+        #expect(phases.all.isEmpty, "second load must not parse: \(phases.all)")
         #expect(store.generations().count == 1)
         #expect(store.readPointer() == pointer)
     }
@@ -610,7 +611,7 @@ struct FamilyGraphCompiledStoreTests {
         #expect(store.ingest(graph: cli, sources: [a, b]) != nil)
         let pointer = try #require(store.readPointer())
 
-        var phases: [String] = []
+        let phases = LogCapture()
         var loader = box.loader(store)
         loader.progress = { phases.append($0) }
         let outcome = loader.loadNewestOutcome()
@@ -618,7 +619,7 @@ struct FamilyGraphCompiledStoreTests {
         #expect(outcome.graph?.people.count == cli.people.count)
         #expect(outcome.graph?.rootPersonIDs.count == 2)
         #expect(outcome.candidateCount == 3)
-        #expect(phases.isEmpty, "generation hit must not parse: \(phases)")
+        #expect(phases.all.isEmpty, "generation hit must not parse: \(phases.all)")
         #expect(store.readPointer() == pointer)
         #expect(store.generations() == [pointer.current])
 

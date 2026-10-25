@@ -3,7 +3,12 @@ import Foundation
 /// Filesystem seam for Hallie's GEDCOM source. Production supplies the
 /// Application Support originals directory; tests supply an isolated root.
 /// No path outside that injected directory is consulted.
-struct FamilyGraphFileLoader {
+///
+/// Sendable (Swift 6): a value type — directory, an optional Sendable
+/// store, a flag and two `@Sendable` closures — built on the main actor
+/// and handed to a detached task by copy. `fileManager` is computed, not
+/// stored (nothing injects one; FileManager is not marked Sendable here).
+struct FamilyGraphFileLoader: Sendable {
     struct Outcome {
         let graph: GedcomFamilyGraph?
         let selectedURL: URL?
@@ -24,14 +29,14 @@ struct FamilyGraphFileLoader {
     }
 
     let originalsDirectory: URL
-    var fileManager: FileManager = .default
+    var fileManager: FileManager { .default }
     /// Compiled-artifact store (2026-08-28). Nil = parse every time (tests,
     /// and callers that must not touch Application Support). With a
     /// store: promoted artifact for the newest .ged → no parse; otherwise
     /// parse, compile, verify, promote, and return the promoted copy.
     var compiledStore: FamilyGraphCompiledStore? = nil
     /// Phase captions for the UI while a compile runs (>1 s on a big pull).
-    var progress: (String) -> Void = { _ in }
+    var progress: @Sendable (String) -> Void = { _ in }
     /// Remote viewer (docs/design/remote_use_design.md Phase 1): the tree is
     /// compiled on the master and arrives by verified sync. In this mode
     /// the loader ONLY decodes the promoted generation — it never parses
@@ -271,7 +276,7 @@ struct FamilyGraphFileLoader {
     /// Where a refusal goes when there is no store to log through. The
     /// no-store case used to `return nil` in total silence, which reads
     /// exactly like success to every caller.
-    var log: (String) -> Void = { appLog.write($0) }
+    var log: @Sendable (String) -> Void = { appLog.write($0) }
 
     /// The marker every "the compile produced no generation" line carries.
     /// The flat app log has no levels; this string is the error level.

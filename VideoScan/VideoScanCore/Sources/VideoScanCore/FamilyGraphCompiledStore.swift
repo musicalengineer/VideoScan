@@ -39,7 +39,14 @@ import Foundation
 // Lives in VideoScanCore (2026-08-28) so the one-time ingest CLI
 // (videoscan-tree-ingest), HallieShellCLI and the app all promote and read
 // the SAME generations. Logging is injected; the app wires appLog.
-public struct FamilyGraphCompiledStore {
+//
+// Sendable (Swift 6, 2026-10-25): a value type whose members are a URL,
+// three flags and two `@Sendable` closures. Every copy is independent
+// (C++: a copyable config object); the only shared state is on disk, and
+// every writer holds the flock. `fileManager` is computed, not stored:
+// nothing ever injected one, and FileManager is not marked Sendable in
+// this SDK (its shared instance is thread-safe per Apple's docs).
+public struct FamilyGraphCompiledStore: Sendable {
 
     public init(root: URL) { self.root = root }
 
@@ -66,7 +73,7 @@ public struct FamilyGraphCompiledStore {
     static let lockName = ".lock"
 
     public let root: URL
-    public var fileManager: FileManager = .default
+    public var fileManager: FileManager { .default }
     /// Generations kept after a promote: current + this many previous.
     ///
     /// FIVE, NOT ONE (2026-09-16). At 1, exactly one mistake was
@@ -87,9 +94,9 @@ public struct FamilyGraphCompiledStore {
     /// 90 MB: trivial beside the sources it protects, and it buys a
     /// window of several mistakes instead of one.
     public var keepPrevious = 5
-    public var log: (String) -> Void = { _ in }
+    public var log: @Sendable (String) -> Void = { _ in }
     /// The ingest gate. Injected so a test can force a failure.
-    public var verify: (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
+    public var verify: @Sendable (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
         = GedcomCompiledTree.verify(decoded:against:)
     /// Remote-viewer read mode (docs/design/remote_use_design.md Phase 1): the
     /// generation was compiled on the MASTER and arrived by verified sync,
@@ -106,7 +113,7 @@ public struct FamilyGraphCompiledStore {
     /// The log line every refused write starts with (test sensor).
     public static let refusedWritePrefix = "[family-tree] refused write on a viewer:"
 
-    public struct Pointer: Codable, Equatable {
+    public struct Pointer: Codable, Equatable, Sendable {
         public var schema: UInt32
         public var codec: UInt32
         public var index: UInt32
@@ -115,7 +122,7 @@ public struct FamilyGraphCompiledStore {
         public var sourceKeys: [String]
     }
 
-    public struct Source: Codable, Equatable {
+    public struct Source: Codable, Equatable, Sendable {
         public var fileName: String
         public var path: String
         public var size: Int
@@ -133,7 +140,7 @@ public struct FamilyGraphCompiledStore {
     /// One entry of the artifact's LOGICAL provenance (what the tree was
     /// merged from), as recorded in the manifest beside the physical
     /// `sources`. Positional; names may repeat (identity = position + sha).
-    public struct LogicalSource: Codable, Equatable {
+    public struct LogicalSource: Codable, Equatable, Sendable {
         public var fileName: String
         /// Nil when that source was never fingerprinted (older artifact).
         public var sha256: String?
@@ -146,7 +153,7 @@ public struct FamilyGraphCompiledStore {
         }
     }
 
-    public struct Manifest: Codable, Equatable {
+    public struct Manifest: Codable, Equatable, Sendable {
         public var schema: UInt32
         public var codec: UInt32
         public var index: UInt32

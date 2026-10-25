@@ -90,7 +90,11 @@ struct FamilyTreeLaunchBundle: Sendable {
                 let built = OSAllocatedUnfairLock(initialState: [String: GedcomFamilyGraph.AncestorIndex]())
                 DispatchQueue.concurrentPerform(iterations: found.count) { i in
                     let index = GedcomFamilyGraph.AncestorIndex(graph: graph, descendantID: found[i].id)
-                    built.withLock { $0[found[i].id] = index }
+                    built.withLock {
+                        // Same fail-fast as the Dictionary(uniqueKeysWithValues:) this replaced.
+                        precondition($0[found[i].id] == nil, "duplicate anchor id \(found[i].id)")
+                        $0[found[i].id] = index
+                    }
                 }
                 let indexes = built.withLock { $0 }
                 partial.withLock {

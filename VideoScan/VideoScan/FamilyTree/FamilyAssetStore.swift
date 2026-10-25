@@ -42,7 +42,7 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
     /// different tree when the designated Master is offline.
     func loadFamilyGraphOutcome(
         compiledStore: FamilyGraphCompiledStore? = nil,
-        progress: @escaping (String) -> Void = { _ in }
+        progress: @escaping @Sendable (String) -> Void = { _ in }
     ) -> FamilyGraphFileLoader.Outcome? {
         guard access != .unavailable else { return nil }
         var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory())
@@ -154,14 +154,14 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
     private var entry: (key: Key, graph: GedcomFamilyGraph, compiled: Bool, token: UUID,
                         outcome: FamilyGraphFileLoader.Outcome, base: FamilyGraphFileLoader.Outcome)?
     private var loadCount = 0
-    private let log: (String) -> Void
+    private let log: @Sendable (String) -> Void
     /// Where "Refresh from FamilySearch…" keeps its fact overlay. Nil = no
     /// overlay (tests that build their own cache and do not opt in). The
     /// production default is App Support family-tree/person-refresh/, and a
     /// scratch folder under a test host (PersonRefreshPaths).
     let overlayStore: PersonFactOverlayStore?
 
-    init(log: @escaping (String) -> Void = { _ in },
+    init(log: @escaping @Sendable (String) -> Void = { _ in },
          overlayStore: PersonFactOverlayStore? = nil) {
         self.log = log
         self.overlayStore = overlayStore
@@ -179,7 +179,7 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
 
     func load(for configuration: FamilyAssetConfiguration,
               store: FamilyGraphCompiledStore?,
-              progress: ((String) -> Void)? = nil) -> Loaded? {
+              progress: (@Sendable (String) -> Void)? = nil) -> Loaded? {
         outcome(for: configuration, store: store, progress: progress).loaded
     }
 
@@ -198,7 +198,7 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
     /// compiled store, and the loader never sees the overlay folder.
     func outcome(for configuration: FamilyAssetConfiguration,
                  store: FamilyGraphCompiledStore?,
-                 progress: ((String) -> Void)? = nil)
+                 progress: (@Sendable (String) -> Void)? = nil)
         -> (outcome: FamilyGraphFileLoader.Outcome?, loaded: Loaded?) {
         guard configuration.access != .unavailable else {
             // Revoked authority: drop what we had so a later republish
@@ -231,7 +231,7 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                 base = entry.base
             } else {
                 loadCount += 1
-                let report: (String) -> Void = { [log] phase in
+                let report: @Sendable (String) -> Void = { [log] phase in
                     log("[hallie] family graph: \(phase)")
                     progress?(phase)
                 }

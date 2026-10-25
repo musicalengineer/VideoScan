@@ -25,6 +25,7 @@
 
 import Testing
 import Foundation
+import os
 @testable import VideoScan
 import VideoScanCore
 
@@ -383,9 +384,9 @@ struct RemoteViewerSyncRoundTripTests {
         try JSONSerialization.data(withJSONObject: pointer).write(to: pointerURL)
 
         ViewerModeCenter.shared.install(.viewer(masterHostname: "RicksM4.local"))
-        var logLines: [String] = []
+        let logSink = OSAllocatedUnfairLock(initialState: [String]())
         var store = FamilyGraphCompiledStore(root: compiled)
-        store.log = { logLines.append($0) }
+        store.log = { line in logSink.withLock { $0.append(line) } }
         store.trustsManifestSources = true
         store.refusesWrites = true
         var loader = FamilyGraphFileLoader(originalsDirectory: masterTree.appendingPathComponent("family-tree/originals"))
@@ -397,6 +398,7 @@ struct RemoteViewerSyncRoundTripTests {
         #expect(outcome.compiled == false)
         #expect(!outcome.needsRecompile.isEmpty)
         #expect(outcome.needsRecompile.contains { $0.path == gedcom.path })
+        var logLines = logSink.withLock { $0 }
         #expect(logLines.contains { $0.contains("viewer: compiled generation \(generation) was built by another version") })
         #expect(store.readPointer()?.current == generation, "the pointer is untouched")
         #expect(store.generations().count == 1, "no new generation was ingested")
@@ -404,10 +406,12 @@ struct RemoteViewerSyncRoundTripTests {
         // The banner copy names the master; the Recompile path is refused.
         #expect(FamilyTreeViewerBanner.compiledElsewhereText() == "Family tree compiled on RicksM4 — sync again once the master is up to date.")
         #expect(loader.recompile(sources: outcome.needsRecompile) == nil)
+        logLines = logSink.withLock { $0 }
         #expect(logLines.contains { $0.hasPrefix(FamilyGraphCompiledStore.refusedWritePrefix) && $0.contains("recompile") })
         // An ingest on this store is refused too, with the log line.
         let graph = try #require(GedcomFamilyGraph(fileURL: gedcom))
         #expect(store.ingest(graph: graph, sources: [gedcom]) == nil)
+        logLines = logSink.withLock { $0 }
         #expect(logLines.contains { $0.hasPrefix(FamilyGraphCompiledStore.refusedWritePrefix) && $0.contains("ingest") })
         #expect(store.rollback() == false)
     }
