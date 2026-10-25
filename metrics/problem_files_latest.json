@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-24T09:13:25Z",
+ "ts": "2026-10-25T09:30:50Z",
  "sha": "ccf547e5",
  "formula_version": 1,
  "files_scored": 795,
@@ -13,8 +13,8 @@
    "lines": 1853,
    "could_be_private": 5,
    "widened_for_split": 21,
-   "churn_7d": 10,
-   "score": 96.0
+   "churn_7d": 8,
+   "score": 83.2
   },
   {
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
@@ -24,8 +24,8 @@
    "lines": 2077,
    "could_be_private": 4,
    "widened_for_split": 1,
-   "churn_7d": 9,
-   "score": 63.9
+   "churn_7d": 8,
+   "score": 59.4
   },
   {
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
@@ -35,7 +35,7 @@
    "lines": 1347,
    "could_be_private": 11,
    "widened_for_split": 0,
-   "churn_7d": 17,
+   "churn_7d": 11,
    "score": 57.1
   },
   {
@@ -46,7 +46,7 @@
    "lines": 1903,
    "could_be_private": 6,
    "widened_for_split": 28,
-   "churn_7d": 19,
+   "churn_7d": 12,
    "score": 46.5
   },
   {
@@ -68,8 +68,8 @@
    "lines": 996,
    "could_be_private": 22,
    "widened_for_split": 1,
-   "churn_7d": 7,
-   "score": 41.4
+   "churn_7d": 6,
+   "score": 37.9
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
@@ -127,28 +127,6 @@
    "score": 25.4
   },
   {
-   "file": "VideoScan/VideoScan/Catalog/CatalogStore.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 1753,
-   "could_be_private": 7,
-   "widened_for_split": 0,
-   "churn_7d": 11,
-   "score": 24.8
-  },
-  {
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 1317,
-   "could_be_private": 11,
-   "widened_for_split": 0,
-   "churn_7d": 18,
-   "score": 24.3
-  },
-  {
    "file": "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift",
    "offenders": 5,
    "worst_ccn": 24,
@@ -169,6 +147,28 @@
    "widened_for_split": 0,
    "churn_7d": 0,
    "score": 23.9
+  },
+  {
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 1317,
+   "could_be_private": 11,
+   "widened_for_split": 0,
+   "churn_7d": 9,
+   "score": 22.6
+  },
+  {
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",
+   "offenders": 4,
+   "worst_ccn": 27,
+   "new_or_worse": 1,
+   "lines": 878,
+   "could_be_private": 11,
+   "widened_for_split": 0,
+   "churn_7d": 0,
+   "score": 21.3
   }
  ]
 }
