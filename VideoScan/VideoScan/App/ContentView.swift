@@ -47,6 +47,11 @@ struct ContentView: View {
         ("Family Tree", "person.3.fill", 5)
     ]
     @Environment(\.openWindow) private var openWindow
+    /// Click → that table or list gets the keyboard. SwiftUI's Table and
+    /// List do not do it on macOS 26/27 (Shared/TableClickFocus.swift).
+    /// Owned by the WINDOW ROOT so every tab has it (Rick 2026-10-25),
+    /// never per tab.
+    @State private var tableClickFocus = TableClickFocus()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -138,6 +143,11 @@ struct ContentView: View {
             .environment(\.catalogPersonFilterReference, catalogPersonFilter)
         }
         .frame(minWidth: 900, minHeight: 600)
+        // The click hook acts only in THIS window (never another window or
+        // a sheet) — the reader hands it the window once it is known.
+        .background(WindowReader { tableClickFocus.window = $0 })
+        .onAppear { tableClickFocus.install() }
+        .onDisappear { tableClickFocus.remove() }
         // Master Archive (docs/archive_promotion_workflow.md). All three
         // are MODEL-driven so the Volumes-window right-click, the catalog
         // right-click, the Archive tab and the File ▸ Archive menu share ONE
@@ -550,10 +560,6 @@ struct CatalogView: View {
     /// writes when the AppKit first responder changes, and reads to move it.
     /// Internal (not private) so CatalogView+VolumeTable.swift can bind it.
     @FocusState var focusedPane: CatalogPane?
-    /// Click → that table gets the keyboard (SwiftUI's Table does not do
-    /// it on its own; see CatalogTableClickFocus.swift). Installed only
-    /// while this tab is on screen.
-    @State private var tableClickFocus = CatalogTableClickFocus()
     /// Per-volume aggregate cache (file count, error count, byte sum,
     /// pre-built Cmd+I popover text). Recomputed once per records or
     /// scan-target change via the `.onChange` modifiers below. Without
@@ -668,11 +674,8 @@ struct CatalogView: View {
         // first key view (the volumes table). The ONE place a pane is named
         // as a focus target in code.
         .defaultFocus($focusedPane, .files)
-        // The click hook acts only in THIS window (never another window or
-        // a sheet) — the reader hands it the window once it is known.
-        .background(CatalogWindowReader { tableClickFocus.catalogWindow = $0 })
-        .onAppear { tableClickFocus.install() }
-        .onDisappear { tableClickFocus.remove() }
+        // The click-to-focus hook lives on ContentView's root since
+        // 2026-10-25 (every tab), no longer here.
     }
 
     private var bottomPane: some View {

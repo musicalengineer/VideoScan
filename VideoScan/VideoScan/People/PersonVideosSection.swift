@@ -387,6 +387,8 @@ struct PersonVideosSection: View {
     /// Groups whose "+N versions" is open.
     @State private var openVersions: Set<UUID> = []
     @State private var showHidden = false
+    /// The row with the keyboard (↑↓ move it; Rick 2026-10-25).
+    @State private var selectedRowID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -394,22 +396,27 @@ struct PersonVideosSection: View {
             if !loaded {
                 ProgressView().controlSize(.small).padding(16)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        // The page (Rick 2026-10-24): his picks first, then the
-                        // best of the rest, at most PersonVideoPage.curatedCap.
-                        if page.picksWithoutMaybes.isEmpty { pickHint }
-                        ForEach(page.curated) { group in groupView(group) }
-                        if page.missingPicks > 0 {
-                            Text("\(page.missingPicks) picked video\(page.missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
-                                .padding(.horizontal, 14)
-                        }
-                        seeAllInCatalog
-                        hiddenFooter
+                // A List with a selection, not a scroll stack (Rick 2026-10-25:
+                // "all views that have lists should allow up/down arrow").
+                // For Rick: List ≈ an NSTableView; the selection binding is
+                // what makes ↑↓ work, and the window's click hook gives it
+                // the keyboard on click. Non-row items opt out of selection.
+                List(selection: $selectedRowID) {
+                    // The page (Rick 2026-10-24): his picks first, then the
+                    // best of the rest, at most PersonVideoPage.curatedCap.
+                    if page.picksWithoutMaybes.isEmpty { pickHint.selectionDisabled() }
+                    ForEach(page.curated) { group in groupView(group) }
+                    if page.missingPicks > 0 {
+                        Text("\(page.missingPicks) picked video\(page.missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .selectionDisabled()
                     }
-                    .padding(.bottom, 8)
+                    seeAllInCatalog.selectionDisabled()
+                    hiddenFooter.selectionDisabled()
                 }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
         }
         .task(id: "\(profile.uuid)-\(refreshTick)") { reload() }
@@ -502,17 +509,21 @@ struct PersonVideosSection: View {
     /// footage; on a version, on that file alone.
     @ViewBuilder private func groupView(_ group: PersonVideoGroup) -> some View {
         rowView(group.lead, scope: group.rows, actions: [.removeFromPage, .notInVideo])
+            .tag(group.lead.id)
         if !group.versions.isEmpty {
             DisclosureGroup(isExpanded: Binding(
                 get: { openVersions.contains(group.id) },
                 set: { if $0 { openVersions.insert(group.id) } else { openVersions.remove(group.id) } })) {
-                ForEach(group.versions) { v in rowView(v, scope: [v], actions: [.removeFromPage, .notInVideo]) }
+                ForEach(group.versions) { v in
+                    rowView(v, scope: [v], actions: [.removeFromPage, .notInVideo]).tag(v.id)
+                }
             } label: {
                 Text(group.versionsWords)
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .help(PersonVideoGroup.evidenceHelp)
             }
             .padding(.leading, 140).padding(.trailing, 14)
+            .selectionDisabled()
         }
     }
 
@@ -657,6 +668,8 @@ struct FamilyVideosSection: View {
     @State private var rows: [PersonVideoRow] = []
     @State private var missing = 0
     @State private var refreshTick = 0
+    /// The row with the keyboard (↑↓ move it; Rick 2026-10-25).
+    @State private var selectedRowID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -678,35 +691,40 @@ struct FamilyVideosSection: View {
                     .help("Look again")
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    if rows.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("No videos picked for \(family?.name ?? "this family") yet.")
-                                .font(.system(size: 15))
-                            Text("Right-click a video in the Catalog or the Archive ▸ Show in People tab ▸ \(family?.name ?? "the family").")
-                                .font(.system(size: 13)).foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                    } else {
-                        ForEach(PersonVideos.byDecade(rows), id: \.decade) { group in
-                            Text(group.decade)
-                                .font(.system(size: 15, weight: .semibold))
-                                .padding(.horizontal, 14).padding(.top, 6)
-                            ForEach(group.rows) { row in
-                                PersonVideoRowView(row: row, catalogModel: catalogModel,
-                                                   onShowInCatalog: onShowInCatalog)
-                            }
-                        }
+            // Same list shape as a person's page (Rick 2026-10-25): ↑↓ move
+            // the selection; headers and notes opt out of selection.
+            List(selection: $selectedRowID) {
+                if rows.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No videos picked for \(family?.name ?? "this family") yet.")
+                            .font(.system(size: 15))
+                        Text("Right-click a video in the Catalog or the Archive ▸ Show in People tab ▸ \(family?.name ?? "the family").")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
                     }
-                    if missing > 0 {
-                        Text("\(missing) picked video\(missing == 1 ? "" : "s") can't be found in the catalog right now.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
-                            .padding(.horizontal, 14)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .selectionDisabled()
+                } else {
+                    ForEach(PersonVideos.byDecade(rows), id: \.decade) { group in
+                        Text(group.decade)
+                            .font(.system(size: 15, weight: .semibold))
+                            .padding(.horizontal, 14).padding(.top, 6)
+                            .selectionDisabled()
+                        ForEach(group.rows) { row in
+                            PersonVideoRowView(row: row, catalogModel: catalogModel,
+                                               onShowInCatalog: onShowInCatalog)
+                                .tag(row.id)
+                        }
                     }
                 }
-                .padding(.bottom, 8)
+                if missing > 0 {
+                    Text("\(missing) picked video\(missing == 1 ? "" : "s") can't be found in the catalog right now.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .selectionDisabled()
+                }
             }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
         }
         .task(id: "\(familyUUID)-\(refreshTick)") {
             family = FamilyGroupStore.load(familyUUID)

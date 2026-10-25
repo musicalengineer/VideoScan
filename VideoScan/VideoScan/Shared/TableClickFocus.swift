@@ -1,4 +1,4 @@
-// CatalogTableClickFocus.swift
+// TableClickFocus.swift (was Catalog/CatalogTableClickFocus.swift until 2026-10-25)
 // "A click in a table gives that table the keyboard" — Finder's rule, done
 // explicitly because SwiftUI's Table does not do it on macOS 26/27
 // (measured 2026-10-06 by the keyboard harness, design doc Q3):
@@ -14,11 +14,15 @@
 //
 // This hook reacts to the CLICK, never to a selection change, so a volume
 // click that re-filters the files cannot move the keyboard. It observes
-// mouseDown only, never consumes it, and only:
-//   • while the Catalog tab is on screen (CatalogView installs/removes it);
-//   • in the Catalog's OWN window (QA 10/6: a local monitor sees every
-//     window of the app — a table in another window or a sheet must be
-//     left alone). The window is captured by CatalogWindowReader.
+// mouseDown only, never consumes it, and only in its OWN window (QA 10/6: a
+// local monitor sees every window of the app — a table in another window or
+// a sheet must be left alone). The window is captured by WindowReader.
+//
+// 2026-10-25 (Rick: "all views that have lists should allow up/down arrow"):
+// the hook moved from the Catalog view to the MAIN WINDOW ROOT, for every
+// tab. SwiftUI's List is NSTableView-backed too, so Triage (a Table), Storage
+// (a List) and the People lists all stayed deaf to ↑↓ while only the Catalog
+// had it. One hook, one window, every table.
 // SwiftUI's `focusedPane` follows the AppKit first responder, as for Tab.
 //
 // C++ analogy: a pre-dispatch event filter (≈ a Qt eventFilter) that sets
@@ -28,12 +32,12 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class CatalogTableClickFocus {
+final class TableClickFocus {
     /// Opaque token from NSEvent's local monitor (≈ a subscription handle).
     private var monitor: Any?
-    /// The Catalog's window. `weak` ≈ a non-owning pointer that becomes nil
-    /// when the window dies; nil = act on nothing.
-    weak var catalogWindow: NSWindow?
+    /// The window this hook serves. `weak` ≈ a non-owning pointer that becomes
+    /// nil when the window dies; nil = act on nothing.
+    weak var window: NSWindow?
 
     /// Idempotent. Worst-case memory: one closure; nothing buffered.
     func install() {
@@ -54,10 +58,10 @@ final class CatalogTableClickFocus {
     /// main thread (the monitor API is main-thread only).
     isolated deinit { remove() }
 
-    /// Pure rule: only clicks in the Catalog's own window count.
-    static func isCatalogClick(eventWindow: NSWindow?, catalogWindow: NSWindow?) -> Bool {
-        guard let catalogWindow, let eventWindow else { return false }
-        return eventWindow === catalogWindow
+    /// Pure rule: only clicks in the hook's own window count.
+    static func isOwnWindowClick(eventWindow: NSWindow?, ownWindow: NSWindow?) -> Bool {
+        guard let ownWindow, let eventWindow else { return false }
+        return eventWindow === ownWindow
     }
 
     /// The table under the click, if any. `hitTest` takes a point in the
@@ -86,7 +90,7 @@ final class CatalogTableClickFocus {
     }
 
     private func focusClickedTable(_ event: NSEvent) {
-        guard Self.isCatalogClick(eventWindow: event.window, catalogWindow: catalogWindow),
+        guard Self.isOwnWindowClick(eventWindow: event.window, ownWindow: window),
               let window = event.window, let table = Self.clickedTable(event),
               Self.shouldFocus(table, firstResponder: window.firstResponder) else { return }
         window.makeFirstResponder(table)
@@ -96,7 +100,7 @@ final class CatalogTableClickFocus {
 /// Reports the window a SwiftUI view lives in (0×0, invisible, never
 /// focusable). ≈ a C++ child widget whose only job is to call back with
 /// its top-level window once it is parented.
-struct CatalogWindowReader: NSViewRepresentable {
+struct WindowReader: NSViewRepresentable {
     let onWindow: (NSWindow?) -> Void
 
     final class Probe: NSView {

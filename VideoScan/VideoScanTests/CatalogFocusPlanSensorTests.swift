@@ -88,8 +88,8 @@ struct CatalogPaneFocusSensorTests {
             let hit = file.code.range(of: #"focusedPane\s*=(?!=)"#, options: .regularExpression)
             #expect(hit == nil, "\(file.name) assigns focusedPane")
             // The ONE exception: a click moves the keyboard to the clicked
-            // table (CatalogTableClickFocus — SwiftUI's Table won't).
-            if file.name.hasPrefix("Catalog/") && file.name != "Catalog/CatalogTableClickFocus.swift" {
+            // table (TableClickFocus — SwiftUI's Table won't).
+            if file.name.hasPrefix("Catalog/") && file.name != "Catalog/TableClickFocus.swift" {
                 #expect(!file.code.contains("makeFirstResponder"), "\(file.name) moves the first responder in code")
             }
         }
@@ -197,16 +197,16 @@ struct CatalogInfoShortcutSensorTests {
     }
 }
 
-// MARK: - Click → keyboard (CatalogTableClickFocus)
+// MARK: - Click → keyboard (TableClickFocus)
 
 @MainActor
 @Suite("A click gives the clicked Catalog table the keyboard — and nothing else does")
-struct CatalogTableClickFocusTests {
+struct TableClickFocusTests {
 
     @Test func focusesAnUnfocusedTable() {
         let table = NSTableView()
-        #expect(CatalogTableClickFocus.shouldFocus(table, firstResponder: nil))
-        #expect(CatalogTableClickFocus.shouldFocus(table, firstResponder: NSTableView()),
+        #expect(TableClickFocus.shouldFocus(table, firstResponder: nil))
+        #expect(TableClickFocus.shouldFocus(table, firstResponder: NSTableView()),
                 "a click in one table takes the keyboard from the other")
     }
 
@@ -214,24 +214,25 @@ struct CatalogTableClickFocusTests {
         let table = NSTableView()
         let editor = NSTextView()
         table.addSubview(editor)
-        #expect(!CatalogTableClickFocus.shouldFocus(table, firstResponder: table))
-        #expect(!CatalogTableClickFocus.shouldFocus(table, firstResponder: editor), "inline edit keeps its field")
+        #expect(!TableClickFocus.shouldFocus(table, firstResponder: table))
+        #expect(!TableClickFocus.shouldFocus(table, firstResponder: editor), "inline edit keeps its field")
     }
 
     @Test func respectsARefusingTable() {
         let table = NSTableView()
         table.refusesFirstResponder = true
-        #expect(!CatalogTableClickFocus.shouldFocus(table, firstResponder: nil))
+        #expect(!TableClickFocus.shouldFocus(table, firstResponder: nil))
     }
 
-    /// The hook reacts to the CLICK only — installed by CatalogView for the
-    /// tab's lifetime, never from a selection or filter change.
-    @Test func installedOnlyByCatalogViewLifetime() throws {
+    /// The hook reacts to the CLICK only — installed once at the window root
+    /// for the window's lifetime (every tab, Rick 2026-10-25), never from a
+    /// selection or filter change, never per tab.
+    @Test func installedOnceAtTheWindowRoot() throws {
         let content = try code("ContentView.swift")
-        #expect(content.contains(".onAppear { tableClickFocus.install() }"))
-        #expect(content.contains(".onDisappear { tableClickFocus.remove() }"))
-        let users = try allAppCode().filter { $0.code.contains("CatalogTableClickFocus") }.map(\.name)
-        #expect(Set(users) == ["App/ContentView.swift", "Catalog/CatalogTableClickFocus.swift"])
+        #expect(occurrences(of: ".onAppear { tableClickFocus.install() }", in: content) == 1)
+        #expect(occurrences(of: ".onDisappear { tableClickFocus.remove() }", in: content) == 1)
+        let users = try allAppCode().filter { $0.code.contains("TableClickFocus") }.map(\.name)
+        #expect(Set(users) == ["App/ContentView.swift", "Shared/TableClickFocus.swift"])
     }
 }
 
@@ -280,7 +281,7 @@ struct CatalogPromoteScopeTests {
 // MARK: - QA 10/6: click hook scoped to the Catalog window; default focus
 
 @MainActor
-@Suite("Catalog click hook acts only in the Catalog's own window")
+@Suite("Click hook acts only in its own window")
 struct CatalogClickFocusWindowScopeTests {
 
     private func window() -> NSWindow {
@@ -290,19 +291,19 @@ struct CatalogClickFocusWindowScopeTests {
     @Test func onlyTheCatalogWindowCounts() {
         let catalog = window()
         let other = window()
-        #expect(CatalogTableClickFocus.isCatalogClick(eventWindow: catalog, catalogWindow: catalog))
-        #expect(!CatalogTableClickFocus.isCatalogClick(eventWindow: other, catalogWindow: catalog),
+        #expect(TableClickFocus.isOwnWindowClick(eventWindow: catalog, ownWindow: catalog))
+        #expect(!TableClickFocus.isOwnWindowClick(eventWindow: other, ownWindow: catalog),
                 "a table click in another window or a sheet must not take the keyboard")
-        #expect(!CatalogTableClickFocus.isCatalogClick(eventWindow: catalog, catalogWindow: nil),
+        #expect(!TableClickFocus.isOwnWindowClick(eventWindow: catalog, ownWindow: nil),
                 "window not known yet = act on nothing")
-        #expect(!CatalogTableClickFocus.isCatalogClick(eventWindow: nil, catalogWindow: catalog))
+        #expect(!TableClickFocus.isOwnWindowClick(eventWindow: nil, ownWindow: catalog))
     }
 
     @Test func hookGuardsOnTheWindowAndCleansUp() throws {
-        let src = try code("CatalogTableClickFocus.swift")
+        let src = try code("TableClickFocus.swift")
         let fn = try #require(src.range(of: "private func focusClickedTable("))
-        #expect(src[fn.upperBound...].prefix(200).contains("Self.isCatalogClick(eventWindow: event.window, catalogWindow: catalogWindow)"))
+        #expect(src[fn.upperBound...].prefix(200).contains("Self.isOwnWindowClick(eventWindow: event.window, ownWindow: window)"))
         #expect(src.contains("isolated deinit { remove() }"))
-        #expect(try code("ContentView.swift").contains("CatalogWindowReader { tableClickFocus.catalogWindow = $0 }"))
+        #expect(try code("ContentView.swift").contains("WindowReader { tableClickFocus.window = $0 }"))
     }
 }
