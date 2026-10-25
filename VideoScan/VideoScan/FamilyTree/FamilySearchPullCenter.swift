@@ -154,8 +154,10 @@ final class FamilySearchPullCenter: ObservableObject {
     /// authorization, never request it here, no sound (this may fire hours
     /// after the user walked away).
     nonisolated static func postNotification(title: String, body: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
+        // `current()` is re-asked inside the @Sendable completion rather
+        // than captured: the center is a process singleton (thread-safe
+        // per Apple) that this SDK has not marked Sendable.
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized
                 || settings.authorizationStatus == .provisional else { return }
             let content = UNMutableNotificationContent()
@@ -166,7 +168,7 @@ final class FamilySearchPullCenter: ObservableObject {
                 identifier: "familysearch-pull.\(UUID().uuidString)",
                 content: content,
                 trigger: nil)
-            center.add(request, withCompletionHandler: nil)
+            UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
         }
     }
 }

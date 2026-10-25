@@ -1415,7 +1415,17 @@ enum CompilationStatus: Equatable {
 
 // MARK: - Reference Face
 
-struct ReferenceFace: Identifiable {
+// Swift 6: a Vision observation is an immutable result object (Apple:
+// "VNObservation … results of a request"; every property is read-only and
+// `computeDistance` only reads), already shared across the scan task group
+// since 2026-05; the SDK has not marked it Sendable yet. One retroactive
+// conformance here instead of a wrapper type threaded through every
+// `prints:` parameter.
+extension VNFeaturePrintObservation: @retroactive @unchecked Sendable {}
+
+/// All `let`; Sendable because every member is (CGImage is Sendable in
+/// this SDK; the feature print by the conformance above).
+struct ReferenceFace: Identifiable, Sendable {
     let id = UUID()
     let featurePrint: VNFeaturePrintObservation
     let thumbnail: CGImage              // 256×256 normalized crop
@@ -1444,7 +1454,7 @@ struct ReferenceFace: Identifiable {
 }
 
 /// A reference photo that failed face detection — surfaced to the user.
-struct ReferenceLoadFailure: Identifiable {
+struct ReferenceLoadFailure: Identifiable, Sendable {
     let id = UUID()
     let filename: String
     let reason: String

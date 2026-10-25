@@ -415,9 +415,12 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
         return nil
     }
 
-    // `@MainActor` is Swift's equivalent of "read this UI-owned object only
-    // on the UI thread"; the resulting value has no actor affinity.
-    @MainActor
+    // Nonisolated since Swift 6 stage 5: `VideoRecord` is not Sendable, so a
+    // caller can only hand one in from the isolation that owns it — the
+    // main actor in the app, the CLI session's own context in the shell.
+    // The read happens inline there (C++: a synchronous copy-constructor);
+    // the resulting value has no actor affinity. The compiler enforces the
+    // ownership at every `Task` boundary instead of at this signature.
     init(record: VideoRecord) {
         self.init(
             id: record.id,
@@ -448,7 +451,8 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
 
     /// Bulk bridge yields between bounded batches so snapshot refresh cannot
     /// monopolize the UI actor. Batch size is clamped even for test callers.
-    @MainActor
+    /// Runs in the caller's isolation (nonisolated async ≈ nonsending under
+    /// approachable concurrency): the records never cross an actor boundary.
     static func capture(
         _ records: [VideoRecord],
         batchSize requestedBatchSize: Int = maxCaptureBatchSize

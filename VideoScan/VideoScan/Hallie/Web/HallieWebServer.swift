@@ -18,6 +18,7 @@
 
 import Foundation
 import Network
+import os
 
 /// One parsed HTTP request. Pure value; `HTTPRequest.parse` is unit-tested
 /// without a socket.
@@ -344,12 +345,19 @@ final class HallieWebServer: @unchecked Sendable {
             peer = "unknown"
         }
         connection.start(queue: queue)
-        var buffer = Data()
-        func receive() {
+        // The lock owns the request bytes received so far (C++: a mutex
+        // wrapping the buffer): the receive completions are @Sendable and
+        // may not share a captured `var`. Bounded by the parser's header +
+        // body caps (16 KiB + 64 KiB) plus one 64 KiB read.
+        let buffer = OSAllocatedUnfairLock(initialState: Data())
+        @Sendable func receive() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
                 guard let self else { connection.cancel(); return }
-                if let data { buffer.append(data) }
-                switch HallieHTTPRequest.parse(buffer) {
+                let parsed = buffer.withLock { bytes -> HallieHTTPRequest.ParseState in
+                    if let data { bytes.append(data) }
+                    return HallieHTTPRequest.parse(bytes)
+                }
+                switch parsed {
                 case .needMore:
                     if isComplete || error != nil { connection.cancel() } else { receive() }
                 case .invalid(let why):
@@ -389,8 +397,9 @@ final class HallieWebServer: @unchecked Sendable {
             connection.cancel(); return
         }
         let chunk = 1 << 20
-        var offset = range.lowerBound
-        func next() {
+        // The offset travels as a parameter of each step (no shared `var`
+        // for the @Sendable send completions to race on).
+        @Sendable func next(offset: Int64) {
             guard offset < range.upperBound else {
                 try? handle.close()
                 connection.cancel()
@@ -401,15 +410,15 @@ final class HallieWebServer: @unchecked Sendable {
                 try handle.seek(toOffset: UInt64(offset))
                 let data = try handle.read(upToCount: count) ?? Data()
                 guard !data.isEmpty else { try? handle.close(); connection.cancel(); return }
-                offset += Int64(data.count)
+                let nextOffset = offset + Int64(data.count)
                 connection.send(content: data, completion: .contentProcessed { error in
-                    if error != nil { try? handle.close(); connection.cancel() } else { next() }
+                    if error != nil { try? handle.close(); connection.cancel() } else { next(offset: nextOffset) }
                 })
             } catch {
                 try? handle.close()
                 connection.cancel()
             }
         }
-        next()
+        next(offset: range.lowerBound)
     }
 }

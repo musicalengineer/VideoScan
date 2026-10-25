@@ -91,8 +91,9 @@ struct ArchivistRecordDossierSnapshot: Sendable, Equatable {
         self.userPlaceStatus = userPlace == nil ? .unplaced : userPlaceStatus
     }
 
-    /// One record, read on the main actor. O(1): no catalog scan.
-    @MainActor
+    /// One record, read in the caller's isolation (the owner of the
+    /// non-Sendable record; see ArchivistPresenceRecordSnapshot). O(1): no
+    /// catalog scan.
     init(record: VideoRecord) {
         self.init(
             presence: ArchivistPresenceRecordSnapshot(record: record),

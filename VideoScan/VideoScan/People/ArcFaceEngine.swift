@@ -98,7 +98,11 @@ actor ArcFaceModelLoader {
     /// Safe to call from multiple jobs concurrently — each gets its own instance,
     /// which avoids the MLE5BindEmptyMemoryObjectToPort race seen when worker
     /// threads inferred against a single shared MLModel.
-    func getModel() -> (MLModel?, String?) {
+    ///
+    /// Swift 6: `sending` on the result ≈ returning a `std::unique_ptr` —
+    /// the MLModel is built here and never stored in actor state, so
+    /// ownership moves to the caller (MLModel is not Sendable in this SDK).
+    func getModel() -> sending (MLModel?, String?) {
         if let url = compiledURL {
             // Fast path: URL already resolved — just rebuild the MLModel.
             let config = Self.makeConfiguration()
@@ -183,7 +187,10 @@ private func arcfacePredictAttempt(
 ) -> (output: MLFeatureProvider?, swiftError: (any Error)?, exceptionFired: Bool) {
     var output: MLFeatureProvider?
     var swiftError: (any Error)?
-    let ok: Bool = lock.withLock {
+    // withLockUnchecked: the body runs synchronously on THIS thread under
+    // the lock and captures the frame's own locals plus the caller's
+    // non-Sendable MLModel/feature provider; nothing crosses a thread.
+    let ok: Bool = lock.withLockUnchecked {
         var caughtException: NSException?
         let success = VSCatchObjCException({
             do {

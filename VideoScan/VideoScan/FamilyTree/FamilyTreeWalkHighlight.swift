@@ -51,7 +51,8 @@ final class TreeWalkHighlighter: ObservableObject {
     /// How many surnames the checklist shows before a search narrows it.
     static let surnamesShown = 25
     /// How many matching names the list holds (the count is always exact).
-    static let listCap = 200
+    /// Immutable, so off the actor: the detached recompute reads it.
+    nonisolated static let listCap = 200
 
     let inputs: Inputs
     @Published private(set) var selection = TreeWalkHighlight.Selection()
@@ -211,7 +212,7 @@ struct TreeWalkHighlightPanel: View {
     }
 
     private func checkbox(_ f: TreeWalkHighlight.Facet, isOn: Bool,
-                          set: @escaping (Bool) -> Void) -> some View {
+                          set: @escaping @MainActor @Sendable (Bool) -> Void) -> some View {
         Toggle(isOn: Binding(get: { isOn }, set: set)) {
             HStack {
                 Text(f.label).font(.system(size: 12))

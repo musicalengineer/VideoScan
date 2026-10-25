@@ -373,7 +373,10 @@ struct PersonEditSheet: View {
                         Spacer()
                     }
 
-                    // Action buttons
+                    // Action buttons. `importing` is read once here (main
+                    // actor); the picker's label closure is @Sendable in
+                    // this SDK.
+                    let importing = isImporting
                     HStack(spacing: 10) {
                         Button("Browse Photos\u{2026}") { browseForReferenceFolder() }
                             .controlSize(.regular)
@@ -383,7 +386,7 @@ struct PersonEditSheet: View {
                             maxSelectionCount: 50,
                             matching: .images
                         ) {
-                            Label(isImporting ? "Importing\u{2026}" : "Apple Photos",
+                            Label(importing ? "Importing\u{2026}" : "Apple Photos",
                                   systemImage: "photo.on.rectangle.angled")
                         }
                         .controlSize(.regular)

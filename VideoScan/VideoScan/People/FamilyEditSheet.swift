@@ -48,10 +48,13 @@ struct FamilyEditSheet: View {
                     TextField("Family name", text: $name)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 15))
+                    // Read the @State once here (main actor); the picker's
+                    // label closure is @Sendable in this SDK.
+                    let importing = isImporting
                     HStack(spacing: 10) {
                         Button("Browse Photos\u{2026}") { browse() }
                         PhotosPicker(selection: $pickerItem, matching: .images) {
-                            Label(isImporting ? "Importing\u{2026}" : "Apple Photos",
+                            Label(importing ? "Importing\u{2026}" : "Apple Photos",
                                   systemImage: "photo.on.rectangle.angled")
                         }
                         .disabled(isImporting)

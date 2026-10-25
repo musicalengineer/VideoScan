@@ -24427,6 +24427,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/Swift6IsolationStage567Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "Swift6IsolationStage567Tests"
+      ],
+      "tests": [
+        "aRangedStreamWalksEveryChunkInOrder",
+        "aRequestArrivingInTwoSegmentsIsReassembled",
+        "bundlePartsEqualTheirSerialBuilders",
+        "snapshotCaptureIsOrderPreservingFromAnyIsolation"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/T3VExtensionlessSurvivalTests.swift",
@@ -28353,6 +28367,7 @@
         "test_fewer_warnings_is_green_and_update_lowers",
         "test_first_baseline_is_written_and_fixes_the_denominator",
         "test_incremental_log_is_judged_per_file",
+        "test_junk_that_itself_contains_the_repo_path_is_stripped_to_the_last_occurrence",
         "test_missing_baseline_is_one_loud_red_not_one_per_file",
         "test_package_checkouts_inside_the_repo_do_not_count",
         "test_percent_is_cleared_over_start_and_99_until_the_app_flips",
@@ -30669,6 +30684,8 @@
         "nicknameWinsAndSelectionKeepsItsIdentity",
         "sharedFormalTagDoesNotCheckBothNicknames",
         "tagMenusDoNotDiscardProfileIdentityOrNicknames",
+        "uncheckHandsTheEngineTheRowsOwnSpellings",
+        "uncheckKeepsTheRecordsSpelling",
         "uniqueLegacyFormalTagCanStillBeUnchecked"
       ]
     },
@@ -33310,7 +33327,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2955,
+      "expected_floor": 2961,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33793,6 +33810,7 @@
         "VideoScanTests/PutBackStaysPutBackTests",
         "VideoScanTests/SplitUnknownDigestHoldTests",
         "VideoScanTests/SideStoreAuthorityTests",
+        "VideoScanTests/Swift6IsolationStage567Tests",
         "VideoScanTests/ValidateCatalogOutcomeTests",
         "VideoScanTests/ValidateCatalogJobTests",
         "VideoScanTests/ValidateCatalogMenuSensorTests",
