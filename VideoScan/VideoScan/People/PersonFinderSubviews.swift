@@ -88,6 +88,7 @@ struct ReferenceFaceCard: View {
 struct PersonCard: View {
     let profile: POIProfile
     let isActive: Bool
+    var displayLabel: String? = nil
     var justSaved: Bool = false
     /// A save that failed or half-succeeded, shown until the next edit
     /// (2026-09-06). Deliberately NOT a timed flash: "Saved" may vanish
@@ -123,6 +124,12 @@ struct PersonCard: View {
     /// (`@State` in a `struct` view ≈ a member SwiftUI keeps alive across
     /// re-renders; the struct itself is still rebuilt every time.)
     @State private var showingWarnings = false
+
+    /// A namesake's birth year needs room beneath the nickname.
+    private var nameLineLimit: Int {
+        guard let displayLabel, displayLabel != profile.displayName else { return 1 }
+        return 2
+    }
 
     private var ringGradient: AngularGradient {
         AngularGradient(
@@ -192,10 +199,10 @@ struct PersonCard: View {
                         .foregroundColor(.green)
                         .transition(.scale.combined(with: .opacity))
                 }
-                Text(saveProblem != nil ? "Not saved" : justSaved ? "Saved" : profile.displayName)
+                Text(saveProblem != nil ? "Not saved" : justSaved ? "Saved" : (displayLabel ?? profile.displayName))
                     .font(.system(size: nameFontSize, weight: isActive ? .bold : .medium))
-                    .lineLimit(1)
-                    .help(saveProblem ?? "")
+                    .lineLimit(nameLineLimit)
+                    .help(saveProblem ?? displayLabel ?? profile.displayName)
                     .foregroundColor(saveProblem != nil ? .red
                                      : justSaved ? .green
                                      : isActive ? .blue : .primary)

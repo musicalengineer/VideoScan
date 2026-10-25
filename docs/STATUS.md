@@ -18,7 +18,7 @@
 - **Merged 10/24, waiting on Rick's Debug spot test:** Archive no-sound mark (#345) and People tab row removal. Follow-ups #368–#371.
 - **Spot-test targets from today's slices:** Catalog People column and Relocate summary sheet text (interpolation replaced `Text +`), filmstrip / Find Person frame seeking (async image generator), People tab first load (migration state read under the run lock).
 - **Nightly 10/24 GREEN:** app 12,271 / 0; Core 1,872 / 0. Hallie strict 57/67.
-- **New issues 10/25:** #375 nickname bug (Catalog people tagging lists "Timothy, Timothy"); #377 two stale gauntlet manifest assignments; #378 two People tests assert a raw 500 ms budget (every weekly sanitizer run reads tests-failed); #379 CI publishes `periphery_aggressive: 0` while a local scan finds 1,440.
+- **#375 nickname bug — fix merged 10/25 (Codex branch, gated here), waiting on Rick's Catalog/People spot test:** tagging lists show the family nickname; duplicate labels carry birth years. **New issues 10/25:** #377 two stale gauntlet manifest assignments; #378 two People tests assert a raw 500 ms budget (every weekly sanitizer run reads tests-failed); #379 CI publishes `periphery_aggressive: 0` while a local scan finds 1,440.
 - **`test/gauntlet-prodshape`** (locked worktree): leave it to its owner session.
 - **Provenance** (design under review): needs Rick's four answers before Phase 1.
 - **Step G (JSON gone):** finish or schedule. Cutover-audit P1s: #338, #339, the stale-JSON-reader item.
@@ -27,7 +27,7 @@
 ## Next (in order)
 1. Merge slices A and B (reviewer → Codex on rule-10 → baseline → lane → merge → push); then stage 8: `SWIFT_VERSION = 6`, full suite on the fleet, Codex on the flip.
 2. Rick: Archive-tab spot test; the two Charter rulings; install the analysis lane when ready.
-3. #378 (two-line fix, unblocks the sanitizer lanes); #375 nickname bug.
+3. #378 (two-line fix, unblocks the sanitizer lanes).
 4. Provenance Phase 1 after Rick's rulings; Step G; #337.
 
 ## Ultra (arrives Tue 10/27; dev setup Wed 10/28)

@@ -410,6 +410,10 @@ struct ArchivedDateReadOnlyTests {
         let fields = "userDate|userDateConfidence|inferredRecordDate|inferredDateConfidence|inferredDateRange|inferredDateReason|inferredDateSource"
         let regex = try NSRegularExpression(pattern: "(?<![\\w.])([A-Za-z_]\\w*)\\.(\(fields))\\s*=(?!=)")
         var writers = Set<String>()
+        // Relativize on symlink-resolved paths: under /private/tmp the
+        // enumerator reports /tmp/… while #filePath says /private/tmp/…, and a
+        // fixed-length drop cut eight characters too many (2026-10-25).
+        let root = appDir.resolvingSymlinksInPath().path
         let walker = try #require(FileManager.default.enumerator(at: appDir, includingPropertiesForKeys: nil))
         for case let url as URL in walker where url.pathExtension == "swift" {
             let text = try String(contentsOf: url, encoding: .utf8)
@@ -417,7 +421,7 @@ struct ArchivedDateReadOnlyTests {
                 guard let r = Range(m.range(at: 1), in: text) else { return false }
                 return text[r] != "self"
             }
-            if hit { writers.insert(String(url.path.dropFirst(appDir.path.count + 1))) }
+            if hit { writers.insert(String(url.resolvingSymlinksInPath().path.dropFirst(root.count + 1))) }
         }
         #expect(writers.count > 10, "the scan found the app sources: \(writers.count)")
         let unreviewed = writers.subtracting(Self.reviewedDateWriters.keys)
