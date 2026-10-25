@@ -12,7 +12,12 @@ import ImageIO
 /// kept in an NSCache is all they need. Crop scale/offset are in view points,
 /// so a smaller bitmap keeps the same framing.
 enum PortraitThumbnailCache {
-    private static let cache: NSCache<NSString, NSImage> = {
+    // Swift 6: NSCache is thread-safe (Apple docs: "you can add, remove, and
+    // query items in the cache from different threads without having to lock
+    // the cache yourself"); its Sendable conformance is marked unavailable in
+    // this SDK. Not @MainActor because `POIProfile.coverImage` (a nonisolated
+    // value) reads it. The only opt-out in this slice.
+    nonisolated(unsafe) private static let cache: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
         c.countLimit = 600
         return c

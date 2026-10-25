@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -783,5 +784,102 @@ extension POIUUIDMigrationTests {
         #expect(try POIStorage.rollbackUUIDMigration(root: root.url) == 0, "nothing left to rename")
         #expect(!fm.fileExists(atPath: audit.path), "audit moved aside once everything is back")
         #expect(try Data(contentsOf: legacy.folder.appendingPathComponent("cover.jpg")) == legacy.bytes, "dereferences again")
+    }
+
+
+    // MARK: - Swift 6 stage 4 (#376): the bookkeeping lock
+
+    /// `migrationStates`, `pendingCatalogLogLines` and `reportedSkips` moved
+    /// from `static var`s into one `OSAllocatedUnfairLock<Bookkeeping>`. The
+    /// state a run writes must be what the readers see: the per-root state,
+    /// the buffered catalog.log summary (drained exactly once), and the
+    /// once-per-process skip report.
+    @Test func bookkeepingIsReadWhereTheRunWroteIt() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        try writeLegacy(root, folder: "rick", name: "Rick", uuid: UUID())
+        // A per-test folder name and the fixture's own base path: the log
+        // buffer is process-global and other suites migrate temp roots in
+        // parallel, so every assertion below is scoped to THIS root.
+        let brokenName = "broken-\(UUID().uuidString.prefix(8))"
+        let base = root.url.deletingLastPathComponent().path
+        let malformed = root.folder(brokenName)
+        try FileManager.default.createDirectory(at: malformed, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: malformed.appendingPathComponent("profile.json"))
+        _ = POIStorage.drainPendingCatalogLogLines()   // other tests' leftovers
+
+        #expect(POIStorage.migrationState(root: root.url) == nil, "no run has looked at this root")
+        let outcome = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups)
+        guard case .ran(let report) = outcome else { Issue.record("expected .ran, got \(outcome)"); return }
+        #expect(report.mapping.count == 1)
+
+        #expect(POIStorage.migrationState(root: root.url) == .backedUp(report.backupPath ?? ""))
+        #expect(POIStorage.legacyWritesPermitted(root: root.url))
+
+        let drained = POIStorage.drainPendingCatalogLogLines()
+        #expect(drained.contains { $0.hasPrefix("People migration:") && $0.contains("1 folder(s)") && $0.contains(base) },
+                "the run's summary reaches the catalog log once: \(drained)")
+        #expect(drained.contains { $0.contains("skipped '\(brokenName)'") }, "the skip is reported the first time")
+        #expect(!POIStorage.drainPendingCatalogLogLines().contains { $0.contains(base) || $0.contains(brokenName) },
+                "drained means gone (for this root)")
+
+        // A second run on the same root: nothing to move, and the skip is
+        // NOT reported again (once per process).
+        _ = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups)
+        let second = POIStorage.drainPendingCatalogLogLines()
+        #expect(!second.contains { $0.contains("skipped '\(brokenName)'") }, "skip reported once per process: \(second)")
+        #expect(POIStorage.migrationState(root: root.url) == .nothingToMove)
+    }
+
+    /// CONTRACT (stage-4 review): a reader asking for a root's state while
+    /// a run is in flight WAITS for that run and sees its result — never the
+    /// previous state. The window that matters is between the backup clone
+    /// and its verify: there `legacyWritesPermitted` must not answer from a
+    /// stale state and let a uuid write land in a legacy folder mid-clone.
+    /// Deterministic through `testAfterCloneBeforeVerify`: the run is parked
+    /// in that window while the reader is checked.
+    /// RED (2026-10-25, bookkeeping lock only): the reader returned at once
+    /// with the stale `nil`. GREEN: it blocks until the run finishes and
+    /// reports `.backedUp(path)`.
+    @Test func aReaderDuringTheBackupWindowWaitsForTheRunsResult() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        try writeLegacy(root, folder: "rick", name: "Rick", uuid: UUID())
+        let seamHit = DispatchSemaphore(value: 0)
+        let proceed = DispatchSemaphore(value: 0)
+        POIStorage.testAfterCloneBeforeVerify.withLock { $0 = { _ in seamHit.signal(); proceed.wait() } }
+        defer { POIStorage.testAfterCloneBeforeVerify.withLock { $0 = nil } }
+
+        let runDone = DispatchSemaphore(value: 0)
+        let backupPath = OSAllocatedUnfairLock<String?>(initialState: nil)
+        Thread.detachNewThread {
+            if case .ran(let report) = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups) {
+                backupPath.withLock { $0 = report.backupPath }
+            }
+            runDone.signal()
+        }
+        defer { proceed.signal() }   // never leave the run parked on a failed expectation
+        #expect(seamHit.wait(timeout: .now() + 10) == .success, "the run reached the clone→verify window")
+
+        // The reader, while the run is parked in that window.
+        let readerDone = DispatchSemaphore(value: 0)
+        let observed = OSAllocatedUnfairLock<(returned: Bool, state: POIStorage.MigrationState?)>(initialState: (false, nil))
+        Thread.detachNewThread {
+            let state = POIStorage.migrationState(root: root.url)
+            observed.withLock { $0 = (true, state) }
+            readerDone.signal()
+        }
+        let readerWaited = readerDone.wait(timeout: .now() + 0.5) == .timedOut
+        #expect(readerWaited,
+                "the reader must wait for the in-flight run, not answer from the previous state: \(observed.withLock { $0 })")
+
+        proceed.signal()
+        #expect(runDone.wait(timeout: .now() + 30) == .success)
+        if readerWaited { #expect(readerDone.wait(timeout: .now() + 10) == .success) }
+        let path = try #require(backupPath.withLock { $0 }, "the run backed up and moved the folder")
+        let seen = observed.withLock { $0 }
+        #expect(seen.returned)
+        #expect(seen.state == .backedUp(path), "the reader saw THIS run's result")
+        #expect(POIStorage.legacyWritesPermitted(root: root.url))
     }
 }

@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 @testable import VideoScan
 
 @Suite("PersonFinderCache")
@@ -502,5 +503,63 @@ struct PersonFinderCacheTests {
                 #expect(cache.lookup(key: secondKey) == nil)
             }
         }
+    }
+
+
+    // MARK: - Swift 6 stage 4 (#376): the lock owns the state
+
+    /// `refHashCache` was a `static var` beside an `NSLock`; now an
+    /// `OSAllocatedUnfairLock<[String: String]>`. Eight threads asking for
+    /// the same reference set must all get the one hash, and a second ask
+    /// must be served from the cache (same value, same key).
+    @Test("cachedRefHash is read where it is written, under 8 concurrent callers")
+    func cachedRefHashAgreesAcrossThreads() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pf-refhash-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let refs = try (0..<3).map { i -> String in
+            let url = dir.appendingPathComponent("ref\(i).jpg")
+            try Data(repeating: UInt8(i), count: 64).write(to: url)
+            return url.path
+        }
+        let expected = PersonFinderCache.cachedRefHash(refs)
+        let results = OSAllocatedUnfairLock(initialState: [String]())
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in
+            for _ in 0..<50 {
+                let h = PersonFinderCache.cachedRefHash(refs)
+                results.withLock { $0.append(h) }
+            }
+        }
+        let all = results.withLock { $0 }
+        #expect(all.count == 400)
+        #expect(Set(all) == [expected])
+    }
+
+    /// The connection and its hit/miss tally live inside one lock now.
+    /// Distinct keys stored and read back from 8 threads at once must all
+    /// hit, and the summary counters must add up — no lost update.
+    @Test("store/lookup from 8 concurrent threads: every key hits, counters add up")
+    func concurrentStoreAndLookupLoseNothing() {
+        let cache = makeTempCache()
+        let keys = (0..<64).map { i in makeKey(videoPath: "/Volumes/T/clip\(i).MTS") }
+        DispatchQueue.concurrentPerform(iterations: 8) { lane in
+            for i in stride(from: lane, to: keys.count, by: 8) {
+                cache.store(key: keys[i], result: sampleResult(hits: i % 5))
+            }
+        }
+        #expect(cache.count == keys.count)
+        let hits = OSAllocatedUnfairLock(initialState: 0)
+        DispatchQueue.concurrentPerform(iterations: 8) { lane in
+            for i in stride(from: lane, to: keys.count, by: 8) {
+                if let r = cache.lookup(key: keys[i]), r.totalHits == i % 5 {
+                    hits.withLock { $0 += 1 }
+                }
+            }
+        }
+        #expect(hits.withLock { $0 } == keys.count)
+        // A miss after the hits: the tally is reachable only through the
+        // lock, so this cannot race the lookups above.
+        #expect(cache.lookup(key: makeKey(videoPath: "/Volumes/T/never.MTS")) == nil)
     }
 }

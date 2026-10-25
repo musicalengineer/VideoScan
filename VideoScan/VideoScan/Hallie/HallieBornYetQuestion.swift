@@ -31,7 +31,7 @@ enum HallieBornYetQuestion {
     /// aux + SUBJECT + (already/even/yet)* (been)? born|alive|around … .
     /// The subject is the shortest run before the born-yet verb phrase.
     private static let shape =
-        /^(?:(?:and|so|ok|okay|well|hey),?\s+)?(?:were|was|had|has|have)\s+(.+?)\s+(?:(?:already|even|yet)\s+)*(?:been\s+)?(?:born|alive|around|on the scene)\b/
+        SendableRegex(/^(?:(?:and|so|ok|okay|well|hey),?\s+)?(?:were|was|had|has|have)\s+(.+?)\s+(?:(?:already|even|yet)\s+)*(?:been\s+)?(?:born|alive|around|on the scene)\b/)
 
     /// The temporal payload to run, or nil when the sentence is not this shape.
     static func detect(_ question: String) -> ArchivistQueryAST.Temporal? {

@@ -27,17 +27,39 @@ actor MemoryPressureMonitor {
 
     private(set) var isMemoryLow = false
 
+    /// The kernel page size `vm_statistics64` counts in: 16 KiB on Apple
+    /// silicon (4 KiB is the x86/Rosetta user page). 0 if the host call fails.
+    /// Swift 6: `host_page_size` instead of the Darwin global `var
+    /// vm_kernel_page_size`, which the checker cannot prove immutable.
+    nonisolated static func kernelPageSize() -> UInt64 {
+        let host = mach_host_self()
+        defer { mach_port_deallocate(task_self_trap(), host) }
+        return kernelPageSize(host: host)
+    }
+
+    private nonisolated static func kernelPageSize(host: mach_port_t) -> UInt64 {
+        var pageSize: vm_size_t = 0
+        return host_page_size(host, &pageSize) == KERN_SUCCESS ? UInt64(pageSize) : 0
+    }
+
     /// Returns available physical memory in bytes using Mach VM statistics.
     nonisolated func availableMemory() -> UInt64 {
+        // One host port per call, released on exit: `mach_host_self()` hands
+        // out a new send right every time (C++: a ref-counted handle you must
+        // release), and a poll loop that leaked one per call would grow the
+        // process's port namespace for its lifetime.
+        let host = mach_host_self()
+        defer { mach_port_deallocate(task_self_trap(), host) }
         var stats = vm_statistics64()
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
         let result = withUnsafeMutablePointer(to: &stats) { ptr in
             ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, intPtr, &count)
+                host_statistics64(host, HOST_VM_INFO64, intPtr, &count)
             }
         }
         guard result == KERN_SUCCESS else { return 0 }
-        let pageSize = UInt64(vm_kernel_page_size)
+        let pageSize = Self.kernelPageSize(host: host)
+        guard pageSize > 0 else { return 0 }
         return (UInt64(stats.free_count) + UInt64(stats.inactive_count)) * pageSize
     }
 
