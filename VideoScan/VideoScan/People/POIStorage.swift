@@ -562,10 +562,13 @@ enum POIStorage {
     /// The per-process bookkeeping a run writes and readers consult.
     /// Swift 6: the lock OWNS these three (they were `static var`s beside
     /// `uuidMigrationLock`, which the checker cannot connect to them).
-    /// `uuidMigrationLock` still serializes whole runs; `bookkeeping` is a
-    /// leaf lock taken for one field access at a time, so there is no
-    /// lock-order hazard. Memory: one state per root (a handful), the
-    /// undrained log lines of one run, and one key per skipped folder.
+    /// LOCK ORDER: `uuidMigrationLock` → `bookkeeping`, always. A run holds
+    /// `uuidMigrationLock` for its whole duration and takes `bookkeeping` for
+    /// one field access at a time (a leaf); `migrationState` takes both in
+    /// that order so a reader waits for an in-flight run and sees ITS result.
+    /// Nothing takes `bookkeeping` and then `uuidMigrationLock`.
+    /// Memory: one state per root (a handful), the undrained log lines of
+    /// one run, and one key per skipped folder.
     private struct Bookkeeping {
         /// Per-root state (keyed by standardized path).
         var migrationStates: [String: MigrationState] = [:]
@@ -593,10 +596,31 @@ enum POIStorage {
         bookkeeping.withLock { $0.reportedSkips.insert(key).inserted }
     }
 
+    /// Test-only pause seam between the backup clone and its verification —
+    /// the window in which a reader must still wait for the run (see
+    /// `migrationState`). Called with the backup URL, on the run's thread,
+    /// while `uuidMigrationLock` is held. Lock-owned, so it is not a global
+    /// `var`; production never sets it. (Same shape as
+    /// `CatalogStore.testAfterWriteBeforeVerify`.)
+    static let testAfterCloneBeforeVerify = OSAllocatedUnfairLock<(@Sendable (URL) -> Void)?>(initialState: nil)
+
+    /// The point between a successful clone and its verification. Production:
+    /// a no-op. Tests: the parked window `migrationState` must wait through.
+    private static func cloneVerifyCheckpoint(_ backup: URL) {
+        testAfterCloneBeforeVerify.withLock { $0 }?(backup)
+    }
+
     /// The last known state for `root`, nil when no run has looked at it in
-    /// this process.
+    /// this process. WAITS for an in-flight run: a reader must see that
+    /// run's result, never the previous state — between the backup clone and
+    /// its verify, `legacyWritesPermitted` answering from a stale `.backedUp`
+    /// would let a uuid write land in a legacy folder mid-clone. Lock order
+    /// `uuidMigrationLock` → `bookkeeping` (see `Bookkeeping`); a run never
+    /// calls this, so there is no re-entrancy on the non-recursive NSLock.
     static func migrationState(root: URL? = nil) -> MigrationState? {
         let path = (root ?? storeDir).standardizedFileURL.path
+        uuidMigrationLock.lock()
+        defer { uuidMigrationLock.unlock() }
         return bookkeeping.withLock { $0.migrationStates[path] }
     }
 
@@ -844,6 +868,7 @@ enum POIStorage {
         switch cloneOrCopyDirectory(from: root, to: backup) {
         case .success(let method):
             report.backupSeconds = seconds(clock.now - backupStart)
+            cloneVerifyCheckpoint(backup)
             let verified = verifyBackup(of: root, at: backup, folders: plan.map(\.source))
             report.backupPath = backup.path
             report.backupMethod = method

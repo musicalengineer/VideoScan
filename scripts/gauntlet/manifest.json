@@ -19094,8 +19094,8 @@
         "MemoryPressurePageSizeTests"
       ],
       "tests": [
-        "availableMemoryIsPositiveAndBoundedByPhysicalRAM",
-        "twoReadingsAgreeToWithinNormalChurn"
+        "availableMemoryIsAWholeNumberOfKernelPages",
+        "kernelPageSizeIsTheOneVMStatisticsCountIn"
       ]
     },
     {
@@ -19941,6 +19941,7 @@
         "POIUUIDMigrationTests"
       ],
       "tests": [
+        "aReaderDuringTheBackupWindowWaitsForTheRunsResult",
         "backupFailureMeansZeroWritesAnywhere",
         "bookkeepingIsReadWhereTheRunWroteIt",
         "failedLinkRebaseKeepsTheOriginalLinkAndIsRetriedOnTheNextRun",
