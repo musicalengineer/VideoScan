@@ -16,7 +16,7 @@ private func person(_ n: Int, born: Int? = nil, gen: Int? = nil, line: TreeWalk.
                     isInnerCircle: inner)
 }
 
-private let allDeceased: (RollCall.Person) -> PersonOfTheDay.Life = { _ in .deceased }
+private let allDeceased: @Sendable (RollCall.Person) -> PersonOfTheDay.Life = { _ in .deceased }
 
 @Suite("RollCall")
 struct RollCallTests {

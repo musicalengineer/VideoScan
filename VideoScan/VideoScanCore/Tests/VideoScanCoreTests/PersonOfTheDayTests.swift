@@ -23,7 +23,7 @@ private func ancestor(_ n: Int, line: TreeWalk.Line = .first, portrait: Bool = f
                    birthPlace: place, line: line, generation: 4, hasPortrait: portrait, storyCount: stories)
 }
 
-private let datesOnly: (POTD.Day) -> (POTD.Candidate) -> POTD.Life = { today in
+private let datesOnly: @Sendable (POTD.Day) -> (POTD.Candidate) -> POTD.Life = { today in
     { POTD.lifeFromDates($0, today: today) }
 }
 

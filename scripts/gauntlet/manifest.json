@@ -28229,6 +28229,36 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_warning_ratchet.py",
+      "stage": "unit",
+      "suites": [
+        "test_warning_ratchet.py"
+      ],
+      "tests": [
+        "test_a_deleted_file_may_vanish_without_evidence",
+        "test_a_missing_log_is_skipped",
+        "test_a_new_file_with_a_warning_is_red",
+        "test_a_new_swift6_blocker_behind_a_fixed_deprecation_is_red",
+        "test_a_warning_glued_to_another_streams_echo_still_counts",
+        "test_baseline_header_survives_a_second_update_without_duplicates",
+        "test_compile_evidence_from_xcodebuild_and_very_verbose_swiftpm",
+        "test_core_is_in_swift_6_mode",
+        "test_distinct_diagnostics_in_repo_files_only",
+        "test_fewer_warnings_is_green_and_update_lowers",
+        "test_first_baseline_is_written_and_fixes_the_denominator",
+        "test_incremental_log_is_judged_per_file",
+        "test_missing_baseline_is_one_loud_red_not_one_per_file",
+        "test_package_checkouts_inside_the_repo_do_not_count",
+        "test_percent_is_cleared_over_start_and_99_until_the_app_flips",
+        "test_swiftpm_evidence_by_file_name_proves_a_fall",
+        "test_the_committed_baseline_exists_and_is_well_formed",
+        "test_update_refuses_a_collapse_without_force",
+        "test_update_refuses_a_rise_without_force_and_without_clean"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_watch_hallie_chat.py",
       "stage": "hallie",
       "suites": [
@@ -33075,6 +33105,10 @@
         },
         {
           "name": "tests/test_vlm_caption.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_warning_ratchet.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

@@ -6,19 +6,16 @@ import PackageDescription
 // Extracted from the app target so the data layer compiles independently,
 // enforces a UI-free boundary, and can be unit-tested in isolation.
 //
-// Swift 5 language mode to match the app target (SWIFT_VERSION = 5.0) — keeps
-// VideoRecord's existing (non-Sendable) concurrency behavior identical to the
-// pre-extraction app build. Platform floor is intentionally low (the domain
-// uses only long-stable Foundation API); the app declares the real, higher
-// deployment target.
+// Swift 6 language mode (Rick 2026-10-25, docs/design/swift6_migration_2026_10_25.md,
+// stage 1): strict concurrency is implicit and its findings are ERRORS, so a
+// data race on tracked state cannot compile. The app target follows once its
+// own diagnostics are at zero (stage 8). Platform floor is intentionally low
+// (the domain uses only long-stable Foundation API); the app declares the
+// real, higher deployment target.
 //
-// Strict concurrency = COMPLETE for every target (stage 1 of the
-// strict-concurrency rollout, Rick 2026-09-22). Still Swift 5 language mode,
-// so findings are warnings, not errors. With swift-tools-version 6.0 the
-// setting is the upcoming feature "StrictConcurrency" (SE-0337), which is
-// what `-strict-concurrency=complete` maps to; it keeps the manifest free of
-// `unsafeFlags`. Swift 6 mode would turn it on implicitly.
-let strictConcurrency: [SwiftSetting] = [.enableUpcomingFeature("StrictConcurrency")]
+// History: strict concurrency was turned on as warnings on 2026-09-22
+// (`.enableUpcomingFeature("StrictConcurrency")`, Swift 5 mode); the v6 mode
+// below replaces that setting.
 
 let package = Package(
     name: "VideoScanCore",
@@ -54,37 +51,31 @@ let package = Package(
     targets: [
         .target(
             name: "VideoScanCore",
-            dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
-            swiftSettings: strictConcurrency
+            dependencies: [.product(name: "GRDB", package: "GRDB.swift")]
         ),
         .executableTarget(
             name: "videoscan-preview-sweep",
-            dependencies: ["VideoScanCore"],
-            swiftSettings: strictConcurrency
+            dependencies: ["VideoScanCore"]
         ),
         .executableTarget(
             name: "videoscan-tree-ingest",
-            dependencies: ["VideoScanCore"],
-            swiftSettings: strictConcurrency
+            dependencies: ["VideoScanCore"]
         ),
         .executableTarget(
             name: "videoscan-audio-match",
-            dependencies: ["VideoScanCore"],
-            swiftSettings: strictConcurrency
+            dependencies: ["VideoScanCore"]
         ),
         // TEST-ONLY (2026-10-18): the child process CatalogHardKillTests
         // SIGKILLs mid-commit. No product entry: the app links only the
         // library; `swift build` / `swift test` build it beside the tests.
         .executableTarget(
             name: "catalog-crash-helper",
-            dependencies: ["VideoScanCore"],
-            swiftSettings: strictConcurrency
+            dependencies: ["VideoScanCore"]
         ),
         .testTarget(
             name: "VideoScanCoreTests",
-            dependencies: ["VideoScanCore"],
-            swiftSettings: strictConcurrency
+            dependencies: ["VideoScanCore"]
         ),
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )
