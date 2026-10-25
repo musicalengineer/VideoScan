@@ -30683,6 +30683,8 @@
         "nicknameWinsAndSelectionKeepsItsIdentity",
         "sharedFormalTagDoesNotCheckBothNicknames",
         "tagMenusDoNotDiscardProfileIdentityOrNicknames",
+        "uncheckHandsTheEngineTheRowsOwnSpellings",
+        "uncheckKeepsTheRecordsSpelling",
         "uniqueLegacyFormalTagCanStillBeUnchecked"
       ]
     },
@@ -33324,7 +33326,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2959,
+      "expected_floor": 2961,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
