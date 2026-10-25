@@ -169,11 +169,16 @@ struct IntegrationStressTests {
         let queries = ["donna", "rick", "birthday", "guitar", "1920", "prores",
                        "vacation christmas", "mov", "piano timmy", "archive"]
 
+        // Swift 6: the storm is 50 readers over ONE record array (that is
+        // the point of the test). `VideoRecord` is a class; nothing writes
+        // a record after this line, so sharing the let is safe in a way
+        // the checker cannot see.
+        nonisolated(unsafe) let shared = records
         await withTaskGroup(of: Int.self) { group in
             for i in 0..<50 {
                 let query = queries[i % queries.count]
                 group.addTask {
-                    let results = pfRecordsMatchingQuery(records, query: query)
+                    let results = pfRecordsMatchingQuery(shared, query: query)
                     return results.count
                 }
             }
@@ -404,7 +409,8 @@ struct PipelineStressTests {
                 outcomes.append(outcome)
             }
         }
-        let records: [VideoRecord] = outcomes.map { let r = VideoRecord(); r.apply($0); return r }
+        let probed = outcomes  // Swift 6: a let for the search children to capture (a var cannot be sent)
+        let records: [VideoRecord] = probed.map { let r = VideoRecord(); r.apply($0); return r }
         #expect(records.count == generatedPaths.count)
 
         // Phase 2: Concurrent searches while still "scanning"
@@ -421,7 +427,7 @@ struct PipelineStressTests {
             // the Sendable outcomes — ten rows, so the cost is nil).
             for query in ["mp4", "h264", "aac", "test_gen", "video"] {
                 group.addTask {
-                    let searchable: [VideoRecord] = outcomes.map { let r = VideoRecord(); r.apply($0); return r }
+                    let searchable: [VideoRecord] = probed.map { let r = VideoRecord(); r.apply($0); return r }
                     _ = pfRecordsMatchingQuery(searchable, query: query)
                 }
             }

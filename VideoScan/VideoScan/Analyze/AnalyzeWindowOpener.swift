@@ -10,9 +10,9 @@ import SwiftUI
 @MainActor
 enum AnalyzeWindowOpener {
     /// Scene id from the `Window(id:)` declaration in VideoScanApp.swift.
-    static let sceneID = "analyze"
+    nonisolated static let sceneID = "analyze"
     /// Scene title — SwiftUI sets NSWindow.title to this.
-    static let windowTitle = "Content Analysis"
+    nonisolated static let windowTitle = "Content Analysis"
 
     /// - source: "menu" (⇧⌘O), "chip" (toolbar button), "analyze-menu".
     static func open(using openWindow: OpenWindowAction, source: String) {

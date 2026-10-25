@@ -53,7 +53,7 @@ private func advHit(_ n: Int = 1) -> ResearchFinding {
 
 @Suite("Adversarial 2026-10-02 — F1 reverted lore draft", .serialized)
 struct AdvRevertedLoreDraftTests {
-    private let fm = FileManager.default
+    private var fm: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable
 
     @MainActor
     private func pane(_ subject: ResearchSubject, _ store: ResearchStore) -> ResearchPersonModel {
@@ -237,7 +237,7 @@ struct AdvRevertedLoreDraftTests {
 
 @Suite("Adversarial 2026-10-02 — F2 re-run keeps Rick's work", .serialized)
 struct AdvRerunKeepsLoreTests {
-    private let fm = FileManager.default
+    private var fm: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable
 
     /// The review's drafted red test.
     @MainActor

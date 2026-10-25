@@ -28,7 +28,7 @@ struct ArchiveAngelUnreadableRow: View {
     }
 
     /// "1 Angel batch can't be read (12.4 GB)" / "3 Angel batches can't be read (…)".
-    static func title(_ batches: [ArchiveAngelPlanStore.UnreadableBatch]) -> String {
+    nonisolated static func title(_ batches: [ArchiveAngelPlanStore.UnreadableBatch]) -> String {
         let n = batches.count
         let bytes = batches.reduce(Int64(0)) { $0 + $1.sizeBytes }
         return "\(n) Angel batch\(n == 1 ? "" : "es") can't be read (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) — left untouched"

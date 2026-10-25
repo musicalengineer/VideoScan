@@ -321,7 +321,8 @@ struct FootageFoldersLogicTests {
             #expect(sort.key == c.key && sort.ascending == false, "\(c.key)")
             let rows = FootageFolderSort.rowComparators(from: rec)
             #expect(rows.count == 1)
-            #expect(FootageFolderSort.recordComparators(from: rows).first?.keyPath == c.record, "\(c.key) round-trips")
+            let roundTrips = FootageFolderSort.recordComparators(from: rows).first?.keyPath == c.record  // Swift 6: key paths are not Sendable inside #expect
+            #expect(roundTrips, "\(c.key) round-trips")
         }
         #expect(FootageFolderSort.sort(from: []) == .byName)
     }

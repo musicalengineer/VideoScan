@@ -96,7 +96,7 @@ struct ArchiveAngelDetailView: View {
         Self.offersReview(isActive: job.state.isActive, readyCount: job.plan.readyCount, status: job.plan.status)
     }
 
-    static func offersReview(isActive: Bool, readyCount: Int, status: ArchiveAngelPlan.Status) -> Bool {
+    nonisolated static func offersReview(isActive: Bool, readyCount: Int, status: ArchiveAngelPlan.Status) -> Bool {
         !isActive && readyCount > 0 && status == .ready
     }
 

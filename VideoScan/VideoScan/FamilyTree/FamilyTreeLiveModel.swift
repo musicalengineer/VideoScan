@@ -794,13 +794,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         let overlayStore = personRefreshOverlayStore
         let rulings = identityDecisions
         let keepInMemoryRulings = identityRulingsUnsaved
-        // Swift 6: a let-bound WeakRef, not `[weak self]` on the detached
-        // closure (a weak capture is a var the checker refuses; WeakRef.swift).
-        let model = WeakRef(self)
+        let model = WeakRef(self)  // Swift 6: a let-bound weak ref, not `[weak self]` (WeakRef.swift)
         let progress: @Sendable (String) -> Void = { phase in
             Task { @MainActor in
-                guard let self = model.object, self.loadGeneration == generation else { return }
-                self.loadPhase = phase
+                if let self = model.object, self.loadGeneration == generation { self.loadPhase = phase }
             }
         }
         let loaded = await Task.detached(priority: .userInitiated) { ()

@@ -26,7 +26,7 @@ private func items(_ n: Int, groups: Int) -> [SignatureWorkItem] {
     }
 }
 
-private let volumeOfPath: (String) -> String = { path in
+private let volumeOfPath: @Sendable (String) -> String = { path in
     path.split(separator: "/").dropFirst().first.map(String.init) ?? ""
 }
 

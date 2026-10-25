@@ -1,5 +1,6 @@
 import Testing
 import CoreML
+import os
 @testable import VideoScan
 
 /// Regression tests for `ArcFaceModelLoader`.
@@ -104,8 +105,7 @@ import CoreML
         // Barrier so all threads enter the hot loop at exactly the same
         // moment — maximum simultaneous contention is what triggers the
         // MLE5 race.
-        let counterLock = NSLock()
-        var readyCount = 0
+        let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
         let startBarrier = DispatchSemaphore(value: 0)
         let group = DispatchGroup()
 
@@ -115,10 +115,7 @@ import CoreML
             Thread.detachNewThread {
                 defer { group.leave() }
 
-                counterLock.lock()
-                readyCount += 1
-                let nowReady = readyCount
-                counterLock.unlock()
+                let nowReady = readyCount.withLock { $0 += 1; return $0 }
                 if nowReady == threadCount {
                     for _ in 0..<threadCount { startBarrier.signal() }
                 }

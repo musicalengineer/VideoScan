@@ -42,7 +42,7 @@ private func bfRec(
     return r
 }
 
-private let allReachable: (String) -> Bool = { _ in true }
+private let allReachable: @Sendable (String) -> Bool = { _ in true }
 
 @Suite("Content-hash backfill — candidate selection")
 struct ContentHashBackfillSelectionTests {

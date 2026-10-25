@@ -310,7 +310,7 @@ struct DossierArchivedAdmissionScaleTests {
         var testDescription: String { name }
     }
 
-    static let matrix: [MatrixCase] = [
+    nonisolated static let matrix: [MatrixCase] = [  // Swift 6: the @Test macro reads it off the actor
         .init(name: "test_dossier_admit.mp4", videoCodec: "libx264", extra: ["-preset", "ultrafast", "-pix_fmt", "yuv420p"],
               audioCodec: "aac", size: "320x240", rate: "25"),
         .init(name: "test_dossier_admit.mov", videoCodec: "prores", extra: [], audioCodec: "pcm_s16le", size: "320x240", rate: "25"),

@@ -454,7 +454,7 @@ struct FamilyTreeDocumentsPanel: View {
     }
 
     /// "Research: 2 confirmed findings" / "Research: none confirmed yet".
-    static func researchSummary(confirmed: Int) -> String {
+    nonisolated static func researchSummary(confirmed: Int) -> String {
         switch confirmed {
         case 0: return "Research: none confirmed yet"
         case 1: return "Research: 1 confirmed finding"

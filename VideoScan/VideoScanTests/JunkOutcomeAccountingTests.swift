@@ -121,8 +121,9 @@ struct JunkOutcomeAccountingTests {
         let trash = sb.trash.operation
         let inFirst = OrderLog()
         let release = DispatchSemaphore(value: 0)
+        let slot = MainActorSlot<VideoScanModel.JunkDeletionResult>()
         let run = Task { @MainActor in
-            await model.deleteConfirmedJunk([a, b], mode: .toTrash, guard: .init(
+            slot.value = await model.deleteConfirmedJunk([a, b], mode: .toTrash, guard: .init(
                 authorize: { _ in nil }, beforeRemoval: { _ in nil },
                 remove: { url in
                     inFirst.add(url.lastPathComponent)
@@ -134,7 +135,8 @@ struct JunkOutcomeAccountingTests {
         while inFirst.entries.isEmpty, ContinuousClock.now < deadline { await Task.yield() }
         run.cancel()
         release.signal()
-        let result = await run.value
+        await run.value
+        let result = try #require(slot.value)
         #expect(result.attempted == 2 && result.succeeded == 1 && result.cancelled == 1, "\(result.items.map(\.outcome.kind))")
         #expect(FileManager.default.fileExists(atPath: b.fullPath) && b.purgedAt == nil)
     }

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import os
 @testable import VideoScan
 
 @MainActor
@@ -14,7 +15,10 @@ struct HallieShellCLITests {
         var translationOptions: [HallieShellCLI.Options] = []
         var mediaActions: [HallieShellCLI.MediaAction] = []
         var transcriptEvents: [HallieTranscriptEvent] = []
-        var composedPlans: [HallieAnswerPlan] = []
+        /// Lock-owned (Swift 6): `composeAnswer` is a @Sendable dependency and
+        /// must not capture this mutable harness; it captures the lock instead.
+        let composed = OSAllocatedUnfairLock(initialState: [HallieAnswerPlan]())
+        var composedPlans: [HallieAnswerPlan] { composed.withLock { $0 } }
         var compositionReply: (@Sendable (HallieAnswerPlan) -> String)?
         var readCount = 0
         var records: [VideoRecord]
@@ -89,8 +93,8 @@ struct HallieShellCLITests {
                 recordTranscript: { [self] events in
                     transcriptEvents.append(contentsOf: events)
                 },
-                composeAnswer: { [self] plan, history, _ in
-                    composedPlans.append(plan)
+                composeAnswer: { [composed, compositionReply] plan, history, _ in
+                    composed.withLock { $0.append(plan) }
                     guard let compositionReply else {
                         return .template(plan, note: "template: no composer configured")
                     }

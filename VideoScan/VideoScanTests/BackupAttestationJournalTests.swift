@@ -107,7 +107,7 @@ struct BackupAttestationJournalTests {
     private func capturingMutations(_ body: () -> Void) -> [String] {
         let seen = OSAllocatedUnfairLock(initialState: [String]())
         let token = NotificationCenter.default.addObserver(forName: .videoScanCatalogMutated, object: nil, queue: nil) { note in
-            if let r = note.object as? VideoRecord { seen.withLock { $0.append(r.filename) } }
+            if let name = (note.object as? VideoRecord)?.filename { seen.withLock { $0.append(name) } }
         }
         body()
         NotificationCenter.default.removeObserver(token)

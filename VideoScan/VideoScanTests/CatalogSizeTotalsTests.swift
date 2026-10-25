@@ -53,7 +53,7 @@ private func entry(_ bytes: Int64 = 1 * GB, dup: UUID? = nil, hash: String = "",
                             contentHash: hash, partialMD5: md5, isArchived: archived)
 }
 
-private let never: (VideoRecord) -> Bool = { _ in false }
+private let never: @Sendable (VideoRecord) -> Bool = { _ in false }
 
 // MARK: - Logic
 

@@ -34,13 +34,13 @@ struct DeleteDuplicatesVolumePicker: View {
 
     /// The preselected drive when it is in the list (a drive with no
     /// deletable duplicates is not offered, preselected or not).
-    static func preselected(in volumes: [CatalogDuplicatesMenu.Volume], path: String?) -> CatalogDuplicatesMenu.Volume? {
+    nonisolated static func preselected(in volumes: [CatalogDuplicatesMenu.Volume], path: String?) -> CatalogDuplicatesMenu.Volume? {
         guard let path else { return nil }
         return volumes.first { $0.path == path }
     }
 
     /// The rest, in the original order.
-    static func others(in volumes: [CatalogDuplicatesMenu.Volume], path: String?) -> [CatalogDuplicatesMenu.Volume] {
+    nonisolated static func others(in volumes: [CatalogDuplicatesMenu.Volume], path: String?) -> [CatalogDuplicatesMenu.Volume] {
         guard let path else { return volumes }
         return volumes.filter { $0.path != path }
     }

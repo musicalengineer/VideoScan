@@ -19,7 +19,7 @@ final class FamilySearchPullMergeTests: XCTestCase {
     private var gedcomDirectory: URL!
     private var staging: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {  // Swift 6: the async override runs on this @MainActor class's actor
         let fm = FileManager.default
         root = fm.temporaryDirectory.appendingPathComponent("fs-merge-\(UUID().uuidString)", isDirectory: true)
         gedcomDirectory = root.appendingPathComponent("GEDCOM", isDirectory: true)
@@ -29,7 +29,7 @@ final class FamilySearchPullMergeTests: XCTestCase {
         }
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: root)
     }
 

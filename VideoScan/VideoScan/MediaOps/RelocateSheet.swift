@@ -495,7 +495,7 @@ struct RelocateSheet: View {
     ///
     /// Swift's `static func` on a struct ≈ a free function namespaced in
     /// C++; pure helper for testability.
-    static func normalizeSourcePath(_ path: String) -> String {
+    nonisolated static func normalizeSourcePath(_ path: String) -> String {
         guard path.count > 1, path.hasSuffix("/") else { return path }
         return String(path.dropLast())
     }
@@ -533,7 +533,7 @@ struct RelocateSheet: View {
     /// source beneath its volume>`; a source that IS a volume root maps to
     /// `<root>/from_<SourceVolume>`. Any deeper chosen folder is used as-is
     /// (the user meant it). Pure; tested.
-    static func derivedDestination(chosen: URL, sourcePath: String) -> URL {
+    nonisolated static func derivedDestination(chosen: URL, sourcePath: String) -> URL {
         let chosenStd = chosen.standardizedFileURL
         let comps = chosenStd.pathComponents            // ["/", "Volumes", "X", ...]
         let isVolumeRoot = comps.count == 3 && comps[1] == "Volumes"

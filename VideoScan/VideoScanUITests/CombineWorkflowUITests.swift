@@ -25,12 +25,13 @@
 
 import XCTest
 
+@MainActor  // Swift 6: XCUI* are main-actor types
 final class CombineWorkflowUITests: XCTestCase {
 
     /// Output dir for the combined file. See setUpWithError() for path policy.
     private var outputDir: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = false
 
         let env = ProcessInfo.processInfo.environment

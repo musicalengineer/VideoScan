@@ -185,8 +185,7 @@ struct ArcFaceMLE5CrashTests {
             return
         }
 
-        let counterLock = NSLock()
-        var readyCount = 0
+        let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
         let startBarrier = DispatchSemaphore(value: 0)
         let group = DispatchGroup()
         let completedPredictions = OSAllocatedUnfairLock(initialState: 0)
@@ -198,10 +197,7 @@ struct ArcFaceMLE5CrashTests {
                 defer { group.leave() }
 
                 // Barrier: all threads start simultaneously
-                counterLock.lock()
-                readyCount += 1
-                let nowReady = readyCount
-                counterLock.unlock()
+                let nowReady = readyCount.withLock { $0 += 1; return $0 }
                 if nowReady == threadCount {
                     for _ in 0..<threadCount { startBarrier.signal() }
                 }
@@ -232,8 +228,7 @@ struct ArcFaceMLE5CrashTests {
         let threadCount = 8
         let predictionsPerThread = 50
 
-        let counterLock = NSLock()
-        var readyCount = 0
+        let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
         let startBarrier = DispatchSemaphore(value: 0)
         let group = DispatchGroup()
         let completed = OSAllocatedUnfairLock(initialState: 0)
@@ -243,10 +238,7 @@ struct ArcFaceMLE5CrashTests {
             Thread.detachNewThread {
                 defer { group.leave() }
 
-                counterLock.lock()
-                readyCount += 1
-                let nowReady = readyCount
-                counterLock.unlock()
+                let nowReady = readyCount.withLock { $0 += 1; return $0 }
                 if nowReady == threadCount {
                     for _ in 0..<threadCount { startBarrier.signal() }
                 }

@@ -131,7 +131,7 @@ struct RepairLifecycleAdoptionTests {
         let notesBefore = original.notes
 
         await #expect(throws: AdoptRepairError.sameFileAsOriginal) {
-            try await model.adoptExternalRepair(
+            _ = try await model.adoptExternalRepair(  // Swift 6: the record must not leave the actor as the closure's result
                 originalID: original.id,
                 fileURL: URL(fileURLWithPath: original.fullPath))
         }
@@ -211,7 +211,7 @@ struct RepairLifecycleAdoptionTests {
         let model = VideoScanModel()
         let before = model.records.count
         await #expect(throws: AdoptRepairError.originalNotFound) {
-            try await model.adoptExternalRepair(
+            _ = try await model.adoptExternalRepair(
                 originalID: UUID(),
                 fileURL: URL(fileURLWithPath: "/tmp/whatever.mov"))
         }

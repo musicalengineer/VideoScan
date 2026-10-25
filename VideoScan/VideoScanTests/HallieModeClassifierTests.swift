@@ -20,10 +20,11 @@ struct HallieModeClassifierTests {
     ]
     private static let files: Set<String> = ["new hampshire.mov", "christmas 1994.mov"]
 
-    private static let oracle = C.Oracle(
+    // Computed, not stored (Swift 6): Oracle's closures are deliberately not @Sendable (see HallieModeClassifier).
+    private static var oracle: C.Oracle { C.Oracle(
         isExactPersonName: { people.contains($0.lowercased()) },
         isKnownPerson: { people.contains($0.lowercased()) },
-        isNamedFile: { files.contains($0.lowercased()) })
+        isNamedFile: { files.contains($0.lowercased()) }) }
 
     private func verdict(_ q: String, previous: HallieMode = .unknown,
                          forced: HallieMode? = nil) -> C.Verdict {

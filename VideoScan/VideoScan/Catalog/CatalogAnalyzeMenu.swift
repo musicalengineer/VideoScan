@@ -83,7 +83,7 @@ struct CatalogAnalyzeMenu: View {
 
     /// The first row: the Catalog Status summary sentence (its colour
     /// lives on the chip and the band — a macOS menu row is monochrome).
-    static func summaryTitle(_ state: CatalogFreshnessState) -> String {
+    nonisolated static func summaryTitle(_ state: CatalogFreshnessState) -> String {
         state.isComputed ? state.summary.headline : "Checking what the catalog knows…"
     }
 

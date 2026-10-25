@@ -44,7 +44,7 @@ struct ArchiveAngelAssessmentPanel: View {
     @State private var rows: [ArchiveAngelListRow] = []
     @State private var shownCount = ArchiveAngelAssessmentPanel.pageSize
     /// Rows per page (Rick 2026-09-24: ten, clearly, beats twenty-five).
-    static let pageSize = 10
+    nonisolated static let pageSize = 10
 
     /// ONE strip in the Archive pane (Rick 2026-09-22: the sidebar had
     /// three overlapping Angel entries). Left: the grades, click to open

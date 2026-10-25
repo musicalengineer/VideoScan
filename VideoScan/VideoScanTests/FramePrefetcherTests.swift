@@ -141,15 +141,17 @@ struct FramePrefetcherTests {
             frameInterval: 1.0 / fps
         )
 
-        var count = 0
-        let task = Task {
+        // Swift 6: the count is owned by the task and returned, not a
+        // captured var mutated across the await.
+        let count = await Task { () -> Int in
+            var count = 0
             for await _ in prefetcher.frames() {
                 count += 1
                 prefetcher.releaseSlot()
                 if count >= 5 { break }
             }
-        }
-        await task.value
+            return count
+        }.value
         #expect(count >= 5)
         #expect(count < 125, "Should not have consumed all 125 frames (5s × 25fps)")
     }

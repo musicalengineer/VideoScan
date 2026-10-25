@@ -252,18 +252,30 @@ struct JunkPerFileAuthorizationTests {
                 if url.lastPathComponent == "test_a.mov" { unmarked.wait() }
                 try trash(url)
             })
-        let run = Task { @MainActor in await model.deleteConfirmedJunk([a, b], mode: .toTrash, guard: fileGuard) }
+        let slot = MainActorSlot<VideoScanModel.JunkDeletionResult>()
+        let run = Task { @MainActor in slot.value = await model.deleteConfirmedJunk([a, b], mode: .toTrash, guard: fileGuard) }
         // While file 1 is being moved, the person un-marks file 2.
         let deadline = ContinuousClock.now + .seconds(20)
         while !order.entries.contains("remove test_a.mov"), ContinuousClock.now < deadline { await Task.yield() }
         b.mediaDisposition = .unreviewed
         unmarked.signal()
-        let result = await run.value
+        await run.value
+        let result = try #require(slot.value)
         #expect(order.entries.prefix(3) == ["authorize test_a.mov", "remove test_a.mov", "authorize test_b.mov"],
                 "the second file was authorized before the first file's turn ended: \(order.entries)")
         #expect(result.succeeded == 1 && result.refused.map(\.reason) == ["no longer junk"], "\(result)")
         #expect(FileManager.default.fileExists(atPath: b.fullPath))
     }
+}
+
+/// A main-actor-owned slot for a result that is NOT Sendable (Swift 6:
+/// `Task<JunkDeletionResult, Never>.value` cannot cross an isolation
+/// boundary because the result holds `VideoRecord`s). The Task writes it on
+/// the main actor and the main-actor test reads it after the Task ends.
+/// C++: a std::optional<T> that only the UI thread touches.
+@MainActor final class MainActorSlot<T> {
+    var value: T?
+    init() {}
 }
 
 /// Thread-safe ordered log.

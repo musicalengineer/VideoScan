@@ -282,7 +282,10 @@ struct HallieQueryBench {
     /// about the tree path. Built here rather than borrowed from
     /// CatalogSearchProfileBench because that generator is `@MainActor` and
     /// the turn runner must stay off the main actor to measure queueing.
-    static let records: [VideoRecord] = makeRecords(5_000)
+    // Swift 6: built once and never mutated after (VideoRecord is a class;
+    // every reader only reads) — a shared immutable table the checker
+    // cannot prove, same shape as the disjoint-slots proof.
+    nonisolated(unsafe) static let records: [VideoRecord] = makeRecords(5_000)
 
     static func makeRecords(_ n: Int) -> [VideoRecord] {
         (0..<n).map { i in
@@ -696,11 +699,12 @@ struct HallieQueryBench {
         let deps = HallieBenchDependencies.make(
             graph: f.graph, profiles: HallieBenchDependencies.profiles(ownerName: f.rootName),
             speakers: Self.speakers(f), ledger: ledger)
-        var deterministic: [Question] = []
+        var collected: [Question] = []
         for question in Self.questions(f) {
             let outcome = await Self.runTurn(question, dependencies: deps)
-            if !outcome.modelRequired { deterministic.append(question) }
+            if !outcome.modelRequired { collected.append(question) }
         }
+        let deterministic = collected  // Swift 6: the task-group children capture a let, not a var
 
         let bridge = await MainActor.run {
             HallieWebBridge(

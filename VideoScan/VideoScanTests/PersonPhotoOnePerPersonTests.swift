@@ -20,7 +20,7 @@ import VideoScanCore
 
 @Suite("One photo per person — tree card ↔ People tab", .serialized)
 struct PersonPhotoOnePerPersonTests {
-    private let fileManager = FileManager.default
+    private var fileManager: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable
 
     // MARK: Fixture
 

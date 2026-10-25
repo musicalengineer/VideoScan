@@ -33,7 +33,7 @@ final class FamilySearchPullCenterTests: XCTestCase {
     private var sandbox: Sandbox!
     private var notifications: [(title: String, body: String)] = []
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {  // Swift 6: the async override runs on this @MainActor class's actor
         let fm = FileManager.default
         let root = fm.temporaryDirectory
             .appendingPathComponent("fs-center-\(UUID().uuidString)", isDirectory: true)
@@ -53,7 +53,7 @@ final class FamilySearchPullCenterTests: XCTestCase {
         notifications = []
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: sandbox.root)
     }
 

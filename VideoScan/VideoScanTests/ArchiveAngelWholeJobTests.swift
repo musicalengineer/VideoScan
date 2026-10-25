@@ -99,7 +99,7 @@ struct ArchiveAngelWholeJobTests {
         b.model.records = [rec]
         var shape = AudioVerifyShape(); shape.audioStreams = 1; shape.audioCodec = "aac"; shape.audioChannels = 2
         let healthy = AudioVerifyDiagnosis(findings: [], shape: shape, balanceAnalysis: nil)
-        let inFlight = try #require(b.center.startVerifyAudio(record: rec, model: b.model, diagnoseOverride: { _ in
+        let inFlight = try #require(b.center.startVerifyAudio(record: rec, model: b.model, diagnoseOverride: { @Sendable _ in
             try? await Task.sleep(nanoseconds: 2_000_000_000)   // a long tape
             return healthy
         }))
