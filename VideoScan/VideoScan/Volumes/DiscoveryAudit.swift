@@ -18,9 +18,9 @@
 //   * and an honesty hook: enumeration errors force scanWasComplete=false,
 //     so the completion merge takes the upsert-never-prune path.
 //
-// Memory (worst case): the three path lists are capped at
-// `maxRecordedPaths` (5,000) entries each; at a generous ~300 bytes per
-// path that bounds the collector at ~4.5 MB regardless of volume size.
+// Memory (worst case): every per-path list (seven as of GH #383) is capped
+// at `maxRecordedPaths` (5,000) entries; at a generous ~300 bytes per path
+// that bounds the collector at ~10.5 MB regardless of volume size.
 // Counters keep counting past the cap; `pathListsTruncated` says so.
 
 import Foundation
@@ -84,6 +84,13 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     var skippedSystemTreeDirs: Int = 0
     /// Bundle-extension directories (.app, .photoslibrary, … per options).
     var skippedBundleDirs: Int = 0
+    /// Editor render/thumbnail cache directories (iMovie Movie Cache,
+    /// iMovie Thumbnails, Render Files, Analysis Files —
+    /// `SkipCategories.editorCacheDirs`, GH #383). Skipped UNCONDITIONALLY,
+    /// even under Scan Everything, so this count is the only trace that a
+    /// cache tree was seen; paths are sampled below so "where did my file
+    /// go?" has an answer.
+    var skippedEditorCacheDirs: Int = 0
 
     // ── Media-candidate classes (counts + paths — someone may ask "where
     //    did my file go?", and these are the only classes where the honest
@@ -126,6 +133,8 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     /// Non-regular entry paths (capped; count stays exact). Someone may ask
     /// "where did my file go?" about a symlinked movie — this is the answer.
     var nonRegularEntryPaths: [String] = []
+    /// Skipped editor-cache DIRECTORY paths (capped; count stays exact).
+    var skippedEditorCacheDirPaths: [String] = []
     /// True when any per-path list hit the recording cap (counts stay exact).
     var pathListsTruncated: Bool = false
 
@@ -195,6 +204,10 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
     func skippedCatalogScope() { with { $0.skippedCatalogScope += 1 } }
     func skippedSystemTreeDir() { with { $0.skippedSystemTreeDirs += 1 } }
     func skippedBundleDir() { with { $0.skippedBundleDirs += 1 } }
+    func skippedEditorCacheDir(path: String) {
+        with { $0.skippedEditorCacheDirs += 1 }
+        append(path, to: \.skippedEditorCacheDirPaths)
+    }
     func directoryEnumerationFailed(path: String, error: Error) {
         with { $0.directoryEnumerationErrors += 1 }
         append("\(path) — \(error.localizedDescription)", to: \.unreadableDirectories)

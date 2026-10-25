@@ -91,6 +91,12 @@ enum CatalogScopePolicy {
         /// not clear what path to remove from catalog… not delete"). Same
         /// reversible set-aside as Tidy — files untouched.
         case removedByUser = "removed-by-user"
+        /// Regenerable editor render/thumbnail caches (iMovie Movie Cache,
+        /// iMovie Thumbnails, Render Files, Analysis Files) that reached the
+        /// catalog under Scan Everything before the walker skipped them
+        /// unconditionally (GH #383, Rick 2026-10-25). Path-based: wins over
+        /// every format class, video included.
+        case editorCache = "editor-cache"
 
         /// Friendly label for UI (no jargon).
         var friendlyLabel: String {
@@ -100,8 +106,26 @@ enum CatalogScopePolicy {
             case .unlinkedAudio: return "Audio with no matching video"
             case .livePhotoComplement: return "Live Photo movie halves (Photos owns them)"
             case .removedByUser: return "Removed from the catalog by you (files untouched)"
+            case .editorCache:   return "Editor render caches (iMovie, Final Cut)"
             }
         }
+    }
+
+    /// True when any DIRECTORY component of `fullPath` is an editor render
+    /// cache (`SkipCategories.editorCacheDirs` — ONE definition, shared with
+    /// the walker so scan-time skip and Tidy set-aside cannot drift). Exact
+    /// component match, case-insensitive, any depth. The LAST component is
+    /// the filename and is never matched: a file named `Render Files.mov`
+    /// is media; a trailing slash (directory path) matches. Pure string
+    /// work — no filesystem calls.
+    static func isEditorCachePath(_ fullPath: String) -> Bool {
+        let parts = fullPath.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count > 1 else { return false }
+        for component in parts.dropLast()
+        where SkipCategories.editorCacheDirs.contains(component.lowercased()) {
+            return true
+        }
+        return false
     }
 
     /// Photos' Live Photo export naming: the 3-second movie half.
@@ -189,12 +213,16 @@ enum CatalogScopePolicy {
     /// The set-aside reason a record WOULD receive, or nil when the
     /// record stays in the catalog. `isVideoLinked` is a closure so the
     /// caller decides how the evidence test runs (indexed at scale via
-    /// CatalogScopeEvidence, or a stub in tests).
+    /// CatalogScopeEvidence, or a stub in tests). Order: the pair-protection
+    /// invariant first (nil), then the PATH rule — an editor render cache
+    /// is set aside whatever its format, video included (GH #383) — then
+    /// the format classes.
     nonisolated static func setAsideReason(
         for rec: VideoRecord,
         isVideoLinked: (VideoRecord) -> Bool
     ) -> SetAsideReason? {
         guard let cls = classifyRecord(rec) else { return nil }  // pair-protected
+        if isEditorCachePath(rec.fullPath) { return .editorCache }
         switch cls {
         case .video, .extensionless:
             return nil

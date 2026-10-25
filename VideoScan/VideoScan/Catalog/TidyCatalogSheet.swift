@@ -173,6 +173,8 @@ struct TidyCatalogCountsGrid: View {
                              "Audio with no matching video", plan.unlinkedAudioCount)
                     countRow("livephoto", .teal,
                              "Live Photo movie halves (Photos owns them)", plan.livePhotoComplementCount)
+                    countRow("film.stack", .brown,
+                             CatalogScopePolicy.SetAsideReason.editorCache.friendlyLabel, plan.editorCacheCount)
                     countRow("arrow.uturn.backward", .orange,
                              "Junk that came back (set aside before, found again elsewhere)", plan.junkCameBackCount)
                     Divider().padding(.vertical, 4)

@@ -181,7 +181,14 @@ enum FilesystemWalker {
                 if rv.isDirectory == true {
                     let dirName = url.lastPathComponent.lowercased()
                     let dirExt = url.pathExtension.lowercased()
-                    if policy.skipDirs.contains(dirName) {
+                    // Editor render caches (GH #383): unconditional — not
+                    // part of `policy.skipDirs`, so no scan option (not
+                    // even Scan Everything) can admit them. Directory
+                    // names only; the file branch below never consults
+                    // this set. Counted separately so the audit says so.
+                    if SkipCategories.editorCacheDirs.contains(dirName) {
+                        audit?.skippedEditorCacheDir(path: url.path)
+                    } else if policy.skipDirs.contains(dirName) {
                         audit?.skippedSystemTreeDir()
                     } else if policy.skipBundleExtensions.contains(dirExt) {
                         audit?.skippedBundleDir()

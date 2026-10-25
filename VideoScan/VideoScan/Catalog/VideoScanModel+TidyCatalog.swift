@@ -74,6 +74,11 @@ extension VideoScanModel {
         var musicCount = 0
         var unlinkedAudioCount = 0
         var livePhotoComplementCount = 0
+        /// Rows under an editor render-cache directory (iMovie Movie Cache,
+        /// iMovie Thumbnails, Render Files, Analysis Files — GH #383). The
+        /// walker now skips these unconditionally; this tally is the rows
+        /// that reached the catalog before it did. Included in `rows`.
+        var editorCacheCount = 0
         /// Rows whose content matches the ignore list / a set-aside or
         /// purged record (2026-09-11). Included in `rows`.
         var junkCameBackCount = 0
@@ -133,7 +138,7 @@ extension VideoScanModel {
         plan.archivedCopyCount = prune.offeredCount
         plan.archivedCopyBytes = prune.offeredBytes
         plan.archivedNoObviousChoices = prune.reasonSummary
-        tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) livePhoto=\(plan.livePhotoComplementCount) junkCameBack=\(plan.junkCameBackCount) archivedCopies=\(plan.archivedCopyCount) (\(plan.archivedCopyBytes) bytes) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
+        tidyCatalogLog.info("Tidy dry run: examined=\(plan.examined) stills=\(plan.stillCount) music=\(plan.musicCount) unlinkedAudio=\(plan.unlinkedAudioCount) livePhoto=\(plan.livePhotoComplementCount) editorCache=\(plan.editorCacheCount) junkCameBack=\(plan.junkCameBackCount) archivedCopies=\(plan.archivedCopyCount) (\(plan.archivedCopyBytes) bytes) keptLinked=\(plan.keptLinkedAudio) pairProtected=\(plan.keptPairProtected)")
         return plan
     }
 
@@ -191,6 +196,18 @@ extension VideoScanModel {
                                        reason: CatalogScopePolicy.SetAsideReason(rawValue: original) ?? .removedByUser,
                                        cameBack: true))
                 plan.junkCameBackCount += 1
+                continue
+            }
+            // Editor render caches (GH #383): the PATH rule beats every
+            // format class — a Cache-30.mov is video by format and a
+            // regenerable cache by nature. Same predicate the walker's skip
+            // set feeds (SkipCategories.editorCacheDirs) — one policy, two
+            // entry points.
+            if CatalogScopePolicy.isEditorCachePath(c.fullPath) {
+                plan.rows.append(.init(id: c.snap.id, filename: c.snap.filename,
+                                       fullPath: c.fullPath, sizeBytes: c.sizeBytes,
+                                       reason: .editorCache))
+                plan.editorCacheCount += 1
                 continue
             }
             // Live Photo movie halves are VIDEO by format but Photos
@@ -306,24 +323,27 @@ extension VideoScanModel {
         // What was ACTUALLY set aside — rows the archive rule (or an
         // apply-time re-check) left alone are not counted.
         let done = Self.tidyAppliedCounts(plan, changed: changedIDs)
-        log("Tidy Catalog: set aside \(changed.count) file(s) — \(done.still) photos, \(done.music) music, \(done.unlinkedAudio) audio with no matching video, \(done.livePhoto) Live Photo halves, \(done.cameBack) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
-        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(done.still), music \(done.music), unlinked audio \(done.unlinkedAudio), live photo \(done.livePhoto), came back \(done.cameBack)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
+        log("Tidy Catalog: set aside \(changed.count) file(s) — \(done.still) photos, \(done.music) music, \(done.unlinkedAudio) audio with no matching video, \(done.livePhoto) Live Photo halves, \(done.editorCache) editor render caches, \(done.cameBack) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
+        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(done.still), music \(done.music), unlinked audio \(done.unlinkedAudio), live photo \(done.livePhoto), editor caches \(done.editorCache), came back \(done.cameBack)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
         tidyCatalogLog.info("Tidy applied: setAside=\(changed.count) of planned \(plan.rows.count) remembered=\(remembered)")
         return changed.count
     }
 
     /// Per-category counts of the rows that were actually set aside.
     nonisolated static func tidyAppliedCounts(_ plan: TidyCatalogPlan, changed: Set<UUID>)
-        -> (still: Int, music: Int, unlinkedAudio: Int, livePhoto: Int, cameBack: Int) {
-        var out = (still: 0, music: 0, unlinkedAudio: 0, livePhoto: 0, cameBack: 0)
+        -> (still: Int, music: Int, unlinkedAudio: Int, livePhoto: Int, editorCache: Int, cameBack: Int) {
+        var out = (still: 0, music: 0, unlinkedAudio: 0, livePhoto: 0, editorCache: 0, cameBack: 0)
         for row in plan.rows where changed.contains(row.id) {
             if row.cameBack { out.cameBack += 1; continue }
+            // Exhaustive on purpose (no `default:`): a new SetAsideReason
+            // must be tallied here or the build breaks.
             switch row.reason {
             case .stillImage: out.still += 1
             case .musicFormat: out.music += 1
             case .unlinkedAudio: out.unlinkedAudio += 1
             case .livePhotoComplement: out.livePhoto += 1
-            default: break
+            case .editorCache: out.editorCache += 1
+            case .removedByUser: break   // never planned by Tidy; Remove from Catalog's reason
             }
         }
         return out

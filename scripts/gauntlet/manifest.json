@@ -11162,6 +11162,32 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EditorCacheSkipTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EditorCacheWalkerTests",
+        "EditorCachePathPolicyTests",
+        "EditorCacheTidyTests",
+        "EditorCacheAuditTruthTests",
+        "EditorCacheScaleTests"
+      ],
+      "tests": [
+        "hundredKPathsUnderBudget",
+        "pathSampleIsCapped",
+        "planApplyAndCameBack",
+        "reasonLabel",
+        "secondDryRunEmpty",
+        "setAsideReasonPrecedence",
+        "sharedDefinition",
+        "sidecarRoundTrips",
+        "skipSetIsPinned",
+        "summaryLinesCarryTheCount",
+        "thoroughScanSkipsCacheDirs",
+        "truthTable"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EmbeddedCreationDateTests.swift",
@@ -33339,7 +33365,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2963,
+      "expected_floor": 2975,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33842,7 +33868,12 @@
         "VideoScanTests/QASlice2RedTests",
         "VideoScanTests/CatalogCodexSlice2Tests",
         "VideoScanTests/PruneSensorTests",
-        "VideoScanTests/TidyCatalogSheetLayoutTests"
+        "VideoScanTests/TidyCatalogSheetLayoutTests",
+        "VideoScanTests/EditorCacheWalkerTests",
+        "VideoScanTests/EditorCachePathPolicyTests",
+        "VideoScanTests/EditorCacheTidyTests",
+        "VideoScanTests/EditorCacheAuditTruthTests",
+        "VideoScanTests/EditorCacheScaleTests"
       ]
     },
     {

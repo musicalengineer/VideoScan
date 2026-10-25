@@ -436,7 +436,7 @@ extension VideoScanModel {
         if audit.directoryEnumerationErrors > 0 {
             discoveryAuditLog.warning("Discovery INCOMPLETE for \(volName, privacy: .public): \(audit.directoryEnumerationErrors) unreadable directories — scan finalized as not-complete (upsert, no prune)")
         }
-        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
+        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), editor caches \(audit.skippedEditorCacheDirs), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
     }
 
     /// The discovery audit's console block, one line per class that has
@@ -445,7 +445,7 @@ extension VideoScanModel {
         var lines: [String] = []
         lines.append("  ── Discovery audit — \(volName) ──")
         lines.append("  Enumerated \(audit.filesEnumerated) file(s) · admitted \(audit.filesAdmitted) · cataloged \(audit.filesCataloged)")
-        lines.append("  Skipped: \(audit.skippedNonMediaExtension) non-media ext · \(audit.skippedExtensionlessOff) extensionless (option off) · \(audit.skippedAudioExtensionOff) audio (option off) · \(audit.skippedSmallFile) small · \(audit.skippedSystemTreeDirs) system dir(s) · \(audit.skippedBundleDirs) bundle dir(s)")
+        lines.append("  Skipped: \(audit.skippedNonMediaExtension) non-media ext · \(audit.skippedExtensionlessOff) extensionless (option off) · \(audit.skippedAudioExtensionOff) audio (option off) · \(audit.skippedSmallFile) small · \(audit.skippedSystemTreeDirs) system dir(s) · \(audit.skippedBundleDirs) bundle dir(s) · \(audit.skippedEditorCacheDirs) editor cache dir(s)")
         if audit.skippedCatalogScope > 0 || audit.scopeUnlinkedAudioExcluded > 0 || audit.scopeLinkedAudioKept > 0 {
             lines.append("  Catalog scope: \(audit.skippedCatalogScope) photo/music file(s) skipped before probing · \(audit.scopeLinkedAudioKept) audio kept (belongs to a video) · \(audit.scopeUnlinkedAudioExcluded) audio left out (no matching video)")
         }

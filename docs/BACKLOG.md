@@ -84,6 +84,8 @@
 - #259 duplicate detector over-claims same-size re-exports; remember refusals; Reclaim numbers inflated.
 - Archive-internal cleanup of redundant versions (keep: original + preservation + access + edit), per-item OK; the invariants need amending to match (DECISIONS contradiction 4).
 - Only-copy badge in Triage/Catalog; codec ladder table; DRM movies suggested "not family media".
+- "Interesting family video" score for Triage ranking (duration, people present, not a transition/test pattern) — a RANKING, never a scan gate: measured 2026-10-25, 7,506 of 11,468 live rows are under 30 s and 649 of those Rick marked Important, so duration alone is not junk evidence.
+- Run MediaAnalyzer scoring on scan (today it runs only from Triage's Analyze button) — policy change, Rick's call.
 - (ruling) Delete `ArchiveRefile` (predecessor of Update…).
 
 ## Catalog UI and folders

@@ -236,6 +236,25 @@ enum SkipCategories {
     static let musicLibraryBundleExtensions: Set<String> = [
         "musiclibrary", "itlp", "ite"
     ]
+    /// ALWAYS-skipped editor render/thumbnail caches (GH #383, Rick's ruling
+    /// 2026-10-25): directories iMovie and Final Cut write and regenerate on
+    /// demand — `iMovie Movie Cache`, `iMovie Thumbnails`, FCP/iMovie
+    /// `Render Files`, FCP `Analysis Files`. Matched against a DIRECTORY's
+    /// lowercased last path component, exact, at any depth; a FILE whose
+    /// name is a token (`Render Files.mov`) is admitted, and a directory
+    /// that merely contains a token (`My Render Files Backup`) is not
+    /// skipped. NOT togglable and NOT cleared by `.thorough`: even "Scan
+    /// Everything" never admits them (545 such rows reached the catalog on
+    /// 10/24 under Scan Everything). Deliberately ABSENT: `Transcoded
+    /// Media`, proxies (`Proxy Media`) and `Avid MediaFiles` — each can be
+    /// the last surviving copy of a clip, and refuse beats guess. This set
+    /// is NOT folded into `skipDirs()` on purpose: the walker counts it in
+    /// its own audit counter (`skippedEditorCacheDirs`) so nothing is
+    /// silent, and `CatalogScopePolicy.isEditorCachePath` reads the same
+    /// set so scan-time skip and Tidy Catalog set-aside can never drift.
+    static let editorCacheDirs: Set<String> = [
+        "imovie movie cache", "imovie thumbnails", "render files", "analysis files"
+    ]
     /// Pro-video PROJECT bundles — the subset of media libraries that
     /// "Look Inside Video Project Bundles" carves back OUT of the skip set.
     /// Canonical list lives in VideoScanCore (ProVideoBundles) so the

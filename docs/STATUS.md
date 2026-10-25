@@ -13,6 +13,7 @@
 - **Retire the design doc** to `docs/archive/` after the 10/26 nightly is green.
 
 ## In flight (other)
+- **#383 editor caches (10/25):** scan skips iMovie/FCP render caches unconditionally; Tidy Catalog sets aside the 545 existing rows. Waiting on Rick: run Tidy Catalog…, confirm, then turn Skip Small Files back on in Scan Options.
 - **P0 rescan purge (10/22) — recovered;** the 10/24 LaCieWorkspace rescan left all 144 FamilyArchive Masters intact. **Waiting on Rick:** Archive-tab spot test (expect 144 Masters). Follow-up #366 (P2).
 - **#375 merged 10/25** (Codex branch, gated here; + engine fix: a rejection keeps the record's own spelling). **Waiting on Rick's spot test:** Catalog → Organize shows the nickname (Timmy); unchecking leaves a correctly-cased strikethrough in the Inspector.
 - **Merged 10/24, waiting on Rick's Debug spot test:** Archive no-sound mark (#345), People tab row removal. Follow-ups #368–#371.
