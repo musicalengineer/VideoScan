@@ -851,8 +851,13 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         return (content, specData)
     }
 
+    // Swift 6: the schemas below are computed, not stored. `[String: Any]`
+    // cannot be Sendable, so a stored static would be shared non-Sendable
+    // state; a literal built per request costs microseconds against a
+    // network round trip to the model, and each caller owns its copy —
+    // the same shape `interpretationResponseSchema` already has.
     /// JSON schema for ollama structured output — MUST mirror NLQuerySpec.
-    static let responseSchema: [String: Any] = [
+    static var responseSchema: [String: Any] { [
         "type": "object",
         "additionalProperties": false,
         "properties": [
@@ -874,12 +879,12 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             "intent": ["type": "string", "enum": ["filter", "count"]],
         ],
         "required": ["people", "keywords", "transcript", "intent"],
-    ]
+    ] }
 
     /// QueryAST-v2 structured-output schema. Each discriminator branch owns
     /// a nested payload schema, so the model cannot place fields from one
     /// query shape into another.
-    static let astResponseSchema: [String: Any] = [
+    static var astResponseSchema: [String: Any] { [
         "oneOf": [
             astBranch("presence", payload: astCatalogPayload),
             astBranch("temporal", payload: astTemporalPayload),
@@ -888,7 +893,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             astBranch("graph", payload: astGraphPayload),
             astBranch("cross", payload: astTextPayload),
         ],
-    ]
+    ] }
 
     static var interpretationResponseSchema: [String: Any] {
         let archiveBranches = astResponseSchema["oneOf"] as? [[String: Any]] ?? []
@@ -908,45 +913,45 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         ]]
     }
 
-    private static let astStringList: [String: Any] = [
+    private static var astStringList: [String: Any] { [
         "type": "array",
         "maxItems": ArchivistQueryAST.maxListItems,
         "items": ["type": "string", "minLength": 1],
-    ]
+    ] }
 
-    private static let astYear: [String: Any] = [
+    private static var astYear: [String: Any] { [
         "type": "integer",
         "minimum": ArchivistQueryAST.yearRange.lowerBound,
         "maximum": ArchivistQueryAST.yearRange.upperBound,
-    ]
+    ] }
 
-    private static let astMediaKind: [String: Any] = [
+    private static var astMediaKind: [String: Any] { [
         "type": "string",
         "enum": ["video", "video-only", "audio", "both", "photo"],
-    ]
+    ] }
 
-    private static let astCatalogProperties: [String: Any] = [
+    private static var astCatalogProperties: [String: Any] { [
         "people": astStringList,
         "yearStart": astYear,
         "yearEnd": astYear,
         "mediaKind": astMediaKind,
         "keywords": astStringList,
-    ]
+    ] }
 
-    private static let astCatalogPayload: [String: Any] = [
+    private static var astCatalogPayload: [String: Any] { [
         "type": "object",
         "additionalProperties": false,
         "properties": astCatalogProperties,
-    ]
+    ] }
 
-    private static let astTextPayload: [String: Any] = [
+    private static var astTextPayload: [String: Any] { [
         "type": "object",
         "additionalProperties": false,
         "properties": astCatalogProperties.merging(
             ["transcript": astStringList]) { current, _ in current },
-    ]
+    ] }
 
-    private static let astTemporalPayload: [String: Any] = [
+    private static var astTemporalPayload: [String: Any] { [
         "type": "object",
         "additionalProperties": false,
         "properties": [
@@ -975,9 +980,9 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             ],
         ],
         "required": ["subject", "operation", "reference"],
-    ]
+    ] }
 
-    private static let astAggregatePayload: [String: Any] = [
+    private static var astAggregatePayload: [String: Any] { [
         "type": "object",
         "additionalProperties": false,
         "properties": [
@@ -994,9 +999,9 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             ],
         ],
         "required": ["operation", "anchorPeople"],
-    ]
+    ] }
 
-    private static let astGraphPayload: [String: Any] = [
+    private static var astGraphPayload: [String: Any] { [
         "oneOf": [
             astGraphOperation("biography"),
             astGraphOperation("birth"),
@@ -1006,11 +1011,11 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             astGraphOperation("relationship", minPeople: 2, maxPeople: 2),
             astGraphFamilyTree,
         ],
-    ]
+    ] }
 
     /// familyTree: a person ("show Donna's family tree"), a surname ("the
     /// Breens"), or neither ("show the family tree").
-    private static let astGraphFamilyTree: [String: Any] = [
+    private static var astGraphFamilyTree: [String: Any] { [
         "type": "object",
         "additionalProperties": false,
         "properties": [
@@ -1023,7 +1028,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             "surname": ["type": "string", "minLength": 1],
         ],
         "required": ["operation"],
-    ]
+    ] }
 
     /// Every wire relation the deterministic executors can answer.
     static let astRelationValues: [String] =

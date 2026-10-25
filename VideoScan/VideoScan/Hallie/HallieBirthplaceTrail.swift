@@ -60,7 +60,7 @@ extension HallieLineageQuestion {
 
     // The vocabulary. Every regex runs on `normalize`d text (lower case,
     // straight apostrophes, no trailing punctuation).
-    private static let trailMediaNoun = /\b(?:video|photo|picture|clip|movie|footage|film|image|portrait)s?\b/
+    private static let trailMediaNoun = SendableRegex(/\b(?:video|photo|picture|clip|movie|footage|film|image|portrait)s?\b/)
     /// "maternal line" / "mother's side" / "paternal birthplaces" — the
     /// line word must be followed by a line noun, so "maternal
     /// grandmother" (a kinship ask) stays out.
@@ -75,9 +75,9 @@ extension HallieLineageQuestion {
     /// engaged once. Nouns are plural-tolerant now, and the vocabulary covers
     /// the words people actually use for a line of descent.
     private static let trailLineNoun =
-        /(?:lines?|sides?|lineages?|ancestors|ancestry|ancestries|forebears|trees?|famil(?:y|ies)|branch(?:es)?|roots|pedigrees?|birth\s*places?|birth\s+locations?)/
+        SendableRegex(/(?:lines?|sides?|lineages?|ancestors|ancestry|ancestries|forebears|trees?|famil(?:y|ies)|branch(?:es)?|roots|pedigrees?|birth\s*places?|birth\s+locations?)/)
     private static let trailLinePhrase =
-        /\b(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s)\s+(?:lines?|sides?|lineages?|ancestors|ancestry|ancestries|forebears|trees?|famil(?:y|ies)|branch(?:es)?|roots|pedigrees?|birth\s*places?|birth\s+locations?)(?:'s)?\b/
+        SendableRegex(/\b(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s)\s+(?:lines?|sides?|lineages?|ancestors|ancestry|ancestries|forebears|trees?|famil(?:y|ies)|branch(?:es)?|roots|pedigrees?|birth\s*places?|birth\s+locations?)(?:'s)?\b/)
     /// A line of descent with NO side named: "trace my line back to europe",
     /// "where do my ancestors come from". Rick's second attempt was exactly
     /// this, and because no side was named the trail declined the turn and
@@ -90,18 +90,18 @@ extension HallieLineageQuestion {
     /// they are pinned as trail negatives. A possessive determiner with a
     /// descent noun is the narrow case Rick actually asked.
     private static let trailBareLinePhrase =
-        /\b(?:my|our|his|her|their)\s+(?:lines?|lineages?|ancestors|ancestry|ancestries|forebears|roots|pedigrees?)\b/
-    private static let trailBirthCue = /\bbirth\s*places?\b|\bbirth\s+locations?\b|\bplaces?\s+of\s+birth\b|\bborn\b|\bbirths\b/
-    private static let trailOriginCue = /\b(?:come|came|comes|coming)\s+from\b|\borigins?\b|\boriginat\w+\b/
+        SendableRegex(/\b(?:my|our|his|her|their)\s+(?:lines?|lineages?|ancestors|ancestry|ancestries|forebears|roots|pedigrees?)\b/)
+    private static let trailBirthCue = SendableRegex(/\bbirth\s*places?\b|\bbirth\s+locations?\b|\bplaces?\s+of\s+birth\b|\bborn\b|\bbirths\b/)
+    private static let trailOriginCue = SendableRegex(/\b(?:come|came|comes|coming)\s+from\b|\borigins?\b|\boriginat\w+\b/)
     /// The ancestry words that make a generations count a TRAIL ask
     /// (codex #1014 item 3): without one of these, or a birth / origin
     /// cue, "how many generations back did Donna travel to Europe" is
     /// about travel, not birthplaces.
-    private static let trailAncestryCue = /\bancest\w*\b|\bforebears?\b|\blineage\b|\bline\b|\broots\b|\bheritage\b|\bpedigree\b/
-    private static let trailOutsideUS = /\b(?:outside|out\s+of|beyond|away\s+from|not\s+in|not\s+born\s+in|left)\s+(?:of\s+)?(?:the\s+)?(?:usa|u\.?s\.?a?\.?|united\s+states|america|the\s+states|this\s+country|the\s+country)\b|\boverseas\b|\babroad\b|\bforeign(?:-born|\s+born)?\b|\b(?:another|a\s+different|some\s+other|other)\s+countr(?:y|ies)\b|\bnon-?american\b|\bimmigra\w+\b|\bemigra\w+\b|\bold\s+country\b/
-    private static let trailEurope = /\beurope\b|\beuropean\b/
-    private static let trailGenerationsAsk = /\bhow\s+many\s+generations?\b|\bhow\s+far\s+back\b|\bhow\s+many\s+(?:steps|hops|greats?)\b|\b(?:first|nearest|closest|earliest|most\s+recent)\s+(?:ancestor|forebear|one|person|relative)\b|\bwhich\s+generation\b|\bhow\s+many\s+generations\b/
-    private static let trailGenerationCount = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+generations?\b/
+    private static let trailAncestryCue = SendableRegex(/\bancest\w*\b|\bforebears?\b|\blineage\b|\bline\b|\broots\b|\bheritage\b|\bpedigree\b/)
+    private static let trailOutsideUS = SendableRegex(/\b(?:outside|out\s+of|beyond|away\s+from|not\s+in|not\s+born\s+in|left)\s+(?:of\s+)?(?:the\s+)?(?:usa|u\.?s\.?a?\.?|united\s+states|america|the\s+states|this\s+country|the\s+country)\b|\boverseas\b|\babroad\b|\bforeign(?:-born|\s+born)?\b|\b(?:another|a\s+different|some\s+other|other)\s+countr(?:y|ies)\b|\bnon-?american\b|\bimmigra\w+\b|\bemigra\w+\b|\bold\s+country\b/)
+    private static let trailEurope = SendableRegex(/\beurope\b|\beuropean\b/)
+    private static let trailGenerationsAsk = SendableRegex(/\bhow\s+many\s+generations?\b|\bhow\s+far\s+back\b|\bhow\s+many\s+(?:steps|hops|greats?)\b|\b(?:first|nearest|closest|earliest|most\s+recent)\s+(?:ancestor|forebear|one|person|relative)\b|\bwhich\s+generation\b|\bhow\s+many\s+generations\b/)
+    private static let trailGenerationCount = SendableRegex(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+generations?\b/)
 
     /// The trail shapes, or nil when the sentence is not one. Two rules:
     ///
@@ -252,12 +252,12 @@ extension HallieLineageQuestion {
     /// possessive right before the line noun.
     /// A window word may carry an apostrophe (o'brien) but never a
     /// possessive — "donna's mother's side" is Donna, not "Donna's Mother".
-    private static let trailPossessiveWindow = /\b((?:[a-z][a-z-]*(?:'(?!s\b)[a-z-]+)?\s+){0,4}[a-z][a-z-]*(?:'(?!s\b)[a-z-]+)?)'s\s+(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s|ancest\w*|forebears|famil\w*|line|lineage|side|birth\w*|roots|heritage|pedigree)\b/
+    private static let trailPossessiveWindow = SendableRegex(/\b((?:[a-z][a-z-]*(?:'(?!s\b)[a-z-]+)?\s+){0,4}[a-z][a-z-]*(?:'(?!s\b)[a-z-]+)?)'s\s+(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s|ancest\w*|forebears|famil\w*|line|lineage|side|birth\w*|roots|heritage|pedigree)\b/)
     /// "my maternal line" / "her ancestors" — a determiner in front of
     /// the line noun.
-    private static let trailDeterminerPhrase = /\b(my|our|his|her|their)\s+(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s|ancest\w*|forebears|famil\w*|line|lineage|birth\w*|roots|heritage|pedigree)\b/
+    private static let trailDeterminerPhrase = SendableRegex(/\b(my|our|his|her|their)\s+(?:maternal|paternal|mother'?s|father'?s|mom'?s|dad'?s|ancest\w*|forebears|famil\w*|line|lineage|birth\w*|roots|heritage|pedigree)\b/)
     /// "first ancestor of donna born outside america" / "ancestors of me".
-    private static let trailAncestorsOf = /\bancestors?\s+of\s+(.+?)(?:\s+(?:born|who|that|were|was|to)\b|$)/
+    private static let trailAncestorsOf = SendableRegex(/\bancestors?\s+of\s+(.+?)(?:\s+(?:born|who|that|were|was|to)\b|$)/)
 
     /// The person the trail is about. See `TrailSubject`. Precedence
     /// (codex #1014 item 3): an explicit possessive name anywhere in the
@@ -316,7 +316,7 @@ extension HallieLineageQuestion {
 
     /// One read-out segment of a query description, as `trailQueryDescription`
     /// writes it — also found inside a joined "two questions: A + B".
-    private static let trailSegment = /birthplace trail (\w+) stop=(\S+) (list|firstMatch): (.+?) \[([^\]]+)\] tree=(\S+) shown (\d+)-(\d+) of (\d+)/
+    private static let trailSegment = SendableRegex(/birthplace trail (\w+) stop=(\S+) (list|firstMatch): (.+?) \[([^\]]+)\] tree=(\S+) shown (\d+)-(\d+) of (\d+)/)
 
     /// The next page of the trail the last answer was reading out, from
     /// its query description; nil when the last answer was not a trail,

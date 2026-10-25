@@ -129,4 +129,35 @@ struct ArchivistQueryASTGraphDecodingTests {
         #expect(OllamaQueryTranslator.astSystemPrompt.contains("as a baby"))
         #expect(OllamaQueryTranslator.astSystemPrompt.contains("do NOT invent years"))
     }
+
+
+    /// Swift 6 stage 4 (#376): the schema statics are computed per call now.
+    /// Every schema the translator sends must still be a JSON object
+    /// `JSONSerialization` accepts, with its nested branch arrays intact.
+    @Test func everyTranslatorSchemaIsAValidJSONObjectWithItsBranches() throws {
+        let schemas: [(String, [String: Any])] = [
+            ("responseSchema", OllamaQueryTranslator.responseSchema),
+            ("astResponseSchema", OllamaQueryTranslator.astResponseSchema),
+            ("interpretationResponseSchema", OllamaQueryTranslator.interpretationResponseSchema),
+        ]
+        for (name, schema) in schemas {
+            #expect(JSONSerialization.isValidJSONObject(schema), Comment(rawValue: name))
+            let data = try JSONSerialization.data(withJSONObject: schema)
+            let decoded = try JSONSerialization.jsonObject(with: data)
+            let back = try #require(decoded as? [String: Any], Comment(rawValue: name))
+            #expect(!back.isEmpty, Comment(rawValue: name))
+        }
+        // The nested array-of-object literals kept their shape.
+        let props = try #require(OllamaQueryTranslator.responseSchema["properties"] as? [String: Any])
+        let mediaKind = try #require(props["mediaKind"] as? [String: Any])
+        #expect((mediaKind["anyOf"] as? [[String: Any]])?.count == 2)
+        let branches = try #require(OllamaQueryTranslator.astResponseSchema["oneOf"] as? [[String: Any]])
+        #expect(branches.count == 6)
+        let interpretation = try #require(OllamaQueryTranslator.interpretationResponseSchema["oneOf"] as? [[String: Any]])
+        #expect(interpretation.count == 7, "six archive shapes plus conversation")
+        let temporal = try #require(branches.first { ($0["properties"] as? [String: Any]).flatMap { ($0["shape"] as? [String: Any])?["enum"] as? [String] } == ["temporal"] })
+        let payload = try #require((temporal["properties"] as? [String: Any])?["payload"] as? [String: Any])
+        let reference = try #require((payload["properties"] as? [String: Any])?["reference"] as? [String: Any])
+        #expect((reference["oneOf"] as? [[String: Any]])?.count == 2)
+    }
 }

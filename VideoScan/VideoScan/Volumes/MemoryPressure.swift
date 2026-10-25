@@ -37,8 +37,13 @@ actor MemoryPressureMonitor {
             }
         }
         guard result == KERN_SUCCESS else { return 0 }
-        let pageSize = UInt64(vm_kernel_page_size)
-        return (UInt64(stats.free_count) + UInt64(stats.inactive_count)) * pageSize
+        // Swift 6: `vm_kernel_page_size` is a Darwin global `var` (written
+        // once at process start, never again) that the checker cannot prove
+        // immutable. `host_page_size` is the Mach call that reports the same
+        // number — the kernel page size the vm_statistics64 counts are in.
+        var pageSize: vm_size_t = 0
+        guard host_page_size(mach_host_self(), &pageSize) == KERN_SUCCESS, pageSize > 0 else { return 0 }
+        return (UInt64(stats.free_count) + UInt64(stats.inactive_count)) * UInt64(pageSize)
     }
 
     /// Check memory and return true if pressure is high.

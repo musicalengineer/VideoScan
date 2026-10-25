@@ -26,18 +26,28 @@ import Foundation
 import CoreML
 import os
 
-final class ArcFacePredictor {
+/// Swift 6: `Sendable` because the pool is the class's only mutable state and
+/// the lock owns it (`OSAllocatedUnfairLock<Pool>`); `shared` is then a plain
+/// `static let` the checker accepts.
+final class ArcFacePredictor: Sendable {
     static let shared = ArcFacePredictor()
     private init() {}
 
-    private let stateLock = OSAllocatedUnfairLock()
-    // All three protected by stateLock:
-    private var slots: [(model: MLModel, lock: OSAllocatedUnfairLock<Void>)] = []
-    private var configuredK = 1
-    private var nextSlot = 0
+    /// The K model instances and the round-robin cursor. `MLModel` has no
+    /// Sendable conformance in this SDK, hence `uncheckedState`: a slot's
+    /// model is only ever used under that slot's own lock (Apple's
+    /// documented-safe condition for MLModel), and the array itself only
+    /// under `pool`. Memory: K MLModel instances (~90 MB each for ArcFace),
+    /// K ≤ processorCount, and 0 in the default serialized mode.
+    private struct Pool {
+        var slots: [(model: MLModel, lock: OSAllocatedUnfairLock<Void>)] = []
+        var configuredK = 1
+        var nextSlot = 0
+    }
+    private let pool = OSAllocatedUnfairLock(uncheckedState: Pool())
 
     /// Number of inference slots currently configured (1 == serialized).
-    var concurrency: Int { stateLock.withLock { configuredK } }
+    var concurrency: Int { pool.withLock { $0.configuredK } }
 
     /// Idempotent. Reshapes the shared pool to match `k`, clamped to
     /// [1, processorCount]. k <= 1 tears the pool down (serialized mode); k > 1
@@ -46,14 +56,14 @@ final class ArcFacePredictor {
     func configure(concurrency k: Int) async {
         let want = max(1, min(k, ProcessInfo.processInfo.processorCount))
 
-        let needsBuild: Bool = stateLock.withLock {
+        let needsBuild: Bool = pool.withLock { p in
             let expectedSlots = want > 1 ? want : 0
-            return !(want == configuredK && slots.count == expectedSlots)
+            return !(want == p.configuredK && p.slots.count == expectedSlots)
         }
         guard needsBuild else { return }
 
         if want <= 1 {
-            stateLock.withLock { slots = []; configuredK = 1; nextSlot = 0 }
+            pool.withLock { p in p.slots = []; p.configuredK = 1; p.nextSlot = 0 }
             return
         }
 
@@ -68,10 +78,12 @@ final class ArcFacePredictor {
         guard built.count == want else { return }   // partial build → stay serialized
         let completedBuild = built
 
-        stateLock.withLock {
-            slots = completedBuild
-            configuredK = want
-            nextSlot = 0
+        // withLockUnchecked: the closure carries MLModel instances (not
+        // Sendable in this SDK) into the lock; see `Pool`.
+        pool.withLockUnchecked { p in
+            p.slots = completedBuild
+            p.configuredK = want
+            p.nextSlot = 0
         }
     }
 
@@ -81,10 +93,11 @@ final class ArcFacePredictor {
     /// the slot's own lock still serializes any two callers that land on it, so
     /// a single instance is never used concurrently.
     func borrow(fallback: MLModel) -> (model: MLModel, lock: OSAllocatedUnfairLock<Void>) {
-        stateLock.withLock {
-            guard !slots.isEmpty else { return (model: fallback, lock: arcfacePredictionLock) }
-            let s = slots[nextSlot % slots.count]
-            nextSlot = (nextSlot &+ 1) % slots.count
+        // withLockUnchecked: returns an MLModel (not Sendable in this SDK).
+        pool.withLockUnchecked { p in
+            guard !p.slots.isEmpty else { return (model: fallback, lock: arcfacePredictionLock) }
+            let s = p.slots[p.nextSlot % p.slots.count]
+            p.nextSlot = (p.nextSlot &+ 1) % p.slots.count
             return s
         }
     }

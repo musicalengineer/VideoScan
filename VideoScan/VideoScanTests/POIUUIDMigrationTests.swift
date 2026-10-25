@@ -784,4 +784,43 @@ extension POIUUIDMigrationTests {
         #expect(!fm.fileExists(atPath: audit.path), "audit moved aside once everything is back")
         #expect(try Data(contentsOf: legacy.folder.appendingPathComponent("cover.jpg")) == legacy.bytes, "dereferences again")
     }
+
+
+    // MARK: - Swift 6 stage 4 (#376): the bookkeeping lock
+
+    /// `migrationStates`, `pendingCatalogLogLines` and `reportedSkips` moved
+    /// from `static var`s into one `OSAllocatedUnfairLock<Bookkeeping>`. The
+    /// state a run writes must be what the readers see: the per-root state,
+    /// the buffered catalog.log summary (drained exactly once), and the
+    /// once-per-process skip report.
+    @Test func bookkeepingIsReadWhereTheRunWroteIt() throws {
+        let root = try makeRoot()
+        defer { root.cleanup() }
+        try writeLegacy(root, folder: "rick", name: "Rick", uuid: UUID())
+        let malformed = root.folder("broken")
+        try FileManager.default.createDirectory(at: malformed, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: malformed.appendingPathComponent("profile.json"))
+        _ = POIStorage.drainPendingCatalogLogLines()   // other tests' leftovers
+
+        #expect(POIStorage.migrationState(root: root.url) == nil, "no run has looked at this root")
+        let outcome = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups)
+        guard case .ran(let report) = outcome else { Issue.record("expected .ran, got \(outcome)"); return }
+        #expect(report.mapping.count == 1)
+
+        #expect(POIStorage.migrationState(root: root.url) == .backedUp(report.backupPath ?? ""))
+        #expect(POIStorage.legacyWritesPermitted(root: root.url))
+
+        let drained = POIStorage.drainPendingCatalogLogLines()
+        #expect(drained.contains { $0.hasPrefix("People migration:") && $0.contains("1 folder(s)") },
+                "the run's summary reaches the catalog log once: \(drained)")
+        #expect(drained.contains { $0.contains("skipped 'broken'") }, "the skip is reported the first time")
+        #expect(POIStorage.drainPendingCatalogLogLines().isEmpty, "drained means gone")
+
+        // A second run on the same root: nothing to move, and the skip is
+        // NOT reported again (once per process).
+        _ = POIStorage.migrateToUUIDFoldersIfNeeded(root: root.url, backupParent: root.backups)
+        let second = POIStorage.drainPendingCatalogLogLines()
+        #expect(!second.contains { $0.contains("skipped 'broken'") }, "skip reported once per process: \(second)")
+        #expect(POIStorage.migrationState(root: root.url) == .nothingToMove)
+    }
 }
