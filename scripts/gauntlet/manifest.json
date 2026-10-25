@@ -7996,6 +7996,7 @@
       ],
       "tests": [
         "asyncSaveRoundTripsThroughBackgroundPath",
+        "asyncWriteLandsAfterTheStoreIsGone",
         "cloneEncodesIdenticallyToOriginal",
         "deepCopyHandlesPartnerOutsideArray",
         "deepCopyRewiresPairedWithToClonedPartner",
@@ -26396,6 +26397,18 @@
     {
       "blocked_reason": "shell adapter needs separate component build/count extraction and confinement audit",
       "kind": "shell",
+      "path": "scripts/test_nightly_analysis_lane.sh",
+      "stage": "unit",
+      "suites": [
+        "test_nightly_analysis_lane.sh"
+      ],
+      "tests": [
+        "shell_suite"
+      ]
+    },
+    {
+      "blocked_reason": "shell adapter needs separate component build/count extraction and confinement audit",
+      "kind": "shell",
       "path": "scripts/test_nightly_failure_modes.sh",
       "stage": "unit",
       "suites": [
@@ -26519,6 +26532,33 @@
         "test_explicit_machine_is_emitted",
         "test_legacy_headless_caller_defaults_to_none",
         "test_unknown_machine_is_rejected_without_writing"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_analysis_lane.py",
+      "stage": "unit",
+      "suites": [
+        "test_analysis_lane.py"
+      ],
+      "tests": [
+        "test_a_boolean_is_not_a_number",
+        "test_a_clean_build_below_the_baseline_says_lowerable_and_writes_nothing",
+        "test_a_failed_build_is_red_even_with_fewer_warnings",
+        "test_a_missing_build_log_is_red_with_no_number",
+        "test_a_missing_stage_result_or_no_number_is_red_whatever_the_stage_said",
+        "test_a_regression_overnight_is_red_and_names_the_file",
+        "test_alert_lines_red_fresh_stale_and_silent",
+        "test_an_incremental_run_does_not_probe_the_baseline",
+        "test_an_unproven_fall_is_reported_not_claimed",
+        "test_each_stage_subcommand_prints_one_line_and_writes_its_json",
+        "test_lint_counts_repo_findings_only_and_a_missing_report_is_red",
+        "test_memsafe_counts_strict_memory_safety_diagnostics_and_handles_an_unsupported_toolchain",
+        "test_periphery_excludes_third_party_and_counts_kinds",
+        "test_report_writes_latest_runs_and_markdown_with_the_numbers",
+        "test_sanitizer_findings_are_red_and_a_missing_row_is_red",
+        "test_unavailable_is_yellow_not_green_and_never_red"
       ]
     },
     {
@@ -26904,6 +26944,24 @@
         "test_relative_links_images_and_reference_links_are_checked",
         "test_templates_still_require_the_current_output_directory",
         "test_tracked_docs_references_exist"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_escape_hatch_census.py",
+      "stage": "unit",
+      "suites": [
+        "test_escape_hatch_census.py"
+      ],
+      "tests": [
+        "test_a_target_with_no_files_is_red",
+        "test_every_kind_by_its_real_spelling_and_nothing_from_comments_or_strings",
+        "test_no_swiftlint_is_red_not_a_silent_zero",
+        "test_per_file_deltas_against_the_previous_census",
+        "test_per_target_totals_and_fixtures_and_checkouts_are_skipped",
+        "test_state_round_trips_through_the_cli",
+        "test_the_real_tree_has_four_targets_with_files"
       ]
     },
     {
@@ -28350,10 +28408,17 @@
         "test_alert_is_quiet_when_green_or_stale",
         "test_alert_main_reads_latest_files",
         "test_alert_shouts_findings_with_the_list",
+        "test_catalog_subset_comes_from_the_gauntlet_manifest",
+        "test_commands_carry_the_sanitizer_the_configuration_and_the_subset",
         "test_findings_are_counted_and_deduplicated",
         "test_findings_beat_timeout_and_failures",
+        "test_main_runs_both_targets_with_fake_tools_and_writes_one_row",
+        "test_merge_folds_targets_findings_win_and_counts_add",
         "test_status_precedence_without_findings",
-        "test_tsan_report_shape"
+        "test_the_real_manifest_yields_a_catalog_subset_of_hundreds_of_suites",
+        "test_tsan_report_shape",
+        "test_ubsan_runtime_errors_count_as_findings",
+        "test_xctest_executed_line_adds_to_the_count_and_an_xctest_failure_is_a_failure"
       ]
     },
     {
@@ -30595,6 +30660,30 @@
         "theSpokenSentenceCarriesTheVolumePill",
         "toolbarDrawsThePillAndClearsThroughTheParent",
         "twoOrMoreReadSelectedVolumesWithTheNamesInTheTooltip"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPersonNamingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPersonNamingTests",
+        "CatalogPersonNamingSensorTests"
+      ],
+      "tests": [
+        "blankAliasesFallBackAndWhitespaceIsTrimmed",
+        "duplicateNamesShowBirthYears",
+        "duplicateNicknamesAndMissingDatesRemainDistinctAndStable",
+        "duplicateNicknamesCannotWriteAnAmbiguousTag",
+        "emptyNameAndFamilyWildcardAreNotPersonTags",
+        "galleryAndCatalogShareDisambiguation",
+        "labelDecorationsNeverBecomeTagsOrChangeProfiles",
+        "narrowCardsExposeTheFullDisambiguatedName",
+        "nicknameIsTheWrittenTagAndDoesNotTagTheNamesake",
+        "nicknameWinsAndSelectionKeepsItsIdentity",
+        "sharedFormalTagDoesNotCheckBothNicknames",
+        "tagMenusDoNotDiscardProfileIdentityOrNicknames",
+        "uniqueLegacyFormalTagCanStillBeUnchecked"
       ]
     },
     {
@@ -32951,6 +33040,10 @@
           "reason": "shell adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "scripts/test_nightly_analysis_lane.sh",
+          "reason": "shell adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_adversarial_confirm.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -33179,6 +33272,14 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_escape_hatch_census.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_analysis_lane.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_weekly_sanitizer.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -33223,7 +33324,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2945,
+      "expected_floor": 2959,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33510,6 +33611,8 @@
         "VideoScanTests/PersonPageCollapseSensorTests",
         "VideoScanTests/PersonPageHideCollapseTests",
         "VideoScanTests/CatalogPersonFilterLogicTests",
+        "VideoScanTests/CatalogPersonNamingTests",
+        "VideoScanTests/CatalogPersonNamingSensorTests",
         "VideoScanTests/CatalogPersonPillTests",
         "VideoScanTests/CatalogPersonFilterStoreTests",
         "VideoScanTests/CatalogPersonFilterScaleTests",

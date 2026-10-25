@@ -60,6 +60,13 @@ fi
 # quiet on other hosts. Never fails the digest.
 python3 "$REPO_ROOT/scripts/sanitizer_alert.py" || true
 
+# The Swift 6 nightly analysis lane (stage 2, 2026-10-25): one line with the
+# lane's numbers (warnings vs baseline, escape hatches, swiftlint analyze,
+# periphery, -strict-memory-safety, a sanitizer pass when one ran), the red
+# reasons under it, 🟡 when it has not run for 36 h. Local file on the Mac
+# that ran it; quiet elsewhere. Never fails the digest.
+python3 "$REPO_ROOT/scripts/analysis_lane.py" alert || true
+
 # Nightly Hallie replay (Rick 2026-10-06: the 10/5 eval caught "People
 # profiles are unavailable" and nothing surfaced it): 🔴 when the decline
 # rate jumps > 5 pts night over night or a NEW decline reason covers ≥ 5

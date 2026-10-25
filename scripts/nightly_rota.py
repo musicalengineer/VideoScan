@@ -8,10 +8,11 @@ too). This is the shell scripts' way in:
   python3 scripts/nightly_rota.py slot RicksM1   ->  "off travel laptop, …"
   python3 scripts/nightly_rota.py slot Other     ->  "unknown"
   python3 scripts/nightly_rota.py label RicksM5  ->  "M5"
+  python3 scripts/nightly_rota.py analysis RicksM4 ->  "on 4 30"       (the Swift 6 analysis lane's slot)
 
-Exit 0 always for `slot` / `label` (the answer is in stdout); a broken rota
-file reads as "unknown" for every host, which makes the installer refuse and
-the guard run as before — never silently drop a Mac that should run.
+Exit 0 always for `slot` / `label` / `analysis` (the answer is in stdout); a
+broken rota file reads as "unknown" for every host, which makes the installer
+refuse and the guard run as before — never silently drop a Mac that should run.
 """
 from __future__ import annotations
 
@@ -30,29 +31,34 @@ def label(host: str) -> str:
     return lab if LABEL_RE.match(lab) else ""
 
 
-def slot(host: str, rota_path: Path = ROTA) -> str:
+def slot(host: str, rota_path: Path = ROTA, key: str = "on") -> str:
+    """`key` is the map holding the time: "on" (the test nightly) or
+    "analysis" (the Swift 6 analysis lane). "off" always wins."""
     try:
         rota = json.loads(rota_path.read_text())
     except (OSError, ValueError):
         return "unknown"
     lab = label(host)
-    on = rota.get("on") or {}
+    on = rota.get(key) or {}
     off = rota.get("off") or {}
+    if lab and lab in off:
+        return f"off {off[lab]}"
     if lab and lab in on:
         m = re.match(r"^(\d{1,2}):(\d{2})$", str(on[lab]))
         if not m:
             return "unknown"
         return f"on {int(m.group(1))} {int(m.group(2))}"
-    if lab and lab in off:
-        return f"off {off[lab]}"
     return "unknown"
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] not in ("slot", "label"):
+    if len(argv) != 2 or argv[0] not in ("slot", "label", "analysis"):
         print(__doc__, file=sys.stderr)
         return 2
-    print(slot(argv[1]) if argv[0] == "slot" else label(argv[1]))
+    if argv[0] == "label":
+        print(label(argv[1]))
+    else:
+        print(slot(argv[1], key="on" if argv[0] == "slot" else "analysis"))
     return 0
 
 
