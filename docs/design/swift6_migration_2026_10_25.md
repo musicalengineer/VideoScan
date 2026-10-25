@@ -1,6 +1,6 @@
 # Swift 6 language mode: the migration plan
 
-Rick's ruling, 2026-10-25: *"we need to be using the latest swift 6 … there is no reason to allow for older compatibility issues, as this is not yet a shipping product … in stages, within a week or sooner."* This document is the plan any session (Opus, Fable, a worker) carries out. It is retired to `docs/archive/` when stage 8 lands.
+Rick's ruling, 2026-10-25: *"we need to be using the latest swift 6 … there is no reason to allow for older compatibility issues, as this is not yet a shipping product … in stages, within a week or sooner."* This document is the plan any session (Opus, Fable, a worker) carries out. **All eight stages merged 2026-10-25** (460 → 1 warnings; Core and app in Swift 6 language mode). Retire to `docs/archive/` after the 10/26 nightly confirms the full suite and gauntlet on the flipped tree.
 
 ## 1. What is true today (measured 2026-10-25, main `4a6607ed3`)
 
@@ -37,12 +37,12 @@ A per-file "Swift 6 warnings" column on the metrics board is the same TSV; Rick'
 | 0 | `warning_ratchet.py`; baseline committed; sensor lane runs `check`; session-start prints `progress`; this doc; `DECISIONS`/`STATUS`/`CLAUDE.md` corrected | sensors GREEN with the ratchet in the lane | **done 10/25** |
 | 1 | VideoScanCore in Swift 6 mode (`swiftLanguageModes: [.v6]`) | `swift test` 1,872/0 in v6 | **done 10/25** |
 | 2 | Nightly analysis lane (§7) on the fleet, report mode: clean build + `check` + progress line + "baseline can be lowered" each night (the merging session lowers it) | one green nightly with the lane's numbers in the report | built 10/25 (`scripts/nightly_analysis_lane.sh`); first fleet night pending |
-| 3 | Non-concurrency warnings: deprecated API (`Text +`, `String(cString:)` on arrays), `??` on non-optionals, redundant `nonisolated(unsafe)`, `[weak x]` vs implicit strong capture | category count 0 | |
-| 4 | Globals and statics "not concurrency-safe" (~148) | category count 0 | |
-| 5 | Main-actor state referenced from nonisolated code (~40) | category count 0 | |
-| 6 | Closure captures, `sending`, region isolation (~120). **Codex pass per slice that touches data-risk code** (`Archive/`, delete/prune/relocate in `MediaOps/`, FamilyTree writers, `ArchiveAngel/Promote/`, volume retire) | category count 0 | |
-| 7 | Missing `Sendable` conformances; non-Sendable results leaving actors (~30) | category count 0 | |
-| 8 | App target `SWIFT_VERSION = 6`; delete `SWIFT_STRICT_CONCURRENCY = complete` (implicit); ratchet floor becomes "any warning is red" | clean build 0 errors 0 warnings; full suite green; Codex pass on the flip diff | |
+| 3 | Non-concurrency warnings: deprecated API (`Text +`, `String(cString:)` on arrays), `??` on non-optionals, redundant `nonisolated(unsafe)`, `[weak x]` vs implicit strong capture | category count 0 | **done 10/25** (152 → 6) |
+| 4 | Globals and statics "not concurrency-safe" (~148) | category count 0 | **done 10/25** (73 → 0) |
+| 5 | Main-actor state referenced from nonisolated code (~40) | category count 0 | **done 10/25** |
+| 6 | Closure captures, `sending`, region isolation (~120). **Codex pass per slice that touches data-risk code** (`Archive/`, delete/prune/relocate in `MediaOps/`, FamilyTree writers, `ArchiveAngel/Promote/`, volume retire) | category count 0 | **done 10/25** |
+| 7 | Missing `Sendable` conformances; non-Sendable results leaving actors (~30) | category count 0 | **done 10/25** |
+| 8 | App target `SWIFT_VERSION = 6`; delete `SWIFT_STRICT_CONCURRENCY = complete` (implicit); ratchet floor becomes "any warning is red" | clean build 0 errors 0 warnings; full suite green; Codex pass on the flip diff | **done 10/25** — the app target compiled with zero errors on the first Swift 6 build; 1 documented deprecation (mlx-swift) remains, so the figure reads 99 % until that library ships a replacement |
 
 Stages 3–7 run as worker slices in worktrees, one category per branch, 20–60 files per branch, fleet/night shift first and Rick's machine only for Debug incremental builds. Stages can interleave by module (a worker may take "Hallie/ stages 4+5") when that keeps a branch file-disjoint from another. Merge order does not matter; the ratchet keeps every merge monotone.
 

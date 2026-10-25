@@ -1,10 +1,5 @@
 # start_total 460
 # recorded 2026-10-25
-# total 9
+# total 1
 # count<TAB>category<TAB>path — scripts/warning_ratchet.py; edit by `update --clean`, never by hand
-2	sendable-capture	VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift
-2	sendable-capture	VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift
-1	sendable-capture	VideoScan/VideoScan/FamilyTree/FamilyTreeRecompileCenter.swift
 1	deprecated	VideoScan/VideoScan/Shared/MLXSafety.swift
-1	sendable-capture	VideoScan/VideoScanTests/FamilyGraphCompiledStoreTests.swift
-2	sendable-capture	VideoScan/VideoScanTests/FamilySearchPullMergeTests.swift
