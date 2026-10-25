@@ -60,14 +60,17 @@ struct ProbeGroupAbortAccountingTests {
         // until we've "unmounted the volume".
         await target.pauseGate.pause()
 
-        let scanTask = Task {
-            await model.runTargetProbeGroup(
+        let scanTask = Task { () -> (recordCount: Int, discovered: Int, completed: Int) in
+            // Swift 6: `[VideoRecord]` may not leave the main actor through
+            // `Task.value`; the assertions only read counts.
+            let r = await model.runTargetProbeGroup(
                 target: target,
                 root: dir.path,
                 volName: "TestVol",
                 rootIsNetwork: false,
                 ramMountPoint: nil
             )
+            return (r.records.count, r.discovered, r.completed)
         }
 
         // Wait for the walk to complete — runTargetProbeGroup sets
@@ -97,7 +100,7 @@ struct ProbeGroupAbortAccountingTests {
 
         // The gate still does its actual job: none of these junk outcomes
         // may enter the catalog.
-        #expect(result.records.isEmpty,
+        #expect(result.recordCount == 0,
                 "not-accessible extensionless outcomes must still be kept OUT of the catalog")
     }
 
@@ -183,14 +186,17 @@ struct ProbeGroupAbortAccountingTests {
         // Hold probes at the gate until the files are gone (same determinism
         // trick as the abort test).
         await target.pauseGate.pause()
-        let scanTask = Task {
-            await model.runTargetProbeGroup(
+        let scanTask = Task { () -> (recordCount: Int, discovered: Int, completed: Int) in
+            // Swift 6: `[VideoRecord]` may not leave the main actor through
+            // `Task.value`; the assertions only read counts.
+            let r = await model.runTargetProbeGroup(
                 target: target,
                 root: dir.path,
                 volName: "TestVol",
                 rootIsNetwork: false,
                 ramMountPoint: nil
             )
+            return (r.records.count, r.discovered, r.completed)
         }
         for _ in 0..<600 where target.filesFound != junkCount {
             try await Task.sleep(nanoseconds: 50_000_000)

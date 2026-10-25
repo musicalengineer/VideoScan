@@ -23,7 +23,8 @@ struct MediaRepairSheetRequest: Identifiable {
     /// This session's sound diagnosis (Verify full tier / Verify Audio).
     let audioDiagnosis: AudioVerifyDiagnosis?
     /// Hand off to Verify… (after this sheet starts dismissing).
-    let onVerify: () -> Void
+    /// Swift 6: a catalog action a SwiftUI sheet fires — main-actor by type.
+    let onVerify: @MainActor () -> Void
     /// Select a row in the catalog (after Link Repaired Copy…).
     var onSelectRecord: (UUID) -> Void = { _ in }
     /// The sound file for "Add its sound from another file", when the

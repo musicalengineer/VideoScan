@@ -108,7 +108,7 @@ struct FamilyMapUnitsTests {
         }
         #expect(throws: FamilyMapUnits.DecodeError.duplicateKey("eng-x")) {
             let f = Self.feature(key: "eng-x", name: "X", country: "ENG", kind: "county", geometry: ["type": "Polygon", "coordinates": [ok]])
-            try decode([f, f])
+            _ = try decode([f, f])
         }
         #expect(throws: FamilyMapUnits.DecodeError.self) {
             try decode([Self.feature(key: "eng-x", name: "X", country: "ENG", kind: "county", geometry: ["type": "Point", "coordinates": [0, 0]])])

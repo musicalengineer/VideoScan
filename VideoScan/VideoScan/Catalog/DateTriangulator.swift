@@ -46,8 +46,8 @@
 // pins 100k realistic records inside a load-aware budget. If a load-time
 // re-triangulation of thousands of rows ever shows as a beachball, move
 // the pure calls to a detached task (the inputs are Sendable values). Regexes are compiled once
-// (`nonisolated(unsafe) static let` — NSRegularExpression is immutable
-// and documented thread-safe; ≈ a `static const std::regex`).
+// (`static let` — NSRegularExpression is immutable, documented thread-safe
+// and marked Sendable by the SDK; ≈ a `static const std::regex`).
 //
 // (For Rick: `struct` claims + a free function ≈ PODs through a pure
 // C function; `[ClosedRange<Int>]` ≈ a vector of {lo, hi} pairs; the
@@ -238,7 +238,7 @@ struct SpokenYearMention: Equatable, Sendable {
 
 /// Compiled once. NSRegularExpression is immutable and thread-safe.
 enum DateTriangulationRegex {
-    nonisolated(unsafe) static let year = try? NSRegularExpression(
+    static let year = try? NSRegularExpression(
         pattern: #"(?<!\d)(?:((?:19|20)\d{2})|['’](\d{2}))(?!\d)"#)
 
     // NOW cues, tested against the (lower-cased) text BEFORE the year.
@@ -247,7 +247,7 @@ enum DateTriangulationRegex {
 
     // NOW cues, tested against the (lower-cased) text BEFORE the year.
     // Every cue starts at a word boundary (QA M3: "escape" is not "cape").
-    nonisolated(unsafe) static let nowBefore: [NSRegularExpression] = [
+    static let nowBefore: [NSRegularExpression] = [
         #"\bwhat year (?:is it|it is|are we in|is this|is it now)\b.{0,40}$"#,
         #"\b(?:the year is|it'?s|it is|this is|today is|today'?s|we'?re in|we are in|welcome to|here we are in|now it'?s|the date is|it'?s now|it is now)[\s,:'"“”]*(?:the year\s*)?$"#,
         #"\b(?:"# + occasions + #")[\s,:'"]*(?:of\s*)?$"#,
@@ -256,14 +256,14 @@ enum DateTriangulationRegex {
 
     // NOW cues in the text AFTER the year ("2004 Cape trip"). "now" is NOT
     // one: "that was 1975, now he's all grown up" contrasts then with now.
-    nonisolated(unsafe) static let nowAfter: [NSRegularExpression] = [
+    static let nowAfter: [NSRegularExpression] = [
         #"^[\s,:'"]*(?:cape|trip|vacation|christmas|thanksgiving|summer|winter|reunion|birthday|wedding|graduation|here)\b"#,
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     // STRONG reference cues ("the class of 1982 reunion": the reunion is
     // now, 1982 is not), including reminiscences about an occasion:
     // "remember Christmas 1985", "ever since Thanksgiving '98".
-    nonisolated(unsafe) static let strongReferenceBefore: [NSRegularExpression] = [
+    static let strongReferenceBefore: [NSRegularExpression] = [
         #"\b(?:back in|born in|was born|born|class of|the movie|the film|the song)[\s,:'"]*$"#,
         #"\b(?:remember|since|until|till|before|after)\s+(?:the\s+|that\s+|our\s+|last\s+|when\s+)?(?:"# + occasions + #")[\s,:'"]*(?:of\s*)?$"#,
     ].compactMap { try? NSRegularExpression(pattern: $0) }
@@ -271,12 +271,12 @@ enum DateTriangulationRegex {
     // REFERENCE cues (past tense, "ago", "since"…). The second pattern
     // reads a past-tense verb earlier in the clause with "in" right before
     // the year: "Dad was in Korea in 1951".
-    nonisolated(unsafe) static let referenceBefore: [NSRegularExpression] = [
+    static let referenceBefore: [NSRegularExpression] = [
         #"\b(?:was|were|had|did|since|until|till|before|after|around|about|circa|remember|used to|when i was|way back|in the year|the summer of|the winter of|the spring of|the fall of)[\s,:'"]*(?:the year\s*)?(?:in\s*)?$"#,
         #"\b(?:was|were|had|did|went|moved|lived|married|died|served|graduated)\b[^.!?]{0,40}\bin[\s,:'"]*$"#,
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
-    nonisolated(unsafe) static let referenceAfter: [NSRegularExpression] = [
+    static let referenceAfter: [NSRegularExpression] = [
         #"^\s*or\s+(?:['’]?\d{1,2}|\d{4})\b"#,          // "1955 or 6"
         #"^[\s,]*(?:years? ago|ago)\b"#,
         #"^['’"]?\s*(?:was|were|had been)\b"#,         // "our wedding 1979 was the best day"
@@ -286,7 +286,7 @@ enum DateTriangulationRegex {
     static let numberToken = #"(\d{1,2}|(?:"# + numberWords + #")(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?)"#
 
     // Ages, tested against the lower-cased text.
-    nonisolated(unsafe) static let ages: [NSRegularExpression] = [
+    static let ages: [NSRegularExpression] = [
         #"how old (?:are you|is (?:he|she|[a-z]+))\W{0,3}(?:i'?m |i am |he'?s |she'?s |is |she is |he is )?"# + numberToken + #"\b"#,
         #"\b"# + numberToken + #"[- ]years?[- ]old\b"#,
         #"\b"# + numberToken + #"(?:st|nd|rd|th) birthday\b"#,
@@ -296,7 +296,7 @@ enum DateTriangulationRegex {
     /// Cheap pre-check so the four age regexes run only when they can hit.
     static let ageTriggers = ["old", "birthday", "turned", "turning"]
 
-    nonisolated(unsafe) static let directoryYear = try? NSRegularExpression(
+    static let directoryYear = try? NSRegularExpression(
         pattern: #"(?<!\d)((?:19|20)\d{2})(?!\d)"#)
 }
 

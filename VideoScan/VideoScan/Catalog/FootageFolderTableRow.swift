@@ -335,6 +335,7 @@ enum CatalogTableReveal {
         }
     }
 
+    @MainActor
     static func tableViews(under view: NSView) -> [NSTableView] {
         var out: [NSTableView] = []
         var stack: [NSView] = [view]

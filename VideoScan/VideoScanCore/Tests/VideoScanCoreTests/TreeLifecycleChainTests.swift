@@ -69,7 +69,7 @@ final class TreeLifecycleChainTests: XCTestCase {
     func testPromotingASingleSourceTreeOverATwoSourceOneIsDetected() throws {
         let mine = try pull("mine.ged", people: 400, generations: 6)
         let hers = try pull("hers.ged", people: 600, generations: 6)
-        var s = store()
+        let s = store()
 
         let a = try XCTUnwrap(GedcomFamilyGraph(fileURL: mine))
         let b = try XCTUnwrap(GedcomFamilyGraph(fileURL: hers))
@@ -105,7 +105,7 @@ final class TreeLifecycleChainTests: XCTestCase {
         let mine = try pull("mine.ged", people: 400, generations: 6)
         let hers = try pull("hers.ged", people: 600, generations: 6)
         let cousin = try pull("cousin.ged", people: 300, generations: 5)
-        var s = store()
+        let s = store()
 
         let a = try XCTUnwrap(GedcomFamilyGraph(fileURL: mine))
         let b = try XCTUnwrap(GedcomFamilyGraph(fileURL: hers))
@@ -129,7 +129,7 @@ final class TreeLifecycleChainTests: XCTestCase {
     func testEveryPersonSurvivesIngestAndReload() throws {
         let mine = try pull("mine.ged", people: 400, generations: 6)
         let hers = try pull("hers.ged", people: 600, generations: 6)
-        var s = store()
+        let s = store()
         let a = try XCTUnwrap(GedcomFamilyGraph(fileURL: mine))
         let b = try XCTUnwrap(GedcomFamilyGraph(fileURL: hers))
         let merged = a.merge(with: b).graph
@@ -150,7 +150,7 @@ final class TreeLifecycleChainTests: XCTestCase {
     func testATwoThousandPersonChainStaysInsideABudget() throws {
         let mine = try pull("mine.ged", people: 1_000, generations: 8)
         let hers = try pull("hers.ged", people: 1_000, generations: 8)
-        var s = store()
+        let s = store()
         let a = try XCTUnwrap(GedcomFamilyGraph(fileURL: mine))
         let b = try XCTUnwrap(GedcomFamilyGraph(fileURL: hers))
 

@@ -637,7 +637,7 @@ struct HallieKindWordsSensorTests {
 @MainActor
 @Suite("Hallie kind words — owner greeting", .serialized)
 struct HallieKindWordsOwnerGreetingTests {
-    private static let profiles = [
+    nonisolated private static let profiles = [
         KindFixture.ellenProfile(), KindFixture.bethProfile(), KindFixture.rickProfile(),
     ]
 

@@ -6,6 +6,7 @@
 // injected store directory, injected play-history, no defaults.
 
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 import VideoScanCore
@@ -114,8 +115,10 @@ struct ArchiveAngelSweepTests {
     @Test("busy → parks with a reason, then finishes once the app is free")
     @MainActor
     func parksWhileBusy() async {
-        var busy = true
-        let (sweep, dir) = makeSweep(candidates: synthetic(300), busy: { busy })
+        // Swift 6: a var captured by the sweep's @Sendable `busy` seam must be
+        // lock-owned; the test flips it from the main actor mid-run.
+        let busy = OSAllocatedUnfairLock(initialState: true)
+        let (sweep, dir) = makeSweep(candidates: synthetic(300), busy: { busy.withLock { $0 } })
         defer { try? FileManager.default.removeItem(at: dir) }
         sweep.run(reason: "test")
         try? await Task.sleep(nanoseconds: 150_000_000)
@@ -124,7 +127,7 @@ struct ArchiveAngelSweepTests {
         }
         #expect(reason.contains("another job"))
         #expect(!sweep.store.isLoaded, "nothing written while parked")
-        busy = false
+        busy.withLock { $0 = false }
         await sweep.runAndWait(reason: "ignored — a run is in flight")
         // runAndWait queued a rerun; wait for both to settle.
         for _ in 0..<200 {

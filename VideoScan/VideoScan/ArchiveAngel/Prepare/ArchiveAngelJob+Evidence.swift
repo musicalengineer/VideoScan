@@ -53,8 +53,8 @@ extension ArchiveAngelJob {
     /// projection (the evidence carries the classifier's year); rows that
     /// might enter are projected. A batch that cannot be filled within
     /// these budgets declines the cache and the job walks.
-    static let coverageProjectionBudget = 400
-    static let coverageLookBudget = 20_000
+    nonisolated static let coverageProjectionBudget = 400
+    nonisolated static let coverageLookBudget = 20_000
 
     /// nil = evidence missing, stale, incomplete, thinner than `count`, or
     /// scored under an OLDER attention state than the store holds now —

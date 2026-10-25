@@ -145,7 +145,7 @@ extension VideoScanModel {
     /// Year-precision folder prior — see rule 3 in the header.
     static let folderYearPriorConfidence: Float = 0.30
     /// Folder years outside this band are counters, not dates.
-    static let folderYearPriorRange: ClosedRange<Int> = 1900...2030
+    nonisolated static let folderYearPriorRange: ClosedRange<Int> = 1900...2030
     /// A date travels between copies only when it rests on evidence
     /// about the CONTENT (OCR / speech / captions ≥ 0.55, or the dossier
     /// pass's path-year tier 0.50). The mtime / container tier (0.30) is

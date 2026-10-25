@@ -621,7 +621,11 @@ struct HallieQueryBench {
     /// control: it proves the probe can see a stall when there is one, and
     /// that the difference is the chunking and not the measurement.
     @Test("main-actor residency: the one O(records) step that does not yield")
+    @MainActor
     func mainActorResidentWork() async {
+        // Swift 6: `[VideoRecord]` cannot cross into `MainActor.run`; the
+        // test itself lives on the main actor and calls the synchronous
+        // pass directly — the same residency the hop probe watches.
         for count in [5_000, 25_000, 100_000] {
             let records = Self.makeRecords(count)
 
@@ -630,7 +634,7 @@ struct HallieQueryBench {
             var blocking: [Double] = []
             for _ in 0..<3 {
                 let start = ContinuousClock.now
-                _ = await MainActor.run { HallieCatalogStats.compute(records: records) }
+                _ = HallieCatalogStats.compute(records: records)
                 blocking.append(HallieBenchClock.seconds(since: start))
             }
             let blockingHops = probe.stop()

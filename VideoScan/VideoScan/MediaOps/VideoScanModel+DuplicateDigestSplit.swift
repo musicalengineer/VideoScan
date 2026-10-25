@@ -75,7 +75,7 @@ struct DuplicateDigestSplitLikenessWrite: Equatable {
 
 extension VideoScanModel {
 
-    static let duplicateDigestSplitTitle = "Split Duplicate Groups by Full Hash"
+    nonisolated static let duplicateDigestSplitTitle = "Split Duplicate Groups by Full Hash"
 
     /// The one sink: console + catalog.log, videoscan.log, the unified log.
     func duplicateDigestSplitNote(_ line: String) {

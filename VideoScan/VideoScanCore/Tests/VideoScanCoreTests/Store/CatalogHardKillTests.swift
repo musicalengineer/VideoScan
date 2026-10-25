@@ -251,7 +251,7 @@ struct KillVerdict {
         do {
             let snapshot = try await CatalogLoad.read(repository)
             notes = try snapshot.rows.compactMap { row in
-                let note = try VideoRecord(loaded: row).userNotes ?? ""
+                let note = try VideoRecord(loaded: row).userNotes
                 return note.hasPrefix("crash-gen ") ? note : nil
             }
         } catch {

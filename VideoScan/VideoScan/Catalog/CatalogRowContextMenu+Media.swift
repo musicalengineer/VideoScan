@@ -129,7 +129,7 @@ extension CatalogContent {
             onCheckMedia: { checkMediaRequest = CheckMediaRequest(records: [rec]) },
             onRepair: { source in presentRepair(for: rec, soundSource: source) },
             onSoundDetails: diagnosis.map { d in
-                {
+                { @MainActor in   // Swift 6: the action type is `@MainActor () -> Void`
                     verifyAudioRequest = VerifyAudioRequest(
                         record: rec, diagnosis: d,
                         onFindMatchingAudio: { repairAudio(for: rec) })   // Combine sheet or alert; no job window (codex #964)

@@ -107,7 +107,7 @@ struct HallieRelationshipSnapshotTests {
         GedcomFamilyGraph(gedcomText: familyTree.replacingOccurrences(
             of: "1 NAME Al /Breen/", with: "1 NAME Rick /Breen/ Sr"))
     }
-    static let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
+    nonisolated static let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
 
     static func cyberBrain() throws -> CyberBrainIndex {
         try CyberBrainIndex(archive: .init(

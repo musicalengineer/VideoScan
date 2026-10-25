@@ -16,7 +16,7 @@ import VideoScanCore
 @Suite("Second-person life facts go to the persona road", .serialized)
 struct HalliePersonaQuestionTests {
 
-    private static let tree = GedcomFamilyGraph(gedcomText: """
+    nonisolated private static let tree = GedcomFamilyGraph(gedcomText: """
     0 HEAD
     0 @I1@ INDI
     1 NAME Hallie Mae /McGill/

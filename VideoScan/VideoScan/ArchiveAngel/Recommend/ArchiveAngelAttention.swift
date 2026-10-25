@@ -193,7 +193,7 @@ final class ArchiveAngelAttentionStore: ObservableObject {
 
     init() {}
 
-    static let attentionKinds: Set<MediaLedgerEvent.Kind> = [.angelProposed, .angelSkipped, .angelCleared]
+    nonisolated static let attentionKinds: Set<MediaLedgerEvent.Kind> = [.angelProposed, .angelSkipped, .angelCleared]
 
     /// The summary for a record: its own lines plus those of every copy
     /// of the same content. O(copies).

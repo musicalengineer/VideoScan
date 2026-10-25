@@ -254,6 +254,11 @@ final class CatalogPaintClock: ObservableObject {
     private var throttle = CatalogPaintThrottle()
     private var trailing: Task<Void, Never>?
 
+    /// Swift 6: nonisolated so `@State var folderPaintClock = CatalogPaintClock()`
+    /// (CatalogTableState, whose memberwise init is not main-actor isolated)
+    /// can build one; the defaults above are plain values, nothing is read.
+    nonisolated init() {}
+
     /// Something the cells may show changed. `busy` = a catalog-writing job
     /// or a scan runs (the 10 s gap); `urgent` = Rick just acted.
     func request(busy: Bool, urgent: Bool = false, now: ContinuousClock.Instant = .now) {

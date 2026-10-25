@@ -40,6 +40,7 @@ struct ArcFaceMLE5ProvocationTests {
     func provokeSharedModelCrash() async throws {
         let (model, _) = await ArcFaceModelLoader.shared.getModel()
         guard let model else { return }
+        let shared = ArcFaceSharedModel(model)
         guard let testImage = makeSyntheticFaceImage(size: 112) else {
             Issue.record("Could not create test image")
             return
@@ -50,6 +51,7 @@ struct ArcFaceMLE5ProvocationTests {
             Issue.record("Could not create pixel buffer")
             return
         }
+        let sharedPB = ArcFaceSharedPixelBuffer(pb)
 
         let threadCount = 16
         let predictionsPerThread = 300
@@ -86,10 +88,10 @@ struct ArcFaceMLE5ProvocationTests {
                         var exception: NSException?
                         let ok = VSCatchObjCException({
                             let input = try? MLDictionaryFeatureProvider(
-                                dictionary: ["faceImage": pb]
+                                dictionary: ["faceImage": sharedPB.buffer]
                             )
                             guard let input else { return }
-                            _ = try? model.prediction(from: input)
+                            _ = try? shared.model.prediction(from: input)
                         }, &exception)
 
                         if ok {
@@ -160,6 +162,7 @@ struct ArcFaceMLE5ProvocationTests {
 
         let pb = makePixelBuffer(from: testImage, size: 112)
         guard let pb else { return }
+        let sharedPB = ArcFaceSharedPixelBuffer(pb)
 
         let caughtExceptions = OSAllocatedUnfairLock(initialState: 0)
         let completedOK = OSAllocatedUnfairLock(initialState: 0)
@@ -172,7 +175,7 @@ struct ArcFaceMLE5ProvocationTests {
         // Some jobs share a model (worst case), some get their own
         let sharedModel = models[0]
         for i in 0..<jobCount {
-            let model = (i < 3) ? sharedModel : models[i]
+            let model = ArcFaceSharedModel((i < 3) ? sharedModel : models[i])
             group.enter()
             Thread.detachNewThread {
                 defer { group.leave() }
@@ -191,10 +194,10 @@ struct ArcFaceMLE5ProvocationTests {
                         var exception: NSException?
                         let ok = VSCatchObjCException({
                             let input = try? MLDictionaryFeatureProvider(
-                                dictionary: ["faceImage": pb]
+                                dictionary: ["faceImage": sharedPB.buffer]
                             )
                             guard let input else { return }
-                            _ = try? model.prediction(from: input)
+                            _ = try? model.model.prediction(from: input)
                         }, &exception)
 
                         if ok {
@@ -237,6 +240,7 @@ struct ArcFaceMLE5ProvocationTests {
 
         let pb = makePixelBuffer(from: testImage, size: 112)
         guard let pb else { return }
+        let sharedPB = ArcFaceSharedPixelBuffer(pb)
 
         let cycles = 50
         let threadsPerCycle = 4
@@ -249,6 +253,7 @@ struct ArcFaceMLE5ProvocationTests {
             // Load a fresh model each cycle — churn ANE resources
             let (model, _) = await ArcFaceModelLoader.shared.getModel()
             guard let model else { continue }
+            let shared = ArcFaceSharedModel(model)
 
             let group = DispatchGroup()
             for _ in 0..<threadsPerCycle {
@@ -260,10 +265,10 @@ struct ArcFaceMLE5ProvocationTests {
                             var exception: NSException?
                             let ok = VSCatchObjCException({
                                 let input = try? MLDictionaryFeatureProvider(
-                                    dictionary: ["faceImage": pb]
+                                    dictionary: ["faceImage": sharedPB.buffer]
                                 )
                                 guard let input else { return }
-                                _ = try? model.prediction(from: input)
+                                _ = try? shared.model.prediction(from: input)
                             }, &exception)
 
                             if ok {
@@ -342,7 +347,7 @@ struct ArcFaceMLE5ProvocationTests {
             let group = DispatchGroup()
 
             for i in 0..<jobCount {
-                let model = models[i]
+                let model = ArcFaceSharedModel(models[i])
                 let profilePath = poiBase + "/" + selectedProfiles[i]
                 group.enter()
                 Thread.detachNewThread {
@@ -365,7 +370,7 @@ struct ArcFaceMLE5ProvocationTests {
                         from: profilePath,
                         largestFaceOnly: false,
                         useLandmarkAlignment: false,
-                        model: model
+                        model: model.model
                     )
                     completedOK.withLock { $0 += 1 }
                     _ = embeddings
@@ -402,6 +407,7 @@ struct ArcFaceMLE5ProvocationTests {
         // This is the exact failure mode from the original 2026-05-11 crash.
         let (model, _) = await ArcFaceModelLoader.shared.getModel()
         guard let model else { return }
+        let shared = ArcFaceSharedModel(model)
 
         let poiBase = NSHomeDirectory() + "/Library/Application Support/VideoScan/POI/donna"
         let fm = FileManager.default
@@ -429,6 +435,7 @@ struct ArcFaceMLE5ProvocationTests {
 
         // Pre-build pixel buffers for all photos
         let pixelBuffers: [CVPixelBuffer] = photos.compactMap { makePixelBuffer(from: $0, size: 112) }
+        let sharedBuffers = pixelBuffers.map(ArcFaceSharedPixelBuffer.init)
         guard !pixelBuffers.isEmpty else { return }
 
         let threadCount = 16
@@ -460,14 +467,14 @@ struct ArcFaceMLE5ProvocationTests {
                 // real photo pixel buffers. Maximum contention.
                 for i in 0..<predictionsPerThread {
                     autoreleasepool {
-                        let pb = pixelBuffers[(threadIdx + i) % pixelBuffers.count]
+                        let pb = sharedBuffers[(threadIdx + i) % sharedBuffers.count].buffer
                         var exception: NSException?
                         let ok = VSCatchObjCException({
                             let input = try? MLDictionaryFeatureProvider(
                                 dictionary: ["faceImage": pb]
                             )
                             guard let input else { return }
-                            _ = try? model.prediction(from: input)
+                            _ = try? shared.model.prediction(from: input)
                         }, &exception)
 
                         if ok {

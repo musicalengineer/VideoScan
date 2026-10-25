@@ -46,20 +46,26 @@ struct VerifyAudioRequest: Identifiable {
     /// depth) instead of findings — Rick 2026-08-14: "Audio Info… should
     /// always be there and always show the audio status."
     let diagnosis: AudioVerifyDiagnosis?
-    let onFindMatchingAudio: () -> Void
+    /// Swift 6: a catalog action a SwiftUI sheet fires — main-actor by type.
+    let onFindMatchingAudio: @MainActor () -> Void
 }
 
 /// Runs catalog actions only after the results sheet starts dismissing.
 /// The injected scheduler keeps this ordering unit-testable without UI tests.
 @MainActor
 enum VerifyAudioDismissHandoff {
-    typealias Scheduler = (@escaping () -> Void) -> Void
+    /// Swift 6: the action is a catalog action a SwiftUI sheet fires, so it
+    /// is `@MainActor` by type (a plain `() -> Void` narrows into it for
+    /// free); the default scheduler then runs it there 0.2 s later without
+    /// handing a non-Sendable closure to GCD.
+    typealias Scheduler = (@escaping @MainActor () -> Void) -> Void
 
     static func perform(
         dismiss: () -> Void,
-        action: @escaping () -> Void,
+        action: @escaping @MainActor () -> Void,
         schedule: Scheduler = { action in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(200))
                 action()
             }
         }

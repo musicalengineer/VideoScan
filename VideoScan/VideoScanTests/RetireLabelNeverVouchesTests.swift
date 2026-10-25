@@ -28,10 +28,10 @@ import VideoScanCore
 struct RetireLabelNeverVouchesTests {
 
     private static let drive = "/Volumes/TestOld"
-    private static let uuid = "11111111-2222-3333-4444-555555555555"
+    nonisolated private static let uuid = "11111111-2222-3333-4444-555555555555"
 
     /// The catalogued drive: its UUID is the recorded one, every folder exists on device 1.
-    private static let probe = RetireDriveProbe(volumeUUID: { _ in uuid }, directoryDevice: { _ in 1 })
+    nonisolated private static let probe = RetireDriveProbe(volumeUUID: { _ in uuid }, directoryDevice: { _ in 1 })
 
     private func model(_ records: [VideoRecord]) -> VideoScanModel {
         let m = VideoScanModel()

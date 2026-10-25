@@ -16,6 +16,7 @@
 // sink are injected. Serialized: the tests swap the global `appLog`.
 
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -100,14 +101,17 @@ struct BackupAttestationJournalTests {
         return r
     }
 
-    private func capturingMutations(_ body: () -> Void) -> [VideoRecord] {
-        var seen: [VideoRecord] = []
+    /// The filenames of the record-scoped posts, in post order.
+    /// Swift 6: the observer block is @Sendable and `VideoRecord` is not,
+    /// so the lock owns the Sendable fact the assertions read.
+    private func capturingMutations(_ body: () -> Void) -> [String] {
+        let seen = OSAllocatedUnfairLock(initialState: [String]())
         let token = NotificationCenter.default.addObserver(forName: .videoScanCatalogMutated, object: nil, queue: nil) { note in
-            if let r = note.object as? VideoRecord { seen.append(r) }
+            if let r = note.object as? VideoRecord { seen.withLock { $0.append(r.filename) } }
         }
         body()
         NotificationCenter.default.removeObserver(token)
-        return seen
+        return seen.withLock { $0 }
     }
 
     @Test("one append and one fsync per batch; batches land in call order; the journal carries millisecond timestamps")
@@ -194,7 +198,7 @@ struct BackupAttestationJournalTests {
         let posted = capturingMutations {
             write = model.recordAttestation(kind: .cloud, answer: .no, at: at, for: [a.id, b.id])
         }
-        #expect(posted.map(\.filename) == ["a.mov", "b.mov"], "announced synchronously, before any journal attempt")
+        #expect(posted == ["a.mov", "b.mov"], "announced synchronously, before any journal attempt")
         #expect(a.backupAttestations.map(\.token) == ["cloud=no"] && b.backupAttestations.map(\.token) == ["cloud=no"])
         #expect(write?.records.count == 2)
         #expect(write?.flush != nil, "an archive IS designated, so the append was attempted")

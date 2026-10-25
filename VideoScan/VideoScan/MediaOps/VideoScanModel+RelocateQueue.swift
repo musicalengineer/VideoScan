@@ -289,7 +289,10 @@ extension VideoScanModel {
                 content: content,
                 trigger: nil
             )
-            center.add(req, withCompletionHandler: nil)
+            // Swift 6: `UNUserNotificationCenter` is not marked Sendable; the
+            // completion runs on the center's own queue, so ask the singleton
+            // again there instead of carrying the handle across.
+            UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
         }
     }
 

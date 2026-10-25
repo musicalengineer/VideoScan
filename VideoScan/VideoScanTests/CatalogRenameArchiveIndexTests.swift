@@ -32,7 +32,7 @@ struct CatalogRenameArchiveIndexTests {
     static var newRel: String { "30_Video/1990-1999/1994/\(newBase).mkv" }
     static let oldName = "1994-xx-xx_Chrsitmas_1994_misc.mkv"
     static let newName = "1994-xx-xx_Christmas_1994_misc.mkv"
-    static let sourceName = "Chrsitmas 1994 misc.mkv"
+    nonisolated static let sourceName = "Chrsitmas 1994 misc.mkv"
     static let at = Date(timeIntervalSince1970: 1_758_000_000)
 
     struct Fixture {

@@ -55,8 +55,8 @@ extension VideoScanModel {
     /// Static so a door with no model at hand (the caption orchestrator)
     /// still writes through the one function.
     @discardableResult
-    nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil,
-                                         kind: CatalogMarkerChange = .request) -> String? {
+    @MainActor static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil,
+                                        kind: CatalogMarkerChange = .request) -> String? {
         let changed = rec.removal != marker
         if changed, let why = CatalogMarkerRelay.markerWillChange(rec, kind: kind) {
             return markerRefusal(rec, verb: markerVerb(marker), why)
@@ -129,9 +129,9 @@ extension VideoScanModel {
     /// (For Rick: a compare-and-swap on (marker, revision), then on each
     /// mirror — the revision is the ABA tag.)
     @discardableResult
-    nonisolated static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?, revision: Int,
-                                          mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors,
-                                          refused: (String) -> Void = { _ in }) -> Bool {
+    @MainActor static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?, revision: Int,
+                                         mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors,
+                                         refused: (String) -> Void = { _ in }) -> Bool {
         guard rec.removal == wrote, rec.removalRevision == revision else { return false }
         if let why = CatalogMarkerRelay.markerWillChange(rec) {
             refused(markerRefusal(rec, verb: "undo the last change to <name>", why))
@@ -294,6 +294,10 @@ struct RemovalMirrors: Sendable, Equatable {
 /// the restore. (For Rick: a tiny memento object ≈ a saved C++ struct copy.)
 /// Holds the INSTANCE it was taken from: not for a rollback that may run
 /// after a reload replaced the object — that is `revertRemoval`.
+/// `@MainActor` by type (Swift 6): it holds a VideoRecord and is built and
+/// reinstated only inside the main-actor Missing-Audio door; the relay it
+/// asks is main-actor too.
+@MainActor
 struct RemovalUndo {
     private let record: VideoRecord
     private let removal: RemovalMarker?
