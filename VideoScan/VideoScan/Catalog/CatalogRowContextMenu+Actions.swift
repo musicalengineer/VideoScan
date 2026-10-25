@@ -48,7 +48,7 @@ extension CatalogContent {
         }
         let modern = reachable.filter { rec in !needsReformat.contains(where: { $0.id == rec.id }) }
 
-        _ = fileOpsCenter.startedByUser { center in
+        fileOpsCenter.startedByUser { center in
             for rec in modern {
                 center.startAnalyzeOne(record: rec, model: model,
                                        orchestrator: captionOrchestrator,
@@ -73,7 +73,7 @@ extension CatalogContent {
         alert.addButton(withTitle: needsReformat.count == reachable.count ? "Cancel" : "Skip These")
         let reformat = alert.runModal() == .alertFirstButtonReturn
         if reformat {
-            _ = fileOpsCenter.startedByUser { center in
+            fileOpsCenter.startedByUser { center in
                 for rec in needsReformat {
                     center.startReformat(record: rec, model: model,
                                          orchestrator: captionOrchestrator)

@@ -268,7 +268,10 @@ struct PersonFinderSettings: Equatable {
 
     // MARK: - Persistence
 
-    private static let defaults = UserDefaults.standard
+    /// Swift 6: `UserDefaults` is not Sendable in this SDK, so a stored
+    /// static handle is flagged; `.standard` is Foundation's own cached
+    /// singleton, so a computed accessor is the same object with no storage.
+    private static var defaults: UserDefaults { .standard }
     private static let prefix = "pf_"
 
     /// Restore settings from UserDefaults. Missing keys use struct defaults.
@@ -1361,7 +1364,8 @@ struct CompilationSettings: Equatable {
     var pad: Double = 2.0
     var concurrency: Int = 8
 
-    private static let defaults = UserDefaults.standard
+    // Swift 6: same reasoning as PersonFinderSettings.defaults above.
+    private static var defaults: UserDefaults { .standard }
     private static let prefix = "comp_"
 
     static func restored() -> CompilationSettings {
@@ -1496,7 +1500,7 @@ struct CompiledOutput: Identifiable, Equatable, Hashable {
 
 // MARK: - Internal data types
 
-struct pfVideoResult {
+struct pfVideoResult: Sendable {
     let filename: String
     let filePath: String
     let durationSeconds: Double
@@ -1532,7 +1536,7 @@ struct pfVideoResult {
     nonisolated var totalPresenceSecs: Double { segments.map { $0.endSecs - $0.startSecs }.reduce(0, +) }
 }
 
-struct pfSegment {
+struct pfSegment: Sendable {
     var startSecs: Double
     var endSecs: Double
     var bestDistance: Float

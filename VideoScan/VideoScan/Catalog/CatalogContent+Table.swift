@@ -767,7 +767,9 @@ extension CatalogContent {
                 .foregroundColor(.secondary)
             let separator = (!strong.isEmpty
                              && !rec.suspectedPeople.isEmpty) ? " · " : ""
-            (strongText + Text(separator) + suspectedText)
+            // Text interpolation keeps each piece's own styling (blue /
+            // italic-secondary); `Text + Text` is deprecated in macOS 26.
+            Text("\(strongText)\(Text(separator))\(suspectedText)")
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .help(peopleColumnHelp(for: rec))

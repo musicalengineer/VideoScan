@@ -47,7 +47,7 @@ struct MLXSafetyTests {
         // and `withError`'s scope-exit throws MLXError.caught.
 
         do {
-            _ = try await runMLX {
+            _ = try runMLX {
                 let a = MLXArray(0 ..< 10, [2, 5])
                 let b = MLXArray(0 ..< 15, [3, 5])
                 let result = a + b
@@ -84,7 +84,7 @@ struct MLXSafetyTests {
     /// happy path.
     @Test("happy-path MLX call inside runMLX returns normally")
     func happyPathRoundtrip() async throws {
-        let result: [Int32] = try await runMLX {
+        let result: [Int32] = try runMLX {
             let a = MLXArray([1, 2, 3, 4, 5])
             let b = MLXArray([10, 20, 30, 40, 50])
             let sum = a + b
@@ -115,7 +115,7 @@ struct MLXSafetyTests {
     func errorIsolation() async throws {
         // First call: should throw.
         do {
-            _ = try await runMLX {
+            _ = try runMLX {
                 let a = MLXArray(0 ..< 6, [2, 3])
                 let b = MLXArray(0 ..< 8, [2, 4])
                 let r = a + b
@@ -128,7 +128,7 @@ struct MLXSafetyTests {
         }
 
         // Second call: should succeed cleanly.
-        let result: [Int32] = try await runMLX {
+        let result: [Int32] = try runMLX {
             let a = MLXArray([100, 200])
             eval(a)
             return a.asArray(Int32.self)

@@ -108,6 +108,27 @@ class Parsing(unittest.TestCase):
         self.assertEqual(ratchet.parse_logs([Path("/nonexistent/sensor-lane-core.log")]), set())
 
 
+class Categories(unittest.TestCase):
+    def test_the_five_messages_stage_3_found_binned_as_other_are_concurrency(self):
+        """2026-10-25 (stage 3 worker): these real diagnostics landed in "other", which let a
+        deprecation slice "own" concurrency findings. Each is a Swift 6 blocker category."""
+        cases = {
+            "main actor-isolated static property 'listCap' cannot be accessed from outside of the actor; this is an error in the Swift 6 language mode": "main-actor",
+            "main actor-isolated static property 'x' can not be referenced from a nonisolated context": "main-actor",
+            "'busy' mutated after capture by sendable closure": "sendable-capture",
+            "pattern that the region based isolation checker does not understand how to check. Please file a bug": "sendable-capture",
+            "sending 'job' risks causing data races; this is an error in the Swift 6 language mode [#RegionIsolation::SendingRisksDataRace]": "sendable-capture",
+            "type 'Foo' does not conform to the 'Sendable' protocol": "sendable-conformance",
+            "static property 'tables' is not concurrency-safe because non-'Sendable' type": "global-static",
+            "'foo' is deprecated: use bar": "deprecated",
+            "left side of nil coalescing operator '??' has non-optional type": "other",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text[:40]):
+                self.assertEqual(ratchet.category(text), expected)
+        self.assertTrue(all(c in ratchet.SWIFT6_BLOCKERS for c in ("main-actor", "sendable-capture", "sendable-conformance", "global-static")))
+
+
 class Check(unittest.TestCase):
     def test_incremental_log_is_judged_per_file(self):
         """Only A was recompiled: its count is exact; B's absence means nothing."""

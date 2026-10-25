@@ -178,7 +178,12 @@ struct ContentView: View {
                 secondaryButton: .cancel()
             )
         }
-        .onAppear {
+        .onAppear { [weak model] in
+            // Weak here too, so the stored callbacks below capture the
+            // same weak reference (Swift 6: a weak inner capture of a
+            // strongly captured outer `model` is flagged as inconsistent).
+            // The view holds the model, so it is alive whenever it appears.
+            guard let model else { return }
             // Wire PersonFinder scan code to the shared DashboardState
             // (visionFPS / msPerFrame / workers updates flow through here).
             // Moved out of PersonFinderView so that view can stop subscribing

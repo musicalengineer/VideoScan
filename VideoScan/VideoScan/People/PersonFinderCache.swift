@@ -9,7 +9,13 @@ private let cacheLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "cach
 /// If a video hasn't changed and the scan parameters match, we skip the expensive
 /// face-recognition pass entirely and return cached segments.
 /// Stored at ~/Library/Application Support/VideoScan/personfinder_cache.sqlite.
-final class PersonFinderCache {
+///
+/// Swift 6: `Sendable` because every mutable field lives inside
+/// `connection`, an `OSAllocatedUnfairLock` that owns its state (C++: a
+/// `std::mutex` whose guarded fields can only be reached through
+/// `lock_guard` — the compiler enforces it, not convention). `shared` is
+/// therefore a plain `static let` the checker accepts.
+final class PersonFinderCache: Sendable {
 
     /// PURE store gate (codex #290 sensor seam): a watchdog-aborted
     /// result is partial and must never enter the cache — an uncached
@@ -19,24 +25,29 @@ final class PersonFinderCache {
         !result.watchdogAborted
     }
 
-    private var db: OpaquePointer?
-    private let lock = NSLock()
+    /// One SQLite connection plus its hit/miss tally. `OpaquePointer` (the
+    /// `sqlite3*` handle) has no Sendable conformance, hence
+    /// `uncheckedState`: the handle is only ever touched inside `withLock`,
+    /// which is exactly SQLite's documented-safe condition for one
+    /// connection shared by several threads (serialized access).
+    private struct Connection {
+        var db: OpaquePointer?
+        var hitCount = 0
+        var missCount = 0
+    }
+    private let connection: OSAllocatedUnfairLock<Connection>
 
     static let shared = PersonFinderCache()
 
-    private var hitCount = 0
-    private var missCount = 0
-
     func resetStats() {
-        lock.lock(); defer { lock.unlock() }
-        hitCount = 0
-        missCount = 0
+        connection.withLock { c in
+            c.hitCount = 0
+            c.missCount = 0
+        }
     }
 
     func logSummary() {
-        lock.lock()
-        let h = hitCount, m = missCount
-        lock.unlock()
+        let (h, m) = connection.withLock { ($0.hitCount, $0.missCount) }
         let total = h + m
         guard total > 0 else { return }
         let pct = String(format: "%.1f", Double(h) / Double(total) * 100)
@@ -66,11 +77,13 @@ final class PersonFinderCache {
 
     init(path: String? = nil) {
         let dbPath = path ?? Self.dbPath
-        guard sqlite3_open(dbPath, &db) == SQLITE_OK else {
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbPath, &handle) == SQLITE_OK else {
             cacheLog.error("Failed to open cache DB at \(dbPath, privacy: .public)")
-            db = nil
+            connection = OSAllocatedUnfairLock(uncheckedState: Connection(db: nil))
             return
         }
+        connection = OSAllocatedUnfairLock(uncheckedState: Connection(db: handle))
         cacheLog.info("Cache opened: \(dbPath, privacy: .public)")
         exec("PRAGMA journal_mode=WAL")
         exec("PRAGMA synchronous=NORMAL")
@@ -94,14 +107,17 @@ final class PersonFinderCache {
     }
 
     deinit {
-        if let db = db { sqlite3_close(db) }
+        connection.withLock { c in
+            if let db = c.db { sqlite3_close(db) }
+            c.db = nil
+        }
     }
 
     // MARK: - Cache Key
 
     /// Equatable so tests can assert restored/rehydrated keys are IDENTICAL
     /// to the live scan's keys (codex post-merge #2).
-    struct CacheKey: Equatable {
+    struct CacheKey: Equatable, Sendable {
         let videoPath: String
         let fileSize: Int64
         let modDate: Date
@@ -196,8 +212,11 @@ final class PersonFinderCache {
         )
     }
 
-    private static var refHashCache: [String: String] = [:]
-    private static let refHashLock = NSLock()
+    /// Reference-set fingerprint → stable hash. Swift 6: the lock owns the
+    /// dictionary (was a `static var` beside an `NSLock`, which the checker
+    /// cannot connect). Memory: one entry per distinct reference set seen
+    /// this process — a handful of short strings, never media bytes.
+    private static let refHashCache = OSAllocatedUnfairLock(initialState: [String: String]())
 
     static func cachedRefHash(_ refFilenames: [String]) -> String {
         let fm = FileManager.default
@@ -210,16 +229,11 @@ final class PersonFinderCache {
             return path
         }.joined(separator: "\n")
 
-        refHashLock.lock()
-        if let cached = refHashCache[cacheKey] {
-            refHashLock.unlock()
+        if let cached = refHashCache.withLock({ $0[cacheKey] }) {
             return cached
         }
-        refHashLock.unlock()
         let result = stableHash(refFilenames)
-        refHashLock.lock()
-        refHashCache[cacheKey] = result
-        refHashLock.unlock()
+        refHashCache.withLock { $0[cacheKey] = result }
         return result
     }
 
@@ -261,77 +275,79 @@ final class PersonFinderCache {
     // MARK: - Lookup
 
     func lookup(key: CacheKey) -> pfVideoResult? {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return nil }
-        let sql = """
-            SELECT duration_seconds, fps, total_hits, segments_json
-            FROM pf_cache
-            WHERE video_path = ? AND file_size = ? AND mod_date = ?
-              AND person_name = ? AND engine = ? AND threshold = ? AND ref_hash = ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-        defer { sqlite3_finalize(stmt) }
+        connection.withLock { c in
+            guard let db = c.db else { return nil }
+            let sql = """
+                SELECT duration_seconds, fps, total_hits, segments_json
+                FROM pf_cache
+                WHERE video_path = ? AND file_size = ? AND mod_date = ?
+                  AND person_name = ? AND engine = ? AND threshold = ? AND ref_hash = ?
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
 
-        bind(stmt, 1, key.videoPath)
-        sqlite3_bind_int64(stmt, 2, key.fileSize)
-        sqlite3_bind_double(stmt, 3, key.modDate.timeIntervalSince1970)
-        bind(stmt, 4, key.personName)
-        bind(stmt, 5, key.engine)
-        sqlite3_bind_double(stmt, 6, Double(key.threshold))
-        bind(stmt, 7, key.refHash)
+            bind(stmt, 1, key.videoPath)
+            sqlite3_bind_int64(stmt, 2, key.fileSize)
+            sqlite3_bind_double(stmt, 3, key.modDate.timeIntervalSince1970)
+            bind(stmt, 4, key.personName)
+            bind(stmt, 5, key.engine)
+            sqlite3_bind_double(stmt, 6, Double(key.threshold))
+            bind(stmt, 7, key.refHash)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
-            missCount += 1
-            cacheLog.debug("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
-            return nil
+            guard sqlite3_step(stmt) == SQLITE_ROW else {
+                c.missCount += 1
+                cacheLog.debug("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
+                return nil
+            }
+
+            let duration = sqlite3_column_double(stmt, 0)
+            let fps = sqlite3_column_double(stmt, 1)
+            let totalHits = Int(sqlite3_column_int(stmt, 2))
+            let segJson = col(stmt, 3)
+
+            let segments = decodeSegments(segJson)
+            c.hitCount += 1
+            let filename = (key.videoPath as NSString).lastPathComponent
+            cacheLog.debug("HIT: \(filename, privacy: .public) hits=\(totalHits)")
+            return pfVideoResult(
+                filename: filename,
+                filePath: key.videoPath,
+                durationSeconds: duration,
+                fps: fps,
+                totalHits: totalHits,
+                segments: segments
+            )
         }
-
-        let duration = sqlite3_column_double(stmt, 0)
-        let fps = sqlite3_column_double(stmt, 1)
-        let totalHits = Int(sqlite3_column_int(stmt, 2))
-        let segJson = col(stmt, 3)
-
-        let segments = decodeSegments(segJson)
-        hitCount += 1
-        let filename = (key.videoPath as NSString).lastPathComponent
-        cacheLog.debug("HIT: \(filename, privacy: .public) hits=\(totalHits)")
-        return pfVideoResult(
-            filename: filename,
-            filePath: key.videoPath,
-            durationSeconds: duration,
-            fps: fps,
-            totalHits: totalHits,
-            segments: segments
-        )
     }
 
     // MARK: - Store
 
     func store(key: CacheKey, result: pfVideoResult) {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return }
-        let sql = """
-            INSERT OR REPLACE INTO pf_cache VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
+        connection.withLock { c in
+            guard let db = c.db else { return }
+            let sql = """
+                INSERT OR REPLACE INTO pf_cache VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
 
-        bind(stmt, 1, key.videoPath)
-        sqlite3_bind_int64(stmt, 2, key.fileSize)
-        sqlite3_bind_double(stmt, 3, key.modDate.timeIntervalSince1970)
-        bind(stmt, 4, key.personName)
-        bind(stmt, 5, key.engine)
-        sqlite3_bind_double(stmt, 6, Double(key.threshold))
-        bind(stmt, 7, key.refHash)
-        sqlite3_bind_double(stmt, 8, result.durationSeconds)
-        sqlite3_bind_double(stmt, 9, result.fps)
-        sqlite3_bind_int(stmt, 10, Int32(result.totalHits))
-        bind(stmt, 11, encodeSegments(result.segments))
-        sqlite3_bind_double(stmt, 12, Date().timeIntervalSince1970)
+            bind(stmt, 1, key.videoPath)
+            sqlite3_bind_int64(stmt, 2, key.fileSize)
+            sqlite3_bind_double(stmt, 3, key.modDate.timeIntervalSince1970)
+            bind(stmt, 4, key.personName)
+            bind(stmt, 5, key.engine)
+            sqlite3_bind_double(stmt, 6, Double(key.threshold))
+            bind(stmt, 7, key.refHash)
+            sqlite3_bind_double(stmt, 8, result.durationSeconds)
+            sqlite3_bind_double(stmt, 9, result.fps)
+            sqlite3_bind_int(stmt, 10, Int32(result.totalHits))
+            bind(stmt, 11, encodeSegments(result.segments))
+            sqlite3_bind_double(stmt, 12, Date().timeIntervalSince1970)
 
-        sqlite3_step(stmt)
+            sqlite3_step(stmt)
+        }
     }
 
     // MARK: - Cache-miss diagnostics
@@ -339,7 +355,7 @@ final class PersonFinderCache {
     /// Summary of a cached row, excluding the heavy result payload. Used to
     /// answer "why did the cache miss for this video on the current search?"
     /// by surfacing the keys that DO exist.
-    struct CachedRowSummary: Equatable {
+    struct CachedRowSummary: Equatable, Sendable {
         let personName: String
         let engine: String
         let threshold: Float
@@ -353,31 +369,32 @@ final class PersonFinderCache {
     /// the search params under which the file WAS cached — letting us
     /// diff against the current search to explain a miss.
     func cachedRowsForVideo(videoPath: String, fileSize: Int64, modDate: Date) -> [CachedRowSummary] {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return [] }
-        let sql = """
-            SELECT person_name, engine, threshold, ref_hash, cached_at
-            FROM pf_cache
-            WHERE video_path = ? AND file_size = ? AND mod_date = ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(stmt) }
-        bind(stmt, 1, videoPath)
-        sqlite3_bind_int64(stmt, 2, fileSize)
-        sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
+        connection.withLock { c in
+            guard let db = c.db else { return [] }
+            let sql = """
+                SELECT person_name, engine, threshold, ref_hash, cached_at
+                FROM pf_cache
+                WHERE video_path = ? AND file_size = ? AND mod_date = ?
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            bind(stmt, 1, videoPath)
+            sqlite3_bind_int64(stmt, 2, fileSize)
+            sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
 
-        var rows: [CachedRowSummary] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append(CachedRowSummary(
-                personName: col(stmt, 0),
-                engine: col(stmt, 1),
-                threshold: Float(sqlite3_column_double(stmt, 2)),
-                refHash: col(stmt, 3),
-                cachedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
-            ))
+            var rows: [CachedRowSummary] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                rows.append(CachedRowSummary(
+                    personName: col(stmt, 0),
+                    engine: col(stmt, 1),
+                    threshold: Float(sqlite3_column_double(stmt, 2)),
+                    refHash: col(stmt, 3),
+                    cachedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+                ))
+            }
+            return rows
         }
-        return rows
     }
 
     /// Builds a human-readable explanation of why the cache missed for the
@@ -424,20 +441,22 @@ final class PersonFinderCache {
     // MARK: - Maintenance
 
     func clearAll() {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return }
-        sqlite3_exec(db, "DELETE FROM pf_cache", nil, nil, nil)
-        sqlite3_exec(db, "VACUUM", nil, nil, nil)
+        connection.withLock { c in
+            guard let db = c.db else { return }
+            sqlite3_exec(db, "DELETE FROM pf_cache", nil, nil, nil)
+            sqlite3_exec(db, "VACUUM", nil, nil, nil)
+        }
     }
 
     var count: Int {
-        lock.lock(); defer { lock.unlock() }
-        guard let db = db else { return 0 }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM pf_cache", -1, &stmt, nil) == SQLITE_OK
-        else { return 0 }
-        defer { sqlite3_finalize(stmt) }
-        return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        connection.withLock { c in
+            guard let db = c.db else { return 0 }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM pf_cache", -1, &stmt, nil) == SQLITE_OK
+            else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
     }
 
     // MARK: - Segment JSON encoding
@@ -473,8 +492,10 @@ final class PersonFinderCache {
     // MARK: - SQLite helpers
 
     private func exec(_ sql: String) {
-        guard let db = db else { return }
-        sqlite3_exec(db, sql, nil, nil, nil)
+        connection.withLock { c in
+            guard let db = c.db else { return }
+            sqlite3_exec(db, sql, nil, nil, nil)
+        }
     }
 
     private func col(_ stmt: OpaquePointer?, _ idx: Int32) -> String {

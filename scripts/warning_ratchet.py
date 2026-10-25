@@ -81,9 +81,13 @@ KNOWN_META = ("start_total", "recorded")
 # How a warning is classified (first match wins). The Swift 6 blockers first.
 CATEGORIES: List[Tuple[str, re.Pattern]] = [
     ("global-static", re.compile(r"not concurrency-safe")),
-    ("main-actor", re.compile(r"main actor-isolated .* (can not|cannot) be referenced|main actor-isolated default value")),
-    ("sendable-capture", re.compile(r"non-Sendable|Sendable|sending '|risks causing data races|concurrently-executing|concurrently-executed|RegionIsolation")),
+    # "cannot be accessed" (a property) as well as "referenced" (a method/let);
+    # "can not" is how older diagnostics spell it.
+    ("main-actor", re.compile(r"main actor-isolated .* (can ?not) be (referenced|accessed)|main actor-isolated default value")),
     ("sendable-conformance", re.compile(r"does not conform to the 'Sendable' protocol")),
+    # Case-insensitive: "mutated after capture by sendable closure" is lowercase;
+    # "region-based isolation" is how the "Please file a bug" diagnostics name it.
+    ("sendable-capture", re.compile(r"sendable|sending '|risks causing data races|concurrently-execut|RegionIsolation|region[- ]based isolation", re.I)),
     ("capture-ownership", re.compile(r"ownership of capture")),
     ("deprecated", re.compile(r"deprecated")),
     ("other", re.compile(r".")),

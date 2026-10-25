@@ -3405,6 +3405,7 @@
         "ArcFacePredictorTests"
       ],
       "tests": [
+        "concurrentReadersAndConfigureAgree",
         "configureClampsToSerialized",
         "configureOneStaysSerialized",
         "defaultIsSerialized",
@@ -5770,6 +5771,7 @@
         "ArchivistQueryASTGraphDecodingTests"
       ],
       "tests": [
+        "everyTranslatorSchemaIsAValidJSONObjectWithItsBranches",
         "familyTreeAcceptsPersonSurnameOrNeither",
         "multiHopKinshipWithSideRoundTrips",
         "strictDecoderRejectsMalformedGraphPayloads",
@@ -19085,6 +19087,18 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MemoryPressurePageSizeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MemoryPressurePageSizeTests"
+      ],
+      "tests": [
+        "availableMemoryIsAWholeNumberOfKernelPages",
+        "kernelPageSizeIsTheOneVMStatisticsCountIn"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/MetadataCacheIsolationTests.swift",
@@ -19927,7 +19941,9 @@
         "POIUUIDMigrationTests"
       ],
       "tests": [
+        "aReaderDuringTheBackupWindowWaitsForTheRunsResult",
         "backupFailureMeansZeroWritesAnywhere",
+        "bookkeepingIsReadWhereTheRunWroteIt",
         "failedLinkRebaseKeepsTheOriginalLinkAndIsRetriedOnTheNextRun",
         "faultInjectionBlocksNewEntriesButNotTheFolderRename",
         "hundredProfilesWithAThousandFilesEachRenameInWellUnderASecond",
@@ -20440,7 +20456,9 @@
         "PersonFinderCacheTests"
       ],
       "tests": [
+        "cachedRefHashAgreesAcrossThreads",
         "clearAll",
+        "concurrentStoreAndLookupLoseNothing",
         "diagnoseRowsEmpty",
         "diagnoseRowsMultipleParamSets",
         "diagnoseRowsReturnsStoredMetadata",
@@ -23728,6 +23746,20 @@
         "smallFilesAreHashedInFullAndAreExact",
         "tailDifferenceIsDetected",
         "unreadableInputsReturnEmpty"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SendableRegexTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SendableRegexTests"
+      ],
+      "tests": [
+        "aRegexBuiltFromAStringWrapsToo",
+        "aStaticIsUsableFromADetachedTask",
+        "concurrentMatchersOnOneInstanceAgree",
+        "stringAPIsAcceptItWithCapturesIntact"
       ]
     },
     {
@@ -28325,6 +28357,7 @@
         "test_percent_is_cleared_over_start_and_99_until_the_app_flips",
         "test_swiftpm_evidence_by_file_name_proves_a_fall",
         "test_the_committed_baseline_exists_and_is_well_formed",
+        "test_the_five_messages_stage_3_found_binned_as_other_are_concurrency",
         "test_update_refuses_a_collapse_without_force",
         "test_update_refuses_a_rise_without_force_and_without_clean"
       ]
@@ -33252,7 +33285,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2934,
+      "expected_floor": 2941,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33513,6 +33546,7 @@
         "VideoScanTests/MediaFileOperationsWindowOpenerTests",
         "VideoScanTests/MediaOpenerPreferredPlayerTests",
         "VideoScanTests/MediaRepairAddSoundPlanTests",
+        "VideoScanTests/MemoryPressurePageSizeTests",
         "VideoScanTests/ModelPresentationTests",
         "VideoScanTests/ModelSchemaTests",
         "VideoScanTests/MusicTriageOffMainTests",
@@ -33597,6 +33631,7 @@
         "VideoScanTests/ScreencastTests",
         "VideoScanTests/SearchFieldPrefixMatchingTests",
         "VideoScanTests/SearchFieldPrefixTokenizerTests",
+        "VideoScanTests/SendableRegexTests",
         "VideoScanTests/SetAsideVisibilityTests",
         "VideoScanTests/ShortClipTests",
         "VideoScanTests/SoundCopyFinderDecideTests",

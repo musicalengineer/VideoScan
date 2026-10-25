@@ -286,7 +286,7 @@ struct ArchiveUpdateSafetyTests {
         try FileManager.default.createDirectory(at: sb.archiveRoot.appendingPathComponent("00_Index"), withIntermediateDirectories: true)
         let root = sb.archiveRoot.path
         try ArchiveIndexLock.withExclusive(root: root, holder: "test outer") {
-            #expect(throws: ArchiveIndexLock.Busy.self) {
+            _ = #expect(throws: ArchiveIndexLock.Busy.self) {
                 try ArchiveIndexLock.withExclusive(root: root, holder: "test inner", wait: .milliseconds(50)) {}
             }
         }
@@ -308,13 +308,17 @@ struct ArchiveUpdateSafetyTests {
         }
         let ctx = PromoteToArchiveJob.RunContext(root: root, manifestURL: sb.manifestURL, journalURL: sb.journalURL,
                                                  manifestRows: [:], manifestFields: [:])
-        let held = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
-        Thread.detachNewThread {
-            try? ArchiveIndexLock.withExclusive(root: root, holder: "test holder", wait: .seconds(5)) {
-                held.signal(); release.wait()
+        // The holder thread signals "held" through a continuation (a
+        // semaphore wait is unavailable in async code); `release` stays a
+        // semaphore because the holder's body is synchronous.
+        let release = DispatchSemaphore(value: 0)
+        await withCheckedContinuation { (held: CheckedContinuation<Void, Never>) in
+            Thread.detachNewThread {
+                try? ArchiveIndexLock.withExclusive(root: root, holder: "test holder", wait: .seconds(5)) {
+                    held.resume(); release.wait()
+                }
             }
         }
-        held.wait()
         defer { release.signal() }
         final class Beat { var last = ContinuousClock.now; var worst = Duration.zero; var running = true }
         let beat = Beat()

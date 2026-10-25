@@ -693,7 +693,7 @@ struct RecordFinderFilingTests {
         store.importClock = {
             if fired.value == 0 {
                 fired.bump()
-                try? research.update(key: key) { dossier in
+                _ = try? research.update(key: key) { dossier in
                     guard let at = dossier?.findings.firstIndex(where: { $0.id == id }) else { return }
                     dossier?.findings[at].verdict = .wrong
                     dossier?.findings[at].fullText = "Synthetic intervening text"

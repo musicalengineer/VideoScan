@@ -570,12 +570,12 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// gedcom for Rick" drew the download pitch). "can you fetch" /
     /// "could you get" are requests and are NOT in this list.
     static let interrogativeFetchClause =
-        /\b(?:did|do|does|have|has|had)\s+(?:we|you|i|they)\s+(?:only\s+|already\s+|ever\s+|just\s+)?(?:get|got|gotten|fetch(?:ed)?|download(?:ed)?|pull(?:ed)?|import(?:ed)?|grab(?:bed)?|load(?:ed)?|have)\b/
+        SendableRegex(/\b(?:did|do|does|have|has|had)\s+(?:we|you|i|they)\s+(?:only\s+|already\s+|ever\s+|just\s+)?(?:get|got|gotten|fetch(?:ed)?|download(?:ed)?|pull(?:ed)?|import(?:ed)?|grab(?:bed)?|load(?:ed)?|have)\b/)
 
     /// Clause seams for the per-clause veto (codex #754): "do we have the
     /// gedcom, and can you fetch more ancestors?" is a question AND a
     /// request; the request clause wins.
-    static let clauseSeam = /\s*(?:,\s*(?:and|but|or)\s+|\s+(?:and|but)\s+|[?;])\s*/
+    static let clauseSeam = SendableRegex(/\s*(?:,\s*(?:and|but|or)\s+|\s+(?:and|but)\s+|[?;])\s*/)
 
     static func isGetFamilyTree(_ lower: String) -> Bool {
         lower.split(separator: clauseSeam).contains { clause in
@@ -1079,7 +1079,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
 
     // MARK: Superlatives
 
-    static let mediaNoun = /\b(photo|picture|portrait|image|video|clip|movie|footage|film|snapshot)s?\b/
+    static let mediaNoun = SendableRegex(/\b(photo|picture|portrait|image|video|clip|movie|footage|film|snapshot)s?\b/)
 
     static func superlativeQuestion(in lower: String) -> HallieLineageQuestion? {
         // Media wrapper: "<anything> photo of (the) <person phrase>".
@@ -1096,7 +1096,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
         return .superlative(kind: parsed.0, scope: parsed.1, media: nil)
     }
 
-    private static let superlativeWords = /\b(?:oldest|eldest|youngest|earliest|latest|first|last|longest|most|deepest|farthest|furthest|distant|largest|biggest|recent(?:ly)?|how far back)\b/
+    private static let superlativeWords = SendableRegex(/\b(?:oldest|eldest|youngest|earliest|latest|first|last|longest|most|deepest|farthest|furthest|distant|largest|biggest|recent(?:ly)?|how far back)\b/)
 
     /// The kind and scope of a superlative person phrase, or nil when
     /// the phrase is not one ("who was rick's oldest son" is a kinship
@@ -1305,7 +1305,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// The NAME AFTER the last kinship phrase wins — the kinship words are
     /// descriptive, and a name plus a relation is one person, not two.
     private static let kinshipApposition =
-        /(?:\b(?:great|grand)[- ]?)*\b(?:grand)?(?:mother|father|mom|dad|parents?|aunt|uncle|cousin|sister|brother|wife|husband|son|daughter|ancestor)s?\b/
+        SendableRegex(/(?:\b(?:great|grand)[- ]?)*\b(?:grand)?(?:mother|father|mom|dad|parents?|aunt|uncle|cousin|sister|brother|wife|husband|son|daughter|ancestor)s?\b/)
 
     /// "… from <name>" / "starting with <name>" / "of <name>" / "for <name>"
     /// anywhere in `fragment` → the capitalized name; nil when nothing is
@@ -1393,7 +1393,7 @@ enum HallieLineageQuestion: Equatable, Sendable {
     /// century). Only four-digit years between 1000 and 2100.
     /// Deliberately without "back": stripping "to 1600" from "all the way
     /// back to 1600" leaves the "back" the depth shapes key on.
-    static let yearBoundPhrase = /\s*\b(?:before|until|till|up to|as far back as|as far as|to)\s+(?:the\s+)?(\d{4})s?\b/
+    static let yearBoundPhrase = SendableRegex(/\s*\b(?:before|until|till|up to|as far back as|as far as|to)\s+(?:the\s+)?(\d{4})s?\b/)
     static func yearBound(in text: String) -> Int? {
         guard let m = text.firstMatch(of: yearBoundPhrase),
               let year = Int(m.1), (1000...2100).contains(year) else { return nil }

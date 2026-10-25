@@ -219,6 +219,7 @@ extension CutoverScene {
         let url = URL(fileURLWithPath: record.fullPath)
         let size = try #require((try FileManager.default.attributesOfItem(atPath: url.path))[.size] as? NSNumber).int64Value
         record.sizeBytes = size
-        record.contentFixity = try #require(ContentFixity.captured(path: url.path, digest: try sha256(url), byteCount: size))
+        let fixity = try #require(ContentFixity.captured(path: url.path, digest: try sha256(url), byteCount: size))
+        record.contentFixity = fixity
     }
 }

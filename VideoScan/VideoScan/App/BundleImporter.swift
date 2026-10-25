@@ -89,7 +89,6 @@ enum BundleImporter {
                             bundleExportedAt: Date,
                             storeDir: URL = POIStorage.storeDir,
                             trashDir: URL? = nil) async -> POIInstallResult {
-        let fm = FileManager.default
         var installed: [String] = []
         var skipped: [(String, String)] = []
         var failed: [(String, String)] = []

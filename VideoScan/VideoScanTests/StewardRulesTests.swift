@@ -94,7 +94,8 @@ struct StewardProofRuleTests {
         try bytes.write(to: url)
         let r = record(url.path, size: Int64(bytes.count), group: rig.group, disposition: disposition)
         if let evidence {
-            r.contentFixity = try #require(ContentFixity.captured(path: url.path, digest: evidence, byteCount: Int64(bytes.count)))
+            let fixity = try #require(ContentFixity.captured(path: url.path, digest: evidence, byteCount: Int64(bytes.count)))
+            r.contentFixity = fixity
         }
         return r
     }
@@ -270,7 +271,8 @@ struct StewardProofRuleTests {
         let linkURL = rig.dir.appendingPathComponent("elsewhere/link.mov")
         try FileManager.default.linkItem(at: URL(fileURLWithPath: copy.fullPath), to: linkURL)
         // The link changed the inode's ctime: re-bind both records' evidence.
-        copy.contentFixity = try #require(ContentFixity.captured(path: copy.fullPath, digest: digest, byteCount: copy.sizeBytes))
+        let copyFixity = try #require(ContentFixity.captured(path: copy.fullPath, digest: digest, byteCount: copy.sizeBytes))
+        copy.contentFixity = copyFixity
         let link = VideoRecord()
         link.fullPath = linkURL.path
         link.filename = "link.mov"
@@ -278,7 +280,8 @@ struct StewardProofRuleTests {
         link.sizeBytes = copy.sizeBytes
         link.duplicateGroupID = rig.group
         link.duplicateDisposition = .extraCopy
-        link.contentFixity = try #require(ContentFixity.captured(path: linkURL.path, digest: digest, byteCount: copy.sizeBytes))
+        let linkFixity = try #require(ContentFixity.captured(path: linkURL.path, digest: digest, byteCount: copy.sizeBytes))
+        link.contentFixity = linkFixity
         rig.model.records = [keeper, copy, link]
         let proof = try stewardProof(rig, copy: copy)
         #expect(proof.remaining == 1, "the hard link was counted as a second copy")

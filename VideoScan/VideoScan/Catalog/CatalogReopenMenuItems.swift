@@ -43,9 +43,11 @@ struct CatalogCutoverSheetHost: ViewModifier {
             .sheet(item: $cutover.adoptRequest) { request in
                 CatalogAdoptSheet(cutover: cutover, request: request)
             }
-            .onAppear {
+            .onAppear { [weak model] in
                 // B2.1 gap 1: held rows get Fill In Full Hashes, scoped to them.
-                guard let center else { return }
+                // Weak here too, so the stored closure captures the same
+                // weak reference (Swift 6 capture-consistency check).
+                guard let model, let center else { return }
                 cutover.attachDigestJobs { [weak model, weak center] ids in
                     guard let model, let center else { return }
                     center.startFullHashBackfill(model: model, scopedTo: ids)

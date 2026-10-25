@@ -202,7 +202,7 @@ struct CopyFamilyEvidenceTests {
         // repaired child; analyzed) vs Projects CapeCod twin (better
         // drive, DIFFERENT content hash, never verified).
         let clipID = UUID()
-        var clip = dv("/Volumes/LaCieWorkspace/Clip 01.dv", hash: "v1:clip", vol: 10, human: 50, id: clipID)
+        let clip = dv("/Volumes/LaCieWorkspace/Clip 01.dv", hash: "v1:clip", vol: 10, human: 50, id: clipID)
         let twin = dv("/Volumes/Projects/CapeCod_2000-something.dv", hash: "v1:DIFFERENT", vol: 90, human: 0)
         let balanced = CopyFamilyInput(fullPath: "/Volumes/LaCieWorkspace/Clip 01_balanced.mov",
                                        sizeBytes: 1, durationSeconds: 3604,
@@ -256,10 +256,10 @@ struct CopyFamilyEvidenceTests {
 struct CopyFamilyRepairTests {
     @Test func balancedDerivativeIsTheRepairedCopyAndAnswersTheAudioCaution() {
         let dvID = UUID()
-        var original = dv("/Volumes/LaCie/Clip 01.dv", id: dvID)     // audio never verified
+        let original = dv("/Volumes/LaCie/Clip 01.dv", id: dvID)     // audio never verified
         // Balanced output: DV essence in a .mov wrapper (raw-DV container
         // can't hold the repaired audio — BalanceAudioJob rule).
-        var balanced = CopyFamilyInput(fullPath: "/Volumes/LaCie/Clip 01_balanced.mov",
+        let balanced = CopyFamilyInput(fullPath: "/Volumes/LaCie/Clip 01_balanced.mov",
                                        sizeBytes: 13_000_000_000, durationSeconds: 3604,
                                        videoCodec: "dvvideo", audioCodec: "pcm_s16le", container: "mov",
                                        resolution: "720x480", frameRate: "29.97",
@@ -280,7 +280,7 @@ struct CopyFamilyRepairTests {
 
     @Test func repairOfADamagedOriginalStillFlagsNothingExtra() {
         let dvID = UUID()
-        var original = dv("/Volumes/A/tape.dv", audio: "damaged", id: dvID)
+        let original = dv("/Volumes/A/tape.dv", audio: "damaged", id: dvID)
         let rebuilt = CopyFamilyInput(fullPath: "/Volumes/A/tape_rebuilt.mov",
                                       sizeBytes: 1, durationSeconds: 3604,
                                       videoCodec: "dvvideo", audioCodec: "pcm_s16le", container: "mov",

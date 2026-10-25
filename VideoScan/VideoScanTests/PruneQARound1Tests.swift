@@ -70,7 +70,8 @@ struct PruneQARound1Tests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: archiveURL.deletingLastPathComponent())
         let aliasPath = link.appendingPathComponent(archiveURL.lastPathComponent).path
         let alias = MasterArchiveTestSupport.makeRecord(path: aliasPath, userDate: "1995")
-        alias.contentFixity = try #require(ContentFixity.captured(path: aliasPath, digest: f.digest, byteCount: alias.sizeBytes))
+        let aliasFixity = try #require(ContentFixity.captured(path: aliasPath, digest: f.digest, byteCount: alias.sizeBytes))
+        alias.contentFixity = aliasFixity
         f.model.records.append(alias)
 
         let shown = await f.model.prunePlan(batch: f.batch).shown()

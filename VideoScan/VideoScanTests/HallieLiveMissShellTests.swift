@@ -361,9 +361,8 @@ struct HallieLiveMissShellTests {
             list: PronunciationDrillList(items: []),
             index: nil
         )
-        state.picker = try #require(
-            HalliePronunciationPicker.makeOffer(word: "Latta")
-        )
+        let picker = try #require(HalliePronunciationPicker.makeOffer(word: "Latta"))
+        state.picker = picker
         state.transientPronunciations = [
             .init(written: "Latta", spoken: "LAT-tah"),
         ]

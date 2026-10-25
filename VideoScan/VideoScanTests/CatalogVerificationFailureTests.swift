@@ -44,7 +44,7 @@ struct CatalogVerificationFailureTests {
     /// Appending is enough — the streaming re-read covers the whole file.
     private static let corrupt: @Sendable (URL) -> Void = { url in
         if let handle = try? FileHandle(forWritingTo: url) {
-            try? handle.seekToEnd()
+            _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: Data("tamper".utf8))
             try? handle.close()
         }

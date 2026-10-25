@@ -532,7 +532,7 @@ struct FamilyTreeView: View, Equatable {
                                             identityPickTarget = nil
                                             identityCenter.showBanner(.pinned, profileName: target.profile.name,
                                                                       candidate: candidate)
-                                            model.focus(onID: candidate.personID)
+                                            _ = model.focus(onID: candidate.personID)
                                         },
                                         onDismiss: { identityPickTarget = nil })
             }

@@ -44,12 +44,16 @@ extension CatalogContent {
             // different? Only with exactly two rows
             // selected. Distinct from the volume-level
             // Compare & Rescue feature.
-            Button("Compare Media…") {
-                _ = fileOpsCenter.startedByUser {
+            Button("Compare Media…") { [weak model] in
+                // Weak on the action too, so the kept-fingerprint callback
+                // captures the same weak reference (Swift 6 consistency
+                // check); the view holds the model, so it is alive here.
+                guard let model else { return }
+                _ = fileOpsCenter.startedByUser { [weak model] in
                     // GH #293: a fingerprint the visual tier computes is
                     // kept on the record and saved with the catalog.
                     $0.startCompare(recordA: fileA, recordB: fileB,
-                                    onFingerprintKept: { [weak model] in model?.saveCatalogDebounced() })
+                                    onFingerprintKept: { model?.saveCatalogDebounced() })
                 }
                 // The compare result lives in the job window — in front (codex #964).
                 MediaFileOperationsWindowOpener.openInFront(openWindow)

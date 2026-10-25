@@ -192,8 +192,8 @@ final class CompareFilmstripLoader: ObservableObject {
                 path: item.path, container: item.container, videoCodec: item.videoCodec,
                 likelyUnanalyzable: item.likelyUnanalyzable, offsets: wanted,
                 ffmpegPath: request.ffmpegPath,
-                onFrame: { offset, image in
-                    Task { @MainActor [weak self] in self?.place(offset, image, run: run) }
+                onFrame: { [weak self] offset, image in
+                    Task { @MainActor in self?.place(offset, image, run: run) }
                 })
             // The hops above may still be queued: place every frame now
             // (idempotent), then mark what never came as empty.

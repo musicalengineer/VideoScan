@@ -211,7 +211,7 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     /// Restore applies the retire dictionaries BEFORE the role, so a real
     /// stamp beats the legacy migration stamp.
-    @Test func restore_realStampWinsOverLegacyRetiredRole() {
+    @Test func restore_realStampWinsOverLegacyRetiredRole() throws {
         let k = Keys()
         defer { k.cleanup() }
         let stamp = Date(timeIntervalSince1970: 1_600_000_000)
@@ -219,10 +219,10 @@ struct VolumeRoleTaxonomyMigrationTests {
         UserDefaults.standard.set(["/Volumes/B": "Retired"], forKey: k.roles)
         UserDefaults.standard.set(["/Volumes/B": stamp], forKey: k.retAt)
         UserDefaults.standard.set(["/Volumes/B": "Relocate done"], forKey: k.retRsn)
-        let t = try? #require(restore(k).first)
-        #expect(t?.retiredAt == stamp)
-        #expect(t?.retiredReason == "Relocate done")
-        #expect(t?.role == .unassigned)
+        let t = try #require(restore(k).first)
+        #expect(t.retiredAt == stamp)
+        #expect(t.retiredReason == "Relocate done")
+        #expect(t.role == .unassigned)
     }
 
     /// Persist after restore writes CURRENT raw values (the plist heals
@@ -608,7 +608,7 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     // MARK: - codex m1/m2/m6: decode-time stamp is persisted once, reason only with the stamp, no zombie retirement
 
-    @Test func m1_legacyRetired_persistedOnceOnRestore_stampStable() {
+    @Test func m1_legacyRetired_persistedOnceOnRestore_stampStable() throws {
         let k = Keys()
         defer { k.cleanup() }
         UserDefaults.standard.set(["/Volumes/RicksBackups"], forKey: k.paths)
@@ -617,8 +617,8 @@ struct VolumeRoleTaxonomyMigrationTests {
         // Launch 1: restore reports the legacy decode; the model persists.
         let r1 = restore(k, reporting: true)
         #expect(r1.legacyRolesDecoded == 1)
-        let t1 = try? #require(r1.targets.first)
-        let stamp1 = t1?.retiredAt
+        let t1 = try #require(r1.targets.first)
+        let stamp1 = t1.retiredAt
         #expect(stamp1 != nil)
         persist(r1.targets, k)
         let written = UserDefaults.standard.dictionary(forKey: k.roles) as? [String: String]
@@ -650,7 +650,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         #expect(u.retiredReason == nil)
     }
 
-    @Test func m6_noZombieRetirement_afterReinstateAndRestore() {
+    @Test func m6_noZombieRetirement_afterReinstateAndRestore() throws {
         let k = Keys()
         defer { k.cleanup() }
         UserDefaults.standard.set(["/Volumes/RicksBackups"], forKey: k.paths)
@@ -658,10 +658,10 @@ struct VolumeRoleTaxonomyMigrationTests {
 
         let m = makeModel()
         m.scanTargets = restore(k)
-        let t = try? #require(m.scanTargets.first)
-        #expect(t?.isRetired == true)
+        let t = try #require(m.scanTargets.first)
+        #expect(t.isRetired)
         #expect(m.reinstateVolume(at: "/Volumes/RicksBackups"))
-        #expect(t?.retiredAt == nil)
+        #expect(t.retiredAt == nil)
         persist(m.scanTargets, k)   // what the model's persistScanDates writes
 
         let again = restore(k)

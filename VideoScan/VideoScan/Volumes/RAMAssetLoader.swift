@@ -199,9 +199,11 @@ enum VolumeSpeed {
 
 enum PageCacheWarmer {
 
-    static var isEnabled: Bool = false
-    static var maxFileSizeBytes: Int64 = 16 * 1024 * 1024 * 1024
-    static var budgetBytes: UInt64 = 16 * 1024 * 1024 * 1024
+    // Constants: nothing in the app or the tests writes these (they were
+    // `static var` with no writer — Swift 6 flags that as shared mutable state).
+    static let isEnabled: Bool = false
+    static let maxFileSizeBytes: Int64 = 16 * 1024 * 1024 * 1024
+    static let budgetBytes: UInt64 = 16 * 1024 * 1024 * 1024
 
     @discardableResult
     static func warm(fileURL: URL) -> Int? {

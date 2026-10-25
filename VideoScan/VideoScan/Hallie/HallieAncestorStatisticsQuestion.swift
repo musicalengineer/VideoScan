@@ -59,18 +59,18 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
 
     // MARK: - Vocabulary
 
-    private static let countAsk = /\bhow\s+many\b|\bnumber\s+of\b|\bcount\b|\bcompare[ds]?\b|\bvs\.?\b|\bversus\b|\bproportion\b|\bpercentage\b|\bshare\s+of\b|\bwhat\s+fraction\b/
-    private static let averageAsk = /\baverage\b|\bmean\b|\bmedian\b|\btypical\b|\busual\b/
-    private static let ageAtDeathWords = /\bage\s+at\s+death\b|\bage\s+(?:when|that|they)\s+(?:they\s+)?died\b|\blife\s*spans?\b|\bhow\s+long\s+did\b.*\blive\b|\bdied\s+at\s+what\s+age\b|\bwhat\s+age\s+did\b.*\bdie\b/
-    private static let ancestorNoun = /\b(?:ancestors?|ancestry|forebears?|forefathers?|lines?|sides?|lineage)\b/
+    private static let countAsk = SendableRegex(/\bhow\s+many\b|\bnumber\s+of\b|\bcount\b|\bcompare[ds]?\b|\bvs\.?\b|\bversus\b|\bproportion\b|\bpercentage\b|\bshare\s+of\b|\bwhat\s+fraction\b/)
+    private static let averageAsk = SendableRegex(/\baverage\b|\bmean\b|\bmedian\b|\btypical\b|\busual\b/)
+    private static let ageAtDeathWords = SendableRegex(/\bage\s+at\s+death\b|\bage\s+(?:when|that|they)\s+(?:they\s+)?died\b|\blife\s*spans?\b|\bhow\s+long\s+did\b.*\blive\b|\bdied\s+at\s+what\s+age\b|\bwhat\s+age\s+did\b.*\bdie\b/)
+    private static let ancestorNoun = SendableRegex(/\b(?:ancestors?|ancestry|forebears?|forefathers?|lines?|sides?|lineage)\b/)
     /// A constraint none of these shapes can hold → abstain.
-    private static let unsupported = /\bmarried\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bphotos?\b|\bvideos?\b|\bpic(?:ture)?s?\b|\bimages?\b|\bportraits?\b|\balive\b|\bliving\b|\bdeceased\b|\bmaternal\b|\bpaternal\b|\bmother'?s\s+(?:side|line)\b|\bfather'?s\s+(?:side|line)\b|\boutside\b|\babroad\b|\boverseas\b|\bforeign\b|\beurope\b|\basia\b|\bafrica\b|\bcentury\b|\bcenturies\b|\bdecades?\b|\bper\s+generation\b|\bby\s+generation\b/
-    private static let anyYear = /\b\d{3,4}s?\b/
+    private static let unsupported = SendableRegex(/\bmarried\b|\bspouse\b|\bchildren\b|\bsons?\b|\bdaughters?\b|\bsurname\b|\bnamed\b|\bcalled\b|\bphotos?\b|\bvideos?\b|\bpic(?:ture)?s?\b|\bimages?\b|\bportraits?\b|\balive\b|\bliving\b|\bdeceased\b|\bmaternal\b|\bpaternal\b|\bmother'?s\s+(?:side|line)\b|\bfather'?s\s+(?:side|line)\b|\boutside\b|\babroad\b|\boverseas\b|\bforeign\b|\beurope\b|\basia\b|\bafrica\b|\bcentury\b|\bcenturies\b|\bdecades?\b|\bper\s+generation\b|\bby\s+generation\b/)
+    private static let anyYear = SendableRegex(/\b\d{3,4}s?\b/)
     /// A kin or sex word in the scope ("my mom's line", "our female
     /// ancestors") is a constraint, not a person's name (QA P3-2): both
     /// statistics recognizers abstain rather than count "My Mom" or the
     /// whole tree. Shared with HallieTreeStatisticsQuestion.
-    static let kinOrSexScope = /\b(?:female|male|women|men|woman|man)\b|\b(?:mom|mum|mommy|mother|dad|daddy|father|grand\w+|wife|husband|aunt|uncle|cousin|brother|sister|nephew|niece|son|daughter)(?:'s|s'|s)\b/
+    static let kinOrSexScope = SendableRegex(/\b(?:female|male|women|men|woman|man)\b|\b(?:mom|mum|mommy|mother|dad|daddy|father|grand\w+|wife|husband|aunt|uncle|cousin|brother|sister|nephew|niece|son|daughter)(?:'s|s'|s)\b/)
     /// "the quill line", "on the lark side", "the quill family", "of the
     /// polwenna branch": a scope this reader cannot resolve to a person
     /// (QA P2-4) — never "ours", and never a PERSON named "Polwenna Branch"
@@ -84,7 +84,7 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     /// fell back to the whole family). A word of the name is never a
     /// preposition, pronoun or possessive ("the average age at death on
     /// donna's side" is a person's side, not a surname).
-    private static let unreadFamilyScope = /\bthe\s+(?!(?:other|same|whole|direct|deepest|longest|oldest|earliest|first|family|two|both)\b)(?:(?!(?:on|in|of|at|for|to|from|with|by|my|our|your|his|her|their|and|or|is|was|were|are|who|that|which)\b)\p{L}(?:[\p{L}.-]|'(?!s\b))*\s+){1,4}(?:family|line|side|clan|branch|lineage)\b/
+    private static let unreadFamilyScope = SendableRegex(/\bthe\s+(?!(?:other|same|whole|direct|deepest|longest|oldest|earliest|first|family|two|both)\b)(?:(?!(?:on|in|of|at|for|to|from|with|by|my|our|your|his|her|their|and|or|is|was|were|are|who|that|which)\b)\p{L}(?:[\p{L}.-]|'(?!s\b))*\s+){1,4}(?:family|line|side|clan|branch|lineage)\b/)
     /// "… ancestors WHO VOTED", "… THAT fought in a war": a relative clause
     /// narrowing the ancestors, which none of these shapes can hold
     /// (generated-input AF3). The shapes' own predicates are not
@@ -92,12 +92,12 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     /// closing "who died" (age at death — every age at death is of someone
     /// who died). "who died IN IRELAND / YOUNG / BEFORE …" narrows the
     /// group and is a constraint (adversarial review 2026-10-01, cce4ea0e).
-    private static let relativeClause = /\b(?:ancestors?|ancestry|forebears?|forefathers?|relatives|people|lines?|sides?|branch(?:es)?|family|families)\s+(?:who|that|which|whom|whose)\b(?!\s+(?:(?:were|was|are|is)\s+)?born\b)(?!\s+died\s*$)/
+    private static let relativeClause = SendableRegex(/\b(?:ancestors?|ancestry|forebears?|forefathers?|relatives|people|lines?|sides?|branch(?:es)?|family|families)\s+(?:who|that|which|whom|whose)\b(?!\s+(?:(?:were|was|are|is)\s+)?born\b)(?!\s+died\s*$)/)
     /// "… ancestors BURIED IN ohio", "… FROM ohio", "… BAPTIZED catholic":
     /// a reduced relative clause or a place word narrowing the ancestors
     /// (adversarial review 2026-10-01, 784f0da7). A place filter ("… IN
     /// ohio") is `inFilter`.
-    private static let reducedRelative = /\b(?:from|at|near|with|without|under|over|buried|bapti[sz]ed|christened|raised|settled|naturali[sz]ed|enumerated|listed|found|lived)\b/
+    private static let reducedRelative = SendableRegex(/\b(?:from|at|near|with|without|under|over|buried|bapti[sz]ed|christened|raised|settled|naturali[sz]ed|enumerated|listed|found|lived)\b/)
     /// Any constraint the age-at-death and birthplace shapes cannot hold.
     private static func hasUnreadConstraint(_ q: String) -> Bool {
         q.firstMatch(of: unreadFamilyScope) != nil || q.firstMatch(of: relativeClause) != nil
@@ -115,7 +115,7 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     /// "in Ireland", "in the civil war" … — a place or event filter the
     /// earliest / deepest shapes cannot hold. "in my/our/the family tree"
     /// and "in donna's tree" are scope, not filters.
-    private static let inFilter = /\bin\s+(?!(?:my|our|the\s+(?:family\s+)?tree\b|this|his|her|their)\b)(?![a-z.'-]+'s?\s)[a-z]+/
+    private static let inFilter = SendableRegex(/\bin\s+(?!(?:my|our|the\s+(?:family\s+)?tree\b|this|his|her|their)\b)(?![a-z.'-]+'s?\s)[a-z]+/)
 
     // MARK: - Recognition
 
