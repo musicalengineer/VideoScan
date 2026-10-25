@@ -1302,6 +1302,13 @@ final class VideoScanModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] note in
+            // Swift 6: the observer is registered with `queue: .main`, so
+            // Foundation delivers on the main thread and the main-actor
+            // assertion below checks it at runtime; the Notification never
+            // leaves this frame. The region checker cannot see the queue,
+            // hence the local opt-out on a `let` (no async hop, as the
+            // comment above requires).
+            nonisolated(unsafe) let note = note
             MainActor.assumeIsolated {
                 guard let self else { return }
                 // When the poster names the mutated record (Inspector

@@ -285,6 +285,14 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
     /// even guarded-out events count as delivered.
     private var handledEvents = 0
 
+    /// The run's path → record map for the bridge's event handler. Owned
+    /// here (main actor) rather than captured by the ProcessRunner line
+    /// callback: VideoRecord is not Sendable, and the callback runs on the
+    /// reader thread; the handler Task reads it back on the main actor.
+    /// Memory: one dictionary of references to records already held by the
+    /// catalog; cleared when the bridge run ends.
+    private var bridgeByPath: [String: VideoRecord] = [:]
+
     /// Lock-guarded emitted-event counter, incremented on the
     /// ProcessRunner callback thread. Paired with `handledEvents` to
     /// let finish wait for in-flight event Tasks.
@@ -548,6 +556,8 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         // emitted/handled counters make finish WAIT until every spawned
         // event ran (bounded — a lost Task must not hang the job).
         let emitted = FindPersonJob.EventCounter()
+        bridgeByPath = byPath
+        defer { bridgeByPath = [:] }
 
         let result = await ProcessRunner.runProcess(
             executable: Self.pythonPath,
@@ -563,8 +573,9 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
                 guard let event = FindPersonJob.parseLine(line) else { return }
                 emitted.increment()
                 Task { @MainActor [weak self] in
-                    self?.handledEvents += 1
-                    self?.handle(event: event, byPath: byPath, total: total)
+                    guard let self else { return }
+                    self.handledEvents += 1
+                    self.handle(event: event, byPath: self.bridgeByPath, total: total)
                 }
             },
             stderrLine: { _ in monitor.tick() },   // model-load chatter counts as life

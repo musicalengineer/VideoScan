@@ -1003,12 +1003,15 @@ final class FamilyTreeLiveModel: ObservableObject {
         let chunk = 4096
         let chunks = (count + chunk - 1) / chunk
         return [FamilyTreePersonSummary](unsafeUninitializedCapacity: count) { buffer, initialized in
+            // Swift 6: the inout buffer pointer may not be captured by the concurrent closure; each
+            // chunk initializes only its disjoint [lo, hi) — no race (the FamilyTreeNameSearch shape).
+            nonisolated(unsafe) let slots = buffer
             DispatchQueue.concurrentPerform(iterations: chunks) { c in
                 let lo = c * chunk, hi = min(count, lo + chunk)
                 for row in lo..<hi {
                     let o = Int(index.sidebarOrder[row])
                     let years = index.lifeYears[o]
-                    (buffer.baseAddress! + row).initialize(
+                    (slots.baseAddress! + row).initialize(
                         to: summary(graph.people[index.ids[o]]!, years: years.isEmpty ? nil : years))
                 }
             }

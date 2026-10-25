@@ -80,9 +80,12 @@ struct ArchivistGraphProfileSnapshot: Sendable, Equatable {
         self.suffix = POINameText.cleanedSuffix(suffix)
     }
 
-    // `@MainActor` ≈ "copy UI-owned state while on the UI thread"; the
-    // resulting value has no actor affinity and contains no private POI media.
-    @MainActor
+    // A pure function of a value: `POIProfile` is a struct, so the copy a
+    // caller hands in already left the UI thread's ownership; the result
+    // has no actor affinity and contains no private POI media. (Was
+    // `@MainActor` until Swift 6 stage 5; the isolation claimed nothing the
+    // value type did not already guarantee, and the nonisolated kinship
+    // overlay builder could only call it by dropping the actor.)
     init(profile: POIProfile) {
         self.init(
             stableID: profile.id,

@@ -187,7 +187,8 @@ enum ArchivistTemporalSelectionDateSnapshot: Sendable, Equatable {
     /// Donna" with 66 instead of 35 (eval 2026-09-01). The lower-confidence
     /// catalog fallbacks are never presented as inferred family truth; their
     /// provenance remains attached to the answer.
-    @MainActor
+    /// Nonisolated since Swift 6 stage 5 (see ArchivistPresenceRecordSnapshot):
+    /// the non-Sendable record can only arrive from the isolation that owns it.
     static func capture(record: VideoRecord) -> Self? {
         if let resolved = resolvedCatalogDate(record: record) { return resolved }
         return legacyFallback(record: record)

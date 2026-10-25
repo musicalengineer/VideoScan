@@ -255,12 +255,13 @@ struct ShowInPeopleTabMenu: View {
             let profiles = POIProfile.listAll().sorted {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
             }
+            let labels = PersonPickerNames.labels(profiles)
             if profiles.isEmpty {
                 Text("No people in the People tab yet")
             } else {
                 ForEach(profiles, id: \.uuid) { profile in
                     let allIn = !records.isEmpty && records.allSatisfy { FeaturedVideos.isFeatured($0, in: profile) }
-                    Toggle(profile.displayName, isOn: Binding(
+                    Toggle(labels[profile.uuid] ?? profile.displayName, isOn: Binding(
                         get: { allIn },
                         set: { FeaturedVideos.set(records, on: $0, for: profile.uuid) }))
                 }

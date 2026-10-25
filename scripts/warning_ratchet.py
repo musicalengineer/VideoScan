@@ -110,8 +110,8 @@ def _ours(path_text: str):
     package checkout / build directory inside it."""
     text = path_text.replace("\\ ", " ")
     marker = str(REPO) + "/"
-    glued = text.find(marker)
-    if glued > 0:                      # junk from another stream glued in front of the path
+    glued = text.rfind(marker)         # the LAST occurrence: the junk glued in front can
+    if glued > 0:                      # itself be a `cd <repo>/…` (seen 2026-10-25)
         text = text[glued:]
     try:
         p = Path(text).resolve()

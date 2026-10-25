@@ -1,7 +1,14 @@
 {
-  "_comment": "THE nightly rotation (GH #360). Which Macs run the 2 AM nightly, and when. Read by scripts/install_nightly.sh (the launchd time), scripts/nightly_guarded.sh (an off-rota Mac never runs), tools/publish_metrics.py (an off-rota Mac's rows leave the pass/fail table; the page shows it as 'off the rotation', never as a failure) and scripts/morning_metrics.sh. Labels are the short host labels (RicksM4 -> M4).",
+  "_comment": "THE nightly rotation (GH #360). Which Macs run the 2 AM nightly, and when. Read by scripts/install_nightly.sh (the launchd time), scripts/nightly_guarded.sh (an off-rota Mac never runs), tools/publish_metrics.py (an off-rota Mac's rows leave the pass/fail table; the page shows it as 'off the rotation', never as a failure) and scripts/morning_metrics.sh. Labels are the short host labels (RicksM4 -> M4). \"analysis\" is the Swift 6 analysis lane's slot (scripts/install_analysis_lane.sh; after the test nightly has published) and \"sanitizer\" says which sanitizer kind that lane runs on which weekday (`--sanitizer auto`; the two kinds cannot share a build or a night).",
   "on": {
     "M4": "02:00"
+  },
+  "analysis": {
+    "M4": "04:30"
+  },
+  "sanitizer": {
+    "Sat": "address",
+    "Sun": "thread"
   },
   "off": {
     "M1": "MacBook Pro, travel laptop, often on battery: out of the nightly (Rick, GH #360, 2026-10-21)",

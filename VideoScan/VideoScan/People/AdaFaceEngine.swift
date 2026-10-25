@@ -99,7 +99,9 @@ actor AdaFaceModelLoader {
     /// "Found but failed to load/compile" is reported distinctly from
     /// "not found" so a corrupt .mlmodelc isn't misdiagnosed as a missing
     /// install (QA #144).
-    func getModel() -> (MLModel?, String?) {
+    /// Swift 6: `sending` result — the fresh MLModel moves to the caller
+    /// (see ArcFaceModelLoader.getModel).
+    func getModel() -> sending (MLModel?, String?) {
         let config = MLModelConfiguration()
         config.computeUnits = .all
 

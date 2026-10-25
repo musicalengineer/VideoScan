@@ -28,8 +28,8 @@ extension HallieTurnExecutor {
         case noSelection
 
         /// The scope for a resolver verdict; the snapshot is built here,
-        /// on the main actor, from the resolved record.
-        @MainActor
+        /// inline in the caller's isolation (the owner of the resolved
+        /// record — see ArchivistPresenceRecordSnapshot).
         init(_ resolution: ArchivistRecordReferenceResolver.Resolution) {
             switch resolution {
             case .resolved(let record): self = .resolved(ArchivistRecordDossierSnapshot(record: record))

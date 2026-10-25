@@ -55,7 +55,9 @@ actor GenderAgeModelLoader {
     static let shared = GenderAgeModelLoader()
     private var compiledURL: URL?
 
-    func getModel() -> (MLModel?, String?) {
+    /// Swift 6: `sending` result — the fresh MLModel moves to the caller
+    /// (see ArcFaceModelLoader.getModel).
+    func getModel() -> sending (MLModel?, String?) {
         let config = MLModelConfiguration()
         config.computeUnits = .all
         if let url = compiledURL {

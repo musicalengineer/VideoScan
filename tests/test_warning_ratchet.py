@@ -104,6 +104,14 @@ class Parsing(unittest.TestCase):
             p.write_text(log(f"    cd /Users/rickb/dev/V{A}:111:17: \x1b[1;33mwarning: \x1b[1;39mresult of call to 'decode(_:type:)' is unused\x1b[0;0m [#NoUsage]"))
             self.assertEqual(ratchet.per_file(ratchet.parse_logs([p])), {A_REL: 1})
 
+    def test_junk_that_itself_contains_the_repo_path_is_stripped_to_the_last_occurrence(self):
+        """2026-10-25 (second shape): the glued echo was `cd <repo>/Vi…`, so the repo marker
+        appeared twice and the first cut left `Vi/Users/…` as a brand-new file (a false rise)."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "log"
+            p.write_text(log(f"    cd {REPO}/Vi{A}:72:13: warning: variable 's' was never mutated"))
+            self.assertEqual(ratchet.per_file(ratchet.parse_logs([p])), {A_REL: 1})
+
     def test_a_missing_log_is_skipped(self):
         self.assertEqual(ratchet.parse_logs([Path("/nonexistent/sensor-lane-core.log")]), set())
 

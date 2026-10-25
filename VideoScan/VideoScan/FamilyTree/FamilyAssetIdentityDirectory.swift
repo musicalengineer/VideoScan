@@ -176,7 +176,9 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
         // token of the tree; subtracting it and the suffix table equals
         // the old `allGiven ∪ allSurnames ∪ suffixes` subtraction.
         let treeSaid = Set(keys)
-        func nicknameTokens(_ spellings: [String]) -> Set<String> {
+        // @Sendable: called from the concurrent chunks below; it captures
+        // only immutable sets.
+        @Sendable func nicknameTokens(_ spellings: [String]) -> Set<String> {
             Set(spellings.flatMap(Self.tokens)).subtracting(treeSaid).subtracting(suffixes)
         }
         let ownerNick = nicknameTokens(ownerName.map { [$0] } ?? [])
@@ -184,6 +186,12 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
         let chunk = 4096
         let chunks = (count + chunk - 1) / chunk
         let members = [Member](unsafeUninitializedCapacity: count) { buffer, initialized in
+            // Swift 6: a buffer pointer is not Sendable, and the `inout`
+            // parameter cannot be captured by the concurrent closure. Each
+            // chunk initializes only its own disjoint range [lo, hi), so the
+            // writes cannot race; this copy asserts that to the compiler
+            // (same shape as FamilyTreeNameSearch in Core).
+            nonisolated(unsafe) let slots = buffer
             DispatchQueue.concurrentPerform(iterations: chunks) { c in
                 let lo = c * chunk, hi = min(count, lo + chunk)
                 for i in lo..<hi {
@@ -192,7 +200,7 @@ struct FamilyAssetIdentityDirectory: Sendable, Equatable {
                     var nick = nicknameTokens(aliases[id] ?? [])
                     if id == ownerGedcomID { nick.formUnion(ownerNick) }
                     let suffix = index.suffixIDs[i]
-                    (buffer.baseAddress! + i).initialize(to: Member(
+                    (slots.baseAddress! + i).initialize(to: Member(
                         gedcomID: id,
                         givenTokens: Set(index.givenIDs(of: o).map { keys[Int($0)] }),
                         surnameTokens: Set(index.surnameTokenIDs(of: o).map { keys[Int($0)] }),

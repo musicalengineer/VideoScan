@@ -25,7 +25,7 @@ Holes, stated plainly:
 
 - **Baseline:** `scripts/warnings_baseline.tsv`, warning counts per **(file, category)** from **clean** builds in the sensor lane's own configuration — Debug `xcodebuild build-for-testing` with the lane's flags, plus `swift build --build-tests -vv` for Core (the `-vv` prints one `Compile X.swift` line per file: the compile evidence `update` demands before it lets a file's count fall to zero; Core's sources are also evidenced by xcodebuild, which builds the package). Same configuration day and night, so Debug-only and toolchain-specific warnings are in the baseline, not a surprise. `# start_total` is written once (the denominator) and never moves.
 - **Ratchet:** `check` compares a build log with the baseline **per (file, category)** (an incremental build recompiles only changed files, so totals mean nothing, but a file that emits a warning was compiled and its counts are exact; per category, so a deprecation fix can never pay for a new concurrency finding). Any (file, category) above its baseline is RED; a missing baseline is one red line, not one per file. The sensor lane calls it on its own two logs, so every merge is checked with no extra step.
-- **Progress:** `progress` prints one line: `Swift 6 progress: N% — R of S warnings remain · Core: Swift 6 · App: Swift 5 (flips at 0)`. N = cleared ÷ start_total; 100 % needs the app target in Swift 6 mode and a total of 0 (99 % until the flip). The session-start hook prints this line, so Rick sees it every morning; the nightly rewrites the baseline from its clean build (`update --clean`) so the number is measured, never estimated.
+- **Progress:** `progress` prints one line: `Swift 6 progress: N% — R of S warnings remain · Core: Swift 6 · App: Swift 5 (flips at 0)`. N = cleared ÷ start_total; 100 % needs the app target in Swift 6 mode and a total of 0 (99 % until the flip). The session-start hook prints this line, so Rick sees it every morning. **Who lowers the baseline (decision 2026-10-25): the merging session**, from each slice's clean build logs (`update --clean`), so the file in `main` always matches what was merged. The nightly **verifies and reports**: its clean build runs `check` (a rise overnight is RED), prints `progress --markdown` and `categories` into its report, and when its clean counts are below the committed baseline it says *"baseline can be lowered: B → N"* — it never writes the file and never commits to `main`.
 - `categories <log>` breaks a log down by fix category (the table in §6), for picking the next slice.
 
 A per-file "Swift 6 warnings" column on the metrics board is the same TSV; Rick's idea (10/25) is in `docs/BACKLOG.md` for stage 2.
@@ -36,7 +36,7 @@ A per-file "Swift 6 warnings" column on the metrics board is the same TSV; Rick'
 |---|---|---|---|
 | 0 | `warning_ratchet.py`; baseline committed; sensor lane runs `check`; session-start prints `progress`; this doc; `DECISIONS`/`STATUS`/`CLAUDE.md` corrected | sensors GREEN with the ratchet in the lane | **done 10/25** |
 | 1 | VideoScanCore in Swift 6 mode (`swiftLanguageModes: [.v6]`) | `swift test` 1,872/0 in v6 | **done 10/25** |
-| 2 | Nightly analysis lane (§7) on the fleet, report mode; `update --clean` + progress line each night | one green nightly with the lane's numbers in the report | next |
+| 2 | Nightly analysis lane (§7) on the fleet, report mode: clean build + `check` + progress line + "baseline can be lowered" each night (the merging session lowers it) | one green nightly with the lane's numbers in the report | built 10/25 (`scripts/nightly_analysis_lane.sh`); first fleet night pending |
 | 3 | Non-concurrency warnings: deprecated API (`Text +`, `String(cString:)` on arrays), `??` on non-optionals, redundant `nonisolated(unsafe)`, `[weak x]` vs implicit strong capture | category count 0 | |
 | 4 | Globals and statics "not concurrency-safe" (~148) | category count 0 | |
 | 5 | Main-actor state referenced from nonisolated code (~40) | category count 0 | |
@@ -79,16 +79,18 @@ These compile silently in Swift 5 mode and fail only when the mode flips, so the
 
 ## 7. Stage 2 — the nightly analysis lane (the Coverity analogue)
 
-Runs on the fleet in the away window, never on Rick's machine; each item prints a number (rule 9) and the lane's report lists them. Language mode is **not** nightly-only: it changes what code means, so day and night build the same mode. The lane adds what is too slow or too noisy for rapid dev:
+Runs on the fleet in the away window, never on Rick's machine; each item prints a number (rule 9) and the lane's report lists them. Language mode is **not** nightly-only: it changes what code means, so day and night build the same mode. **The lane verifies and reports; it never commits to `main` and never writes `scripts/warnings_baseline.tsv`** (decision 2026-10-25; the merging session lowers the baseline, §3). The lane adds what is too slow or too noisy for rapid dev:
 
 | Check | Catches | Mode |
 |---|---|---|
-| clean Debug `build-for-testing` (the lane's flags) + `swift build --build-tests -vv`, then `warning_ratchet.py update --clean`; `progress` line into the report | the morning number; the floor can only fall | writes the baseline on green; a refused update (unproven fall) is a report line, never `--force` |
-| escape-hatch count (`nonisolated(unsafe)`, `@unchecked Sendable`, `assumeIsolated`, `Unsafe*Pointer`) with per-file deltas | holes in the proof | ratchet |
-| Thread Sanitizer test pass (Core + app, Release) | races through the holes, at runtime | red on a finding |
-| Address + UB Sanitizer test pass (cannot share a build with TSan) | memory errors in pointer code (ArcFace, Metal, frame buffers) | red on a finding |
-| `-strict-memory-safety` report (Swift 6.2+) | every unsafe construct, listed | report, then ratchet |
-| `swiftlint analyze` + Periphery (both installed via Homebrew) | unused imports/declarations, dead code | report, then ratchet |
+| clean Debug `build-for-testing` (the sensor lane's exact flags) + clean `swift build --build-tests -vv`, then `warning_ratchet.py check`; `progress --markdown` and `categories` into the report; "baseline can be lowered: B → N" when the clean counts are below the committed baseline | a regression overnight (RED); the morning number | report; the file is written by the merging session (`update --clean`), never here |
+| escape-hatch census (`nonisolated(unsafe)`, `@unchecked Sendable`, `assumeIsolated`, `withLockUnchecked`/`uncheckedState`, `Unsafe*Pointer`, `unsafeBitCast`, `try!`, `as!`, force-unwrap via swiftlint) per target with per-file deltas against the previous night (`scripts/escape_hatch_census.py`) | holes in the proof | report now; ratchet the opt-out kinds once quiet for a week (TODO in the script) |
+| Thread Sanitizer test pass (Core + app, Release, `weekly_sanitizer.py --configuration Release --target all`) | races through the holes, at runtime | red on a finding; one kind per night (`--sanitizer auto`, rota weekday map) |
+| Address + UB Sanitizer test pass (share a build; cannot share one with TSan) | memory errors in pointer code (ArcFace, Metal, frame buffers) | red on a finding; `--subset catalog` = Core + the catalog/MFO/Archive app suites when the window is short |
+| `-strict-memory-safety` build (Swift 6.2+, probed; own DerivedData, `OTHER_SWIFT_FLAGS`) | every unsafe construct, counted | report, then ratchet; 🟡 with the reason on a toolchain that lacks it |
+| Periphery (`--skip-build` on the clean build's index store, 21 s); `swiftlint analyze` (unused_import, unused_declaration) is plumbed but opt-in — measured 10/25: each file's SourceKit index request re-typechecks the whole ~1,400-file app module, so one 70-file folder had not finished after 540 s (O(files²) on one big module) | unused imports/declarations, dead code | report, then ratchet; third-party excluded |
+
+Implementation: `scripts/nightly_analysis_lane.sh` (processes, paths, watchdogs) + `scripts/analysis_lane.py` (one line with a number per stage, the verdict, `latest.json`, the markdown report, the morning `alert`); installed by `scripts/install_analysis_lane.sh` at the rota's `analysis` slot (`scripts/nightly_rota.json`, M4 04:30); harness `scripts/test_nightly_analysis_lane.sh`. Results stay local to the Mac that ran it (`~/Library/Logs/VideoScan/swift6-analysis/`, like the sanitizer and Hallie-voice lanes) and reach the morning through `.claude/scripts/session_start.sh` and `scripts/morning_metrics.sh`.
 
 Not in the lane: Coverity itself (commercial, vendor-hosted; Rick prefers self-hosted, and Swift 6 mode + sanitizers cover what it would add here).
 
@@ -98,11 +100,13 @@ Not in the lane: Coverity itself (commercial, vendor-hosted; Rick prefers self-h
 Task: Swift 6 stage [N] — [category] in [module globs]. Plan: docs/design/swift6_migration_2026_10_25.md §5–§6.
 Worktree: git -C ~/dev/VideoScan worktree add -b swift6/[stage]-[module] ~/dev/VideoScan-wt/swift6-[stage]-[module] main
 DerivedData: your own path. Never touch ~/dev/VideoScan.
+Use unique log/DerivedData names — workers share the scratch dir.
 Before: python3 scripts/warning_ratchet.py categories <clean build log>  → quote the category count.
 Do: fix every "[category]" warning in the files listed; the correct fix is §6; opt-outs need the `// Swift 6:` comment.
 Tests: related suites for every touched type; a red/green test for any behaviour change; scripts/run_sensors.sh --derived-data <dd> GREEN (it runs the ratchet).
 Codex: if a touched file is in the rule-10 map, write the brief (docs/reviews/BRIEF_TEMPLATE.md) and run tools/codex_review.py before reporting.
-Report: category count before → after, test counts, the escape-hatch delta, the branch name. Do not merge; the manager merges.
+Report: category count before → after, test counts, the escape-hatch delta, the branch name. Do not merge; the manager merges
+(and lowers scripts/warnings_baseline.tsv from your clean build logs with `warning_ratchet.py update --clean` — the nightly never does).
 ```
 
 ## 9. Risks and what retires them

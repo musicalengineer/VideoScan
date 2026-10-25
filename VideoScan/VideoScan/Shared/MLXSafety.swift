@@ -137,7 +137,12 @@ func installMLXSafetyNet() {
 /// The returned error is `MLXError.caught(message)` — call sites can
 /// re-wrap into `CaptionRunnerError.underlying(error)` for the typed
 /// error surface the UI expects.
-func runMLX<R>(_ body: () async throws -> R) async throws -> R {
+///
+/// Swift 6: mlx-swift's `withError` runs its body on the concurrent pool
+/// (the package predates approachable concurrency), so `body` already
+/// executes off the caller's actor; `sending` states that the closure and
+/// what it captures move with it (C++: pass by rvalue).
+func runMLX<R>(_ body: sending () async throws -> R) async throws -> R {
     try await MLX.withError {
         try await body()
     }

@@ -2014,7 +2014,7 @@ enum HallieShellCLI {
             records: state.records,
             recordForID: state.record,
             deictic: ArchivistRecordQuestion.mentionsSelection(question))
-        return await HallieTurnExecutor.RecordScope(resolution)
+        return HallieTurnExecutor.RecordScope(resolution)
     }
 
     static func temporalSelectionDate(
