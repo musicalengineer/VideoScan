@@ -51,6 +51,10 @@ struct PersonFinderView: View {
     // and Results extensions (Family Tree jump, Show-in-Catalog). (2026-06-24)
     @AppStorage("selectedTab") var selectedTab: Int = 0
     @AppStorage("ftHighlightedPersonName") var ftHighlight: String = ""
+    /// The Catalog's Person ▾ picker store (ContentView owns it), held
+    /// WITHOUT a subscription: a person page's "See all … in the Catalog →"
+    /// sets it (CatalogPersonLink); this view shows none of its state.
+    @Environment(\.catalogPersonFilterReference) var catalogPersonFilter
 
     // The result-table/inspector state below was relaxed from `private` —
     // it's driven by the Results extension (PersonFinderView+Results.swift).
@@ -291,10 +295,16 @@ struct PersonFinderView: View {
             .frame(minHeight: 200, maxHeight: .infinity)
             Divider()
         } else if let profile = PeopleEntryList.profile(for: entry, in: model.savedProfiles) {
-            PersonVideosSection(profile: profile, catalogModel: catalogModel) { title in
+            PersonVideosSection(profile: profile, catalogModel: catalogModel, onShowInCatalog: { title in
                 catalogModel.archivistSearchRequest = title
                 selectedTab = 1
-            }
+            }, onShowAllInCatalog: {
+                guard let catalogPersonFilter else {
+                    appLog.write("People tab: See all in the Catalog refused \u{2014} no Catalog person store (outside the main window)")
+                    return
+                }
+                selectedTab = CatalogPersonLink.showAll(of: profile, in: catalogPersonFilter)
+            })
             .frame(minHeight: 200, maxHeight: .infinity)
             Divider()
         }

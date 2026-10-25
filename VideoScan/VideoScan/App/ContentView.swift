@@ -135,6 +135,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .environmentObject(catalogPersonFilter)
+            .environment(\.catalogPersonFilterReference, catalogPersonFilter)
         }
         .frame(minWidth: 900, minHeight: 600)
         // Master Archive (docs/archive_promotion_workflow.md). All three

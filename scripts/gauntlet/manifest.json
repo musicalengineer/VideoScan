@@ -30540,6 +30540,28 @@
         "theTokenViewIsSharedNotCopied",
         "toolbarDrawsTheMenuLeftOfTheSearchAndThePillAfterTheVolumePill"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonPageCuratedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonPageCuratedRankingTests",
+        "PersonPageCuratedPageTests",
+        "PersonPageCuratedSensorTests"
+      ],
+      "tests": [
+        "confirmedBeforeFaceArchivedBeforeNotLongerBeforeShorter",
+        "hiddenVideosNeverAppear",
+        "hundredThousandRecordsCuratedPageInBudget",
+        "noTwoRowsOfOneFootage",
+        "picksAreAllShownEvenPastTheCap",
+        "theCatalogCountIsHonest",
+        "theCatalogLinkSetsThePickerAndTurnsFoldersOnlyOff",
+        "theFillStopsAtTheCapBestFirst",
+        "theLongListIsGoneAndTheLinkGoesThroughTheSeam",
+        "theSeeAllWords"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -33100,7 +33122,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2924,
+      "expected_floor": 2934,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33390,6 +33412,9 @@
         "VideoScanTests/CatalogPersonFilterStoreTests",
         "VideoScanTests/CatalogPersonFilterScaleTests",
         "VideoScanTests/CatalogPersonFilterSensorTests",
+        "VideoScanTests/PersonPageCuratedRankingTests",
+        "VideoScanTests/PersonPageCuratedPageTests",
+        "VideoScanTests/PersonPageCuratedSensorTests",
         "VideoScanTests/PersonVideoRemovalTests",
         "VideoScanTests/PerceptualStatisticsTests",
         "VideoScanTests/PerceptualVerdictFoldTests",

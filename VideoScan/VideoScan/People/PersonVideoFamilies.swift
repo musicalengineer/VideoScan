@@ -155,6 +155,17 @@ enum PersonVideoFamilies {
         return out
     }
 
+    /// How many pieces of footage `ids` make: one per group, one per file
+    /// in no group. Pure, O(ids).
+    static func footageCount(_ ids: [UUID], groups: Groups) -> Int {
+        var families = Set<Int>()
+        var loose = 0
+        for id in ids {
+            if let g = groups.groupOf[id] { families.insert(g) } else { loose += 1 }
+        }
+        return families.count + loose
+    }
+
     // MARK: - Collapse (pure)
 
     /// Picks keep their order; a later pick of the same footage, and every
