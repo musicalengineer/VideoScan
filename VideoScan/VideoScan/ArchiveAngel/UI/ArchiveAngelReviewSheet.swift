@@ -612,7 +612,7 @@ struct ArchiveAngelReviewSheet: View {
     /// The catalog notes with `adding` appended once — never a second time.
     /// Line-exact (codex #1572): "Grandma birthday" inside "Not Grandma
     /// birthday" is a different note and must still be added.
-    static func mergedNotes(existing: String, adding: String) -> String {
+    nonisolated static func mergedNotes(existing: String, adding: String) -> String {
         let add = adding.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !add.isEmpty else { return existing }
         let lines = existing.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }

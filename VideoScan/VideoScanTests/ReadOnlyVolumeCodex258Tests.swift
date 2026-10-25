@@ -363,11 +363,13 @@ struct ReadOnlyVolumeCodex258Tests {
                 }
                 try FileManager.default.removeItem(at: url)
             })
-        let run = Task { @MainActor in await model.deleteConfirmedJunk([first, second], mode: .permanent, guard: fileGuard) }
+        let slot = MainActorSlot<VideoScanModel.JunkDeletionResult>()
+        let run = Task { @MainActor in slot.value = await model.deleteConfirmedJunk([first, second], mode: .permanent, guard: fileGuard) }
         await waitUntil("the first file's removal") { inFirstRemoval.value }
         model.setVolumeReadOnly(true, for: target)
         release.signal()
-        let result = await run.value
+        await run.value
+        let result = try #require(slot.value)
 
         #expect(FileManager.default.fileExists(atPath: second.fullPath), "a file was removed from a drive already marked Read only")
         #expect(!second.isPurged && result.succeeded == 1 && result.refused.count == 1, "\(result.succeeded) removed, \(result.refused.count) refused")

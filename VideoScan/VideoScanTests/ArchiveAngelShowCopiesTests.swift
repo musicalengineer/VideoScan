@@ -20,6 +20,7 @@
 
 import Foundation
 import Testing
+import os
 @testable import VideoScan
 import VideoScanCore
 
@@ -162,14 +163,14 @@ struct ArchiveAngelShowCopiesTests {
         seed.userDate = "1994-12-25"; seed.userDateConfidence = "known"
         let twin = vr("/Volumes/B/Christmas 1994.dv", hash: "v1:x")      // no date of its own
         model.records = [seed, twin]
-        var posts = 0
+        let posts = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the observer closure is @Sendable
         let token = NotificationCenter.default.addObserver(forName: .videoScanCatalogMutated, object: nil, queue: nil) { _ in
-            posts += 1
+            posts.withLock { $0 += 1 }
         }
         defer { NotificationCenter.default.removeObserver(token) }
         model.archiveAngel.showCopies(of: twin.id)
         #expect(model.archiveAngel.showCopiesPresenter.request?.familyCount == 2)
-        #expect(posts == 0)
+        #expect(posts.withLock { $0 } == 0)
         #expect(twin.userDate == nil, "the Helper stamped the family date on promote; Show Copies never writes")
         #expect(seed.userDate == "1994-12-25")
     }

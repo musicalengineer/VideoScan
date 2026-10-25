@@ -13,6 +13,7 @@
 
 import Testing
 import Foundation
+import os
 @testable import VideoScan
 import VideoScanCore
 
@@ -122,8 +123,8 @@ struct RemoteViewerIsolationTests {
         #expect(HallieRemoteClient.sessionID(defaults) == "7")
         #expect(!HallieRemoteClient.sessionID(defaults).isEmpty)
         var store = FamilyGraphCompiledStore(root: live.appendingPathComponent("family-tree/compiled"))
-        var storeLog: [String] = []
-        store.log = { storeLog.append($0) }
+        let storeLog = OSAllocatedUnfairLock(initialState: [String]())
+        store.log = { line in storeLog.withLock { $0.append(line) } }
         store.trustsManifestSources = true
         store.refusesWrites = true
         var loader = FamilyGraphFileLoader(originalsDirectory: live.appendingPathComponent("family-tree/originals"))

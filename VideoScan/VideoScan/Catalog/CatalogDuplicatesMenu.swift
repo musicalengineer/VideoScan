@@ -65,8 +65,8 @@ struct CatalogDuplicatesMenu: View {
     var onFindSimilarFootageOfSelected: () -> Void = {}
 
     /// Rick's convention: no ellipsis — the job starts at once (no sheet).
-    static let findSimilarFootageTitle = "Find Similar Footage"
-    static let findSimilarFootageOfSelectedTitle = "Find Similar Footage of Selected"
+    nonisolated static let findSimilarFootageTitle = "Find Similar Footage"
+    nonisolated static let findSimilarFootageOfSelectedTitle = "Find Similar Footage of Selected"
 
     /// Title of the menu item that opens the picker.
     static let deleteOnVolumeTitle = "Delete Duplicates on Volume…"

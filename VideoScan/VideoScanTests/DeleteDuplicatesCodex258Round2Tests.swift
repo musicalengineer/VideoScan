@@ -171,13 +171,14 @@ struct DeleteDuplicatesCodex258Round2Tests {
                 DeleteDuplicatesJob.removalBoundaryHold(model: model, recordID: copy.id, path: copy.fullPath)
             }
         }
-        #expect(await Task.detached { ask(copy.fullPath) }.value == nil, "fixture: nothing is marked yet")
+        let copyPath = copy.fullPath  // Swift 6: a String, not the main-actor record, crosses into the detached task
+        #expect(await Task.detached { ask(copyPath) }.value == nil, "fixture: nothing is marked yet")
 
         let target = scanTarget("/Volumes/TestMarked")
         target.readOnlyMark = VolumeReadOnlyMark(markedAt: .distantPast, volumeUUID: "TEST-U")
         model.scanTargets = [target]
         #expect(model.bulkDeleteRefusal(forPath: copy.fullPath) == nil, "fixture: by its path the copy is not on the marked drive")
-        let note = await Task.detached { ask(copy.fullPath) }.value
+        let note = await Task.detached { ask(copyPath) }.value
         #expect(note == "left alone — lives on TestMarked, which you marked Read only",
                 "a mark that matches by identity only was missed at the removal boundary: \(String(describing: note))")
     }

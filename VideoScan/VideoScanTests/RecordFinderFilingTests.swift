@@ -58,7 +58,7 @@ private let treeGedcom = """
 
 @Suite("Record Finder — I found a record (filing)", .serialized)
 struct RecordFinderFilingTests {
-    private let fm = FileManager.default
+    private var fm: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable
     private let fixedNow = Date(timeIntervalSince1970: 1_790_000_000)
 
     private struct Sandbox {

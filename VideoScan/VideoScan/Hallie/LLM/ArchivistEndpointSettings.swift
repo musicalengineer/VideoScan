@@ -419,7 +419,7 @@ struct ArchivistEndpointSettings: View {
 
     /// The one key every asking path reads (ArchivistChatWindow,
     /// ArchivistAskField, HallieWebAccess).
-    static let modelKey = "archivist.ollamaModel"
+    nonisolated static let modelKey = "archivist.ollamaModel"
 
     /// Explicit save, like every other setting here — @State carries no
     /// didSet, so nothing writes itself.
@@ -464,7 +464,7 @@ struct ArchivistEndpointSettings: View {
     /// rather than a number floating in space.
     private static let machineRAMBytes: Int64 = Int64(ProcessInfo.processInfo.physicalMemory)
 
-    static func roundedGB(_ bytes: Int64) -> Int {
+    nonisolated static func roundedGB(_ bytes: Int64) -> Int {
         // Round UP. This number answers "will it fit", and a figure that
         // rounds 22.7 down to 22 answers it wrong in the one direction that
         // matters.
@@ -602,7 +602,7 @@ struct ArchivistEndpointSettings: View {
     }
 
     /// One word per verdict, for the log line above.
-    static func probeWord(_ probe: OllamaQueryTranslator.StructuredOutputProbe) -> String {
+    nonisolated static func probeWord(_ probe: OllamaQueryTranslator.StructuredOutputProbe) -> String {
         switch probe {
         case .available:   return "accepted"
         case .unverified:  return "accepted but not obeyed — the reply did not match the schema"

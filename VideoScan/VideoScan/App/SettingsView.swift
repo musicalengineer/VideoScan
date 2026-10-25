@@ -314,7 +314,8 @@ struct SettingsTabView: View {
             guard size > 0 else { return "" }
             var buf = [CChar](repeating: 0, count: size)
             sysctlbyname(key, &buf, &size, nil, 0)
-            return String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Bytes up to the NUL, as UTF-8 (the array overload of String(cString:) is deprecated).
+            return (String(bytes: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         let name = sysctlString("machdep.cpu.brand_string")

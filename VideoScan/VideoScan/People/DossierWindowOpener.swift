@@ -46,11 +46,11 @@ let dossierWindowLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "wind
 enum DossierWindowOpener {
 
     /// Scene id from the `Window(id:)` declaration in VideoScanApp.swift.
-    static let sceneID = "dossier"
+    nonisolated static let sceneID = "dossier"
     /// Scene title — SwiftUI sets the NSWindow.title to this, so it is a
     /// reliable way to find the backing window (more so than the
     /// identifier, whose raw value format varies across SwiftUI versions).
-    static let windowTitle = "Analyze Dashboard (legacy)"
+    nonisolated static let windowTitle = "Analyze Dashboard (legacy)"
 
     /// The single entry point both legacy call sites use (Window menu
     /// "Analyze Dashboard (legacy)").

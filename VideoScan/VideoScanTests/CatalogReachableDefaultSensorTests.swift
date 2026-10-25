@@ -127,6 +127,7 @@ struct ReachableOnlyFilterDefaultTests {
     /// Empty search + empty filterByIDs/filterTargetPaths + no pairs/view
     /// filters means the method never touches the @EnvironmentObject model —
     /// so the constant bindings and unresolved environment are safe.
+    @MainActor  // Swift 6: CatalogContent is a View (main-actor init)
     private func computeFiltered(records: [VideoRecord], showDisconnectedMedia: Bool) -> [VideoRecord] {
         let view = CatalogContent(
             records: records,
@@ -151,7 +152,7 @@ struct ReachableOnlyFilterDefaultTests {
         return view.computeFiltered()
     }
 
-    @Test func defaultHidesUnreachableIncludesReachable() throws {
+    @MainActor @Test func defaultHidesUnreachableIncludesReachable() throws {
         // Reachable: a REAL temp file (non-/Volumes → optimistic-true default
         // AND a truthful background probe, so it can never flip out).
         let tmp = FileManager.default.temporaryDirectory
@@ -174,7 +175,7 @@ struct ReachableOnlyFilterDefaultTests {
                 "record on an unmounted /Volumes path must be hidden by default (showDisconnectedMedia == false)")
     }
 
-    @Test func optOutIncludesUnreachable() throws {
+    @MainActor @Test func optOutIncludesUnreachable() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("reachable_\(UUID().uuidString).mov")
         FileManager.default.createFile(atPath: tmp.path, contents: Data([0x00]))

@@ -116,15 +116,17 @@ struct SeekingFrameProviderTests {
             asset: asset, duration: dur, frameInterval: 0.1
         )
 
-        var count = 0
-        let task = Task {
+        // Swift 6: the count is owned by the task and returned, not a
+        // captured var mutated across the await.
+        let count = await Task { () -> Int in
+            var count = 0
             for await _ in provider.frames() {
                 count += 1
                 provider.releaseSlot()
                 if count >= 5 { break }
             }
-        }
-        await task.value
+            return count
+        }.value
         #expect(count >= 5)
         #expect(count < 50, "Should not have consumed all frames")
     }

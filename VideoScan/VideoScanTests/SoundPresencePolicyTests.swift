@@ -263,7 +263,7 @@ struct SoundCopyFinderDecideTests {
                        soundFiles: folder.map { SoundPairSource(audio: $0, sameFolder: true, sameFootage: false) })
     }
 
-    static let allConnected: (String) -> Bool = { _ in true }
+    static let allConnected: @Sendable (String) -> Bool = { _ in true }
 
     @Test func theArchiveCopyIsPreferred() {
         let raid = Self.cand("Thanksgiving2009-ProRes.mov", volume: "RAID", precedence: 9)

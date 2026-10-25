@@ -113,7 +113,7 @@ struct ArchiveAngelTestbed {
         var model = [CChar](repeating: 0, count: max(size, 1))
         sysctlbyname("hw.model", &model, &size, nil, 0)
         let mem = ProcessInfo.processInfo.physicalMemory / 1_073_741_824
-        return "\(String(cString: model)) · \(ProcessInfo.processInfo.activeProcessorCount) cores · \(mem) GB"
+        return "\((String(bytes: model.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? "")) · \(ProcessInfo.processInfo.activeProcessorCount) cores · \(mem) GB"
     }
 
     /// Fixtures are cached across runs (same name = same content).

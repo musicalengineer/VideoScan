@@ -39,7 +39,7 @@ private let tree = """
 @Suite("Person gallery — answer, offer, profile, attachments", .serialized)
 struct HalliePersonGalleryAnswerTests {
     typealias Exec = HallieTurnExecutor
-    private let fileManager = FileManager.default
+    private var fileManager: FileManager { .default }  // Swift 6: a stored FileManager would make the suite non-Sendable
     let graph = GedcomFamilyGraph(gedcomText: tree)
 
     private struct Fixture {

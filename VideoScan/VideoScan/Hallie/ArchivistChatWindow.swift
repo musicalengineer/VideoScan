@@ -470,7 +470,7 @@ struct ArchivistChatWindow: View {
     /// `HallieMaeAngles-1.png` with `-2..-4` siblings — so picking the
     /// first frame as the portrait is enough. Returns file URLs only (pure,
     /// testable); `angleFrames(for:)` decodes them.
-    static func angleFrameURLs(besideImageAt path: String) -> [URL] {
+    nonisolated static func angleFrameURLs(besideImageAt path: String) -> [URL] {
         let url = URL(fileURLWithPath: path)
         let dir = url.deletingLastPathComponent()
         let stem = url.deletingPathExtension().lastPathComponent

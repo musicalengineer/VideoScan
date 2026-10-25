@@ -106,6 +106,7 @@
 - Dead code: ~7,500 removable lines (Periphery 10/11) after Rick's call.
 - CCN > 30 to zero before the Ultra (#281); switch/else-if census → typed enums.
 - Remove concurrency escape hatches as stores leave the model.
+- Core helper `[T].parallelInitialized(count:chunk:)` so the four copies of the disjoint-chunk `nonisolated(unsafe) let slots` proof (FamilyTreeNameSearch, CatalogChangeDetector, FamilyTreeLiveModel.sidebarRows, FamilyAssetIdentityDirectory) become one audited site (reviewer, 10/25).
 - Long operations not yet MFO jobs: FamilySearch pull/refresh, RescueFileCopier, Angel sweep, Angel buffer Clear (#242).
 - Background Activity panel = the Analyze cycler control panel (#195).
 - Test quality: sensors prove execution not presence (#262); integration ladder rungs 1–3 (#140); #273 main-thread SIGSEGVs; test hosts writing to the real `.trash` (#256).

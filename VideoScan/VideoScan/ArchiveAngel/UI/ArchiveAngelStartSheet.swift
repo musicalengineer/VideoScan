@@ -39,7 +39,7 @@ struct ArchiveAngelStartSheet: View {
     var hygiene: ArchiveAngelBufferHygiene.Report = .empty
     var revealHygiene: (() -> Void)? = nil
 
-    static let choices = [10, 25, 35, 50]
+    nonisolated static let choices = [10, 25, 35, 50]
 
     private var bufferRoot: URL { angel.environment.bufferRoot }
     private var freeText: String {

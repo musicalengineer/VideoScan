@@ -115,14 +115,14 @@ struct ExternalPlayerAudioRouteMediaMatrixTests {
         var testDescription: String { "\(ext) · \(video) · \(audio)" }
     }
 
-    private static let dv = ["-c:v", "dvvideo", "-s", "720x480", "-r", "30000/1001", "-pix_fmt", "yuv411p"]
-    private static let x264 = ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
+    private nonisolated static let dv = ["-c:v", "dvvideo", "-s", "720x480", "-r", "30000/1001", "-pix_fmt", "yuv411p"]
+    private nonisolated static let x264 = ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
 
     /// Every container · audio codec pair in FamilyArchive/30_Video
     /// (GH #332), with the video codec the archive carries. qdm2 (and
     /// svq3) cannot be ENCODED by ffmpeg, so that one file is covered by
     /// the logic suite's unreadable-asset case, not a fixture.
-    static let pairs: [Pair] = [
+    nonisolated static let pairs: [Pair] = [  // Swift 6: the @Test macro reads it off the actor
         Pair(name: "mov_hevc_aac", ext: "mov", video: "hevc", audio: "aac",
              videoArgs: ["-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1", "-pix_fmt", "yuv420p"], audioArgs: ["-c:a", "aac"], muxArgs: []),
         Pair(name: "mov_h264_aac", ext: "mov", video: "h264", audio: "aac", videoArgs: x264, audioArgs: ["-c:a", "aac"], muxArgs: []),

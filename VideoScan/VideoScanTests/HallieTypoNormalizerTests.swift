@@ -36,8 +36,8 @@ enum HallieTypoFixture {
         "donna", "tim", "dan", "ma", "libby", "anna", "mark", "matt", "rick",
         "latta", "moher", "wen", "breen", "donna breen", "rick breen",
     ]
-    static let isKnownPerson: (String) -> Bool = { people.contains($0.lowercased()) }
-    static let nobody: (String) -> Bool = { _ in false }
+    static let isKnownPerson: @Sendable (String) -> Bool = { people.contains($0.lowercased()) }
+    static let nobody: @Sendable (String) -> Bool = { _ in false }
 
     /// The routing decision a turn gets BEFORE any model: the front door,
     /// the request-opener repair, the pre-translation lanes with the mode

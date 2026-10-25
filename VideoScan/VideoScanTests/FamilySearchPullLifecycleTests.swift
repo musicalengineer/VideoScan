@@ -32,7 +32,7 @@ final class FamilySearchPullLifecycleTests: XCTestCase {
     private var outputURL: URL!
     private var notifications: [(title: String, body: String)] = []
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {  // Swift 6: the async override runs on this @MainActor class's actor
         let fm = FileManager.default
         root = fm.temporaryDirectory
             .appendingPathComponent("fs-lifecycle-\(UUID().uuidString)", isDirectory: true)
@@ -49,7 +49,7 @@ final class FamilySearchPullLifecycleTests: XCTestCase {
         notifications = []
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: root)
     }
 

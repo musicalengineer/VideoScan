@@ -140,7 +140,9 @@ struct InspectorDateView: View {
     }()
 
     /// "yyyy-MM-dd" in UTC for a day-precise inference (a burn-in, a stamp).
-    static let inferredDayFormatter: DateFormatter = {
+    /// nonisolated: read by the pure `inferredSummary` (DateFormatter is
+    /// Sendable in this SDK; same shape as VideoRecord+ArchivedAt).
+    nonisolated static let inferredDayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
@@ -180,7 +182,7 @@ struct InspectorDateView: View {
     }
 
     /// Pure text for the line (tested without a view host).
-    static func inferredSummary(_ record: VideoRecord) -> String? {
+    nonisolated static func inferredSummary(_ record: VideoRecord) -> String? {
         // GH #293: `inferredDateReasonShown` / `effectiveInferredDateRange`
         // keep a legacy year-only row (folder-year, path-year — no span, no
         // written reason) a YEAR with its WHY, never "Guess: 1995-01-01".

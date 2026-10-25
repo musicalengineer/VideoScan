@@ -1,33 +1,34 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-25 (evening). Rick corrects this file; agents read it at session start.*
+*Updated 2026-10-25 (night). Rick corrects this file; agents read it at session start.*
 
 ## This week's theme
-**Stability before the Ultra** (Rick, 10/19) **and Swift 6 everywhere** (Rick, 10/25: Swift 6 language mode, in stages, within about a week — `docs/design/swift6_migration_2026_10_25.md`, tracking #376). Feature work is paused except provenance design. No FamilyArchive rescan until Rick says so.
+**Stability before the Ultra** (Rick, 10/19) — and **Swift 6 everywhere is done** (Rick's ruling 10/25, carried out the same day: `docs/design/swift6_migration_2026_10_25.md`, #376). Feature work is paused except provenance design. No FamilyArchive rescan until Rick says so.
 
-## Swift 6 migration — where it stands (the session-start hook prints the measured line)
-- **Stages 0, 1, 2, 3, 4 merged and pushed 10/25.** Start: 460 warnings in 168 files (299 Swift 6 errors). After stage 3+4: **228 remain (50 %)** — sendable-capture 140 · main-actor 54 · sendable-conformance 27 · other 6 · deprecated 1. Core is in Swift 6 language mode (1,873 tests / 0). The app flips (stage 8) at 0.
-- **In flight (worktrees, workers):** stages 5–7 split by module — A: People/ FamilyTree/ Hallie/ Model/ Shared/ (87); B: Media/ Catalog/ MediaOps/ ArchiveAngel/ Archive/ Volumes/ (47) + all test-target warnings (94). Each slice: fresh-eyes reviewer, Codex on rule-10 files, related suites, sensors GREEN, then the merging session lowers the baseline from the slice's clean logs.
-- **The floor:** `scripts/warning_ratchet.py` runs inside the sensor lane (per file × category; nothing may rise). The committed baseline moves only at a merge. Every opt-out carries a `// Swift 6:` comment (`grep -rn "// Swift 6:" VideoScan/` is the audit list); the nightly census counts them.
-- **Stage 2 nightly analysis lane** (merged 10/25): `scripts/nightly_analysis_lane.sh` — ratchet verify + progress, escape-hatch census, Periphery, `-strict-memory-safety`, one sanitizer kind per night (TSan / ASan+UBSan via `weekly_sanitizer.py`). **Not installed yet:** Rick runs `bash scripts/install_analysis_lane.sh` on the M4 when he wants the 04:30 slot live (rota `"analysis"`); the weekly sanitizer agents stay until the lane has run green for a week. `swiftlint analyze` is opt-in only (O(files²), >25 min).
-- **Process bugs fixed on the way (10/25):** the sensor-lane GREEN stamp had never been written (empty `mktemp` index) and then never matched a commit (tracked-but-ignored files) — no push to main had passed the hook since 10/23. Fixed, red/green, `scripts/sensor_lane_stamp.sh`. Main is pushed.
-- **Rulings still wanted from Rick (Charter review 10/25):** (a) §8 sampled hash is a hint only, identity is whole-file SHA-256 — one DECISIONS line; (b) provenance gate at ingest or at Promote. Rick's Charter edits + the new §3.8 Development Modes are uncommitted in his checkout.
+## Swift 6 — end state (the session-start hook prints the measured line)
+- **All eight stages merged and pushed 10/25.** 460 warnings → 1 (the mlx-swift `setErrorHandler` deprecation, documented in `Shared/MLXSafety.swift`; the figure reads 99 % until mlx-swift ships a replacement). **Core and the app target are in Swift 6 language mode**; `SWIFT_STRICT_CONCURRENCY` is gone (implicit). The app's 1,128 files compiled with zero errors on the first Swift 6 build — stages 3–7 had cleared every would-be error; the flip's errors were all in the test targets and were fixed per §6a.
+- **Every slice:** fresh-eyes reviewer (two contract drifts and one real data bug caught and fixed red/green), Codex on every rule-10 file (all *merge*, 0 findings), related suites with counts, sensors GREEN, baseline lowered only from clean logs. Opt-outs added carry a `// Swift 6:` invariant (`grep -rn "// Swift 6:" VideoScan/`); net escape-hatch count fell (slice B −10).
+- **Not yet proven:** the full 12k app suite and the gauntlet on the flipped tree — the 10/26 02:00 nightly on the fleet does that. If it is red, the flip stays (fix forward, red/green); do not revert the mode.
+- **The floor stays:** `scripts/warning_ratchet.py` in the sensor lane (per file × category; nothing may rise; baseline now 1). Stage 2's nightly analysis lane (`scripts/nightly_analysis_lane.sh`: ratchet verify, escape-hatch census, Periphery, `-strict-memory-safety`, TSan/ASan+UBSan by weekday) is merged but **not installed** — Rick runs `bash scripts/install_analysis_lane.sh` on the M4 when ready (rota slot 04:30).
+- **Retire the design doc** to `docs/archive/` after the 10/26 nightly is green.
 
 ## In flight (other)
-- **P0 rescan purge (10/22) — recovered;** the 10/24 LaCieWorkspace rescan (5,642 cataloged, 5,640 hashed in full) left all 144 FamilyArchive Masters intact. **Waiting on Rick:** spot test of the Archive tab (expect 144 Masters). Follow-up #366 (P2).
-- **Merged 10/24, waiting on Rick's Debug spot test:** Archive no-sound mark (#345) and People tab row removal. Follow-ups #368–#371.
-- **Spot-test targets from today's slices:** Catalog People column and Relocate summary sheet text (interpolation replaced `Text +`), filmstrip / Find Person frame seeking (async image generator), People tab first load (migration state read under the run lock).
+- **P0 rescan purge (10/22) — recovered;** the 10/24 LaCieWorkspace rescan left all 144 FamilyArchive Masters intact. **Waiting on Rick:** Archive-tab spot test (expect 144 Masters). Follow-up #366 (P2).
+- **#375 merged 10/25** (Codex branch, gated here; + engine fix: a rejection keeps the record's own spelling). **Waiting on Rick's spot test:** Catalog → Organize shows the nickname (Timmy); unchecking leaves a correctly-cased strikethrough in the Inspector.
+- **Merged 10/24, waiting on Rick's Debug spot test:** Archive no-sound mark (#345), People tab row removal. Follow-ups #368–#371.
+- **Other spot-test targets from 10/25 slices:** Catalog People column and Relocate summary sheet text; filmstrip / Find Person seeking; People tab first load; Family Tree recompile/pull (Sendable store, same writers).
+- **Process bugs fixed 10/25:** the sensor-lane GREEN stamp had never been written and then never matched a commit — no push to main had passed the hook since 10/23; fixed red/green (`scripts/sensor_lane_stamp.sh`). Main is pushed through `17485b1fe`…
 - **Nightly 10/24 GREEN:** app 12,271 / 0; Core 1,872 / 0. Hallie strict 57/67.
-- **#375 nickname bug — fix merged 10/25 (Codex branch, gated here), waiting on Rick's Catalog/People spot test:** tagging lists show the family nickname; duplicate labels carry birth years. **New issues 10/25:** #377 two stale gauntlet manifest assignments; #378 two People tests assert a raw 500 ms budget (every weekly sanitizer run reads tests-failed); #379 CI publishes `periphery_aggressive: 0` while a local scan finds 1,440.
+- **Issues opened 10/25:** #377 stale gauntlet manifest entries · #378 two People tests assert a raw 500 ms budget (every weekly sanitizer run reads tests-failed) · #379 CI publishes `periphery_aggressive: 0` vs 1,440 locally · #380 HallieWebServer synchronous 1 MiB reads on the server queue · #381 HallieQueryBench residency probe fails on the interactive M4 (pre-existing, machine-dependent).
 - **`test/gauntlet-prodshape`** (locked worktree): leave it to its owner session.
 - **Provenance** (design under review): needs Rick's four answers before Phase 1.
 - **Step G (JSON gone):** finish or schedule. Cutover-audit P1s: #338, #339, the stale-JSON-reader item.
-- **VideoScanModel split (#337, P1):** coordinate with Swift 6 stages 5–7 (same files).
+- **VideoScanModel split (#337, P1):** plan → Rick's go → slices.
 
 ## Next (in order)
-1. Merge slices A and B (reviewer → Codex on rule-10 → baseline → lane → merge → push); then stage 8: `SWIFT_VERSION = 6`, full suite on the fleet, Codex on the flip.
-2. Rick: Archive-tab spot test; the two Charter rulings; install the analysis lane when ready.
-3. #378 (two-line fix, unblocks the sanitizer lanes).
+1. 10/26 morning: read the nightly (full suite + gauntlet on Swift 6). Green → retire the design doc, close #376. Red → fix forward with red/green; the mode stays.
+2. Rick: Archive-tab and #375 spot tests; the two Charter rulings (sampled hash = hint only; provenance gate at ingest or Promote); commit the Charter edits (+ §3.8 Development Modes); install the analysis lane when ready.
+3. #378 (two-line fix; unblocks the sanitizer lanes); #377; #381.
 4. Provenance Phase 1 after Rick's rulings; Step G; #337.
 
 ## Ultra (arrives Tue 10/27; dev setup Wed 10/28)

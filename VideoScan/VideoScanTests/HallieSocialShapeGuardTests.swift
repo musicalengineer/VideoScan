@@ -90,7 +90,7 @@ let hallieSocialStillSearches: [HallieSocialReplayRow] = [
           expect: .search),
 ]
 
-private let nobody: (String) -> Bool = { _ in false }
+private let nobody: @Sendable (String) -> Bool = { _ in false }
 
 // MARK: - 1. The guard
 

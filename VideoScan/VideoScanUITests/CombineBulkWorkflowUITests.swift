@@ -19,6 +19,7 @@
 
 import XCTest
 
+@MainActor  // Swift 6: XCUI* are main-actor types
 final class CombineBulkWorkflowUITests: XCTestCase {
 
     /// Output dir for the combined files. Cleaned up in tearDown unless
@@ -36,7 +37,7 @@ final class CombineBulkWorkflowUITests: XCTestCase {
     /// healthy threshold for "the bulk path actually muxed real files."
     private let minExpectedOutputs = 12
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = false
 
         let uuid = UUID().uuidString.prefix(8)
@@ -46,7 +47,7 @@ final class CombineBulkWorkflowUITests: XCTestCase {
         print("[BULK-UI-TEST] Output dir: \(outputDir.path)")
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         guard let outputDir else { return }
         if ProcessInfo.processInfo.environment["VS_UI_TEST_KEEP_OUTPUT"] != "1" {
             try? FileManager.default.removeItem(at: outputDir)

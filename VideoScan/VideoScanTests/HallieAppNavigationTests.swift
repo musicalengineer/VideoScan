@@ -84,13 +84,16 @@ struct HallieAppNavigationTests {
         let stale = Navigation.answer(.archive)
         let current = HallieTurnExecutor.commandResult(.smalltalk(.thanks))
         #expect(stale.offeredActions == [.openAppDestination(.archive)])
-        #expect(!Navigation.acceptImmediateOffer(
-            from: current, defaults: defaults, openMainWindow: { opens += 1 }))
+        // Swift 6: the call sits outside #expect so the non-escaping closure is not wrapped as @Sendable.
+        let acceptedCurrent = Navigation.acceptImmediateOffer(
+            from: current, defaults: defaults, openMainWindow: { opens += 1 })
+        #expect(!acceptedCurrent)
         #expect(defaults.integer(forKey: "selectedTab") == 77)
         #expect(opens == 0)
 
-        #expect(Navigation.acceptImmediateOffer(
-            from: stale, defaults: defaults, openMainWindow: { opens += 1 }))
+        let acceptedStale = Navigation.acceptImmediateOffer(
+            from: stale, defaults: defaults, openMainWindow: { opens += 1 })
+        #expect(acceptedStale)
         #expect(defaults.integer(forKey: "selectedTab") == 4)
         #expect(opens == 1)
     }
@@ -140,8 +143,9 @@ struct HallieAppNavigationTests {
         let defaults = UserDefaults(suiteName: "HallieAppNavigationTests.deferred")!
         defaults.set(77, forKey: "selectedTab")
         var opens = 0
-        #expect(Navigation.acceptImmediateOffer(
-            from: result, defaults: defaults, openMainWindow: { opens += 1 }))
+        let accepted = Navigation.acceptImmediateOffer(
+            from: result, defaults: defaults, openMainWindow: { opens += 1 })
+        #expect(accepted)
         #expect(defaults.integer(forKey: "selectedTab") == Destination.archive.selectedTab)
         #expect(opens == 1)
     }
@@ -176,8 +180,9 @@ struct HallieAppNavigationTests {
         let defaults = UserDefaults(suiteName: "HallieAppNavigationTests.reordered")!
         defaults.set(77, forKey: "selectedTab")
         var opens = 0
-        #expect(Navigation.acceptImmediateOffer(
-            from: result, defaults: defaults, openMainWindow: { opens += 1 }))
+        let accepted = Navigation.acceptImmediateOffer(
+            from: result, defaults: defaults, openMainWindow: { opens += 1 })
+        #expect(accepted)
         #expect(defaults.integer(forKey: "selectedTab") == Destination.storage.selectedTab)
         #expect(opens == 1)
     }

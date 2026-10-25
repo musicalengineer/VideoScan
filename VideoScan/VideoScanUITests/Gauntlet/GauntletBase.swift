@@ -25,6 +25,9 @@
 
 import XCTest
 
+// Swift 6: XCUIApplication/XCUIElement are main-actor types; XCTest drives
+// UI tests on the main thread, so the whole hierarchy is @MainActor.
+@MainActor
 class GauntletTestCase: XCTestCase {
 
     /// The app under test, kept for the failure screenshot.
@@ -38,7 +41,7 @@ class GauntletTestCase: XCTestCase {
     /// real account even where an in-app gate is missing.
     private(set) var fakeHome: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = false
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["VS_GAUNTLET"] == "1",
@@ -53,7 +56,19 @@ class GauntletTestCase: XCTestCase {
             withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
+        // Screenshot on failure — every Gauntlet flow fails with pixels
+        // attached so a remote M1 run can be diagnosed from the .xcresult.
+        // Taken here, before terminate(), rather than in a `record(_:)`
+        // override: that override is nonisolated by inheritance and XCUI
+        // is main-actor (Swift 6); `continueAfterFailure` is false, so the
+        // first failure is the last thing the app did and is still on screen.
+        if let app, (testRun?.totalFailureCount ?? 0) > 0 {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "gauntlet-failure-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         app?.terminate()
         // Fixture teardown. Project policy forbids deleting USER files —
         // this sandbox is entirely test-created, same lifecycle as
@@ -63,20 +78,6 @@ class GauntletTestCase: XCTestCase {
         }
     }
 
-    /// Screenshot on failure — every Gauntlet flow fails with pixels
-    /// attached so a remote M1 run can be diagnosed from the .xcresult.
-    override func record(_ issue: XCTIssue) {
-        if let app {
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = "gauntlet-failure-\(name)"
-            attachment.lifetime = .keepAlways
-            var annotated = issue
-            annotated.add(attachment)
-            super.record(annotated)
-            return
-        }
-        super.record(issue)
-    }
 
     // MARK: - Launch
 

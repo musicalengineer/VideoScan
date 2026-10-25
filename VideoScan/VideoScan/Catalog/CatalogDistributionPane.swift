@@ -449,14 +449,14 @@ struct CatalogDistributionPane: View {
     /// 10/15 F4: an unknown unit is shown as unknown, never hidden). The
     /// home folder's catch-all label reads as this Mac. The folded "Other"
     /// row has no unit.
-    static func rowName(_ slice: MediaDistributionSlice, facts: DriveAllocationFacts?, host: String) -> String {
+    nonisolated static func rowName(_ slice: MediaDistributionSlice, facts: DriveAllocationFacts?, host: String) -> String {
         let base = slice.name == MediaDistributionCalculator.homeName ? "\(host) (system)" : slice.name
         guard !slice.isOther else { return base }
         return "\(base) (\(facts?.unitName ?? "—"))"
     }
 
     /// This Mac's name for the home-folder row ("RicksM4" from "RicksM4.local").
-    static var hostDisplayName: String {
+    nonisolated static var hostDisplayName: String {
         let raw = ProcessInfo.processInfo.hostName
         let short = raw.split(separator: ".").first.map(String.init) ?? raw
         return short.isEmpty ? "This Mac" : short

@@ -316,13 +316,13 @@ struct VolumeTableTotalsFooter: View {
 
     /// Height the pane's auto-sizing math must reserve. Kept next to the
     /// layout it describes so the two stay in step.
-    static let height: CGFloat = 48
+    nonisolated static let height: CGFloat = 48
     /// Extra height when the manually-deleted caption line is showing.
-    static let captionLineHeight: CGFloat = 16
+    nonisolated static let captionLineHeight: CGFloat = 16
 
     /// Height for a given totals value — the pane's auto-size math calls
     /// this so the caption line never squeezes a volume row off screen.
-    static func height(for totals: CatalogStorageTotals) -> CGFloat {
+    nonisolated static func height(for totals: CatalogStorageTotals) -> CGFloat {
         height + (totals.manuallyDeletedCaption == nil ? 0 : captionLineHeight)
     }
 }

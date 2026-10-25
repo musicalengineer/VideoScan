@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import os
 @testable import VideoScan
 
 struct RecoveryOutcomeContractTests {
@@ -71,25 +72,28 @@ struct RecoveryOutcomeContractTests {
         let f = try Fixture(); defer { f.cleanup() }
         try f.breakPointer()
         var recovering = f.store
-        var injected = false
-        var injectionError: Error?
-        var winner: FamilyGraphCompiledStore.Pointer?
+        // Swift 6: the hook's state is lock-owned (the log closure is
+        // @Sendable); C++: a struct behind a mutex, not three captured locals.
+        struct Injection { var injected = false; var error: Error?; var winner: FamilyGraphCompiledStore.Pointer? }
+        let injection = OSAllocatedUnfairLock(initialState: Injection())
         // loadCurrent exits on the broken pointer before hashing. The first hash
         // log is inside recovery lookup, after its CAS baseline was captured.
         recovering.log = { line in
-            guard !injected, line.contains("hashed") else { return }
-            injected = true
+            guard !injection.withLock({ $0.injected }), line.contains("hashed") else { return }
+            injection.withLock { $0.injected = true }
             do {
-                winner = try f.promoteLarger()
+                let winner = try f.promoteLarger()
+                injection.withLock { $0.winner = winner }
                 if makeWinnerUnavailable {
                     try FileManager.default.moveItem(at: f.c, to: f.root.appendingPathComponent("Gamma.unavailable"))
                 }
-            } catch { injectionError = error }
+            } catch { injection.withLock { $0.error = error } }
         }
         let outcome = f.loader(store: recovering).loadNewestOutcome()
-        try #require(injected, "The production recovery lookup must reach the interleaving hook")
-        try #require(injectionError == nil, "Synthetic competing promotion must succeed: \(String(describing: injectionError))")
-        let promoted = try #require(winner)
+        let seen = injection.withLock { $0 }
+        try #require(seen.injected, "The production recovery lookup must reach the interleaving hook")
+        try #require(seen.error == nil, "Synthetic competing promotion must succeed: \(String(describing: seen.error))")
+        let promoted = try #require(seen.winner)
         print("SUPERSEDED_CALLER_EVIDENCE unavailable=\(makeWinnerUnavailable) returned=\(outcome.graph?.people.count ?? -1) pointerChanged=\(f.store.readPointer() != promoted)")
         #expect(f.store.readPointer() == promoted, "Recovery must preserve the winning promotion even if it cannot be reloaded")
         if makeWinnerUnavailable {
@@ -100,7 +104,7 @@ struct RecoveryOutcomeContractTests {
         }
     }
 
-    private struct Fixture {
+    private struct Fixture: Sendable {
         let root: URL
         let originals: URL
         let a: URL

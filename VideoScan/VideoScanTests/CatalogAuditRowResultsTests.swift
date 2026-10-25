@@ -346,8 +346,8 @@ struct CatalogAuditRowResultsIsolationTests {
         var testDescription: String { label }
     }
 
-    static let twice = UUID()
-    static let poisons: [Poison] = [
+    nonisolated static let twice = UUID()
+    nonisolated static let poisons: [Poison] = [  // Swift 6: the @Test macro reads it off the actor
         Poison(label: "a result word from the future",
                rows: #"[{"id":"\#(UUID().uuidString)","result":"present"},{"id":"\#(UUID().uuidString)","result":"vaporised","detail":"x"}]"#,
                expectedWords: "a result word this version does not know (\"vaporised\")"),

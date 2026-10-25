@@ -196,7 +196,7 @@ struct RollCallOverlay: View {
     let onFinish: () -> Void
 
     /// Left paused this long, the roll call resumes by itself.
-    static let autoResumeAfter: TimeInterval = 4 * 60
+    nonisolated static let autoResumeAfter: TimeInterval = 4 * 60
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var start = Date()

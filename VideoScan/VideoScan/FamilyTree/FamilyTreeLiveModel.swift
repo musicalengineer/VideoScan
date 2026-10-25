@@ -794,14 +794,14 @@ final class FamilyTreeLiveModel: ObservableObject {
         let overlayStore = personRefreshOverlayStore
         let rulings = identityDecisions
         let keepInMemoryRulings = identityRulingsUnsaved
-        let loaded = await Task.detached(priority: .userInitiated) { [weak self] ()
-            -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?, FamilyIdentityDecisions?) in
-            let progress: (String) -> Void = { phase in
-                Task { @MainActor [weak self] in
-                    guard let self, self.loadGeneration == generation else { return }
-                    self.loadPhase = phase
-                }
+        let model = WeakRef(self)  // Swift 6: a let-bound weak ref, not `[weak self]` (WeakRef.swift)
+        let progress: @Sendable (String) -> Void = { phase in
+            Task { @MainActor in
+                if let self = model.object, self.loadGeneration == generation { self.loadPhase = phase }
             }
+        }
+        let loaded = await Task.detached(priority: .userInitiated) { ()
+            -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?, FamilyIdentityDecisions?) in
             let clock = ContinuousClock()
             var mark = clock.now
             if let configuration, configuration.gedcomDirectory() == directory {
@@ -941,12 +941,13 @@ final class FamilyTreeLiveModel: ObservableObject {
         captionGeneration &+= 1
         let captionGeneration = self.captionGeneration
         let directory = originalsDirectory
-        let promoted = await Task.detached(priority: .userInitiated) { [weak self] () -> Bool in
+        let model = WeakRef(self)  // Swift 6: see loadFromDisk
+        let promoted = await Task.detached(priority: .userInitiated) { () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = { phase in
-                Task { @MainActor [weak self] in
-                    guard let self, self.captionGeneration == captionGeneration else { return }
+                Task { @MainActor in
+                    guard let self = model.object, self.captionGeneration == captionGeneration else { return }
                     self.loadPhase = phase
                 }
             }

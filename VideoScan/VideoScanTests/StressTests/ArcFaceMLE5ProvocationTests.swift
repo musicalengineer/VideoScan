@@ -61,8 +61,7 @@ struct ArcFaceMLE5ProvocationTests {
         let completedOK = OSAllocatedUnfairLock(initialState: 0)
         let swiftErrors = OSAllocatedUnfairLock(initialState: 0)
 
-        let counterLock = NSLock()
-        var readyCount = 0
+        let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
         let startBarrier = DispatchSemaphore(value: 0)
         let group = DispatchGroup()
 
@@ -72,10 +71,7 @@ struct ArcFaceMLE5ProvocationTests {
                 defer { group.leave() }
 
                 // Barrier: all threads start at the same instant
-                counterLock.lock()
-                readyCount += 1
-                let nowReady = readyCount
-                counterLock.unlock()
+                let nowReady = readyCount.withLock { $0 += 1; return $0 }
                 if nowReady == threadCount {
                     for _ in 0..<threadCount { startBarrier.signal() }
                 }
@@ -167,8 +163,7 @@ struct ArcFaceMLE5ProvocationTests {
         let caughtExceptions = OSAllocatedUnfairLock(initialState: 0)
         let completedOK = OSAllocatedUnfairLock(initialState: 0)
 
-        let counterLock = NSLock()
-        var readyCount = 0
+        let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
         let startBarrier = DispatchSemaphore(value: 0)
         let group = DispatchGroup()
 
@@ -180,10 +175,7 @@ struct ArcFaceMLE5ProvocationTests {
             Thread.detachNewThread {
                 defer { group.leave() }
 
-                counterLock.lock()
-                readyCount += 1
-                let nowReady = readyCount
-                counterLock.unlock()
+                let nowReady = readyCount.withLock { $0 += 1; return $0 }
                 if nowReady == jobCount {
                     for _ in 0..<jobCount { startBarrier.signal() }
                 }
@@ -341,8 +333,7 @@ struct ArcFaceMLE5ProvocationTests {
             }
             guard models.count == jobCount else { continue }
 
-            let counterLock = NSLock()
-            var readyCount = 0
+            let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
             let startBarrier = DispatchSemaphore(value: 0)
             let group = DispatchGroup()
 
@@ -353,10 +344,7 @@ struct ArcFaceMLE5ProvocationTests {
                 Thread.detachNewThread {
                     defer { group.leave() }
 
-                    counterLock.lock()
-                    readyCount += 1
-                    let nowReady = readyCount
-                    counterLock.unlock()
+                    let nowReady = readyCount.withLock { $0 += 1; return $0 }
                     if nowReady == jobCount {
                         for _ in 0..<jobCount { startBarrier.signal() }
                     }
@@ -444,8 +432,7 @@ struct ArcFaceMLE5ProvocationTests {
         let caughtExceptions = OSAllocatedUnfairLock(initialState: 0)
         let completedOK = OSAllocatedUnfairLock(initialState: 0)
 
-        let counterLock = NSLock()
-        var readyCount = 0
+        let readyCount = OSAllocatedUnfairLock(initialState: 0)  // Swift 6: the lock owns the barrier count
         let startBarrier = DispatchSemaphore(value: 0)
         let group = DispatchGroup()
 
@@ -454,10 +441,7 @@ struct ArcFaceMLE5ProvocationTests {
             Thread.detachNewThread {
                 defer { group.leave() }
 
-                counterLock.lock()
-                readyCount += 1
-                let nowReady = readyCount
-                counterLock.unlock()
+                let nowReady = readyCount.withLock { $0 += 1; return $0 }
                 if nowReady == threadCount {
                     for _ in 0..<threadCount { startBarrier.signal() }
                 }

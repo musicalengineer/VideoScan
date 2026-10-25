@@ -26,7 +26,8 @@ enum ChipInfo {
         guard size > 0 else { return "Apple" }
         var buf = [CChar](repeating: 0, count: size)
         sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0)
-        let s = String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Bytes up to the NUL, as UTF-8 (the array overload of String(cString:) is deprecated).
+        let s = (String(bytes: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return s.isEmpty ? "Apple" : s
     }
 

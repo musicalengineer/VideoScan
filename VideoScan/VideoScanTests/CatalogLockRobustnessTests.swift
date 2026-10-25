@@ -204,6 +204,7 @@ final class CatalogLockRobustnessTests: XCTestCase {
         let saved = CatalogWriteJournal.maxBytes
         defer { CatalogWriteJournal.maxBytes = saved }
         CatalogWriteJournal.maxBytes = .max     // no rotation during this test
+        let catalogURL: URL = catalogURL  // Swift 6: the writers capture the URL, not the test case
         DispatchQueue.concurrentPerform(iterations: 8) { _ in
             for _ in 0..<50 {
                 CatalogWriteJournal.record(.readOnlyViewer, catalogURL: catalogURL)
