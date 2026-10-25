@@ -128,6 +128,13 @@ enum CatalogScopePolicy {
         return false
     }
 
+    /// The same rule for a DIRECTORY path (a scan root): every component
+    /// counts, including the last. `isEditorCachePath` treats the last
+    /// component as a filename; this one does not.
+    static func isEditorCacheDirectory(_ directoryPath: String) -> Bool {
+        isEditorCachePath(directoryPath + "/")
+    }
+
     /// Photos' Live Photo export naming: the 3-second movie half.
     /// Matched on the FILENAME only (case-insensitive) — the pattern is
     /// specific enough that a sibling check adds nothing but I/O.

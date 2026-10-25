@@ -253,7 +253,7 @@ enum SkipCategories {
     /// silent, and `CatalogScopePolicy.isEditorCachePath` reads the same
     /// set so scan-time skip and Tidy Catalog set-aside can never drift.
     static let editorCacheDirs: Set<String> = [
-        "imovie movie cache", "imovie thumbnails", "render files", "analysis files"
+        "imovie movie cache", "imovie cache", "imovie thumbnails", "render files", "analysis files"
     ]
     /// Pro-video PROJECT bundles — the subset of media libraries that
     /// "Look Inside Video Project Bundles" carves back OUT of the skip set.

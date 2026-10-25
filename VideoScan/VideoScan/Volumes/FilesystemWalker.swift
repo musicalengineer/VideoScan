@@ -131,6 +131,13 @@ enum FilesystemWalker {
         emit: (URL) -> Void
     ) {
         let fm = FileManager.default
+        // The ROOT is checked too (383 review): a scan target at or inside
+        // an editor cache dir admits nothing — the same rule as children,
+        // so the scan and Tidy Catalog can never disagree. Counted.
+        if CatalogScopePolicy.isEditorCacheDirectory(root) {
+            audit?.skippedEditorCacheDir(path: root)
+            return
+        }
         var dirStack: [URL] = [URL(fileURLWithPath: root)]
 
         while !dirStack.isEmpty {

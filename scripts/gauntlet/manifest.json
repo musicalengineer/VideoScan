@@ -11163,6 +11163,17 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EditorCacheSkipReviewTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EditorCacheScanRootReviewTests"
+      ],
+      "tests": [
+        "rootInsideCacheIsNotAdmitted"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EditorCacheSkipTests.swift",
       "stage": "unit",
       "suites": [
@@ -33365,7 +33376,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2975,
+      "expected_floor": 2976,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33873,7 +33884,8 @@
         "VideoScanTests/EditorCachePathPolicyTests",
         "VideoScanTests/EditorCacheTidyTests",
         "VideoScanTests/EditorCacheAuditTruthTests",
-        "VideoScanTests/EditorCacheScaleTests"
+        "VideoScanTests/EditorCacheScaleTests",
+        "VideoScanTests/EditorCacheScanRootReviewTests"
       ]
     },
     {

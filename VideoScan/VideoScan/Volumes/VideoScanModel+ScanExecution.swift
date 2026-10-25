@@ -436,7 +436,7 @@ extension VideoScanModel {
         if audit.directoryEnumerationErrors > 0 {
             discoveryAuditLog.warning("Discovery INCOMPLETE for \(volName, privacy: .public): \(audit.directoryEnumerationErrors) unreadable directories — scan finalized as not-complete (upsert, no prune)")
         }
-        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), editor caches \(audit.skippedEditorCacheDirs), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
+        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), editor cache dirs \(audit.skippedEditorCacheDirs), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
     }
 
     /// The discovery audit's console block, one line per class that has
@@ -666,7 +666,13 @@ extension VideoScanModel {
         // and commitScanResults would then prune everything else under the
         // root. MetadataCache makes the re-probes cheap (cache hits skip
         // ffprobe), so re-covering the whole list costs little.
-        let remainingPaths = checkpoint.discoveredPaths
+        // A checkpoint written before GH #383 can list editor-cache files;
+        // resume never re-walks, so the path rule is applied here too (the
+        // third scan door, 383 review). Logged, never silent.
+        let remainingPaths = checkpoint.discoveredPaths.filter { !CatalogScopePolicy.isEditorCachePath($0) }
+        if remainingPaths.count < checkpoint.discoveredPaths.count {
+            log("  Skipped \(checkpoint.discoveredPaths.count - remainingPaths.count) checkpointed file(s) inside editor render caches (GH #383)")
+        }
         log("Resuming scan of \(volName): re-verifying \(remainingPaths.count) checkpointed file(s) (cache hits skip ffprobe)")
         appLog.write("Resuming catalog scan of volume \(volName) from checkpoint (\(remainingPaths.count) file(s), full-list re-verify)")
 

@@ -134,7 +134,7 @@ struct EditorCacheWalkerTests {
     @Test("the skip set is exactly the regenerable caches — proxies, Transcoded Media and Avid MediaFiles are deliberately absent")
     func skipSetIsPinned() {
         #expect(SkipCategories.editorCacheDirs
-                == ["imovie movie cache", "imovie thumbnails", "render files", "analysis files"])
+                == ["imovie movie cache", "imovie cache", "imovie thumbnails", "render files", "analysis files"])
         // Not folded into any option-derived set: Scan Everything's skipDirs
         // does not carry it (the walker consults it unconditionally).
         #expect(ScanOptions.thorough.skipDirs().isDisjoint(with: SkipCategories.editorCacheDirs))
@@ -156,6 +156,8 @@ struct EditorCachePathPolicyTests {
         ("/Volumes/X/Project/Render Files/", true),                                   // trailing slash = directory
         ("/Volumes/X/Project/RENDER FILES/x.mov", true),                              // case-insensitive
         ("/Volumes/X/Event.fcpbundle/Cape/Analysis Files/a.mov", true),               // FCP analysis
+        ("/Volumes/X/Projects/Xmas/iMovie Cache/Cache.mov", true),                    // iMovie HD era (74 rows on Rick's drives)
+        ("/Volumes/X/My iMovie Cache Backup/keep.mov", false),                        // substring of the HD-era token
         ("/Volumes/X/Christmas1990/Render Files.mov", false),                         // token as filename (with ext)
         ("/Volumes/X/Christmas1990/Render Files", false),                             // token as the last component = filename
         ("/Volumes/X/My Render Files Backup/keep.mov", false),                        // substring
