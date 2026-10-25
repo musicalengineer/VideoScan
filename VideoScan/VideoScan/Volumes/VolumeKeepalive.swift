@@ -50,7 +50,7 @@ actor VolumeKeepalive {
                 if Task.isCancelled { break }
 
                 if !reachable {
-                    let wasDown = await self.markDown()
+                    let wasDown = self.markDown()
                     if !wasDown {
                         log("  ⚠ Volume \(volumePath) unreachable — pausing scan, will retry every \(Int(recoveryPollInterval))s")
                     }
@@ -60,7 +60,7 @@ actor VolumeKeepalive {
                     }
                     try? await Task.sleep(for: .seconds(recoveryPollInterval))
                 } else {
-                    let wasDown = await self.markUp()
+                    let wasDown = self.markUp()
                     if wasDown {
                         log("  ✓ Volume \(volumePath) is back — resuming scan")
                     }

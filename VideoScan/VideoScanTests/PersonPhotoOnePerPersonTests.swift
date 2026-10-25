@@ -513,7 +513,7 @@ struct PersonPhotoOnePerPersonTests {
     }
 
     @Test func oversizedPeopleCoverIsRejectedBySizePreflightBeforeAllocation() throws {
-        var box = try sandbox()
+        let box = try sandbox()
         defer { try? fileManager.removeItem(at: box.base) }
         let handle = try FileHandle(forWritingTo: box.cover)
         try handle.truncate(atOffset: UInt64(FamilyAssetStore.maxImportBytes + 1))

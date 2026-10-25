@@ -46,7 +46,7 @@ struct VolumeRelocatedIndicatorTests {
     }
 
     @Test
-    func relocatedTo_returnsCommonPrefixWhenAllRecordsOnSingleDest() {
+    func relocatedTo_returnsCommonPrefixWhenAllRecordsOnSingleDest() throws {
         // 3 records originated on ExternalRAID, all relocated under
         // /Volumes/LaCieWorkspace/CheesegraterArchive/ExternalRAID/...
         // The longest common prefix should be that whole directory,
@@ -70,8 +70,7 @@ struct VolumeRelocatedIndicatorTests {
             sourceVolumeName: "ExternalRAID",
             allRecords: records
         )
-        let unwrapped = try? #require(summary)
-        guard let s = unwrapped else { return }
+        let s = try #require(summary)
         #expect(s.dominantDestinationPath
                 == "/Volumes/LaCieWorkspace/CheesegraterArchive/ExternalRAID/")
         #expect(s.dominantDestinationVolume == "LaCieWorkspace")

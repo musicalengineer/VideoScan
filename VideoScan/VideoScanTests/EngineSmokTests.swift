@@ -117,8 +117,8 @@ struct EngineSmokTests {
 
         if let face = faces.first {
             #expect(face.confidence >= 0.5, "Face confidence should be >= 0.5, got \(face.confidence)")
-            #expect(face.thumbnail != nil, "Should produce a face thumbnail")
-            #expect(face.featurePrint != nil, "Should produce a Vision feature print")
+            #expect(face.thumbnail.width > 0 && face.thumbnail.height > 0, "Should produce a face thumbnail")
+            #expect(face.featurePrint.elementCount > 0, "Should produce a Vision feature print")
         }
     }
 

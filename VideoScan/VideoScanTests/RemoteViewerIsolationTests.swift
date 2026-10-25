@@ -97,7 +97,7 @@ struct RemoteViewerIsolationTests {
         try write("{\"version\":4,\"records\":[]}", to: masterTree.appendingPathComponent("catalog.json"))
         try write("{\"entries\":[]}", to: masterTree.appendingPathComponent("Hallie/pronunciations.json"))
         try write("{\"schema\":1,\"items\":[]}", to: masterTree.appendingPathComponent("cyberbrain/cyberbrain.json"))
-        try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1)
+        _ = try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1)
         let runner = StubRsync(masterTree: masterTree)
         var log: [String] = []
         let sync = CatalogSync(paths: paths, hostnameSource: FixedHostname(value: "RicksM5"),

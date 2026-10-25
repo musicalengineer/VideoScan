@@ -247,7 +247,7 @@ struct ArchivistTranscriptRenderSensorTests {
         let counter = RowCounter()
         var appendStalls: [TimeInterval] = [], mutateStalls: [TimeInterval] = [], tickStalls: [TimeInterval] = []
         var appendRows = 0, mutateRows = 0, tickRows = 0
-        try Self.withProbe(counter) {
+        Self.withProbe(counter) {
             for i in 0..<30 {
                 counter.reset()
                 store.messages.append(ArchivistMessage(role: .assistant, text: "appended \(i)"))
@@ -282,7 +282,7 @@ struct ArchivistTranscriptRenderSensorTests {
         // (a) append one message ×30
         var appendStalls: [TimeInterval] = []
         var appendRows: [Int] = []
-        try Self.withProbe(counter) {
+        Self.withProbe(counter) {
             for i in 0..<30 {
                 counter.reset()
                 store.messages.append(ArchivistMessage(role: .assistant, text: "appended \(i)"))
@@ -294,7 +294,7 @@ struct ArchivistTranscriptRenderSensorTests {
         // (b) mutate the LAST message's text ×30 (streaming / phase caption)
         var mutateStalls: [TimeInterval] = []
         var mutateRows: [Int] = []
-        try Self.withProbe(counter) {
+        Self.withProbe(counter) {
             for i in 0..<30 {
                 counter.reset()
                 let last = store.messages.count - 1
@@ -307,7 +307,7 @@ struct ArchivistTranscriptRenderSensorTests {
         // (c) 30 unrelated publishes (what a speaker / model publish looked like)
         var tickStalls: [TimeInterval] = []
         var tickRows = 0
-        try Self.withProbe(counter) {
+        Self.withProbe(counter) {
             counter.reset()
             for _ in 0..<30 {
                 store.unrelatedTick += 1
@@ -404,7 +404,7 @@ struct ArchivistTranscriptRenderSensorTests {
         var stopMillis = 0.0
         var speakingStall: TimeInterval = 0
         var stopStall: TimeInterval = 0
-        try Self.withProbe(counter) {
+        Self.withProbe(counter) {
             speaker.speak(ArchivistConversationCommand.helpCard)
             #expect(speaker.isSpeaking)
             speakingStall = Self.pump(seconds: 0.4)     // she is mid-utterance

@@ -112,15 +112,13 @@ func installMLXSafetyNet() {
     // handler slot. Reading GPU.cacheLimit is cheap and non-allocating.
     _ = MLX.GPU.cacheLimit
 
-    // The deprecated `setErrorHandler` is the only public API to set
-    // the global slot; the deprecation is a steer toward `withError`
-    // for per-call use, which we're already doing. Suppress the
-    // deprecation warning for this one intentional global install.
-    @available(*, deprecated)
-    func install() {
-        setErrorHandler(globalSafetyHandler, data: nil, dtor: nil)
-    }
-    install()
+    // The deprecated `setErrorHandler` is the only public API to set the
+    // global slot (mlx-swift 0.29.1, ErrorHandler.swift); the deprecation
+    // steers toward `withError` for per-call use, which runMLX already
+    // does. This call is the one intentional global install, so the
+    // deprecation warning stays visible until mlx-swift offers a
+    // replacement — not wrapped in an `@available` shim to hide it.
+    setErrorHandler(globalSafetyHandler, data: nil, dtor: nil)
 
     mlxLogger.info("MLX safety net installed")
 }

@@ -4,6 +4,7 @@ import CoreImage
 import CoreVideo
 import Foundation
 import os
+import Synchronization
 
 final class SeekingFrameProvider: @unchecked Sendable {
     private let asset: AVURLAsset
@@ -102,11 +103,10 @@ final class SeekingFrameProvider: @unchecked Sendable {
                     let requestTime = CMTime(seconds: t, preferredTimescale: 600)
                     let t0 = CFAbsoluteTimeGetCurrent()
 
-                    var actualTime = CMTime.zero
+                    let actualTime: CMTime
                     let cgImage: CGImage
                     do {
-                        cgImage = try generator.copyCGImage(
-                            at: requestTime, actualTime: &actualTime)
+                        (cgImage, actualTime) = try Self.generateImage(generator, at: requestTime)
                     } catch {
                         Self.logger.warning(
                             "Seek failed at \(String(format: "%.2f", t))s: \(error.localizedDescription)"
@@ -148,6 +148,38 @@ final class SeekingFrameProvider: @unchecked Sendable {
                 continuation.finish()
             }
         }
+    }
+
+    /// One frame, synchronously. `copyCGImage(at:actualTime:)` is deprecated
+    /// (macOS 15) in favour of the callback form, so the producer — on its
+    /// own GCD queue, not a cooperative thread, and already pacing itself
+    /// on `slots` — waits for the callback here. One request in flight at a
+    /// time, as before. The handoff is a `Mutex` (SE-0433): the callback
+    /// moves the image in, the waiting thread moves it out; the semaphore
+    /// orders the two. (C++: a std::mutex-guarded std::optional plus a
+    /// binary semaphore.)
+    private static func generateImage(_ generator: AVAssetImageGenerator,
+                                      at time: CMTime) throws -> (CGImage, CMTime) {
+        let done = DispatchSemaphore(value: 0)
+        let handoff = Mutex<Result<(CGImage, CMTime), Error>?>(nil)
+        generator.generateCGImageAsynchronously(for: time) { image, actualTime, error in
+            let result: Result<(CGImage, CMTime), Error>
+            if let image {
+                result = .success((image, actualTime))
+            } else {
+                result = .failure(error ?? GenerateError.noImage)
+            }
+            handoff.withLock { $0 = result }
+            done.signal()
+        }
+        done.wait()
+        guard let result = handoff.withLock({ $0.take() }) else { throw GenerateError.noImage }
+        return try result.get()
+    }
+
+    private enum GenerateError: Error, LocalizedError {
+        case noImage
+        var errorDescription: String? { "the image generator returned neither an image nor an error" }
     }
 
     private static func pixelBuffer(from image: CGImage) -> CVPixelBuffer? {

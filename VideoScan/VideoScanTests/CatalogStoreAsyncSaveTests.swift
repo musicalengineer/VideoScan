@@ -61,6 +61,15 @@ struct CatalogStoreAsyncSaveTests {
                                     isDirectory: true)
     }
 
+    /// Blocks the calling (main) thread without suspending the task — the
+    /// test's whole point is that the main-actor completion cannot run
+    /// meanwhile. A synchronous body, so the sleep is not in async code
+    /// (where `Thread.sleep` is unavailable because a task may resume on
+    /// another thread; here nothing resumes).
+    private static func blockMainThread(seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
+    }
+
     private func makeRecord(name: String, notes: String = "") -> VideoRecord {
         let r = VideoRecord()
         r.filename = name
@@ -249,7 +258,7 @@ struct CatalogStoreAsyncSaveTests {
 
         let rec = makeRecord(name: "clip.mov", notes: "v1")
         store.saveAsync(records: [rec])
-        Thread.sleep(forTimeInterval: 0.3)      // write lands; completion starved
+        Self.blockMainThread(seconds: 0.3)      // write lands; completion starved
         let url = dir.appendingPathComponent("catalog.json")
         #expect(CatalogSnapshot.headerProbe(at: url)?.generation == 1, "precondition: async write already on disk")
 

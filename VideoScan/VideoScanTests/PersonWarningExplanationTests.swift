@@ -337,18 +337,18 @@ struct PersonWarningExplanationTests {
 
     /// The end-to-end shape the card gets: overlay → popover sections, with
     /// a real warning and a real person.
-    @Test func aRealWarningReachesThePopoverWithItsGuidance() {
+    @Test func aRealWarningReachesThePopoverWithItsGuidance() throws {
         let dad = Snapshot(stableID: "FF6C5474", canonicalName: "Richard",
                            aliases: ["Dad"], sex: .male, uuid: UUID())
         let overlay = Overlay(snapshots: [dad], graph: nil)
         let sections = PersonWarningPopoverModel.sections(
             for: overlay.structuredWarnings(forProfileStableID: "FF6C5474"),
             personName: "Dad", profileID: "FF6C5474")
-        let section = try? #require(sections.first)
-        #expect(section?.text == "Alias 'Dad' on Richard looks relational — use a Relationship row instead")
-        #expect(section?.why.contains("depending on who says it") == true)
-        #expect(section?.fix.contains("Relationship row") == true)
-        #expect(section?.action == .editRelationships)
+        let section = try #require(sections.first)
+        #expect(section.text == "Alias 'Dad' on Richard looks relational — use a Relationship row instead")
+        #expect(section.why.contains("depending on who says it"))
+        #expect(section.fix.contains("Relationship row"))
+        #expect(section.action == .editRelationships)
     }
 
     // MARK: 5. Scale — one map per gallery evaluation, memoised

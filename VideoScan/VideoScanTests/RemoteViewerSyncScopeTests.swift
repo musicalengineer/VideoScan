@@ -314,7 +314,7 @@ struct RemoteViewerSyncRoundTripTests {
         let masterTree = root.appendingPathComponent("master", isDirectory: true)
         let raidPeople = root.appendingPathComponent("raid/People", isDirectory: true)
         _ = try populateMaster(at: masterTree, peopleOutside: raidPeople)
-        try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1,
+        _ = try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1,
                                                 externalSources: ["family-tree/assets/People": raidPeople])
 
         let viewerPaths = makePaths(under: root.appendingPathComponent("viewer"))
@@ -327,7 +327,7 @@ struct RemoteViewerSyncRoundTripTests {
 
         // Master changes, then the RAID goes away mid-sync.
         try write("{\"version\":4,\"records\":[{\"new\":true}]}", to: masterTree.appendingPathComponent("catalog.json"))
-        try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1,
+        _ = try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1,
                                                 externalSources: ["family-tree/assets/People": raidPeople])
         runner.failExternal = true
         await viewer.syncFromMaster()
@@ -346,7 +346,7 @@ struct RemoteViewerSyncRoundTripTests {
         let masterTree = root.appendingPathComponent("master", isDirectory: true)
         let raidPeople = root.appendingPathComponent("raid/People", isDirectory: true)
         let (_, generation) = try populateMaster(at: masterTree, peopleOutside: raidPeople)
-        try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1,
+        _ = try CatalogSync.computeAndWriteManifest(liveDir: masterTree, scope: .phase1,
                                                 externalSources: ["family-tree/assets/People": raidPeople])
         let viewerPaths = makePaths(under: root.appendingPathComponent("viewer"))
         let runner = MappingRsync(masterTree: masterTree, externalMap: [raidPeople.standardizedFileURL.path: raidPeople])

@@ -402,7 +402,7 @@ struct ArchiveVolumeProtectionIdentityTests {
         #expect(snap?.verdict(forPath: "/Volumes/CrucialX10/../FamilyArchive/x.mov") == .onArchiveVolume, "'..' cannot smuggle it out")
     }
 
-    @Test func removalTimeRecheckCatchesAVolumeMountedAfterTheSnapshot() {
+    @Test func removalTimeRecheckCatchesAVolumeMountedAfterTheSnapshot() throws {
         // Snapshot taken while the archive was offline and an unknown
         // mount looked "proven other"; at removal the file's own volume
         // reads back the archive's UUID.
@@ -410,10 +410,10 @@ struct ArchiveVolumeProtectionIdentityTests {
                                          rootPath: "/Volumes/FamilyArchive/Breen_Family_Archive", volumeUUID: "U")
         let snap = ArchiveVolumeProtection.make(designation: d, mountedRoots: { ["/Volumes/Other"] },
                                                 probe: { $0.hasPrefix("/Volumes/Other") ? "O" : nil })
-        let s = try? #require(snap)
-        #expect(s?.verdict(forPath: "/Volumes/Other/a.mov") == .clear)
-        #expect(s?.verdictAtRemoval(path: "/Volumes/Other/a.mov", probe: { _ in "U" }) == .onArchiveVolume)
-        #expect(s?.verdictAtRemoval(path: "/Volumes/Other/a.mov", probe: { _ in "O" }) == .clear)
+        let s = try #require(snap)
+        #expect(s.verdict(forPath: "/Volumes/Other/a.mov") == .clear)
+        #expect(s.verdictAtRemoval(path: "/Volumes/Other/a.mov", probe: { _ in "U" }) == .onArchiveVolume)
+        #expect(s.verdictAtRemoval(path: "/Volumes/Other/a.mov", probe: { _ in "O" }) == .clear)
     }
 
     @Test func bootDiskArchiveProtectsItsFolderNotTheWholeBootDisk() {

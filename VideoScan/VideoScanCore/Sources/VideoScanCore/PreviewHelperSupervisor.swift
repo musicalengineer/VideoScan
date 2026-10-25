@@ -114,11 +114,15 @@ public struct PreviewHelperProcessIdentity: Codable, Equatable, Sendable {
     }
 
     public static func capture(pid: pid_t) -> PreviewHelperProcessIdentity? {
-        var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        var pathBuffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN) * 4)
         let pathLength = pathBuffer.withUnsafeMutableBufferPointer { buffer in
             proc_pidpath(pid, buffer.baseAddress, UInt32(buffer.count))
         }
         guard pathLength > 0 else { return nil }
+        // proc_pidpath returns the byte count it wrote (no terminator), so
+        // the string is exactly that prefix; String(cString:) on an array
+        // is deprecated.
+        let executablePath = String(decoding: pathBuffer.prefix(Int(pathLength)), as: UTF8.self)
 
         var info = proc_bsdinfo()
         let infoSize = Int32(MemoryLayout<proc_bsdinfo>.size)
@@ -127,7 +131,7 @@ public struct PreviewHelperProcessIdentity: Codable, Equatable, Sendable {
 
         return PreviewHelperProcessIdentity(
             pid: pid,
-            executablePath: String(cString: pathBuffer),
+            executablePath: executablePath,
             startSeconds: UInt64(info.pbi_start_tvsec),
             startMicroseconds: UInt64(info.pbi_start_tvusec))
     }

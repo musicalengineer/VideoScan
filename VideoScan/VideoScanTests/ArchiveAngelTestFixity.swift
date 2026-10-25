@@ -17,7 +17,8 @@ enum AngelTestFixity {
         let digest = try #require(try ArchivePromoteEngine.sha256(path: r.fullPath))
         let size = Int64((try FileManager.default.attributesOfItem(atPath: r.fullPath)[.size] as? NSNumber)?.int64Value ?? 0)
         r.sizeBytes = size
-        r.contentFixity = try #require(ContentFixity.captured(path: r.fullPath, digest: digest, byteCount: size))
+        let fixity = try #require(ContentFixity.captured(path: r.fullPath, digest: digest, byteCount: size))
+        r.contentFixity = fixity
     }
 
     /// A byte-identical copy of `original`'s file named `name` in `dir`,

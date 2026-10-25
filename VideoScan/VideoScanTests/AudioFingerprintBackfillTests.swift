@@ -291,7 +291,7 @@ struct AudioFingerprintBackfillLogicTests {
             try await Task.sleep(nanoseconds: 60_000_000)
             await gauge.leave()
             return try await stubPass(item)
-        }) { $0.fileExists = { _ in true } }
+        }, configure: { $0.fileExists = { _ in true } })
         #expect(job.totals[.fingerprinted] == 6, Comment(rawValue: job.totals.line))
         let peak = await gauge.peak
         #expect(peak == 3, "peak was \(peak)")
@@ -301,14 +301,14 @@ struct AudioFingerprintBackfillLogicTests {
     func saveCadence() async throws {
         let sb = try ShowAgainSandbox.make("afb_save"); defer { sb.cleanup() }
         for i in 0..<5 { try sb.sound("f\(i).mov") }
-        let byCount = await runJob(sb.model) { j in
+        let byCount = await runJob(sb.model, configure: { j in
             j.checkpointFiles = 2; j.checkpointSeconds = 3_600; j.saveCatalogForTesting = { true }
-        }
+        })
         #expect(byCount.storedCount == 5 && byCount.saveCount == 3, "after 2, after 4, and the final one (got \(byCount.saveCount))")
         for r in sb.model.records { r.audioFingerprint = nil }
-        let byClock = await runJob(sb.model) { j in
+        let byClock = await runJob(sb.model, configure: { j in
             j.checkpointFiles = 10_000; j.checkpointSeconds = 0; j.saveCatalogForTesting = { true }
-        }
+        })
         #expect(byClock.storedCount == 5 && byClock.saveCount >= 2, "time-based checkpoints fired (got \(byClock.saveCount))")
     }
 
@@ -316,7 +316,7 @@ struct AudioFingerprintBackfillLogicTests {
     func failedSaveUndoes() async throws {
         let sb = try ShowAgainSandbox.make("afb_savefail"); defer { sb.cleanup() }
         let recs = try (0..<4).map { try sb.sound("s\($0).mov") }
-        let job = await runJob(sb.model) { j in j.checkpointFiles = 2; j.saveCatalogForTesting = { false } }
+        let job = await runJob(sb.model, configure: { j in j.checkpointFiles = 2; j.saveCatalogForTesting = { false } })
         #expect(job.saveFailed && job.storedCount == 0)
         if case .failed(let msg) = job.state { #expect(msg.contains("could not be saved")) } else { Issue.record("expected failed, got \(job.state)") }
         #expect(recs.allSatisfy { $0.audioFingerprint == nil }, "every stamp undone")
@@ -383,7 +383,7 @@ struct AudioFingerprintBackfillLogicTests {
         try sb.sound("a.mov")
         let calls = PassLog()
         let pass: AudioFingerprintBackfillJob.Pass = { item in await calls.append(item.path); return try await stubPass(item) }
-        let missing = await runJob(sb.model, pass: pass) { $0.ffmpegPath = "/opt/homebrew/bin/ffmpeg-not-here-\(UUID().uuidString.prefix(4))" }
+        let missing = await runJob(sb.model, pass: pass, configure: { $0.ffmpegPath = "/opt/homebrew/bin/ffmpeg-not-here-\(UUID().uuidString.prefix(4))" })
         #expect(missing.wasRefused)
         if case .failed(let msg) = missing.state {
             #expect(msg.contains("ffmpeg was not found at /opt/homebrew/bin/ffmpeg-not-here") && msg.contains("brew install ffmpeg"), Comment(rawValue: msg))
@@ -462,10 +462,10 @@ struct AudioFingerprintBackfillQARound1Tests {
         let job = await runJob(sb.model, pass: { item in
             if item.path.contains("AFBR_B") { try await Task.sleep(nanoseconds: 100_000_000) }
             return try await stubPass(item)
-        }) { j in
+        }, configure: { j in
             j.fileExists = { _ in true }; j.checkpointFiles = 1
             j.saveCatalogForTesting = { try? await Task.sleep(nanoseconds: 300_000_000); return true }
-        }
+        })
         let stamp = try #require(slow.audioFingerprint)
         #expect(try sb.store().has(.init(contentDigest: stamp.contentDigest, sizeBytes: 1_000)), "stamped but never put")
         #expect(job.storedCount == 2)
@@ -482,10 +482,10 @@ struct AudioFingerprintBackfillQARound1Tests {
         let gauge = ConcurrencyGauge()
         _ = await runJob(sb.model, pass: { item in
             await gauge.enter(); try await Task.sleep(nanoseconds: 60_000_000); await gauge.leave(); return try await stubPass(item)
-        }) { j in
+        }, configure: { j in
             j.fileExists = { _ in true }
             j.gatesFor = { path in [MediaVolumeGate(root: MediaVolumeGatePolicy.volumeRoot(forPath: path), label: "g", semaphore: AsyncSemaphore(limit: 1))] }
-        }
+        })
         let peak = await gauge.peak
         #expect(peak == 3, "peak was \(peak)")
     }
@@ -494,10 +494,10 @@ struct AudioFingerprintBackfillQARound1Tests {
     func failedSidecarPutUndoes() async throws {
         let sb = try ShowAgainSandbox.make("afb_putfail"); defer { sb.cleanup() }
         let recs = try (0..<3).map { try sb.sound("p\($0).mov") }
-        let job = await runJob(sb.model) { j in
+        let job = await runJob(sb.model, configure: { j in
             j.checkpointFiles = 1
             j.sidecarPutForTesting = { _ in throw AudioFingerprintStore.Failure.sql("disk full") }
-        }
+        })
         #expect(job.saveFailed && job.storedCount == 0)
         if case .failed(let msg) = job.state { #expect(msg.contains("could not be saved"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
         #expect(recs.allSatisfy { $0.audioFingerprint == nil }, "every stamp undone")
@@ -521,7 +521,7 @@ struct AudioFingerprintBackfillQARound1Tests {
         let sb = try ShowAgainSandbox.make("afb_recipe"); defer { sb.cleanup() }
         try sb.sound("a.mov")
         let calls = PassLog()
-        let job = await runJob(sb.model, pass: { await calls.append($0.path); return try await stubPass($0) }) { $0.parameters.hopSamples = 0 }
+        let job = await runJob(sb.model, pass: { await calls.append($0.path); return try await stubPass($0) }, configure: { $0.parameters.hopSamples = 0 })
         #expect(job.wasRefused)
         if case .failed(let msg) = job.state { #expect(msg.contains("fingerprint recipe is invalid"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
         #expect(await calls.paths.isEmpty)
@@ -613,7 +613,7 @@ struct AudioFingerprintBackfillIsolationTests {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
         guard !FileManager.default.isWritableFile(atPath: dir.path) else { return }   // root cannot make it read-only
         let calls = PassLog()
-        let job = await runJob(sb.model, pass: { item in await calls.append(item.path); return try await stubPass(item) }) { $0.storeDirectory = dir }
+        let job = await runJob(sb.model, pass: { item in await calls.append(item.path); return try await stubPass(item) }, configure: { $0.storeDirectory = dir })
         #expect(job.wasRefused)
         if case .failed(let msg) = job.state { #expect(msg.contains("not writable"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
         #expect(await calls.paths.isEmpty)
@@ -797,7 +797,7 @@ struct AudioFingerprintBackfillMediaMatrixTests {
         for f in Self.fixtures {
             let path = dir.appendingPathComponent(f.name).path
             try CleanupTestMedia.runFFmpeg(f.args, output: path)
-            try Self.record(path, seconds: 6, in: model)
+            _ = try Self.record(path, seconds: 6, in: model)
         }
         let videoOnlyPath = dir.appendingPathComponent("test_afb_videoonly.mp4").path
         try CleanupTestMedia.runFFmpeg(Self.picture + ["-an", "-c:v", "libx264", "-preset", "ultrafast"], output: videoOnlyPath)
@@ -808,7 +808,7 @@ struct AudioFingerprintBackfillMediaMatrixTests {
         truncated.sizeBytes = 1_000   // the catalog remembers a real file; the disk has 0 bytes
         let before = try model.records.map { try MediaFingerprint.of($0.fullPath) }
 
-        let job = await runJob(model, pass: nil) { $0.ffmpegPath = ToolLocator.ffmpegPath }
+        let job = await runJob(model, pass: nil, configure: { $0.ffmpegPath = ToolLocator.ffmpegPath })
         #expect(job.totals.planned == 7, Comment(rawValue: job.totals.line))
         #expect(job.totals[.fingerprinted] == 5 && job.totals[.noAudio] == 1 && job.totals[.failed] == 1,
                 Comment(rawValue: job.problems.map { "\($0.filename): \($0.detail)" }.joined(separator: " | ")))
@@ -829,7 +829,7 @@ struct AudioFingerprintBackfillMediaMatrixTests {
         #expect(beside.isEmpty)
 
         // A rerun plans only the failed file (nothing stamped is decoded again).
-        let rerun = await runJob(model, pass: nil) { $0.ffmpegPath = ToolLocator.ffmpegPath }
+        let rerun = await runJob(model, pass: nil, configure: { $0.ffmpegPath = ToolLocator.ffmpegPath })
         #expect(rerun.totals.planned == 1 && rerun.totals.alreadyStamped == 6, Comment(rawValue: rerun.totals.line))
     }
 
@@ -843,7 +843,7 @@ struct AudioFingerprintBackfillMediaMatrixTests {
         let path = dir.appendingPathComponent("test_afb_long.mov").path
         try CleanupTestMedia.runFFmpeg(Self.sound(10) + ["-c:a", "pcm_s16le"], output: path)
         let rec = try Self.record(path, seconds: 10, in: model)
-        let job = await runJob(model, pass: nil) { $0.ffmpegPath = ToolLocator.ffmpegPath; $0.decoderMaxSeconds = 4 }
+        let job = await runJob(model, pass: nil, configure: { $0.ffmpegPath = ToolLocator.ffmpegPath; $0.decoderMaxSeconds = 4 })
         #expect(job.totals[.partial] == 1 && job.totals[.fingerprinted] == 0, Comment(rawValue: job.totals.line))
         let stamp = try #require(rec.audioFingerprint)
         #expect(!stamp.complete && stamp.outcome == .fingerprinted)
@@ -851,7 +851,7 @@ struct AudioFingerprintBackfillMediaMatrixTests {
         #expect(job.problems.first?.detail.contains("only the first 4 s of 10 s") == true, Comment(rawValue: job.problems.first?.detail ?? ""))
         let store = try AudioFingerprintStore(directory: model.audioFingerprintSidecarDirectory)
         #expect(try store.summary(for: .init(contentDigest: stamp.contentDigest, sizeBytes: stamp.sizeBytes))?.analyzedSeconds == stamp.analyzedSeconds)
-        let rerun = await runJob(model, pass: nil) { $0.ffmpegPath = ToolLocator.ffmpegPath; $0.decoderMaxSeconds = 4 }
+        let rerun = await runJob(model, pass: nil, configure: { $0.ffmpegPath = ToolLocator.ffmpegPath; $0.decoderMaxSeconds = 4 })
         #expect(rerun.totals.planned == 0 && rerun.totals.alreadyStamped == 1, "a partial stamp is not retried nightly")
         #expect(model.audioFingerprintBackfillPlan().partialStamped == 1)
     }
@@ -869,11 +869,11 @@ struct AudioFingerprintBackfillMediaMatrixTests {
             let path = dir.appendingPathComponent("test_afb_pace\(i).mp4").path
             try CleanupTestMedia.runFFmpeg(["-f", "lavfi", "-i", "testsrc=duration=600:size=320x240:rate=25"] + Self.sound(600)
                                            + ["-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac"], output: path)
-            try Self.record(path, seconds: 600, in: model)
+            _ = try Self.record(path, seconds: 600, in: model)
         }
         let bytes = model.records.reduce(Int64(0)) { $0 + $1.sizeBytes }
         let start = Date()
-        let job = await runJob(model, pass: nil) { $0.ffmpegPath = ToolLocator.ffmpegPath }
+        let job = await runJob(model, pass: nil, configure: { $0.ffmpegPath = ToolLocator.ffmpegPath })
         let elapsed = Date().timeIntervalSince(start)
         #expect(job.totals[.fingerprinted] == 3, Comment(rawValue: job.totals.line))
         let perFile = elapsed / 3

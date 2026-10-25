@@ -511,7 +511,7 @@ struct PersonRefreshAuditSensorTests {
             })
         center.console = { console.append($0) }
         let appLogLines = InMemoryLogSink()
-        try withAppLog(appLogLines) {
+        withAppLog(appLogLines) {
             center.begin(target: target, installedFacts: { model.personFacts(familySearchID: "WWWW-111") })
             center.cancel()
         }

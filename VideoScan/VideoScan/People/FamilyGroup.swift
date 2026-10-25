@@ -61,9 +61,11 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
             + picks.quarantined
         createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date(timeIntervalSince1970: 0)
         photoFilename = try? c.decodeIfPresent(String.self, forKey: .photoFilename)
-        cropScale = ((try? c.decodeIfPresent(Double.self, forKey: .cropScale)) ?? 1.0) ?? 1.0
-        cropOffsetX = ((try? c.decodeIfPresent(Double.self, forKey: .cropOffsetX)) ?? 0) ?? 0
-        cropOffsetY = ((try? c.decodeIfPresent(Double.self, forKey: .cropOffsetY)) ?? 0) ?? 0
+        // `try?` flattens the nested optional, so one default covers both
+        // "key absent" and "value unreadable".
+        cropScale = (try? c.decodeIfPresent(Double.self, forKey: .cropScale)) ?? 1.0
+        cropOffsetX = (try? c.decodeIfPresent(Double.self, forKey: .cropOffsetX)) ?? 0
+        cropOffsetY = (try? c.decodeIfPresent(Double.self, forKey: .cropOffsetY)) ?? 0
     }
 }
 

@@ -271,7 +271,9 @@ extension ArchivistFollowUpResolver {
 
         // Nothing but filler ("ok", "and", "hmm?"): not a question at all.
         if scan.residual.allSatisfy({ fragmentFiller.contains($0) }) {
-            return snapshot?.ast == nil ? .none : .declineUninterpretable(original)
+            // nil (not `Resolution.none`): the caller falls through to
+            // `.none` itself, so the two read the same; nil says so plainly.
+            return snapshot?.ast == nil ? nil : .declineUninterpretable(original)
         }
         if readsAsSentence(scan) { return nil }
 
@@ -295,7 +297,7 @@ extension ArchivistFollowUpResolver {
         // lead ("and …") is an honest decline. Name lookups cost identity
         // sources, so nothing below runs without something to refine.
         guard let snapshot, let ast = snapshot.ast else {
-            return scan.explicit ? .declineNoPriorResult(nil) : .none
+            return scan.explicit ? .declineNoPriorResult(nil) : nil
         }
         let listShape: Bool
         switch ast {

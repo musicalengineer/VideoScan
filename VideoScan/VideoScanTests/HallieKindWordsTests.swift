@@ -395,7 +395,8 @@ struct HallieKindWordsDecisionTests {
     @Test func theLineIsNeverACitationOrClaim() throws {
         var memory = Memory()
         let result = KindFixture.biographyResult(name: nil)
-        let said = HallieKindWords.apply(try #require(offer(for: result)), to: result,
+        let offer = try #require(offer(for: result))
+        let said = HallieKindWords.apply(offer, to: result,
                                          memory: &memory, rotation: HallieKindWordsRotation(), log: { _ in })
         #expect(!said.prose.contains("[c"))
         #expect(said.knowledgeCitations == result.knowledgeCitations)

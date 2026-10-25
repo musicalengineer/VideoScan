@@ -140,7 +140,7 @@ struct ArchivistBirthplaceTests {
     @Test func theBiographyStatesPlacesAndMarriageDates() {
         let answer = ArchivistBiographyPolicy.biography(
             personID: "@I1@", in: graph())
-        let text = answer.text ?? ""
+        let text = answer.text
         #expect(text.contains("born 12 MAY 1633 in Ipswich, Massachusetts"),
                 Comment(rawValue: text))
         #expect(text.contains("Sudbury, Middlesex"), Comment(rawValue: text))
