@@ -28126,6 +28126,22 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_sensor_lane_stamp.py",
+      "stage": "unit",
+      "suites": [
+        "test_sensor_lane_stamp.py"
+      ],
+      "tests": [
+        "test_a_green_run_stamps_the_working_tree_including_untracked_files",
+        "test_a_worktree_stamps_the_common_git_dir",
+        "test_fifty_lines_are_kept",
+        "test_not_a_repo_is_loud_and_nonzero",
+        "test_tracked_but_ignored_files_stay_in_the_stamped_tree"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_sprint_digest.py",
       "stage": "unit",
       "suites": [
@@ -33112,6 +33128,10 @@
         },
         {
           "name": "tests/test_sensor_lane.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_sensor_lane_stamp.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
