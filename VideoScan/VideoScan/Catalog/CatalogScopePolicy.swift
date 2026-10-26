@@ -119,13 +119,20 @@ enum CatalogScopePolicy {
     /// is media; a trailing slash (directory path) matches. Pure string
     /// work — no filesystem calls.
     static func isEditorCachePath(_ fullPath: String) -> Bool {
-        let parts = fullPath.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count > 1 else { return false }
-        for component in parts.dropLast()
+        firstEditorCacheComponent(fullPath.split(separator: "/", omittingEmptySubsequences: false)) != nil
+    }
+
+    /// Index of the first DIRECTORY component (the last part is the
+    /// filename, never matched) that is an editor-cache name; nil when none.
+    /// The one loop behind `isEditorCachePath` and
+    /// `editorCacheDirectory(enclosing:)`.
+    private static func firstEditorCacheComponent(_ parts: [Substring]) -> Int? {
+        guard parts.count > 1 else { return nil }
+        for (i, component) in parts.dropLast().enumerated()
         where SkipCategories.editorCacheDirs.contains(component.lowercased()) {
-            return true
+            return i
         }
-        return false
+        return nil
     }
 
     /// The same rule for a DIRECTORY path (a scan root): every component
@@ -133,6 +140,37 @@ enum CatalogScopePolicy {
     /// component as a filename; this one does not.
     static func isEditorCacheDirectory(_ directoryPath: String) -> Bool {
         isEditorCachePath(directoryPath + "/")
+    }
+
+    /// The OUTERMOST editor-cache directory enclosing `fullPath` — the path
+    /// up to and including the first cache component — or nil when the
+    /// file is not under one. This is the directory the walker would have
+    /// refused (it never descends into a cache dir, so a cache nested in a
+    /// cache is never seen separately). Pure string work.
+    static func editorCacheDirectory(enclosing fullPath: String) -> String? {
+        let parts = fullPath.split(separator: "/", omittingEmptySubsequences: false)
+        guard let i = firstEditorCacheComponent(parts) else { return nil }
+        return parts[...i].joined(separator: "/")
+    }
+
+    /// Split a list of discovered file paths into the ones to keep and the
+    /// editor-cache DIRECTORIES that were refused — one entry per outermost
+    /// cache directory, first-seen order, deduplicated the way the walk
+    /// counts them (GH #383, the resume door; codex round 2 F3). Pure, so
+    /// the resume door and its test call the same function. O(n) with a Set.
+    static func partitionEditorCachePaths(_ paths: [String]) -> (kept: [String], skippedDirectories: [String]) {
+        var kept: [String] = []
+        kept.reserveCapacity(paths.count)
+        var seen = Set<String>()
+        var skipped: [String] = []
+        for path in paths {
+            if let dir = editorCacheDirectory(enclosing: path) {
+                if seen.insert(dir).inserted { skipped.append(dir) }
+            } else {
+                kept.append(path)
+            }
+        }
+        return (kept, skipped)
     }
 
     /// Photos' Live Photo export naming: the 3-second movie half.

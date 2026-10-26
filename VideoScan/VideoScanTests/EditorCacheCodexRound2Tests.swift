@@ -179,3 +179,78 @@ struct EditorCacheIgnoreListNameFallbackTests {
         #expect(model.ignoredContentStore.isEmpty)
     }
 }
+
+// MARK: - Finding 3: resume counts the cache directories it drops
+
+@Suite("383 r2 — F3: a resumed checkpoint reports the editor-cache directories it skipped")
+struct EditorCacheResumeAuditTests {
+
+    @Test("pure seam: kept paths in order; one skipped directory per OUTERMOST cache dir, first-seen, deduped like the walk")
+    func partitionDedupesNestedCacheDirs() {
+        let paths = [
+            "/Volumes/T/keep1.mov",
+            "/Volumes/T/Project/Render Files/x.mov",
+            "/Volumes/T/Project/Render Files/Segment 3/Render Files/y.mov",   // nested cache: same outer dir
+            "/Volumes/T/Project/Render Files/z.mov",
+            "/Volumes/T/Family/Christmas1990/keep2.mov",
+            "/Volumes/T/Event/iMovie Cache/Cache.mov",
+            "/Volumes/T/Christmas1990/Render Files",                           // a FILE named like the token — kept
+            "/Volumes/T/My Render Files Backup/keep3.mov",
+        ]
+        let part = CatalogScopePolicy.partitionEditorCachePaths(paths)
+        #expect(part.kept == ["/Volumes/T/keep1.mov", "/Volumes/T/Family/Christmas1990/keep2.mov",
+                              "/Volumes/T/Christmas1990/Render Files", "/Volumes/T/My Render Files Backup/keep3.mov"])
+        #expect(part.skippedDirectories == ["/Volumes/T/Project/Render Files", "/Volumes/T/Event/iMovie Cache"])
+        #expect(CatalogScopePolicy.editorCacheDirectory(enclosing: "/Volumes/T/keep1.mov") == nil)
+        #expect(CatalogScopePolicy.editorCacheDirectory(enclosing: "/Volumes/X/A/RENDER FILES/B/c.mov") == "/Volumes/X/A/RENDER FILES")
+        #expect(CatalogScopePolicy.partitionEditorCachePaths([]).kept.isEmpty)
+    }
+
+    @Test("end to end: resume a checkpoint holding two files under one Render Files dir — the final audit and the sidecar say one skipped cache dir and name it; the keeper is cataloged")
+    @MainActor
+    func resumedScanAuditCountsSkippedCacheDirs() async throws {
+        let root = try tempRoot("resume")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keeper = try touch(root, "Family/keeper.mov")
+        let cacheA = try touch(root, "Project/Render Files/a.mov")
+        let cacheB = try touch(root, "Project/Render Files/Deeper/b.mov")
+        let sidecarDir = try tempRoot("sidecar")
+        defer { try? FileManager.default.removeItem(at: sidecarDir) }
+
+        let model = VideoScanModel()
+        var opts = ScanOptions()          // in memory only — never saved (settings-pollution class)
+        opts.skipSmallFiles = false
+        opts.skipChecksums = true
+        model.scanOptions = opts
+        model.discoveryAuditDirectoryOverride = sidecarDir
+
+        // The checkpoint an interrupted pre-#383 scan would have left.
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: root.path, startedAt: Date(),
+            discoveredPaths: [keeper, cacheA, cacheB], totalDiscovered: 3, skipChecksums: true))
+        defer { ScanCheckpointStorage.delete(for: root.path) }
+
+        let target = CatalogScanTarget(searchPath: root.path)
+        model.scanTargets = [target]
+        model.resumeTarget(target)
+        _ = await target.scanTask?.value
+
+        let audit = try #require(model.lastDiscoveryAudit, "finalize publishes the audit")
+        #expect(audit.skippedEditorCacheDirs == 1, "one Render Files directory (got \(audit.skippedEditorCacheDirs))")
+        #expect(audit.skippedEditorCacheDirPaths == [root.appendingPathComponent("Project/Render Files").path],
+                "got \(audit.skippedEditorCacheDirPaths)")
+        // Agrees with the catalog: the keeper is a row, the cache files are not.
+        #expect(model.records.contains { $0.fullPath == keeper })
+        #expect(!model.records.contains { CatalogScopePolicy.isEditorCachePath($0.fullPath) })
+
+        // The sidecar carries the same truth.
+        let files = try FileManager.default.contentsOfDirectory(at: sidecarDir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("scan-audit-") }
+        let sidecar = try #require(files.first, "one sidecar written to the override directory")
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let decoded = try dec.decode(DiscoveryAudit.self, from: Data(contentsOf: sidecar))
+        #expect(decoded.skippedEditorCacheDirs == 1)
+        #expect(decoded.skippedEditorCacheDirPaths == audit.skippedEditorCacheDirPaths)
+    }
+}

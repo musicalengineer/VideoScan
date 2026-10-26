@@ -11166,12 +11166,15 @@
       "path": "VideoScan/VideoScanTests/EditorCacheCodexRound2Tests.swift",
       "stage": "unit",
       "suites": [
-        "EditorCacheIgnoreListNameFallbackTests"
+        "EditorCacheIgnoreListNameFallbackTests",
+        "EditorCacheResumeAuditTests"
       ],
       "tests": [
         "byteIdenticalCopyStillHides",
         "familyVideoWithSameNameAndSizeIsNotJunk",
         "keyPolicy",
+        "partitionDedupesNestedCacheDirs",
+        "resumedScanAuditCountsSkippedCacheDirs",
         "retroactiveIndexIsContentKeyedForCaches"
       ]
     },
@@ -33421,7 +33424,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3015,
+      "expected_floor": 3017,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33934,7 +33937,8 @@
         "VideoScanTests/EditorCacheScaleTests",
         "VideoScanTests/EditorCacheScanRootReviewTests",
         "VideoScanTests/ListKeyboardNavigationSensorTests",
-        "VideoScanTests/EditorCacheIgnoreListNameFallbackTests"
+        "VideoScanTests/EditorCacheIgnoreListNameFallbackTests",
+        "VideoScanTests/EditorCacheResumeAuditTests"
       ]
     },
     {
