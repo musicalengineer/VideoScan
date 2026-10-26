@@ -132,6 +132,7 @@
 - Improve (Nov–Dec): QTGMC/VapourSynth restoration, local upscale/interpolation (#299); Trim (#154); A/V sync check on improved versions (#309).
 
 ## Process and tooling
+- Swift 6 test-host crash follow-ups (2026-10-25, fix 2ab067d62): confirm `MasterArchivePromoteTests.swift:350` (`var poisoned` mutated in a `progress:` closure) is called on the test's own thread; `nonisolated(unsafe) var` on a CAPTURED LOCAL does not silence the runtime isolation check (BoundaryAuthorization crashed with it); `-test-iterations N` does not repeat Swift Testing tests on this Xcode — repeat runs need N separate invocations.
 - Test fixtures that pin `isReachable = true` on unmounted `/Volumes/...` targets (seven files besides DuplicateCodexReviewTests, `grep "isReachable = true" VideoScanTests`): the model's reachability refresh overwrites the pin at the next suspension point (the 2026-10-25 DuplicateReelectionStampTests flake). Any of them that awaits while comparing reachability-derived state has the same latent flake — fix the same way (let the target derive its own facts, or pin through `VolumeReachability`).
 - GH issue triage close script (31 done + 16 obsolete + 1 dup; 47 → 23 umbrellas) awaiting Rick's OK.
 - Post-cutover stability baseline (the 10/14 one predates SQLite).
