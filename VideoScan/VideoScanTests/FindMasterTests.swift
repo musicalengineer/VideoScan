@@ -259,6 +259,55 @@ struct FindMasterAnswerTests {
         #expect(!header.lowercased().contains("master") && !header.lowercased().contains("original"))
     }
 
+    static func hit(_ verdict: AudioMatchVerdict, n: Int, offset: Double, start: Double, end: Double,
+                    otherDuration: Double = 3_600) -> AudioMasterCandidate {
+        let evidence = AudioMatchEvidence(matchedLandmarks: 412, coverage: 0.93, overlapSeconds: end - start, spanSeconds: end - start,
+                                          offsetSeconds: offset, queryDurationSeconds: 25, masterDurationSeconds: otherDuration)
+        return AudioMasterCandidate(key: AudioFingerprintStore.Key(contentDigest: "sha256:" + String(format: "%064x", n), sizeBytes: 9),
+                                    match: AudioMatch(evidence: evidence, verdict: verdict, queryLandmarks: 500, masterLandmarks: 9_000,
+                                                      spanStartInMasterSeconds: start, spanEndInMasterSeconds: end), votes: 30)
+    }
+
+    @Test("hits at the same spot group as one recording; members in stable order (longest, then name)")
+    func hitsGroupBySpot() {
+        let inside = AudioMatchVerdict.containedInMaster(offsetSeconds: 305)
+        let a = Self.hit(inside, n: 1, offset: 305.1, start: 305, end: 330, otherDuration: 1_800)
+        let b = Self.hit(inside, n: 2, offset: 305.2, start: 305, end: 330, otherDuration: 3_600)
+        let c = Self.hit(inside, n: 3, offset: 305.0, start: 305, end: 330, otherDuration: 3_600)
+        let elsewhere = Self.hit(.containedInMaster(offsetSeconds: 12), n: 4, offset: 12, start: 12, end: 37)
+        let names = [1: "a.mov", 2: "z.dv", 3: "m.mkv", 4: "tape2.mov"]
+        let name: (AudioMasterCandidate) -> String = { c in Int(c.key.contentDigest.dropFirst(7), radix: 16).flatMap { names[$0] } ?? "?" }
+        let groups = FindMasterAnswer.groups([a, b, c, elsewhere], name: name)
+        #expect(groups.count == 2)
+        #expect(groups[0].members.map(name) == ["m.mkv", "z.dv", "a.mov"], "longest first, then name")
+        #expect(FindMasterAnswer.shortSpan(groups[0].start, groups[0].end) == "5:05–5:30")
+        #expect(FindMasterAnswer.shortSpan(3_725, 3_730) == "1:02:05–1:02:10")
+        #expect(FindMasterAnswer.copiesLine(["z.dv", "a.mov"]) == "+ 2 copies at the same spot: z.dv, a.mov")
+        #expect(FindMasterAnswer.copiesLine([]) == nil)
+        // The single-file headline counts groups as recordings, hits as files.
+        let t = FindMasterAnswer.Tally(searched: 1, inside: 1)
+        #expect(FindMasterAnswer.headline(t, outcomes: [.found([a, b, c, elsewhere], searched: 40)])
+                == .init(text: "FOUND this clip in 2 recordings (4 files)", isFound: true))
+        let same = [Self.hit(.sameRecording, n: 5, offset: 0, start: 0, end: 25), Self.hit(.sameRecording, n: 6, offset: 0, start: 0, end: 25)]
+        #expect(FindMasterAnswer.headline(.init(searched: 1, same: 1), outcomes: [.found(same, searched: 40)]).text
+                == "FOUND — same recording as 2 files")
+        let contains = [Self.hit(.masterContainedInQuery(offsetSeconds: -5), n: 7, offset: -5, start: 0, end: 10)]
+        #expect(FindMasterAnswer.headline(.init(searched: 1, contains: 1), outcomes: [.found(contains, searched: 40)]).text
+                == "FOUND 1 recording inside this clip (1 file)")
+        let weakOnly = [Self.overlap(coverage: 0.03, landmarks: 24)]
+        let weak = FindMasterAnswer.headline(.init(searched: 1, weakOnly: 1), outcomes: [.found(weakOnly, searched: 40)])
+        #expect(!weak.isFound && !weak.text.hasPrefix("FOUND"))
+        #expect(FindMasterAnswer.headline(.init(searched: 1, none: 1), outcomes: [.noneFound(searched: 3_575)])
+                == .init(text: "Not found in any other recording (searched 3,575 contents)", isFound: false))
+        // Multi-file: only non-zero counts; stopped says so.
+        var stopped = FindMasterAnswer.Tally(searched: 2, same: 1, none: 1, notStarted: 3)
+        stopped.stopped = true
+        #expect(FindMasterAnswer.headline(stopped, outcomes: []).text
+                == "Stopped — FOUND 1 of 2 files in other recordings · 1 same recording · 1 none found · 3 not started")
+        #expect(FindMasterAnswer.headline(.init(searched: 3, none: 3), outcomes: []).text
+                == "Not found in any other recording (searched 3 files)")
+    }
+
     @Test("a negative says what was searched and what could not be")
     func negativeSaysWhatWasSearched() {
         let s = FindMasterAnswer.noneFound(searched: 3_575, noSoundTrack: 1_014, notFingerprinted: 122)
@@ -293,6 +342,35 @@ struct FindMasterJobTests {
         guard case .found(let found, _, _) = clip.outcome else { Issue.record("\(clip.outcome)"); return }
         #expect(found.first?.key == F.key(1))
         #expect(sink.lines.contains { $0.contains("inside clip1.mov from 00:01:40") })
+    }
+
+    /// Regression (Rick 2026-10-26): a finished run's row read "1 searched ·
+    /// 1 found inside another · 0 same recording · 0 none found · 0 refused ·
+    /// 19.5 s" — read as "nothing found". The row now leads with FOUND, lists
+    /// no zero counts and keeps the timing in the log.
+    @Test("the finished row's summary leads with FOUND, never lists a zero count, and carries no timing")
+    func finishedRowSummaryLeadsWithFound() async throws {
+        let dir = try F.sidecar()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func run(_ selected: [Int], refusedToo: Bool = false) async -> FindMasterJob {
+            let job = FindMasterJob(plan: F.plan(selected: selected, refusedToo: refusedToo), sidecarDirectory: dir, note: { _ in })
+            job.start()
+            await job.task?.value
+            return job
+        }
+        let single = await run([2])
+        #expect(single.subtitle == "FOUND this clip in 1 recording (1 file)")
+        #expect(single.headline?.isFound == true)
+        let multi = await run([2, 3], refusedToo: true)
+        #expect(multi.subtitle == "FOUND 1 of 2 files in other recordings · 1 inside another · 1 none found · 1 refused")
+        let none = await run([3])
+        #expect(none.subtitle.hasPrefix("Not found in any other recording (searched "), "\(none.subtitle)")
+        #expect(none.headline?.isFound == false)
+        for job in [single, multi, none] {
+            #expect(!job.subtitle.contains(" 0 ") && !job.subtitle.hasPrefix("0 "), "zero count listed: \(job.subtitle)")
+            #expect(!job.subtitle.hasSuffix(" s"), "timing in the headline: \(job.subtitle)")
+            #expect(!job.subtitle.lowercased().contains("original") && !job.subtitle.lowercased().contains("master"))
+        }
     }
 
     @Test("weak overlaps: counted as their own bucket, one log line with their count; strong hits listed one per line")

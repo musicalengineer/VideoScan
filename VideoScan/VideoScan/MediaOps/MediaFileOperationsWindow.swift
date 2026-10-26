@@ -542,26 +542,13 @@ struct MediaFileOperationRow: View {
             // inside the panel — a role chip, a file row — collapsed it).
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
+                    MediaFileOperationDisclosure(isExpandable: job.kind.hasDetailView, isExpanded: isExpanded)
                     MediaFileOperationBadge(
                         kind: job.kind,
                         textOverride: (job as? AnalyzeJob)?.displayBadge
                     )
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(job.title)
-                            .font(.system(size: 13, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            // Gauntlet flow 4 matches the balanced file's row
-                            // by this title text. Test-only.
-                            .accessibilityIdentifier("mfo.row.title")
-                        Text(job.subtitle)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .accessibilityIdentifier("mfo.row.subtitle")
-                    }
+                    MediaFileOperationRowText(title: job.title, subtitle: job.subtitle, headline: headline)
 
                     Spacer()
 
@@ -594,6 +581,16 @@ struct MediaFileOperationRow: View {
                 // must never reach here (Bug A).
                 if job.kind.hasDetailView { onToggleExpand() }
             }
+            // The summary is copied through the context menu, NOT made
+            // selectable: a selectable Text takes the mouse-down for its
+            // selection, which would fight the tap-to-expand above
+            // (Rick 2026-10-26).
+            .contextMenu {
+                Button("Copy Summary") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(copySummaryText, forType: .string)
+                }
+            }
 
             // A finished Verify's diagnostics stay on the collapsed row: one
             // file's banner with Repair…, or "2 of 5 have no sound" (Rick
@@ -605,7 +602,11 @@ struct MediaFileOperationRow: View {
             // The double-click detail (MediaFileOperationDetail below —
             // one place that maps a job to its detail view, 2026-10-07).
             if isExpanded {
+                // Every detail's text can be selected and ⌘C'd (Rick
+                // 2026-10-26). The detail sits outside the tap area, so a
+                // selection drag never toggles the row (Bug A).
                 MediaFileOperationDetail(job: job)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -626,6 +627,16 @@ struct MediaFileOperationRow: View {
         } message: { msg in
             Text(msg)
         }
+    }
+
+    /// A finished job's headline (FOUND …), when it states one.
+    private var headline: MediaFileOperationHeadline? {
+        (job as? any MediaFileOperationHeadlineProviding)?.headline
+    }
+
+    /// "Copy Summary": the title and the line the row shows.
+    private var copySummaryText: String {
+        job.title + "\n" + (headline?.text ?? job.subtitle)
     }
 
     @ViewBuilder

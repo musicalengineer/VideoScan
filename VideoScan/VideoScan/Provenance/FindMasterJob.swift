@@ -106,7 +106,7 @@ struct FindMasterResult: Identifiable, Equatable {
 }
 
 @MainActor
-final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDetail {
+final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDetail, MediaFileOperationHeadlineProviding {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .findMaster
@@ -129,6 +129,9 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
     @Published private(set) var isPaused = false
     @Published private(set) var results: [FindMasterResult] = []
     @Published private(set) var buildReport: AudioCatalogIndex.BuildReport?
+    /// The finished (or stopped) row's answer; nil while running or when
+    /// refused before reading (the subtitle then carries the reason).
+    @Published private(set) var headline: MediaFileOperationHeadline?
     private(set) var wasRefused = false
     private(set) var tally = FindMasterAnswer.Tally()
     /// Internal so tests can `await job.task?.value`.
@@ -345,6 +348,11 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         }
     }
 
+    /// How a found content is named in the detail (label, or digest).
+    func otherName(_ c: AudioMasterCandidate) -> String {
+        FindMasterAnswer.name(of: c.key, label: plan.labels[c.key.contentDigest])
+    }
+
     /// The sentence for one found content, naming it from the plan's labels.
     func answer(_ c: AudioMasterCandidate) -> String {
         FindMasterAnswer.sentence(c, other: FindMasterAnswer.name(of: c.key, label: plan.labels[c.key.contentDigest]))
@@ -355,7 +363,7 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         tally.stopped = true
         note(FindMasterAnswer.outcomeLine(tally, seconds: Date().timeIntervalSince(startedAt)))
         state = .cancelled
-        subtitleText = FindMasterAnswer.summary(tally, seconds: Date().timeIntervalSince(startedAt))
+        settleHeadline()
         isIndeterminateValue = false
     }
 
@@ -364,15 +372,24 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         if gate.isStopped {
             tally.stopped = true
             note(FindMasterAnswer.outcomeLine(tally, seconds: seconds))
-            subtitleText = FindMasterAnswer.summary(tally, seconds: seconds)
+            settleHeadline()
             state = .cancelled
             return
         }
         fractionValue = 1
         let summary = FindMasterAnswer.summary(tally, seconds: seconds)
         note(FindMasterAnswer.outcomeLine(tally, seconds: seconds))
-        subtitleText = summary
+        settleHeadline()
+        // The terminal state keeps the full tally for the app log's
+        // "find master done:" line; the row shows the headline.
         state = .finished(summary: summary)
+    }
+
+    /// The row's answer: FOUND … / Not found … (no timing, no zero counts).
+    private func settleHeadline() {
+        let line = FindMasterAnswer.headline(tally, outcomes: results.map(\.outcome))
+        headline = line
+        subtitleText = line.text
     }
 }
 

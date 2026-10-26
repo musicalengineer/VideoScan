@@ -14,3 +14,19 @@ import SwiftUI
 protocol MediaFileOperationOwnDetail {
     var detailView: AnyView { get }
 }
+
+/// A finished row's prominent one-line answer, shown in place of the plain
+/// subtitle (Find Master's "FOUND this clip in 3 recordings (10 files)",
+/// 2026-10-26). `isFound` paints it green, semibold, a size up; otherwise it
+/// is the ordinary secondary subtitle.
+struct MediaFileOperationHeadline: Equatable, Sendable {
+    let text: String
+    let isFound: Bool
+}
+
+/// A job that can state its result as a headline (nil while running).
+/// (For Rick: another optional virtual on the job, asked by the row.)
+@MainActor
+protocol MediaFileOperationHeadlineProviding {
+    var headline: MediaFileOperationHeadline? { get }
+}

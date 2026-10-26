@@ -45,8 +45,11 @@ struct FindMasterDetailView: View {
                 unreadableRows(unreadable)
             case .found(let found, _, let unreadable):
                 let halves = FindMasterAnswer.split(found)
-                ForEach(Array(halves.strong.enumerated()), id: \.offset) { _, candidate in
-                    FindMasterFoundRow(job: job, candidate: candidate)
+                // One line per group of copies matching at the same spot
+                // (a "recording"); a few dozen hits at most, not O(records).
+                let groups = FindMasterAnswer.groups(halves.strong, name: job.otherName)
+                ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                    FindMasterGroupRow(job: job, group: group)
                 }
                 if !halves.weak.isEmpty {
                     FindMasterWeakGroup(job: job, weak: halves.weak)
@@ -94,7 +97,51 @@ struct FindMasterWeakGroup: View {
     }
 }
 
-/// One found content: verdict chip, the sentence, Reveal in Catalog.
+/// One group of copies at the same spot: verdict chip, the first file's
+/// name, its span, Reveal — and "+ N copies at the same spot: a, b" under
+/// it. The full evidence sentence for each member is the tooltip (and is in
+/// the log, one line per hit).
+struct FindMasterGroupRow: View {
+    @ObservedObject var job: FindMasterJob
+    let group: FindMasterAnswer.HitGroup
+
+    var body: some View {
+        let first = group.members[0]
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(group.chip)
+                    .font(.system(size: 10, weight: .semibold)).textCase(.uppercase)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                Text(job.otherName(first)).font(.system(size: 12, weight: .medium))
+                    .lineLimit(1).truncationMode(.middle)
+                Text(FindMasterAnswer.shortSpan(group.start, group.end))
+                    .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if let label = job.plan.labels[first.key.contentDigest] {
+                    Button {
+                        job.reveal(label.recordID)
+                    } label: {
+                        Label("Reveal in Catalog", systemImage: "film.stack").font(.system(size: 11))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(label.path)
+                }
+            }
+            if let copies = FindMasterAnswer.copiesLine(group.members.dropFirst().map(job.otherName)) {
+                Text(copies).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 4)
+            }
+        }
+        .help(group.members.map(job.answer).joined(separator: "\n"))
+        .accessibilityIdentifier("mfo.findMaster.group")
+    }
+}
+
+/// One found content: verdict chip, the sentence, Reveal in Catalog
+/// (the weak-overlap list, collapsed by default).
 struct FindMasterFoundRow: View {
     @ObservedObject var job: FindMasterJob
     let candidate: AudioMasterCandidate
