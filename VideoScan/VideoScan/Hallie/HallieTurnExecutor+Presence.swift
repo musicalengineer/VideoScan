@@ -55,6 +55,13 @@ extension HallieTurnExecutor {
         return HallieDroppedTopicWord.note(restored)
     }
 
+    /// The presence / cross turn, in the order the steps have always run:
+    /// rewrite the payload (names, kinship, pronouns, topic words, unknown
+    /// names, age phrase, place) → the ordered path OR one catalog query with
+    /// the untagged-name fallback → the prose shape → the basis line → the
+    /// typed result. Each step is a named helper below; the comments that
+    /// explain WHY a step exists travel with it. (2026-10-25: split from one
+    /// 221-line function, CCN 44, with no change in prose, notes or order.)
     static func executePresenceLike(
         _ payload: ArchivistQueryAST.Presence,
         route: Route,
@@ -62,43 +69,155 @@ extension HallieTurnExecutor {
         context: Context,
         dependencies: Dependencies
     ) async throws -> Result {
-        var effective = payload
-        var notes: [String] = []
-        var correctionAnnouncements: [String] = []
-
-        if let note = demoteTopicPeople(&effective, context: context) { notes.append(note) }
-        // Tag-only names ("Bonnie", "Hudson Family") before spelling
-        // recovery can mistake "the Hudsons" for a typo (+HallieTagOnlyName).
-        notes.append(contentsOf: mapTagOnlyNames(
-            &effective, question: request.intent.originalQuestion, context: context))
-        // A year the question never says (the current year leaking in) is
-        // not a constraint (+HallieInventedPresenceYears).
-        notes.append(contentsOf: dropInventedPresenceYears(&effective, request: request))
-
-        if let people = effective.people, !people.isEmpty {
-            let recovery = recoverPresencePeople(people, context: context)
-            if !recovery.ambiguous.isEmpty {
-                let choices = recovery.ambiguous.joined(separator: " or ")
-                return Result(
-                    route: route,
-                    outcome: .declined,
-                    prose: "I found more than one close family name. Did you mean \(choices)?",
-                    basisLine: "Basis: spelling recovery was ambiguous; no catalog query was performed.",
-                    queryDescription: description(of: request.intent.ast),
-                    citations: [],
-                    catalogPersonName: nil)
-            }
-            effective.people = recovery.people
-            for correction in recovery.corrections {
-                notes.append(
-                    "spelling recovery “\(correction.typed)” → People profile “\(correction.canonical)”")
-                correctionAnnouncements.append(
-                    "I took “\(correction.typed)” to mean \(correction.canonical).")
-            }
+        var rewrite: PresenceRewrite
+        switch rewritePresencePayload(payload, route: route, request: request, context: context) {
+        case .decline(let result):
+            return result
+        case .proceed(let rewritten):
+            rewrite = rewritten
         }
 
-        // "videos of my dad": a first-person relative is resolved through the
-        // speaker and the family tree, or declined by name (+SpeakerKinship).
+        // Hand-entered place (Rick 2026-09-12): "videos at Cape Cod", "Donna
+        // in Westford", "what do we have from Montana". A term that is one
+        // of Rick's OWN places — the distinct userPlace values in the
+        // catalog, nothing seeded — becomes the EXACT place facet instead
+        // of a word search, so a transcript that says "cape cod" no longer
+        // answers for a video shot there. Runs after every keyword rewrite
+        // above so nothing re-inserts the consumed term (HalliePlaceFacet).
+        let knownPlaces = HalliePlaceFacet.knownPlaces(in: context.presenceRecords)
+        if let detection = HalliePlaceFacet.apply(
+            to: &rewrite.effective, question: request.intent.originalQuestion, knownPlaces: knownPlaces) {
+            rewrite.notes.append(detection.note)
+        }
+
+        // "and the newest?": the same question, every match, in date
+        // order (+DateOrdered). Names have been recovered and rebound
+        // above, so the ordered run sees the canonical people.
+        if let ordered = request.intent.order {
+            return try await executeOrdered(
+                rewrite.effective, order: ordered, route: route, intent: request.intent,
+                notes: rewrite.notes, context: context)
+        }
+
+        let queried = try await runPresenceQuery(
+            rewrite.effective, request: request, context: context, dependencies: dependencies,
+            knownPlaces: knownPlaces, notes: &rewrite.notes)
+        let answer = ArchivistPresenceAnswerComposer.compose(queried.result)
+        let prose = presenceProse(
+            answer: answer, result: queried.result, request: request,
+            announcements: rewrite.correctionAnnouncements)
+        let basis = presenceBasis(answer.basisLine, request: request, notes: rewrite.notes)
+        return presenceListResult(
+            route: route, request: request, executed: queried.effective, result: queried.result,
+            answer: answer, prose: prose, basisLine: basis)
+    }
+
+    // MARK: Payload rewrites
+
+    /// The payload after every deterministic rewrite, with what the basis
+    /// line says about each, and the spelling corrections the prose
+    /// announces up front. (For Rick: a plain value struct passed `inout`
+    /// through the steps — a non-const reference, no hidden state.)
+    struct PresenceRewrite: Sendable {
+        var effective: ArchivistQueryAST.Presence
+        var notes: [String] = []
+        var correctionAnnouncements: [String] = []
+    }
+
+    /// What rewriting decided: carry on with the rewritten payload, or give
+    /// this decline instead of searching (ambiguous spelling, unresolved kin).
+    enum PresenceRewriteOutcome {
+        case proceed(PresenceRewrite)
+        case decline(Result)
+    }
+
+    /// Steps 1–9 of the turn, in their original order. Every step is a note
+    /// in the basis line or a decline; none touches the catalog.
+    static func rewritePresencePayload(
+        _ payload: ArchivistQueryAST.Presence,
+        route: Route,
+        request: Request,
+        context: Context
+    ) -> PresenceRewriteOutcome {
+        var rewrite = PresenceRewrite(effective: payload)
+
+        if let note = demoteTopicPeople(&rewrite.effective, context: context) { rewrite.notes.append(note) }
+        // Tag-only names ("Bonnie", "Hudson Family") before spelling
+        // recovery can mistake "the Hudsons" for a typo (+HallieTagOnlyName).
+        rewrite.notes.append(contentsOf: mapTagOnlyNames(
+            &rewrite.effective, question: request.intent.originalQuestion, context: context))
+        // A year the question never says (the current year leaking in) is
+        // not a constraint (+HallieInventedPresenceYears).
+        rewrite.notes.append(contentsOf: dropInventedPresenceYears(&rewrite.effective, request: request))
+
+        if let declined = recoverPeopleSpelling(&rewrite, route: route, request: request, context: context) {
+            return .decline(declined)
+        }
+        if let declined = rebindSpeakerKinship(
+            &rewrite, original: payload, route: route, request: request, context: context) {
+            return .decline(declined)
+        }
+
+        // "can you play a video for me?" (eval ic009, 2026-09-01): a first-
+        // or second-person pronoun the translator kept as a name or a word
+        // is you or me, never a search term. Kinship rebinding above has
+        // already had its chance to turn "my dad" into a person.
+        let droppedPronouns = dropSpeakerPronouns(&rewrite.effective)
+        if !droppedPronouns.isEmpty {
+            rewrite.notes.append("“\(droppedPronouns.joined(separator: "”, “"))” means you or me, not a search word, so I left it out")
+        }
+
+        // "Christmas videos from 2006" arrived as year=2006 alone (live
+        // 09-22, 09-24, 09-25) and the answer counted every 2006 item. A
+        // holiday / family-event / family-place word the reader said is put
+        // back (+HallieDroppedTopicWord). Fresh translations only: a
+        // refinement or paging re-run carries the previous AST on purpose.
+        if let note = restoreDroppedTopicWords(&rewrite.effective, original: payload, request: request) {
+            rewrite.notes.append(note)
+        }
+
+        demoteUnknownPeople(&rewrite, context: context)
+        applyAgePhraseYearBand(&rewrite, original: payload, context: context)
+        return .proceed(rewrite)
+    }
+
+    /// Spelling recovery against the People gallery: a typed name becomes
+    /// the profile's canonical tag (announced in the prose and the basis);
+    /// more than one close family name is a decline, not a guess.
+    private static func recoverPeopleSpelling(
+        _ rewrite: inout PresenceRewrite, route: Route, request: Request, context: Context
+    ) -> Result? {
+        guard let people = rewrite.effective.people, !people.isEmpty else { return nil }
+        let recovery = recoverPresencePeople(people, context: context)
+        if !recovery.ambiguous.isEmpty {
+            let choices = recovery.ambiguous.joined(separator: " or ")
+            return Result(
+                route: route,
+                outcome: .declined,
+                prose: "I found more than one close family name. Did you mean \(choices)?",
+                basisLine: "Basis: spelling recovery was ambiguous; no catalog query was performed.",
+                queryDescription: description(of: request.intent.ast),
+                citations: [],
+                catalogPersonName: nil)
+        }
+        rewrite.effective.people = recovery.people
+        for correction in recovery.corrections {
+            rewrite.notes.append(
+                "spelling recovery “\(correction.typed)” → People profile “\(correction.canonical)”")
+            rewrite.correctionAnnouncements.append(
+                "I took “\(correction.typed)” to mean \(correction.canonical).")
+        }
+        return nil
+    }
+
+    /// "videos of my dad": a first-person relative is resolved through the
+    /// speaker and the family tree, or declined by name (+SpeakerKinship).
+    /// Reads the ORIGINAL people slot (the phrase as the translator left it).
+    private static func rebindSpeakerKinship(
+        _ rewrite: inout PresenceRewrite,
+        original payload: ArchivistQueryAST.Presence,
+        route: Route, request: Request, context: Context
+    ) -> Result? {
         let kin = SpeakerKinship.rebind(
             people: payload.people ?? [],
             question: request.intent.originalQuestion,
@@ -117,8 +236,8 @@ extension HallieTurnExecutor {
                 catalogPersonName: nil)
         }
         if !kin.notes.isEmpty {
-            effective.people = kin.people
-            notes.append(contentsOf: kin.notes)
+            rewrite.effective.people = kin.people
+            rewrite.notes.append(contentsOf: kin.notes)
         }
         // B5, 2026-09-06: a kinship term spent on an identity is not also a
         // content keyword. The translator emits both — `person="my dad"` AND
@@ -129,112 +248,96 @@ extension HallieTurnExecutor {
         // archive says "dad" about Dad; the word was never evidence, it was
         // the question's way of naming him. Dropped silently: a note here
         // would explain a term the user never meant as a search word.
-        if let existing = effective.keywords, kin.consumedKinPhrase != nil {
+        if let existing = rewrite.effective.keywords, kin.consumedKinPhrase != nil {
             let kept = existing.filter { !kin.spentKeyword($0) }
-            if kept.count != existing.count { effective.keywords = kept.isEmpty ? nil : kept }
+            if kept.count != existing.count { rewrite.effective.keywords = kept.isEmpty ? nil : kept }
         }
+        return nil
+    }
 
-        // "can you play a video for me?" (eval ic009, 2026-09-01): a first-
-        // or second-person pronoun the translator kept as a name or a word
-        // is you or me, never a search term. Kinship rebinding above has
-        // already had its chance to turn "my dad" into a person.
-        let droppedPronouns = dropSpeakerPronouns(&effective)
-        if !droppedPronouns.isEmpty {
-            notes.append("“\(droppedPronouns.joined(separator: "”, “"))” means you or me, not a search word, so I left it out")
-        }
-
-        // "Christmas videos from 2006" arrived as year=2006 alone (live
-        // 09-22, 09-24, 09-25) and the answer counted every 2006 item. A
-        // holiday / family-event / family-place word the reader said is put
-        // back (+HallieDroppedTopicWord). Fresh translations only: a
-        // refinement or paging re-run carries the previous AST on purpose.
-        if let note = restoreDroppedTopicWords(&effective, original: payload, request: request) {
-            notes.append(note)
-        }
-
-        // "pull up anything from Franklin": the translator took a place for
-        // a person. A name nobody knows — no profile, no tree, no CyberBrain,
-        // no person tag anywhere in the catalog — is searched as a place or
-        // word instead, and the basis says so (overnight cycle 9).
-        // Only when there is something to know people FROM: with no
-        // profiles, tree, CyberBrain or records at all, "unknown" means
-        // nothing and the name stays a person.
+    /// "pull up anything from Franklin": the translator took a place for
+    /// a person. A name nobody knows — no profile, no tree, no CyberBrain,
+    /// no person tag anywhere in the catalog — is searched as a place or
+    /// word instead, and the basis says so (overnight cycle 9).
+    /// Only when there is something to know people FROM: with no
+    /// profiles, tree, CyberBrain or records at all, "unknown" means
+    /// nothing and the name stays a person.
+    private static func demoteUnknownPeople(_ rewrite: inout PresenceRewrite, context: Context) {
         let hasIdentitySources = (context.profiles?.isEmpty == false) || context.graph != nil
             || context.cyberBrain != nil || !context.presenceRecords.isEmpty
-        if hasIdentitySources, let people = effective.people, !people.isEmpty {
-            let taggedNames = Set(context.presenceRecords
-                .flatMap { $0.confirmedPeople.map { PersonResolver.normalize($0.name) } })
-            var keep: [String] = []
-            var demoted: [String] = []
-            for name in people {
-                let known = isKnownPerson(name, context: context, acceptSurname: true)
-                    || taggedNames.contains(PersonResolver.normalize(name))
-                if known { keep.append(name) } else { demoted.append(name) }
+        guard hasIdentitySources, let people = rewrite.effective.people, !people.isEmpty else { return }
+        let taggedNames = Set(context.presenceRecords
+            .flatMap { $0.confirmedPeople.map { PersonResolver.normalize($0.name) } })
+        var keep: [String] = []
+        var demoted: [String] = []
+        for name in people {
+            let known = isKnownPerson(name, context: context, acceptSurname: true)
+                || taggedNames.contains(PersonResolver.normalize(name))
+            if known { keep.append(name) } else { demoted.append(name) }
+        }
+        if !demoted.isEmpty {
+            rewrite.effective.people = keep.isEmpty ? nil : keep
+            rewrite.effective.keywords = (rewrite.effective.keywords ?? []) + demoted
+            rewrite.notes.append(contentsOf: demoted.map {
+                "“\($0)” isn't a person I know, so I searched it as a place or word"
+            })
+        }
+    }
+
+    /// "as a baby" / "as a kid" / "as a teenager" → a year band from the
+    /// FIRST named person's birth year. Only when the AST has no explicit
+    /// years (an explicit year is the user's word and wins) and only when
+    /// exactly one source vouches for the birth year. Reads the ORIGINAL
+    /// payload's keywords and people, as it always has.
+    private static func applyAgePhraseYearBand(
+        _ rewrite: inout PresenceRewrite, original payload: ArchivistQueryAST.Presence, context: Context
+    ) {
+        guard payload.yearStart == nil, payload.yearEnd == nil,
+              let detection = ArchivistAgePhrase.detect(in: payload.keywords ?? []),
+              let person = payload.people?.first else { return }
+        if let evidence = birthYear(of: person, context: context),
+           let years = ArchivistAgePhrase.years(
+               birthYear: evidence.year, band: detection.band) {
+            rewrite.effective.yearStart = years.lowerBound
+            rewrite.effective.yearEnd = years.upperBound
+            rewrite.effective.keywords = (payload.keywords ?? []).filter {
+                $0 != detection.keyword
             }
-            if !demoted.isEmpty {
-                effective.people = keep.isEmpty ? nil : keep
-                effective.keywords = (effective.keywords ?? []) + demoted
-                notes.append(contentsOf: demoted.map {
-                    "“\($0)” isn't a person I know, so I searched it as a place or word"
-                })
-            }
+            if rewrite.effective.keywords?.isEmpty == true { rewrite.effective.keywords = nil }
+            rewrite.notes.append(
+                "using \(evidence.personName)'s birth year \(evidence.year) "
+                + "from \(evidence.source) "
+                + "(“\(detection.keyword)” = \(years.lowerBound)–\(years.upperBound))")
+        } else {
+            rewrite.notes.append(
+                "I don't know \(person)'s birth year, so “\(detection.keyword)” "
+                + "was searched as a word")
         }
+    }
 
-        // "as a baby" / "as a kid" / "as a teenager" → a year band from the
-        // FIRST named person's birth year. Only when the AST has no explicit
-        // years (an explicit year is the user's word and wins) and only when
-        // exactly one source vouches for the birth year.
-        if payload.yearStart == nil, payload.yearEnd == nil,
-           let detection = ArchivistAgePhrase.detect(in: payload.keywords ?? []),
-           let person = payload.people?.first {
-            if let evidence = birthYear(of: person, context: context),
-               let years = ArchivistAgePhrase.years(
-                   birthYear: evidence.year, band: detection.band) {
-                effective.yearStart = years.lowerBound
-                effective.yearEnd = years.upperBound
-                effective.keywords = (payload.keywords ?? []).filter {
-                    $0 != detection.keyword
-                }
-                if effective.keywords?.isEmpty == true { effective.keywords = nil }
-                notes.append(
-                    "using \(evidence.personName)'s birth year \(evidence.year) "
-                    + "from \(evidence.source) "
-                    + "(“\(detection.keyword)” = \(years.lowerBound)–\(years.upperBound))")
-            } else {
-                notes.append(
-                    "I don't know \(person)'s birth year, so “\(detection.keyword)” "
-                    + "was searched as a word")
-            }
-        }
+    // MARK: The catalog query
 
-        // Hand-entered place (Rick 2026-09-12): "videos at Cape Cod", "Donna
-        // in Westford", "what do we have from Montana". A term that is one
-        // of Rick's OWN places — the distinct userPlace values in the
-        // catalog, nothing seeded — becomes the EXACT place facet instead
-        // of a word search, so a transcript that says "cape cod" no longer
-        // answers for a video shot there. Runs after every keyword rewrite
-        // above so nothing re-inserts the consumed term (HalliePlaceFacet).
-        let knownPlaces = HalliePlaceFacet.knownPlaces(in: context.presenceRecords)
-        if let detection = HalliePlaceFacet.apply(
-            to: &effective, question: request.intent.originalQuestion, knownPlaces: knownPlaces) {
-            notes.append(detection.note)
-        }
+    /// What the catalog said, and the payload that was actually executed
+    /// (the untagged-name fallback may have turned the names into words).
+    struct PresenceQueryOutcome: Sendable {
+        let effective: ArchivistQueryAST.Presence
+        let result: ArchivistPresenceResult
+    }
 
-        // "and the newest?": the same question, every match, in date
-        // order (+DateOrdered). Names have been recovered and rebound
-        // above, so the ordered run sees the canonical people.
-        if let ordered = request.intent.order {
-            return try await executeOrdered(
-                effective, order: ordered, route: route, intent: request.intent,
-                notes: notes, context: context)
-        }
-
+    /// One presence query off the main actor, then — when the only
+    /// constraint is a name no catalog record is tagged with — the same words
+    /// tried once more as a place / filename / folder / transcript search.
+    private static func runPresenceQuery(
+        _ effective: ArchivistQueryAST.Presence,
+        request: Request, context: Context, dependencies: Dependencies,
+        knownPlaces: [String], notes: inout [String]
+    ) async throws -> PresenceQueryOutcome {
         let query = ArchivistPresenceQuery(
             effective, citationOffset: request.intent.citationOffset,
             aliases: presenceAliases(for: effective.people ?? [], context: context))
         let records = context.presenceRecords
         let execute = dependencies.executePresence
-        var result = try await detached {
+        let result = try await detached {
             execute(query, records)
         }
         // "pull up anything from Franklin" when the family tree DOES know a
@@ -247,49 +350,103 @@ extension HallieTurnExecutor {
         if result.conclusion != .present,
            request.intent.citationOffset == 0,
            let people = effective.people, !people.isEmpty,
-           (effective.keywords ?? []).isEmpty {
-            let taggedNames = Set(records.flatMap {
-                $0.confirmedPeople.map { PersonResolver.normalize($0.name) }
-            })
-            // B6, 2026-09-06: never for someone in the People tab. Live
-            // 2026-09-05 row 914, "show me videos of Dad": the name resolved
-            // to Rick's father, nobody in the catalog is tagged with him, and
-            // this fallback answered with 123 videos of OTHER people saying
-            // the word "Richard" — presented as videos of Dad. The honest
-            // answer is that no video is tagged with him yet. The fallback
-            // still earns its keep for a tree-only name, where "Franklin" or
-            // "Hudson" really might be the place on the box.
-            let anyIsFamily = people.contains {
-                HallieTurnExecutor.isPeopleTabPerson($0, context: context)
-            }
-            if !anyIsFamily,
-               people.allSatisfy({ !taggedNames.contains(PersonResolver.normalize($0)) }) {
-                var asWords = effective
-                asWords.people = nil
-                asWords.keywords = people
-                // The same place step for the demoted name (2026-09-12):
-                // "videos of Franklin" with a record placed at Franklin, MA.
-                if let detection = HalliePlaceFacet.apply(
-                    to: &asWords, question: request.intent.originalQuestion, knownPlaces: knownPlaces) {
-                    notes.append(detection.note)
-                }
-                let wordQuery = ArchivistPresenceQuery(asWords, citationOffset: 0)
-                let wordResult = try await detached {
-                    execute(wordQuery, records)
-                }
-                if wordResult.conclusion == .present {
-                    let names = people.map { "“\($0)”" }.joined(separator: ", ")
-                    notes.append(
-                        "no one in the catalog is tagged \(names), so I searched it as a place or word")
-                    effective = asWords
-                    result = wordResult
-                }
-            }
+           (effective.keywords ?? []).isEmpty,
+           let asWords = try await retryUntaggedNamesAsWords(
+               effective, people: people, request: request, context: context,
+               execute: execute, knownPlaces: knownPlaces, notes: &notes) {
+            return asWords
         }
-        let answer = ArchivistPresenceAnswerComposer.compose(result)
+        return PresenceQueryOutcome(effective: effective, result: result)
+    }
 
-        var prose = answer.prose
-        let offset = request.intent.citationOffset
+    /// The fallback itself. nil = not attempted (a People-tab person, or a
+    /// tagged name) or attempted and also empty — the caller's result stands.
+    /// The place-facet note is appended as soon as the words are prepared,
+    /// whether or not the word search then hits (as it always has).
+    private static func retryUntaggedNamesAsWords(
+        _ effective: ArchivistQueryAST.Presence,
+        people: [String], request: Request, context: Context,
+        execute: @Sendable @escaping (ArchivistPresenceQuery, [ArchivistPresenceRecordSnapshot]) -> ArchivistPresenceResult,
+        knownPlaces: [String], notes: inout [String]
+    ) async throws -> PresenceQueryOutcome? {
+        let records = context.presenceRecords
+        let taggedNames = Set(records.flatMap {
+            $0.confirmedPeople.map { PersonResolver.normalize($0.name) }
+        })
+        // B6, 2026-09-06: never for someone in the People tab. Live
+        // 2026-09-05 row 914, "show me videos of Dad": the name resolved
+        // to Rick's father, nobody in the catalog is tagged with him, and
+        // this fallback answered with 123 videos of OTHER people saying
+        // the word "Richard" — presented as videos of Dad. The honest
+        // answer is that no video is tagged with him yet. The fallback
+        // still earns its keep for a tree-only name, where "Franklin" or
+        // "Hudson" really might be the place on the box.
+        let anyIsFamily = people.contains {
+            HallieTurnExecutor.isPeopleTabPerson($0, context: context)
+        }
+        guard !anyIsFamily,
+              people.allSatisfy({ !taggedNames.contains(PersonResolver.normalize($0)) }) else { return nil }
+        var asWords = effective
+        asWords.people = nil
+        asWords.keywords = people
+        // The same place step for the demoted name (2026-09-12):
+        // "videos of Franklin" with a record placed at Franklin, MA.
+        if let detection = HalliePlaceFacet.apply(
+            to: &asWords, question: request.intent.originalQuestion, knownPlaces: knownPlaces) {
+            notes.append(detection.note)
+        }
+        let wordQuery = ArchivistPresenceQuery(asWords, citationOffset: 0)
+        let wordResult = try await detached {
+            execute(wordQuery, records)
+        }
+        guard wordResult.conclusion == .present else { return nil }
+        let names = people.map { "“\($0)”" }.joined(separator: ", ")
+        notes.append(
+            "no one in the catalog is tagged \(names), so I searched it as a place or word")
+        return PresenceQueryOutcome(effective: asWords, result: wordResult)
+    }
+
+    // MARK: Prose, basis, result
+
+    /// Which sentence the list answer leads with — decided once, then one
+    /// switch. The order of these cases IS the precedence.
+    enum PresenceProseShape: Equatable, Sendable {
+        /// A COUNT re-run (design §3.5, Intent.countOnly): the number is the
+        /// answer; `scope` is the refinement's lead, if any, with its space.
+        case count(scope: String)
+        /// A "show more" page of an answered list.
+        case page(offset: Int)
+        /// A refined turn says what changed and what is left.
+        case refined(change: String)
+        /// The composer's own sentence.
+        case composed
+    }
+
+    static func presenceProseShape(for request: Request, result: ArchivistPresenceResult) -> PresenceProseShape {
+        if request.intent.countOnly {
+            return .count(scope: request.intent.refinementChange.map { " " + $0 } ?? "")
+        }
+        if result.conclusion == .present, request.intent.citationOffset > 0 {
+            return .page(offset: request.intent.citationOffset)
+        }
+        if let change = request.intent.refinementChange {
+            return .refined(change: change)
+        }
+        return .composed
+    }
+
+    /// The prose and the citations it stands on.
+    struct PresenceProse: Sendable {
+        let prose: String
+        let evidenceCitations: [ArchivistEvidenceCitation]
+        let shown: Int
+        let total: Int
+    }
+
+    private static func presenceProse(
+        answer: ArchivistFactualAnswer, result: ArchivistPresenceResult,
+        request: Request, announcements: [String]
+    ) -> PresenceProse {
         // A COUNT re-run (design §3.5, Intent.countOnly) cites at most a
         // handful; the number is the answer.
         let countExamples = 5
@@ -298,39 +455,51 @@ extension HallieTurnExecutor {
             : result.evidence.citations
         let shown = evidenceCitations.count
         let total = result.evidence.totalMatchCount
-        if request.intent.countOnly {
+        var prose: String
+        switch presenceProseShape(for: request, result: result) {
+        case .count(let scope):
             // The same noun the list answers use ("N catalog items"), so a
             // golden count reads the same whether the scope named a kind.
             let noun = "catalog item"
-            let scope = request.intent.refinementChange.map { " " + $0 } ?? ""
             prose = result.conclusion == .present
                 ? "\(total) \(noun)\(total == 1 ? "" : "s")\(scope)."
                 : "Nothing\(scope)."
-        } else if result.conclusion == .present, offset > 0 {
+        case .page(let offset):
             prose = shown == 0
                 ? "That's all of them — I've already shown all \(total)."
                 : "Here are \(shown) more (items \(offset + 1)–\(offset + shown) of \(total))."
-        } else if let change = request.intent.refinementChange {
-            // A refined turn says what changed and what is left:
+        case .refined(let change):
             // "Narrowed to Westford, around 2005 — 3 catalog items."
             prose = result.conclusion == .present
                 ? "\(change) — \(total) catalog item\(total == 1 ? "" : "s")."
                 : "\(change) — nothing matched. " + ArchivistPresenceAnswerComposer.noEvidenceProse
+        case .composed:
+            prose = answer.prose
         }
-        if !correctionAnnouncements.isEmpty {
-            prose = correctionAnnouncements.joined(separator: " ") + " " + prose
+        if !announcements.isEmpty {
+            prose = announcements.joined(separator: " ") + " " + prose
         }
+        return PresenceProse(prose: prose, evidenceCitations: evidenceCitations, shown: shown, total: total)
+    }
 
-        var basis = answer.basisLine
+    /// The basis line: the refinement note first, then every rewrite note in
+    /// the order it was made, then the composer's own "N cited of M".
+    static func presenceBasis(_ composed: String, request: Request, notes: [String]) -> String {
         var prefixes: [String] = []
         if let note = request.intent.refinementNote { prefixes.append(note) }
         prefixes.append(contentsOf: notes)
-        if !prefixes.isEmpty {
-            basis = "Basis: " + prefixes.joined(separator: "; ") + "; "
-                + basis.dropFirst("Basis: ".count)
-        }
+        guard !prefixes.isEmpty else { return composed }
+        return "Basis: " + prefixes.joined(separator: "; ") + "; "
+            + composed.dropFirst("Basis: ".count)
+    }
 
-        let citations = normalize(evidenceCitations)
+    private static func presenceListResult(
+        route: Route, request: Request,
+        executed effective: ArchivistQueryAST.Presence,
+        result: ArchivistPresenceResult, answer: ArchivistFactualAnswer,
+        prose: PresenceProse, basisLine: String
+    ) -> Result {
+        let citations = normalize(prose.evidenceCitations)
         // The typed plan behind the list answer: the count sentence plus
         // each cited item and why it matched. A model may rephrase these
         // and nothing else (HallieGroundedComposer); the basis line stays
@@ -338,9 +507,9 @@ extension HallieTurnExecutor {
         let plan: HallieAnswerPlan? = result.conclusion == .present
             ? HallieAnswerPlan.presenceList(
                 route: route,
-                prose: prose,
-                totalMatchCount: total,
-                shownCount: shown,
+                prose: prose.prose,
+                totalMatchCount: prose.total,
+                shownCount: prose.shown,
                 citations: citations)
             : nil
         // The retry the not-found sentence just offered, as the search a
@@ -358,12 +527,12 @@ extension HallieTurnExecutor {
         return Result(
             route: route,
             outcome: result.conclusion == .present ? .answered : .declined,
-            prose: prose,
-            basisLine: basis,
+            prose: prose.prose,
+            basisLine: basisLine,
             queryDescription: result.interpretedQuery,
             citations: citations,
             catalogPersonName: nil,
-            matchCount: result.conclusion == .present ? total : 0,
+            matchCount: result.conclusion == .present ? prose.total : 0,
             answerPlan: plan,
             retryOffer: retryOffer)
     }

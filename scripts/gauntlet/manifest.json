@@ -15450,6 +15450,42 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HalliePresenceLikeCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HalliePresenceLikeCharacterizationTests"
+      ],
+      "tests": [
+        "agePhraseBecomesAYearBandFromTheProfileBirthYear",
+        "agePhraseWithoutABirthYearIsSearchedAsAWord",
+        "ambiguousSpellingDeclinesBeforeAnyCatalogQuery",
+        "anExplicitYearWinsOverTheAgePhrase",
+        "basisPrefixIsRefinementNoteThenNotesInOrder",
+        "bothSearchesEmptyKeepTheHonestDecline",
+        "countOnlyPhrasesTheNumberAndCitesAtMostFive",
+        "droppedTopicWordIsRestoredOnAFreshTranslationOnly",
+        "fallbackNeverRunsWithAKeywordOrOnAPage",
+        "orderedRequestTakesTheDateOrderedPathWithRecoveredNames",
+        "pagingSaysHereAreMoreOrThatIsAll",
+        "personOnlyMissForAPeopleTabPersonDeclinesWithoutAnOffer",
+        "personPlusWordMissOffersTheRetryFromTheExecutedQuery",
+        "personPlusWordMissRelaxesTheWordsWhenThePersonHasVideos",
+        "plainListAnswerCarriesCountPlanAndBasis",
+        "refinedTurnLeadsWithTheChangeAndOffersNoRetry",
+        "resolvedKinshipRebindsThePersonAndDropsTheSpentKeyword",
+        "ricksOwnPlaceBecomesTheExactPlaceFacet",
+        "speakerPronounsAreDroppedWithOneNote",
+        "spellingCorrectionIsAnnouncedBeforeTheProse",
+        "topicWordInThePeopleSlotIsSearchedAsAWord",
+        "treeKnownUntaggedNameFallsBackToWordsWhenTheWordSearchHits",
+        "treeOnlyKinshipRebindsThePersonButKeepsTheKinWord",
+        "unknownNameIsDemotedToAWordAndSaysSo",
+        "unknownNameStaysAPersonWhenThereIsNothingToKnowPeopleFrom",
+        "unresolvableKinshipDeclinesWithTheTreeBasis"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HalliePresenceRenamedProfileTagsTests.swift",
       "stage": "hallie",
       "suites": [
@@ -33370,7 +33406,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2984,
+      "expected_floor": 3010,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33597,6 +33633,7 @@
         "VideoScanTests/GedcomLookupConcurrencyTests",
         "VideoScanTests/GeneratedInputAppFindingsTests",
         "VideoScanTests/HallieAncestorRoutingPropertyTests",
+        "VideoScanTests/HalliePresenceLikeCharacterizationTests",
         "VideoScanTests/HammingTests",
         "VideoScanTests/IdentityNarrowingRegressionSensors",
         "VideoScanTests/IdentityNarrowingTests",
