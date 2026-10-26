@@ -15,7 +15,8 @@
 //   * every QUEUED PURGE (#145 F3): a door took the record out of memory,
 //     the store still holds it — its lock alone (a purge writes no values).
 // A mismatch HOLDS the entry (out of every commit, named in catalog.log);
-// a row that is gone FAILS the read-back and saving stays blocked.
+// a row that is gone or no longer decodes FAILS the read-back and saving
+// stays blocked (#145 F5: every row read is decoded, whatever its lock says).
 //
 // Memory: per entry one loaded row (and, for a new copy, one sibling row)
 // for the length of the read — worst case every record changed: one copy of
@@ -88,6 +89,14 @@ enum CatalogReadBack {
     /// in-memory record (nil for a queued purge — it left memory).
     static func verdict(_ entry: Wanted, record: VideoRecord?, read: Findings, sharedBaseline: CatalogSharedCurated?) -> Verdict {
         let found = read.found[entry.id] ?? .nothing
+        // Codex #145 F5: decoded whatever the lock says — a changed lock used
+        // to make an undecodable row an ordinary HELD row (the failure
+        // swallowed while naming it) and saving was unblocked.
+        if let broken = undecodable(found, read.content[entry.id]) {
+            let who = record.map { "record \(entry.id.uuidString) (\($0.filename))" }
+                ?? "row \(entry.id.uuidString) (queued for removal from the catalog)"
+            return .failed("\(who): \(broken.words) — quit and relaunch, then redo the change(s)")
+        }
         guard let record else { return purgeVerdict(entry, found: found) }
         let snapshot = VideoRecordDTO(record)
         let mismatch: CatalogRowCheck.Mismatch?
@@ -104,6 +113,18 @@ enum CatalogReadBack {
         case .rowChanged, .materialised, .pendingGone, .pendingChanged, .sharedChanged:
             return .held(heldWords(record, mismatch: mismatch, stored: found, newCopy: entry.newCopy != nil))
         }
+    }
+
+    /// The first stored row the read-back read that no longer becomes a
+    /// record (F5), as the door's own mismatch words; nil when all decode.
+    /// One decode per row read — what a launch does for every row.
+    private static func undecodable(_ found: CatalogRowCheck.Found, _ content: CatalogLoadedRow?) -> CatalogRowCheck.Mismatch? {
+        var rows: [CatalogLoadedRow] = content.map { [$0] } ?? []
+        if case .row(let row) = found { rows.append(row) }
+        for row in rows {
+            do { _ = try VideoRecord(loaded: row) } catch { return .undecodable(String(describing: error)) }
+        }
+        return nil
     }
 
     /// A queued purge (F3): its lock alone.
