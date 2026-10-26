@@ -174,8 +174,10 @@ public protocol CatalogLoadReading {
     /// `import_runs` rows that finished with the comparator's word (the
     /// launch rule's evidence that the import is whole, §7).
     func finishedImports() throws -> Int
-    /// True while no curated display row has been written.
-    func displayTablesEmpty() throws -> Bool
+    /// True while the one-time display pass still owes its run: no curated
+    /// display row exists AND the pass has never committed (codex #141 F4 —
+    /// a person clearing the last value must not bring the import back).
+    func displayPassPending() throws -> Bool
     /// Every curated `knowledge_sources` occurrence that hangs on a digest.
     func displaySources(_ visit: (DisplayValueDerivation.Source) throws -> Void) throws
 }
@@ -254,7 +256,7 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, Ca
     func insertPersonSearch(_ search: CatalogRow.PersonSearch) throws
 
     // The display pass (cutover B1): re-checked and filled inside one write.
-    func displayTablesEmpty() throws -> Bool
+    func displayPassPending() throws -> Bool
     func insertDisplayRows(_ rows: DisplayValueDerivation.Rows) throws
 
     // Live writes (cutover B2, GRDBCatalogRepository+Live.swift). Unlike the

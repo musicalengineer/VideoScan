@@ -11,6 +11,18 @@
 // and the confirmed / rejected people_tags (detected / suspected are bound
 // derived values a cycler writes, not display choices).
 //
+// Codex #141 F4 (2026-10-25): emptiness alone was the completion test, and a
+// person who clears the LAST curated value (one note in a catalog with
+// nothing else curated) emptied the tables again — the next launch rebuilt
+// the note from the immutable `knowledge_sources`, undoing the clear. The
+// pass now also asks whether it has EVER committed: its one write goes
+// through `write(as: .migrate)`, the only `.migrate` writer, and every commit
+// leaves a `generation_history` row naming its door — append-only, never
+// deleted, restored with the file. That row is the persistent marker; no
+// schema change. (A pass that found nothing to fill writes nothing and
+// leaves no marker: on a catalog with no curated evidence re-checking is one
+// cheap read, and a read-only store must not be written just to say so.)
+//
 // (For Rick: the DAO for the pass — SELECT the evidence, INSERT the verdict.)
 
 import Foundation
@@ -18,14 +30,19 @@ import GRDB
 
 extension GRDBRecordHandle {
 
-    func displayTablesEmpty() throws -> Bool {
+    /// True while the display pass still owes its one run: every curated
+    /// display table is empty AND no `.migrate` commit is in the history.
+    func displayPassPending() throws -> Bool {
         let rows = try Int.fetchOne(db, sql: """
             SELECT (SELECT count(*) FROM stars) + (SELECT count(*) FROM user_dates) + (SELECT count(*) FROM user_places)
                  + (SELECT count(*) FROM user_notes) + (SELECT count(*) FROM dispositions) + (SELECT count(*) FROM family_music)
                  + (SELECT count(*) FROM workflow_tags) + (SELECT count(*) FROM backup_attestations)
                  + (SELECT count(*) FROM people_tags WHERE kind IN ('confirmed','rejected'))
             """) ?? 0
-        return rows == 0
+        guard rows == 0 else { return false }
+        let passes = try Int.fetchOne(db, sql: "SELECT count(*) FROM generation_history WHERE writer = ?",
+                                      arguments: [CatalogWriter.migrate.rawValue]) ?? 0
+        return passes == 0
     }
 
     func displaySources(_ visit: (DisplayValueDerivation.Source) throws -> Void) throws {

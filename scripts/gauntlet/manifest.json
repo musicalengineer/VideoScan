@@ -2649,7 +2649,8 @@
         "CatalogStoreDurabilityCodex141Tests"
       ],
       "tests": [
-        "archivalWriterUsesFullSynchronization"
+        "archivalWriterUsesFullSynchronization",
+        "clearingTheLastCuratedValueStaysClearedAcrossRelaunch"
       ]
     },
     {
@@ -34283,7 +34284,7 @@
       ],
       "expected_floor": 288,
       "name": "regression",
-      "package_expected_floor": 259,
+      "package_expected_floor": 260,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

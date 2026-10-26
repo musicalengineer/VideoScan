@@ -13,9 +13,12 @@
 // The display pass. After the import the display tables are empty; the
 // first load derives them from `knowledge_sources` (DisplayValueDerivation)
 // and writes them in ONE `write(as: .migrate)`. It runs only while the
-// tables are empty, so it happens once. If it cannot be written (a
-// read-only store, an engine refusal) the load REFUSES with the store's
-// words rather than show a catalog with every star, date and name missing.
+// tables are empty AND no `.migrate` commit is in generation_history (codex
+// #141 F4: emptiness alone re-ran it after a person cleared the last
+// curated value, resurrecting the import), so it happens once. If it
+// cannot be written (a read-only store, an engine refusal) the load REFUSES
+// with the store's words rather than show a catalog with every star, date
+// and name missing.
 //
 // Memory: the snapshot holds one `CatalogLoadedRow` per `files` row
 // (≈ the size of the record it becomes; the derived text dominates). The
@@ -31,7 +34,8 @@ public enum CatalogLoad {
 
     /// What the display pass did.
     public enum DisplayPass: Sendable, Equatable {
-        /// The tables already hold rows: nothing to do.
+        /// The tables already hold rows, or the pass has already committed
+        /// once (its `.migrate` row in generation_history): nothing to do.
         case alreadyFilled
         /// No curated evidence hangs on a digest: nothing to write.
         case nothingToFill
@@ -92,12 +96,13 @@ public enum CatalogLoad {
     }
 
     /// The one-time pass: derive the display rows from the evidence and
-    /// write them, only while the display tables are empty.
+    /// write them, only while the pass is still pending (the display tables
+    /// empty and no earlier pass committed).
     public static func fillDisplayTablesIfEmpty(_ repository: any CatalogRepository) async throws -> DisplayPass {
-        let evidence: (empty: Bool, sources: [DisplayValueDerivation.Source])
+        let evidence: (pending: Bool, sources: [DisplayValueDerivation.Source])
         do {
             evidence = try await repository.read { reader in
-                guard try reader.displayTablesEmpty() else { return (false, []) }
+                guard try reader.displayPassPending() else { return (false, []) }
                 var sources: [DisplayValueDerivation.Source] = []
                 try reader.displaySources { sources.append($0) }
                 return (true, sources)
@@ -105,11 +110,11 @@ public enum CatalogLoad {
         } catch {
             throw Failure.readFailed(String(describing: error))
         }
-        guard evidence.empty else { return .alreadyFilled }
+        guard evidence.pending else { return .alreadyFilled }
         let rows = DisplayValueDerivation.derive(sources: evidence.sources)
         guard rows.rowCount > 0 else { return .nothingToFill }
         let outcome = await repository.write(as: .migrate) { tx in
-            guard try tx.displayTablesEmpty() else { throw DisplayPassRace() }
+            guard try tx.displayPassPending() else { throw DisplayPassRace() }
             try tx.insertDisplayRows(rows)
         }
         switch outcome {
