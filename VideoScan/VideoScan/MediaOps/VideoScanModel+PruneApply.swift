@@ -309,6 +309,11 @@ extension VideoScanModel {
             },
             beforeRemoval: { path in
                 guard path == proof.path else { return "was never read in this batch — nothing moved" }
+                // Codex #150 F4: the archive copy that stays must not be
+                // leaving through another job right now.
+                if RemovalReservations.shared.isReserved(proof.archivePath) {
+                    return RemovalReservations.survivorLeavingNote
+                }
                 if isNetwork(path) { return "\(PruneReason.driveProtected.text) (a network drive) — nothing moved" }
                 return Self.pruneProofProblemOnDisk(proof)
             },

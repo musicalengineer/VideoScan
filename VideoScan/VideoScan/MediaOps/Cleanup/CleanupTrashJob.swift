@@ -428,6 +428,12 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             },
             beforeRemoval: { path in
                 guard let copy = byPath[path] else { return "was not in the set you confirmed — nothing moved" }
+                // Codex #150 F4: the copy that stays must not be leaving
+                // through another job right now (this file is reserved by
+                // the engine's turn already).
+                if RemovalReservations.shared.isReserved(copy.keeper.path) {
+                    return RemovalReservations.survivorLeavingNote
+                }
                 started?(path)
                 switch CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.transfer($0, from: control) },
                                                betweenReads: { between?(path) }) {

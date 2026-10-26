@@ -436,7 +436,12 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
         case .warned?:
             return nil
         case let .claims(source, copies)?:
-            return ContentCopyProof.proven(source: source, copies: copies)
+            // Codex #150 F4: a copy another job is removing right now is no
+            // survivor. This file is already reserved by the engine's turn,
+            // so whichever of two racing doors checks second is held.
+            let staying = copies.filter { !RemovalReservations.shared.isReserved($0.path) }
+            if staying.isEmpty, !copies.isEmpty { return RemovalReservations.survivorLeavingNote }
+            return ContentCopyProof.proven(source: source, copies: staying)
                 ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
         case nil:
             return VideoScanModel.copyNotProvenAtTheMoveNote

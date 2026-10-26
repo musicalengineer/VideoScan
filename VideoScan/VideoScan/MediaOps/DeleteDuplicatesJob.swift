@@ -344,6 +344,19 @@ enum DeleteDuplicatesDiskWorker {
                                                                 facts: DeletionTierFacts()),
                                             learnedKeeperFixity: nil, notCountedWhy: why)
         }
+        // Codex #150 F4: this copy is reserved for removal from the proof
+        // through the quarantine move (after it, the file is no longer at
+        // its path, so no other door can count it as the copy that stays),
+        // and the keeper must not be leaving through another job now.
+        return RemovalReservations.shared.whileReserved(
+            item.path, survivor: item.keeperPath,
+            held: { Self.leftAloneByReservation($0) },
+            { proveAndQuarantine(item, hooks: hooks) })
+    }
+
+    /// Phase 1's proof and quarantine move, with the copy reserved.
+    private static func proveAndQuarantine(_ item: DeleteDuplicatesWorkItem,
+                                           hooks: SignatureVerification.Hooks) -> DeleteDuplicatesPhaseOne {
         let box = FixityBox()
         var observing = hooks
         let downstream = hooks.didComputeKeeperFixity
@@ -362,6 +375,14 @@ enum DeleteDuplicatesDiskWorker {
         return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value,
                                         retainedInQuarantine: retainedInQuarantine(outcome),
                                         siblingReads: reads)
+    }
+
+    /// Left alone (a hold, never counted, never a Review mark) because the
+    /// file or the copy that stays is being removed by another job now.
+    static func leftAloneByReservation(_ note: String) -> DeleteDuplicatesPhaseOne {
+        DeleteDuplicatesPhaseOne(outcome: .leftAlone(reason: DuplicateDeletionHold.leftAlonePrefix + note,
+                                                     facts: DeletionTierFacts()),
+                                 learnedKeeperFixity: nil, notCountedWhy: note)
     }
 
     /// R6: a copy that cannot be stat'ed at its turn is OFFLINE when its
@@ -476,6 +497,9 @@ enum DeleteDuplicatesDiskWorker {
     /// is the tier recorded before the save; it is what the file goes by
     /// when every stamp reproduces. Stat only — the keeper is never read
     /// here.
+    /// Codex #150 F4: the whole of phase two runs with the duplicate
+    /// reserved for removal (RemovalReservations), and is put back when the
+    /// keeper is itself being removed by another job right now.
     static func deleteQuarantined(_ ticket: QuarantineTicket, decided recorded: DeletionTierDecision,
                                   facts: DeletionTierFacts,
                                   keeperFilename: String,
@@ -483,6 +507,27 @@ enum DeleteDuplicatesDiskWorker {
                                   archiveCheck: ArchiveRemovalCheck? = nil,
                                   boundary ask: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)? = nil)
         -> DeleteDuplicatesPhaseTwo {
+        RemovalReservations.shared.whileReserved(
+            ticket.originalPath, survivor: ticket.proof.keeperPath,
+            held: { note in
+                DeleteDuplicatesPhaseTwo(
+                    outcome: release(ticket, reason: note, keeperFilename: keeperFilename, leftAlone: facts),
+                    decision: recorded, facts: facts, evidenceChanged: false, heldNote: note, notCountedWhy: note)
+            },
+            {
+                deleteQuarantinedWhileReserved(ticket, decided: recorded, facts: facts, keeperFilename: keeperFilename,
+                                               hooks: hooks, archiveCheck: archiveCheck, boundary: ask)
+            })
+    }
+
+    private static func deleteQuarantinedWhileReserved(
+        _ ticket: QuarantineTicket, decided recorded: DeletionTierDecision,
+        facts: DeletionTierFacts,
+        keeperFilename: String,
+        hooks: SignatureVerification.Hooks,
+        archiveCheck: ArchiveRemovalCheck?,
+        boundary ask: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)?
+    ) -> DeleteDuplicatesPhaseTwo {
         guard recorded.tier != nil else {
             // Never reached — the caller releases a nil tier itself — but
             // a nil tier must never default to a removal.

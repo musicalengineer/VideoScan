@@ -555,6 +555,13 @@ struct JunkDiskTurn: Sendable {
     /// then the file operation — one synchronous stretch, nothing awaited.
     func run(path: String, protections: JunkTurnProtections,
              catalogBytes: Int64) -> VideoScanModel.JunkFileOutcome {
+        // Codex #150 F4: the file is reserved for removal from the door's
+        // proof through the move, so no other door counts it as the copy
+        // that stays meanwhile (RemovalReservations).
+        guard let reservation = RemovalReservations.shared.reserve(path) else {
+            return .held(RemovalReservations.busyNote)
+        }
+        defer { RemovalReservations.shared.release(reservation) }
         // Before the existence check on purpose: the guard decides what a
         // vanished file means.
         if let beforeRemoval, let why = beforeRemoval(path) { return .held(why) }
