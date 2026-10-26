@@ -43,3 +43,4 @@ The matcher reads the command's first token. Never `cd X && …`; never lead wit
 
 ## Working with Rick
 Direct and terse; push back when he is wrong; one question at a time; 🔴 at the top for anything blocking. Give a one-line C++ analogy where a Swift idiom is non-obvious. Rick builds and spot-tests the app himself: say Debug or Release and why. Say what you did, not how hard it was.
+**Machine names (Rick, 2026-10-26):** when Rick says **"M5"** he means the **M5 Ultra Mac Studio** (hostname `RicksUltra`, his dev machine from 10/27). "M4" is the M4 Max Studio (`RicksM4`, the headless test host after the move). The M5 Pro MacBook is "the laptop" or "M5 Pro" (`ricksm5.local`; scripts still label it `M5`, e.g. `nightly_rota.json`). When writing, say "M5 Ultra" or "M5 Pro", never a bare "M5".
