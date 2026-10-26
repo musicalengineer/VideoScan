@@ -67,6 +67,7 @@
 // state but a locked box the serialized closure owns.
 
 import Foundation
+import CSQLiteCloseGuard
 import GRDB
 import os
 import SQLite3
@@ -241,6 +242,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
             let loaded = try await Self.prepare(opened, host: host)
             let settled = try await settle(opened, loaded: loaded, at: url, fileGuard: fileGuard)
             if let words = fileGuard.violation() { throw Refusal(reason: words) }
+            // #151-1: the open is admitted — the session's own close may
+            // checkpoint and tidy its WAL again, as before. The last step
+            // that can throw; nothing after it refuses.
+            try Self.liftCloseProtection(opened)
             pool = opened.pool
             databaseURL = url
             self.fileGuard = fileGuard
@@ -281,7 +286,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
     }
 
     private static func openPool(at url: URL, durability: Durability) throws -> Opened {
-        let verdict = OpenVerdict(path: url.path)
+        let verdict = OpenVerdict(path: SQLiteWALSidecar.resolvedPath(url))
         do {
             return Opened(pool: try makePool(at: url, durability: durability, readonly: false, verdict: verdict),
                           readOnlyReason: nil, verdict: verdict)
@@ -313,6 +318,12 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let fullfsync = durability.fullfsync
         let busyMilliseconds = Int(busyTimeoutSeconds * 1_000)
         configuration.prepareDatabase { db in
+            // #151-1: the read-write writer's VERY FIRST act, before any
+            // statement that reads the schema (a malformed schema fails the
+            // first such pragma, and GRDB closes the connection at once):
+            // its close may neither checkpoint nor delete until the open is
+            // admitted (OpenVerdict.setCloseProtection; lifted in finishOpen).
+            if verdict != nil, !db.configuration.readonly { try OpenVerdict.setCloseProtection(db, on: true) }
             // The engine's own busy handler (not GRDB's `busyMode`, which
             // installs a callback the pragma cannot report back). FIRST:
             // `PRAGMA synchronous` reads the schema, so it already needs a
@@ -333,15 +344,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // journal_mode = WAL is DatabasePool's own invariant; it sets it —
         // AFTER prepareDatabase, so only a file that passed the checks is
         // switched or written (GRDB 7.11.1 DatabasePool.init → setUpWALMode).
-        let pool: DatabasePool
-        do {
-            pool = try DatabasePool(path: url.path, configuration: configuration)
-        } catch {
-            // GRDB has closed the refusing writer by now (SerializedDatabase
-            // closes a connection whose setUp threw); the holder goes last.
-            verdict?.release()
-            throw error
-        }
+        // A refusal from prepareDatabase: GRDB closes that writer at once
+        // (SerializedDatabase closes a connection whose setUp threw) — with
+        // its close protection already on.
+        let pool = try DatabasePool(path: url.path, configuration: configuration)
         // codex #141 F1: GRDB 7.11.1 enables WAL on the WRITER after
         // prepareDatabase ran, and follows it with `PRAGMA synchronous =
         // NORMAL` (GRDB/Core/Database.swift, setUpWALMode — "many
@@ -1097,8 +1103,10 @@ extension GRDBCatalogRepository {
 
     /// What every refusal reached by the verdict says about the file (#387).
     /// True because the checks ran before GRDB's WAL switch and init write,
-    /// nothing in this file unlinks, and `holdFilesAsFound` keeps SQLite's
-    /// own close from checkpointing or deleting (see `OpenVerdict`).
+    /// nothing in this file unlinks, and the writer's close protection
+    /// (on before its first schema read) keeps SQLite's own close from
+    /// checkpointing or deleting (see `OpenVerdict`). `path` is the RESOLVED
+    /// path, so the sidecar names are the ones SQLite uses (#151-4).
     static func leftAsFoundWords(_ path: String) -> String {
         let name = (path as NSString).lastPathComponent
         return "VideoScan left \(name) as found: it wrote nothing to it and removed nothing beside it (SQLite's journal files \(name)-wal and \(name)-shm may now be beside it)"
@@ -1122,11 +1130,21 @@ extension GRDBCatalogRepository {
     /// WAL mode never makes one, so this is always another program's; a
     /// journal that is live rather than hot is refused too, and the next
     /// open, after that program commits, succeeds.
+    ///
+    /// The journal is looked for beside the RESOLVED path — the name SQLite
+    /// itself uses for a symlinked database (#151-4).
+    ///
+    /// Not closed (Codex #151-3, documented, issue drafted): this is an
+    /// unlocked look. A rollback-mode writer that crashes in the
+    /// microseconds between it and the writer's first schema read leaves a
+    /// journal SQLite then plays back before the checks. It needs a foreign
+    /// rollback-mode writer crashing during our open.
     static func hotJournal(beside url: URL) -> String? {
-        guard let handle = FileHandle(forReadingAtPath: url.path + "-journal") else { return nil }
+        let path = SQLiteWALSidecar.resolvedPath(url)
+        guard let handle = FileHandle(forReadingAtPath: path + "-journal") else { return nil }
         defer { try? handle.close() }
         guard let first = (try? handle.read(upToCount: 1))?.first, first != 0 else { return nil }
-        return "\(url.lastPathComponent)-journal is beside it: a write another program did not finish. Open it once with that program, or sqlite3, to finish the recovery"
+        return "\((path as NSString).lastPathComponent)-journal is beside it: a write another program did not finish. Open it once with that program, or sqlite3, to finish the recovery"
     }
 
     /// The open's verdict (#387, Rick 2026-10-26: "the lock that admits the
@@ -1152,22 +1170,34 @@ extension GRDBCatalogRepository {
     /// checked file is the file being written; a changed one re-runs the
     /// checks right there, under that lock (codex #144-2).
     ///
-    /// `holdFilesAsFound`, before a refusing writer closes (codex #144-1/-3):
-    /// nothing in the store unlinks a sidecar, and SQLite's own close must
-    /// not either — as the last connection it would checkpoint any committed
-    /// `-wal` frames into the main file and then delete the `-wal` and
-    /// `-shm`. Two guards: SQLITE_FCNTL_PERSIST_WAL on the writer (the close
-    /// never deletes), and a READ-ONLY holder connection opened before the
-    /// writer closes and closed after it. In WAL mode every connection keeps
-    /// a SHARED lock on the database file until it closes, so the writer's
-    /// close cannot take the EXCLUSIVE lock its checkpoint needs; the holder
-    /// cannot checkpoint at all (a read-only WAL connection gets
-    /// SQLITE_READONLY) and so never deletes either. (sqlite3_db_config's
-    /// NO_CKPT_ON_CLOSE would be one call, but it is variadic — Swift cannot
-    /// call it without a C shim.)
+    /// `setCloseProtection` (codex #144-1/-3, #151-1): nothing in the store
+    /// unlinks a sidecar, and SQLite's own close must not either — as the
+    /// last connection it would checkpoint any committed `-wal` frames into
+    /// the main file and then delete (Apple's build: truncate) the `-wal`
+    /// and the `-shm`. So the read-write writer's FIRST act in
+    /// `prepareDatabase`, before any statement reads the schema, is
+    /// SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE (through the one-function C target
+    /// CSQLiteCloseGuard — sqlite3_db_config is variadic, which Swift cannot
+    /// call) plus SQLITE_FCNTL_PERSIST_WAL. With NO_CKPT_ON_CLOSE the close
+    /// skips the checkpoint, and SQLite deletes/truncates the WAL only after
+    /// a checkpoint succeeded, so neither the main file nor a sidecar is
+    /// touched; PERSIST_WAL is the second layer. Both stay on for the whole
+    /// open and are lifted (`liftCloseProtection`) only when the session is
+    /// about to be published. (The read-only "holder" connection of the
+    /// previous round is gone: Codex #151-1 showed it came too late — a
+    /// malformed schema fails the first pragma — and a failed holder left
+    /// only PERSIST_WAL, which does not stop the checkpoint.)
     ///
-    /// Memory: one Int, one handle; the holder's page cache (≤ ~2 MB) lives
-    /// only between a refusal and the end of the open.
+    /// NOT closed this round (Codex #151-2, documented, issue drafted): the
+    /// verdict's lock is released before GRDB's own setup writes — the WAL
+    /// switch, the `grdb_issue_102` CREATE/DROP, and the migrator's
+    /// `CREATE TABLE IF NOT EXISTS grdb_migrations` — none of which runs
+    /// `confirm`. A foreign writer that commits an inadmissible change in
+    /// that window gets those writes before the later `confirm` refuses
+    /// (whose words say so: `changedDuringOpenWords`). Needs a foreign
+    /// writer committing during our open.
+    ///
+    /// Memory: one Int.
     /// For Rick: a mutex-guarded struct the writer's setup closure and the
     /// open share — a std::shared_ptr<Verdict> two threads touch under a lock.
     final class OpenVerdict: @unchecked Sendable {
@@ -1176,8 +1206,6 @@ extension GRDBCatalogRepository {
         private let lock = NSLock()
         /// `PRAGMA data_version` on the writer when the checks last passed.
         private var dataVersion: Int?
-        /// The read-only holder, between a refusal and `release`.
-        private var holder: OpaquePointer?
 
         init(path: String) { self.path = path }
 
@@ -1193,11 +1221,7 @@ extension GRDBCatalogRepository {
                 }
                 lock.withLock { dataVersion = seen }
             } catch let refusal as Refusal {
-                holdFilesAsFound(db)
                 throw Refusal(reason: "\(refusal.reason) — \(GRDBCatalogRepository.leftAsFoundWords(path))")
-            } catch {
-                holdFilesAsFound(db)
-                throw error
             }
         }
 
@@ -1216,53 +1240,33 @@ extension GRDBCatalogRepository {
             lock.withLock { dataVersion = now }
         }
 
-        /// Before the writer `db` closes on a refusal (see above). Best
-        /// effort by design: if the holder cannot open, PERSIST_WAL still
-        /// keeps the close from deleting anything.
-        func holdFilesAsFound(_ db: Database) {
-            guard let connection = db.sqliteConnection else { return }
-            var persist: Int32 = 1
-            _ = sqlite3_file_control(connection, "main", SQLITE_FCNTL_PERSIST_WAL, &persist)
-            var handle: OpaquePointer?
-            guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let handle else {
-                sqlite3_close(handle)
-                return
+        /// Close protection on the connection `db` (see above). On: the
+        /// close neither checkpoints nor deletes; off: SQLite's default.
+        /// Throws when NO_CKPT_ON_CLOSE does not take — the open is then
+        /// refused before anything was read (fail closed).
+        static func setCloseProtection(_ db: Database, on: Bool) throws {
+            guard let connection = db.sqliteConnection else { throw Refusal(reason: "the catalog connection is closed") }
+            var now: Int32 = -1
+            let code = videoscan_sqlite3_no_ckpt_on_close(UnsafeMutableRawPointer(connection), on ? 1 : 0, &now)
+            guard code == SQLITE_OK, now == (on ? 1 : 0) else {
+                throw Refusal(reason: "SQLite would not \(on ? "set" : "clear") NO_CKPT_ON_CLOSE (code \(code), now \(now)) — the catalog was not opened")
             }
-            // One read enters WAL mode and takes the SHARED lock the
-            // connection then keeps until it closes.
-            var statement: OpaquePointer?
-            if sqlite3_prepare_v2(handle, "SELECT count(*) FROM sqlite_master", -1, &statement, nil) == SQLITE_OK {
-                _ = sqlite3_step(statement)
-            }
-            sqlite3_finalize(statement)
-            let previous = lock.withLock { () -> OpaquePointer? in
-                let previous = holder
-                holder = handle
-                return previous
-            }
-            if let previous { sqlite3_close(previous) }
-        }
-
-        /// After the refusing writer has closed: the holder goes last.
-        func release() {
-            let handle = lock.withLock { () -> OpaquePointer? in
-                let handle = holder
-                holder = nil
-                return handle
-            }
-            if let handle { sqlite3_close(handle) }
+            var persist: Int32 = on ? 1 : 0
+            _ = sqlite3_file_control(connection, "main", SQLITE_FCNTL_PERSIST_WAL, &persist)   // second layer; best effort
         }
     }
 
-    /// Close the pool of an open that was refused, leaving the files as
-    /// found (see `OpenVerdict.holdFilesAsFound`). A read-only pool cannot
-    /// checkpoint or delete, so it is simply closed.
+    /// Close the pool of an open that was refused. Its writer still has
+    /// the close protection it got first thing (lifted only on success), so
+    /// the close neither checkpoints nor deletes; a read-only pool cannot.
     private static func closeRefused(_ opened: Opened) {
-        if let verdict = opened.verdict {
-            try? opened.pool.writeWithoutTransaction { db in verdict.holdFilesAsFound(db) }
-        }
         try? opened.pool.close()
-        opened.verdict?.release()
+    }
+
+    /// The open is admitted: give the writer SQLite's default close back.
+    private static func liftCloseProtection(_ opened: Opened) throws {
+        guard opened.verdict != nil, opened.readOnlyReason == nil else { return }
+        try opened.pool.writeWithoutTransaction { db in try OpenVerdict.setCloseProtection(db, on: false) }
     }
 
     /// The open checks and the migration. A read-write pool's checks already

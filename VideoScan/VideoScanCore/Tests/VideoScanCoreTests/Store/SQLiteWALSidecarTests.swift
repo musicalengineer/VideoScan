@@ -69,6 +69,38 @@ struct SQLiteWALSidecarTests {
         #expect(FileManager.default.fileExists(atPath: Self.wal(fixture.url)))
     }
 
+    /// Codex #151-4: through `alias.sqlite → catalog.sqlite` SQLite uses the
+    /// TARGET's sidecar names; the restored -wal must be `catalog.sqlite-wal`.
+    @Test func aViewerOpeningThroughAnAliasGetsTheTargetsSidecar() async throws {
+        let fixture = try await Self.walCatalogWithoutSidecars()
+        defer { fixture.remove() }
+        let alias = fixture.directory.appendingPathComponent("alias.sqlite")
+        try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: fixture.url.lastPathComponent)
+        let repository = GRDBCatalogRepository(host: "viewer", durability: .volatileForTests)
+        let opened = await repository.openForReading(at: alias)
+        await repository.close()
+        #expect(opened == .readOnly(reason: GRDBCatalogRepository.readerOnlyWords), "\(opened)")
+        #expect(FileManager.default.fileExists(atPath: Self.wal(fixture.url)), "the target's -wal was not restored")
+        #expect(!FileManager.default.fileExists(atPath: alias.path + "-wal"), "a -wal SQLite never reads was made beside the alias")
+    }
+
+    /// Codex #151-5: the restored -wal gets the database's mode whatever the
+    /// process umask. umask(2) is PROCESS-wide and swift test runs suites in
+    /// parallel, so it is changed for the one helper call only and restored
+    /// at once (this suite is .serialized; other suites' files created in
+    /// that microsecond window would only be created more private).
+    @Test func theRestoredSidecarHasTheDatabasesModeWhateverTheUmask() async throws {
+        let fixture = try await Self.walCatalogWithoutSidecars()
+        defer { fixture.remove() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o660], ofItemAtPath: fixture.url.path)
+        let previous = umask(0o077)
+        let readiness = SQLiteWALSidecar.prepareForReadOnlyOpen(fixture.url)
+        umask(previous)
+        #expect(readiness == .created)
+        let mode = (try FileManager.default.attributesOfItem(atPath: Self.wal(fixture.url))[.posixPermissions] as? NSNumber)?.intValue
+        #expect(mode == 0o660, "the -wal's mode is \(String(mode ?? -1, radix: 8)), not the database's 660")
+    }
+
     // MARK: - Read-only folder: refused, in words that say why
 
     @Test func aReadOnlyFolderIsRefusedWithWordsThatSayWhy() async throws {

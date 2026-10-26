@@ -45,19 +45,38 @@ public enum SQLiteWALSidecar {
     /// Before a READ-ONLY open of `database`: make sure a WAL-mode file has
     /// its `-wal` (see the file comment). Never deletes or rewrites anything.
     public static func prepareForReadOnlyOpen(_ database: URL) -> Readiness {
-        guard isWALMode(database) else { return .notNeeded }
-        let wal = database.path + "-wal"
+        // SQLite names the sidecars after the RESOLVED database (#151-4).
+        let path = resolvedPath(database)
+        let target = URL(fileURLWithPath: path)
+        guard isWALMode(target) else { return .notNeeded }
         // The database's own permission bits, as SQLite gives its sidecars.
         var info = stat()
-        let mode = stat(database.path, &info) == 0 ? mode_t(info.st_mode & 0o777) : 0o644
-        let fd = open(wal, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
+        let mode = stat(path, &info) == 0 ? mode_t(info.st_mode & 0o777) : 0o644
+        let fd = open(path + "-wal", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
         if fd >= 0 {
+            // #151-5: open(2) applies the process umask; set the database's
+            // mode exactly, on the descriptor we created (as SQLite's own
+            // robust_open does), so another user who can read the database
+            // can read its -wal too.
+            _ = fchmod(fd, mode)
             close(fd)
             return .created
         }
         let failure = errno
         if failure == EEXIST { return .alreadyThere }   // there before us, or another creator won the race
-        return .refused(missingWords(database, why: String(cString: strerror(failure))))
+        return .refused(missingWords(target, why: String(cString: strerror(failure))))
+    }
+
+    /// The path SQLite itself uses for `database` and its sidecars (Codex
+    /// #151-4): SQLite's unix VFS resolves a symlinked database and names
+    /// `-wal` / `-shm` / `-journal` after the TARGET. realpath(3) resolves
+    /// every component; a resolved directory link names the same directory,
+    /// so the sidecar path it gives is the same file SQLite uses. A path
+    /// that cannot be resolved (no file yet) comes back as given.
+    public static func resolvedPath(_ database: URL) -> String {
+        guard let resolved = realpath(database.path, nil) else { return database.path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// The words when the `-wal` cannot be restored here (#386).

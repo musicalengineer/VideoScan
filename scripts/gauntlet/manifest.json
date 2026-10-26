@@ -2649,6 +2649,7 @@
         "CatalogStoreDurabilityCodex141Tests"
       ],
       "tests": [
+        "aHotJournalBehindAnAliasIsRefusedUntouched",
         "aNewerSchemaIsRefusedWithoutTheFileChanging",
         "aNewerSchemaWALFileIsRefusedWithItsMainFileAsFound",
         "aReadOnlyFolderWithoutSidecarsNeverOpensForWriting",
@@ -2668,6 +2669,7 @@
       "tests": [
         "aBrieflyLockedCatalogIsWaitedFor",
         "aForeignKeyViolationAfterTheChecksIsRefused",
+        "aMalformedSchemaCrashImageIsRefusedWithItsFramesInTheirWAL",
         "aRefusedOpenLeavesCommittedFramesInTheirWAL",
         "foreignSidecarsSurviveARefusal"
       ]
@@ -2683,8 +2685,10 @@
         "aDanglingSymlinkIsNeitherFollowedNorReplaced",
         "aReadOnlyFolderIsRefusedWithWordsThatSayWhy",
         "aRollbackJournalFileGetsNoSidecar",
+        "aViewerOpeningThroughAnAliasGetsTheTargetsSidecar",
         "anExistingSidecarIsNeverTouched",
         "thePreflightReaderReadsACatalogWithoutItsSidecar",
+        "theRestoredSidecarHasTheDatabasesModeWhateverTheUmask",
         "theViewerDoorRestoresTheSidecarAndOpens"
       ]
     },
@@ -34330,7 +34334,7 @@
       ],
       "expected_floor": 289,
       "name": "regression",
-      "package_expected_floor": 275,
+      "package_expected_floor": 279,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

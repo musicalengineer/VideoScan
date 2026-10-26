@@ -188,6 +188,67 @@ struct CatalogStoreOpenVerdictTests {
         #expect(walAfter == walBefore, "the -wal holding the committed transaction was removed or rewritten (\(walBefore.count) → \(walAfter?.count ?? -1) bytes)")
     }
 
+    // MARK: - #151-1 (P1): close protection is in place before the first schema read
+
+    /// Codex #151-1's recipe: a crash image whose last COMMITTED transaction
+    /// (in the -wal, not checkpointed) wrote malformed schema SQL. The very
+    /// first statement that reads the schema — `PRAGMA synchronous`, before
+    /// the checks — fails SQLITE_CORRUPT and GRDB closes the writer at once.
+    /// As the last connection, an unprotected close checkpoints the frames
+    /// into the main file and removes the -wal.
+    private static func malformedSchemaCrashImage() async throws -> StoreFixture {
+        let source = try await StoreFixture.make(.grdb, generation: 1)
+        defer { source.remove() }
+        let image = StoreFixture(kind: .grdb, directory: try StoreFixture.temporaryDirectory())
+        let writer = try DatabaseQueue(path: source.url.path)
+        try writer.inDatabase { db in
+            // The table's schema row reaches the MAIN file (checkpoint), then
+            // one more commit stays in the -wal without touching that row.
+            try db.execute(sql: "CREATE TABLE malformed_probe (x INTEGER)")
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+            try db.execute(sql: "PRAGMA wal_autocheckpoint = 0")
+            try db.execute(sql: "INSERT INTO malformed_probe VALUES (1)")
+        }
+        try FileManager.default.copyItem(at: source.url, to: image.url)
+        try FileManager.default.copyItem(atPath: source.url.path + "-wal", toPath: image.url.path + "-wal")
+        try writer.close()
+        // Apple's SQLite refuses writable_schema edits (defensive mode), so
+        // the schema SQL is broken in the main file's bytes: same length, ')'
+        // → '(' — a parse error when the schema is read. Main-file pages
+        // carry no checksum; the -wal's frames do, so the -wal is untouched
+        // and must not hold a copy of that row.
+        let good = Data("CREATE TABLE malformed_probe (x INTEGER)".utf8)
+        let bad = Data("CREATE TABLE malformed_probe (x INTEGER(".utf8)
+        var main = try Data(contentsOf: image.url)
+        let wal = try Data(contentsOf: URL(fileURLWithPath: image.url.path + "-wal"))
+        try #require(!wal.isEmpty, "the crash image's -wal is empty")
+        try #require(wal.range(of: good) == nil, "the -wal holds a copy of the schema row; the patch would be shadowed")
+        let found = try #require(main.range(of: good), "the schema row is not in the main file")
+        try #require(main.range(of: good, in: found.upperBound..<main.count) == nil, "the schema row appears twice")
+        main.replaceSubrange(found, with: bad)
+        try main.write(to: image.url)
+        return image
+    }
+
+    @Test func aMalformedSchemaCrashImageIsRefusedWithItsFramesInTheirWAL() async throws {
+        let fixture = try await Self.malformedSchemaCrashImage()
+        defer { fixture.remove() }
+        let mainBefore = try Data(contentsOf: fixture.url)
+        let walBefore = try Data(contentsOf: URL(fileURLWithPath: fixture.url.path + "-wal"))
+        let repository = GRDBCatalogRepository(host: "malformed-image", durability: .volatileForTests)
+        let outcome = await repository.open(at: fixture.url)
+        await repository.close()
+        guard case .refused = outcome else {
+            Issue.record("expected .refused for a malformed schema, got \(outcome)")
+            return
+        }
+        let mainAfter = try Data(contentsOf: fixture.url)
+        #expect(mainAfter == mainBefore, "the refused open checkpointed the -wal into the main file")
+        let walAfter = try? Data(contentsOf: URL(fileURLWithPath: fixture.url.path + "-wal"))
+        #expect(walAfter == walBefore, "the -wal was removed or rewritten (\(walBefore.count) → \(walAfter?.count ?? -1) bytes)")
+        #expect(FileManager.default.fileExists(atPath: fixture.url.path + "-shm"), "the -shm the open made was removed")
+    }
+
     // MARK: - #144-4 (P2): a briefly locked healthy catalog is waited for, not refused
 
     /// A healthy current catalog in rollback-journal mode, held under

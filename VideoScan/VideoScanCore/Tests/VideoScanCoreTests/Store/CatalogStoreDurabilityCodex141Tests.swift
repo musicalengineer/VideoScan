@@ -368,6 +368,32 @@ struct CatalogStoreDurabilityCodex141Tests {
         }
     }
 
+    /// Codex #151-4: the same hot journal, opened through a symlink
+    /// `alias.sqlite → catalog.sqlite`. SQLite resolves the link and uses
+    /// the TARGET's sidecar names, so the byte check must look beside the
+    /// target too, or SQLite plays `catalog.sqlite-journal` back first.
+    @Test func aHotJournalBehindAnAliasIsRefusedUntouched() async throws {
+        let (fixture, _) = try await newerSchemaFixtureWithAHotJournal()
+        defer { fixture.remove() }
+        let alias = fixture.directory.appendingPathComponent("alias.sqlite")
+        try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: fixture.url.lastPathComponent)
+        let before = try Self.directorySnapshot(fixture.directory)
+        try #require(before.keys.contains("catalog.sqlite-journal"))
+        let repository = GRDBCatalogRepository(host: "hot-journal-alias", durability: .volatileForTests)
+        let outcome = await repository.open(at: alias)
+        await repository.close()
+        guard case .refused(let words) = outcome else {
+            Issue.record("expected .refused for a hot journal behind an alias, got \(outcome)")
+            return
+        }
+        #expect(words.contains("could not be verified before opening"), Comment(rawValue: words))
+        let after = try Self.directorySnapshot(fixture.directory)
+        #expect(Set(after.keys) == Set(before.keys), "the directory's entries changed: \(after.keys.sorted()) vs \(before.keys.sorted())")
+        for (name, bytes) in before {
+            #expect(after[name] == bytes, "\(name) changed — the hot journal behind the alias was played back")
+        }
+    }
+
     /// The read-only-folder corner the F6-2 rule must keep: a healthy
     /// WAL-mode catalog with its sidecars cleaned, in a folder that cannot
     /// be written. The writer cannot make the `-shm` it needs, so the door

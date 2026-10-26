@@ -51,7 +51,14 @@ let package = Package(
     targets: [
         .target(
             name: "VideoScanCore",
-            dependencies: [.product(name: "GRDB", package: "GRDB.swift")]
+            dependencies: [.product(name: "GRDB", package: "GRDB.swift"), "CSQLiteCloseGuard"]
+        ),
+        // Codex #151-1 (2026-10-26): ONE C function — a non-variadic wrapper
+        // for sqlite3_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE), which Swift
+        // cannot call (variadic). Used only by Store/GRDBCatalogRepository.
+        .target(
+            name: "CSQLiteCloseGuard",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
             name: "videoscan-preview-sweep",
