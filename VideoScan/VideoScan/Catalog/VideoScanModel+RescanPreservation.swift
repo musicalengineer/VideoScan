@@ -290,21 +290,51 @@ struct RescanPreservedFields: Sendable {
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
     /// keep the map small.
+    ///
+    /// One rule group per concept the header lists (dossier product,
+    /// people tags, curation, lifecycle state, archive provenance, Rick's
+    /// answers, footage + music); `isWorthRestoring` is their OR. A new
+    /// preserved field joins the group it belongs to, and the truth table in
+    /// RescanWorthRestoringCharacterizationTests gets a row. (2026-10-25:
+    /// split from one 36-term disjunction — the complexity gate's worst
+    /// predicate — with no change to what is admitted.)
     var isWorthRestoring: Bool {
+        carriesDossierProduct
+            || carriesPeopleTags
+            || carriesCuration
+            || carriesLifecycleState
+            || carriesArchiveProvenance
+            || carriesUsersAnswers
+            || carriesFootageOrMusic
+    }
+
+    /// Machine products of the dossier pass — hours of Qwen + Whisper per
+    /// volume. A propagated / caught-up date lives on records that never
+    /// had their own dossier pass (2026-09-12) — it must survive a rescan
+    /// like every other machine product. Side fields (model names, dates,
+    /// confidence, source, range, reason) do not count on their own: without
+    /// their channel they describe nothing.
+    var carriesDossierProduct: Bool {
         !sceneCaptions.isEmpty
             || !(audioTranscript ?? "").isEmpty
             || !ocrDateCandidates.isEmpty
             || !ocrText.isEmpty
             || dossierProcessedAt != nil
-            // A propagated / caught-up date lives on records that never
-            // had their own dossier pass (2026-09-12) — it must survive a
-            // rescan like every other machine product.
             || inferredRecordDate != nil
-            || !detectedPeople.isEmpty
+    }
+
+    /// Who is in the footage — detected, suspected, confirmed, rejected.
+    var carriesPeopleTags: Bool {
+        !detectedPeople.isEmpty
             || !suspectedPeople.isEmpty
             || !confirmedByUserPeople.isEmpty
             || !rejectedPeople.isEmpty
-            || mediaDisposition != .unreviewed
+    }
+
+    /// Rick's triage: disposition, stage, stars, junk score, notes, tags.
+    /// Each is compared against its blank default, not merely "set".
+    var carriesCuration: Bool {
+        mediaDisposition != .unreviewed
             || lifecycleStage != .cataloged
             || archiveStage != .none
             || starRating != 0
@@ -312,29 +342,51 @@ struct RescanPreservedFields: Sendable {
             || !notes.isEmpty
             || !tags.isEmpty
             || !userNotes.isEmpty
-            || purgedAt != nil
+    }
+
+    /// Removal marker, set-aside, and the repair lifecycle (superseded /
+    /// confirmed / derived-from). A rescan must never resurrect or
+    /// un-confirm any of these; only their own doors flip them.
+    var carriesLifecycleState: Bool {
+        purgedAt != nil
             || setAsideReason != nil
             || supersededByID != nil
             || repairConfirmedDate != nil
             || derivedFrom != nil
             || derivationKind != nil
-            || archiveFixity != nil
+    }
+
+    /// Promote / Verify provenance: the fixity record (restored only under
+    /// the identity guard — but its PRESENCE is reason enough to snapshot)
+    /// and the where-did-this-come-from / which-archive fields.
+    var carriesArchiveProvenance: Bool {
+        archiveFixity != nil
             || originalFullPath != nil
             || originVolume != nil
             || !masterLocation.isEmpty
-            || userDate != nil
+    }
+
+    /// Rick's hand-entered date and place (with their confidences) and his
+    /// word on off-site copies — typed once, must survive every rescan.
+    var carriesUsersAnswers: Bool {
+        userDate != nil
             || userDateConfidence != nil
             || userPlace != nil
             || userPlaceConfidence != nil
             || !backupAttestations.isEmpty
-            || !footageDecisions.isEmpty
+    }
+
+    /// Find Similar Footage answers + membership, and the Family Music mark.
+    var carriesFootageOrMusic: Bool {
+        !footageDecisions.isEmpty
             || footage != nil
             || familyMusic != nil
     }
 
     /// GH #293: worth snapshotting for its kept perceptual fingerprint
     /// alone (an ffmpeg pass per file to recompute). Kept apart from
-    /// `isWorthRestoring` so that known complexity offender does not grow.
+    /// `isWorthRestoring`: a derived product of the bytes, admitted on its
+    /// own terms (same-size follow), not a curated fact.
     var carriesKeptFingerprint: Bool { perceptualFingerprint != nil }
 
     /// Codex r3 2026-10-16 F3 (D7): worth snapshotting for its removal

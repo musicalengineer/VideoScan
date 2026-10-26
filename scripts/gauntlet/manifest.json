@@ -23026,6 +23026,21 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RescanWorthRestoringCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RescanWorthRestoringCharacterizationTests"
+      ],
+      "tests": [
+        "eachCuratedFieldAloneIsWorthRestoring",
+        "positivesNeverVetoEachOther",
+        "scanDerivedOrSiblingFieldsAloneAreNotWorthRestoring",
+        "siblingPredicatesStayOutsideIsWorthRestoring",
+        "truthTableCoversEveryTermOnce"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RescueFileCopierTests.swift",
@@ -33355,7 +33370,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2979,
+      "expected_floor": 2984,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33692,6 +33707,7 @@
         "VideoScanTests/RepairLifecycleFilterTests",
         "VideoScanTests/RepairLifecycleRescanTests",
         "VideoScanTests/RepairLifecycleTests",
+        "VideoScanTests/RescanWorthRestoringCharacterizationTests",
         "VideoScanTests/ResearchHintsSurnamePropertyTests",
         "VideoScanTests/SWRProbeCacheTests",
         "VideoScanTests/ScanCheckpointTests",
