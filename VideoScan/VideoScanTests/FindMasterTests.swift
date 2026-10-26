@@ -218,6 +218,38 @@ struct FindMasterAnswerTests {
         }
     }
 
+    static func overlap(coverage: Double, landmarks: Int, n: Int = 1) -> AudioMasterCandidate {
+        let evidence = AudioMatchEvidence(matchedLandmarks: landmarks, coverage: coverage, overlapSeconds: 600, spanSeconds: 6,
+                                          offsetSeconds: 196.9, queryDurationSeconds: 600, masterDurationSeconds: 4_000)
+        return AudioMasterCandidate(key: AudioFingerprintStore.Key(contentDigest: "sha256:" + String(repeating: "\(n)", count: 64), sizeBytes: 9),
+                                    match: AudioMatch(evidence: evidence, verdict: .overlap(offsetSeconds: 196.9, seconds: 6),
+                                                      queryLandmarks: 16_000, masterLandmarks: 90_000,
+                                                      spanStartInMasterSeconds: 268.9, spanEndInMasterSeconds: 274.9), votes: 9)
+    }
+
+    @Test("weak overlaps: below the matcher's minCoverage AND under 3× its landmark floor; everything else is strong")
+    func weakOverlapsAreSplitByTheMatchersConstants() {
+        #expect(FindMasterAnswer.weakCoverageBelow == AudioMatchPolicy.default.minCoverage)
+        #expect(FindMasterAnswer.weakLandmarksBelow == 3 * AudioMatchPolicy.default.minMatchedLandmarks)
+        let realDataLike = Self.overlap(coverage: 0.03, landmarks: 24, n: 1)       // the 2026-10-26 smoke's shape
+        let manyLandmarks = Self.overlap(coverage: 0.03, landmarks: 400, n: 2)      // a long genuine shared stretch
+        let distributed = Self.overlap(coverage: 0.70, landmarks: 24, n: 3)         // a short query, well covered
+        let atTheLine = Self.overlap(coverage: 0.49, landmarks: 59, n: 4)
+        let contained = Self.candidate(.containedInMaster(offsetSeconds: 760.2))
+        #expect(FindMasterAnswer.isWeak(realDataLike))
+        #expect(FindMasterAnswer.isWeak(atTheLine))
+        #expect(!FindMasterAnswer.isWeak(manyLandmarks))
+        #expect(!FindMasterAnswer.isWeak(distributed))
+        #expect(!FindMasterAnswer.isWeak(contained))
+        let (strong, weak) = FindMasterAnswer.split([contained, realDataLike, manyLandmarks, atTheLine, distributed])
+        #expect(strong.map(\.key) == [contained.key, manyLandmarks.key, distributed.key], "rank order kept")
+        #expect(weak.map(\.key) == [realDataLike.key, atTheLine.key])
+        let header = FindMasterAnswer.weakHeader(count: 2)
+        #expect(header.hasPrefix("2 weak overlaps"))
+        #expect(header.contains("0.50") && header.contains("60"))
+        #expect(!header.lowercased().contains("master") && !header.lowercased().contains("original"))
+    }
+
     @Test("a negative says what was searched and what could not be")
     func negativeSaysWhatWasSearched() {
         let s = FindMasterAnswer.noneFound(searched: 3_575, noSoundTrack: 1_014, notFingerprinted: 122)
@@ -252,6 +284,26 @@ struct FindMasterJobTests {
         guard case .found(let found, _) = clip.outcome else { Issue.record("\(clip.outcome)"); return }
         #expect(found.first?.key == F.key(1))
         #expect(sink.lines.contains { $0.contains("inside clip1.mov from 00:01:40") })
+    }
+
+    @Test("weak overlaps: counted as their own bucket, one log line with their count; strong hits listed one per line")
+    func weakOverlapsAreCountedAndLoggedTogether() throws {
+        let job = FindMasterJob(plan: F.plan(selected: [2]), sidecarDirectory: URL(fileURLWithPath: "/nonexistent"), note: { _ in })
+        let weak1 = FindMasterAnswerTests.overlap(coverage: 0.03, landmarks: 24, n: 1)
+        let weak2 = FindMasterAnswerTests.overlap(coverage: 0.02, landmarks: 26, n: 2)
+        let strong = FindMasterAnswerTests.candidate(.containedInMaster(offsetSeconds: 760.2))
+        job.count(.found([weak1, weak2], searched: 10))
+        job.count(.found([strong, weak1], searched: 10))
+        #expect(job.tally.weakOnly == 1)
+        #expect(job.tally.inside == 1)
+        #expect(job.tally.searched == 2)
+        #expect(FindMasterAnswer.summary(job.tally, seconds: 1).contains("1 only weak overlaps"))
+        let query = try #require(job.plan.queries.first)
+        let lines = job.lines(for: query, outcome: .found([strong, weak1, weak2], searched: 10))
+        #expect(lines.count == 2)
+        #expect(lines[0].contains("inside"))
+        #expect(lines[1].contains("2 weak overlaps"))
+        #expect(lines[1].contains("24 landmarks") && lines[1].contains("26 landmarks"))
     }
 
     @Test("Stop after query 1 of 3 → stopped, 1 searched, 2 not started")
@@ -298,14 +350,21 @@ struct FindMasterJobTests {
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
     }
 
-    @Test("a missing or poisoned sidecar is refused before reading; no query runs")
+    @Test("a missing, poisoned or -wal-less sidecar is refused before reading; no query runs")
     func unopenableSidecarRefusesBeforeReading() async throws {
         let missing = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test_findmaster_missing_\(UUID().uuidString)")
         let poisoned = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test_findmaster_poison_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: poisoned, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: poisoned) }
         try Data(repeating: 0x5A, count: 4_096).write(to: poisoned.appendingPathComponent(AudioFingerprintStore.fileName))
-        for (dir, words) in [(missing, "no sound prints yet"), (poisoned, "not a database")] {
+        // A WAL sidecar "last closed by another program": no -wal, no -shm
+        // (test-owned scratch files). Refused (TODO #386), never re-created.
+        let noWAL = try F.sidecar()
+        defer { try? FileManager.default.removeItem(at: noWAL) }
+        let noWALFile = noWAL.appendingPathComponent(AudioFingerprintStore.fileName).path
+        try? FileManager.default.removeItem(atPath: noWALFile + "-wal")
+        try? FileManager.default.removeItem(atPath: noWALFile + "-shm")
+        for (dir, words) in [(missing, "no sound prints yet"), (poisoned, "not a database"), (noWAL, "write-ahead log")] {
             let sink = FindMasterLineSink()
             let job = FindMasterJob(plan: F.plan(selected: [2, 3]), sidecarDirectory: dir, note: sink.note)
             job.start()
@@ -317,30 +376,58 @@ struct FindMasterJobTests {
             #expect(job.results.isEmpty)
             #expect(sink.lines.filter { $0.hasPrefix("OUTCOME find master") }.count == 1)
         }
-        // Refusing never created the missing sidecar.
+        // Refusing never created the missing sidecar, nor the missing -wal.
         #expect(!FileManager.default.fileExists(atPath: missing.path))
+        #expect(!FileManager.default.fileExists(atPath: noWALFile + "-wal"))
     }
 
-    @Test("a run writes nothing: the sidecar's bytes, size, mtime and -wal are unchanged")
+    /// Bytes + mtime of the main file and -wal; inode of each sidecar file.
+    struct SidecarFacts: Equatable {
+        var db = Data(), wal: Data?
+        var dbModified: Date?, walModified: Date?
+        var inodes: [String: Int] = [:]
+        static func of(_ dir: URL) throws -> SidecarFacts {
+            let fm = FileManager.default
+            let path = dir.appendingPathComponent(AudioFingerprintStore.fileName).path
+            var f = SidecarFacts()
+            f.db = try Data(contentsOf: URL(fileURLWithPath: path))
+            f.dbModified = try fm.attributesOfItem(atPath: path)[.modificationDate] as? Date
+            if fm.fileExists(atPath: path + "-wal") {
+                f.wal = try Data(contentsOf: URL(fileURLWithPath: path + "-wal"))
+                f.walModified = try fm.attributesOfItem(atPath: path + "-wal")[.modificationDate] as? Date
+            }
+            for suffix in ["", "-wal", "-shm"] {
+                if let ino = try? fm.attributesOfItem(atPath: path + suffix)[.systemFileNumber] as? Int { f.inodes[suffix] = ino }
+            }
+            return f
+        }
+    }
+
+    @Test("a run writes nothing: bytes, mtime and inodes unchanged — idle, and while a writer holds -wal frames")
     func writesNothing() async throws {
         let dir = try F.sidecar()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let file = dir.appendingPathComponent(AudioFingerprintStore.fileName)
-        func facts() throws -> (Data, Int, Date, Bool) {
-            let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-            return (try Data(contentsOf: file), (attributes[.size] as? Int) ?? -1,
-                    (attributes[.modificationDate] as? Date) ?? .distantPast,
-                    FileManager.default.fileExists(atPath: file.path + "-wal"))
+        func run() async {
+            let job = FindMasterJob(plan: F.plan(selected: [1, 2, 3, 4]), sidecarDirectory: dir, note: { _ in })
+            job.start()
+            await job.task?.value
+            if case .finished = job.state {} else { Issue.record("\(job.state)") }
         }
-        let before = try facts()
-        let job = FindMasterJob(plan: F.plan(selected: [1, 2, 3, 4]), sidecarDirectory: dir, note: { _ in })
-        job.start()
-        await job.task?.value
-        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
-        let after = try facts()
-        #expect(after.0 == before.0, "sidecar bytes changed")
-        #expect(after.1 == before.1)
-        #expect(after.2 == before.2)
-        #expect(after.3 == before.3, "-wal appeared or vanished")
+        // Idle sidecar (no other connection).
+        let idle = try SidecarFacts.of(dir)
+        await run()
+        #expect(try SidecarFacts.of(dir) == idle)
+        // A running Fingerprint Sound: an open writer whose newest row lives
+        // only in -wal frames — never checkpointed by this reader.
+        var writer: AudioFingerprintStore? = try AudioFingerprintStore(directory: dir)
+        try writer?.put([.init(key: F.key(9), fingerprint: F.print(F.recording(seconds: 30, seed: 3), seconds: 30), sourcePath: "test")])
+        let walSize = try FileManager.default.attributesOfItem(
+            atPath: dir.appendingPathComponent(AudioFingerprintStore.fileName).path + "-wal")[.size] as? Int ?? 0
+        #expect(walSize > 0, "the fixture must have WAL frames")
+        let busy = try SidecarFacts.of(dir)
+        await run()
+        #expect(try SidecarFacts.of(dir) == busy)
+        writer = nil
+        _ = writer
     }
 }

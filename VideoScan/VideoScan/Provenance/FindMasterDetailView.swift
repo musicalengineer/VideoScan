@@ -42,14 +42,53 @@ struct FindMasterDetailView: View {
                     searched: searched, noSoundTrack: job.plan.noSoundTrackContents,
                     notFingerprinted: job.plan.notFingerprintedContents))
             case .found(let found, _):
-                ForEach(Array(found.enumerated()), id: \.offset) { _, candidate in
-                    foundRow(candidate)
+                let halves = FindMasterAnswer.split(found)
+                ForEach(Array(halves.strong.enumerated()), id: \.offset) { _, candidate in
+                    FindMasterFoundRow(job: job, candidate: candidate)
+                }
+                if !halves.weak.isEmpty {
+                    FindMasterWeakGroup(job: job, weak: halves.weak)
                 }
             }
         }
     }
 
-    private func foundRow(_ c: AudioMasterCandidate) -> some View {
+    private func line(icon: String, tint: Color, text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: icon).foregroundStyle(tint).font(.system(size: 11)).frame(width: 14)
+            Text(text).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Weak overlaps: counted in the header, COLLAPSED by default (shown on
+/// demand, never hidden).
+struct FindMasterWeakGroup: View {
+    @ObservedObject var job: FindMasterJob
+    let weak: [AudioMasterCandidate]
+    @State private var isExpanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(Array(weak.enumerated()), id: \.offset) { _, candidate in
+                FindMasterFoundRow(job: job, candidate: candidate)
+            }
+        } label: {
+            Text(FindMasterAnswer.weakHeader(count: weak.count))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityIdentifier("mfo.findMaster.weakOverlaps")
+    }
+}
+
+/// One found content: verdict chip, the sentence, Reveal in Catalog.
+struct FindMasterFoundRow: View {
+    @ObservedObject var job: FindMasterJob
+    let candidate: AudioMasterCandidate
+
+    var body: some View {
+        let c = candidate
         HStack(alignment: .top, spacing: 8) {
             Text(FindMasterAnswer.chip(c.match.verdict))
                 .font(.system(size: 10, weight: .semibold)).textCase(.uppercase)
@@ -67,13 +106,6 @@ struct FindMasterDetailView: View {
                 .controlSize(.small)
                 .help(label.path)
             }
-        }
-    }
-
-    private func line(icon: String, tint: Color, text: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: icon).foregroundStyle(tint).font(.system(size: 11)).frame(width: 14)
-            Text(text).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

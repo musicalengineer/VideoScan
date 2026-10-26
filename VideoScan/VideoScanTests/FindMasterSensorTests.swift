@@ -40,6 +40,15 @@ struct FindMasterSensorTests {
         }
     }
 
+    @Test("weak overlaps are a collapsed-by-default group with their count; strong hits are listed")
+    func weakOverlapsStartCollapsed() throws {
+        let code = try SourceTree.appCode(named: "Provenance/FindMasterDetailView.swift")
+        #expect(code.contains("@State private var isExpanded = false"))
+        #expect(code.contains("DisclosureGroup(isExpanded: $isExpanded)"))
+        #expect(code.contains("FindMasterAnswer.weakHeader(count: weak.count)"))
+        #expect(code.contains("FindMasterAnswer.split(found)"))
+    }
+
     @Test(".findMaster is a registered kind with a detail view")
     func findMasterIsARegisteredKind() {
         #expect(MediaFileOperationKind.all.contains(.findMaster))

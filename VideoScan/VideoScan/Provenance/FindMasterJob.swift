@@ -266,18 +266,21 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         for line in lines(for: query, outcome: outcome) { note(line) }
     }
 
-    private func count(_ outcome: FindMasterResult.Outcome) {
+    func count(_ outcome: FindMasterResult.Outcome) {
         switch outcome {
         case .refused: tally.refused += 1
         case .noneFound: tally.searched += 1; tally.none += 1
         case .found(let found, _):
             tally.searched += 1
-            switch found.first?.match.verdict {
+            // A file is counted by its best STRONG hit; weak overlaps alone
+            // are their own bucket (FindMasterAnswer.isWeak).
+            switch FindMasterAnswer.split(found).strong.first?.match.verdict {
             case .sameRecording?: tally.same += 1
             case .containedInMaster?: tally.inside += 1
             case .masterContainedInQuery?: tally.contains += 1
             case .overlap?: tally.shares += 1
-            case .inconclusive?, .different?, nil: tally.inconclusive += 1
+            case .inconclusive?, .different?: tally.inconclusive += 1
+            case nil: tally.weakOnly += 1
             }
         }
     }
@@ -290,9 +293,12 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
             return [FindMasterAnswer.queryLine(name: query.name, key: query.key, answer: FindMasterAnswer.noneFound(
                 searched: searched, noSoundTrack: plan.noSoundTrackContents, notFingerprinted: plan.notFingerprintedContents))]
         case .found(let found, _):
-            return found.map { c in
+            let (strong, weak) = FindMasterAnswer.split(found)
+            var lines = strong.map { c in
                 FindMasterAnswer.queryLine(name: query.name, key: query.key, answer: answer(c))
             }
+            if !weak.isEmpty { lines.append(FindMasterAnswer.weakLine(name: query.name, key: query.key, weak: weak)) }
+            return lines
         }
     }
 

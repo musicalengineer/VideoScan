@@ -116,6 +116,48 @@ enum FindMasterAnswer {
         String(digest.prefix(15)) + "…"
     }
 
+    // MARK: Weak overlaps (shown, but collapsed)
+    //
+    // The pair matcher is unchanged (rule 4); this only decides how its
+    // `.overlap` answers are PRESENTED. An overlap is WEAK when both hold:
+    //   • coverage < AudioMatchPolicy.minCoverage (0.5) — the matcher's own
+    //     line for "not distributed over the audible query" (decision-table
+    //     row 3: the reason it refused "same"/"contained"); and
+    //   • matched landmarks < 3 × AudioMatchPolicy.minMatchedLandmarks (60)
+    //     — three times the matcher's noise floor. On the real sidecar
+    //     (2026-10-26 smoke, 3 queries) every coincidental-looking overlap
+    //     had 20–29 landmarks (1–1.5× the floor), coverage ≤ 0.08, 5–15 s;
+    //     a genuine shared stretch of 2 × minOverlapSeconds (10 s) at the
+    //     catalog's MEDIAN density (15.7 landmarks/s) with half its
+    //     landmarks surviving a re-encode carries ≈ 78 — above the line.
+    // Weak overlaps are counted and listed on demand, never hidden.
+
+    static let weakCoverageBelow = AudioMatchPolicy.default.minCoverage
+    static let weakLandmarksBelow = 3 * AudioMatchPolicy.default.minMatchedLandmarks
+
+    static func isWeak(_ c: AudioMasterCandidate) -> Bool {
+        guard case .overlap = c.match.verdict else { return false }
+        return c.match.coverage < weakCoverageBelow && c.match.matchedLandmarks < weakLandmarksBelow
+    }
+
+    /// Ranked order kept inside each half.
+    static func split(_ found: [AudioMasterCandidate]) -> (strong: [AudioMasterCandidate], weak: [AudioMasterCandidate]) {
+        (found.filter { !isWeak($0) }, found.filter(isWeak))
+    }
+
+    static func weakHeader(count: Int) -> String {
+        String(format: "%d weak overlap%@ — short, sparse matches (coverage below %.2f and fewer than %d matching landmarks each); may be coincidence",
+               count, count == 1 ? "" : "s", weakCoverageBelow, weakLandmarksBelow)
+    }
+
+    static func weakLine(name: String, key: AudioFingerprintStore.Key, weak: [AudioMasterCandidate]) -> String {
+        let each = weak.map { c in
+            String(format: "%@ %d s, %d landmarks, coverage %.2f", shortDigest(c.key.contentDigest),
+                   Int(c.match.spanSeconds.rounded()), c.match.matchedLandmarks, c.match.coverage)
+        }
+        return "find master: \(name) \(shortDigest(key.contentDigest)) → \(weakHeader(count: weak.count)): " + each.joined(separator: "; ")
+    }
+
     /// Short verdict word for the detail list's chip.
     static func chip(_ verdict: AudioMatchVerdict) -> String {
         switch verdict {
@@ -150,6 +192,8 @@ enum FindMasterAnswer {
 
     struct Tally: Equatable, Sendable {
         var searched = 0, inside = 0, same = 0, contains = 0, shares = 0, inconclusive = 0, none = 0
+        /// Searched files whose only hits were weak overlaps.
+        var weakOnly = 0
         var refused = 0, notStarted = 0
         var stopped = false
     }
@@ -160,6 +204,7 @@ enum FindMasterAnswer {
         if t.contains > 0 { parts.append("\(t.contains) contain another") }
         if t.shares > 0 { parts.append("\(t.shares) share sound") }
         if t.inconclusive > 0 { parts.append("\(t.inconclusive) inconclusive") }
+        if t.weakOnly > 0 { parts.append("\(t.weakOnly) only weak overlaps") }
         parts.append("\(t.none) none found")
         parts.append("\(t.refused) refused")
         if t.stopped { parts.append("\(t.notStarted) not started") }
