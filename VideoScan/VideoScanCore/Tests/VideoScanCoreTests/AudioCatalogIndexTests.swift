@@ -209,6 +209,92 @@ struct AudioCatalogIndexTests {
         #expect(rowsSeen >= 20)
     }
 
+    /// Bytes + mtime of the main file and the -wal, and the inode of every
+    /// sidecar file that exists (db, -wal, -shm).
+    struct SidecarFacts: Equatable {
+        var dbBytes = Data(), walBytes: Data?
+        var dbModified = Date.distantPast, walModified: Date?
+        var inodes: [String: Int] = [:]
+
+        static func of(_ file: URL) throws -> SidecarFacts {
+            let fm = FileManager.default
+            var f = SidecarFacts()
+            f.dbBytes = try Data(contentsOf: file)
+            f.dbModified = try fm.attributesOfItem(atPath: file.path)[.modificationDate] as? Date ?? .distantPast
+            if fm.fileExists(atPath: file.path + "-wal") {
+                f.walBytes = try Data(contentsOf: URL(fileURLWithPath: file.path + "-wal"))
+                f.walModified = try fm.attributesOfItem(atPath: file.path + "-wal")[.modificationDate] as? Date
+            }
+            for suffix in ["", "-wal", "-shm"] {
+                if let ino = try? fm.attributesOfItem(atPath: file.path + suffix)[.systemFileNumber] as? Int {
+                    f.inodes[suffix] = ino
+                }
+            }
+            return f
+        }
+    }
+
+    @Test("a read-only build changes nothing — bytes, mtime, inodes — even while a writer holds -wal frames")
+    func readOnlyBuildChangesNothingEvenWithWALFrames() throws {
+        let dir = try F.scratchDirectory("readonly")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // A writer that stays open (a running Fingerprint Sound): its rows
+        // live in -wal frames, never checkpointed while we read.
+        var openWriter: AudioFingerprintStore? = try AudioFingerprintStore(directory: dir)
+        let file = try #require(openWriter).fileURL
+        try openWriter?.put((0..<6).map { .init(key: F.key($0), fingerprint: F.randomPrint(count: 120, seed: UInt64($0 + 70)), sourcePath: "test") })
+        let walSize = try FileManager.default.attributesOfItem(atPath: file.path + "-wal")[.size] as? Int ?? 0
+        #expect(walSize > 0, "the fixture must have WAL frames")
+        let before = try SidecarFacts.of(file)
+        do {
+            let reader = try AudioCatalogIndex.openSidecar(directory: dir)
+            #expect(reader.isReadOnly)
+            let (index, report) = try AudioCatalogIndex.build(store: reader)
+            #expect(report.indexed == 6, "rows that exist only in -wal frames are read")
+            #expect(try reader.fingerprint(for: F.key(3)) != nil)
+            #expect(index.ordinal(of: F.key(5)) != nil)
+            #expect(throws: (any Error).self) { try reader.put([.init(key: F.key(99), fingerprint: F.randomPrint(count: 30, seed: 1), sourcePath: "x")]) }
+        }   // reader closed here
+        #expect(try SidecarFacts.of(file) == before)
+
+        // And after the writer closes (Apple's SQLite keeps a 0-byte -wal):
+        // a read-only run still leaves every byte and inode as it was.
+        openWriter = nil
+        _ = openWriter
+        let afterWriter = try SidecarFacts.of(file)
+        do {
+            let reader = try AudioCatalogIndex.openSidecar(directory: dir)
+            #expect(try AudioCatalogIndex.build(store: reader).1.indexed == 6)
+        }
+        #expect(try SidecarFacts.of(file) == afterWriter)
+    }
+
+    @Test("a WAL sidecar whose -wal is missing is refused in plain words; no file is created")
+    func readOnlyOpenRefusesAMissingWAL() throws {
+        let dir = try F.scratchDirectory("nowal")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file: URL
+        do {
+            let writer = try AudioFingerprintStore(directory: dir)
+            try writer.put([.init(key: F.key(1), fingerprint: F.randomPrint(count: 40, seed: 5), sourcePath: "test")])
+            file = writer.fileURL
+        }
+        // Simulate "last closed by another program": no -wal, no -shm (test-owned scratch files).
+        try? FileManager.default.removeItem(atPath: file.path + "-wal")
+        try? FileManager.default.removeItem(atPath: file.path + "-shm")
+        let before = try SidecarFacts.of(file)
+        do {
+            _ = try AudioCatalogIndex.openSidecar(directory: dir)
+            Issue.record("expected a refusal")
+        } catch let failure as AudioFingerprintStore.Failure {
+            #expect(failure == .readOnlyNeedsWAL(path: file.path))
+            #expect(failure.description.contains("write-ahead log"))
+            #expect(failure.description.contains("Nothing was read or changed"))
+        }
+        #expect(try SidecarFacts.of(file) == before)
+        #expect(!FileManager.default.fileExists(atPath: file.path + "-wal"))
+    }
+
     @Test("isCancelled stops the build with CancellationError")
     func cancelStopsTheBuild() throws {
         let rows: [(AudioFingerprintStore.Key, Result<AudioFingerprint, Error>)] =

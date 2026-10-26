@@ -58,6 +58,13 @@ public final class AudioFingerprintStore: @unchecked Sendable {
         case schemaNewer(found: Int, supported: Int)
         /// Any other statement failure, with SQLite's message.
         case sql(String)
+        /// A READ-ONLY open found the file in WAL mode with no `-wal` beside
+        /// it: SQLite (Apple 3.54) cannot read it without writing one, and a
+        /// reader never writes. Nothing was read or changed.
+        case readOnlyNeedsWAL(path: String)
+        /// The file has no `fingerprints` table (a read-only open never
+        /// creates one).
+        case noFingerprintTable(path: String)
 
         public var description: String {
             switch self {
@@ -67,6 +74,10 @@ public final class AudioFingerprintStore: @unchecked Sendable {
             case .schemaNewer(let found, let supported):
                 return "the fingerprint file was written by a newer VideoScan (schema \(found); this build reads up to \(supported))"
             case .sql(let message): return "fingerprint store error: \(message)"
+            case .readOnlyNeedsWAL(let path):
+                return "the sound-print file can't be read without changing it: its write-ahead log (\((path as NSString).lastPathComponent)-wal) is missing, and this reader never writes. Nothing was read or changed: \(path)"
+            case .noFingerprintTable(let path):
+                return "the sound-print file holds no fingerprints table (never written by Fingerprint Sound): \(path)"
             }
         }
     }
@@ -142,6 +153,7 @@ public final class AudioFingerprintStore: @unchecked Sendable {
     /// named `Failure` instead of returning a store that cannot work.
     public init(directory: URL) throws {
         fileURL = directory.appendingPathComponent(Self.fileName)
+        isReadOnly = false
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard FileManager.default.isWritableFile(atPath: directory.path) else {
             throw Failure.directoryNotWritable(path: directory.path)
@@ -163,8 +175,66 @@ public final class AudioFingerprintStore: @unchecked Sendable {
         }
     }
 
+    /// True for a store opened by `init(readingOnly:)`.
+    public let isReadOnly: Bool
+
+    /// Open an EXISTING sidecar READ-ONLY (`SQLITE_OPEN_READONLY`): no
+    /// PRAGMA, no CREATE, no schema upgrade, and — because the connection
+    /// cannot write — no checkpoint and no `-wal` deletion on close. For
+    /// readers that must leave the file exactly as they found it (Find
+    /// Master; design provenance_retroactive §sidecars rules 3–4). The main
+    /// file and `-wal` are untouched; SQLite may create a missing `-shm`
+    /// (its shared-memory read index, no data) as any reader does.
+    /// Refuses, before any row is read: missing file, not a database, newer
+    /// schema, no fingerprints table, and a WAL-mode file whose `-wal` is
+    /// missing (SQLITE_CANTOPEN: Apple's SQLite will not read it read-only).
+    // TODO(#386): `SQLiteWALSidecar.prepareForReadOnlyOpen` (branch
+    // fix/store-durability-codex141, in Codex review) restores a missing
+    // -wal create-only when the folder is writable; call it here once it
+    // merges, instead of refusing `.readOnlyNeedsWAL`.
+    public init(readingOnly directory: URL) throws {
+        fileURL = directory.appendingPathComponent(Self.fileName)
+        isReadOnly = true
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw Failure.cannotOpen(path: fileURL.path, reason: "no such file")
+        }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(fileURL.path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let handle else {
+            let reason = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "no handle"
+            if let handle { sqlite3_close_v2(handle) }
+            throw Failure.cannotOpen(path: fileURL.path, reason: reason)
+        }
+        db = handle
+        do {
+            try checkReadableSchema()
+        } catch {
+            sqlite3_close_v2(handle)
+            db = nil
+            throw error
+        }
+    }
+
+    private func checkReadableSchema() throws {
+        let walMissing = !FileManager.default.fileExists(atPath: fileURL.path + "-wal")
+        do {
+            guard let found = try scalarInt("SELECT version FROM schema LIMIT 1") else {
+                throw Failure.noFingerprintTable(path: fileURL.path)
+            }
+            guard found <= Self.schemaVersion else { throw Failure.schemaNewer(found: found, supported: Self.schemaVersion) }
+            guard try scalarInt("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'fingerprints'") == 1 else {
+                throw Failure.noFingerprintTable(path: fileURL.path)
+            }
+        } catch Failure.sql(let message) where walMissing && sqlite3_errcode(db) == SQLITE_CANTOPEN {
+            _ = message
+            throw Failure.readOnlyNeedsWAL(path: fileURL.path)
+        } catch Failure.sql(let message) where message.contains("no such table") {
+            throw Failure.noFingerprintTable(path: fileURL.path)
+        }
+    }
+
     deinit {
-        if let db { sqlite3_close(db) }
+        if let db { sqlite3_close_v2(db) }
     }
 
     // MARK: Schema
