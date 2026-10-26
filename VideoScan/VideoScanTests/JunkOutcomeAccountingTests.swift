@@ -103,7 +103,7 @@ struct JunkOutcomeAccountingTests {
         offline.filename = "test_off.mov"
         model.records = [pair, removed, offline]
 
-        let result = await model.trashSelectedRecords([pair, removed, offline])
+        let result = await model.trashSelectedRecords([pair, removed, offline], confirmed: model.catalogTrashPlan(for: [pair, removed, offline]))
         #expect(result.attempted == 3, "every selected row has an outcome: \(result.attempted)")
         #expect(result.skippedOffline == 1)
         #expect(result.refused.count == 2)
@@ -201,7 +201,7 @@ struct JunkOutcomeAccountingTests {
         let a = sb.junk(try sb.write("test_a.mov"))
         model.records = [a]
         model.isReadOnly = true
-        let result = await model.trashSelectedRecords([a])
+        let result = await model.trashSelectedRecords([a], confirmed: model.catalogTrashPlan(for: [a]))
         #expect(result.attempted == 1 && result.refused.count == 1)
         #expect(result.refused.first?.reason.contains("read-only viewer") == true)
         #expect(FileManager.default.fileExists(atPath: a.fullPath))

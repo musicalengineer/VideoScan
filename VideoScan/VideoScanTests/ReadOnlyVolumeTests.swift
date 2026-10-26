@@ -354,7 +354,7 @@ struct ReadOnlyVolumeGateTests {
         let c = plain(rig.ro.appendingPathComponent("c.mov")), d = plain(rig.ro.appendingPathComponent("d.mov"))
         rig.model.records = [a, b, c, d]
 
-        let trashed = await rig.model.trashSelectedRecords([a])
+        let trashed = await rig.model.trashSelectedRecords([a], confirmed: rig.model.catalogTrashPlan(for: [a]))
         #expect(trashed.succeeded == 0)
         #expect(rig.model.catalogTrashPlan(for: [a]).toTrash.isEmpty)
         let toTrash = await rig.model.deleteConfirmedJunk([b], mode: .toTrash)

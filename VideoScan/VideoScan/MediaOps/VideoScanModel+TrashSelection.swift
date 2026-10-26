@@ -21,6 +21,11 @@
 // existing routine re-checks the archive and offline gates itself, so
 // they are enforced twice (plan time + apply time — the Tidy shape).
 //
+// The move never exceeds the confirmation (adversarial 2026-10-26 F2):
+// the caller hands in the plan the person said yes to, and at each file's
+// turn a row outside it is held, and so is a row that became the only copy
+// the catalog knows of after the alert said another copy survives.
+//
 // Memory: O(selection). Nothing here walks `records`.
 
 import Foundation
@@ -117,14 +122,18 @@ extension VideoScanModel {
     /// and no Master Archive copy — the promote link or the digest-proved
     /// identical copy only, never the promotion index's scored content match
     /// (QA round 1 m3).
-    func catalogOnlyCopyIDs(_ ids: [UUID], among selection: [VideoRecord]) -> [UUID] {
+    /// `catalog` narrows the rows searched for a copy (nil = all of
+    /// `records`); `alsoLeaving` are rows already on their way out that
+    /// can no longer count as a copy (the ⌘⌫ move's earlier turns).
+    func catalogOnlyCopyIDs(_ ids: [UUID], among selection: [VideoRecord],
+                            in catalog: [VideoRecord]? = nil, alsoLeaving: Set<UUID> = []) -> [UUID] {
         guard !ids.isEmpty else { return [] }
         let byID = Dictionary(selection.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let moving = ids.compactMap { byID[$0] }
-        let leaving = Set(ids)
+        let leaving = Set(ids).union(alsoLeaving)
         let retiredRoots = scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
-        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: self.records) {
-            Self.isKnownCopySurvivor($0, retiredRoots: retiredRoots)
+        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: catalog ?? self.records) {
+            !alsoLeaving.contains($0.id) && Self.isKnownCopySurvivor($0, retiredRoots: retiredRoots)
         }
         return moving.filter { rec in
             guard unmatched.contains(rec.id) else { return false }
@@ -154,10 +163,18 @@ extension VideoScanModel {
     /// the routine's outcomes, in selection order — so the alert can list
     /// every row that stayed, and why. An empty or fully-refused selection
     /// never reaches the disk.
+    /// `confirmed` is the plan the person saw and said yes to (the alert's
+    /// plan in `confirmThenTrash`) — required, so no caller can move files
+    /// without saying what was confirmed. The move never exceeds it
+    /// (adversarial 2026-10-26 F2, MOPS-1): at each file's turn a row that
+    /// was not in `confirmed.toTrash` is held, and a row that is NOW the
+    /// only copy the catalog knows of, but was not warned about as one
+    /// (`confirmed.onlyCopy`), is held — refuse rather than guess.
     /// `fileOperation` is the tests' seam for the file operation (nil =
     /// the routine's own move to the Trash — every production caller).
     @discardableResult
     func trashSelectedRecords(_ requested: [VideoRecord],
+                              confirmed: CatalogTrashPlan,
                               fileOperation: (@Sendable (URL) throws -> Void)? = nil) async -> JunkDeletionResult {
         guard !requested.isEmpty else { return .empty }
         guard !isReadOnly else {
@@ -183,8 +200,10 @@ extension VideoScanModel {
         if inert > 0 {
             log("Move to Trash: \(inert) file(s) were already removed or set aside — nothing more to do for them.")
         }
-        if !plan.onlyCopy.isEmpty {
-            log("Move to Trash: \(plan.onlyCopy.count) file(s) are the only copy the catalog knows of — moving them as you confirmed (recoverable from the Trash until it is emptied).")
+        let warned = Set(confirmed.onlyCopy)
+        let warnedNow = plan.onlyCopy.filter(warned.contains).count
+        if warnedNow > 0 {
+            log("Move to Trash: \(warnedNow) file(s) are the only copy the catalog knows of — moving them as you confirmed after the warning (recoverable from the Trash until it is emptied).")
         }
         let byID = Dictionary(requested.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let targets = plan.toTrash.compactMap { byID[$0] }
@@ -192,11 +211,20 @@ extension VideoScanModel {
         // purgedAt/.trashed, publish, and the copyTrashed ledger lines. The
         // plan's own catalog gates are asked AGAIN at each file's turn
         // (codex delete-engines F3): a row Combine pairs, or that is
-        // removed or set aside, while the batch runs is held.
+        // removed or set aside, while the batch runs is held — and so is a
+        // row the person did not confirm, or that became the only copy
+        // after the alert (adversarial 2026-10-26 F2).
+        let confirmedIDs = Set(confirmed.toTrash)
+        let copies = CatalogTrashTurnCopies(batch: targets)
         var fileGuard = JunkDeletionGuard(
             authorize: { [weak self] rec in
                 guard let self else { return "the catalog went away — nothing moved" }
-                return self.catalogTrashTurnProblem(rec)
+                let problem = self.catalogTrashTurnProblem(rec, confirmed: confirmedIDs,
+                                                           warnedOnlyCopy: warned, copies: copies)
+                // Passed: from now on it counts as gone for the turns after
+                // it (the catalog marks the batch only at its end).
+                if problem == nil { copies.handedOn(rec.id) }
+                return problem
             },
             beforeRemoval: { _ in nil },
             remove: fileOperation)
@@ -222,15 +250,34 @@ extension VideoScanModel {
     }
 
     /// The ⌘⌫ plan's catalog gates at ONE file's turn: still active, still
-    /// not half of a recovered A/V pair. nil = go on. (The archive and
+    /// not half of a recovered A/V pair, among the rows the person
+    /// confirmed, and — unless the alert warned about it — still not the
+    /// only copy the catalog knows of. nil = go on. (The archive and
     /// read-only gates are the routine's own, also asked per file.)
-    func catalogTrashTurnProblem(_ rec: VideoRecord) -> String? {
+    /// The only-copy question is asked only for rows the alert did not warn
+    /// about, against `copies` (see `CatalogTrashTurnCopies` for its cost).
+    func catalogTrashTurnProblem(_ rec: VideoRecord, confirmed: Set<UUID>,
+                                 warnedOnlyCopy: Set<UUID>, copies: CatalogTrashTurnCopies) -> String? {
         if rec.isPurged || rec.isSetAside || rec.isSuperseded {
             return "was removed, set aside or replaced by a repair since you chose it — nothing moved"
         }
         if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
+        if !confirmed.contains(rec.id) { return Self.notConfirmedHeldNote }
+        if !warnedOnlyCopy.contains(rec.id), copies.isOnlyCopyNow(rec, model: self) {
+            return Self.becameOnlyCopyHeldNote
+        }
         return nil
     }
+
+    /// A row the confirmation held back (or never showed) that is movable
+    /// now — the move never exceeds what the person said yes to.
+    nonisolated static let notConfirmedHeldNote =
+        "was not among the files you confirmed — nothing moved"
+
+    /// A row the alert counted as having another copy, which is now the
+    /// only copy the catalog knows of (another copy went away meanwhile).
+    nonisolated static let becameOnlyCopyHeldNote =
+        "is now the only copy the catalog knows of — another copy went away after you confirmed, so it was not moved"
 
     /// One outcome per selected row, in selection order: the routine's
     /// outcome for a row it was handed, else the plan's refusal as a named
@@ -290,5 +337,43 @@ extension VideoScanModel {
         if tree > 0 { log(Self.masterArchiveRefusalLine(verb: "Move to Trash", count: tree)) }
         if onVolume > 0 { log(Self.masterArchiveVolumeRefusalLine(verb: "Move to Trash", count: onVolume, volume: label)) }
         if unprovable > 0 { log(Self.masterArchiveUnprovableRefusalLine(verb: "Move to Trash", count: unprovable, volume: label)) }
+    }
+}
+
+/// "Is this file NOW the only copy the catalog knows of?" at each turn of
+/// ONE ⌘⌫ batch (adversarial 2026-10-26 F2). Owns, for that batch only:
+///   - `leaving`: the rows already handed to the disk. They count as gone
+///     for the turns after them — the routine marks the catalog only at
+///     the batch's end, so without this two selected copies would vouch
+///     for each other and both move. A row handed on whose move then fails
+///     still counts as gone: the error is an extra hold, never a missing one.
+///   - `pool`: the catalog rows sharing an identity value with the batch
+///     (`CatalogKnownCopies.candidates`) — the only rows that can be a
+///     copy. Rebuilt whenever the model's `catalogMutationRevision` moves
+///     (rows appended or replaced while the batch runs), so a replaced
+///     row's stale object is never trusted as a live copy.
+/// Cost: one O(records) pass per rebuild (normally once per batch), then
+/// O(pool) per turn. Worst-case memory: one reference per catalog row
+/// (every row shares a key) ≈ 8 B × 100k = 0.8 MB, freed with the batch.
+/// (A `final class` here ≈ a C++ object passed by pointer into the
+/// per-file callback, so the callback can update it.)
+@MainActor
+final class CatalogTrashTurnCopies {
+    private let batch: [VideoRecord]
+    private var leaving: Set<UUID> = []
+    private var pool: [VideoRecord] = []
+    private var poolRevision: UInt64?
+
+    init(batch: [VideoRecord]) { self.batch = batch }
+
+    /// `id` passed its turn's gates and went to the disk half.
+    func handedOn(_ id: UUID) { leaving.insert(id) }
+
+    func isOnlyCopyNow(_ rec: VideoRecord, model: VideoScanModel) -> Bool {
+        if poolRevision != model.catalogMutationRevision {
+            pool = CatalogKnownCopies.candidates(for: batch + [rec], in: model.records)
+            poolRevision = model.catalogMutationRevision
+        }
+        return !model.catalogOnlyCopyIDs([rec.id], among: [rec], in: pool, alsoLeaving: leaving).isEmpty
     }
 }

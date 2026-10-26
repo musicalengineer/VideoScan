@@ -609,7 +609,9 @@ extension CatalogContent {
             }
         }
         Task { @MainActor in
-            let result = await model.trashSelectedRecords(targets)
+            // `confirmed: plan` — the plan behind the alert just answered;
+            // the move re-checks each file against it at its turn.
+            let result = await model.trashSelectedRecords(targets, confirmed: plan)
             reportDeleteResult(result)
         }
     }

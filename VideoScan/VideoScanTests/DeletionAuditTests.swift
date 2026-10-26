@@ -84,7 +84,7 @@ struct DeletionAuditReceiptTests {
         try FileManager.default.removeItem(atPath: gone.fullPath)
         model.records = [moved, paired, gone]
 
-        let result = await model.trashSelectedRecords([moved, paired, gone], fileOperation: sb.trash.operation)
+        let result = await model.trashSelectedRecords([moved, paired, gone], confirmed: model.catalogTrashPlan(for: [moved, paired, gone]), fileOperation: sb.trash.operation)
         let receipt = try #require(result.receipt)
         defer { try? FileManager.default.removeItem(at: receipt) }
         let rows = try csvRows(receipt)
@@ -110,7 +110,7 @@ struct DeletionAuditReceiptTests {
         let model = sb.model()
         let rec = sb.junk(try sb.write("test_g2_receipt_\(UUID().uuidString.prefix(8)).mov"))
         model.records = [rec]
-        let result = await model.trashSelectedRecords([rec])
+        let result = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]))
         let receipt = try #require(result.receipt)
         defer { try? FileManager.default.removeItem(at: receipt) }
         let row = try #require(try csvRows(receipt).dropFirst().first)

@@ -76,7 +76,7 @@ struct OneEngineCodexRound1Tests {
         let url = try sb.write("test_f2.mov")
         let rec = sb.junk(url)
         model.records = [rec]
-        _ = await model.trashSelectedRecords([rec], fileOperation: sb.trash.operation)
+        _ = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]), fileOperation: sb.trash.operation)
         let marker = try #require(rec.removal)
         #expect(marker.state == .inTrash)
 

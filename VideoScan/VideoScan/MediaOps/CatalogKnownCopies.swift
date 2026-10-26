@@ -74,15 +74,10 @@ enum CatalogKnownCopies {
         let leaving = Set(moving.map(\.id))
         let leavingPaths = Set(moving.map { $0.fullPath.lowercased() })
         let leavingFiles = Dictionary(grouping: moving.compactMap(fileStamp), by: \.inode)
-        let md5s = Set(moving.map(\.partialMD5).filter { !$0.isEmpty })
-        let sigs = Set(moving.map(\.contentHash).filter { !$0.isEmpty })
-        let digests = Set(moving.flatMap { [$0.contentFixity?.digest, $0.archiveFixity?.digest] }
-            .compactMap { $0 }.filter { !$0.isEmpty })
+        let raw = RawValues(moving)
         var surviving = Set<String>()
         for r in all where !leaving.contains(r.id) {
-            guard md5s.contains(r.partialMD5) || sigs.contains(r.contentHash)
-                    || digests.contains(r.contentFixity?.digest ?? "")
-                    || digests.contains(r.archiveFixity?.digest ?? "") else { continue }
+            guard raw.shared(by: r) else { continue }
             guard isSurvivor(r), !leavingPaths.contains(r.fullPath.lowercased()) else { continue }
             if let file = fileStamp(r), leavingFiles[file.inode]?.contains(where: { mayBeSameFile($0, file) }) == true {
                 continue
@@ -90,5 +85,35 @@ enum CatalogKnownCopies {
             surviving.formUnion(keys(r))
         }
         return Set(moving.filter { rec in !keys(rec).contains(where: surviving.contains) }.map(\.id))
+    }
+
+    /// The rows of `all` that share a raw identity value with `moving` —
+    /// the only rows that can be a copy of one (the same prefilter
+    /// `onlyCopies` runs). One pass; the ⌘⌫ move asks `onlyCopies` per file
+    /// against this short list instead of the whole catalog.
+    nonisolated static func candidates(for moving: [VideoRecord], in all: [VideoRecord]) -> [VideoRecord] {
+        guard !moving.isEmpty else { return [] }
+        let raw = RawValues(moving)
+        return all.filter(raw.shared(by:))
+    }
+
+    /// The raw identity values of a set of rows (empty values dropped).
+    private struct RawValues {
+        let md5s: Set<String>
+        let sigs: Set<String>
+        let digests: Set<String>
+
+        nonisolated init(_ moving: [VideoRecord]) {
+            md5s = Set(moving.map(\.partialMD5).filter { !$0.isEmpty })
+            sigs = Set(moving.map(\.contentHash).filter { !$0.isEmpty })
+            digests = Set(moving.flatMap { [$0.contentFixity?.digest, $0.archiveFixity?.digest] }
+                .compactMap { $0 }.filter { !$0.isEmpty })
+        }
+
+        nonisolated func shared(by r: VideoRecord) -> Bool {
+            md5s.contains(r.partialMD5) || sigs.contains(r.contentHash)
+                || digests.contains(r.contentFixity?.digest ?? "")
+                || digests.contains(r.archiveFixity?.digest ?? "")
+        }
     }
 }

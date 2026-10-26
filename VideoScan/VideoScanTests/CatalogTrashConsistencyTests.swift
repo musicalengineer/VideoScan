@@ -23,7 +23,7 @@ struct CatalogTrashConsistencyTests {
         #expect(menu.contains("confirmThenTrash(targets)"))
         #expect(!menu.contains("deleteConfirmedJunk("), "the row menu bypasses the shared Move to Trash")
         let table = try SourceTree.appCode(named: "CatalogContent+Table.swift")
-        #expect(table.contains("let result = await model.trashSelectedRecords(targets)"))
+        #expect(table.contains("let result = await model.trashSelectedRecords(targets, confirmed: plan)"))
         #expect(table.contains("reportDeleteResult(result)"))
         #expect(!table.contains("deleteConfirmedJunk("))
     }
@@ -50,7 +50,7 @@ struct CatalogTrashConsistencyTests {
         pair.partialMD5 = "md5pair"
         model.records = [moved, pair]
 
-        let result = await model.trashSelectedRecords([moved, pair], fileOperation: sb.trash.operation)
+        let result = await model.trashSelectedRecords([moved, pair], confirmed: model.catalogTrashPlan(for: [moved, pair]), fileOperation: sb.trash.operation)
         #expect(result.succeeded == 1 && result.refused.count == 1)
         let store = model.ignoredContentStore
         #expect(store.contains(partialMD5: moved.partialMD5, sizeBytes: moved.sizeBytes, filename: moved.filename))

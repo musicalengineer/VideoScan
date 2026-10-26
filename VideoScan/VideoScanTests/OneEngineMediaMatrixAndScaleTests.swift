@@ -83,7 +83,7 @@ struct OneEngineMediaMatrixAndScaleTests {
         let trashDir = dir.appendingPathComponent("trash", isDirectory: true)
         try FileManager.default.createDirectory(at: trashDir, withIntermediateDirectories: true)
         let sandbox = SandboxTrash(dir: trashDir)
-        let cat = await model.trashSelectedRecords([selected], fileOperation: sandbox.operation)
+        let cat = await model.trashSelectedRecords([selected], confirmed: model.catalogTrashPlan(for: [selected]), fileOperation: sandbox.operation)
         #expect(cat.items.map(\.outcome.kind) == [.moved], "\(ext): \(cat.items.map(\.outcome))")
         #expect(selected.removal?.state == .inTrash && selected.removal?.reason == .catalogTrash)
         let landed = try FileManager.default.contentsOfDirectory(atPath: trashDir.path)

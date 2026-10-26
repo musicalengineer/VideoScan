@@ -50,7 +50,7 @@ struct JunkProtectionsPerFileTests {
             // Rick designates the archive while the first file is moving.
             Self.onMain { _ = try? MasterArchiveTestSupport.initialize(live, in: sandbox) }
         }
-        let result = await model.trashSelectedRecords(recs, fileOperation: operation)
+        let result = await model.trashSelectedRecords(recs, confirmed: model.catalogTrashPlan(for: recs), fileOperation: operation)
 
         #expect(model.masterArchive != nil, "fixture: the archive was designated mid-batch")
         #expect(result.items.map(\.outcome.kind) == [.moved, .held], "\(result.items.map(\.outcome))")
@@ -98,7 +98,7 @@ struct JunkProtectionsPerFileTests {
             try trash.operation(url)
             Self.onMain { second.pairGroupID = UUID() }
         }
-        let result = await model.trashSelectedRecords([a, b], fileOperation: operation)
+        let result = await model.trashSelectedRecords([a, b], confirmed: model.catalogTrashPlan(for: [a, b]), fileOperation: operation)
 
         #expect(result.items.map(\.outcome.kind) == [.moved, .held], "\(result.items.map(\.outcome))")
         #expect(FileManager.default.fileExists(atPath: b.fullPath))

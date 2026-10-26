@@ -39,7 +39,7 @@ struct OneEngineDoorCharacterizationTests {
         rec.mediaDisposition = .unreviewed
         model.records = [rec]
 
-        let result = await model.trashSelectedRecords([rec], fileOperation: sb.trash.operation)
+        let result = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]), fileOperation: sb.trash.operation)
 
         #expect(result.items.map(\.outcome.kind) == [.moved])
         #expect(!FileManager.default.fileExists(atPath: url.path))
@@ -58,7 +58,7 @@ struct OneEngineDoorCharacterizationTests {
         model.records = [rec]
         sb.trash.failEverything(with: Boom())
 
-        let result = await model.trashSelectedRecords([rec], fileOperation: sb.trash.operation)
+        let result = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]), fileOperation: sb.trash.operation)
 
         // The lane reports a thrown Trash call as failed or held (it names
         // the drive); either way nothing moved.
@@ -172,7 +172,7 @@ struct OneEngineDoorCharacterizationTests {
         try FileManager.default.createDirectory(at: trashDir, withIntermediateDirectories: true)
         let trash = SandboxTrash(dir: trashDir)
 
-        let cat = await model.trashSelectedRecords([rec], fileOperation: trash.operation)
+        let cat = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]), fileOperation: trash.operation)
         #expect(cat.items.map(\.outcome.kind) == [.held], "⌘⌫: \(cat.items.map(\.outcome))")
 
         let snapshot = await model.freezeJunkSnapshot([rec], isOffline: { _ in false })

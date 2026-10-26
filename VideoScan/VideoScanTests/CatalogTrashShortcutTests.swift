@@ -107,7 +107,7 @@ struct CatalogTrashShortcutTests {
         model.records = [recA, recB, recPair, recArchived]
         #expect(model.isInsideMasterArchive(path: archiveFile.path), "sandbox archive root is the model's Master Archive")
 
-        let result = await model.trashSelectedRecords([recA, recPair, recB, recArchived])
+        let result = await model.trashSelectedRecords([recA, recPair, recB, recArchived], confirmed: model.catalogTrashPlan(for: [recA, recPair, recB, recArchived]))
         // One outcome per selected row (design R6): 2 moved, 2 held with why.
         #expect(result.attempted == 4 && result.succeeded == 2 && result.failed.isEmpty, "\(result)")
         #expect(result.refused.map(\.record.id) == [recPair.id, recArchived.id], "\(result.refused.map(\.reason))")
@@ -155,13 +155,13 @@ struct CatalogTrashShortcutTests {
         rec.pairGroupID = UUID()
         model.records = [rec]
 
-        let empty = await model.trashSelectedRecords([])
+        let empty = await model.trashSelectedRecords([], confirmed: model.catalogTrashPlan(for: []))
         #expect(empty.attempted == 0)
-        let refused = await model.trashSelectedRecords([rec])
+        let refused = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]))
         #expect(refused.attempted == 1 && refused.succeeded == 0 && refused.refused.count == 1, "the refusal is reported, not dropped")
         rec.pairGroupID = nil
         model.isReadOnly = true
-        let readOnly = await model.trashSelectedRecords([rec])
+        let readOnly = await model.trashSelectedRecords([rec], confirmed: model.catalogTrashPlan(for: [rec]))
         #expect(readOnly.attempted == 1 && readOnly.refused.first?.reason.contains("read-only viewer") == true)
         #expect(FileManager.default.fileExists(atPath: file.path))
         await model.mediaLedger.waitForPendingWrites()
@@ -190,7 +190,7 @@ struct CatalogTrashShortcutTests {
         #expect(handler.contains("confirmThenTrash(targets)"))
         let confirmRange = try #require(table.range(of: "func confirmThenTrash(_ targets: [VideoRecord])"))
         let confirm = String(table[confirmRange.lowerBound...].prefix(1_800))
-        #expect(confirm.contains("await model.trashSelectedRecords(targets)"))
+        #expect(confirm.contains("await model.trashSelectedRecords(targets, confirmed: plan)"))
         #expect(confirm.contains("reportDeleteResult(result)"))
         // The guard was `press.modifiers == .command` until 2026-09-16.
         // Exact equality made any stray flag macOS reported alongside

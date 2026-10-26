@@ -130,7 +130,7 @@ struct JunkTrashOnlyTests {
         model.records = [a]
         sb.trash.failEverything(with: CocoaError(.fileWriteNoPermission))
 
-        let result = await model.trashSelectedRecords([a], fileOperation: sb.trash.operation)
+        let result = await model.trashSelectedRecords([a], confirmed: model.catalogTrashPlan(for: [a]), fileOperation: sb.trash.operation)
         #expect(sb.trash.attempts == [a.fullPath])
         #expect(FileManager.default.fileExists(atPath: a.fullPath) && a.purgedAt == nil)
         #expect(result.refused.first?.reason.contains("couldn't move it to the Trash on ") == true, "\(result.refused.map(\.reason))")

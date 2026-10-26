@@ -30438,6 +30438,22 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvReview20261026TrashTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogTrashOnlyCopyAtTheMoveTests"
+      ],
+      "tests": [
+        "aCopyOnARetiredDriveDoesNotCount",
+        "aCopyThatBecameTheOnlyOneAfterTheConfirmationIsHeld",
+        "aRowTheConfirmationHeldBackNeverMoves",
+        "aWarnedOnlyCopyStillMoves",
+        "scale_perTurnCheckAt100kWithinBudget",
+        "twoSelectedCopiesWhoseThirdWentAwayLeaveOne"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogBackupSQLiteTests.swift",
       "stage": "regression",
       "suites": [
@@ -34492,7 +34508,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 294,
+      "expected_floor": 300,
       "name": "regression",
       "package_expected_floor": 279,
       "package_selectors": [
@@ -34607,6 +34623,7 @@
         "VideoScanTests/AdvRescanLiveAppliedCountTests",
         "VideoScanTests/RelocateSummaryAllSafeHeadlineTests",
         "VideoScanTests/RelocateSummaryHeadlineTests",
+        "VideoScanTests/CatalogTrashOnlyCopyAtTheMoveTests",
         "VideoScanTests/CatalogBackupSQLiteTests",
         "VideoScanTests/CatalogBackupImportTests",
         "VideoScanTests/CatalogBackupScaleTests",

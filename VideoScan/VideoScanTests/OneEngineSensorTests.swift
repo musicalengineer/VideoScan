@@ -217,7 +217,7 @@ struct OneEngineSensorTests {
         let kept = sb.junk(try sb.write("test_kept.mov", fill: 0x22))
         model.records = [present, gone, kept]
 
-        _ = await model.trashSelectedRecords([present, gone], fileOperation: sb.trash.operation)
+        _ = await model.trashSelectedRecords([present, gone], confirmed: model.catalogTrashPlan(for: [present, gone]), fileOperation: sb.trash.operation)
         _ = model.purgeRecords(ids: [kept.id])
 
         #expect(present.removal?.state == .inTrash, "⌘⌫ → In the Trash")
