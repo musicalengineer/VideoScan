@@ -32,6 +32,10 @@
 //   |         |                                                   | THEN refused on the version                   | dir identical |
 //   |         | aReadOnlyFolderWithoutSidecarsNeverOpensForWriting| (pin, green from the start: the read-only     | not .readWrite|
 //   |         |                                                   | folder corner the F6-2 rule must keep)        | dir identical |
+//   | 6-3 P2  | aNewerSchemaWALFileIsRefusedWithItsFolderExactly… | refused in the right words, main file         | refused; the  |
+//   |         |                                                   | identical, but the folder gained -shm and a   | directory's   |
+//   |         |                                                   | -wal (12392 bytes: GRDB's issue-102 CREATE/   | entry set and |
+//   |         |                                                   | DROP, written by the pool on a bare WAL file) | bytes equal   |
 //
 // Lives under Tests/…/Store/ because it opens the same file with a plain
 // GRDB queue (the sensor allows `import GRDB` only here and in
@@ -391,6 +395,58 @@ struct CatalogStoreDurabilityCodex141Tests {
         await repository.close()
         let after = try Self.directorySnapshot(fixture.directory)
         #expect(after == before, "the read-only folder changed: \(after.keys.sorted()) vs \(before.keys.sorted())")
+    }
+
+    // MARK: - Closing pass (codex #142) F6-3 (P2): a refused WAL-mode file leaves its folder exactly as found
+
+    /// A current fixture stamped one version ahead, left in WAL mode and
+    /// closed cleanly with nothing beside it — Codex's case: the open has
+    /// to make `-wal` / `-shm` to read it at all (the system SQLite will
+    /// not open a WAL-mode file read-only without them), so "left exactly
+    /// as found" is a claim about the DIRECTORY, not the main file.
+    private func newerSchemaFixtureInWALModeWithoutSidecars() async throws -> (StoreFixture, Int) {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        let newer = GRDBCatalogRepository.currentSchemaVersion + 1
+        let queue = try DatabaseQueue(path: fixture.url.path)
+        try queue.inDatabase { db in
+            try db.execute(sql: "UPDATE catalog_state SET schema_version = \(newer) WHERE singleton = 1")
+            try db.execute(sql: "PRAGMA user_version = \(newer)")
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+        try queue.close()
+        let fm = FileManager.default
+        for suffix in ["-wal", "-shm"] where fm.fileExists(atPath: fixture.url.path + suffix) {
+            if suffix == "-wal" {
+                let size = (try fm.attributesOfItem(atPath: fixture.url.path + suffix)[.size] as? NSNumber)?.intValue ?? -1
+                try #require(size == 0, "the -wal holds \(size) bytes — the checkpoint did not empty it")
+            }
+            try fm.removeItem(atPath: fixture.url.path + suffix)
+        }
+        let header = try Data(contentsOf: fixture.url).prefix(100)
+        try #require(header[18] == 2 && header[19] == 2, "the fixture must be in WAL mode")
+        return (fixture, newer)
+    }
+
+    @Test func aNewerSchemaWALFileIsRefusedWithItsFolderExactlyAsFound() async throws {
+        let (fixture, newer) = try await newerSchemaFixtureInWALModeWithoutSidecars()
+        defer { fixture.remove() }
+        let before = try Self.directorySnapshot(fixture.directory)
+        try #require(!before.keys.contains("catalog.sqlite-wal") && !before.keys.contains("catalog.sqlite-shm"))
+        let repository = GRDBCatalogRepository(host: "wal-sidecars", durability: .volatileForTests)
+        let outcome = await repository.open(at: fixture.url)
+        guard case .refused(let words) = outcome else {
+            Issue.record("expected .refused for a newer schema, got \(outcome)")
+            await repository.close()
+            return
+        }
+        #expect(words.contains("schema version \(newer) is newer"), Comment(rawValue: words))
+        await repository.close()
+        let after = try Self.directorySnapshot(fixture.directory)
+        let added = after.filter { before[$0.key] == nil }.map { "\($0.key) (\($0.value.count) bytes)" }.sorted()
+        #expect(Set(after.keys) == Set(before.keys), "the directory gained \(added) / lost \(Set(before.keys).subtracting(after.keys).sorted())")
+        for (name, bytes) in before {
+            #expect(after[name] == bytes, "\(name) changed beside a refused file")
+        }
     }
 
     // MARK: - Finding 4 (P2): clearing the last curated value must not resurrect the imported one

@@ -2650,6 +2650,7 @@
       ],
       "tests": [
         "aNewerSchemaIsRefusedWithoutTheFileChanging",
+        "aNewerSchemaWALFileIsRefusedWithItsFolderExactlyAsFound",
         "aReadOnlyFolderWithoutSidecarsNeverOpensForWriting",
         "anAdmissionGoneStaleBeforeThePoolIsRefused",
         "anUnverifiableExistingFileIsRefusedUntouched",
@@ -34299,7 +34300,7 @@
       ],
       "expected_floor": 289,
       "name": "regression",
-      "package_expected_floor": 264,
+      "package_expected_floor": 265,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

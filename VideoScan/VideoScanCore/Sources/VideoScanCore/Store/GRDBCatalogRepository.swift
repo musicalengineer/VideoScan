@@ -173,6 +173,17 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if requiringLatch, CatalogFileIdentity.read(url.deletingLastPathComponent().appendingPathComponent(CatalogFileGuard.latchFileName)) == .missing {
             return refusedToOpen(url, Self.noLatchWords(folder: url.deletingLastPathComponent()))
         }
+        // codex #142 F6-3: what was beside the file before this open touched
+        // it; a refusal gives back exactly the sidecars the open added.
+        let footprint = AdmissionFootprint.record(url)
+        let outcome = await admitAndOpen(url, requiringLatch: requiringLatch)
+        if case .refused = outcome { footprint.eraseWhatTheOpenAdded() }
+        return outcome
+    }
+
+    /// The admission, the pool and the open checks (`open` wraps this with
+    /// the footprint; the pool is published only by `finishOpen`).
+    private func admitAndOpen(_ url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome {
         // GH #359: the file as it was BEFORE the pool opened it (missing for
         // a new catalog), so a swap during the open itself is caught.
         let before = CatalogFileIdentity.read(url)
@@ -181,7 +192,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // WAL on construction, and a file this build must refuse (a newer
         // schema, a corrupt page) is never written to. Codex #142 F6-2: an
         // existing file that look could not verify gets no writer either
-        // (openPool decides: refuse, read-only, or nothing-to-recover).
+        // (openPool decides: refused, or read-only in a read-only folder).
         let admission = Self.admit(url)
         if case .refused(let words) = admission { return refusedToOpen(url, words) }
         if admission == .admitted, let hook = admittedHook {
@@ -269,9 +280,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
     }
 
     private static func openPool(at url: URL, durability: Durability, admission: Admission) throws -> Opened {
-        if case .unverified(let why) = admission, !nothingToRecover(at: url) {
-            return try openUnverified(at: url, durability: durability, why: why)
-        }
+        if case .unverified(let why) = admission { return try openUnverified(at: url, durability: durability, why: why) }
         do {
             return Opened(pool: try makePool(at: url, durability: durability, readonly: false),
                           readOnlyReason: nil)
@@ -1085,16 +1094,82 @@ extension GRDBCatalogRepository {
         }
     }
 
+    /// "Left exactly as found" for the DIRECTORY (codex #142 F6-3). SQLite
+    /// makes `-wal` and `-shm` beside a WAL-mode file to read it at all
+    /// (wal.html §Read-only databases: the system build will not open such
+    /// a file read-only without them), so a refused open that created
+    /// nothing else still leaves two new entries. Recorded before the
+    /// admission; after a refusal, `eraseWhatTheOpenAdded` removes ONLY what
+    /// the open added, and only with proof nothing else happened:
+    ///   - the main file's stat is unchanged (device, inode, size, mtime,
+    ///     ctime — any write by any process moves mtime/ctime; a hash would
+    ///     be O(file) twice over);
+    ///   - the `-wal` was absent before and is 0 bytes now (no frames: no
+    ///     one wrote through it); the `-shm` was absent before (an index,
+    ///     rebuilt from the WAL by the next open; never data).
+    /// An empty `-wal` and a `-shm` this open made are not media and not
+    /// records; nothing with content is ever removed here. Residual
+    /// (documented, not closed): another PROCESS that opened the same file
+    /// in the window between the snapshot and the erase would lose the
+    /// `-shm` under it. A POSIX fcntl probe from this process would be
+    /// worse — closing the probe's fd drops every lock this process holds
+    /// on the file, SQLite's included (the classic POSIX lock pitfall).
+    /// The window is a few ms inside a refused open, under the one-writer
+    /// latch. For Rick: a value type holding three stat snapshots.
+    struct AdmissionFootprint: Sendable {
+        /// The parts of `stat(2)` that move when a file is written.
+        private struct Fingerprint: Equatable {
+            let device: dev_t, inode: ino_t, size: off_t
+            let modified: (Int, Int), changed: (Int, Int)
+            static func == (lhs: Fingerprint, rhs: Fingerprint) -> Bool {
+                lhs.device == rhs.device && lhs.inode == rhs.inode && lhs.size == rhs.size
+                    && lhs.modified == rhs.modified && lhs.changed == rhs.changed
+            }
+            static func read(_ path: String) -> Fingerprint? {
+                var info = stat()
+                guard stat(path, &info) == 0 else { return nil }
+                return Fingerprint(device: info.st_dev, inode: info.st_ino, size: info.st_size,
+                                   modified: (info.st_mtimespec.tv_sec, info.st_mtimespec.tv_nsec),
+                                   changed: (info.st_ctimespec.tv_sec, info.st_ctimespec.tv_nsec))
+            }
+        }
+
+        private let url: URL
+        private let main: Fingerprint?
+        private let hadWAL: Bool
+        private let hadSHM: Bool
+
+        static func record(_ url: URL) -> AdmissionFootprint {
+            let fm = FileManager.default
+            return AdmissionFootprint(url: url, main: Fingerprint.read(url.path),
+                                      hadWAL: fm.fileExists(atPath: url.path + "-wal"),
+                                      hadSHM: fm.fileExists(atPath: url.path + "-shm"))
+        }
+
+        func eraseWhatTheOpenAdded() {
+            guard let main, Fingerprint.read(url.path) == main else { return }   // the file moved on; touch nothing
+            let fm = FileManager.default
+            let wal = url.path + "-wal", shm = url.path + "-shm"
+            let walNow = Fingerprint.read(wal)
+            if !hadWAL, let walNow, walNow.size == 0, (try? fm.removeItem(atPath: wal)) != nil {
+                storeLog.notice("catalog store OPEN REFUSED: removed the empty \(url.lastPathComponent)-wal this open created")
+            }
+            if !hadSHM, fm.fileExists(atPath: shm), (try? fm.removeItem(atPath: shm)) != nil {
+                storeLog.notice("catalog store OPEN REFUSED: removed the \(url.lastPathComponent)-shm this open created")
+            }
+        }
+    }
+
     /// True when no open of `url` can change a byte of it: the header says
     /// WAL (bytes 18/19 = 2) and there is no `-wal` and no `-journal` beside
-    /// it — nothing to play back, and the pool's `journal_mode = WAL` is a
-    /// no-op. Needed because the system SQLite (3.54.0 "aapl", probed
-    /// 2026-10-25) answers a READ-ONLY open of such a file with
-    /// SQLITE_CANTOPEN even in a writable folder (it will not create the
-    /// sidecars for a read-only connection), so a healthy catalog whose
-    /// sidecars were cleaned — a restore, a copy — cannot be admitted
-    /// read-only. It goes to the pool with `admitted: false`: the pool makes
-    /// the sidecars it needs and every check runs on it before migration.
+    /// it — nothing to play back, and a `journal_mode = WAL` is a no-op.
+    /// Why it matters: the system SQLite (3.54.0 "aapl", probed with
+    /// /usr/bin/sqlite3 on 2026-10-25) answers a READ-ONLY open of a
+    /// WAL-mode file whose `-wal` does not exist with SQLITE_CANTOPEN, even
+    /// in a writable folder (it creates the `-shm` for a read-only
+    /// connection, never the `-wal`); a clean close leaves a 0-byte `-wal`
+    /// and the `-shm`, so this is the state of a restored or copied
+    /// catalog. Such a file gets a second, read-write look in `admit`.
     static func nothingToRecover(at url: URL) -> Bool {
         let fm = FileManager.default
         guard !fm.fileExists(atPath: url.path + "-wal"), !fm.fileExists(atPath: url.path + "-journal"),
@@ -1117,9 +1192,23 @@ extension GRDBCatalogRepository {
     /// licence to open read-write (see `Admission`).
     private static func admit(_ url: URL) -> Admission {
         guard FileManager.default.fileExists(atPath: url.path) else { return .noVerdict }
+        let first = look(at: url, readonly: true)
+        guard case .unverified = first, nothingToRecover(at: url) else { return first }
+        // codex #142 F6-3: the second look. A plain read-write queue makes
+        // the 0-byte `-wal` and the `-shm` the engine needs and nothing
+        // else — no `journal_mode` pragma, no GRDB init write (that is the
+        // pool's; see makePool), nothing to play back — so a verdict is
+        // still reached BEFORE the pool, and a refusal leaves only those
+        // two files for the footprint to take back.
+        return look(at: url, readonly: false)
+    }
+
+    /// One connection, the checks, a verdict. `readonly` is the connection
+    /// flag (SQLITE_OPEN_READONLY); the checks are reads either way.
+    private static func look(at url: URL, readonly: Bool) -> Admission {
         var configuration = Configuration()
         configuration.label = "VideoScan.catalog.admit"
-        configuration.readonly = true
+        configuration.readonly = readonly
         let queue: DatabaseQueue
         do {
             queue = try DatabaseQueue(path: url.path, configuration: configuration)
@@ -1262,7 +1351,8 @@ extension GRDBCatalogRepository {
     /// words. SQLITE_OPEN_READONLY; no migration (an incomplete schema is
     /// refused); the high-water witnesses are neither read nor raised; every
     /// write is refused for the session. The same engine and schema checks
-    /// as `open` (integrity_check, foreign_key_check, schema version).
+    /// as `open` (integrity_check, foreign_key_check, schema version), run
+    /// the same way: the read-only admission first, then the pool.
     public func openReadOnly(at url: URL, reason: String) async -> CatalogOpenOutcome {
         guard pool == nil else {
             return .refused(reason: "already open at \(databaseURL?.path ?? "?")")
@@ -1270,6 +1360,19 @@ extension GRDBCatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "\(url.lastPathComponent) does not exist")
         }
+        // codex #142 F6-3: this door reaches its verdict before its pool
+        // too — the admission's second look is what lets a read-only pool
+        // open a WAL-mode file with no `-wal` at all on the system SQLite —
+        // and a refusal gives back what the look added.
+        let footprint = AdmissionFootprint.record(url)
+        let outcome = await admitAndOpenReadOnly(url, reason: reason)
+        if case .refused = outcome { footprint.eraseWhatTheOpenAdded() }
+        return outcome
+    }
+
+    private func admitAndOpenReadOnly(_ url: URL, reason: String) async -> CatalogOpenOutcome {
+        let admission = Self.admit(url)
+        if case .refused(let words) = admission { return refusedToOpen(url, words) }
         let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
@@ -1279,7 +1382,7 @@ extension GRDBCatalogRepository {
         }
         do {
             let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
-            let loaded = try await Self.prepare(opened, host: host, admitted: false)
+            let loaded = try await Self.prepare(opened, host: host, admitted: admission == .admitted)
             pool = opened.pool
             databaseURL = url
             self.fileGuard = fileGuard
