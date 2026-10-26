@@ -13,6 +13,7 @@
 
 import Foundation
 import Testing
+import os
 @testable import VideoScan
 
 @Suite("Master Archive — codex R3 hardening", .serialized)
@@ -572,27 +573,58 @@ struct MasterArchiveHardeningTests {
 
 /// Switchable volume-UUID answer for the TASK-LOCAL probe seam. Only the
 /// closure passed to `withValue` sees it — never another suite.
-final class ProbeBox: @unchecked Sendable {
-    var uuid: String?
-    init(_ uuid: String?) { self.uuid = uuid }
+///
+/// Lock-owned (TSan, 2026-10-25): the test writes `uuid` on the main actor
+/// while the model's background archive-volume snapshot rebuild reads it
+/// through the probe closure — an `@unchecked Sendable` with a bare `var`
+/// was a real data race (ThreadSanitizer, wrongVolumeIdentityRefused).
+/// C++: a `std::mutex` that owns the field, not one beside it.
+final class ProbeBox: Sendable {
+    private let state: OSAllocatedUnfairLock<String?>
+    var uuid: String? {
+        get { state.withLock { $0 } }
+        set { state.withLock { $0 = newValue } }
+    }
+    init(_ uuid: String?) { state = OSAllocatedUnfairLock(initialState: uuid) }
 }
 
 /// Switchable barrier failures for the TASK-LOCAL `barriers` seam.
-final class BarrierBox: @unchecked Sendable {
-    var failFullFsync = false
-    var failFsync = false
+/// Lock-owned for the same reason as ProbeBox: the barriers run on the
+/// promote engine's worker while the test flips the switches.
+final class BarrierBox: Sendable {
+    private struct State {
+        var failFullFsync = false
+        var failFsync = false
+        var fullFsyncFailAfterCalls: Int?
+        var fullFsyncCalls = 0
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    var failFullFsync: Bool {
+        get { state.withLock { $0.failFullFsync } }
+        set { state.withLock { $0.failFullFsync = newValue } }
+    }
+    var failFsync: Bool {
+        get { state.withLock { $0.failFsync } }
+        set { state.withLock { $0.failFsync = newValue } }
+    }
     /// After this many successful F_FULLFSYNC calls, the rest fail.
-    var fullFsyncFailAfterCalls: Int?
-    private(set) var fullFsyncCalls = 0
-    func reset() { failFullFsync = false; failFsync = false; fullFsyncFailAfterCalls = nil; fullFsyncCalls = 0 }
+    var fullFsyncFailAfterCalls: Int? {
+        get { state.withLock { $0.fullFsyncFailAfterCalls } }
+        set { state.withLock { $0.fullFsyncFailAfterCalls = newValue } }
+    }
+    var fullFsyncCalls: Int { state.withLock { $0.fullFsyncCalls } }
+    func reset() { state.withLock { $0 = State() } }
     var barriers: ArchivePromoteEngine.Barriers {
         let live = ArchivePromoteEngine.Barriers.live
         return .init(
             fullFsync: { [self] fd in
-                fullFsyncCalls += 1
-                if failFullFsync { return -1 }
-                if let n = fullFsyncFailAfterCalls, fullFsyncCalls > n { return -1 }
-                return live.fullFsync(fd)
+                let fail = state.withLock { s -> Bool in
+                    s.fullFsyncCalls += 1
+                    if s.failFullFsync { return true }
+                    if let n = s.fullFsyncFailAfterCalls, s.fullFsyncCalls > n { return true }
+                    return false
+                }
+                return fail ? -1 : live.fullFsync(fd)
             },
             fsync: { [self] fd in failFsync ? -1 : live.fsync(fd) })
     }
