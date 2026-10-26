@@ -26,6 +26,12 @@
 //   | 6-1 P1  | anAdmissionGoneStaleBeforeThePoolIsRefused        | .readWrite — prepare(admitted: true) skipped   | .refused,     |
 //   |         |                                                   | the version check; the bump after admission   | write refused |
 //   |         |                                                   | (same inode) opened read-write                | "not open"    |
+//   | 6-2 P2  | anUnverifiableExistingFileIsRefusedUntouched      | the hot -journal was played back (main file   | .refused      |
+//   |         |                                                   | 544768 → 540672 bytes, -journal gone), the    | "could not be |
+//   |         |                                                   | file switched to WAL (-wal/-shm appeared),    | verified…";   |
+//   |         |                                                   | THEN refused on the version                   | dir identical |
+//   |         | aReadOnlyFolderWithoutSidecarsNeverOpensForWriting| (pin, green from the start: the read-only     | not .readWrite|
+//   |         |                                                   | folder corner the F6-2 rule must keep)        | dir identical |
 //
 // Lives under Tests/…/Store/ because it opens the same file with a plain
 // GRDB queue (the sensor allows `import GRDB` only here and in
@@ -244,6 +250,147 @@ struct CatalogStoreDurabilityCodex141Tests {
         let wrote = await repository.write(as: .ui) { _ in }
         #expect(wrote == .refused(reason: "not open"), "a stale admission left something writable: \(wrote)")
         await repository.close()
+    }
+
+    // MARK: - Closing pass (codex #142) F6-2 (P2): an unverifiable existing file never authorises a writer
+
+    /// Every file in `directory` by name, with its bytes — the oracle for
+    /// "left exactly as found": the entry SET and every file's content, not
+    /// only the main file (codex #142 F6-3).
+    private static func directorySnapshot(_ directory: URL) throws -> [String: Data] {
+        var snapshot: [String: Data] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) {
+            snapshot[name] = try Data(contentsOf: directory.appendingPathComponent(name))
+        }
+        return snapshot
+    }
+
+    /// The newer-schema DELETE-mode fixture with a HOT rollback journal
+    /// beside it: a process died mid-transaction after the journal reached
+    /// the disk. Built by hand from a copy taken before one committed write
+    /// (SQLite's documented format, fileformat.html §Rollback Journal): the
+    /// journal holds every page the write changed, as it was BEFORE the
+    /// write, so rolling it back restores the copy. The next read-write
+    /// connection plays it back on open (lockingv3.html §Dealing with hot
+    /// journals) — which is a write to the main file and a delete of the
+    /// journal; a read-only connection refuses with SQLITE_READONLY_ROLLBACK.
+    private func newerSchemaFixtureWithAHotJournal() async throws -> (StoreFixture, Int) {
+        let (fixture, newer, pageImageBefore) = try await newerSchemaFixtureInDeleteMode()
+        // One committed write after the copy, so the two images differ.
+        let queue = try DatabaseQueue(path: fixture.url.path)
+        try queue.inDatabase { db in
+            // A new table: page 1 (sqlite_master) changes and a page is added.
+            try db.execute(sql: "CREATE TABLE hot_journal_scratch (x INTEGER); INSERT INTO hot_journal_scratch VALUES (1)")
+        }
+        try queue.close()
+        for suffix in ["-wal", "-shm", "-journal"] where FileManager.default.fileExists(atPath: fixture.url.path + suffix) {
+            try FileManager.default.removeItem(atPath: fixture.url.path + suffix)
+        }
+        let after = try Data(contentsOf: fixture.url)
+        try #require(after != pageImageBefore, "the write changed no page; the journal would be empty")
+        try Self.writeHotJournal(beside: fixture.url, original: pageImageBefore, current: after)
+        return (fixture, newer)
+    }
+
+    /// Big-endian 32-bit, as the journal format stores every number.
+    private static func be32(_ value: UInt32) -> [UInt8] {
+        [UInt8(value >> 24), UInt8((value >> 16) & 0xFF), UInt8((value >> 8) & 0xFF), UInt8(value & 0xFF)]
+    }
+
+    private static func writeHotJournal(beside database: URL, original: Data, current: Data) throws {
+        var pageSize = Int(original[16]) << 8 | Int(original[17])
+        if pageSize == 1 { pageSize = 65_536 }
+        let pages = original.count / pageSize
+        try #require(pages * pageSize == original.count)
+        let nonce: UInt32 = 0x5EED_1234
+        var records: [UInt8] = []
+        var count: UInt32 = 0
+        for page in 0..<pages {
+            let range = (page * pageSize)..<((page + 1) * pageSize)
+            let before = original.subdata(in: range)
+            if current.count >= range.upperBound, current.subdata(in: range) == before { continue }
+            // Record: page number, the page as it was, then the checksum —
+            // the nonce plus every 200th byte counting down from the end.
+            records += be32(UInt32(page + 1))
+            records += before
+            var checksum = nonce
+            var offset = pageSize - 200
+            while offset > 0 { checksum &+= UInt32(before[offset]); offset -= 200 }
+            records += be32(checksum)
+            count += 1
+        }
+        try #require(count > 0)
+        let sector = 512
+        var header: [UInt8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]   // the journal magic
+        header += be32(count)                       // records that follow
+        header += be32(nonce)
+        header += be32(UInt32(pages))               // size to truncate back to
+        header += be32(UInt32(sector))
+        header += be32(UInt32(pageSize))
+        header += [UInt8](repeating: 0, count: sector - header.count)
+        try Data(header + records).write(to: URL(fileURLWithPath: database.path + "-journal"))
+    }
+
+    @Test func anUnverifiableExistingFileIsRefusedUntouched() async throws {
+        let (fixture, newer) = try await newerSchemaFixtureWithAHotJournal()
+        defer { fixture.remove() }
+        let before = try Self.directorySnapshot(fixture.directory)
+        try #require(before.keys.contains("catalog.sqlite-journal"))
+        let repository = GRDBCatalogRepository(host: "hot-journal", durability: .volatileForTests)
+        let outcome = await repository.open(at: fixture.url)
+        guard case .refused(let words) = outcome else {
+            Issue.record("expected .refused for a newer-schema file with a hot journal, got \(outcome)")
+            await repository.close()
+            return
+        }
+        #expect(words.contains("could not be verified before opening"), Comment(rawValue: words))
+        #expect(words.contains("nothing was written"), Comment(rawValue: words))
+        _ = newer
+        let wrote = await repository.write(as: .ui) { _ in }
+        #expect(wrote == .refused(reason: "not open"), Comment(rawValue: "\(wrote)"))
+        await repository.close()
+        let after = try Self.directorySnapshot(fixture.directory)
+        #expect(Set(after.keys) == Set(before.keys), "the directory's entries changed: \(after.keys.sorted()) vs \(before.keys.sorted())")
+        for (name, bytes) in before {
+            #expect(after[name] == bytes, "\(name) changed — the hot journal was rolled back or the file was switched to WAL")
+        }
+    }
+
+    /// The read-only-folder corner the F6-2 rule must keep: a healthy
+    /// WAL-mode catalog with its sidecars cleaned, in a folder that cannot
+    /// be written. The read-only admission cannot be made — the system
+    /// SQLite (3.54.0 "aapl") answers CANTOPEN for ANY read-only open of a
+    /// WAL-mode file without its sidecars, the read-only pool included, so
+    /// this folder cannot open read-only on this build at all (it could not
+    /// before the fix either). What the rule must keep: never read-write,
+    /// read-only or refused in words, and the folder exactly as found. The
+    /// sidecars-present variant opens read-only
+    /// (GRDBCatalogRepositoryTests.aReadOnlyFolderNeverOpensForWriting).
+    @Test func aReadOnlyFolderWithoutSidecarsNeverOpensForWriting() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        let fm = FileManager.default
+        for suffix in ["-wal", "-shm"] where fm.fileExists(atPath: fixture.url.path + suffix) {
+            try fm.removeItem(atPath: fixture.url.path + suffix)
+        }
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: fixture.directory.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.directory.path)
+            fixture.remove()
+        }
+        let before = try Self.directorySnapshot(fixture.directory)
+        let repository = GRDBCatalogRepository(host: "ro-folder", durability: .volatileForTests)
+        let outcome = await repository.open(at: fixture.url)
+        switch outcome {
+        case .readWrite:
+            Issue.record("a read-only folder opened read-write")
+        case .readOnly(let words), .refused(let words):
+            #expect(words.contains("is not writable") || words.contains("unable to open"), Comment(rawValue: words))
+        }
+        let wrote = await repository.write(as: .ui) { _ in }
+        #expect(!wrote.isCommitted, "a write landed in a read-only folder: \(wrote)")
+        await repository.close()
+        let after = try Self.directorySnapshot(fixture.directory)
+        #expect(after == before, "the read-only folder changed: \(after.keys.sorted()) vs \(before.keys.sorted())")
     }
 
     // MARK: - Finding 4 (P2): clearing the last curated value must not resurrect the imported one

@@ -179,7 +179,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // codex #141 F6: the checks that can say no run on a READ-ONLY
         // connection first — the read-write pool below switches the file to
         // WAL on construction, and a file this build must refuse (a newer
-        // schema, a corrupt page) is never written to.
+        // schema, a corrupt page) is never written to. Codex #142 F6-2: an
+        // existing file that look could not verify gets no writer either
+        // (openPool decides: refuse, read-only, or nothing-to-recover).
         let admission = Self.admit(url)
         if case .refused(let words) = admission { return refusedToOpen(url, words) }
         if admission == .admitted, let hook = admittedHook {
@@ -187,9 +189,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
         }
         let opened: Opened
         do {
-            opened = try Self.openPool(at: url, durability: durability)
+            opened = try Self.openPool(at: url, durability: durability, admission: admission)
         } catch {
-            return refusedToOpen(url, "could not open: \(Self.words(error))")
+            let why = Self.words(error)
+            return refusedToOpen(url, error is Refusal ? why : "could not open: \(why)")
         }
         return await finishOpen(opened, at: url, before: before, requiringLatch: requiringLatch,
                                 admitted: admission == .admitted)
@@ -265,7 +268,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let readOnlyReason: String?
     }
 
-    private static func openPool(at url: URL, durability: Durability) throws -> Opened {
+    private static func openPool(at url: URL, durability: Durability, admission: Admission) throws -> Opened {
+        if case .unverified(let why) = admission, !nothingToRecover(at: url) {
+            return try openUnverified(at: url, durability: durability, why: why)
+        }
         do {
             return Opened(pool: try makePool(at: url, durability: durability, readonly: false),
                           readOnlyReason: nil)
@@ -1037,14 +1043,65 @@ extension GRDBCatalogRepository {
     /// What the read-only look at the file before the pool said.
     private enum Admission: Equatable {
         /// Engine and schema checks passed on a read-only connection: the
-        /// pool may be built and `prepare` need not repeat them.
+        /// pool may be built; `prepare` repeats only the schema-version check.
         case admitted
         /// The file is refused, in these words; no pool is built.
         case refused(String)
-        /// No file yet (a new catalog), or a read-only connection could not
-        /// be made at all: the read-write door runs the checks itself and
-        /// says its own words, as before.
+        /// An EXISTING file the read-only look could not verify (the
+        /// connection could not be made, or a check failed with an engine
+        /// error rather than a verdict — a hot rollback journal gives
+        /// SQLITE_READONLY_ROLLBACK here). Codex #142 F6-2: this never
+        /// authorises a writer, because a read-write connection would
+        /// recover the file (play the journal back, delete it, switch to
+        /// WAL) before any check could refuse it. A writable folder → the
+        /// open is refused in words saying the file was not opened; a
+        /// read-only folder → a read-only pool, with the full checks on it.
+        case unverified(String)
+        /// No file at the path yet: a new catalog, which the read-write
+        /// door creates and checks itself.
         case noVerdict
+    }
+
+    /// The words for `.unverified` in a writable folder (codex #142 F6-2).
+    static func unverifiedWords(_ url: URL, _ why: String) -> String {
+        "\(url.lastPathComponent) could not be verified before opening (\(why)) — it was not opened; nothing was written"
+    }
+
+    /// `.unverified` with something an open could recover: never a
+    /// read-write pool. A folder that cannot be written (a read-only
+    /// volume, where the admission connection may fail for want of a
+    /// `-shm`) opens READ-ONLY — SQLITE_OPEN_READONLY cannot play a journal
+    /// back or switch the mode, and `prepare(admitted: false)` runs every
+    /// check on that pool. A writable folder refuses: the file stays
+    /// exactly as found.
+    private static func openUnverified(at url: URL, durability: Durability, why: String) throws -> Opened {
+        guard let reason = folderNotWritableReason(for: url) else {
+            throw Refusal(reason: unverifiedWords(url, why))
+        }
+        do {
+            return Opened(pool: try makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason)
+        } catch {
+            throw Refusal(reason: unverifiedWords(url, "\(why); read-only: \(words(error))"))
+        }
+    }
+
+    /// True when no open of `url` can change a byte of it: the header says
+    /// WAL (bytes 18/19 = 2) and there is no `-wal` and no `-journal` beside
+    /// it — nothing to play back, and the pool's `journal_mode = WAL` is a
+    /// no-op. Needed because the system SQLite (3.54.0 "aapl", probed
+    /// 2026-10-25) answers a READ-ONLY open of such a file with
+    /// SQLITE_CANTOPEN even in a writable folder (it will not create the
+    /// sidecars for a read-only connection), so a healthy catalog whose
+    /// sidecars were cleaned — a restore, a copy — cannot be admitted
+    /// read-only. It goes to the pool with `admitted: false`: the pool makes
+    /// the sidecars it needs and every check runs on it before migration.
+    static func nothingToRecover(at url: URL) -> Bool {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: url.path + "-wal"), !fm.fileExists(atPath: url.path + "-journal"),
+              let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let header = (try? handle.read(upToCount: 100)) ?? Data()
+        return header.count == 100 && header[18] == 2 && header[19] == 2
     }
 
     /// "Refused, never written to" (codex #141 F6): `DatabasePool` switches
@@ -1055,6 +1112,9 @@ extension GRDBCatalogRepository {
     /// changes no byte of the main file (on a WAL-mode file it may create
     /// `-shm`, which the pool creates anyway). For Rick: `fopen(path, "r")`
     /// plus the checks, before anything opens the file for writing.
+    /// Codex #142 F6-2: only `.admitted` authorises a writer; a connection
+    /// or check that fails without a verdict is `.unverified`, never a
+    /// licence to open read-write (see `Admission`).
     private static func admit(_ url: URL) -> Admission {
         guard FileManager.default.fileExists(atPath: url.path) else { return .noVerdict }
         var configuration = Configuration()
@@ -1064,7 +1124,7 @@ extension GRDBCatalogRepository {
         do {
             queue = try DatabaseQueue(path: url.path, configuration: configuration)
         } catch {
-            return .noVerdict
+            return .unverified(words(error))
         }
         defer { try? queue.close() }
         do {
@@ -1073,8 +1133,12 @@ extension GRDBCatalogRepository {
                 try checkSchemaVersion(db)
             }
             return .admitted
+        } catch let refusal as Refusal {
+            return .refused(refusal.reason)
         } catch {
-            return .refused(words(error))
+            // The check itself could not run (an engine error, not a
+            // verdict): the file is unverified, not refused on its merits.
+            return .unverified(words(error))
         }
     }
 
