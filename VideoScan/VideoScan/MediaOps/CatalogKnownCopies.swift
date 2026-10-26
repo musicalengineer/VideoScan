@@ -3,12 +3,16 @@
 // (tab-charter audit T3, 2026-10-11 — the charter: ⌘⌫ is Finder-like, but
 // warns when the file is the only copy).
 //
-// A copy is another catalog row with the SAME bytes by the catalog's
-// strong identity keys — never the duplicate scan's scored, fuzzy match
-// (a near-duplicate is not a copy; trusting one would hide the warning):
-//   * partialMD5 + size        — the scan's identity key;
-//   * contentHash + size       — the segmented content signature;
-//   * a whole-file digest      — contentFixity / archiveFixity (fixity).
+// A copy is another catalog row with the SAME bytes by whole-file SHA-256
+// (rule 6; Codex #150 F3) — never the partial MD5, the sampled signature or
+// the duplicate scan's scored match:
+//   * contentFixity — sha256, usable for verification (ctime- and
+//     volume-bound stamp), or archiveFixity — the archive's read-back sha256;
+//   * same digest AND byte count; a row whose two digests disagree has no
+//     identity at all (a conflicting digest never vouches).
+// A row without one has no known copy: the alert warns, and the move needs
+// the person's deliberate click. At the move the copy is proven again on
+// disk (`ContentCopyProof`).
 // It must SURVIVE the move (QA round 1, M2):
 //   * the caller's survivor rule — the model passes the Migrate witness
 //     rule (`isLiveRelocateWitness`: not removed, not trashed, not labelled
@@ -24,9 +28,10 @@
 //     target look like a different file and hide the warning. When either
 //     stamp has no volume UUID, a matching inode is taken as possibly the
 //     same file: the error is an extra warning, never a missing one.
-// A copy on a drive that is merely disconnected still counts.
+// The model's survivor rule also drops a copy whose drive is not connected
+// now (Codex #150 F3): it cannot be proven at the move.
 //
-// Cost: one pass over the catalog with three Set lookups per row; key
+// Cost: one pass over the catalog with two Set lookups per row; key
 // strings are built only for rows that already share a raw value with the
 // selection. Pinned at 100k records by CatalogTrashOnlyCopyTests.
 //
@@ -40,12 +45,10 @@ enum CatalogKnownCopies {
 
     /// The identity keys of one row (empty values contribute none).
     nonisolated static func keys(_ r: VideoRecord) -> [String] {
-        var out: [String] = []
-        if !r.partialMD5.isEmpty { out.append("md5:\(r.partialMD5)|\(r.sizeBytes)") }
-        if !r.contentHash.isEmpty { out.append("sig:\(r.contentHash)|\(r.sizeBytes)") }
-        if let f = r.contentFixity, !f.digest.isEmpty { out.append("file:\(f.algorithm):\(f.digest)") }
-        if let f = r.archiveFixity, !f.digest.isEmpty { out.append("file:\(f.algorithm):\(f.digest)") }
-        return out
+        let content = ContentCopyProof.digest(r).map { "sha256:\($0.digest.lowercased())|\($0.byteCount)" }
+        let archive = ContentCopyProof.archiveDigest(r).map { "sha256:\($0.digest.lowercased())|\($0.sizeBytes)" }
+        if let content, let archive, content != archive { return [] }   // conflicting digests: no identity
+        return [content ?? archive].compactMap { $0 }
     }
 
     /// The row's stored fixity stamp, when it names an inode.
@@ -87,6 +90,25 @@ enum CatalogKnownCopies {
         return Set(moving.filter { rec in !keys(rec).contains(where: surviving.contains) }.map(\.id))
     }
 
+    /// The rows of `all` that are a surviving copy of `rec` alone: same
+    /// whole-file SHA-256 key, `isSurvivor`, not `rec` itself, not the same
+    /// path (any case) and not maybe-the-same inode. The ⌘⌫ move's per-file
+    /// question; `all` is the short candidate pool.
+    nonisolated static func survivingCopies(of rec: VideoRecord, in all: [VideoRecord],
+                                            isSurvivor: (VideoRecord) -> Bool) -> [VideoRecord] {
+        let mine = Set(keys(rec))
+        guard !mine.isEmpty else { return [] }
+        let path = rec.fullPath.lowercased()
+        let stamp = fileStamp(rec)
+        let raw = RawValues([rec])
+        return all.filter { r in
+            guard r.id != rec.id, raw.shared(by: r), r.fullPath.lowercased() != path,
+                  keys(r).contains(where: mine.contains), isSurvivor(r) else { return false }
+            if let stamp, let other = fileStamp(r), mayBeSameFile(stamp, other) { return false }
+            return true
+        }
+    }
+
     /// The rows of `all` that share a raw identity value with `moving` —
     /// the only rows that can be a copy of one (the same prefilter
     /// `onlyCopies` runs). One pass; the ⌘⌫ move asks `onlyCopies` per file
@@ -97,22 +119,20 @@ enum CatalogKnownCopies {
         return all.filter(raw.shared(by:))
     }
 
-    /// The raw identity values of a set of rows (empty values dropped).
+    /// The raw whole-file digests of a set of rows (a cheap prefilter; the
+    /// full key, size included, decides).
     private struct RawValues {
-        let md5s: Set<String>
-        let sigs: Set<String>
         let digests: Set<String>
 
         nonisolated init(_ moving: [VideoRecord]) {
-            md5s = Set(moving.map(\.partialMD5).filter { !$0.isEmpty })
-            sigs = Set(moving.map(\.contentHash).filter { !$0.isEmpty })
             digests = Set(moving.flatMap { [$0.contentFixity?.digest, $0.archiveFixity?.digest] }
-                .compactMap { $0 }.filter { !$0.isEmpty })
+                .compactMap { $0?.lowercased() }.filter { !$0.isEmpty })
         }
 
         nonisolated func shared(by r: VideoRecord) -> Bool {
-            md5s.contains(r.partialMD5) || sigs.contains(r.contentHash)
-                || digests.contains(r.contentFixity?.digest ?? "")
+            guard !digests.isEmpty else { return false }
+            // Both digests are stored lowercase (ContentFixity.init, ArchiveFixity).
+            return digests.contains(r.contentFixity?.digest ?? "")
                 || digests.contains(r.archiveFixity?.digest ?? "")
         }
     }

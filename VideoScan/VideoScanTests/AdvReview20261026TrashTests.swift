@@ -10,8 +10,10 @@
 //
 // Every move goes to a sandbox "Trash" (SandboxTrash), never the real one.
 
+import CryptoKit
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 @Suite(.serialized)
@@ -44,17 +46,28 @@ struct CatalogTrashOnlyCopyAtTheMoveTests {
 
         func cleanup() { try? FileManager.default.removeItem(at: root) }
 
-        /// A file on disk and its row; same `md5` = same bytes (a copy).
-        func file(_ name: String, md5: String = "synthetic-md5-0001") throws -> VideoRecord {
-            let url = folder.appendingPathComponent(name)
-            try bytes.write(to: url)
+        /// The bytes for a content tag: same tag = same bytes (a copy).
+        func content(_ md5: String) -> Data {
+            var data = bytes
+            data.append(contentsOf: Array(md5.utf8))
+            return data
+        }
+
+        /// A file on disk and its row, with its whole-file SHA-256 fixity
+        /// stamped from the file (Codex #150 F3: identity is SHA-256).
+        func file(_ name: String, md5: String = "synthetic-md5-0001", in dir: URL? = nil) throws -> VideoRecord {
+            let url = (dir ?? folder).appendingPathComponent(name)
+            let data = content(md5)
+            try data.write(to: url)
             let r = VideoRecord()
             r.fullPath = url.path
             r.filename = url.lastPathComponent
             r.directory = url.deletingLastPathComponent().path
             r.ext = url.pathExtension
             r.partialMD5 = md5
-            r.sizeBytes = Int64(bytes.count)
+            r.sizeBytes = Int64(data.count)
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            r.contentFixity = ContentFixity.captured(path: url.path, digest: digest, byteCount: Int64(data.count))
             return r
         }
     }
@@ -172,6 +185,70 @@ struct CatalogTrashOnlyCopyAtTheMoveTests {
         #expect(result.refused.map(\.reason) == [VideoScanModel.becameOnlyCopyHeldNote], "\(result.refused.map(\.reason))")
     }
 
+    // MARK: Codex #150 F3 — the surviving copy is proven on disk at the move
+
+    /// Codex's recipe: B moved elsewhere on disk WITHOUT its catalog row
+    /// changing. The catalog still says B survives; the live proof at the
+    /// move does not, so A stays.
+    @Test func aCopyMovedAwayOnDiskIsNotProvenAtTheMove() async throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let recA = try rig.file("test_clip_a.mov")
+        let recB = try rig.file("test_clip_b.mov")
+        rig.model.records = [recA, recB]
+        let confirmed = rig.model.catalogTrashPlan(for: [recA])
+        try #require(confirmed.onlyCopy.isEmpty, "B is a catalogued SHA-256 copy: no warning")
+
+        try FileManager.default.moveItem(atPath: recB.fullPath, toPath: rig.root.appendingPathComponent("elsewhere.mov").path)
+
+        let result = await rig.model.trashSelectedRecords([recA], confirmed: confirmed,
+                                                          fileOperation: rig.trash.operation)
+        #expect(onDisk(recA), "A moved although its only copy was gone from disk")
+        #expect(rig.trash.attempts.isEmpty)
+        #expect(result.refused.map(\.reason) == [VideoScanModel.copyNotProvenAtTheMoveNote], "\(result.refused.map(\.reason))")
+    }
+
+    /// B rewritten with different bytes of the same size: its stored digest
+    /// no longer describes it (live stat), so it proves nothing.
+    @Test func aCopyRewrittenOnDiskIsNotProvenAtTheMove() async throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let recA = try rig.file("test_clip_a.mov")
+        let recB = try rig.file("test_clip_b.mov")
+        rig.model.records = [recA, recB]
+        let confirmed = rig.model.catalogTrashPlan(for: [recA])
+        try #require(confirmed.onlyCopy.isEmpty)
+
+        try rig.content("synthetic-md5-0002").write(to: URL(fileURLWithPath: recB.fullPath))
+
+        let result = await rig.model.trashSelectedRecords([recA], confirmed: confirmed,
+                                                          fileOperation: rig.trash.operation)
+        #expect(onDisk(recA))
+        #expect(result.refused.map(\.reason) == [VideoScanModel.copyNotProvenAtTheMoveNote])
+    }
+
+    /// Matched only by partial MD5 (no whole-file SHA-256 on B) or by a
+    /// conflicting SHA-256: not a copy — the alert warns, so the move is a
+    /// deliberate click.
+    @Test func aWeakerOrConflictingIdentityIsNotACopy() throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let recA = try rig.file("test_clip_a.mov")
+        let recB = try rig.file("test_clip_b.mov"); recB.contentFixity = nil
+        rig.model.records = [recA, recB]
+        #expect(rig.model.catalogTrashPlan(for: [recA]).onlyCopy == [recA.id], "partial MD5 alone")
+        let recC = try rig.file("test_clip_c.mov", md5: "synthetic-md5-0002"); recC.partialMD5 = recA.partialMD5
+        rig.model.records = [recA, recC]
+        #expect(rig.model.catalogTrashPlan(for: [recA]).onlyCopy == [recA.id], "same MD5, different SHA-256")
+    }
+
+    /// A copy whose drive is not connected cannot be proven: warned.
+    @Test func anOfflineCopyIsNotASurvivingCopy() throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let recA = try rig.file("test_clip_a.mov")
+        let recB = try rig.file("test_clip_b.mov")
+        rig.model.records = [recA, recB]
+        let plan = rig.model.catalogTrashPlan(for: [recA], isOffline: { $0.id == recB.id })
+        #expect(plan.onlyCopy == [recA.id])
+    }
+
     /// SCALE: 100k rows, 500 selected rows each with a live copy, none
     /// warned — the per-turn only-copy question for all 500 stays in budget.
     @Test func scale_perTurnCheckAt100kWithinBudget() {
@@ -184,6 +261,12 @@ struct CatalogTrashOnlyCopyAtTheMoveTests {
             r.filename = "clip_\(i).mov"
             r.partialMD5 = "m\(i % 99_500)"     // rows 0..<500 have a copy at 99_500..<100_000
             r.sizeBytes = 10_000
+            // A usable whole-file SHA-256 (synthetic digest, unique inode).
+            let digest = String(format: "%064x", i % 99_500)
+            r.contentFixity = ContentFixity(digest: digest, byteCount: 10_000,
+                                            stamp: FileIdentityStamp(device: 1, inode: UInt64(i + 1), size: 10_000,
+                                                                     mtimeNs: 1, ctimeNs: 1,
+                                                                     volumeUUID: "00000000-0000-0000-0000-000000000001"))
             all.append(r)
         }
         model.records = all

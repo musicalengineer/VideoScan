@@ -11,6 +11,7 @@
 //
 // Logic, words, a source sensor for the alert, and SCALE (100k records).
 
+import CryptoKit
 import Foundation
 import Testing
 import VideoScanCore
@@ -20,11 +21,33 @@ import VideoScanCore
 @MainActor
 struct CatalogTrashOnlyCopyTests {
 
+    /// A row; a non-empty `md5` also gives it a usable whole-file SHA-256
+    /// fixity derived from it (since Codex #150 F3 a copy is known only by
+    /// whole-file SHA-256 — the partial MD5 alone is never a copy). Each
+    /// volume gets a stable UUID, each path its own inode.
     private func rec(_ path: String, md5: String, size: Int64 = 1_000) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path; r.filename = (path as NSString).lastPathComponent
         r.partialMD5 = md5; r.sizeBytes = size
+        if !md5.isEmpty {
+            r.contentFixity = ContentFixity(digest: Self.sha(md5), byteCount: size,
+                                            stamp: Self.stamp(path, size: size))
+        }
         return r
+    }
+
+    static func sha(_ s: String) -> String {
+        SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A usable stored stamp: ctime known, bound to the path's volume UUID.
+    static func stamp(_ path: String, size: Int64, inode: UInt64? = nil, device: UInt64 = 7,
+                      volume: String?? = nil) -> FileIdentityStamp {
+        let comps = (path as NSString).pathComponents
+        let vol = comps.count > 2 && comps[1] == "Volumes" ? comps[2] : "boot"
+        let uuid = volume ?? "00000000-0000-0000-0000-" + String(sha(vol).prefix(12)).uppercased()
+        let ino = inode ?? (UInt64(sha(path).prefix(12), radix: 16) ?? 1)
+        return FileIdentityStamp(device: device, inode: ino, size: size, mtimeNs: 1, ctimeNs: 1, volumeUUID: uuid)
     }
 
     private func model(_ records: [VideoRecord]) -> VideoScanModel {
@@ -94,14 +117,25 @@ struct CatalogTrashOnlyCopyTests {
 
     @Test("fixity: a whole-file digest match is a copy even when the partial hashes differ")
     func fixityDigestIsACopy() {
-        let stamp = FileIdentityStamp(device: 1, inode: 2, size: 1_000, mtimeNs: 1, ctimeNs: 1)
         let target = rec("/Volumes/A/clip.mov", md5: "")
-        target.contentFixity = ContentFixity(digest: "abc", byteCount: 1_000, stamp: stamp, computedAt: Date())
+        target.contentFixity = ContentFixity(digest: Self.sha("abc"), byteCount: 1_000,
+                                             stamp: Self.stamp(target.fullPath, size: 1_000), computedAt: Date())
         let archived = rec("/Volumes/Raid/Archive/clip.mov", md5: "")
-        archived.archiveFixity = ArchiveFixity(digest: "abc", verifiedAt: Date(), sizeBytes: 1_000)
+        archived.archiveFixity = ArchiveFixity(digest: Self.sha("abc"), verifiedAt: Date(), sizeBytes: 1_000)
         #expect(plan(model([target, archived]), [target]).onlyCopy.isEmpty)
         let unknown = rec("/Volumes/A/no-keys.mov", md5: "")
         #expect(plan(model([unknown]), [unknown]).onlyCopy == [unknown.id], "no identity key = no known copy")
+    }
+
+    @Test("Codex #150 F3: the same partial MD5 with a DIFFERENT whole-file digest is not a copy")
+    func conflictingFullDigestIsNotACopy() {
+        let target = rec("/Volumes/A/clip.mov", md5: "m1")
+        let impostor = rec("/Volumes/B/clip.mov", md5: "m1")
+        impostor.contentFixity = ContentFixity(digest: Self.sha("other bytes"), byteCount: 1_000,
+                                               stamp: Self.stamp(impostor.fullPath, size: 1_000))
+        #expect(plan(model([target, impostor]), [target]).onlyCopy == [target.id])
+        let md5Only = rec("/Volumes/C/clip.mov", md5: ""); md5Only.partialMD5 = "m1"
+        #expect(plan(model([target, md5Only]), [target]).onlyCopy == [target.id], "a partial MD5 alone is not a copy")
     }
 
     @Test("QA M2: a copy superseded by a repair, or a skipped row, is not a surviving copy")
@@ -116,10 +150,12 @@ struct CatalogTrashOnlyCopyTests {
 
     @Test("QA M2: the same inode on both fixity stamps (volume unproven) is the same file, not a copy")
     func sameDeviceAndInodeIsTheSameFile() {
+        // One volume UUID for all three: the firmlink spelling shares the
+        // target's inode on that volume (same file); the real copy does not.
         func stamped(_ path: String, inode: UInt64) -> VideoRecord {
             let r = rec(path, md5: "m1")
-            let stamp = FileIdentityStamp(device: 7, inode: inode, size: 1_000, mtimeNs: 1, ctimeNs: 1)
-            r.contentFixity = ContentFixity(digest: "abc", byteCount: 1_000, stamp: stamp)
+            let stamp = Self.stamp(path, size: 1_000, inode: inode, volume: "11111111-2222-3333-4444-555555555555")
+            r.contentFixity = ContentFixity(digest: Self.sha("abc"), byteCount: 1_000, stamp: stamp)
             return r
         }
         let target = stamped("/Volumes/A/clip.mov", inode: 42)
@@ -139,7 +175,7 @@ struct CatalogTrashOnlyCopyTests {
             let r = rec(path, md5: "m1")
             let stamp = FileIdentityStamp(device: device, inode: inode, size: 1_000, mtimeNs: 1, ctimeNs: 1,
                                           volumeUUID: volume)
-            r.contentFixity = ContentFixity(digest: "abc", byteCount: 1_000, stamp: stamp)
+            r.contentFixity = ContentFixity(digest: Self.sha("abc"), byteCount: 1_000, stamp: stamp)
             return r
         }
         let vol = "11111111-2222-3333-4444-555555555555"
@@ -166,9 +202,11 @@ struct CatalogTrashOnlyCopyTests {
         let end = try #require(trash.range(of: "nonisolated static func isKnownCopySurvivor(",
                                            range: start.upperBound..<trash.endIndex))
         let body = trash[start.upperBound..<end.lowerBound]
-        #expect(body.contains("masterArchiveCopy(of: rec)") && body.contains("identicalArchivedCopy(of: rec)"))
-        #expect(!body.replacingOccurrences(of: "identicalArchivedCopy(of:", with: "").contains("archivedCopy(of:"),
-                "no archivedCopy(of:) — its third leg is the promotion index's scored content match")
+        // Codex #150 F3: archive copies count only by their read-back
+        // SHA-256 through the same survivor rule (retired drives too) —
+        // no separate archive leg, never the promotion index's scored match.
+        #expect(!body.contains("archivedCopy(of:") && !body.contains("masterArchiveCopy(of:"))
+        #expect(body.contains("isKnownCopySurvivor("))
         let table = try SourceTree.appCode(named: "CatalogContent+Table.swift")
         #expect(table.contains("alert.window.initialFirstResponder = cancel"))
     }

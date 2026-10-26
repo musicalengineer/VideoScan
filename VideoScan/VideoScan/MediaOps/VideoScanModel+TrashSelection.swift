@@ -112,34 +112,32 @@ extension VideoScanModel {
             for: records,
             isMasterArchive: { self.bulkDeleteRefusal($0, volume: archiveVolume) != nil },
             isOffline: isOffline)
-        plan.onlyCopy = catalogOnlyCopyIDs(plan.toTrash, among: records)
+        plan.onlyCopy = catalogOnlyCopyIDs(plan.toTrash, among: records, isOffline: isOffline)
         return plan
     }
 
     /// Of `ids` (rows about to move, in order), those with no surviving
-    /// copy the catalog knows of: no same-bytes survivor
-    /// (`CatalogKnownCopies` with `isKnownCopySurvivor`) outside the move,
-    /// and no Master Archive copy — the promote link or the digest-proved
-    /// identical copy only, never the promotion index's scored content match
-    /// (QA round 1 m3).
-    /// `catalog` narrows the rows searched for a copy (nil = all of
-    /// `records`); `alsoLeaving` are rows already on their way out that
-    /// can no longer count as a copy (the ⌘⌫ move's earlier turns).
+    /// copy the catalog knows of: no row outside the move with the same
+    /// whole-file SHA-256 (`CatalogKnownCopies`; a Master Archive copy
+    /// counts by its read-back digest) that passes `isKnownCopySurvivor`
+    /// — retired drives included, for the archive too (Codex #150 F3) —
+    /// and whose drive is connected (`isOffline`, injectable like the
+    /// plan's). The promotion index's scored match never counts.
     func catalogOnlyCopyIDs(_ ids: [UUID], among selection: [VideoRecord],
-                            in catalog: [VideoRecord]? = nil, alsoLeaving: Set<UUID> = []) -> [UUID] {
+                            isOffline: (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume) -> [UUID] {
         guard !ids.isEmpty else { return [] }
         let byID = Dictionary(selection.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let moving = ids.compactMap { byID[$0] }
-        let leaving = Set(ids).union(alsoLeaving)
-        let retiredRoots = scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
-        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: catalog ?? self.records) {
-            !alsoLeaving.contains($0.id) && Self.isKnownCopySurvivor($0, retiredRoots: retiredRoots)
+        let retiredRoots = knownCopyRetiredRoots()
+        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: self.records) {
+            Self.isKnownCopySurvivor($0, retiredRoots: retiredRoots) && !isOffline($0)
         }
-        return moving.filter { rec in
-            guard unmatched.contains(rec.id) else { return false }
-            let archive = [masterArchiveCopy(of: rec), identicalArchivedCopy(of: rec)].compactMap { $0 }
-            return !archive.contains { !leaving.contains($0.id) && !$0.isPurged }
-        }.map(\.id)
+        return moving.filter { unmatched.contains($0.id) }.map(\.id)
+    }
+
+    /// The roots of RETIRED drives — a copy there never survives a move.
+    func knownCopyRetiredRoots() -> [String] {
+        scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
     }
 
     /// Can `r` still hold the bytes after a Move to Trash? The Migrate
@@ -216,17 +214,22 @@ extension VideoScanModel {
         // after the alert (adversarial 2026-10-26 F2).
         let confirmedIDs = Set(confirmed.toTrash)
         let copies = CatalogTrashTurnCopies(batch: targets)
+        // Each turn's catalog half (main actor) names the copies its disk
+        // half must prove, off-main, immediately before the move (Codex
+        // #150 F3: whole-file SHA-256 on a live file stat'd at the moment
+        // of removal).
+        let proofs = CatalogTrashMoveProofs()
         var fileGuard = JunkDeletionGuard(
             authorize: { [weak self] rec in
                 guard let self else { return "the catalog went away — nothing moved" }
                 let problem = self.catalogTrashTurnProblem(rec, confirmed: confirmedIDs,
-                                                           warnedOnlyCopy: warned, copies: copies)
+                                                           warnedOnlyCopy: warned, copies: copies, proofs: proofs)
                 // Passed: from now on it counts as gone for the turns after
                 // it (the catalog marks the batch only at its end).
                 if problem == nil { copies.handedOn(rec.id) }
                 return problem
             },
-            beforeRemoval: { _ in nil },
+            beforeRemoval: { path in proofs.problemAtTheMove(path) },
             remove: fileOperation)
         fileGuard.settled = { rec, outcome in audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id) }
         let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, reason: .catalogTrash, guard: fileGuard)
@@ -256,16 +259,25 @@ extension VideoScanModel {
     /// read-only gates are the routine's own, also asked per file.)
     /// The only-copy question is asked only for rows the alert did not warn
     /// about, against `copies` (see `CatalogTrashTurnCopies` for its cost).
+    /// `proofs` receives what the disk half must prove for this file: nothing
+    /// for a warned row, else the source's and the copies' SHA-256 claims.
     func catalogTrashTurnProblem(_ rec: VideoRecord, confirmed: Set<UUID>,
-                                 warnedOnlyCopy: Set<UUID>, copies: CatalogTrashTurnCopies) -> String? {
+                                 warnedOnlyCopy: Set<UUID>, copies: CatalogTrashTurnCopies,
+                                 proofs: CatalogTrashMoveProofs? = nil) -> String? {
         if rec.isPurged || rec.isSetAside || rec.isSuperseded {
             return "was removed, set aside or replaced by a repair since you chose it — nothing moved"
         }
         if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
         if !confirmed.contains(rec.id) { return Self.notConfirmedHeldNote }
-        if !warnedOnlyCopy.contains(rec.id), copies.isOnlyCopyNow(rec, model: self) {
-            return Self.becameOnlyCopyHeldNote
+        if warnedOnlyCopy.contains(rec.id) {
+            proofs?.record(.warned, for: rec.fullPath)
+            return nil
         }
+        guard let source = ContentCopyProof.digest(rec) else { return Self.becameOnlyCopyHeldNote }
+        let claims = copies.survivingCopyClaims(of: rec, model: self)
+        if claims.isEmpty { return Self.becameOnlyCopyHeldNote }
+        proofs?.record(.claims(source: ContentCopyProof.Claim(path: rec.fullPath, fixity: source), copies: claims),
+                       for: rec.fullPath)
         return nil
     }
 
@@ -278,6 +290,12 @@ extension VideoScanModel {
     /// only copy the catalog knows of (another copy went away meanwhile).
     nonisolated static let becameOnlyCopyHeldNote =
         "is now the only copy the catalog knows of — another copy went away after you confirmed, so it was not moved"
+
+    /// At the move itself: no other copy could be proven on disk by its
+    /// whole-file SHA-256 (moved, rewritten, unplugged, or the file itself
+    /// changed since it was hashed).
+    nonisolated static let copyNotProvenAtTheMoveNote =
+        "no other copy of it could be proven on disk just now (whole-file SHA-256) — nothing moved"
 
     /// One outcome per selected row, in selection order: the routine's
     /// outcome for a row it was handed, else the plan's refusal as a named
@@ -369,11 +387,59 @@ final class CatalogTrashTurnCopies {
     /// `id` passed its turn's gates and went to the disk half.
     func handedOn(_ id: UUID) { leaving.insert(id) }
 
-    func isOnlyCopyNow(_ rec: VideoRecord, model: VideoScanModel) -> Bool {
+    /// The catalog's surviving copies of `rec` (same whole-file SHA-256,
+    /// the survivor rule incl. retired drives, not handed on earlier in
+    /// this batch, not the same file), as claims for the disk half to
+    /// prove. Empty = no copy the catalog knows of now. Offline copies are
+    /// left in: the live proof at the move refuses them.
+    func survivingCopyClaims(of rec: VideoRecord, model: VideoScanModel) -> [ContentCopyProof.Claim] {
         if poolRevision != model.catalogMutationRevision {
             pool = CatalogKnownCopies.candidates(for: batch + [rec], in: model.records)
             poolRevision = model.catalogMutationRevision
         }
-        return !model.catalogOnlyCopyIDs([rec.id], among: [rec], in: pool, alsoLeaving: leaving).isEmpty
+        let retiredRoots = model.knownCopyRetiredRoots()
+        let rows = CatalogKnownCopies.survivingCopies(of: rec, in: pool) {
+            !leaving.contains($0.id) && VideoScanModel.isKnownCopySurvivor($0, retiredRoots: retiredRoots)
+        }
+        return rows.compactMap { row in
+            if let f = ContentCopyProof.digest(row) { return ContentCopyProof.Claim(path: row.fullPath, fixity: f) }
+            if let a = ContentCopyProof.archiveDigest(row) { return ContentCopyProof.Claim(path: row.fullPath, archive: a) }
+            return nil
+        }
+    }
+}
+
+/// What each ⌘⌫ file's disk half must prove, handed over from its catalog
+/// half (Codex #150 F3). The catalog half runs on the main actor, the disk
+/// half on a detached task immediately before the Trash move, so the hand-
+/// over is lock-owned (≈ a C++ std::map guarded by a std::mutex). One entry
+/// per file path, taken (removed) by the disk half. Memory: one entry per
+/// file in flight — at most the batch.
+final class CatalogTrashMoveProofs: @unchecked Sendable {
+    enum Entry: Sendable {
+        /// The alert warned this is the only copy and the person moved it anyway.
+        case warned
+        /// Move only if `source` and one of `copies` hold the same bytes now.
+        case claims(source: ContentCopyProof.Claim, copies: [ContentCopyProof.Claim])
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    func record(_ entry: Entry, for path: String) { lock.withLock { entries[path] = entry } }
+
+    /// The disk half's verdict for `path`, read ONCE: nil = move it.
+    /// No entry → refuse (nothing proved it).
+    func problemAtTheMove(_ path: String) -> String? {
+        let entry = lock.withLock { entries.removeValue(forKey: path) }
+        switch entry {
+        case .warned?:
+            return nil
+        case let .claims(source, copies)?:
+            return ContentCopyProof.proven(source: source, copies: copies)
+                ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
+        case nil:
+            return VideoScanModel.copyNotProvenAtTheMoveNote
+        }
     }
 }
