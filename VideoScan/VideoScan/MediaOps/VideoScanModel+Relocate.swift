@@ -662,6 +662,10 @@ extension VideoScanModel {
         // refresh now that records have moved between volume buckets.
         notifyVolumeAggregatesStale()
 
+        // Codex #150 F1/F5: which backed-up files are PROVEN now — the
+        // summary's "safe" and "retire" words stand only on these.
+        let proven = await provenBackupCount(reconcile.safelyRedundant)
+
         // Fix 1 — set the summary sheet but do NOT call
         // `maybeOfferRetire` here. Trigger ordering: the user must
         // dismiss the summary first. The summary sheet's Done button
@@ -672,8 +676,37 @@ extension VideoScanModel {
             reconcile: reconcile,
             salvageFailedPaths: salvageFailedPaths,
             snapshotPath: snapshotPath,
-            elapsed: Date().timeIntervalSince(runStart)
+            elapsed: Date().timeIntervalSince(runStart),
+            provenBackupCount: proven
         )
+    }
+
+    /// Of the Bucket E entries, how many have a backup PROVEN now
+    /// (`ContentCopyProof`, Codex #150 F1/F5): a witness on a safe drive
+    /// that is not marked Aging, whose catalog row carries the same
+    /// whole-file SHA-256 as the source, both stamps still describing
+    /// their files. The catalog half (row lookups) runs here on the main
+    /// actor; the live stats run detached (a worker thread, then joined).
+    /// Cost: one open+fstat per source and per candidate witness, no reads.
+    /// Memory: O(entries × ≤5 witnesses) small Sendable claims.
+    func provenBackupCount(_ entries: [SafelyRedundantEntry]) async -> Int {
+        let claims: [RelocateClaimSet] = entries.compactMap { entry in
+            guard let sourceDigest = ContentCopyProof.digest(entry.rec) else { return nil }
+            let copies = entry.safeWitnesses
+                .filter { $0.isSafe && $0.trust != .aging }
+                .compactMap { w -> ContentCopyProof.Claim? in
+                    guard let row = record(forPath: w.path), !row.isPurged,
+                          let f = ContentCopyProof.digest(row) else { return nil }
+                    return ContentCopyProof.Claim(path: w.path, fixity: f)
+                }
+            guard !copies.isEmpty else { return nil }
+            return RelocateClaimSet(source: ContentCopyProof.Claim(path: entry.rec.fullPath, fixity: sourceDigest),
+                                    copies: copies)
+        }
+        guard !claims.isEmpty else { return 0 }
+        return await Task.detached(priority: .userInitiated) {
+            claims.reduce(0) { $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies) ? 1 : 0) }
+        }.value
     }
 
     /// Re-stat every Bucket E witness immediately before the apply phase.
@@ -723,7 +756,8 @@ extension VideoScanModel {
                                  reconcile: ReconcileResult,
                                  salvageFailedPaths: [String],
                                  snapshotPath: String?,
-                                 elapsed: TimeInterval) {
+                                 elapsed: TimeInterval,
+                                 provenBackupCount: Int = 0) {
         let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
         let mbps = elapsed > 0 ? mb / elapsed : 0
 
@@ -776,7 +810,8 @@ extension VideoScanModel {
             averageMBps: mbps,
             snapshotPath: snapshotPath,
             notMarkedCount: dashboard.relocateBucketBNotMarked,
-            stillThereCount: dashboard.relocateBucketBStillThere
+            stillThereCount: dashboard.relocateBucketBStillThere,
+            provenBackupCount: provenBackupCount
         )
         pendingRelocateSummary = summary
         // Attach to the queued job and flip status. The job's summary

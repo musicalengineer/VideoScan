@@ -86,13 +86,28 @@ struct RelocateSummary: Identifiable, Equatable {
     /// unmarked and not copied (adversarial 2026-10-19).
     var stillThereCount: Int = 0
 
+    /// Of `safelyRedundantCount`, the files whose backup copy is PROVEN now
+    /// (`ContentCopyProof`): a witness on a safe drive that is not marked
+    /// Aging, holding the same whole-file SHA-256 on record as the source,
+    /// and both stored stamps still describe their files (live stat). The
+    /// partial-MD5 match that put a file in Bucket E is not proof
+    /// (Codex #150 F1). Defaulted so the memberwise init keeps its shape.
+    var provenBackupCount: Int = 0
+
+    /// Backed-up files whose copy is not proven (see `provenBackupCount`):
+    /// no full SHA-256 on record, the copy or the source changed since it
+    /// was hashed, or the only copies are on aging, retired or unreliable
+    /// drives (Codex #150 F1, F5). Includes `degradedOnlyCount`.
+    var unprovenBackupCount: Int { max(0, safelyRedundantCount - provenBackupCount) }
+
     /// Files this run left WITHOUT proof: the copy failed, the file was still
     /// at its path (or could not be checked), the catalog could not mark it,
-    /// or its only backups are on aging/retired drives. The four buckets are
-    /// disjoint (A-failed, B-refused, B-present/unchecked, E-degraded). Any
-    /// of them > 0 withholds "safe" and "retire" (adversarial 2026-10-26 F1).
+    /// it was marked missing from the source (no copy proven anywhere —
+    /// Codex #150 F2), or its backup is not proven. The buckets are disjoint
+    /// (A-failed, B-refused, B-present/unchecked, B-missing, E-unproven).
+    /// Any of them > 0 withholds "safe" and "retire".
     var needsAttentionCount: Int {
-        salvageFailedCount + stillThereCount + notMarkedCount + degradedOnlyCount
+        salvageFailedCount + stillThereCount + notMarkedCount + manuallyDeletedCount + unprovenBackupCount
     }
 
     /// One source-to-witness pairing. Carries the host volume's
@@ -156,22 +171,23 @@ struct RelocateSummaryHeadline: Equatable {
             return
         }
         // "Safe" and "retire" only when this run proved every file: copied
-        // and verified, or a checksum-verified copy on a safe drive. Any
-        // unproven file (copy failed, still at its path, not marked, backed
-        // up only on aging/retired drives) says so and never invites a retire.
+        // and verified, or a copy proven by its full SHA-256 on a safe drive.
+        // Any unproven file (copy failed, still at its path, not marked,
+        // missing from the source, backup not proven) says so and never
+        // invites a retire.
         let unproven = s.needsAttentionCount
         if unproven > 0 {
-            title = "Some files are not safe yet"
+            title = "Some files are not proven safe yet"
             let done = s.succeededCount > 0
                 ? Self.copiedLine(s)
                 : "No files were copied." + Self.backedUpSentence(s, more: false)
             body = done + " \(unproven) " + (unproven == 1 ? "file is" : "files are")
-                + " not safe yet — see the rows below. Keep \(s.sourceVolumeName) until "
+                + " not proven safe yet — see the rows below. Keep \(s.sourceVolumeName) until "
                 + (unproven == 1 ? "it is." : "they are.")
             icon = "exclamationmark.triangle.fill"; tint = .orange; invitesRetire = false
             return
         }
-        let total = s.succeededCount + s.safelyBackedUpCount
+        let total = s.succeededCount + s.provenBackupCount
         if s.succeededCount > 0 {
             title = "Files copied and verified"
             body = Self.copiedLine(s)
@@ -190,7 +206,7 @@ struct RelocateSummaryHeadline: Equatable {
         title = "Your files are safe"
         body = "I found backup copies of all \(total) file"
             + (total == 1 ? "" : "s")
-            + " on safer drives and checksum-verified them. "
+            + " on safer drives, each matched by its full SHA-256 checksum. "
             + "Everything's accounted for — you can retire "
             + "\(s.sourceVolumeName) whenever you're ready."
         icon = "shield.checkered"; tint = .green
@@ -205,11 +221,12 @@ struct RelocateSummaryHeadline: Equatable {
             + backedUpSentence(s, more: true)
     }
 
-    /// " M more are already safely backed up on other drives." ("" when none).
+    /// " M more are already backed up on other drives, matched by full
+    /// SHA-256." ("" when none) — proven backups only.
     static func backedUpSentence(_ s: RelocateSummary, more: Bool) -> String {
-        guard s.safelyBackedUpCount > 0 else { return "" }
-        return " \(s.safelyBackedUpCount)" + (more ? " more " : " ")
-            + (s.safelyBackedUpCount == 1 ? "is" : "are")
-            + " already safely backed up on other drives."
+        guard s.provenBackupCount > 0 else { return "" }
+        return " \(s.provenBackupCount)" + (more ? " more " : " ")
+            + (s.provenBackupCount == 1 ? "is" : "are")
+            + " already backed up on other drives, matched by full SHA-256 checksum."
     }
 }

@@ -9,14 +9,16 @@ import AppKit
 // accounted for, not to read a forensic surveillance report.
 //
 // Five headline modes (`RelocateSummaryHeadline`, RelocateSummary.swift):
-//   - "Your files are safe"     — nothing copied; every file has a
-//                                  checksum-verified copy on a safe drive.
+//   - "Your files are safe"     — nothing copied; every file has a copy on
+//                                  a safe, non-Aging drive proven by its
+//                                  full SHA-256 now (ContentCopyProof).
 //   - "Files copied and verified" — some Bucket A copies happened; the
-//                                   rest were already safely backed up.
-//   - "Some files are not safe yet" — any copy failed, any file still at
-//                                  its path, not marked, or backed up only
-//                                  on aging/retired drives. Never "safe",
-//                                  never "retire" (adversarial 2026-10-26 F1).
+//                                   rest have proven backups.
+//   - "Some files are not proven safe yet" — any copy failed, still at
+//                                  its path, not marked, missing from the
+//                                  source, or a backup not proven. Never
+//                                  "safe", never "retire" (adversarial
+//                                  2026-10-26 F1; Codex #150 F1/F2/F5).
 //   - "Nothing was copied"       — nothing copied or checked this run.
 //   - "Dry-run preview"          — preview only.
 // The "retire <drive>" line shows only for the first two.
@@ -151,6 +153,17 @@ struct RelocateSummarySheet: View {
                          count: summary.degradedOnlyCount,
                          detail: "needs attention — see disclosure below",
                          identifier: "relocateSummary.row.degradedOnly",
+                         badge: true)
+            }
+            // Backed up on a safe drive, but the copy is not proven by its
+            // full SHA-256 now (Codex #150 F1/F5); degraded-only shown above.
+            if summary.unprovenBackupCount - summary.degradedOnlyCount > 0 {
+                countRow(icon: "questionmark.circle",
+                         color: .orange,
+                         label: "Backup not proven",
+                         count: summary.unprovenBackupCount - summary.degradedOnlyCount,
+                         detail: "no matching full SHA-256 on record, the file changed since, or the drive is Aging",
+                         identifier: "relocateSummary.row.backupNotProven",
                          badge: true)
             }
             if summary.sourceMovesCount > 0 {

@@ -5,8 +5,10 @@
 // are safe … you can retire <drive>". F2 (⌘⌫) is in
 // AdvReview20261026TrashTests.swift.
 
+import CryptoKit
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 @Suite struct RelocateSummaryAllSafeHeadlineTests {
@@ -55,22 +57,23 @@ import Testing
 
     static func summary(dryRun: Bool = false, copied: Int = 0, backedUp: Int = 0, degraded: Int = 0,
                         salvageFailed: Int = 0, notMarked: Int = 0, stillThere: Int = 0,
-                        adopted: Int = 0) -> RelocateSummary {
+                        adopted: Int = 0, proven: Int? = nil, missing: Int = 0) -> RelocateSummary {
         RelocateSummary(
             isDryRun: dryRun, sourceVolumeName: "OldDrive", sourceVolumeRootPath: "/Volumes/OldDrive",
             destinationDisplay: "Workspace/from-OldDrive", destinationRootPath: "/Volumes/Workspace/from-OldDrive",
             succeededCount: copied, bytesCopied: Int64(copied) * 1_000, adoptedCount: adopted,
             safelyRedundantCount: backedUp + degraded, safelyRedundantBytes: 0,
-            sourceMovesCount: 0, manuallyDeletedCount: 0, salvageFailedCount: salvageFailed, skippedCount: 0,
+            sourceMovesCount: 0, manuallyDeletedCount: missing, salvageFailedCount: salvageFailed, skippedCount: 0,
             safelyBackedUpCount: backedUp, degradedOnlyCount: degraded,
             salvageFailedPaths: [], witnessSamples: [], elapsedSeconds: 1, averageMBps: 0, snapshotPath: nil,
-            notMarkedCount: notMarked, stillThereCount: stillThere)
+            notMarkedCount: notMarked, stillThereCount: stillThere,
+            provenBackupCount: proven ?? backedUp)
     }
 
     static func saysSafeOrRetire(_ h: RelocateSummaryHeadline) -> Bool {
         let words = (h.title + " " + h.body).lowercased()
-        return words.contains("safe") && !words.contains("not safe") || words.contains("retire")
-            || words.contains("accounted for") || h.invitesRetire
+        return words.contains("safe") && !words.contains("not proven safe") || words.contains("retire")
+            || words.contains("accounted for") || words.contains("checksum-verified") || h.invitesRetire
     }
 
     /// The finding's own example: nothing copied, 37 backed up, 3 failed.
@@ -79,7 +82,7 @@ import Testing
         #expect(!Self.saysSafeOrRetire(h), "\(h)")
         #expect(h.tint == .orange)
         #expect(h.body.contains("No files were copied"), "\(h.body)")
-        #expect(h.body.contains("3 files are not safe yet"), "\(h.body)")
+        #expect(h.body.contains("3 files are not proven safe yet"), "\(h.body)")
         #expect(h.body.contains("Keep OldDrive"), "\(h.body)")
     }
 
@@ -95,9 +98,27 @@ import Testing
                                                          salvageFailed: failed, notMarked: notMarked,
                                                          stillThere: stillThere))
             #expect(!Self.saysSafeOrRetire(h), "copied \(copied), counts \(counts): \(h)")
-            #expect(h.title == "Some files are not safe yet")
-            #expect(h.body.contains("1 file is not safe yet"), "\(h.body)")
+            #expect(h.title == "Some files are not proven safe yet")
+            #expect(h.body.contains("1 file is not proven safe yet"), "\(h.body)")
         }
+    }
+
+    /// Codex #150 F2: a source marked missing (old path gone, nothing
+    /// matched) proves no surviving copy — it withholds safe and retire.
+    @Test func aMissingSourceWithholdsSafeAndRetire() {
+        let h = RelocateSummaryHeadline(Self.summary(backedUp: 1, missing: 1))
+        #expect(!Self.saysSafeOrRetire(h), "\(h)")
+        #expect(h.body.contains("1 file is not proven safe yet"), "\(h.body)")
+    }
+
+    /// Codex #150 F1/F5: a Bucket E backup matched only by partial MD5 +
+    /// stat (or only on an Aging drive) is not proven — no "safe", no
+    /// "checksum-verified", no retire.
+    @Test func anUnprovenBackupWithholdsSafeAndRetire() {
+        let h = RelocateSummaryHeadline(Self.summary(backedUp: 37, proven: 36))
+        #expect(!Self.saysSafeOrRetire(h), "\(h)")
+        #expect(h.body.contains("36 are already backed up on other drives, matched by full SHA-256 checksum"), "\(h.body)")
+        #expect(h.body.contains("1 file is not proven safe yet"), "\(h.body)")
     }
 
     /// Nothing copied and nothing backed up: no proof happened this run, so
@@ -112,10 +133,117 @@ import Testing
     @Test func provenRunsKeepTheirWords() {
         let allSafe = RelocateSummaryHeadline(Self.summary(backedUp: 37))
         #expect(allSafe.title == "Your files are safe" && allSafe.invitesRetire)
-        #expect(allSafe.body.contains("Everything's accounted for — you can retire OldDrive"))
+        #expect(allSafe.body.contains("each matched by its full SHA-256 checksum. Everything's accounted for — you can retire OldDrive"))
         let mixed = RelocateSummaryHeadline(Self.summary(copied: 3, backedUp: 1))
         #expect(mixed.title == "Files copied and verified" && mixed.invitesRetire)
         let dry = RelocateSummaryHeadline(Self.summary(dryRun: true, salvageFailed: 2))
         #expect(dry.title == "Dry-run preview" && !dry.invitesRetire)
+    }
+}
+
+/// Codex #150 F1/F5 end to end: a real Migrate whose only backup is a
+/// catalogued same-MD5 copy. The retire words stand only when that copy is
+/// proven by its full SHA-256 now, on a safe drive that is not Aging.
+@Suite(.serialized) @MainActor
+struct RelocateSummaryProofTests {
+
+    struct Rig {
+        let root: URL, source: URL, dest: URL, catalog: URL, backup: URL
+        init() throws {
+            root = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("vs-migrate-proof-\(UUID().uuidString.prefix(8))", isDirectory: true)
+            source = root.appendingPathComponent("source"); dest = root.appendingPathComponent("dest")
+            catalog = root.appendingPathComponent("catalog"); backup = root.appendingPathComponent("MyBook")
+            for url in [source, dest, catalog, backup] {
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            }
+        }
+        func cleanup() { try? FileManager.default.removeItem(at: root) }
+    }
+
+    static func bytes(_ seed: Int) -> Data { Data((0..<4_096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ seed) }) }
+
+    /// A catalog row for `url`, with its full SHA-256 fixity when `hashed`.
+    static func row(_ url: URL, hashed: Bool) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = url.path; r.filename = url.lastPathComponent
+        r.directory = url.deletingLastPathComponent().path
+        let data = (try? Data(contentsOf: url)) ?? Data()
+        r.sizeBytes = Int64(data.count)
+        r.partialMD5 = FileHasher.partialMD5(path: url.path)
+        if hashed {
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            r.contentFixity = ContentFixity.captured(path: url.path, digest: digest, byteCount: Int64(data.count))
+        }
+        return r
+    }
+
+    /// Run a real Migrate of a source holding one file whose backup is on
+    /// MyBook (`trust`); `tamper` runs after cataloguing, before the run.
+    func migrate(trust: VolumeTrust, hashed: Bool = true,
+                 tamper: (Rig) throws -> Void = { _ in }) async throws -> RelocateSummary {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let src = rig.source.appendingPathComponent("clip.mov")
+        let copy = rig.backup.appendingPathComponent("clip.mov")
+        try Self.bytes(7).write(to: src)
+        try Self.bytes(7).write(to: copy)
+        let srcRow = Self.row(src, hashed: hashed)
+        let copyRow = Self.row(copy, hashed: hashed)
+        if hashed {
+            try #require(srcRow.contentFixity?.isUsableForVerification == true
+                         && copyRow.contentFixity?.isUsableForVerification == true,
+                         "the fixture could not stamp a usable fixity")
+        }
+        try tamper(rig)
+
+        let model = VideoScanModel()
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
+        model.catalogStore = CatalogStore(directory: rig.catalog)
+        model.records = [srcRow, copyRow]
+        let safe = CatalogScanTarget(searchPath: rig.backup.path)
+        safe.role = .backup; safe.trust = trust
+        model.scanTargets = [CatalogScanTarget(searchPath: rig.source.path), safe]
+        model.catalogStore.saveNow(records: model.records)
+        model.relocateVolume(RelocateOptions(sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
+                                             maxConcurrency: 1, dryRun: false,
+                                             skipAlreadyRelocated: true, skipDupsOnOtherVolumes: true))
+        let deadline = Date().addingTimeInterval(30)
+        while model.pendingRelocateSummary == nil && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return try #require(model.pendingRelocateSummary)
+    }
+
+    /// Control / truth: a backup proven by its full SHA-256 on a reliable
+    /// drive keeps "Your files are safe" and the retire invitation.
+    @Test func aHashedUntouchedBackupInvitesRetire() async throws {
+        let s = try await migrate(trust: .reliable)
+        try #require(s.safelyRedundantCount == 1, "the fixture must land in Bucket E")
+        #expect(RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+    }
+
+    /// Codex's recipe: the backup was overwritten with different bytes of
+    /// the same size after it was catalogued. Bucket E still matches it by
+    /// the stored partial MD5 and the size; the summary must not.
+    @Test func anOverwrittenBackupIsNotProven() async throws {
+        let s = try await migrate(trust: .reliable) { rig in
+            try Self.bytes(99).write(to: rig.backup.appendingPathComponent("clip.mov"))
+        }
+        try #require(s.safelyRedundantCount == 1, "the stale partial MD5 still lands it in Bucket E")
+        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+    }
+
+    /// No full SHA-256 on record at all (partial MD5 only): not proven.
+    @Test func anUnhashedBackupIsNotProven() async throws {
+        let s = try await migrate(trust: .reliable, hashed: false)
+        try #require(s.safelyRedundantCount == 1)
+        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+    }
+
+    /// Codex #150 F5: the only backup is on a drive marked Aging.
+    @Test func anAgingOnlyBackupNeverInvitesRetire() async throws {
+        let s = try await migrate(trust: .aging)
+        try #require(s.safelyRedundantCount == 1)
+        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
     }
 }

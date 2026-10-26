@@ -901,7 +901,11 @@ struct RelocateSummarySheetTests {
         // what we expect — defends against a future find/replace pass
         // accidentally removing the renamed term too.
         #expect(headlineTitleFor(dry) == "Dry-run preview")
-        #expect(headlineTitleFor(allSafe) == "Your files are safe")
-        #expect(headlineTitleFor(mixed) == "Files copied and verified")
+        // These fixtures' backups carry a partial MD5 only (no full SHA-256
+        // on record), so since Codex #150 F1 they are not proven and the
+        // run says so; the proven words are pinned by
+        // RelocateSummaryProofTests and RelocateSummaryHeadlineTests.
+        #expect(headlineTitleFor(allSafe) == "Some files are not proven safe yet")
+        #expect(headlineTitleFor(mixed) == "Some files are not proven safe yet")
     }
 }
