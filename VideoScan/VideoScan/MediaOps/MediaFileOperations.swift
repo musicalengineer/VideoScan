@@ -469,6 +469,18 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let validateCatalog = Self("validateCatalog", hasDetailView: true,
         style: .init(badge: "Validate Catalog", logVerb: "validate catalog", fill: .init(0.00, 0.50, 0.00)))
 
+    // Find Master by sound (2026-10-26, provenance Phase A) — electric
+    // violet-blue: a reading verb that writes nothing (no catalog, sidecar
+    // or ledger write; log lines only). Δ ≥ 0.43 from every other fill,
+    // contrast vs white ≈ 8.5. The badge's question mark is deliberate: the
+    // answers are geometry ("inside", "contains"), never "this is the master".
+    /// "Provenance ▸ Find Master (sound)" (Rick 2026-10-26,
+    /// docs/design/provenance_retroactive_2026_10_26.md §Phase A): for each
+    /// selected file, every other content whose sound lines up with it, by
+    /// the pair matcher's verdict. FindMasterJob.
+    static let findMaster = Self("findMaster", hasDetailView: true,
+        style: .init(badge: "MASTER?", logVerb: "find master", fill: .init(0.15, 0.00, 1.00)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -478,7 +490,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
-        .verifyCatalog, .validateCatalog,
+        .verifyCatalog, .validateCatalog, .findMaster,
     ]
 
     /// Badge text — rendered in small caps by the row view.

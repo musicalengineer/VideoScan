@@ -196,6 +196,18 @@ public struct AudioMatch: Sendable, Equatable {
     public let spanStartInMasterSeconds: Double
     public let spanEndInMasterSeconds: Double
 
+    /// Public so app tests can state evidence for the wording's truth tests;
+    /// production verdicts come only from `AudioFingerprintIndex.match`.
+    public init(evidence: AudioMatchEvidence, verdict: AudioMatchVerdict, queryLandmarks: Int, masterLandmarks: Int,
+                spanStartInMasterSeconds: Double, spanEndInMasterSeconds: Double) {
+        self.evidence = evidence
+        self.verdict = verdict
+        self.queryLandmarks = queryLandmarks
+        self.masterLandmarks = masterLandmarks
+        self.spanStartInMasterSeconds = spanStartInMasterSeconds
+        self.spanEndInMasterSeconds = spanEndInMasterSeconds
+    }
+
     public var offsetSeconds: Double { evidence.offsetSeconds }
     public var matchedLandmarks: Int { evidence.matchedLandmarks }
     public var coverage: Double { evidence.coverage }

@@ -13047,6 +13047,46 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FindMasterSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FindMasterSensorTests"
+      ],
+      "tests": [
+        "findMasterFilesWriteNothing",
+        "findMasterIsARegisteredKind",
+        "noVerdictIsMadeOutsideCore",
+        "tableContextMenuHasTheProvenanceMenu"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FindMasterTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FindMasterAnswerTests",
+        "FindMasterJobTests",
+        "FindMasterPlanTests"
+      ],
+      "tests": [
+        "eachRefusalReason",
+        "hundredThousandRecordSnapshot",
+        "labelsPreferLiveCopies",
+        "negativeSaysWhatWasSearched",
+        "neverClaimsDirection",
+        "pauseHoldsBetweenQueries",
+        "sampledKeyedStampIsNoSoundPrint",
+        "sentenceCarriesItsEvidence",
+        "startAndOutcomeOnceWithCounts",
+        "stopMidRunSaysStopped",
+        "unopenableSidecarRefusesBeforeReading",
+        "writesNothing"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FindPersonDedupTests.swift",
       "stage": "unit",
@@ -33566,6 +33606,14 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioCatalogIndexTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FindMasterTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FindMasterSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 3018,

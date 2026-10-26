@@ -390,6 +390,8 @@ extension CatalogContent {
             let fileIDs = showFootageFolders ? FolderRowSelection.recordIDs(of: ids, refs: tableState.folderRowRefs) : ids
             rowContextMenu(ids: fileIDs)
             folderMembershipItems(recordIDs: displayedIDs(among: fileIDs), inFolder: rowsFolder(ids))
+            // Provenance ▸ Find Master (sound) — reads, writes nothing (provenance Phase A).
+            FindMasterMenuItem(model: model, recordIDs: displayedIDs(among: fileIDs))
         }
     }
 
