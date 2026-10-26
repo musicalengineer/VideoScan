@@ -2599,6 +2599,31 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCornerCases2026_10_25Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCornerCases2026_10_25Tests"
+      ],
+      "tests": [
+        "aCommitWaitsOutAShortLockAndLands",
+        "aCounterTableWithTheWrongRowCountIsRefusedAtOpen",
+        "aDigestIsOneContentWhateverItsCase",
+        "aFileThatIsNotADatabaseIsRefusedAndNeverWritten",
+        "aSealedCopyTakenBetweenQueuedWritesIsOneWholeGeneration",
+        "aZeroByteCatalogBesideItsWitnessesNeverOpensReadWrite",
+        "anEmptyDigestIsRefusedAndANullDigestLandsOnlyWhereTheDDLAllowsIt",
+        "anOrphanRowThroughTheStoresDoorsIsRefusedWhole",
+        "closeWaitsForAReaderAndStillLeavesOneFile",
+        "everyOlderSchemaVersionMigratesToTwelveWithBothVersionsAgreeing",
+        "reopeningACurrentFileRunsNoMigrationAndChangesNothingLogical",
+        "theReadOnlyDoorNeedsTheWALSidecarOnAppleSQLite",
+        "theReadOnlyDoorReadsFollowsTheWriterAndNeverWrites",
+        "theReadOnlyDoorRefusesAnOlderSchemaInsteadOfMigratingIt",
+        "tornWALOpensAtACommittedPrefixAndTheWitnessesSpeak"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDecisionTablesTests.swift",
@@ -34246,7 +34271,7 @@
       ],
       "expected_floor": 288,
       "name": "regression",
-      "package_expected_floor": 243,
+      "package_expected_floor": 258,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -34285,7 +34310,8 @@
         "VideoScanCoreTests.CatalogFileGuardCodex117Tests",
         "VideoScanCoreTests.CatalogCommitReplacementTests",
         "VideoScanCoreTests.CatalogCommitRelationTests",
-        "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests"
+        "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests",
+        "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
