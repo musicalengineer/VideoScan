@@ -43,6 +43,9 @@ enum SQLiteCatalogLoader {
         var generation: Int
         /// Records that came from `pending_rows` (no whole-file hash yet).
         var heldIDs: Set<UUID> = []
+        /// The per-row lock of every loaded row, from the store (codex
+        /// #143): the committer's expectation for the row until it lands.
+        var locks: [UUID: CatalogRowLock.Value] = [:]
         /// Held payloads that did not decode (left in the table).
         var unreadableHeld = 0
         /// Rows skipped because the app had purged them.
@@ -81,7 +84,18 @@ enum SQLiteCatalogLoader {
         result.heldIDs = Set(held.records.map(\.id))
         result.unreadableHeld = held.unreadable
         result.purgedCount = snapshot.purged
+        result.locks = rowLocks(snapshot.rows)
         return result
+    }
+
+    /// One lock per loaded row (the cores share the hashing; ≈ 10 µs a row).
+    static func rowLocks(_ rows: [CatalogLoadedRow]) -> [UUID: CatalogRowLock.Value] {
+        var locks: [UUID: CatalogRowLock.Value] = [:]
+        locks.reserveCapacity(rows.count)
+        for (row, lock) in zip(rows, CatalogRowLock.locks(of: rows)) {
+            if let id = UUID(uuidString: row.file.id) { locks[id] = lock }
+        }
+        return locks
     }
 
     /// The held records, from their stored payload (the app's own decoder);

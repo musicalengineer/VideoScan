@@ -35,7 +35,9 @@
 //                                  deferred or refused — no generation
 //   .refused(words, rows)          the store said no (read-only, "reopen the
 //                                  catalog", an engine refusal outside a row,
-//                                  the designation guard) — nothing changed
+//                                  the designation guard, a row another writer
+//                                  changed since this session saw it — the
+//                                  per-row lock, codex #143) — nothing changed
 //   .generationMismatch            another writer committed first — nothing
 //                                  changed
 //
@@ -46,9 +48,21 @@ import Foundation
 
 public enum CatalogCommit {
 
+    /// What the committer believes the store holds for a row it submits
+    /// (codex #143, the per-row lock): checked INSIDE the transaction before
+    /// anything is written; any mismatch refuses the whole commit.
+    public enum Expectation: Sendable, Equatable {
+        /// A `files` row whose per-row parts hash to this lock (CatalogRowLock).
+        case row(lock: CatalogRowLock.Value)
+        /// Held in `pending_rows` (no whole-file hash yet): no `files` row,
+        /// the held payload still there.
+        case pending
+    }
+
     /// One changed record: its id, its snapshot, the fingerprint the
     /// detector computed for that snapshot (the new baseline if it lands),
-    /// and the shared curated values the record last agreed with the store on.
+    /// the shared curated values the record last agreed with the store on,
+    /// and what the store is expected to hold for it now.
     public struct Item: Sendable {
         public var id: UUID
         public var snapshot: VideoRecordDTO
@@ -56,13 +70,16 @@ public enum CatalogCommit {
         /// nil = unknown (a record this session never saw stored): its
         /// shared fields are compared with the store, as before B2.1.
         public var sharedBaseline: CatalogSharedCurated?
+        /// nil = a record this session created (never stored): no check.
+        public var expected: Expectation?
 
         public init(id: UUID, snapshot: VideoRecordDTO, fingerprint: CatalogChangeDetector.Fingerprint,
-                    sharedBaseline: CatalogSharedCurated? = nil) {
+                    sharedBaseline: CatalogSharedCurated? = nil, expected: Expectation? = nil) {
             self.id = id
             self.snapshot = snapshot
             self.fingerprint = fingerprint
             self.sharedBaseline = sharedBaseline
+            self.expected = expected
         }
     }
 
@@ -167,6 +184,11 @@ public enum CatalogCommit {
         /// attestations) this commit changed: the sets the store ENDS with
         /// (cutover B2.4). nil = no set of the content was written.
         public var settledSets: SettledSets?
+        /// The row's per-row lock as the store holds it after this commit
+        /// (codex #143): read back inside the transaction for a written or
+        /// partial row, the pre-write read for an unchanged one. nil for a
+        /// row that is not a `files` row now (held, refused, removed).
+        public var storedLock: CatalogRowLock.Value?
     }
 
     public enum Outcome: Sendable, Equatable {

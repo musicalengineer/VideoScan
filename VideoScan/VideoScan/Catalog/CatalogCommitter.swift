@@ -77,12 +77,14 @@
 //                                   changed, the store's words are shown, and
 //                                   NO further commit is tried until the
 //                                   person chooses Catalog ▸ Reopen SQLite
-//                                   Catalog (never retried silently); a
-//                                   Reopen that finds another writer's
-//                                   generation reconciles the changed records
-//                                   against the store first (codex #141 F2,
-//                                   `reconcile`): nothing of theirs is ever
-//                                   overwritten by this session's stale copy;
+//                                   Catalog (never retried silently);
+//   changed under you             → the store found a submitted row changed
+//                                   by ANOTHER WRITER since this session saw
+//                                   it (the per-row lock, CatalogRowLock, or
+//                                   a shared scalar's per-field baseline —
+//                                   codex #141 F2, closed in cycle #143):
+//                                   the whole commit is refused like any
+//                                   refusal, nothing written, generation kept;
 //   file-stop (GH #359)           → catalog.sqlite or its latch is not the
 //                                   file this session opened: refused like
 //                                   any refusal, but the words say "quit and
@@ -93,7 +95,27 @@
 //                                   door shows the words (once per reason
 //                                   here, per row at the door).
 //
-// Memory: CatalogCommitBaseline (≈ 150 B a record); a commit holds one
+// THE PROMISE of Catalog ▸ Reopen after another writer (codex #143 —
+// "refuse rather than guess", CLAUDE.md rule 2): Reopen reads back, in ONE
+// store snapshot, every record the next commit could submit (held and new
+// records included). A row the store still holds exactly as this session
+// last saw it (its lock and its shared-scalar baseline) may be saved as it
+// is — every difference is ours. A row that moved is HELD: out of every
+// commit, dirty in memory with the person's values untouched, named with
+// the parts that differ (one HELD line per row in catalog.log, said again
+// at every Reopen, counted in the OUTCOME), its marker changes refused at
+// the door — until a relaunch loads the catalog's values and the person
+// redoes the edit. Nothing in memory is rebuilt or swapped; nothing of the
+// other writer's is ever overwritten by this session's stale copy; what
+// this session cannot attribute (a footage decision missing in memory —
+// theirs added, or ours removed?) is not guessed at. A failed read-back
+// (an error, a missing row, a row that no longer decodes) keeps saving
+// blocked with words. The read-back's set is captured before the read; a
+// record that turns dirty afterwards meets the same check at the commit
+// door, inside the transaction, where the generation compare-and-set still
+// stands beneath it.
+//
+// Memory: CatalogCommitBaseline (≈ 160 B a record); a commit holds one
 // snapshot per record for its length (the snapshots share their strings and
 // arrays with the records).
 //
@@ -151,11 +173,6 @@ final class CatalogCommitter {
     var onHeldChanged: (Set<UUID>) -> Void = { _ in }
     /// A reopen or an adopt made the store writable again.
     var onWritableAgain: () -> Void = {}
-    /// Codex #141 F2: a Reopen found another writer's generation and rebuilt
-    /// these records from the store (their changes kept, this session's
-    /// curated edits re-applied); the model shows each in place of the
-    /// record with its id.
-    var onRecordsReconciled: ([VideoRecord]) -> Void = { _ in }
     /// True when `record` is THIS session's live record (not a detached
     /// snapshot, not another session's): only those can be vetoed.
     var owns: (VideoRecord) -> Bool = { _ in true }
@@ -166,6 +183,10 @@ final class CatalogCommitter {
     private var debounceTask: Task<Void, Never>?
     /// Rows whose removal marker changed since their last commit.
     private var markerDirty: Set<UUID> = []
+    /// Codex #143: rows Reopen found changed by another writer — HELD out
+    /// of every commit (id → the words), dirty in memory, until a relaunch
+    /// (`adoptBaseline`) or a later Reopen that finds them unchanged.
+    private(set) var conflicts: [UUID: String] = [:]
     /// Ids a door removed from the catalog, not yet purged (id → why).
     private var purgeRequested: [UUID: String] = [:]
     /// Of `purgeRequested`: purged id → the record that replaces it
@@ -212,9 +233,12 @@ final class CatalogCommitter {
     /// The store holds exactly these records (right after a load, before
     /// the launch-time migrations run — what they change is then committed).
     /// `held`: records that came from `pending_rows` (still no row).
-    func adoptBaseline(_ records: [VideoRecord], held: Set<UUID> = [], generation: Int? = nil) {
+    /// `locks`: each loaded row's per-row lock from the store (codex #143).
+    func adoptBaseline(_ records: [VideoRecord], held: Set<UUID> = [], generation: Int? = nil,
+                       locks: [UUID: CatalogRowLock.Value] = [:]) {
         if let generation { knownGeneration = generation }
-        baseline.adopt(records, held: held)
+        baseline.adopt(records, held: held, locks: locks)
+        conflicts = [:]
         markerDirty = []
         purgeRequested = [:]
         replacedBy = [:]
@@ -243,6 +267,12 @@ final class CatalogCommitter {
         guard owns(record) else { return nil }
         let id = record.id
         if kind == .request, let why = saveRefusal() { return refuseMarker(why) }
+        // Codex #143: a row held because another writer changed it cannot
+        // take a person's marker change — it would never be saved. A disk
+        // fact (the file already moved) is recorded in memory and stays held.
+        if kind == .request, let words = conflicts[id] {
+            return refuseMarker(Self.cantSave(words, until: "you relaunch and redo the change"))
+        }
         guard markerDirty.contains(id) else { return nil }
         commitNow(ids: markerDirty)
         guard markerDirty.contains(id) else { return nil }
@@ -350,7 +380,7 @@ final class CatalogCommitter {
     /// reopened, refused) — and the caller must replace nothing.
     func commitBeforeReplacing(_ id: UUID) -> String? {
         if commitNow(ids: [id]) { return nil }
-        return saveRefusal() ?? baseline.waiting[id]?.words ?? "its current values could not be stored"
+        return saveRefusal() ?? conflicts[id] ?? baseline.waiting[id]?.words ?? "its current values could not be stored"
     }
 
     /// A safety copy of catalog.sqlite is about to be sealed (`VACUUM INTO`,
@@ -368,7 +398,9 @@ final class CatalogCommitter {
         let stored = commit(.save, owner: nil, scope: .everything)
         if let why = saveRefusal() { return why }
         if !stored {
-            sink("Catalog store: safety copy — \(baseline.waiting.count) row(s) the store would not take are in it at their last stored values")
+            sink("Catalog store: safety copy — \(baseline.waiting.count) row(s) the store would not take"
+                 + (conflicts.isEmpty ? "" : " and \(conflicts.count) row(s) held (changed under you)")
+                 + " are in it at their last stored values")
         }
         return nil
     }
@@ -518,15 +550,26 @@ final class CatalogCommitter {
         let opened = await repository.open(at: url, requiringLatch: true)   // QA r1 D (#359): no latch, no reopen
         switch opened {
         case .readWrite:
-            // Codex #141 F2: a generation this session did not write means
-            // another writer committed — the retained edits are reconciled
-            // against the store BEFORE any of them may be committed over it.
-            let found = await generationNow()
-            if found != knownGeneration { await reconcile(found: found) }
-            reopening = false
-            knownGeneration = found
-            sink("Catalog store: OUTCOME reopened catalog.sqlite — writes allowed again; committing what is still changed")
-            becameWritable()
+            // Codex #143: ALWAYS the read-back (a door's "changed under you"
+            // refusal leaves the generation equal, so the generation alone
+            // cannot say whether another writer was here).
+            switch await readBack() {
+            case .failed(let words):
+                reopening = false
+                blockedReason = words
+                sink("Catalog store: REFUSED Reopen's read-back — \(words). Nothing was written; saving stays blocked.")
+            case .checked(let found, let checked, let held):
+                reopening = false
+                knownGeneration = found
+                conflicts = held
+                for (id, words) in held.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+                    sink("Catalog store: HELD \(id.uuidString) — \(words)")
+                }
+                sink("Catalog store: OUTCOME reopened catalog.sqlite at generation \(found) — \(checked) changed record(s) checked "
+                     + "against the catalog: \(checked - held.count) may be saved, \(held.count) held (changed under you); "
+                     + "writes allowed again; committing what is still changed")
+                becameWritable()
+            }
         case .readOnly(let reason), .refused(let reason):
             reopening = false
             blockedReason = "read-only: \(reason)"
@@ -534,100 +577,78 @@ final class CatalogCommitter {
         }
     }
 
-    // MARK: - Reopen after another writer (codex #141 F2)
+    // MARK: - Reopen after another writer (codex #141 F2 → #143: refuse and name)
 
-    /// Another writer committed `found` while this session knew
-    /// `knownGeneration`. Every record CHANGED in memory is checked against
-    /// the store's row (the only rows a commit would write):
-    ///   * a row the other writer left alone (its stored fingerprint is this
-    ///     session's baseline) commits as it is — every difference is ours;
-    ///   * a row they changed too is rebuilt FROM THE STORE (their values —
-    ///     a footage decision, a marker, a fact — included) with this
-    ///     session's own shared-curated edits re-applied: the per-field
-    ///     baseline knows exactly which groups this session changed. A part
-    ///     the baseline cannot attribute (a row-scoped field, a relation)
-    ///     keeps the catalog's value — refuse to guess — and the row is
-    ///     named with the parts in question. The model swaps the rebuilt
-    ///     record in (`onRecordsReconciled`).
-    /// Records this session did not change are not touched: they are never
-    /// written, so nothing of the other writer's is at risk; memory may show
-    /// them behind the catalog until a relaunch, said once.
-    /// Memory: one loaded row and one fresh record per changed record for the
-    /// length of the reopen — worst case (every record changed, every row
-    /// touched) a second copy of the catalog, what a launch holds.
-    private func reconcile(found: Int) async {
-        let records = input().records
-        let changed = changedSinceBaseline(records)
-        guard !changed.isEmpty else {
-            sink("Catalog store: Reopen — another writer committed generation \(found) (this session knew \(knownGeneration)); "
-                 + "nothing is changed in memory, so nothing of theirs is at risk; relaunch to see their changes")
-            return
-        }
-        let ids = changed.map(\.id.uuidString)
-        guard let rows = try? await repository.read({ reader in try ids.map { try reader.storedRow(id: $0) } }),
-              rows.count == changed.count else {
-            // No comparison, no commit over theirs: stay blocked with the words.
-            blockedReason = "another writer committed generation \(found) and this session's \(changed.count) changed record(s) could not be "
-                + "compared with the catalog — quit and relaunch, then redo the change(s)"
-            sink("Catalog store: REFUSED Reopen's reconciliation — \(blockedReason ?? ""). Nothing was written.")
-            return
-        }
-        let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let formatter = VideoRecord.makeRowDateFormatter()
-        var fresh: [VideoRecord] = []
-        for (record, row) in zip(changed, rows) {
-            guard let row, let rebuilt = reconcileRow(record, row: row, partners: byID, formatter: formatter, found: found) else { continue }
-            fresh.append(rebuilt)
-        }
-        sink("Catalog store: Reopen — another writer committed generation \(found) (this session knew \(knownGeneration)): "
-             + "\(changed.count) changed record(s) checked, \(fresh.count) also changed in the catalog and rebuilt from it; "
-             + "records this session did not change may be behind the catalog until a relaunch")
-        guard !fresh.isEmpty else { return }
-        markerDirty.subtract(fresh.map(\.id))
-        onRecordsReconciled(fresh)
+    /// What Reopen's read-back found.
+    private enum ReadBack {
+        /// The store's generation, how many records were checked, and the
+        /// rows that moved under this session (id → the words).
+        case checked(generation: Int, checked: Int, conflicts: [UUID: String])
+        /// No comparison, no commit: the words, and saving stays blocked.
+        case failed(String)
     }
 
-    /// The records with a baseline whose fingerprint moved since it.
+    /// Every record the next commit could submit — the commit's own rule
+    /// (fingerprint ≠ baseline: edited, held and new records alike; rows
+    /// waiting on a refusal too, since Reopen forgets it) — checked against
+    /// the store in ONE read snapshot with the generation. A record this
+    /// session created has no expectation and nothing to check. The
+    /// comparison is of the STORE against the BASELINE (CatalogRowCheck, the
+    /// same check the commit door makes), so an edit made during the read
+    /// changes nothing here; a record that turns dirty after the read meets
+    /// the door's check.
+    /// Memory: one loaded row per changed record for the length of the
+    /// read — worst case (every record changed) one copy of the catalog's
+    /// rows, what a launch holds; dropped before this returns.
+    private func readBack() async -> ReadBack {
+        let wanted = changedSinceBaseline(input().records).compactMap { record -> (id: UUID, expected: CatalogCommit.Expectation)? in
+            baseline.expectation(of: record.id).map { (record.id, $0) }
+        }
+        let read: (generation: Int, found: [UUID: CatalogRowCheck.Found])
+        do {
+            read = try await repository.read { reader in
+                var found: [UUID: CatalogRowCheck.Found] = [:]
+                for entry in wanted { found[entry.id] = try CatalogRowCheck.find(id: entry.id.uuidString, in: reader) }
+                return (reader.generation, found)
+            }
+        } catch {
+            return .failed("this session's \(wanted.count) changed record(s) could not be compared with the catalog (\(error)) — "
+                           + "quit and relaunch, then redo the change(s)")
+        }
+        let byID = Dictionary(input().records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var held: [UUID: String] = [:]
+        for entry in wanted {
+            guard let record = byID[entry.id], let found = read.found[entry.id] else { continue }
+            guard let mismatch = CatalogRowCheck.check(entry.expected, snapshot: VideoRecordDTO(record),
+                                                       sharedBaseline: baseline.shared[entry.id], found: found) else { continue }
+            switch mismatch {
+            case .rowGone, .undecodable:
+                return .failed("record \(entry.id.uuidString) (\(record.filename)): \(mismatch.words) — quit and relaunch, then redo the change(s)")
+            case .rowChanged, .materialised, .pendingGone, .sharedChanged:
+                held[entry.id] = Self.heldWords(record, mismatch: mismatch, stored: found)
+            }
+        }
+        return .checked(generation: read.generation, checked: wanted.count, conflicts: held)
+    }
+
+    /// The records whose fingerprint is not the baseline's (none included):
+    /// exactly what `detect` would send or hold.
     private func changedSinceBaseline(_ records: [VideoRecord]) -> [VideoRecord] {
         let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
-        return zip(records, prints).compactMap { record, print in
-            guard let base = baseline.prints[record.id], base != print else { return nil }
-            return record
-        }
+        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).map { records[$0] }
     }
 
-    /// nil = the other writer did not touch this row (it commits as it is).
-    /// Else the record rebuilt from the store with this session's shared
-    /// edits re-applied, its baseline moved to the store's state.
-    private func reconcileRow(_ record: VideoRecord, row: CatalogLoadedRow, partners: [UUID: VideoRecord],
-                              formatter: DateFormatter, found: Int) -> VideoRecord? {
-        guard let fresh = try? VideoRecord(row: row, dateFormatter: formatter) else { return nil }
-        Self.relinkPair(of: fresh, partners: partners)
-        let storedPrint = CatalogChangeDetector.fingerprint(VideoRecordDTO(fresh))
-        guard storedPrint != baseline.prints[record.id] else { return nil }
-        let mine = CatalogSharedCurated(record)
-        let stored = CatalogSharedCurated(fresh)
-        let edited = baseline.shared[record.id].map { CatalogSharedCurated.groups(of: Array(mine.edited(since: $0))) } ?? []
-        let parts = Self.differingParts(stored: fresh, current: record)
-        for group in edited { mine.apply(group, to: fresh) }
-        baseline.rebase(record.id, print: storedPrint, shared: stored, keeping: edited)
-        let kept = edited.isEmpty ? "none" : edited.map { "\($0)" }.joined(separator: ", ")
-        sink("Catalog store: Reopen reconciled \(record.id.uuidString) (\(record.filename)) — another writer changed it "
-             + "(generation \(found)); this session's copy differed in: \(parts). Kept this session's edits to: \(kept); "
-             + "the catalog's values for the rest.")
-        return fresh
-    }
-
-    /// The same rewiring a load does for one record (SQLiteCatalogLoader
-    /// .rewirePairs): the partner object from memory, or no pair.
-    private static func relinkPair(of fresh: VideoRecord, partners: [UUID: VideoRecord]) {
-        guard let partnerID = fresh.pendingPairedWithID else { return }
-        fresh.pairedWith = partners[partnerID]
-        fresh.pendingPairedWithID = nil
-        if fresh.pairedWith == nil {
-            fresh.pairGroupID = nil
-            fresh.pairConfidence = nil
+    /// The words for a row held out of every commit: why, and which parts
+    /// differ between the catalog and this session (the commit's own
+    /// comparison, CatalogRecordDiff) — theirs and ours together, since a
+    /// part the baseline cannot attribute is not guessed at.
+    private static func heldWords(_ record: VideoRecord, mismatch: CatalogRowCheck.Mismatch, stored: CatalogRowCheck.Found) -> String {
+        var parts = "(not compared)"
+        if case .row(let row) = stored, let fresh = try? VideoRecord(loaded: row) {
+            parts = differingParts(stored: fresh, current: record)
         }
+        return "the catalog changed under you: \(record.filename) — \(mismatch.words); it differs from this session in: \(parts); "
+            + "this session's edit of it was not saved; relaunch to see the catalog's values, then redo the edit"
     }
 
     /// The parts of the record that differ between the store and memory,
@@ -694,12 +715,15 @@ final class CatalogCommitter {
     private struct Detection {
         var items: [CatalogCommit.Item] = []
         var waiting: [(id: UUID, print: CatalogChangeDetector.Fingerprint)] = []
+        /// Changed rows held out of this commit (changed under you, #143).
+        var heldBack = 0
     }
 
-    /// The plan, and the designation text it carries.
+    /// The plan, the designation text it carries, and the held-back count.
     private struct Prepared {
         let plan: CatalogCommit.Plan
         let designationJSON: String?
+        var heldBack = 0
     }
 
     /// One synchronous commit. True when every changed record is stored
@@ -711,7 +735,8 @@ final class CatalogCommitter {
         let start = clock.now
         let detected = detect(now.records, scope: scope)
         lastDetection = clock.now - start
-        let durableWaiting = baseline.notDurable(detected.waiting) == 0
+        // A row held back (changed under you) is changed and NOT stored.
+        let durableWaiting = baseline.notDurable(detected.waiting) == 0 && detected.heldBack == 0
         guard let prepared = prepare(door, detected, now: now, scope: scope) else { return durableWaiting }
         let outcome = CatalogCommit.runBlocking(prepared.plan, on: repository)
         commitCount += 1
@@ -763,11 +788,13 @@ final class CatalogCommitter {
         var found = Detection()
         for index in CatalogChangeDetector.changed(ids, fingerprints: prints, baseline: baseline.prints) {
             let id = ids[index]
-            if baseline.waiting[id]?.print == prints[index] {
+            if conflicts[id] != nil {
+                found.heldBack += 1               // codex #143: never sent until a relaunch
+            } else if baseline.waiting[id]?.print == prints[index] {
                 found.waiting.append((id, prints[index]))
             } else {
                 found.items.append(CatalogCommit.Item(id: id, snapshot: snapshots[index], fingerprint: prints[index],
-                                                      sharedBaseline: baseline.shared[id]))
+                                                      sharedBaseline: baseline.shared[id], expected: baseline.expectation(of: id)))
             }
         }
         return found
@@ -776,7 +803,8 @@ final class CatalogCommitter {
     /// The plan, or nil when there is nothing to write.
     private func prepare(_ door: CatalogWriter, _ detected: Detection, now: Input, scope: Scope) -> Prepared? {
         guard case .everything = scope else {
-            return detected.items.isEmpty ? nil : Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items), designationJSON: nil)
+            return detected.items.isEmpty ? nil : Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items), designationJSON: nil,
+                                                           heldBack: detected.heldBack)
         }
         let purges = duePurges(present: Set(now.records.map(\.id)), sent: Set(detected.items.map(\.id)))
         let json = Self.json(now.designation)
@@ -787,7 +815,7 @@ final class CatalogCommitter {
         for id in purges { if let r = replacedBy[id] { replacements[id] = r } }
         return Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items, designation: designation, purges: purges,
                                                  replacements: replacements),
-                        designationJSON: json)
+                        designationJSON: json, heldBack: detected.heldBack)
     }
 
     /// The purges the doors asked for that are due now (the store holds the
@@ -855,7 +883,8 @@ final class CatalogCommitter {
             adoptDesignation(prepared)
             lastMarkerRefusal = nil
             let durable = apply(rows, prepared.plan)
-            sink("Catalog store: OUTCOME commit generation \(generation) via \(door) — " + Self.counts(rows))
+            sink("Catalog store: OUTCOME commit generation \(generation) via \(door) — " + Self.counts(rows)
+                 + (prepared.heldBack > 0 ? " · held back \(prepared.heldBack) (changed under you; relaunch, then redo)" : ""))
             return durable
         case .nothingWritten(let rows):
             // The designation, if sent, already matched catalog_state.
@@ -896,6 +925,7 @@ final class CatalogCommitter {
         for id in plan.purges where !baseline.holds(id) {
             purgeRequested[id] = nil
             replacedBy[id] = nil
+            conflicts[id] = nil              // a door removed it; the row is tombstoned, never silently rewritten
         }
         // A purge kept for its replacement (P0 2026-10-22, codex #123 F4)
         // stays requested WITH its relation: `duePurges` sends it again

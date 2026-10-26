@@ -243,7 +243,7 @@ extension VideoScanModel {
         case .success(let launch):
             do {
                 let result = try SQLiteCatalogLoader.build(launch.snapshot)
-                adoptSQLiteAuthority(launch, url: url, records: result.records, held: result.heldIDs)
+                adoptSQLiteAuthority(launch, url: url, records: result.records, held: result.heldIDs, locks: result.locks)
                 catalogAuthorityNote("OUTCOME loaded \(result.summary)")
                 return result.records
             } catch {
@@ -263,8 +263,10 @@ extension VideoScanModel {
     /// at every relaunch, GH #353.) The baseline is taken NOW, before the
     /// launch-time migrations run, and one commit is scheduled so what they
     /// change lands. `held` (B2.1): records from `pending_rows` — still
-    /// changed, and Fill In Full Hashes is queued for them.
-    private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord], held: Set<UUID>) {
+    /// changed, and Fill In Full Hashes is queued for them. `locks` (codex
+    /// #143): each loaded row's per-row lock, the committer's expectation.
+    private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord], held: Set<UUID>,
+                                      locks: [UUID: CatalogRowLock.Value]) {
         updateReadOnlyFacts { $0.jsonFrozenByLaunch = true }
         if let stored = CatalogCommitter.designation(fromJSON: launch.designationJSON) {
             catalogStore.masterArchive = stored
@@ -277,9 +279,8 @@ extension VideoScanModel {
                                          input: { [weak self] in self?.catalogCommitInput() ?? CatalogCommitter.Input(
                                              records: [], designation: nil, clearAuthorized: false, holdReason: nil, holdOwner: nil) },
                                          sink: { [weak self] line in self?.catalogAuthorityNote(line) })
-        committer.adoptBaseline(records, held: held, generation: launch.snapshot.generation)
+        committer.adoptBaseline(records, held: held, generation: launch.snapshot.generation, locks: locks)
         committer.onCopiesUpdated = { [weak self] in self?.noteCatalogMutated() }
-        committer.onRecordsReconciled = { [weak self] fresh in self?.showReconciledRecords(fresh) }   // codex #141 F2
         // B2.3: the marker veto answers only for this session's live records.
         committer.owns = { [weak self] record in self?.record(forID: record.id) === record }
         committer.onWritableAgain = { [weak self] in
@@ -325,30 +326,6 @@ extension VideoScanModel {
             EventsDecisionStore.shared.attachCatalog(EventsCatalogBacking(committer: committer))
             Task { await EventsDecisionStore.shared.load() }
         }
-    }
-
-    /// Codex #141 F2: Catalog ▸ Reopen rebuilt these records from a catalog
-    /// another writer changed — each takes the place of the record with its
-    /// id. The array is swapped ONCE (one `didSet`: the indexes un-latch, the
-    /// counts and snapshots follow), then every `pairedWith` that pointed at
-    /// a replaced instance is re-pointed to the one now in the array. The old
-    /// instances are detached: the marker veto's `owns` says no to them.
-    /// (For Rick: the same `records[i] = decoded` swap a rescan does; a
-    /// pointer fix-up pass after it.)
-    func showReconciledRecords(_ fresh: [VideoRecord]) {
-        guard !fresh.isEmpty else { return }
-        let byID = Dictionary(fresh.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var replaced: [ObjectIdentifier: VideoRecord] = [:]
-        var next = records
-        for index in next.indices {
-            guard let replacement = byID[next[index].id] else { continue }
-            replaced[ObjectIdentifier(next[index])] = replacement
-            next[index] = replacement
-        }
-        for record in next {
-            if let partner = record.pairedWith, let moved = replaced[ObjectIdentifier(partner)] { record.pairedWith = moved }
-        }
-        records = next
     }
 
     /// The catalog's generation for a synchronous stamp: catalog.sqlite's as

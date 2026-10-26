@@ -5,10 +5,18 @@
 // bookkeeping:
 //
 //   prints   id → fingerprint of the state the store holds (the dirty test);
+//   locks    id → the per-row lock of the row as the STORE last reported it
+//            (CatalogRowLock, codex #143): at launch from the loaded rows,
+//            after every landed row from the store's own read-back. Sent
+//            with every submitted row; the store refuses the commit when the
+//            row it holds hashes differently (another writer changed it).
+//            Never computed from memory: a memory fingerprint cannot
+//            round-trip through a load;
 //   shared   id → the SHARED curated values (stars, notes, people, …) this
 //            record last agreed with the store on — the per-FIELD baseline
 //            codex B2 P1-1 asked for: a row writes a shared field only when
-//            THIS record changed it since then;
+//            THIS record changed it since then; the store compares a scalar
+//            group this record edited against this baseline too (#143);
 //   waiting  rows the store deferred or refused, at the fingerprint it saw:
 //            not sent again until they change;
 //   held     id → the fingerprint of the payload `pending_rows` holds for
@@ -36,13 +44,17 @@
 // {a,b,base}, exactly what the next launch loads. The commit is
 // synchronous, so "still equals its baseline" means exactly "the person did
 // not change it since the store last agreed" — no edit can arrive mid-commit.
-// A copy whose group is NOT clean keeps its baseline too (codex #141 F3): a
-// scoped save (`commitNow(ids:)`) of A alone must not move dirty B's
-// baseline to {base,a}, or B's own save reads `a` as B's removal.
+// A copy whose SET group is NOT clean keeps its baseline too (codex #141
+// F3): a scoped save (`commitNow(ids:)`) of A alone must not move dirty B's
+// baseline to {base,a}, or B's own save reads `a` as B's removal. A dirty
+// SCALAR group (notes, stars, …) keeps its VALUE but takes the committed
+// value as its baseline (codex #143): the baseline is what the store holds
+// now, so B's next save is still B's edit (its value differs from the
+// baseline) and the store's conflict check sees no stranger's write.
 //
-// Memory: per record one Int (prints) + one CatalogSharedCurated (12 small
-// fields, strings and arrays shared with the record until it changes) —
-// ≈ 150 B a record, 14k records ≈ 2 MB, 100k ≈ 15 MB.
+// Memory: per record two Ints (prints, locks) + one CatalogSharedCurated
+// (12 small fields, strings and arrays shared with the record until it
+// changes) — ≈ 160 B a record, 14k records ≈ 2 MB, 100k ≈ 16 MB.
 //
 // (For Rick: the "shadow copy" a write-behind cache keeps of what is on
 // disk — a checksum per row plus a copy of the few shared columns.)
@@ -57,6 +69,7 @@ struct CatalogCommitBaseline {
     typealias Share = (source: UUID, digest: String, groups: [CatalogSharedCurated.Group], committed: CatalogSharedCurated)
 
     private(set) var prints: [UUID: Fingerprint] = [:]
+    private(set) var locks: [UUID: CatalogRowLock.Value] = [:]
     private(set) var shared: [UUID: CatalogSharedCurated] = [:]
     private(set) var waiting: [UUID: (print: Fingerprint, words: String)] = [:]
     private(set) var held: [UUID: Fingerprint] = [:]
@@ -70,11 +83,15 @@ struct CatalogCommitBaseline {
 
     /// The store holds exactly these records — `heldIDs` as payloads in
     /// `pending_rows` (not rows: they stay changed, durable at the
-    /// fingerprint they were loaded with), the rest as rows.
-    mutating func adopt(_ records: [VideoRecord], held heldIDs: Set<UUID>) {
+    /// fingerprint they were loaded with), the rest as rows. `locks`: the
+    /// per-row lock of each loaded row, from the store (codex #143); a row
+    /// without one (a test that adopts records with no load) is sent with
+    /// no expectation.
+    mutating func adopt(_ records: [VideoRecord], held heldIDs: Set<UUID>, locks rowLocks: [UUID: CatalogRowLock.Value] = [:]) {
         let snapshots = records.map(VideoRecordDTO.init)
         let fingerprints = CatalogChangeDetector.fingerprints(of: snapshots)
         prints = [:]
+        locks = [:]
         shared = [:]
         held = [:]
         for (index, record) in records.enumerated() {
@@ -82,6 +99,7 @@ struct CatalogCommitBaseline {
                 if held[record.id] == nil { held[record.id] = fingerprints[index] }
             } else if prints[record.id] == nil {
                 prints[record.id] = fingerprints[index]
+                locks[record.id] = rowLocks[record.id]
                 shared[record.id] = CatalogSharedCurated(snapshots[index])
             }
         }
@@ -95,20 +113,14 @@ struct CatalogCommitBaseline {
         waiting = [:]
     }
 
-    /// Codex #141 F2: a Reopen found the store's row of `id` changed by
-    /// another writer. The store now holds `print` / `stored`; the groups
-    /// this session edited keep their OLD baseline value, so a set's next
-    /// delta is still this session's own additions and removals (never a
-    /// removal of what the other writer added).
-    mutating func rebase(_ id: UUID, print: Fingerprint, shared stored: CatalogSharedCurated,
-                         keeping groups: [CatalogSharedCurated.Group]) {
-        var next = stored
-        if let old = shared[id] {
-            for group in groups { next.take(group, from: old) }
-        }
-        prints[id] = print
-        shared[id] = next
-        waiting[id] = nil
+    /// What the store is expected to hold for `id` when a commit submits it
+    /// (codex #143): the row at its last reported lock, the held payload, or
+    /// nothing to check (a record this session created, or one adopted
+    /// without a lock).
+    func expectation(of id: UUID) -> CatalogCommit.Expectation? {
+        if let lock = locks[id] { return .row(lock: lock) }
+        if held[id] != nil { return .pending }
+        return nil
     }
 
     // MARK: - At a commit
@@ -179,6 +191,7 @@ struct CatalogCommitBaseline {
         }
         if landing != .absent, landing != .alreadyPurged { report.purged += 1 }
         prints[row.id] = nil
+        locks[row.id] = nil
         shared[row.id] = nil
         waiting[row.id] = nil
         held[row.id] = nil
@@ -197,7 +210,9 @@ struct CatalogCommitBaseline {
             settle(row, item: item)
         case .partial(let curated, let words):
             // Curated values landed; the record stays CHANGED (codex P2-7).
+            // The row's per-row parts did land: its lock is the store's now.
             shared[row.id] = CatalogSharedCurated(item.snapshot)
+            locks[row.id] = row.storedLock
             report.allStored = false
             notePartial(row, words: words, into: &report)
             share(row, item: item, curated: curated, into: &report)
@@ -222,12 +237,15 @@ struct CatalogCommitBaseline {
         }
         if held[row.id] == nil { report.heldCount += 1 }
         held[row.id] = row.fingerprint
+        locks[row.id] = nil                 // a held payload, not a row
         report.needDigest.insert(row.id)
     }
 
-    /// The store now holds exactly this snapshot of the record.
+    /// The store now holds exactly this snapshot of the record, and the
+    /// row at the lock it read back (`storedLock`).
     private mutating func settle(_ row: CatalogCommit.RowResult, item: CatalogCommit.Item) {
         prints[row.id] = row.fingerprint
+        locks[row.id] = row.storedLock
         shared[row.id] = CatalogSharedCurated(item.snapshot)
         waiting[row.id] = nil
         held[row.id] = nil
@@ -292,12 +310,21 @@ struct CatalogCommitBaseline {
         var changed = false
         // A set reaches its writer too: the store's set is the union of the copies' deltas.
         for (group, final) in groups where final.source != copy.id || group.isSet {
-            // Codex #141 F3: a copy with its OWN pending change to this group
+            // Codex #141 F3: a copy with its OWN pending change to a SET
             // keeps its value AND its baseline — its next delta is taken
             // against what it actually saw, so another copy's addition never
             // reads as this copy's removal (a scoped save of A moved B's
             // baseline to {base,a}; B's save then removed `a`).
-            guard now.same(group, as: mine) else { continue }
+            // Codex #143: a copy with its own pending change to a SCALAR
+            // keeps its value and takes the committed value as its baseline —
+            // what the store holds now — so the store's conflict check (a
+            // stranger changed the group since the baseline) does not fire
+            // on this session's own sibling save; its edit still differs
+            // from the baseline and is written.
+            guard now.same(group, as: mine) else {
+                if !group.isSet { mine.take(group, from: final.value) }
+                continue
+            }
             if !now.same(group, as: final.value) {
                 final.value.apply(group, to: copy)
                 changed = true

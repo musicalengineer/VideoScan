@@ -49,6 +49,22 @@ extension GRDBRecordHandle {
     func tombstoneRevisions(fileID: String) throws -> [Int] {
         try Int.fetchAll(db, sql: "SELECT revision FROM tombstones WHERE file_id = ? ORDER BY revision", arguments: [fileID])
     }
+
+    func storedRecordPresent(id: String) throws -> Bool {
+        // A `files` row stands for its file unless it carries the purge
+        // marker (the load skips exactly those). In the Trash, missing, or
+        // removed by a person, it is still the file's row — a rescan's fresh
+        // record inherits that marker (codex #124 F1).
+        if try Bool.fetchOne(db, sql: """
+            SELECT EXISTS (SELECT 1 FROM files WHERE id = ?
+                              AND NOT (removal_state IS ? AND removal_reason IS ?))
+            """, arguments: [id, CatalogDDL.RemovalState.removedFromCatalog.rawValue, CatalogRow.purgeReason]) == true {
+            return true
+        }
+        return try Bool.fetchOne(db, sql: """
+            SELECT EXISTS (SELECT 1 FROM pending_rows WHERE id = ? AND id NOT IN (SELECT id FROM pending_purges))
+            """, arguments: [id]) == true
+    }
 }
 
 // MARK: - Doors (the transaction)
@@ -84,22 +100,6 @@ extension GRDBTransaction {
         guard !tombstoned else { return .alreadyPurged }
         try db.execute(sql: "INSERT INTO pending_purges (id, purged_at, door) VALUES (?, ?, ?)", arguments: [id, since, door])
         return .pendingPurged
-    }
-
-    func storedRecordPresent(id: String) throws -> Bool {
-        // A `files` row stands for its file unless it carries the purge
-        // marker (the load skips exactly those). In the Trash, missing, or
-        // removed by a person, it is still the file's row — a rescan's fresh
-        // record inherits that marker (codex #124 F1).
-        if try Bool.fetchOne(db, sql: """
-            SELECT EXISTS (SELECT 1 FROM files WHERE id = ?
-                              AND NOT (removal_state IS ? AND removal_reason IS ?))
-            """, arguments: [id, CatalogDDL.RemovalState.removedFromCatalog.rawValue, CatalogRow.purgeReason]) == true {
-            return true
-        }
-        return try Bool.fetchOne(db, sql: """
-            SELECT EXISTS (SELECT 1 FROM pending_rows WHERE id = ? AND id NOT IN (SELECT id FROM pending_purges))
-            """, arguments: [id]) == true
     }
 
     func purgeFile(id: String, since: Int64, writtenAt: Int64, door: String) throws -> CatalogRow.PurgeLanding {

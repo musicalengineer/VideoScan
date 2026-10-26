@@ -28,8 +28,21 @@
 // the app's records again): its marker moves on by one revision with its
 // own tombstone, and the app is told the revision.
 //
+// BEFORE any of that (codex #143, the per-row lock): every submitted row's
+// EXPECTATION — the lock of the row the committer last saw stored
+// (CatalogRowLock), or "still held in pending_rows" — is checked against
+// the store (CatalogRowCheck, the same check Reopen's read-back makes). One
+// row another writer changed since this session saw it refuses the WHOLE
+// commit: nothing is written, the generation is untouched, the words name
+// the rows. The rows read for the check are the ones `land` compares
+// against, so the check costs no extra read; a landed row is read back once
+// more inside the transaction so the committer learns the lock the store
+// holds now (`RowResult.storedLock`) — ≈ 0.7 ms a written row.
+//
 // (For Rick: the unit of work's apply loop; each `try` that throws inside a
-// savepoint rolls back that one record and becomes its `.refused` words.)
+// savepoint rolls back that one record and becomes its `.refused` words.
+// The expectation pass is `WHERE rowversion = @expected` for every row,
+// asked first, with one failure aborting the batch.)
 
 import Foundation
 
@@ -40,12 +53,24 @@ struct CatalogCommitBody {
     /// Copies of one content that changed the same field differently in
     /// this commit (B2.3, regression F2 — CatalogCommitConflicts.swift).
     let conflicts: CatalogCommitConflicts
+    /// The rows the expectation pass read, handed to `land` once per id
+    /// (a second snapshot of the same id reads the row the first one left).
+    /// Bounded by the plan's items; dropped with the body.
+    private let readRows = CommitRowCache()
 
     init(plan: CatalogCommit.Plan, tx: any CatalogTransaction, ledger: CatalogCommitLedger) {
         self.plan = plan
         self.tx = tx
         self.ledger = ledger
         conflicts = CatalogCommitConflicts(plan.items)
+    }
+
+    /// Codex #143: a row the store holds differently from what the
+    /// committer expects. Thrown out of `run` BEFORE any write, so the whole
+    /// commit is refused with these words and the generation stays.
+    struct ChangedUnderYou: Error, CustomStringConvertible {
+        let rows: [(id: UUID, mismatch: CatalogRowCheck.Mismatch)]
+        var description: String { CatalogCommitWords.changedUnderYou(rows.map { ($0.id, $0.mismatch.words) }) }
     }
 
     private var source: String { CatalogRow.RowKnowledge.appSource(plan.door) }
@@ -81,6 +106,7 @@ struct CatalogCommitBody {
     /// F1–F3). Before any of this, a FamilyArchive rescan purged 641 rows
     /// while 95 replacements were refused (generation 681).
     func run() throws {
+        try verifyExpectations()
         var landed = 0
         var purgeRows = [CatalogCommit.RowResult?](repeating: nil, count: plan.purges.count)
         var itemRows = [(CatalogCommit.RowResult, Bool)?](repeating: nil, count: plan.items.count)
@@ -110,6 +136,42 @@ struct CatalogCommitBody {
             ledger.noteNothingLanded()
             throw NothingLanded()
         }
+    }
+
+    // MARK: - The per-row lock (codex #143)
+
+    /// Every submitted row's expectation against the store, FIRST — the
+    /// first snapshot of each id (later snapshots follow from it). The rows
+    /// read here are the ones `land` compares against. Any mismatch refuses
+    /// the whole commit before a byte is written: refuse, never guess.
+    private func verifyExpectations() throws {
+        var seen = Set<UUID>()
+        var mismatched: [(id: UUID, mismatch: CatalogRowCheck.Mismatch)] = []
+        for item in plan.items where seen.insert(item.id).inserted {
+            guard let expected = item.expected else { continue }
+            let found = try CatalogRowCheck.find(id: item.id.uuidString, in: tx)
+            if case .row(let row) = found { readRows.rows[item.id.uuidString] = row }
+            if let mismatch = CatalogRowCheck.check(expected, snapshot: item.snapshot, sharedBaseline: item.sharedBaseline,
+                                                    found: found) {
+                mismatched.append((item.id, mismatch))
+            }
+        }
+        guard mismatched.isEmpty else { throw ChangedUnderYou(rows: mismatched) }
+    }
+
+    /// The stored row for `id`: the expectation pass's read when it has
+    /// one (consumed), else read now.
+    private func loadedRow(id: String) throws -> CatalogLoadedRow? {
+        if let row = readRows.rows.removeValue(forKey: id) { return row }
+        return try tx.storedRow(id: id)
+    }
+
+    /// The row's lock as the store holds it after this row's write — read
+    /// back inside the transaction; a row that cannot be read back is
+    /// refused (its savepoint undone) rather than left unlocked.
+    private func lockAfterWrite(id: String) throws -> CatalogRowLock.Value {
+        guard let after = try tx.storedRow(id: id) else { throw CatalogCommitWords.Refusal(CatalogCommitWords.notReadBack) }
+        return CatalogRowLock.of(after)
     }
 
     // MARK: - A replaced row and its replacement (P0 2026-10-22, codex #123)
@@ -188,6 +250,7 @@ struct CatalogCommitBody {
                     itemRows[index].0.adoptedRevision = nil
                 }
                 itemRows[index].0.heldPending = false
+                itemRows[index].0.storedLock = nil          // the savepoint took the write back
                 itemRows[index].1 = false
             }
         }
@@ -277,7 +340,8 @@ struct CatalogCommitBody {
                       into result: CatalogCommit.RowResult) -> CatalogCommit.RowResult {
         var result = result
         do {
-            let stored = try storedDTO(id: mapped.file.id)
+            let row = try loadedRow(id: mapped.file.id)
+            let stored = try row.map(storedDTO)
             if let was = stored?.digestState.digest, was != digest {
                 result.landing = .refused(CatalogCommitWords.digestChanged(from: was, to: digest))
                 return result
@@ -293,13 +357,17 @@ struct CatalogCommitBody {
             }
             guard !diff.isEmpty else {
                 result.landing = .unchanged
+                result.storedLock = row.map(CatalogRowLock.of)
                 return result
             }
             var written = Written()
+            var lock: CatalogRowLock.Value?
             try tx.inSavepoint {
                 written = try write(current, digest: digest, stored: stored, diff: diff, baseline: item.sharedBaseline,
                                     replacing: replacing)
+                lock = try lockAfterWrite(id: mapped.file.id)
             }
+            result.storedLock = lock
             // A field in conflict is not shared: each copy keeps its own value (F2).
             let inConflict = conflicts.fields(of: digest)
             let curated = diff.knowledge.filter { CatalogCommitWords.sharedByCopies.contains($0) && !inConflict.contains($0) }
@@ -308,13 +376,13 @@ struct CatalogCommitBody {
         } catch {
             result.landing = .refused(CatalogCommitWords.engine(error))
             result.adoptedRevision = nil
+            result.storedLock = nil
         }
         return result
     }
 
     /// The stored row as the DTO a record loaded from it would give.
-    private func storedDTO(id: String) throws -> CatalogRecordDTO? {
-        guard let row = try tx.storedRow(id: id) else { return nil }
+    private func storedDTO(_ row: CatalogLoadedRow) throws -> CatalogRecordDTO {
         let record = try VideoRecord(loaded: row)
         // A live record's partner is an object; the encoder writes its id.
         if let partner = record.pendingPairedWithID { record.pairedWith = VideoRecord(id: partner) }
@@ -475,6 +543,13 @@ struct CatalogCommitBody {
     }
 }
 
+/// The rows one commit's expectation pass read (codex #143), by id. Lives
+/// and dies with the body on the store's queue — nothing else sees it.
+/// (For Rick: a scratch map, not a cache: filled once, drained by `land`.)
+final class CommitRowCache {
+    var rows: [String: CatalogLoadedRow] = [:]
+}
+
 /// People as a delta against the record's own baseline (codex B2 P1-6), on
 /// FULL rows — name, kind and confirmation date (cutover B2.6, the class of
 /// codex B2.4 F2): a removal is the exact row the baseline held, and a
@@ -522,6 +597,19 @@ enum CatalogCommitWords {
     static func engine(_ error: Error) -> String {
         String(describing: error)
     }
+
+    /// Codex #143: a submitted row the store holds differently from what
+    /// this session last saw (the per-row lock). The whole commit is refused.
+    static func changedUnderYou(_ rows: [(id: UUID, why: String)]) -> String {
+        let named = rows.prefix(5).map { "\($0.id.uuidString) (\($0.why))" }.joined(separator: "; ")
+        let more = rows.count > 5 ? "; … and \(rows.count - 5) more" : ""
+        return "the catalog changed under this session — \(rows.count) row(s) in this save were changed by another writer "
+            + "since this session last read them: \(named)\(more); nothing was written — choose Catalog ▸ Reopen SQLite Catalog, "
+            + "which holds the rows that changed, names them, and saves the rest"
+    }
+
+    /// A landed row that could not be read back inside its own transaction.
+    static let notReadBack = "its row could not be read back after the write — not saved (refused rather than left unchecked)"
 
     /// A replaced row kept because its replacement is not stored (P0 2026-10-22, codex #123).
     static func replacementNotStored(_ replacement: UUID, _ why: String) -> String {

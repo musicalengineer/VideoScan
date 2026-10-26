@@ -98,6 +98,23 @@ public struct CatalogSharedCurated: Sendable, Equatable {
         }
     }
 
+    /// `same(_:as:)` for a value read back FROM THE STORE against one kept
+    /// in memory (codex #143, the shared-scalar conflict check): the store
+    /// keeps the family-music date in whole seconds, so the dates are
+    /// compared truncated to seconds, as `CatalogJSONDate.unixSeconds` keeps
+    /// them. Every other scalar group is stored verbatim. Sets are deltas
+    /// and never compared this way.
+    public func sameAsStored(_ group: Group, as stored: Self) -> Bool {
+        guard group == .music else { return same(group, as: stored) }
+        switch (familyMusic, stored.familyMusic) {
+        case (nil, nil): return true
+        case (let mine?, let theirs?):
+            return mine.performer == theirs.performer && mine.title == theirs.title
+                && Int64(mine.markedAt.timeIntervalSince1970.rounded(.down)) == Int64(theirs.markedAt.timeIntervalSince1970.rounded(.down))
+        default: return false
+        }
+    }
+
     /// The knowledge fields whose group differs from `baseline`.
     public func edited(since baseline: Self) -> Set<CatalogDDL.KnowledgeField> {
         Set(Group.allCases.filter { !same($0, as: baseline) }.flatMap(\.fields))

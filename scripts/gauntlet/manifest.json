@@ -2600,6 +2600,22 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitRowLockTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitRowLockTests"
+      ],
+      "tests": [
+        "doorAcceptsCurrentLockAndReportsTheNext",
+        "doorChecksSharedScalarsThroughTheBaseline",
+        "doorRefusesChangedRow",
+        "doorRefusesMaterialisedPending",
+        "hundredRowsUnderBudget",
+        "lockCoversRowPartsOnly"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCornerCases2026_10_25Tests.swift",
       "stage": "regression",
       "suites": [
@@ -6983,12 +6999,17 @@
       "path": "VideoScan/VideoScanTests/CatalogCodex141ReopenReconcileTests.swift",
       "stage": "regression",
       "suites": [
-        "CatalogReopenReconcileTests"
+        "CatalogReopenReconcileTests",
+        "CatalogReopenReconcileReviewTests",
+        "CatalogReopenReconcileRoundTripReviewTests"
       ],
       "tests": [
+        "reopenHoldsTheRowWhereBothChangedANonSharedPart",
         "reopenKeepsBothWritersChanges",
-        "reopenKeepsTheCatalogsValueWhereBothChangedANonSharedPart",
-        "reopenLeavesAnUntouchedRowsEditWhole"
+        "reopenKeepsThisSessionsRemovalMarker",
+        "reopenLeavesASessionCommittedRowAlone",
+        "reopenLeavesAnUntouchedRowsEditWhole",
+        "reopenNamesTheOtherWritersNoteWhenBothChangedIt"
       ]
     },
     {
@@ -7000,6 +7021,31 @@
       ],
       "tests": [
         "scopedSavePreservesBothCopiesTagAdditions"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCodex143FailedReadBackTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogReopenFailedReadBackTests"
+      ],
+      "tests": [
+        "failedReadBackStaysBlocked"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCodex143RefuseAndNameTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogReopenRefuseAndNameTests"
+      ],
+      "tests": [
+        "conflictStaysHeldAcrossASecondReopen",
+        "editAfterReadBackIsRefusedAtTheDoor",
+        "heldRecordMaterialisedByTheOtherWriterIsHeld",
+        "rowsOnlyThisSessionWroteAreNeverHeld"
       ]
     },
     {
@@ -34306,9 +34352,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 292,
+      "expected_floor": 300,
       "name": "regression",
-      "package_expected_floor": 260,
+      "package_expected_floor": 266,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -34349,7 +34395,8 @@
         "VideoScanCoreTests.CatalogCommitRelationTests",
         "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests",
         "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests",
-        "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests"
+        "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests",
+        "VideoScanCoreTests.CatalogCommitRowLockTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -34433,7 +34480,11 @@
         "VideoScanTests/ExternalPlayerAudioRouteSourceSensor",
         "VideoScanTests/CatalogVolumePillLogicTests",
         "VideoScanTests/CatalogVolumePillRegressionTests",
-        "VideoScanTests/CatalogVolumePillSensorTests"
+        "VideoScanTests/CatalogVolumePillSensorTests",
+        "VideoScanTests/CatalogReopenReconcileReviewTests",
+        "VideoScanTests/CatalogReopenReconcileRoundTripReviewTests",
+        "VideoScanTests/CatalogReopenRefuseAndNameTests",
+        "VideoScanTests/CatalogReopenFailedReadBackTests"
       ]
     },
     {
