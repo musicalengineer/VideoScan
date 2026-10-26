@@ -60,7 +60,7 @@ struct CatalogStoreSensorTests {
     private static var swiftSchema: String {
         (CatalogBookkeepingSchema.statements + CatalogDataSchema.statements + CatalogLiveWritesSchema.statements
          + CatalogPendingRowsSchema.statements + CatalogCommitB22Schema.statements
-         + CatalogDecisionTablesSchema.statements).joined(separator: "\n")
+         + CatalogDecisionTablesSchema.statements + CatalogProvenanceRolesSchema.statements).joined(separator: "\n")
     }
 
     @Test func onlyStoreFoldersImportGRDB() {
@@ -132,7 +132,7 @@ struct CatalogStoreSensorTests {
 
     @Test func everyTableOfTheDDLIsInTheSwiftSchema() throws {
         let documented = try SchemaDocument.ddl().tableNames
-        #expect(documented.count == 56)                        // 3 bookkeeping + 47 data + content_text_fts + 1 live (v1.7) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11)
+        #expect(documented.count == 57)                        // 3 bookkeeping + 47 data + content_text_fts + 1 live (v1.7) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12)
         let swift = Self.swiftSchema
         for name in documented {
             let declared = swift.contains("CREATE TABLE \(name) ") || swift.contains("CREATE VIRTUAL TABLE \(name) ")
@@ -142,7 +142,7 @@ struct CatalogStoreSensorTests {
 
     @Test func everyTriggerOfTheDDLIsInTheSwiftSchema() throws {
         let documented = try SchemaDocument.ddl().triggerNames
-        #expect(documented.count == 78)                        // 12 bookkeeping + 58 data + 3 live (v1.7) + 1 pending (v1.8) + 4 append-only (v1.11)
+        #expect(documented.count == 80)                        // 12 bookkeeping + 58 data + 3 live (v1.7) + 1 pending (v1.8) + 4 append-only (v1.11) + 2 append-only (v1.12)
         let swift = Self.swiftSchema
         for name in documented {
             let declared = swift.contains("CREATE TRIGGER \(name) ") || swift.contains("CREATE TRIGGER \(name)\n")

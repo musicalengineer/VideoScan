@@ -449,14 +449,23 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // Provenance roles (v1.12, Rick approved 2026-10-26): additive —
+        // `provenance_roles`, version 13.
+        migrator.registerMigration(CatalogProvenanceRolesSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
+            for statement in CatalogProvenanceRolesSchema.statements + CatalogProvenanceRolesSchema.versionBump {
+                try db.execute(sql: statement)
+            }
+        }
         return migrator
     }
 
     /// The `catalog_state.schema_version` a fully migrated database carries
     /// (v1 creates 7; `v3_live_writes` raises it to 8; `v4_pending_rows` to
     /// 9; `v5_b22_commit` to 10; `v6_folder_kind` to 11; `v7_decision_tables`
-    /// to 12). A HIGHER number is a newer build's file and is refused at open.
-    static let currentSchemaVersion = CatalogDecisionTablesSchema.schemaVersion
+    /// to 12; `v8_provenance_roles` to 13). A HIGHER number is a newer
+    /// build's file and is refused at open.
+    static let currentSchemaVersion = CatalogProvenanceRolesSchema.schemaVersion
 
     // MARK: - High-water at open (DDL §11)
 

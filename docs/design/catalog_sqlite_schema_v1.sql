@@ -66,6 +66,11 @@
 -- migration `v7_decision_tables`, which raises catalog_state.schema_version to 12). ADDITIVE: two
 -- new tables, one index, four append-only triggers; no earlier table, trigger, index or CHECK
 -- changed.
+-- Revision 13 (v1.12, 2026-10-26, provenance roles; Rick approved the table 2026-10-26): §17 —
+-- `provenance_roles`, what a content IS (Master, Camera Original, … , Unknown), append-only,
+-- the newest row per digest current (VideoScanCore/Store/CatalogProvenanceRolesSchema.swift,
+-- migration `v8_provenance_roles`, which raises catalog_state.schema_version to 13). ADDITIVE: one
+-- new table, one index, two append-only triggers; no earlier table, trigger, index or CHECK changed.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1718,3 +1723,30 @@ CREATE TRIGGER ignored_content_put_back_no_update BEFORE UPDATE ON ignored_conte
 BEGIN SELECT RAISE(ABORT, 'ignored_content_put_back is append-only evidence'); END;
 CREATE TRIGGER ignored_content_put_back_no_delete BEFORE DELETE ON ignored_content_put_back
 BEGIN SELECT RAISE(ABORT, 'ignored_content_put_back is append-only evidence'); END;
+
+-- ---------------------------------------------------------------------------------------------
+-- 17. PROVENANCE ROLES (v1.12, 2026-10-26, migration `v8_provenance_roles`). What a content IS, in
+--     Rick's words (docs/guides/provenance_roles.md): master · cameraOriginal · alternateCapture ·
+--     remasteredCopy · editCopy · excerpt · viewCopy · testCopy · unknown (stable keys; the menu's
+--     words are the app's). A role belongs to the CONTENT (whole-file SHA-256): byte-identical
+--     copies share it. Only Rick sets one (Provenance ▸ Set Role, through the commit door);
+--     background jobs never write here. APPEND-ONLY: every choice is a new row; the CURRENT role of
+--     a digest is its row with the highest role_id (insertion order, never decided_at); no row =
+--     Unknown; setting Unknown appends an 'unknown' row, so the history is kept. source_missing = 1
+--     only on a Master Rick marked "source not in the catalog (the only surviving version)"; it
+--     means nothing on any other role and readers ignore it there.
+--     The migration then runs: UPDATE catalog_state SET schema_version = 13; PRAGMA user_version = 13.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE provenance_roles (            -- v1.12: what a content is, set by Rick; the newest row per digest is current
+  role_id        INTEGER PRIMARY KEY,
+  digest         TEXT    NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
+  role           TEXT    NOT NULL CHECK (role IN ('master','cameraOriginal','alternateCapture','remasteredCopy','editCopy','excerpt','viewCopy','testCopy','unknown')),
+  decided_at     INTEGER NOT NULL,
+  source_missing INTEGER NOT NULL DEFAULT 0 CHECK (source_missing IN (0,1)),   -- only meaningful for 'master'
+  note           TEXT
+) STRICT;
+CREATE INDEX provenance_roles_by_digest ON provenance_roles(digest, role_id);
+CREATE TRIGGER provenance_roles_no_update BEFORE UPDATE ON provenance_roles
+BEGIN SELECT RAISE(ABORT, 'provenance_roles is append-only history'); END;
+CREATE TRIGGER provenance_roles_no_delete BEFORE DELETE ON provenance_roles
+BEGIN SELECT RAISE(ABORT, 'provenance_roles is append-only history'); END;

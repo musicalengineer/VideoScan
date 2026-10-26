@@ -2711,7 +2711,7 @@
         "anEmptyDigestIsRefusedAndANullDigestLandsOnlyWhereTheDDLAllowsIt",
         "anOrphanRowThroughTheStoresDoorsIsRefusedWhole",
         "closeWaitsForAReaderAndStillLeavesOneFile",
-        "everyOlderSchemaVersionMigratesToTwelveWithBothVersionsAgreeing",
+        "everyOlderSchemaVersionMigratesToCurrentWithBothVersionsAgreeing",
         "reopeningACurrentFileRunsNoMigrationAndChangesNothingLogical",
         "theReadOnlyDoorNeedsTheWALSidecarOnAppleSQLite",
         "theReadOnlyDoorReadsFollowsTheWriterAndNeverWrites",
@@ -2735,6 +2735,30 @@
         "bothTablesAreAppendOnlyAndTheirChecksHold",
         "oneHundredThousandPairsRecordAndReadInsideBudgets",
         "theReviewReadsTheLatestPersonsVerdictEitherDirection"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogProvenanceRolesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogProvenanceRolesTests"
+      ],
+      "tests": [
+        "aDigestInAnyCaseIsTheSameContent",
+        "aDigestThatIsNotContentWritesNothing",
+        "aFileHoldingAPoisonedRoleKeyIsRefusedAtOpenWithWords",
+        "aPoisonedRoleKeyReadsAsUnreadableUnknownAndNeverThrows",
+        "aReadOnlyOpenRefusesARoleWrite",
+        "aSchemaTwelveDatabaseOpensAsThirteenWithEveryContentRowIntact",
+        "everyChoiceIsANewRowAndTheNewestIsCurrent",
+        "oneHundredThousandContentsCurrentRoleInsideBudgets",
+        "settingUnknownAppendsAnUnknownRowAndResets",
+        "sourceMissingIsKeptOnlyOnAMaster",
+        "theCheckListIsExactlyTheNineRoleKeys",
+        "theTableIsAppendOnlyAndItsChecksHold",
+        "theWholeTableReadingGivesOneCurrentRowPerDigest"
       ]
     },
     {
@@ -13113,13 +13137,15 @@
       "path": "VideoScan/VideoScanTests/FindMasterTests.swift",
       "stage": "unit",
       "suites": [
+        "FindMasterPlanTests",
         "FindMasterAnswerTests",
-        "FindMasterJobTests",
-        "FindMasterPlanTests"
+        "FindMasterJobTests"
       ],
       "tests": [
         "buildProgressLineIsHonest",
         "eachRefusalReason",
+        "finishedRowSummaryLeadsWithFound",
+        "hitsGroupBySpot",
         "hundredThousandRecordSnapshot",
         "labelsPreferLiveCopies",
         "negativeSaysWhatWasSearched",
@@ -31559,6 +31585,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDecisionTablesTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogProvenanceRolesTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {

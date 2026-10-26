@@ -81,7 +81,7 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["fullfsync"] == "1")
         #expect(pragmas["foreign_keys"] == "1")
         #expect(pragmas["busy_timeout"] == "5000")
-        #expect(pragmas["user_version"] == "12")                // v1.11 (`v7_decision_tables`) raised it
+        #expect(pragmas["user_version"] == "13")                // v1.12 (`v8_provenance_roles`) raised it
         #expect(pragmas["recursive_triggers"] == "1")   // codex C′ #1: REPLACE's deletes reach the delete triggers
         // codex #141 F1: the WRITER is the connection that commits; GRDB's WAL
         // setup had left it at NORMAL while every reader said FULL.
@@ -276,7 +276,7 @@ struct GRDBCatalogRepositoryTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 1)
         defer { fixture.remove() }
         try rawQueue(fixture).inDatabase { db in
-            try db.execute(sql: "UPDATE catalog_state SET schema_version = 13 WHERE singleton = 1")
+            try db.execute(sql: "UPDATE catalog_state SET schema_version = \(GRDBCatalogRepository.currentSchemaVersion + 1) WHERE singleton = 1")
         }
         let repository = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
         let outcome = await repository.open(at: fixture.url)
@@ -284,7 +284,7 @@ struct GRDBCatalogRepositoryTests {
             Issue.record("expected .refused, got \(outcome)")
             return
         }
-        #expect(reason.contains("schema version 13 is newer"))
+        #expect(reason.contains("schema version \(GRDBCatalogRepository.currentSchemaVersion + 1) is newer"))
     }
 
     @Test func aCorruptedFileIsRefusedWithTheEnginesWords() async throws {

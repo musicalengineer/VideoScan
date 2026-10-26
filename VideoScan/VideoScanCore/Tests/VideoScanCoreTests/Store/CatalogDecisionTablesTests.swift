@@ -243,7 +243,7 @@ struct CatalogDecisionTablesTests {
         let after = try DatabaseQueue(path: fixture.url.path).inDatabase { db in
             try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state")
         }
-        #expect(after == CatalogDecisionTablesSchema.schemaVersion)
+        #expect(after == GRDBCatalogRepository.currentSchemaVersion)
     }
 
     // MARK: - Read-only
