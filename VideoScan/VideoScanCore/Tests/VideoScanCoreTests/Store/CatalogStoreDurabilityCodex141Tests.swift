@@ -11,6 +11,9 @@
 //   | 4  P2   | clearingTheLastCuratedValueStaysClearedAcrossRelaunch | the clear committed (user_notes 0), then the | .alreadyFilled|
 //   |         |                                                   | relaunch's pass read .filled(rows: 1), the    | note "", 0    |
 //   |         |                                                   | note came back and user_notes had 1 row       | rows          |
+//   | 6  P2   | aNewerSchemaIsRefusedWithoutTheFileChanging       | refused, but the bytes differed: header 18/19 | byte-identical|
+//   |         |                                                   | read 2/2 (WAL) and a -wal appeared — the pool | 1/1, no -wal  |
+//   |         |                                                   | was built before the version check            |               |
 //
 // Lives under Tests/…/Store/ because it opens the same file with a plain
 // GRDB queue (the sensor allows `import GRDB` only here and in
@@ -153,5 +156,48 @@ struct CatalogStoreDurabilityCodex141Tests {
         #expect(second.displayPass == .alreadyFilled, Comment(rawValue: "\(second.displayPass)"))
         #expect(reloaded.userNotes.isEmpty, "the imported note came back after the clear: \(reloaded.userNotes)")
         #expect(try userNotesRows(fixture) == 0, "a user_notes row reappeared from the immutable evidence")
+    }
+
+    // MARK: - Finding 6 (P2): a newer-schema file is refused BEFORE anything touches it
+
+    /// A current fixture stamped one version ahead and put back in
+    /// rollback-journal mode (no -wal / -shm beside it), so any touch by the
+    /// open — the WAL switch, GRDB's init table — changes the file's bytes.
+    private func newerSchemaFixtureInDeleteMode() async throws -> (StoreFixture, Int, Data) {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        let newer = GRDBCatalogRepository.currentSchemaVersion + 1
+        let queue = try DatabaseQueue(path: fixture.url.path)
+        try queue.inDatabase { db in
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+            try db.execute(sql: "UPDATE catalog_state SET schema_version = \(newer) WHERE singleton = 1")
+            try db.execute(sql: "PRAGMA user_version = \(newer)")
+            _ = try String.fetchOne(db, sql: "PRAGMA journal_mode = DELETE")
+        }
+        try queue.close()
+        // SQLite may leave an empty -shm behind the mode switch; in DELETE
+        // mode it is meaningless. Scratch only (the fixture's own temp dir).
+        let fm = FileManager.default
+        for suffix in ["-wal", "-shm"] where fm.fileExists(atPath: fixture.url.path + suffix) {
+            try fm.removeItem(atPath: fixture.url.path + suffix)
+        }
+        return (fixture, newer, try Data(contentsOf: fixture.url))
+    }
+
+    @Test func aNewerSchemaIsRefusedWithoutTheFileChanging() async throws {
+        let (fixture, newer, before) = try await newerSchemaFixtureInDeleteMode()
+        defer { fixture.remove() }
+        let repository = GRDBCatalogRepository(host: "admit-first", durability: .volatileForTests)
+        let outcome = await repository.open(at: fixture.url)
+        guard case .refused(let words) = outcome else {
+            Issue.record("expected .refused, got \(outcome)")
+            await repository.close()
+            return
+        }
+        #expect(words.contains("schema version \(newer) is newer"), Comment(rawValue: words))
+        await repository.close()
+        let after = try Data(contentsOf: fixture.url)
+        #expect(after == before, "a refused file must be byte-identical — the open switched it to WAL or wrote GRDB's init table")
+        #expect(after[18] == 1 && after[19] == 1, "header bytes 18/19 must still say rollback journal (1/1), not WAL (2/2)")
+        #expect(!FileManager.default.fileExists(atPath: fixture.url.path + "-wal"), "no -wal may appear beside a refused file")
     }
 }

@@ -14,7 +14,9 @@
 //     cache), a busy timeout, WAL — and the writer is set to FULL AGAIN
 //     after the pool exists, because GRDB's WAL setup lowers it (codex #141 F1);
 //   - at open: integrity_check + foreign_key_check → `.refused` with the
-//     engine's words; a NEWER schema_version → `.refused`; exactly one
+//     engine's words; a NEWER schema_version → `.refused` — both run on a
+//     READ-ONLY connection BEFORE the pool exists, so a refused file is never
+//     switched to WAL or otherwise written (codex #141 F6); exactly one
 //     catalog_state row and one generations row; then the high-water
 //     reconciliation INSIDE one immediate transaction (codex C′ #4) against
 //     THREE witnesses — the sidecar `catalog.highwater`, the append-only
@@ -170,13 +172,20 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // GH #359: the file as it was BEFORE the pool opened it (missing for
         // a new catalog), so a swap during the open itself is caught.
         let before = CatalogFileIdentity.read(url)
+        // codex #141 F6: the checks that can say no run on a READ-ONLY
+        // connection first — the read-write pool below switches the file to
+        // WAL on construction, and a file this build must refuse (a newer
+        // schema, a corrupt page) is never written to.
+        let admission = Self.admit(url)
+        if case .refused(let words) = admission { return refusedToOpen(url, words) }
         let opened: Opened
         do {
             opened = try Self.openPool(at: url, durability: durability)
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
-        return await finishOpen(opened, at: url, before: before, requiringLatch: requiringLatch)
+        return await finishOpen(opened, at: url, before: before, requiringLatch: requiringLatch,
+                                admitted: admission == .admitted)
     }
 
     public static let readerOnlyWords = "opened for reading only by a process that is not the catalog's writer"
@@ -207,11 +216,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// settle's high-water raise checks them, and they are checked again
     /// before the session is published.
     private func finishOpen(_ opened: Opened, at url: URL, before: CatalogFileIdentity.Reading,
-                            requiringLatch: Bool = false) async -> CatalogOpenOutcome {
+                            requiringLatch: Bool = false, admitted: Bool = false) async -> CatalogOpenOutcome {
         do {
             let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
             if requiringLatch, fileGuard.latch == nil { throw Refusal(reason: Self.noLatchWords(folder: url.deletingLastPathComponent())) }
-            let loaded = try await Self.prepare(opened, host: host)
+            let loaded = try await Self.prepare(opened, host: host, admitted: admitted)
             let settled = try await settle(opened, loaded: loaded, at: url, fileGuard: fileGuard)
             if let words = fileGuard.violation() { throw Refusal(reason: words) }
             pool = opened.pool
@@ -305,52 +314,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return pool
     }
 
-    /// The open checks, in the order the DDL's §11 lists them. Throws a
-    /// `Refusal` (words for the person) or an engine error.
-    private static func prepare(_ opened: Opened, host: String) async throws -> Int {
-        try await checkEngine(opened.pool)
-        try await checkSchemaVersion(opened.pool)
-        if opened.readOnlyReason == nil {
-            try migrator(host: host).migrate(opened.pool)
-        } else if try await !migrationsComplete(opened.pool, host: host) {
-            throw Refusal(reason: "the database is read-only and its schema is not current")
-        }
-        return try await loadGeneration(opened.pool)
-    }
-
-    private static func checkEngine(_ pool: DatabasePool) async throws {
-        let (integrity, violations) = try await pool.read { db in
-            (try String.fetchAll(db, sql: "PRAGMA integrity_check"),
-             try Row.fetchAll(db, sql: "PRAGMA foreign_key_check").count)
-        }
-        guard integrity == ["ok"] else {
-            throw Refusal(reason: "integrity_check: \(integrity.joined(separator: "; "))")
-        }
-        guard violations == 0 else {
-            throw Refusal(reason: "foreign_key_check: \(violations) violation(s)")
-        }
-    }
-
-    private static func checkSchemaVersion(_ pool: DatabasePool) async throws {
-        let found = try await pool.read { db -> Int? in
-            guard try db.tableExists("catalog_state") else { return nil }
-            return try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state WHERE singleton = 1")
-        }
-        if let found, found > currentSchemaVersion {
-            throw Refusal(reason: "schema version \(found) is newer than this build understands (\(currentSchemaVersion)) — open it with a newer VideoScan")
-        }
-    }
-
-    private static func loadGeneration(_ pool: DatabasePool) async throws -> Int {
-        try await pool.read { db in
-            let states = try Int.fetchOne(db, sql: "SELECT count(*) FROM catalog_state") ?? 0
-            let counters = try Int.fetchOne(db, sql: "SELECT count(*) FROM generations") ?? 0
-            guard states == 1, counters == 1 else {
-                throw Refusal(reason: "expected one catalog_state row and one generations row, found \(states) and \(counters)")
-            }
-            return try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? 0
-        }
-    }
+    // The open checks (prepare / admit / checkEngine / checkSchemaVersion /
+    // loadGeneration) are in the "Open checks" extension below, same file.
 
     // MARK: - Migrations
 
@@ -428,11 +393,6 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// 9; `v5_b22_commit` to 10; `v6_folder_kind` to 11; `v7_decision_tables`
     /// to 12). A HIGHER number is a newer build's file and is refused at open.
     static let currentSchemaVersion = CatalogDecisionTablesSchema.schemaVersion
-
-    private static func migrationsComplete(_ pool: DatabasePool, host: String) async throws -> Bool {
-        let migrator = migrator(host: host)
-        return try await pool.read { db in try migrator.hasCompletedMigrations(db) }
-    }
 
     // MARK: - High-water at open (DDL §11)
 
@@ -1052,6 +1012,118 @@ extension GRDBCatalogRepository {
     }
 }
 
+// MARK: - Open checks (DDL §11), and the read-only admission (codex #141 F6)
+//
+// Moved out of the actor body unchanged except `admitted:` (codex #141 kept
+// the body under SwiftLint's 600 lines); same file, so `Refusal` and the
+// migrator stay private. Every check takes a `Database` so the SAME code
+// runs on the admission connection and, where admission gave no verdict,
+// on the pool.
+
+extension GRDBCatalogRepository {
+
+    /// What the read-only look at the file before the pool said.
+    private enum Admission: Equatable {
+        /// Engine and schema checks passed on a read-only connection: the
+        /// pool may be built and `prepare` need not repeat them.
+        case admitted
+        /// The file is refused, in these words; no pool is built.
+        case refused(String)
+        /// No file yet (a new catalog), or a read-only connection could not
+        /// be made at all: the read-write door runs the checks itself and
+        /// says its own words, as before.
+        case noVerdict
+    }
+
+    /// "Refused, never written to" (codex #141 F6): `DatabasePool` switches
+    /// the file to WAL and may create GRDB's init table the moment it is
+    /// constructed, so a file this build must refuse — a newer schema, a
+    /// corrupt page — was being written before the refusal. A plain
+    /// `DatabaseQueue` with `readonly = true` takes only shared locks and
+    /// changes no byte of the main file (on a WAL-mode file it may create
+    /// `-shm`, which the pool creates anyway). For Rick: `fopen(path, "r")`
+    /// plus the checks, before anything opens the file for writing.
+    private static func admit(_ url: URL) -> Admission {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .noVerdict }
+        var configuration = Configuration()
+        configuration.label = "VideoScan.catalog.admit"
+        configuration.readonly = true
+        let queue: DatabaseQueue
+        do {
+            queue = try DatabaseQueue(path: url.path, configuration: configuration)
+        } catch {
+            return .noVerdict
+        }
+        defer { try? queue.close() }
+        do {
+            try queue.read { db in
+                try checkEngine(db)
+                try checkSchemaVersion(db)
+            }
+            return .admitted
+        } catch {
+            return .refused(words(error))
+        }
+    }
+
+    /// The open checks, in the order the DDL's §11 lists them. Throws a
+    /// `Refusal` (words for the person) or an engine error. `admitted`: the
+    /// engine and schema checks already passed on the read-only admission
+    /// connection for this very open; they are not run twice (integrity_check
+    /// is O(file)).
+    private static func prepare(_ opened: Opened, host: String, admitted: Bool) async throws -> Int {
+        if !admitted {
+            try await checkEngine(opened.pool)
+            try await opened.pool.read { db in try checkSchemaVersion(db) }
+        }
+        if opened.readOnlyReason == nil {
+            try migrator(host: host).migrate(opened.pool)
+        } else if try await !migrationsComplete(opened.pool, host: host) {
+            throw Refusal(reason: "the database is read-only and its schema is not current")
+        }
+        return try await loadGeneration(opened.pool)
+    }
+
+    private static func checkEngine(_ pool: DatabasePool) async throws {
+        try await pool.read { db in try checkEngine(db) }
+    }
+
+    private static func checkEngine(_ db: Database) throws {
+        let integrity = try String.fetchAll(db, sql: "PRAGMA integrity_check")
+        guard integrity == ["ok"] else {
+            throw Refusal(reason: "integrity_check: \(integrity.joined(separator: "; "))")
+        }
+        let violations = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check").count
+        guard violations == 0 else {
+            throw Refusal(reason: "foreign_key_check: \(violations) violation(s)")
+        }
+    }
+
+    private static func checkSchemaVersion(_ db: Database) throws {
+        guard try db.tableExists("catalog_state") else { return }
+        let found = try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state WHERE singleton = 1")
+        if let found, found > currentSchemaVersion {
+            throw Refusal(reason: "schema version \(found) is newer than this build understands (\(currentSchemaVersion)) — open it with a newer VideoScan")
+        }
+    }
+
+    private static func loadGeneration(_ pool: DatabasePool) async throws -> Int {
+        try await pool.read { db in
+            let states = try Int.fetchOne(db, sql: "SELECT count(*) FROM catalog_state") ?? 0
+            let counters = try Int.fetchOne(db, sql: "SELECT count(*) FROM generations") ?? 0
+            guard states == 1, counters == 1 else {
+                throw Refusal(reason: "expected one catalog_state row and one generations row, found \(states) and \(counters)")
+            }
+            return try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? 0
+        }
+    }
+
+    private static func migrationsComplete(_ pool: DatabasePool, host: String) async throws -> Bool {
+        let migrator = migrator(host: host)
+        return try await pool.read { db in try migrator.hasCompletedMigrations(db) }
+    }
+}
+
 // MARK: - Pragmas (tests)
 //
 // Moved out of the actor body unchanged (GH #359 kept the body under
@@ -1127,7 +1199,7 @@ extension GRDBCatalogRepository {
         }
         do {
             let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
-            let loaded = try await Self.prepare(opened, host: host)
+            let loaded = try await Self.prepare(opened, host: host, admitted: false)
             pool = opened.pool
             databaseURL = url
             self.fileGuard = fileGuard
