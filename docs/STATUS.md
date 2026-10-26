@@ -27,8 +27,8 @@
 3. Provenance Phase B (picture timeline v2) needs schema v13 approval; C1 needs v14 approval (design doc §schema).
 4. #378, #377, #381, #385.
 
-## Ultra (arrives Tue 10/27; dev setup Wed 10/28)
-`scripts/install_dev_tools.sh` on a clean Mac (Rick: Xcode, GUI apps, Homebrew, `gh auth login` first). Then TB5 bridge + 10 GbE to the M4. **Before the catalog moves:** `migrate_data.sh --from <M4 TB-bridge IP>` (its catalog checks are uncommitted and need their Codex pass); verify how the catalog identifies a volume moved between Macs (UUID vs device number); `defaults write Rick-Breen.VideoScan CatalogSyncMasterHostname RicksUltra.local` or the Ultra launches as a viewer; recreate the STEAM symlink. Add the Ultra to `scripts/nightly_rota.json`. The M4 stays untouched as fallback until the Ultra has run green for a week.
+## Ultra (pickup and bring-up Tue 10/27)
+Run sheet and machine roles: `install_videoscan_dev_dependencies/MIGRATION_PLAN.md` § Tuesday 10/27 (updated 10/26). Ultra = Rick's machine, catalog master, all media drives local; M4 = headless test/LLM host (nightly stays on the M4). No family media over SMB from the M4 (read-only model jobs only). Ultra SSD budget: ≥ 400 GB free, fast copies in one 800 GB-quota APFS volume. `migrate_data.sh` catalog checks are committed (Codex #122 closed). 🔴 Main must be pushed before the Ultra's clone.
 
 ## Dates
 - 2026-11-01: off-site copy plan due.

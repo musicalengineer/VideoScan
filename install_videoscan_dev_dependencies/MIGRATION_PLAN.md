@@ -5,6 +5,67 @@ nothing lost, the M4 kept untouched as a fallback until the Ultra has run green
 for a week, and the whole thing reproducible from the scripts in this folder
 rather than from memory.
 
+## Tuesday 10/27 — run sheet (updated 2026-10-26, supersedes the role split below)
+
+Rick's plan, in his order, with the checks that keep it safe. Goal for the day:
+a Debug build of VideoScan on the Ultra by late afternoon. The catalog move
+(Phase 3) can be the same evening or the next day; do not rush it.
+
+**The evening before (10/26):** main must be on GitHub, or the Ultra's clone gets
+code from 10/25. That needs Rick's "happy" → sensor lane on HEAD → push.
+
+| # | Step | Who | Check before moving on |
+|---|---|---|---|
+| 1 | macOS setup, Apple ID, update macOS 27.x. Local hostname **RicksUltra** (Settings ▸ General ▸ Sharing). Turn on Remote Login. | Rick | `scutil --get LocalHostName` → RicksUltra |
+| 2 | App Store: Xcode 27 (open once, accept license, let it install components), Logic, Photoshop, the rest. | Rick | `xcodebuild -version` |
+| 3 | Homebrew (asks for password); add `eval "$(/opt/homebrew/bin/brew shellenv)"` to `~/.zprofile`; `brew install gh git`; `gh auth login`; git name/email. | Rick | `gh auth status` |
+| 4 | `git clone https://github.com/musicalengineer/VideoScan.git ~/dev/VideoScan` | Rick | `git -C ~/dev/VideoScan log -1` matches the M4's main |
+| 5 | Claude Code and Codex use **their own installers** (they live in `~/.local/bin`, not brew); sign in to both. | Rick | `claude --version`, `codex --version` |
+| 6 | Cables: TB5 cable Ultra↔M4 and the Ultra's 10 GbE to the switch. Give the Thunderbolt Bridge static IPs (Settings ▸ Network ▸ Thunderbolt Bridge ▸ Manual: M4 `10.55.0.1`, Ultra `10.55.0.2`, mask 255.255.255.0, no router). `ssh-copy-id rickb@10.55.0.1`. | Rick | `ssh 10.55.0.1 hostname` → RicksM4 |
+| 7 | `~/dev/VideoScan/scripts/install_dev_tools.sh --copy-from 10.55.0.1` (1–2 h, mostly unattended). **Skip `--with-models` on day one** — the big models stay on the M4 (below). | script | the summary ends with 0 failed; "needs Rick" items done |
+| 8 | Xcode: open `VideoScan/VideoScan.xcodeproj`, scheme VideoScan, **Debug**, Clean Build Folder, Build (⌘B). Build only — don't Run yet. | Rick | build succeeds |
+| 9 | Quit VideoScan on the M4. Move the drives (wiring slide). On **both** Macs, before either app launches: `defaults write Rick-Breen.VideoScan CatalogSyncMasterHostname RicksUltra.local` | Rick | M4 app stays quit |
+| 10 | Phase 3 below: `migrate_data.sh --from 10.55.0.1` (dry run), then `--go`. It checks quick_check, marker and row count itself. | script | its checks pass |
+| 11 | Full Disk Access + Removable Volumes for VideoScan, Xcode, Terminal. Then ⌘R. | Rick | Catalog file count = the M4's; Archive tab shows 144 Masters |
+
+If the day runs long, stop after step 8: the M4 is untouched and still the
+working machine until step 9.
+
+## Who does what after the move (recommended 2026-10-26)
+
+| Machine | Role | Why |
+|---|---|---|
+| **Ultra** (interactive) | Rick's machine: Xcode, the app, **catalog master (the only writer)**, every media drive and the RAID attached directly, sensor lane, quick Debug test runs. | One writer, local drives: the catalog's identity, fixity stamps and the removal proofs all assume a local file system. |
+| **M4** (headless) | 02:00 nightly + gauntlet + full suites (and now **daytime** test runs too — nobody works on it), Codex/agent heavy runs, Ollama/Hallie LLM host, MLX VLM jobs. | Its 64 GB and GPU stay busy without slowing Rick down. The nightly rota already names the M4; it stays. |
+| Laptops | Overflow and travel, as now. | — |
+
+**Drives over Thunderbolt from the M4 — recommendation: no, not for family media.**
+A drive left on the M4 would reach the Ultra as an SMB share over the
+Thunderbolt Bridge. That is fast enough (roughly 1–2+ GB/s, about what the RAID
+delivers anyway), but VideoScan's safety rests on local-volume facts that an SMB
+mount does not give: a stable volume UUID (the catalog would see a new drive),
+stable inode/device numbers (fixity stamps and the new removal reservations key
+on them), and a real Trash (on a network share "move to Trash" can mean delete).
+So: every media drive plugs into the Ultra. The M4 can reach media **read-only**
+over the bridge for model jobs (captioning, fingerprinting), which only read.
+A spare drive on the M4 is fine for test fixtures, DerivedData or a backup copy.
+
+**The Ultra's 2 TB SSD — a budget, so it never fills like the M4 (93 % full today).**
+- System + apps + Xcode + DerivedData + venvs: ~400 GB.
+- Keep ≥ 400 GB (20 %) free always — SSD speed and swap need it.
+- Fast media copies go in **one capped APFS volume**, so the cap is enforced by
+  the file system, not by memory:
+  `diskutil apfs addVolume disk3 APFS HotMedia -quota 800g` (check the
+  container name with `diskutil list` first). VideoScan sees it as a drive like
+  any other; copies there are working copies, never the only copy.
+- Models stay on the M4 (Ollama 17 GB, Hugging Face 9 GB today) unless a
+  job needs them on the Ultra.
+
+**Fixity on the move:** every file copied onto the Ultra (App Support by
+`migrate_data.sh`, media into HotMedia) should be hashed on arrival and compared
+with its stored SHA-256. That is a free fixity check of everything moved, and the
+first measurement of how well the stored digests hold up (DECISIONS 2026-10-26).
+
 ## Decisions for Rick (before the Ultra arrives)
 
 1. **Hostname — DECIDED 2026-10-05: `RicksUltra`** (`RicksUltra.local`).
