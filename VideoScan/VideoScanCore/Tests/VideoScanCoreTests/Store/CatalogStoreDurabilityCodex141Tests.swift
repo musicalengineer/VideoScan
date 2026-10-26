@@ -371,9 +371,10 @@ struct CatalogStoreDurabilityCodex141Tests {
     /// The read-only-folder corner the F6-2 rule must keep: a healthy
     /// WAL-mode catalog with its sidecars cleaned, in a folder that cannot
     /// be written. The writer cannot make the `-shm` it needs, so the door
-    /// falls back to a read-only pool — and the system SQLite (3.54.0
-    /// "aapl") answers CANTOPEN for ANY read-only open of a WAL-mode file
-    /// without its `-wal` (GH #386). What the rule must keep: never read-write,
+    /// falls back to a read-only pool — which the system SQLite (3.54.0
+    /// "aapl") refuses for a WAL-mode file without its `-wal`, and #386 cannot
+    /// restore it in this folder, so the door refuses in words that say why.
+    /// What the rule must keep: never read-write,
     /// read-only or refused in words, and the folder exactly as found. The
     /// sidecars-present variant opens read-only
     /// (GRDBCatalogRepositoryTests.aReadOnlyFolderNeverOpensForWriting).
@@ -395,7 +396,10 @@ struct CatalogStoreDurabilityCodex141Tests {
         case .readWrite:
             Issue.record("a read-only folder opened read-write")
         case .readOnly(let words), .refused(let words):
-            #expect(words.contains("is not writable") || words.contains("unable to open"), Comment(rawValue: words))
+            // #386: the read-only fallback cannot restore the -wal in this
+            // folder, so it refuses in words that say why — never the
+            // engine's bare "unable to open".
+            #expect(words.contains("was last closed by another program"), Comment(rawValue: words))
         }
         let wrote = await repository.write(as: .ui) { _ in }
         #expect(!wrote.isCommitted, "a write landed in a read-only folder: \(wrote)")

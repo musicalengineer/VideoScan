@@ -210,12 +210,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// preview helper, the Hallie shell — 2026-10-19, cutover audit gap 3):
     /// SQLITE_OPEN_READONLY, no migration (an unmigrated file is refused), no
     /// high-water reconcile or raise, every write refused. The engine checks
-    /// still run. The outcome is always `.readOnly` or `.refused`.
+    /// still run. The outcome is always `.readOnly` or `.refused`. The one
+    /// file it may create is a missing EMPTY `-wal` (#386, `walSidecarRefusal`).
     public func openForReading(at url: URL) async -> CatalogOpenOutcome {
         guard pool == nil else { return .refused(reason: "already open at \(databaseURL?.path ?? "?")") }
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "could not open: no file at \(url.path)")
         }
+        if let words = Self.walSidecarRefusal(url) { return refusedToOpen(url, words) }   // #386
         let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
@@ -286,6 +288,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         } catch let error as DatabaseError
                     where FileManager.default.fileExists(atPath: url.path)
                     && (error.resultCode == .SQLITE_READONLY || error.resultCode == .SQLITE_CANTOPEN) {
+            if let words = walSidecarRefusal(url) { throw Refusal(reason: words) }   // #386
             let pool = try makePool(at: url, durability: durability, readonly: true)
             let folder = url.deletingLastPathComponent().path
             return Opened(pool: pool,
@@ -1371,6 +1374,22 @@ extension GRDBCatalogRepository {
 
 extension GRDBCatalogRepository {
 
+    /// #386 (Rick 2026-10-26): before any READ-ONLY pool. Apple's SQLite
+    /// refuses a read-only open of a WAL-mode file with no `-wal` beside it;
+    /// `SQLiteWALSidecar` restores the empty one (create-only) when the
+    /// folder takes it, and nil means "go ahead". Otherwise: the words.
+    static func walSidecarRefusal(_ url: URL) -> String? {
+        switch SQLiteWALSidecar.prepareForReadOnlyOpen(url) {
+        case .notNeeded, .alreadyThere:
+            return nil
+        case .created:
+            storeLog.notice("catalog store: restored the empty \(url.lastPathComponent, privacy: .public)-wal a read-write last closer removed, before a read-only open")
+            return nil
+        case .refused(let words):
+            return words
+        }
+    }
+
     /// The words every sealed-snapshot session carries as its read-only reason.
     public static let sealedSnapshotWords = "a sealed snapshot of the master's catalog — read-only on this Mac"
 
@@ -1387,6 +1406,7 @@ extension GRDBCatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "\(url.lastPathComponent) does not exist")
         }
+        if let words = Self.walSidecarRefusal(url) { return refusedToOpen(url, words) }   // #386
         let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {

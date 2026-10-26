@@ -28,7 +28,7 @@
 //   aCounterTableWithTheWrongRowCountIsRefusedAtOpen          | loadGeneration: the `states == 1, counters == 1` guard removed
 //   theReadOnlyDoorReadsFollowsTheWriterAndNeverWrites        | settle: the `opened.readOnlyReason` early return removed
 //   theReadOnlyDoorRefusesAnOlderSchemaInsteadOfMigratingIt   | prepare: the `migrationsComplete` refusal removed
-//   theReadOnlyDoorNeedsTheWALSidecarOnAppleSQLite            | (no mutation: RED today by nature, wrapped in withKnownIssue — see its doc comment)
+//   theReadOnlyDoorNeedsTheWALSidecarOnAppleSQLite            | (no mutation: RED by nature until #386 — the door now restores the -wal; see its doc comment)
 //
 // Five dimensions: LOGIC (every test) · SCALE (N/A here — CatalogDataSchemaScaleTests
 // and CatalogRepositoryScaleTests hold the 100k budgets) · MEDIA N/A (no media
@@ -666,10 +666,13 @@ struct CatalogCornerCases2026_10_25Tests {
     /// catalog Rick last touched with the sqlite3 shell is not. Fail-closed,
     /// never a data risk — but the read-only doors (`openForReading`,
     /// `openReadOnly`) and `CatalogPreflightReader` answer with the engine's
-    /// words, not with what happened or what to do. The strategy (create the
-    /// 0-byte -wal when the folder is writable? better words?) is a design
-    /// decision for the store; this pin flips when it lands.
-    @Test("KNOWN (2026-10-25): on Apple SQLite the read-only door refuses a WAL catalog whose -wal was deleted by a read-write last closer (sqlite3 shell, .backup, cp) — with the engine's words, not ours")
+    /// words, not with what happened or what to do.
+    ///
+    /// #386 (Rick 2026-10-26): the read-only doors restore the empty -wal
+    /// when the folder is writable (SQLiteWALSidecar, create-only) and
+    /// otherwise refuse in words that say why (SQLiteWALSidecarTests). This
+    /// was the pin; it is now the green half of #386's red/green.
+    @Test("#386: on Apple SQLite the read-only door restores the -wal a read-write last closer (sqlite3 shell, .backup, cp) removed, and opens the catalog")
     func theReadOnlyDoorNeedsTheWALSidecarOnAppleSQLite() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 5)
         defer { fixture.remove() }
@@ -680,12 +683,9 @@ struct CatalogCornerCases2026_10_25Tests {
         let opened = await reader.openForReading(at: fixture.url)
         await reader.close()
         print("[corner-2026-10-25] read-only door without a -wal beside the catalog: \(opened)")
-        withKnownIssue("Apple SQLite 3.54: SQLITE_OPEN_READONLY needs the -wal beside a WAL catalog; the read-only door refuses with the engine's words (strategy pending — see the doc comment)") {
-            #expect(opened == .readOnly(reason: GRDBCatalogRepository.readerOnlyWords), "\(opened)")
-        }
-        if case .refused(let words) = opened {
-            #expect(words.contains("unable to open database file"), "the refusal changed its words — update this pin: \(words)")
-        }
+        #expect(opened == .readOnly(reason: GRDBCatalogRepository.readerOnlyWords), "\(opened)")
+        #expect(FileManager.default.fileExists(atPath: Self.wal(fixture.url).path), "the door did not restore the -wal")
+        #expect(Self.size(Self.wal(fixture.url)) == 0, "the restored -wal must be empty")
         #expect(try Self.sha256(fixture.url) == before, "the read-only door changed catalog.sqlite")
         // The same catalog with the 0-byte -wal the app's close leaves opens read-only.
         try Data().write(to: Self.wal(fixture.url))

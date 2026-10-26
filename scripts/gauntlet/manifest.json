@@ -2673,6 +2673,22 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/SQLiteWALSidecarTests.swift",
+      "stage": "regression",
+      "suites": [
+        "SQLiteWALSidecarTests"
+      ],
+      "tests": [
+        "aDanglingSymlinkIsNeitherFollowedNorReplaced",
+        "aReadOnlyFolderIsRefusedWithWordsThatSayWhy",
+        "aRollbackJournalFileGetsNoSidecar",
+        "anExistingSidecarIsNeverTouched",
+        "thePreflightReaderReadsACatalogWithoutItsSidecar",
+        "theViewerDoorRestoresTheSidecarAndOpens"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SurnameVariantPropertyTests.swift",
@@ -34314,7 +34330,7 @@
       ],
       "expected_floor": 289,
       "name": "regression",
-      "package_expected_floor": 269,
+      "package_expected_floor": 275,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -34356,7 +34372,8 @@
         "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests",
         "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests",
         "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests",
-        "VideoScanCoreTests.CatalogStoreOpenVerdictTests"
+        "VideoScanCoreTests.CatalogStoreOpenVerdictTests",
+        "VideoScanCoreTests.SQLiteWALSidecarTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

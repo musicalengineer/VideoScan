@@ -8,7 +8,9 @@
 // (SQLITE_OPEN_READONLY: no migration, no write, no high-water) and closes
 // it before returning. It never touches the app's writer pool, so it is
 // safe beside the open catalog — a WAL reader sees the last commit and never
-// blocks a writer (CatalogPreflightReaderQAR1Tests pins both).
+// blocks a writer (CatalogPreflightReaderQAR1Tests pins both). The one file
+// it may create: the EMPTY `-wal` of a WAL-mode catalog whose read-write last
+// closer removed it (#386, SQLiteWALSidecar — create-only, never a rewrite).
 //
 // Stopping quick_check: two things may stop it — its time budget and a
 // cancel (the app quitting, PreflightCancellation). Both are decided ON THE
@@ -138,6 +140,13 @@ public enum CatalogPreflightReader {
 
     private struct StopRequested: Error {}
 
+    /// #386: the read-only open cannot be made here, and why (the preflight
+    /// shows `String(describing:)` of the error, so the words ARE the error).
+    struct WALSidecarMissing: Error, CustomStringConvertible {
+        let words: String
+        var description: String { words }
+    }
+
     /// The one door to `interrupt()` and `close()` for a preflight connection,
     /// and the remembered stop the progress handler reads. interrupt() takes
     /// the lock and checks `closed`; close() sets `closed` under the lock
@@ -183,6 +192,11 @@ public enum CatalogPreflightReader {
     private static func openReadOnly(_ databaseURL: URL) throws -> DatabaseQueue {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: databaseURL.path])
+        }
+        // #386: a WAL-mode catalog whose -wal a read-write last closer
+        // removed gets the empty one back (create-only), or a refusal in words.
+        if case .refused(let words) = SQLiteWALSidecar.prepareForReadOnlyOpen(databaseURL) {
+            throw WALSidecarMissing(words: words)
         }
         var configuration = Configuration()
         configuration.readonly = true
