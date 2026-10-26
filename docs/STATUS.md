@@ -6,7 +6,7 @@
 **Stability before the Ultra** (Rick, 10/19). Swift 6 everywhere is done (10/25). Provenance is now designed and Phase A is built (Rick, 10/26: "design and implement"). No FamilyArchive rescan until Rick says so. **Main is local-only since 10/25 — nothing is pushed until Rick says "happy".**
 
 ## Landed on local main 10/26 (not pushed)
-- **Adversarial P2s (nightly 10/26) — merged after 4 Codex rounds (final: merge, 0 findings):** Migrate says "safe / retire" only when every file is proven (adoptions included: source stamp current + fresh destination hash); ⌘⌫ knows a copy only by whole-file SHA-256 and proves it on disk at the move; one process-wide `RemovalReservations` (st_dev+st_ino; leaving / relied-on) across every media removal door incl. Transcode replace; git's racily-clean rule in `ContentFixity.describesFileNow`. **Rick's calls:** (a) rule 2 read literally = fresh full re-hash of every stamped survivor at each ⌘⌫ move (~1–3 s/GB SSD, 10–20 s per 2 GB clip on USB HDD, estimated) vs today's stored SHA-256 + racily-clean stat; (b) should `VolumeSafety.isSafe` stop treating Aging drives as safe app-wide. New words to see: Migrate "Some files are not proven safe yet", row "Backup not proven"; ⌘⌫ hold reasons. Not covered: family-tree file trashing in People/ (not media).
+- **Adversarial P2s (nightly 10/26) — merged after 4 Codex rounds (final: merge, 0 findings):** Migrate says "safe / retire" only when every file is proven (adoptions included: source stamp current + fresh destination hash); ⌘⌫ knows a copy only by whole-file SHA-256 and proves it on disk at the move; one process-wide `RemovalReservations` (st_dev+st_ino; leaving / relied-on) across every media removal door incl. Transcode replace; git's racily-clean rule in `ContentFixity.describesFileNow`. Rick ruled 10/26: trust stored SHA-256, re-hash only when needed; Aging drives unchanged (DECISIONS). New words to see: Migrate "Some files are not proven safe yet", row "Backup not proven"; ⌘⌫ hold reasons. Not covered: family-tree file trashing in People/ (not media).
 - **#387 catalog open:** version/integrity/FK checks run inside the writer's first `BEGIN IMMEDIATE`; a refused open deletes nothing; close protection (`NO_CKPT_ON_CLOSE` via the one-function C target `CSQLiteCloseGuard`, + `PERSIST_WAL`) is the writer's first act. Codex #151 closing pass: merge, 0 findings. Residue (a foreign writer committing *during* our open) → #389.
 - **#386 read-only doors:** a WAL catalog with no `-wal` gets an empty one (create-only, resolved path, DB's mode) or a refusal that says why. `Store/SQLiteWALSidecar.swift` is reusable.
 - **Provenance design:** `docs/design/provenance_retroactive_2026_10_26.md` (phases A–E, F cut; four rulings in DECISIONS).
@@ -37,6 +37,5 @@
 ## Open rulings wanted from Rick
 1. Schema v13 (`picture_prints`, Phase B) and v14 (provenance tables + veto trigger, Phase C) — design doc.
 2. Provenance gate at **ingest** (Charter §2.2) or at **Promote** (10/22); hard or soft for the first month; role list; July 2026 device chain.
-3. ⌘⌫ survivor proof: fresh re-hash per move, or stored SHA-256 + racily-clean stat (above). Aging drives app-wide.
-4. Charter: sampled hash = hint only; Triage keep / fold / cut.
-5. #327 remainder; People engines; Archive Angel; Hallie; two-copy edit conflict policy.
+3. Charter: sampled hash = hint only; Triage keep / fold / cut.
+4. #327 remainder; People engines; Archive Angel; Hallie; two-copy edit conflict policy.
