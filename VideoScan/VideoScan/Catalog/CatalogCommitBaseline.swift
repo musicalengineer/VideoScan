@@ -23,6 +23,11 @@
 //            it (no whole-file digest yet — gap 1). B2.2 (codex B2.1 closing
 //            pass): a held row is durable only AT that fingerprint, so an
 //            older payload never certifies a newer edit whose update failed;
+//   pendingLocks  id → the lock of that payload as the STORE holds it
+//            (CatalogRowLock.ofPending, codex #145 F1): at launch from the
+//            loaded JSON, after every hold from the JSON the store put. A
+//            held record is expected at this payload — another writer's
+//            changed payload for the same id is "changed under you";
 //   reportedAbsent  ids the store holds that left memory with no door's
 //            purge, already named once. B2.3 (codex B2.2 finding (e)): absence
 //            never purges — only `purges(requested:present:)`, fed by the
@@ -52,7 +57,8 @@
 // now, so B's next save is still B's edit (its value differs from the
 // baseline) and the store's conflict check sees no stranger's write.
 //
-// Memory: per record two Ints (prints, locks) + one CatalogSharedCurated
+// Memory: per record two Ints (prints, locks — or held + pendingLocks for a
+// held record) + one CatalogSharedCurated
 // (12 small fields, strings and arrays shared with the record until it
 // changes) — ≈ 160 B a record, 14k records ≈ 2 MB, 100k ≈ 16 MB.
 //
@@ -73,6 +79,7 @@ struct CatalogCommitBaseline {
     private(set) var shared: [UUID: CatalogSharedCurated] = [:]
     private(set) var waiting: [UUID: (print: Fingerprint, words: String)] = [:]
     private(set) var held: [UUID: Fingerprint] = [:]
+    private(set) var pendingLocks: [UUID: CatalogRowLock.Value] = [:]
     /// Ids the store holds (or holds pending) that left memory with no
     /// door's purge, already named once.
     private var reportedAbsent: Set<UUID> = []
@@ -84,9 +91,10 @@ struct CatalogCommitBaseline {
     /// The store holds exactly these records — `heldIDs` as payloads in
     /// `pending_rows` (not rows: they stay changed, durable at the
     /// fingerprint they were loaded with), the rest as rows. `locks`: the
-    /// per-row lock of each loaded row, from the store (codex #143); a row
-    /// without one (a test that adopts records with no load) is sent with
-    /// no expectation.
+    /// per-row lock of each loaded row, from the store (codex #143), and the
+    /// payload lock of each held record (codex #145 F1); a record without
+    /// one (a test that adopts records with no load) is sent with no
+    /// expectation.
     mutating func adopt(_ records: [VideoRecord], held heldIDs: Set<UUID>, locks rowLocks: [UUID: CatalogRowLock.Value] = [:]) {
         let snapshots = records.map(VideoRecordDTO.init)
         let fingerprints = CatalogChangeDetector.fingerprints(of: snapshots)
@@ -94,9 +102,13 @@ struct CatalogCommitBaseline {
         locks = [:]
         shared = [:]
         held = [:]
+        pendingLocks = [:]
         for (index, record) in records.enumerated() {
             if heldIDs.contains(record.id) {
-                if held[record.id] == nil { held[record.id] = fingerprints[index] }
+                if held[record.id] == nil {
+                    held[record.id] = fingerprints[index]
+                    pendingLocks[record.id] = rowLocks[record.id]
+                }
             } else if prints[record.id] == nil {
                 prints[record.id] = fingerprints[index]
                 locks[record.id] = rowLocks[record.id]
@@ -114,12 +126,12 @@ struct CatalogCommitBaseline {
     }
 
     /// What the store is expected to hold for `id` when a commit submits it
-    /// (codex #143): the row at its last reported lock, the held payload, or
-    /// nothing to check (a record this session created, or one adopted
-    /// without a lock).
+    /// (codex #143): the row at its last reported lock, the held payload at
+    /// its payload lock (codex #145 F1), or nothing to check (a record this
+    /// session created, or one adopted without a lock).
     func expectation(of id: UUID) -> CatalogCommit.Expectation? {
         if let lock = locks[id] { return .row(lock: lock) }
-        if held[id] != nil { return .pending }
+        if held[id] != nil, let payload = pendingLocks[id] { return .pending(lock: payload) }
         return nil
     }
 
@@ -195,6 +207,7 @@ struct CatalogCommitBaseline {
         shared[row.id] = nil
         waiting[row.id] = nil
         held[row.id] = nil
+        pendingLocks[row.id] = nil
         reportedAbsent.remove(row.id)
         partialWords[row.id] = nil
     }
@@ -238,6 +251,7 @@ struct CatalogCommitBaseline {
         if held[row.id] == nil { report.heldCount += 1 }
         held[row.id] = row.fingerprint
         locks[row.id] = nil                 // a held payload, not a row
+        pendingLocks[row.id] = row.storedLock   // the payload the store holds now (codex #145 F1)
         report.needDigest.insert(row.id)
     }
 
@@ -249,6 +263,7 @@ struct CatalogCommitBaseline {
         shared[row.id] = CatalogSharedCurated(item.snapshot)
         waiting[row.id] = nil
         held[row.id] = nil
+        pendingLocks[row.id] = nil
         partialWords[row.id] = nil
     }
 

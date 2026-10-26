@@ -144,6 +144,7 @@ struct CatalogCommitRowLockTests {
         let fresh = try FreshRecord.copy(healthy, path: "/Volumes/Fixture/fresh/held.mov")
         let held = try await s.commit([fresh])
         #expect(held.rows.first?.heldPending == true, "held in pending_rows")
+        let seen = try #require(held.rows.first?.storedLock, "the hold reports the payload's lock")
 
         // The other connection finishes its hash first and stores the same id as a row.
         let twin = try CatalogPendingRecord.record(try CatalogPendingRecord.json(VideoRecordDTO(fresh)))
@@ -155,10 +156,39 @@ struct CatalogCommitRowLockTests {
 
         FreshRecord.giveDigest(fresh, digest)
         fresh.userNotes = "this session's note"
-        let outcome = try await s.commitItems([Self.item(fresh, baseline: nil, expected: .pending)])
+        let outcome = try await s.commitItems([Self.item(fresh, baseline: nil, expected: .pending(lock: seen))])
         guard case .refused(let words, _) = outcome else { Issue.record("expected .refused, got \(outcome)"); return }
         #expect(words.contains("stored it as a row"), Comment(rawValue: words))
         #expect(try await s.load().records[fresh.id.uuidString]?.userNotes != "this session's note")
+    }
+
+    /// Codex #145 F1: "still pending" proved only that SOME payload was
+    /// held; another connection's changed payload for the same id passed,
+    /// and this session's put replaced it.
+    @Test("a held payload another connection replaced with its own is refused; at the payload the store holds now, the save passes")
+    func doorRefusesChangedPending() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let healthy = try #require(loaded.records[healthyID])
+        let fresh = try FreshRecord.copy(healthy, path: "/Volumes/Fixture/fresh/held-by-both.mov")
+        let held = try await s.commit([fresh])
+        let seen = try #require(held.rows.first?.storedLock, "the hold reports the payload's lock")
+
+        // The other connection holds its own payload for the same id (still no hash).
+        let twin = try CatalogPendingRecord.record(try CatalogPendingRecord.json(VideoRecordDTO(fresh)))
+        twin.userNotes = "B's note"
+        #expect(try await s.commit([twin]).isCommitted)
+
+        fresh.userNotes = "A's note"
+        let outcome = try await s.commitItems([Self.item(fresh, baseline: nil, expected: .pending(lock: seen))])
+        guard case .refused(let words, _) = outcome else { Issue.record("expected .refused, got \(outcome)"); return }
+        #expect(words.contains("changed its held payload"), Comment(rawValue: words))
+        let json: String = try #require(try s.scalar("SELECT json FROM pending_rows WHERE id = ?", [fresh.id.uuidString]))
+        #expect(json.contains("B's note"), "B's payload is intact")
+
+        let current = try await s.commitItems([Self.item(fresh, baseline: nil, expected: .pending(lock: CatalogRowLock.ofPending(json: json)))])
+        #expect(current.isCommitted, "at the payload the store holds, the save passes: \(current)")
+        #expect(current.rows.first?.storedLock != CatalogRowLock.ofPending(json: json), "and reports the new payload's lock")
     }
 
     @Test("a shared scalar both writers changed is refused; one only this session changed passes (the other writer changed a different group)")

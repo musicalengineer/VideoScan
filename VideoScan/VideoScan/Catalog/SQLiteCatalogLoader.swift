@@ -45,6 +45,8 @@ enum SQLiteCatalogLoader {
         var heldIDs: Set<UUID> = []
         /// The per-row lock of every loaded row, from the store (codex
         /// #143): the committer's expectation for the row until it lands.
+        /// A held record's entry is its payload's lock (`ofPending`, codex
+        /// #145 F1) — `heldIDs` says which kind each id is.
         var locks: [UUID: CatalogRowLock.Value] = [:]
         /// Held payloads that did not decode (left in the table).
         var unreadableHeld = 0
@@ -85,6 +87,7 @@ enum SQLiteCatalogLoader {
         result.unreadableHeld = held.unreadable
         result.purgedCount = snapshot.purged
         result.locks = rowLocks(snapshot.rows)
+        for (id, lock) in held.payloadLocks { result.locks[id] = lock }
         return result
     }
 
@@ -99,18 +102,25 @@ enum SQLiteCatalogLoader {
     }
 
     /// The held records, from their stored payload (the app's own decoder);
-    /// an id that is already a `files` row is not held twice.
-    static func heldRecords(_ rows: [CatalogRow.PendingRow], stored: Set<UUID>) -> (records: [VideoRecord], unreadable: Int) {
+    /// an id that is already a `files` row is not held twice. Each held
+    /// record's payload lock (codex #145 F1) is the hash of the JSON text
+    /// it was decoded from.
+    static func heldRecords(_ rows: [CatalogRow.PendingRow], stored: Set<UUID>)
+        -> (records: [VideoRecord], unreadable: Int, payloadLocks: [UUID: CatalogRowLock.Value]) {
         var out: [VideoRecord] = []
+        var locks: [UUID: CatalogRowLock.Value] = [:]
         var unreadable = 0
         for row in rows {
             guard let record = try? CatalogPendingRecord.record(row.json) else {
                 unreadable += 1
                 continue
             }
-            if !stored.contains(record.id) { out.append(record) }
+            if !stored.contains(record.id) {
+                out.append(record)
+                locks[record.id] = CatalogRowLock.ofPending(json: row.json)
+            }
         }
-        return (out, unreadable)
+        return (out, unreadable, locks)
     }
 
     /// `pendingPairedWithID` → `pairedWith`, the same rule as

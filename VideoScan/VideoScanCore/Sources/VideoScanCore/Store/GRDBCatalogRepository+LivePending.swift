@@ -65,6 +65,12 @@ extension GRDBRecordHandle {
             SELECT EXISTS (SELECT 1 FROM pending_rows WHERE id = ? AND id NOT IN (SELECT id FROM pending_purges))
             """, arguments: [id]) == true
     }
+
+    func storedPendingJSON(id: String) throws -> String? {
+        try String.fetchOne(db, sql: """
+            SELECT json FROM pending_rows WHERE id = ? AND NOT EXISTS (SELECT 1 FROM pending_purges q WHERE q.id = pending_rows.id)
+            """, arguments: [id])
+    }
 }
 
 // MARK: - Doors (the transaction)

@@ -55,8 +55,10 @@ public enum CatalogCommit {
         /// A `files` row whose per-row parts hash to this lock (CatalogRowLock).
         case row(lock: CatalogRowLock.Value)
         /// Held in `pending_rows` (no whole-file hash yet): no `files` row,
-        /// the held payload still there.
-        case pending
+        /// and the held payload the one this session last stored or loaded —
+        /// its `CatalogRowLock.ofPending` lock (codex #145 F1: existence
+        /// alone let another writer's changed payload be replaced).
+        case pending(lock: CatalogRowLock.Value)
     }
 
     /// One changed record: its id, its snapshot, the fingerprint the
@@ -186,8 +188,10 @@ public enum CatalogCommit {
         public var settledSets: SettledSets?
         /// The row's per-row lock as the store holds it after this commit
         /// (codex #143): read back inside the transaction for a written or
-        /// partial row, the pre-write read for an unchanged one. nil for a
-        /// row that is not a `files` row now (held, refused, removed).
+        /// partial row, the pre-write read for an unchanged one; for a row
+        /// held in `pending_rows` (`heldPending`), the lock of the payload the
+        /// store now holds (`CatalogRowLock.ofPending`, codex #145 F1). nil
+        /// otherwise (refused, removed, a hold that could not be stored).
         public var storedLock: CatalogRowLock.Value?
     }
 

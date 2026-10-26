@@ -30,7 +30,8 @@
 //
 // BEFORE any of that (codex #143, the per-row lock): every submitted row's
 // EXPECTATION — the lock of the row the committer last saw stored
-// (CatalogRowLock), or "still held in pending_rows" — is checked against
+// (CatalogRowLock), or the lock of the payload held for it in pending_rows
+// (codex #145 F1) — is checked against
 // the store (CatalogRowCheck, the same check Reopen's read-back makes). One
 // row another writer changed since this session saw it refuses the WHOLE
 // commit: nothing is written, the generation is untouched, the words name
@@ -329,6 +330,7 @@ struct CatalogCommitBody {
             var wrote = false
             try tx.inSavepoint { wrote = try tx.putPendingRow(row) }
             result.heldPending = true
+            result.storedLock = CatalogRowLock.ofPending(json: row.json)   // the payload the store now holds (codex #145 F1)
             return (result, wrote)
         } catch {
             result.landing = .deferred(CatalogCommitWords.notHeld(CatalogCommitWords.engine(error)))

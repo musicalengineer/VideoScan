@@ -624,7 +624,7 @@ final class CatalogCommitter {
             switch mismatch {
             case .rowGone, .undecodable:
                 return .failed("record \(entry.id.uuidString) (\(record.filename)): \(mismatch.words) — quit and relaunch, then redo the change(s)")
-            case .rowChanged, .materialised, .pendingGone, .sharedChanged:
+            case .rowChanged, .materialised, .pendingGone, .pendingChanged, .sharedChanged:
                 held[entry.id] = Self.heldWords(record, mismatch: mismatch, stored: found)
             }
         }

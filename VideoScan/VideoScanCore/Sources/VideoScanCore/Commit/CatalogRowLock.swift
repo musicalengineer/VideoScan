@@ -67,6 +67,18 @@ public enum CatalogRowLock {
         return hasher.finalize()
     }
 
+    /// The lock of a payload HELD in `pending_rows` (a record with no
+    /// whole-file hash yet — codex #145 F1): the hash of the JSON text the
+    /// store holds, verbatim. A held record is expected at THIS payload, so
+    /// another writer's changed payload for the same id ("still pending"
+    /// but not ours) is a mismatch, never a pass. ≈ 1 µs per KB of payload.
+    public static func ofPending(json: String) -> Value {
+        var hasher = Hasher()
+        hasher.combine("pending_rows")
+        hasher.combine(json)
+        return hasher.finalize()
+    }
+
     /// The locks of many rows, in order (the launch: the cores share the work).
     public static func locks(of rows: [CatalogLoadedRow]) -> [Value] {
         let count = rows.count
@@ -116,8 +128,9 @@ public enum CatalogRowCheck {
     public enum Found: Sendable {
         /// A `files` row (live, or tombstoned, or purged — the lock says which).
         case row(CatalogLoadedRow)
-        /// No `files` row; a `pending_rows` payload that is not purged.
-        case pendingOnly
+        /// No `files` row; a `pending_rows` payload that is not purged, at
+        /// this payload lock (`CatalogRowLock.ofPending`, codex #145 F1).
+        case pending(lock: CatalogRowLock.Value)
         /// Neither.
         case nothing
     }
@@ -132,6 +145,9 @@ public enum CatalogRowCheck {
         case materialised
         /// Expected a held payload: it is gone.
         case pendingGone
+        /// Expected a held payload: another writer replaced it with its own
+        /// (codex #145 F1 — still held, but not the payload this session saw).
+        case pendingChanged
         /// A shared scalar group this session edited was also changed in
         /// the store since this session's baseline (notes, stars, …).
         case sharedChanged([CatalogSharedCurated.Group])
@@ -144,6 +160,7 @@ public enum CatalogRowCheck {
             case .rowChanged: return "another writer changed its row"
             case .materialised: return "another writer stored it as a row while this session held it without a whole-file hash"
             case .pendingGone: return "its held payload is no longer in the catalog"
+            case .pendingChanged: return "another writer changed its held payload (it still has no whole-file hash)"
             case .sharedChanged(let groups): return "another writer also changed its \(groups.map { "\($0)" }.joined(separator: ", "))"
             case .undecodable(let why): return "its stored row could not be compared: \(why)"
             }
@@ -153,7 +170,8 @@ public enum CatalogRowCheck {
     /// The reader's finding for `id`.
     public static func find(id: String, in reader: any CatalogLiveReading) throws -> Found {
         if let row = try reader.storedRow(id: id) { return .row(row) }
-        return try reader.storedRecordPresent(id: id) ? .pendingOnly : .nothing
+        guard let json = try reader.storedPendingJSON(id: id) else { return .nothing }
+        return .pending(lock: CatalogRowLock.ofPending(json: json))
     }
 
     /// nil = the store holds exactly what the committer expects (for the
@@ -164,12 +182,12 @@ public enum CatalogRowCheck {
         case (.row(let lock), .row(let row)):
             guard CatalogRowLock.of(row) == lock else { return .rowChanged }
             return sharedScalarMismatch(snapshot: snapshot, baseline: sharedBaseline, stored: row)
-        case (.row, .pendingOnly), (.row, .nothing):
+        case (.row, .pending), (.row, .nothing):
             return .rowGone
         case (.pending, .row):
             return .materialised
-        case (.pending, .pendingOnly):
-            return nil
+        case (.pending(let mine), .pending(let theirs)):
+            return mine == theirs ? nil : .pendingChanged
         case (.pending, .nothing):
             return .pendingGone
         }

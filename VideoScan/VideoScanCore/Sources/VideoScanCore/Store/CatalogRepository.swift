@@ -207,6 +207,11 @@ public protocol CatalogLiveReading {
     /// 2026-10-22, codex #123; #124 F1). A reader asks it too (codex #143):
     /// Reopen's read-back checks a held record's payload is still there.
     func storedRecordPresent(id: String) throws -> Bool
+    /// The `pending_rows` payload held for `id`, verbatim JSON text, unless
+    /// it is purged (`pending_purges`); nil when none. One indexed read.
+    /// The commit door and Reopen compare its `CatalogRowLock.ofPending`
+    /// with the payload this session last saw (codex #145 F1).
+    func storedPendingJSON(id: String) throws -> String?
 }
 
 /// The handle a `read` body receives.
