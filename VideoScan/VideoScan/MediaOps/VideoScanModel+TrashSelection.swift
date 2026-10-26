@@ -439,7 +439,11 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
             // Codex #150 F4: a copy another job is removing right now is no
             // survivor. This file is already reserved by the engine's turn,
             // so whichever of two racing doors checks second is held.
-            let staying = copies.filter { !RemovalReservations.shared.isReserved($0.path) }
+            // Pin the copies this move relies on (released with the turn);
+            // a copy that is leaving, or is this very file under another
+            // spelling, cannot be pinned (closing pass F4/F5).
+            let pinned = Set(RemovalReservations.shared.pin(copies.map(\.path), for: path))
+            let staying = copies.filter { pinned.contains($0.path) }
             if staying.isEmpty, !copies.isEmpty { return RemovalReservations.survivorLeavingNote }
             return ContentCopyProof.proven(source: source, copies: staying)
                 ? nil : VideoScanModel.copyNotProvenAtTheMoveNote

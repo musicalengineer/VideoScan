@@ -81,10 +81,10 @@ struct RemovalReservationTests {
     @Test func aReservedPathCannotBeReservedTwiceAndIsFreedOnRelease() {
         let path = "/tmp/reserve-unit-\(UUID().uuidString)/Clip.MOV"
         let r = RemovalReservations.shared
-        let key = try? #require(r.reserve(path))
-        #expect(r.reserve(path.lowercased()) == nil, "case-folded: the same file")
+        guard case .reserved(let key) = r.reserve(path) else { Issue.record("first reserve held"); return }
+        if case .reserved = r.reserve(path.lowercased()) { Issue.record("case-folded spelling reserved twice") }
         #expect(r.isReserved(path))
-        if let key { r.release(key) }
+        r.release(key)
         #expect(!r.isReserved(path))
     }
 
@@ -117,8 +117,8 @@ struct RemovalReservationTests {
         let aLeft = !FileManager.default.fileExists(atPath: recA.fullPath)
         let bLeft = !FileManager.default.fileExists(atPath: recB.fullPath)
         #expect(!(aLeft && bLeft), "both copies moved to the Trash — the last copy is gone")
-        #expect(aLeft && !bLeft, "A was proven first and moves; B is held while A leaves")
-        #expect(second.refused.map(\.reason) == [RemovalReservations.survivorLeavingNote], "\(second.refused.map(\.reason))")
+        #expect(aLeft && !bLeft, "A was proven first and moves; B is held while A relies on it")
+        #expect(second.refused.map(\.reason) == [RemovalReservations.reliedOnNote], "\(second.refused.map(\.reason))")
         #expect(firstMoved == 1)
     }
 
@@ -129,7 +129,9 @@ struct RemovalReservationTests {
         let recA = try rig.copy("test_clip_a.mov")
         rig.model.records = [recA]
         let plan = rig.model.catalogTrashPlan(for: [recA])
-        let key = try #require(RemovalReservations.shared.reserve(recA.fullPath))
+        guard case .reserved(let key) = RemovalReservations.shared.reserve(recA.fullPath) else {
+            Issue.record("could not reserve the fixture"); return
+        }
         defer { RemovalReservations.shared.release(key) }
         let trash = SandboxTrash(dir: rig.trashDir)
         let result = await rig.model.trashSelectedRecords([recA], confirmed: plan, fileOperation: trash.operation)
@@ -151,10 +153,13 @@ struct RemovalReservationTests {
         #expect(dups.contains("ticket.originalPath, survivor: ticket.proof.keeperPath,"), "Delete Duplicates phase two")
         #expect(dups.components(separatedBy: "RemovalReservations.shared.whileReserved(").count - 1 == 2)
         let cleanup = try SourceTree.appCode(named: "CleanupTrashJob.swift")
-        #expect(cleanup.contains("RemovalReservations.shared.isReserved(copy.keeper.path)"), "Cleanup's copy lane")
+        // Closing pass F4/F5: each door PINS the copy it relies on.
+        #expect(cleanup.contains("RemovalReservations.shared.pin([copy.keeper.path], for: path)"), "Cleanup's copy lane")
         let prune = try SourceTree.appCode(named: "VideoScanModel+PruneApply.swift")
-        #expect(prune.contains("RemovalReservations.shared.isReserved(proof.archivePath)"), "Prune")
+        #expect(prune.contains("RemovalReservations.shared.pin([proof.archivePath], for: path)"), "Prune")
         let trash = try SourceTree.appCode(named: "VideoScanModel+TrashSelection.swift")
-        #expect(trash.contains("RemovalReservations.shared.isReserved($0.path)"), "⌘⌫")
+        #expect(trash.contains("RemovalReservations.shared.pin(copies.map(\\.path), for: path)"), "⌘⌫")
+        let publish = try SourceTree.appCode(named: "DerivativeOutputPublish.swift")
+        #expect(publish.contains("RemovalReservations.shared.whileReserved("), "Transcode/Reformat replacing its original")
     }
 }

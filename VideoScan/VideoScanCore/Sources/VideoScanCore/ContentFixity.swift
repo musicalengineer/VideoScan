@@ -288,9 +288,25 @@ public struct ContentFixity: Codable, Equatable, Hashable, Sendable {
     /// inode, size, mtime and ctime, and size == byteCount. Only this may
     /// let the stored digest stand in for reading the file.
     public func describesFileNow(_ current: FileIdentityStamp?) -> Bool {
-        guard let current, isUsableForVerification else { return false }
+        guard let current, isUsableForVerification, !isRacilyAmbiguous else { return false }
         return stamp.describesSameFile(now: current, changeTime: .mustMatch, volume: .persistentUUID)
             && current.size == byteCount
+    }
+
+    /// Git's "racily clean" rule (Codex closing pass 2026-10-26 F2): the
+    /// stamp vouches for the bytes only if the hash was taken at or after
+    /// max(mtime, ctime) + the stamp's resolution. HFS+ reports whole
+    /// seconds (zero nanoseconds), so there the resolution is 1 s: a file
+    /// rewritten in place, same size, in the second it was hashed keeps an
+    /// identical stamp. Otherwise the resolution is the reported one (ns).
+    /// Ambiguous → the stored digest never stands in; callers re-read.
+    public var isRacilyAmbiguous: Bool {
+        let second: Int64 = 1_000_000_000
+        let wholeSeconds = stamp.mtimeNs % second == 0 && (!stamp.hasChangeTime || stamp.ctimeNs % second == 0)
+        let resolution: Int64 = wholeSeconds ? second : 1
+        let changed = max(stamp.mtimeNs, stamp.hasChangeTime ? stamp.ctimeNs : stamp.mtimeNs)
+        let hashedNs = Int64((computedAt.timeIntervalSince1970 * 1e9).rounded(.down))
+        return hashedNs < changed &+ resolution
     }
 
     /// True when this fixity can ever satisfy `describesFileNow`: sha256,

@@ -558,8 +558,11 @@ struct JunkDiskTurn: Sendable {
         // Codex #150 F4: the file is reserved for removal from the door's
         // proof through the move, so no other door counts it as the copy
         // that stays meanwhile (RemovalReservations).
-        guard let reservation = RemovalReservations.shared.reserve(path) else {
-            return .held(RemovalReservations.busyNote)
+        // A file another removal relies on as its surviving copy is held too.
+        let reservation: String
+        switch RemovalReservations.shared.reserve(path) {
+        case .held(let note): return .held(note)
+        case .reserved(let key): reservation = key
         }
         defer { RemovalReservations.shared.release(reservation) }
         // Before the existence check on purpose: the guard decides what a

@@ -124,9 +124,13 @@ import VideoScanCore
     /// Nothing copied and nothing backed up: no proof happened this run, so
     /// no "safe" and no retire line.
     @Test func nothingCopiedNothingBackedUpIsNotSafe() {
-        let h = RelocateSummaryHeadline(Self.summary(adopted: 2))
+        let h = RelocateSummaryHeadline(Self.summary())
         #expect(!Self.saysSafeOrRetire(h), "\(h)")
         #expect(h.title == "Nothing was copied")
+        // Closing pass F1: an adoption with no proof is not safe either.
+        let adopted = RelocateSummaryHeadline(Self.summary(adopted: 2))
+        #expect(!Self.saysSafeOrRetire(adopted), "\(adopted)")
+        #expect(adopted.title == "Some files are not proven safe yet")
     }
 
     /// The truly all-safe and copied-and-verified runs keep their words.
@@ -237,6 +241,42 @@ struct RelocateSummaryProofTests {
     @Test func anUnhashedBackupIsNotProven() async throws {
         let s = try await migrate(trust: .reliable, hashed: false)
         try #require(s.safelyRedundantCount == 1)
+        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+    }
+
+    /// Codex closing pass F1 (recipe): source A has no stored hash and an
+    /// unrelated same-size X sits at A's planned destination, so Migrate
+    /// adopts X by size alone; source C has a genuinely proven backup. The
+    /// adoption proves nothing — no retire invitation.
+    @Test func aSizeOnlyAdoptionNeverInvitesRetire() async throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let srcA = rig.source.appendingPathComponent("a.mov")
+        try Self.bytes(1).write(to: srcA)
+        try Self.bytes(2).write(to: rig.dest.appendingPathComponent("a.mov"))   // unrelated, same size
+        let rowA = Self.row(srcA, hashed: false); rowA.partialMD5 = ""
+        let srcC = rig.source.appendingPathComponent("c.mov")
+        let copyC = rig.backup.appendingPathComponent("c.mov")
+        try Self.bytes(7).write(to: srcC)
+        try Self.bytes(7).write(to: copyC)
+        let rowC = Self.row(srcC, hashed: true), copyRow = Self.row(copyC, hashed: true)
+
+        let model = VideoScanModel()
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
+        model.catalogStore = CatalogStore(directory: rig.catalog)
+        model.records = [rowA, rowC, copyRow]
+        let safe = CatalogScanTarget(searchPath: rig.backup.path)
+        safe.role = .backup; safe.trust = .reliable
+        model.scanTargets = [CatalogScanTarget(searchPath: rig.source.path), safe]
+        model.catalogStore.saveNow(records: model.records)
+        model.relocateVolume(RelocateOptions(sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
+                                             maxConcurrency: 1, dryRun: false,
+                                             skipAlreadyRelocated: true, skipDupsOnOtherVolumes: true))
+        let deadline = Date().addingTimeInterval(30)
+        while model.pendingRelocateSummary == nil && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let s = try #require(model.pendingRelocateSummary)
+        try #require(s.adoptedCount == 1, "the fixture must adopt X for A (adopted \(s.adoptedCount), copied \(s.succeededCount))")
         #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
     }
 

@@ -225,6 +225,45 @@ struct CatalogTrashOnlyCopyAtTheMoveTests {
         #expect(result.refused.map(\.reason) == [VideoScanModel.copyNotProvenAtTheMoveNote])
     }
 
+    /// Codex closing pass F3: a Master Archive copy known only by its
+    /// read-back digest (no stamp), replaced on disk by unrelated same-size
+    /// bytes. "Regular file, right size" is not proof; it is hashed fresh at
+    /// the move, so A stays.
+    @Test func anArchiveOnlyCopyReplacedOnDiskIsNotProven() async throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let recA = try rig.file("test_clip_a.mov")
+        let recB = try rig.file("test_clip_b.mov")
+        let digest = try #require(recB.contentFixity?.digest)
+        recB.contentFixity = nil
+        recB.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: recB.sizeBytes)
+        rig.model.records = [recA, recB]
+        let confirmed = rig.model.catalogTrashPlan(for: [recA])
+        try #require(confirmed.onlyCopy.isEmpty, "the archive digest is a known copy")
+
+        try rig.content("synthetic-md5-0002").write(to: URL(fileURLWithPath: recB.fullPath))
+
+        let result = await rig.model.trashSelectedRecords([recA], confirmed: confirmed,
+                                                          fileOperation: rig.trash.operation)
+        #expect(onDisk(recA), "A moved on a replaced archive copy")
+        #expect(rig.trash.attempts.isEmpty)
+        #expect(result.refused.map(\.reason) == [VideoScanModel.copyNotProvenAtTheMoveNote])
+    }
+
+    /// Control: the untouched archive-only copy, hashed fresh, proves A.
+    @Test func anUntouchedArchiveOnlyCopyIsProvenByAFreshHash() async throws {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let recA = try rig.file("test_clip_a.mov")
+        let recB = try rig.file("test_clip_b.mov")
+        let digest = try #require(recB.contentFixity?.digest)
+        recB.contentFixity = nil
+        recB.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: recB.sizeBytes)
+        rig.model.records = [recA, recB]
+        let confirmed = rig.model.catalogTrashPlan(for: [recA])
+        let result = await rig.model.trashSelectedRecords([recA], confirmed: confirmed,
+                                                          fileOperation: rig.trash.operation)
+        #expect(!onDisk(recA) && result.succeeded == 1, "\(result.refused.map(\.reason))")
+    }
+
     /// Matched only by partial MD5 (no whole-file SHA-256 on B) or by a
     /// conflicting SHA-256: not a copy — the alert warns, so the move is a
     /// deliberate click.

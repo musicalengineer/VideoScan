@@ -444,6 +444,21 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRacilyCleanTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ContentFixityRacilyCleanTests"
+      ],
+      "tests": [
+        "aNanosecondStampHashedAfterTheWriteIsCurrent",
+        "aWholeSecondStampHashedAfterTheSecondEndedIsCurrent",
+        "aWholeSecondStampHashedInItsOwnSecondIsAmbiguous",
+        "theLaterOfMtimeAndCtimeDecides"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRemountReproTests.swift",
       "stage": "regression",
       "suites": [
@@ -30433,6 +30448,7 @@
       "tests": [
         "aHashedUntouchedBackupInvitesRetire",
         "aMissingSourceWithholdsSafeAndRetire",
+        "aSizeOnlyAdoptionNeverInvitesRetire",
         "allSafeWordsAskAboutFailedAndUnmatchedFiles",
         "anAgingOnlyBackupNeverInvitesRetire",
         "anOverwrittenBackupIsNotProven",
@@ -30442,6 +30458,18 @@
         "nothingCopiedAndThreeFailedNeverSaysSafeOrRetire",
         "nothingCopiedNothingBackedUpIsNotSafe",
         "provenRunsKeepTheirWords"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RemovalReservationRound3Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "RemovalReservationRound3Tests"
+      ],
+      "tests": [
+        "aCopyReliedOnByAMoveIsNotRemovedByAnotherDoor",
+        "anAliasOfALeavingCopyIsNoSurvivor"
       ]
     },
     {
@@ -30473,7 +30501,9 @@
         "aRowTheConfirmationHeldBackNeverMoves",
         "aWarnedOnlyCopyStillMoves",
         "aWeakerOrConflictingIdentityIsNotACopy",
+        "anArchiveOnlyCopyReplacedOnDiskIsNotProven",
         "anOfflineCopyIsNotASurvivingCopy",
+        "anUntouchedArchiveOnlyCopyIsProvenByAFreshHash",
         "scale_perTurnCheckAt100kWithinBudget",
         "twoSelectedCopiesWhoseThirdWentAwayLeaveOne"
       ]
@@ -34250,6 +34280,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRacilyCleanTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterConcurrencyTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -34534,7 +34568,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 314,
+      "expected_floor": 319,
       "name": "regression",
       "package_expected_floor": 279,
       "package_selectors": [
@@ -34652,6 +34686,7 @@
         "VideoScanTests/RelocateSummaryProofTests",
         "VideoScanTests/CatalogTrashOnlyCopyAtTheMoveTests",
         "VideoScanTests/RemovalReservationTests",
+        "VideoScanTests/RemovalReservationRound3Tests",
         "VideoScanTests/CatalogBackupSQLiteTests",
         "VideoScanTests/CatalogBackupImportTests",
         "VideoScanTests/CatalogBackupScaleTests",

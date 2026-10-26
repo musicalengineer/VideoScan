@@ -100,14 +100,22 @@ struct RelocateSummary: Identifiable, Equatable {
     /// drives (Codex #150 F1, F5). Includes `degradedOnlyCount`.
     var unprovenBackupCount: Int { max(0, safelyRedundantCount - provenBackupCount) }
 
+    /// Of `adoptedCount`, the files whose adopted destination copy hashes,
+    /// fresh, to the source's whole-file SHA-256 on record (Codex closing
+    /// pass F1: an adoption matched by size alone is never proof).
+    var provenAdoptedCount: Int = 0
+    var unprovenAdoptedCount: Int { max(0, adoptedCount - provenAdoptedCount) }
+
     /// Files this run left WITHOUT proof: the copy failed, the file was still
     /// at its path (or could not be checked), the catalog could not mark it,
     /// it was marked missing from the source (no copy proven anywhere —
-    /// Codex #150 F2), or its backup is not proven. The buckets are disjoint
-    /// (A-failed, B-refused, B-present/unchecked, B-missing, E-unproven).
+    /// Codex #150 F2), its backup is not proven, or its adoption is not
+    /// proven (closing pass F1). The buckets are disjoint (A-failed,
+    /// B-refused, B-present/unchecked, B-missing, E-unproven, D-unproven).
     /// Any of them > 0 withholds "safe" and "retire".
     var needsAttentionCount: Int {
         salvageFailedCount + stillThereCount + notMarkedCount + manuallyDeletedCount + unprovenBackupCount
+            + unprovenAdoptedCount
     }
 
     /// One source-to-witness pairing. Carries the host volume's

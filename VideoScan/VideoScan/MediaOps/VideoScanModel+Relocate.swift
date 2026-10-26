@@ -501,7 +501,7 @@ extension VideoScanModel {
             // Pad to min-visible window even on dry-run so a 50ms
             // reconcile doesn't blink past.
             await padToMinVisible(runStart: runStart, minVisibleSeconds: minVisibleSeconds)
-            publishSummary(
+            await publishSummary(
                 jobID: jobID,
                 options: options,
                 reconcile: reconcile,
@@ -662,22 +662,17 @@ extension VideoScanModel {
         // refresh now that records have moved between volume buckets.
         notifyVolumeAggregatesStale()
 
-        // Codex #150 F1/F5: which backed-up files are PROVEN now — the
-        // summary's "safe" and "retire" words stand only on these.
-        let proven = await provenBackupCount(reconcile.safelyRedundant)
-
         // Fix 1 — set the summary sheet but do NOT call
         // `maybeOfferRetire` here. Trigger ordering: the user must
         // dismiss the summary first. The summary sheet's Done button
         // fires the retire offer instead. See ContentView wiring.
-        publishSummary(
+        await publishSummary(
             jobID: jobID,
             options: options,
             reconcile: reconcile,
             salvageFailedPaths: salvageFailedPaths,
             snapshotPath: snapshotPath,
-            elapsed: Date().timeIntervalSince(runStart),
-            provenBackupCount: proven
+            elapsed: Date().timeIntervalSince(runStart)
         )
     }
 
@@ -706,6 +701,23 @@ extension VideoScanModel {
         guard !claims.isEmpty else { return 0 }
         return await Task.detached(priority: .userInitiated) {
             claims.reduce(0) { $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies) ? 1 : 0) }
+        }.value
+    }
+
+    /// Of the Bucket D adoptions, how many are PROVEN (Codex closing pass
+    /// F1): the source row carries a whole-file SHA-256 on record and the
+    /// adopted destination file hashes to it, fresh, now. Detached; cost =
+    /// one full read of each adopted file (adoption is the rare bucket),
+    /// memory one 1 MiB buffer at a time.
+    func provenAdoptedCount(_ adopted: [(rec: VideoRecord, destPath: String)]) async -> Int {
+        let claims: [ContentCopyProof.Claim] = adopted.compactMap { entry in
+            guard let f = entry.rec.contentFixity, f.algorithm == ContentFixity.sha256,
+                  ArchiveDigestIndex.isSHA256(f.digest) else { return nil }
+            return ContentCopyProof.Claim(path: entry.destPath, digest: f.digest, byteCount: f.byteCount)
+        }
+        guard !claims.isEmpty else { return 0 }
+        return await Task.detached(priority: .userInitiated) {
+            claims.reduce(0) { $0 + (ContentCopyProof.sha256(path: $1.path, expectedBytes: $1.byteCount) == $1.digest ? 1 : 0) }
         }.value
     }
 
@@ -756,8 +768,12 @@ extension VideoScanModel {
                                  reconcile: ReconcileResult,
                                  salvageFailedPaths: [String],
                                  snapshotPath: String?,
-                                 elapsed: TimeInterval,
-                                 provenBackupCount: Int = 0) {
+                                 elapsed: TimeInterval) async {
+        // Codex #150 F1/F5 and the closing pass F1: the "safe" and "retire"
+        // words stand only on backups and adoptions PROVEN now (a dry run
+        // proves nothing and never invites retiring).
+        let provenBackups = options.dryRun ? 0 : await self.provenBackupCount(reconcile.safelyRedundant)
+        let provenAdoptions = options.dryRun ? 0 : await self.provenAdoptedCount(reconcile.adopted)
         let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
         let mbps = elapsed > 0 ? mb / elapsed : 0
 
@@ -811,7 +827,8 @@ extension VideoScanModel {
             snapshotPath: snapshotPath,
             notMarkedCount: dashboard.relocateBucketBNotMarked,
             stillThereCount: dashboard.relocateBucketBStillThere,
-            provenBackupCount: provenBackupCount
+            provenBackupCount: provenBackups,
+            provenAdoptedCount: provenAdoptions
         )
         pendingRelocateSummary = summary
         // Attach to the queued job and flip status. The job's summary

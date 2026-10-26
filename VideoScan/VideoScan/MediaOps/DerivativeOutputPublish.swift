@@ -205,11 +205,21 @@ enum DerivativeOutputPublish {
     /// file went — it is in the Trash, not lost.
     private static func trashThenTake(partial: String, final: URL,
                                       trash: @Sendable (URL) throws -> URL?) throws -> TrashStep {
+        // Codex closing pass F5: the previous file is reserved for removal
+        // through its Trash move; one another removal relies on as the copy
+        // that stays (or is already removing) is kept, never replaced.
+        let moved: Result<URL?, Failure> = RemovalReservations.shared.whileReserved(
+            final.path, survivor: nil,
+            held: { note in .failure(Failure(message: "the previous file \(note)")) },
+            {
+                do { return .success(try trash(final)) } catch {
+                    return .failure(Failure(message: "the previous file could not be moved to the Trash (\(error.localizedDescription))"))
+                }
+            })
         let trashedTo: URL?
-        do {
-            trashedTo = try trash(final)
-        } catch {
-            return .keep("the previous file could not be moved to the Trash (\(error.localizedDescription))")
+        switch moved {
+        case .success(let url): trashedTo = url
+        case .failure(let why): return .keep(why.message)
         }
         let whereTo = trashedTo?.path ?? "the Trash"
         let line = "publish: moved the previous \(final.lastPathComponent) to \(whereTo); the new output takes its name next"

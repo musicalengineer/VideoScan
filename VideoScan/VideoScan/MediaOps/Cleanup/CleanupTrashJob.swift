@@ -431,7 +431,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
                 // Codex #150 F4: the copy that stays must not be leaving
                 // through another job right now (this file is reserved by
                 // the engine's turn already).
-                if RemovalReservations.shared.isReserved(copy.keeper.path) {
+                if RemovalReservations.shared.pin([copy.keeper.path], for: path).isEmpty {
                     return RemovalReservations.survivorLeavingNote
                 }
                 started?(path)
