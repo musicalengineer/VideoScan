@@ -36,6 +36,9 @@
 // {a,b,base}, exactly what the next launch loads. The commit is
 // synchronous, so "still equals its baseline" means exactly "the person did
 // not change it since the store last agreed" — no edit can arrive mid-commit.
+// A copy whose group is NOT clean keeps its baseline too (codex #141 F3): a
+// scoped save (`commitNow(ids:)`) of A alone must not move dirty B's
+// baseline to {base,a}, or B's own save reads `a` as B's removal.
 //
 // Memory: per record one Int (prints) + one CatalogSharedCurated (12 small
 // fields, strings and arrays shared with the record until it changes) —
@@ -273,7 +276,13 @@ struct CatalogCommitBaseline {
         var changed = false
         // A set reaches its writer too: the store's set is the union of the copies' deltas.
         for (group, final) in groups where final.source != copy.id || group.isSet {
-            if now.same(group, as: mine), !now.same(group, as: final.value) {
+            // Codex #141 F3: a copy with its OWN pending change to this group
+            // keeps its value AND its baseline — its next delta is taken
+            // against what it actually saw, so another copy's addition never
+            // reads as this copy's removal (a scoped save of A moved B's
+            // baseline to {base,a}; B's save then removed `a`).
+            guard now.same(group, as: mine) else { continue }
+            if !now.same(group, as: final.value) {
                 final.value.apply(group, to: copy)
                 changed = true
             }
