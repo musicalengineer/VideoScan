@@ -55,7 +55,12 @@
 // SCALAR group (notes, stars, …) keeps its VALUE but takes the committed
 // value as its baseline (codex #143): the baseline is what the store holds
 // now, so B's next save is still B's edit (its value differs from the
-// baseline) and the store's conflict check sees no stranger's write.
+// baseline) and the store's conflict check sees no stranger's write. That
+// copy's whole-record fingerprint baseline (`prints`) then no longer
+// describes the store — it still holds the OLD value — so the copy joins
+// `stale` (codex #145 F4): it stays CHANGED whatever its fingerprint until
+// its own commit settles it. Without that, B changed back to the old value
+// looked clean, was never sent, and a relaunch restored the other value.
 //
 // Memory: per record two Ints (prints, locks — or held + pendingLocks for a
 // held record) + one CatalogSharedCurated
@@ -80,6 +85,11 @@ struct CatalogCommitBaseline {
     private(set) var waiting: [UUID: (print: Fingerprint, words: String)] = [:]
     private(set) var held: [UUID: Fingerprint] = [:]
     private(set) var pendingLocks: [UUID: CatalogRowLock.Value] = [:]
+    /// Records whose `prints` entry no longer describes what the store holds
+    /// for them (a sibling's commit moved a shared scalar under a dirty copy
+    /// — codex #145 F4): changed whatever their fingerprint, until their own
+    /// commit settles them. Bounded by the dirty copies of committed contents.
+    private(set) var stale: Set<UUID> = []
     /// Ids the store holds (or holds pending) that left memory with no
     /// door's purge, already named once.
     private var reportedAbsent: Set<UUID> = []
@@ -116,8 +126,19 @@ struct CatalogCommitBaseline {
             }
         }
         waiting = [:]
+        stale = []
         reportedAbsent = []
         partialWords = [:]
+    }
+
+    /// The indices of `ids` whose state is not what the store holds: the
+    /// fingerprint differs from `prints` (CatalogChangeDetector), or the
+    /// record is `stale` (F4). The one dirty test every commit and Reopen use.
+    func changed(_ ids: [UUID], fingerprints: [Fingerprint]) -> [Int] {
+        let byPrint = CatalogChangeDetector.changed(ids, fingerprints: fingerprints, baseline: prints)
+        guard !stale.isEmpty else { return byPrint }
+        let dirty = Set(byPrint)
+        return ids.indices.filter { dirty.contains($0) || stale.contains(ids[$0]) }
     }
 
     /// A Reopen: what was refused may be tried again.
@@ -241,6 +262,7 @@ struct CatalogCommitBaseline {
         waiting[row.id] = nil
         held[row.id] = nil
         pendingLocks[row.id] = nil
+        stale.remove(row.id)
         reportedAbsent.remove(row.id)
         partialWords[row.id] = nil
     }
@@ -297,6 +319,7 @@ struct CatalogCommitBaseline {
         waiting[row.id] = nil
         held[row.id] = nil
         pendingLocks[row.id] = nil
+        stale.remove(row.id)
         partialWords[row.id] = nil
     }
 
@@ -354,7 +377,7 @@ struct CatalogCommitBaseline {
     private mutating func share(_ groups: [CatalogSharedCurated.Group: Final], onto copy: VideoRecord) -> Bool {
         guard var mine = shared[copy.id] else { return false }
         let now = CatalogSharedCurated(copy)
-        let wasClean = prints[copy.id] == CatalogChangeDetector.fingerprint(VideoRecordDTO(copy))
+        let wasClean = !stale.contains(copy.id) && prints[copy.id] == CatalogChangeDetector.fingerprint(VideoRecordDTO(copy))
         var changed = false
         // A set reaches its writer too: the store's set is the union of the copies' deltas.
         for (group, final) in groups where final.source != copy.id || group.isSet {
@@ -368,9 +391,14 @@ struct CatalogCommitBaseline {
             // what the store holds now — so the store's conflict check (a
             // stranger changed the group since the baseline) does not fire
             // on this session's own sibling save; its edit still differs
-            // from the baseline and is written.
+            // from the baseline and is written. Codex #145 F4: its `prints`
+            // still describe the OLD value — the copy is `stale` (changed
+            // until its own commit), so a reversal to that value is sent.
             guard now.same(group, as: mine) else {
-                if !group.isSet { mine.take(group, from: final.value) }
+                if !group.isSet, !mine.same(group, as: final.value) {
+                    mine.take(group, from: final.value)
+                    stale.insert(copy.id)
+                }
                 continue
             }
             if !now.same(group, as: final.value) {

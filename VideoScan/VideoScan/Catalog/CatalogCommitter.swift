@@ -257,7 +257,7 @@ final class CatalogCommitter {
     func changedRecordCount() -> Int {
         let records = input().records
         let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
-        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).count
+        return baseline.changed(records.map(\.id), fingerprints: prints).count
     }
 
     // MARK: - Removal markers (through CatalogMarkerRelay)
@@ -637,7 +637,7 @@ final class CatalogCommitter {
     /// exactly what `detect` would send or hold.
     private func changedSinceBaseline(_ records: [VideoRecord]) -> [VideoRecord] {
         let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
-        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).map { records[$0] }
+        return baseline.changed(records.map(\.id), fingerprints: prints).map { records[$0] }
     }
 
     /// Catalog ▸ Adopt This SQLite Catalog… (gap 5): the person accepted a
@@ -763,7 +763,7 @@ final class CatalogCommitter {
         let prints = CatalogChangeDetector.fingerprints(of: snapshots)
         let ids = records.map(\.id)
         var found = Detection()
-        let changed = CatalogChangeDetector.changed(ids, fingerprints: prints, baseline: baseline.prints)
+        let changed = baseline.changed(ids, fingerprints: prints)
         let fresh = baseline.newCopies(changed.map { records[$0] }, among: all)     // codex #145 F2
         for index in changed {
             let id = ids[index]

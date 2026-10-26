@@ -7088,6 +7088,17 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCodex145ScalarRevertTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogScopedSaveScalarRevertTests"
+      ],
+      "tests": [
+        "revertingASiblingAfterAScopedSaveIsSaved"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCoverageExclusionTests.swift",
       "stage": "unit",
       "suites": [
@@ -34390,7 +34401,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 305,
+      "expected_floor": 306,
       "name": "regression",
       "package_expected_floor": 269,
       "package_selectors": [
@@ -34525,7 +34536,8 @@
         "VideoScanTests/CatalogReopenFailedReadBackTests",
         "VideoScanTests/CatalogReopenPendingPayloadTests",
         "VideoScanTests/CatalogNewCopySharedCurationTests",
-        "VideoScanTests/CatalogReopenQueuedPurgeTests"
+        "VideoScanTests/CatalogReopenQueuedPurgeTests",
+        "VideoScanTests/CatalogScopedSaveScalarRevertTests"
       ]
     },
     {
