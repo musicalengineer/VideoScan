@@ -20,13 +20,21 @@ private func makeModel(_ dir: URL) -> VideoScanModel {
     return model
 }
 
+/// A scan target on a volume that is NOT mounted on the test machine
+/// (/Volumes/A, /Volumes/B). `isReachable` is left exactly as
+/// `CatalogScanTarget.init` derives it from `VolumeReachability` — false —
+/// and the tests reason about two offline volumes (availability ties, the
+/// precedence list decides). Do NOT pin `isReachable = true` here: that
+/// field is a mirror the model re-syncs from `VolumeReachability` on every
+/// `reachabilityDidChange` post (coalesced 100 ms after ANY probe
+/// first-fills or changes ANY key, process-wide), so a pin is overwritten
+/// at the test's next suspension point and the stamped policy stops
+/// matching the live one (2026-10-25 flake, 1/20 →
+/// `fixtureVolumeFactsSurviveReachabilityRefresh`).
 @MainActor
 private func target(_ path: String, role: VolumeRole = .workspace) -> CatalogScanTarget {
     let t = CatalogScanTarget(searchPath: path)
     t.role = role
-    // init probes the real filesystem (/Volumes/A doesn't exist here);
-    // pin "plugged in" explicitly so the tests own the fact.
-    t.isReachable = true
     return t
 }
 
@@ -220,6 +228,10 @@ struct DuplicateStalePolicyReelectionTests {
     @Test func reachabilityChangeIsPartOfTheDescriptor() {
         let model = makeModel(tempDir("DupStale2"))
         model.scanTargets = [target("/Volumes/A"), target("/Volumes/B")]
+        // Pure descriptor comparison with no suspension point, so the
+        // model's reachability refresh cannot interleave: pin "online"
+        // here, then flip it, and compare the three snapshots.
+        model.scanTargets[0].isReachable = true
         let before = model.duplicateKeeperPolicy().electionDescriptor
         model.scanTargets[0].isReachable = false
         let offline = model.duplicateKeeperPolicy().electionDescriptor
@@ -565,6 +577,25 @@ struct DuplicateReelectionBestMatchTests {
 @MainActor
 @Suite(.serialized)
 struct DuplicateReelectionStampTests {
+
+    /// Flake regression (2026-10-25): the fixture's volume facts must
+    /// survive `refreshTargetReachability()` — the exact path the model's
+    /// `reachabilityDidChange` observer runs whenever ANY background probe
+    /// first-fills or changes ANY key, process-wide, 100 ms later. A test
+    /// that pins `isReachable` on a target whose volume is not mounted is
+    /// overwritten at its next suspension point, and the policy it stamped
+    /// no longer matches the live one (`isDuplicateKeeperPolicyStale`
+    /// flipped true between two reads in the same expectation).
+    @Test func fixtureVolumeFactsSurviveReachabilityRefresh() {
+        let model = makeModel(tempDir("DupFixture"))
+        model.scanTargets = [target("/Volumes/A"), target("/Volumes/B")]
+        model.duplicateKeeperSettings.volumePrecedence = ["B", "A"]
+        let pinned = model.electionStamp(for: model.duplicateKeeperPolicy())
+        VolumeReachability.awaitPendingProbesForTesting()
+        model.refreshTargetReachability()
+        #expect(model.electionStamp(for: model.duplicateKeeperPolicy()) == pinned,
+                "the fixture must state the real reachability of its volumes, not a pin the model will overwrite")
+    }
 
     /// NOTE 3: rows replaced during the re-election await ⇒ the policy is
     /// NOT stamped; the next Find Duplicates re-elects again.
