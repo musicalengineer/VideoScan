@@ -68,20 +68,36 @@ public enum AudioMasterRefusal: Sendable, Equatable {
     case tooLittleSound(landmarks: Int)
 }
 
+/// A stage-1 candidate whose print could not be loaded for stage 2: its
+/// verdict is UNKNOWN, so no answer may treat it as "does not share".
+public struct AudioMasterUnreadable: Sendable, Equatable {
+    public let key: AudioFingerprintStore.Key
+    /// The loader's error, or "not in the sound-print file" for nil.
+    public let reason: String
+    public init(key: AudioFingerprintStore.Key, reason: String) {
+        self.key = key
+        self.reason = reason
+    }
+}
+
 public enum AudioMasterSearch: Sendable, Equatable {
     /// Ranked; `.different` dropped. `searched` = searchable contents other
-    /// than the query's own.
-    case found([AudioMasterCandidate], searched: Int)
-    case noneFound(searched: Int)
+    /// than the query's own. `unreadable` = candidates stage 1 chose whose
+    /// print could not be read (rule 1: unknown, never "different").
+    case found([AudioMasterCandidate], searched: Int, unreadable: [AudioMasterUnreadable])
+    case noneFound(searched: Int, unreadable: [AudioMasterUnreadable])
     case refused(AudioMasterRefusal)
 }
 
 public enum AudioMasterFinder {
 
+    /// `load` returns a candidate's full print; nil (absent) or a thrown
+    /// error is recorded in `unreadable` with its reason — never skipped
+    /// silently, never thrown out of the search.
     public static func find(query: AudioFingerprint, queryKey: AudioFingerprintStore.Key,
                             in index: AudioCatalogIndex,
                             load: (AudioFingerprintStore.Key) throws -> AudioFingerprint?,
-                            policy: AudioMasterFinderPolicy = .default) rethrows -> AudioMasterSearch {
+                            policy: AudioMasterFinderPolicy = .default) -> AudioMasterSearch {
         let reference = AudioFingerprintParameters.default
         guard query.recipeID == index.recipeID, query.sampleRate == reference.sampleRate,
               query.hopSamples == reference.hopSamples, query.frameSize == reference.frameSize else {
@@ -94,15 +110,26 @@ public enum AudioMasterFinder {
         let searched = index.searchableCount - (own.map { index.documents[$0].landmarks > 0 ? 1 : 0 } ?? 0)
         let ranked = candidates(query: query, excluding: own, in: index, policy: policy)
         var found: [AudioMasterCandidate] = []
+        var unreadable: [AudioMasterUnreadable] = []
         for (ordinal, votes) in ranked {
             let key = index.documents[ordinal].key
-            guard let master = try load(key) else { continue }
+            let master: AudioFingerprint
+            do {
+                guard let loaded = try load(key) else {
+                    unreadable.append(AudioMasterUnreadable(key: key, reason: "not in the sound-print file"))
+                    continue
+                }
+                master = loaded
+            } catch {
+                unreadable.append(AudioMasterUnreadable(key: key, reason: "\(error)"))
+                continue
+            }
             let match = AudioFingerprintIndex(master: master).match(query, policy: policy.match)
             if match.verdict == .different { continue }
             found.append(AudioMasterCandidate(key: key, match: match, votes: votes))
         }
-        guard !found.isEmpty else { return .noneFound(searched: searched) }
-        return .found(rank(found), searched: searched)
+        guard !found.isEmpty else { return .noneFound(searched: searched, unreadable: unreadable) }
+        return .found(rank(found), searched: searched, unreadable: unreadable)
     }
 
     /// Stage 1: (ordinal, score) of the top `candidateCount` documents with

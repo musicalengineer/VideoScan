@@ -165,6 +165,20 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintDecodeEquivalenceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioFingerprintDecodeEquivalenceTests"
+      ],
+      "tests": [
+        "badHeadersAndGarbage",
+        "truncatedAndSizeMismatched",
+        "validPrints"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintEngineTests.swift",
       "stage": "integration",
       "suites": [
@@ -258,6 +272,7 @@
         "rankingOrder",
         "reencodeIsSameRecording",
         "tooLittleSoundIsRefusedNotNoneFound",
+        "unloadableCandidateIsNotANegative",
         "unrelatedQueryReportsWhatWasSearched",
         "verdictIsExactlyThePairMatchers"
       ]
@@ -13087,6 +13102,7 @@
         "FindMasterPlanTests"
       ],
       "tests": [
+        "buildProgressLineIsHonest",
         "eachRefusalReason",
         "hundredThousandRecordSnapshot",
         "labelsPreferLiveCopies",
@@ -13098,6 +13114,9 @@
         "startAndOutcomeOnceWithCounts",
         "stopMidRunSaysStopped",
         "unopenableSidecarRefusesBeforeReading",
+        "unreadableCandidateIsNotANegative",
+        "unreadableQueryPrintIsNotNoSoundPrint",
+        "unstampedRecordIsNamedFromTheCatalog",
         "weakOverlapsAreCountedAndLoggedTogether",
         "weakOverlapsAreSplitByTheMatchersConstants",
         "writesNothing"
@@ -33625,11 +33644,15 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanTests/FindMasterTests.swift",
+          "name": "VideoScan/VideoScanTests/FindMasterSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/FindMasterSensorTests.swift",
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintDecodeEquivalenceTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FindMasterTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
@@ -34715,11 +34738,11 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderTests.swift",
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderAcceptanceTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderAcceptanceTests.swift",
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],

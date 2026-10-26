@@ -37,11 +37,13 @@ struct FindMasterDetailView: View {
             switch result.outcome {
             case .refused(let reason):
                 line(icon: "nosign", tint: .orange, text: FindMasterAnswer.refusal(reason))
-            case .noneFound(let searched):
-                line(icon: "magnifyingglass", tint: .secondary, text: FindMasterAnswer.noneFound(
+            case .noneFound(let searched, let unreadable):
+                line(icon: unreadable.isEmpty ? "magnifyingglass" : "exclamationmark.triangle",
+                     tint: unreadable.isEmpty ? .secondary : .orange, text: FindMasterAnswer.noneFound(
                     searched: searched, noSoundTrack: job.plan.noSoundTrackContents,
-                    notFingerprinted: job.plan.notFingerprintedContents))
-            case .found(let found, _):
+                    notFingerprinted: job.plan.notFingerprintedContents, unreadable: unreadable.count))
+                unreadableRows(unreadable)
+            case .found(let found, _, let unreadable):
                 let halves = FindMasterAnswer.split(found)
                 ForEach(Array(halves.strong.enumerated()), id: \.offset) { _, candidate in
                     FindMasterFoundRow(job: job, candidate: candidate)
@@ -49,7 +51,17 @@ struct FindMasterDetailView: View {
                 if !halves.weak.isEmpty {
                     FindMasterWeakGroup(job: job, weak: halves.weak)
                 }
+                unreadableRows(unreadable)
             }
+        }
+    }
+
+    /// Candidates the index chose whose print could not be read: verdict
+    /// unknown, named with the reason.
+    @ViewBuilder private func unreadableRows(_ unreadable: [AudioMasterUnreadable]) -> some View {
+        ForEach(Array(unreadable.enumerated()), id: \.offset) { _, u in
+            line(icon: "exclamationmark.triangle", tint: .orange,
+                 text: "Could not be read: \(FindMasterAnswer.name(of: u.key, label: job.plan.labels[u.key.contentDigest])) — \(u.reason)")
         }
     }
 

@@ -11,8 +11,8 @@
 // see is a print's recipe (that lives in the sidecar, not the stamp); the
 // finder refuses another recipe when the print is loaded.
 //
-// MEMORY: one label per sounded digest (≈ 200 B: name, path, flags) — for
-// today's ≈ 5,400 prints ≈ 1 MB; 100k sounded records ≈ 20 MB.
+// MEMORY: one label per HASHED digest (≈ 200 B: name, path, flags) — for
+// a catalog of 100k hashed records ≈ 20 MB, built once per run.
 //
 // (For Rick: a value-type "plan object" — like a const struct a C++ worker
 // is handed by value, so the worker never reaches back into the model.)
@@ -34,6 +34,10 @@ enum FindMasterRefusalReason: Equatable, Sendable {
     case tooLittleSound(landmarks: Int)
     /// The print in the sidecar was made by another recipe.
     case olderRecipe
+    /// The stored print exists but could not be read (store error or a
+    /// blob that will not decode) — decided when the job loads it; never
+    /// reported as "no sound print" (rule 1). Carries the error's words.
+    case printUnreadable(String)
 }
 
 struct FindMasterQuery: Equatable, Sendable, Identifiable {
@@ -129,7 +133,7 @@ struct FindMasterPlan: Equatable, Sendable {
         return nil
     }
 
-    /// One pass over the catalog: labels for sounded digests and the two
+    /// One pass over the catalog: labels for every hashed digest and the two
     /// counts the negative sentence carries.
     private struct Census {
         var labels: [String: FindMasterLabel] = [:]
@@ -142,10 +146,13 @@ struct FindMasterPlan: Equatable, Sendable {
             for r in all {
                 guard let full = fullDigest(r) else { continue }
                 let digest = AudioFingerprintStamp.fullDigest(full)
+                // Every hashed record can NAME its content, stamp or not: a
+                // sidecar print outlives a stale stamp, and the answer must
+                // still say what it found and offer Reveal (review 2026-10-26).
+                c.offer(r, digest: digest, isArchived: isArchived(r))
                 switch classify(r) {
                 case .success:
                     printed.insert(digest)
-                    c.offer(r, digest: digest, isArchived: isArchived(r))
                 case .failure(let refused):
                     switch refused.reason {
                     case .noSound: c.noSound.insert(digest)

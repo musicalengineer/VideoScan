@@ -113,7 +113,12 @@ public enum AudioFingerprintCLI {
         let query: AudioFingerprint
         let queryKey: AudioFingerprintStore.Key
         if let key = parseKey(target) {
-            guard let print = try? store.fingerprint(for: key) else {
+            let print: AudioFingerprint?
+            do { print = try store.decodedFingerprint(for: key) } catch {
+                out("refused: the sound print for \(key.contentDigest.prefix(19))… could not be read: \(error)")
+                return 4
+            }
+            guard let print else {
                 out("refused: no sound print in the sidecar for \(key.contentDigest.prefix(19))… (\(key.sizeBytes) bytes)")
                 return 4
             }
@@ -134,7 +139,7 @@ public enum AudioFingerprintCLI {
         }
         let indexed = clock.now
         let search = AudioMasterFinder.find(query: query, queryKey: queryKey, in: built.0,
-                                            load: { try? store.fingerprint(for: $0) })
+                                            load: { try store.decodedFingerprint(for: $0) })
         let searchedAt = clock.now
         out(findReport(index: built.0, report: built.1, search: search, buildSeconds: seconds(indexed - start),
                        searchSeconds: seconds(searchedAt - indexed), residentGrowthMB: residentMB() - before))
@@ -153,18 +158,26 @@ public enum AudioFingerprintCLI {
             lines.append(String(format: "refused   the query's print is from another recipe (0x%08x; the index is 0x%08x)", q, i))
         case .refused(.tooLittleSound(let n)):
             lines.append("refused   too little sound to match (\(n) landmarks; \(AudioMatchPolicy.default.minMatchedLandmarks) needed)")
-        case .noneFound(let searched):
-            lines.append("none      no content shares its sound (searched \(searched) sounded contents)")
-        case .found(let found, let searched):
+        case .noneFound(let searched, let unreadable):
+            lines.append(unreadable.isEmpty
+                ? "none      no content shares its sound (searched \(searched) sounded contents)"
+                : "none      no READABLE content shares its sound (searched \(searched) sounded contents) — \(unreadable.count) candidate(s) could not be read, so this is not a negative")
+            lines += unreadableLines(unreadable)
+        case .found(let found, let searched, let unreadable):
             lines.append("found     \(found.count) of \(searched) sounded contents")
             for c in found {
                 lines.append(String(format: "  %@…  %@  coverage %.2f, %d landmarks, span %.1f–%.1f s of the other",
                                     String(c.key.contentDigest.prefix(19)), describe(c.match.verdict), c.match.coverage,
                                     c.match.matchedLandmarks, c.match.spanStartInMasterSeconds, c.match.spanEndInMasterSeconds))
             }
+            lines += unreadableLines(unreadable)
         }
         lines.append(String(format: "timing    build %.2f s, search %.3f s", buildSeconds, searchSeconds))
         return lines.joined(separator: "\n")
+    }
+
+    static func unreadableLines(_ unreadable: [AudioMasterUnreadable]) -> [String] {
+        unreadable.map { "  unreadable \($0.key.contentDigest.prefix(19))…  \($0.reason)" }
     }
 
     private static func residentMB() -> Double {

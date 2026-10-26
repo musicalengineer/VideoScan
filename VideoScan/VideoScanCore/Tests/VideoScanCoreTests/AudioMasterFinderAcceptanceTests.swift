@@ -145,7 +145,7 @@ struct AudioMasterFinderAcceptanceTests {
         /// True when the clip's own master is found as its container; any
         /// OTHER master called container or same recording is recorded.
         mutating func judge(_ c: Clip, _ search: AudioMasterSearch) -> Bool {
-            guard case .found(let candidates, _) = search else { return false }
+            guard case .found(let candidates, _, _) = search else { return false }
             var hit = false
             for candidate in candidates {
                 let isTrue = candidate.key == AudioMasterFinderAcceptanceTests.masterKey(c.master)

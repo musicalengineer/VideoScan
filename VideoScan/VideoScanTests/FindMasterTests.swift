@@ -14,6 +14,7 @@
 // sidecar — no file of Rick's, no App Support data.
 
 import Foundation
+import SQLite3
 import Testing
 import VideoScanCore
 @testable import VideoScan
@@ -157,6 +158,14 @@ struct FindMasterPlanTests {
         #expect(plan.labels["sha256:" + F.digest(7)]?.name == "live.mov")
     }
 
+    @Test("a hashed record with no (fresh) sound print still names its content — Reveal works")
+    func unstampedRecordIsNamedFromTheCatalog() {
+        let unstamped = F.record(8, name: "unstamped.mov", stamp: nil)
+        let plan = FindMasterPlan.make(selected: [], all: [unstamped], isArchived: { _ in false })
+        #expect(plan.labels["sha256:" + F.digest(8)]?.name == "unstamped.mov")
+        #expect(plan.labels["sha256:" + F.digest(8)]?.recordID == unstamped.id)
+    }
+
     @Test("100k-record snapshot: plan and labels in under a second")
     func hundredThousandRecordSnapshot() {
         let records = (0..<100_000).map { F.record($0) }
@@ -281,7 +290,7 @@ struct FindMasterJobTests {
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
         // The clip's answer names the master and where it sits.
         let clip = try #require(job.results.first { $0.name == "clip2.mov" })
-        guard case .found(let found, _) = clip.outcome else { Issue.record("\(clip.outcome)"); return }
+        guard case .found(let found, _, _) = clip.outcome else { Issue.record("\(clip.outcome)"); return }
         #expect(found.first?.key == F.key(1))
         #expect(sink.lines.contains { $0.contains("inside clip1.mov from 00:01:40") })
     }
@@ -304,6 +313,50 @@ struct FindMasterJobTests {
         #expect(lines[0].contains("inside"))
         #expect(lines[1].contains("2 weak overlaps"))
         #expect(lines[1].contains("24 landmarks") && lines[1].contains("26 landmarks"))
+    }
+
+    @Test("a candidate that could not be read makes the answer 'not a negative', counted and logged with its error")
+    func unreadableCandidateIsNotANegative() throws {
+        let job = FindMasterJob(plan: F.plan(selected: [2]), sidecarDirectory: URL(fileURLWithPath: "/nonexistent"), note: { _ in })
+        let unread = AudioMasterUnreadable(key: F.key(1), reason: "sizeMismatch(expected: 47, actual: 4)")
+        job.count(.noneFound(searched: 3, unreadable: [unread]))
+        #expect(job.tally.none == 0)
+        #expect(job.tally.notConclusive == 1)
+        let query = try #require(job.plan.queries.first)
+        let lines = job.lines(for: query, outcome: .noneFound(searched: 3, unreadable: [unread]))
+        #expect(!lines.contains { $0.contains("No content shares its sound") }, "\(lines)")
+        #expect(lines.contains { $0.contains("Not a negative: 1 candidate could not be read") })
+        #expect(lines.contains { $0.contains("clip1.mov") || $0.contains("sizeMismatch") })
+        #expect(lines.contains { $0.contains("sizeMismatch(expected: 47, actual: 4)") }, "the job logs the error")
+    }
+
+    @Test("a query print that cannot be read says so — never 'No sound print yet'")
+    func unreadableQueryPrintIsNotNoSoundPrint() async throws {
+        let dir = try F.sidecar()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Poison the clip's stored blob (test-owned scratch sidecar).
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dir.appendingPathComponent(AudioFingerprintStore.fileName).path, &db) == SQLITE_OK)
+        sqlite3_exec(db, "UPDATE fingerprints SET blob = x'00010203' WHERE content_digest = '\(F.key(2).contentDigest)'", nil, nil, nil)
+        sqlite3_close(db)
+        let sink = FindMasterLineSink()
+        let job = FindMasterJob(plan: F.plan(selected: [2]), sidecarDirectory: dir, note: sink.note)
+        job.start()
+        await job.task?.value
+        let result = try #require(job.results.first)
+        #expect(result.outcome != .refused(.noSoundPrint))
+        #expect(!sink.lines.contains { $0.contains("run Fingerprint Sound") }, "\(sink.lines)")
+        #expect(sink.lines.contains { $0.contains("could not be read") }, "\(sink.lines)")
+    }
+
+    @Test("the build progress line is honest at every page boundary, including the end of pass 2")
+    func buildProgressLineIsHonest() {
+        // 300 rows → 2 pages per pass; 600 visits over both passes.
+        #expect(FindMasterJob.buildProgressLine(done: 1, total: 600).hasSuffix("pass 1 of 2, page 1 of 2"))
+        #expect(FindMasterJob.buildProgressLine(done: 256, total: 600).hasSuffix("pass 1 of 2, page 1 of 2"))
+        #expect(FindMasterJob.buildProgressLine(done: 300, total: 600).hasSuffix("pass 1 of 2, page 2 of 2"))
+        #expect(FindMasterJob.buildProgressLine(done: 301, total: 600).hasSuffix("pass 2 of 2, page 1 of 2"))
+        #expect(FindMasterJob.buildProgressLine(done: 600, total: 600).hasSuffix("pass 2 of 2, page 2 of 2"))
     }
 
     @Test("Stop after query 1 of 3 → stopped, 1 searched, 2 not started")

@@ -33,6 +33,8 @@ enum FindMasterAnswer {
             return "Too little sound to match (\(landmarks) landmarks; \(AudioMatchPolicy.default.minMatchedLandmarks) needed)."
         case .olderRecipe:
             return "Its sound print is from an older recipe — re-run Fingerprint Sound."
+        case .printUnreadable(let error):
+            return "Its stored sound print could not be read, so nothing was searched (\(error))."
         }
     }
 
@@ -46,9 +48,18 @@ enum FindMasterAnswer {
 
     // MARK: Negatives
 
-    static func noneFound(searched: Int, noSoundTrack: Int, notFingerprinted: Int) -> String {
-        "No content shares its sound (searched \(searched.formatted()) sounded contents; "
-            + "\(noSoundTrack.formatted()) have no sound track; \(notFingerprinted.formatted()) not fingerprinted)."
+    /// With `unreadable` > 0 this is NOT a negative: those candidates were
+    /// chosen by the index but their prints could not be read (rule 1).
+    static func noneFound(searched: Int, noSoundTrack: Int, notFingerprinted: Int, unreadable: Int = 0) -> String {
+        let counts = "searched \(searched.formatted()) sounded contents; "
+            + "\(noSoundTrack.formatted()) have no sound track; \(notFingerprinted.formatted()) not fingerprinted"
+        guard unreadable > 0 else { return "No content shares its sound (\(counts))." }
+        return "Not a negative: \(unreadable.formatted()) candidate\(unreadable == 1 ? "" : "s") could not be read, and no readable content shares its sound (\(counts))."
+    }
+
+    static func unreadableLine(name: String, key: AudioFingerprintStore.Key, unreadable: [AudioMasterUnreadable]) -> String {
+        "find master: \(name) \(shortDigest(key.contentDigest)) → \(unreadable.count) candidate(s) could not be read: "
+            + unreadable.map { "\(shortDigest($0.key.contentDigest)) \($0.reason)" }.joined(separator: "; ")
     }
 
     // MARK: Positives
@@ -194,6 +205,8 @@ enum FindMasterAnswer {
         var searched = 0, inside = 0, same = 0, contains = 0, shares = 0, inconclusive = 0, none = 0
         /// Searched files whose only hits were weak overlaps.
         var weakOnly = 0
+        /// Searched files with no hit while a candidate could not be read.
+        var notConclusive = 0
         var refused = 0, notStarted = 0
         var stopped = false
     }
@@ -205,6 +218,7 @@ enum FindMasterAnswer {
         if t.shares > 0 { parts.append("\(t.shares) share sound") }
         if t.inconclusive > 0 { parts.append("\(t.inconclusive) inconclusive") }
         if t.weakOnly > 0 { parts.append("\(t.weakOnly) only weak overlaps") }
+        if t.notConclusive > 0 { parts.append("\(t.notConclusive) not conclusive (a candidate could not be read)") }
         parts.append("\(t.none) none found")
         parts.append("\(t.refused) refused")
         if t.stopped { parts.append("\(t.notStarted) not started") }

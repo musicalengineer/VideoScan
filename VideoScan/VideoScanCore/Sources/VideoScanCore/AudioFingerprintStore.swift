@@ -320,6 +320,23 @@ public final class AudioFingerprintStore: @unchecked Sendable {
         }
     }
 
+    /// The decoded fingerprint; nil ONLY when no row exists. A row whose
+    /// blob will not decode THROWS its `AudioFingerprint.DecodingError` —
+    /// "could not be read" is never confused with "never printed" (rule 1).
+    public func decodedFingerprint(for key: Key, engineVersion: Int = Int(AudioFingerprint.currentVersion)) throws -> AudioFingerprint? {
+        let blob: Data? = try lock.withLock {
+            let sql = "SELECT blob FROM fingerprints WHERE content_digest = ? AND size_bytes = ? AND engine_version = ?"
+            let stmt = try prepare(sql)
+            defer { sqlite3_finalize(stmt) }
+            try bind(stmt, key: key, engineVersion: engineVersion)
+            guard try step(stmt) else { return nil }
+            let count = Int(sqlite3_column_bytes(stmt, 0))
+            return sqlite3_column_blob(stmt, 0).map { Data(bytes: $0, count: count) } ?? Data()
+        }
+        guard let blob else { return nil }
+        return try AudioFingerprint.decode(blob)
+    }
+
     public func count() throws -> Int {
         try lock.withLock { try scalarInt("SELECT COUNT(*) FROM fingerprints") ?? 0 }
     }

@@ -11,7 +11,10 @@ import SwiftUI
 import VideoScanCore
 
 struct FindMasterMenuItem: View {
-    @ObservedObject var model: VideoScanModel
+    /// NOT observed: the body reads no model state, so a catalog change must
+    /// not re-render this menu (the click action reads the model once).
+    /// (For Rick: a plain pointer member, not a subscription.)
+    let model: VideoScanModel
     @Environment(\.mediaFileOperationsCenterReference) private var center
     let recordIDs: Set<UUID>
 

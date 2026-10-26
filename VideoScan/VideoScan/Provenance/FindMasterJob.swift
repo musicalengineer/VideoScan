@@ -69,20 +69,34 @@ struct FindMasterEngine: Sendable {
                                 buildSeconds: TimingBudget.seconds(clock.now - start))
     }
 
-    /// One query: its print from the sidecar, then the finder. nil = the
-    /// sidecar holds no print for the key (the stamp is ahead of it).
-    func search(_ key: AudioFingerprintStore.Key) -> AudioMasterSearch? {
-        guard let print = try? store.fingerprint(for: key) else { return nil }
-        return AudioMasterFinder.find(query: print, queryKey: key, in: index,
-                                      load: { try? store.fingerprint(for: $0) })
+    /// What reading one query's print gave.
+    enum QueryRead: Sendable {
+        case searched(AudioMasterSearch)
+        /// No row for the key (the stamp is ahead of the sidecar).
+        case absent
+        /// A row exists but could not be read (store error or a blob that
+        /// will not decode) — never reported as "no sound print" (rule 1).
+        case unreadable(String)
+    }
+
+    /// One query: its print from the sidecar, then the finder. Candidates
+    /// whose print cannot be read come back in the search's `unreadable`.
+    func search(_ key: AudioFingerprintStore.Key) -> QueryRead {
+        let print: AudioFingerprint?
+        do { print = try store.decodedFingerprint(for: key) } catch { return .unreadable("\(error)") }
+        guard let print else { return .absent }
+        return .searched(AudioMasterFinder.find(query: print, queryKey: key, in: index,
+                                                load: { try store.decodedFingerprint(for: $0) }))
     }
 }
 
 /// One selected file's answer, as the detail view shows it.
 struct FindMasterResult: Identifiable, Equatable {
     enum Outcome: Equatable {
-        case found([AudioMasterCandidate], searched: Int)
-        case noneFound(searched: Int)
+        /// `unreadable`: candidates whose print could not be read — their
+        /// verdict is unknown, so a negative is never claimed for them.
+        case found([AudioMasterCandidate], searched: Int, unreadable: [AudioMasterUnreadable] = [])
+        case noneFound(searched: Int, unreadable: [AudioMasterUnreadable] = [])
         case refused(FindMasterRefusalReason)
     }
     let recordID: UUID
@@ -194,9 +208,19 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
             guard done % 256 == 0 || done == total else { return }
             Task { @MainActor [weak self] in self?.buildTick(done: done, total: total) }
         }
-        let opened = await Task.detached(priority: .userInitiated) {
-            Result { try FindMasterEngine.open(directory: directory, gate: gate, progress: progress) }
-        }.value
+        // A DEDICATED thread, not the cooperative pool: Pause blocks this
+        // worker inside `gate.checkpoint()` (NSCondition.wait), which must
+        // never park one of Swift concurrency's few pool threads.
+        // (For Rick: a std::thread that hands its result back through a
+        // promise — `withCheckedContinuation` is the future side.)
+        let opened = await withCheckedContinuation { (continuation: CheckedContinuation<Result<FindMasterEngine, Error>, Never>) in
+            let worker = Thread {
+                continuation.resume(returning: Result { try FindMasterEngine.open(directory: directory, gate: gate, progress: progress) })
+            }
+            worker.name = "find-master-index"
+            worker.qualityOfService = .userInitiated
+            worker.start()
+        }
         switch opened {
         case .success(let engine):
             buildReport = engine.report
@@ -221,9 +245,19 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         guard state == .running, !isPaused, total > 0 else { return }
         isIndeterminateValue = false
         fractionValue = 0.5 * Double(done) / Double(total)
-        let pages = max(1, (total / 2 + AudioFingerprintStore.defaultPageSize - 1) / AudioFingerprintStore.defaultPageSize)
-        let page = min(pages, ((done % max(1, total / 2)) / AudioFingerprintStore.defaultPageSize) + 1)
-        subtitleText = "Reading sound prints — pass \(done <= total / 2 ? 1 : 2) of 2, page \(page) of \(pages)"
+        subtitleText = Self.buildProgressLine(done: done, total: total)
+    }
+
+    /// "Reading sound prints — pass p of 2, page n of m" for `done` of
+    /// `total` row visits (both passes).
+    nonisolated static func buildProgressLine(done: Int, total: Int) -> String {
+        let size = AudioFingerprintStore.defaultPageSize
+        let rows = max(1, total / 2)
+        let pages = (rows + size - 1) / size
+        let pass = done <= rows ? 1 : 2
+        let inPass = max(1, pass == 1 ? done : done - rows)          // 1-based row within its pass
+        let page = min(pages, (inPass + size - 1) / size)
+        return "Reading sound prints — pass \(pass) of 2, page \(page) of \(pages)"
     }
 
     private func searchAll(_ engine: FindMasterEngine) async {
@@ -249,17 +283,19 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         return gate.isStopped
     }
 
-    private func record(_ query: FindMasterQuery, search: AudioMasterSearch?, engine: FindMasterEngine) {
+    private func record(_ query: FindMasterQuery, search: FindMasterEngine.QueryRead, engine: FindMasterEngine) {
         let outcome: FindMasterResult.Outcome
         switch search {
-        case nil:
+        case .absent:
             outcome = .refused(.noSoundPrint)
-        case .refused(let refusal)?:
+        case .unreadable(let error):
+            outcome = .refused(.printUnreadable(error))
+        case .searched(.refused(let refusal)):
             outcome = .refused(FindMasterAnswer.reason(for: refusal))
-        case .noneFound(let searched)?:
-            outcome = .noneFound(searched: searched)
-        case .found(let found, let searched)?:
-            outcome = .found(found, searched: searched)
+        case .searched(.noneFound(let searched, let unreadable)):
+            outcome = .noneFound(searched: searched, unreadable: unreadable)
+        case .searched(.found(let found, let searched, let unreadable)):
+            outcome = .found(found, searched: searched, unreadable: unreadable)
         }
         results.append(FindMasterResult(recordID: query.recordID, name: query.name, outcome: outcome))
         count(outcome)
@@ -269,8 +305,11 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
     func count(_ outcome: FindMasterResult.Outcome) {
         switch outcome {
         case .refused: tally.refused += 1
-        case .noneFound: tally.searched += 1; tally.none += 1
-        case .found(let found, _):
+        case .noneFound(_, let unreadable):
+            tally.searched += 1
+            // Not a negative while a candidate could not be read (rule 1).
+            if unreadable.isEmpty { tally.none += 1 } else { tally.notConclusive += 1 }
+        case .found(let found, _, _):
             tally.searched += 1
             // A file is counted by its best STRONG hit; weak overlaps alone
             // are their own bucket (FindMasterAnswer.isWeak).
@@ -289,15 +328,19 @@ final class FindMasterJob: @MainActor MediaFileOperationJob, MediaFileOperationO
         switch outcome {
         case .refused(let reason):
             return [FindMasterAnswer.refusalLine(name: query.name, reason: reason)]
-        case .noneFound(let searched):
-            return [FindMasterAnswer.queryLine(name: query.name, key: query.key, answer: FindMasterAnswer.noneFound(
-                searched: searched, noSoundTrack: plan.noSoundTrackContents, notFingerprinted: plan.notFingerprintedContents))]
-        case .found(let found, _):
+        case .noneFound(let searched, let unreadable):
+            var lines = [FindMasterAnswer.queryLine(name: query.name, key: query.key, answer: FindMasterAnswer.noneFound(
+                searched: searched, noSoundTrack: plan.noSoundTrackContents, notFingerprinted: plan.notFingerprintedContents,
+                unreadable: unreadable.count))]
+            if !unreadable.isEmpty { lines.append(FindMasterAnswer.unreadableLine(name: query.name, key: query.key, unreadable: unreadable)) }
+            return lines
+        case .found(let found, _, let unreadable):
             let (strong, weak) = FindMasterAnswer.split(found)
             var lines = strong.map { c in
                 FindMasterAnswer.queryLine(name: query.name, key: query.key, answer: answer(c))
             }
             if !weak.isEmpty { lines.append(FindMasterAnswer.weakLine(name: query.name, key: query.key, weak: weak)) }
+            if !unreadable.isEmpty { lines.append(FindMasterAnswer.unreadableLine(name: query.name, key: query.key, unreadable: unreadable)) }
             return lines
         }
     }

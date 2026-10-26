@@ -66,7 +66,7 @@ struct AudioMasterFinderTests {
     @Test("a 40 s clip cut at 312.4 s is found inside its master within 0.1 s")
     func clipIsFoundInsideItsMaster() throws {
         let search = AudioMasterFinder.find(query: C.clip, queryKey: C.clipKey, in: try C.index(), load: C.loader())
-        guard case .found(let found, let searched) = search else { Issue.record("got \(search)"); return }
+        guard case .found(let found, let searched, _) = search else { Issue.record("got \(search)"); return }
         #expect(searched == 4)
         let first = try #require(found.first)
         #expect(first.key == C.masterKey)
@@ -81,7 +81,7 @@ struct AudioMasterFinderTests {
         let entries = C.catalog + [(CatalogIndexFixtures.key(20), original)]
         let search = AudioMasterFinder.find(query: aac, queryKey: CatalogIndexFixtures.key(21),
                                             in: try C.index(entries), load: C.loader(entries))
-        guard case .found(let found, _) = search else { Issue.record("got \(search)"); return }
+        guard case .found(let found, _, _) = search else { Issue.record("got \(search)"); return }
         #expect(found.first?.key == CatalogIndexFixtures.key(20))
         #expect(found.first?.match.verdict == .sameRecording)
     }
@@ -89,7 +89,7 @@ struct AudioMasterFinderTests {
     @Test("the master as query lists its clips as contained in it")
     func masterQueryListsItsClips() throws {
         let search = AudioMasterFinder.find(query: C.master, queryKey: C.masterKey, in: try C.index(), load: C.loader())
-        guard case .found(let found, _) = search else { Issue.record("got \(search)"); return }
+        guard case .found(let found, _, _) = search else { Issue.record("got \(search)"); return }
         #expect(Set(found.map(\.key)) == [C.clipKey, C.clip2Key])
         for candidate in found {
             guard case .masterContainedInQuery = candidate.match.verdict else {
@@ -103,7 +103,7 @@ struct AudioMasterFinderTests {
         let index = try C.index()
         let load = C.loader()
         for (key, query) in C.catalog {
-            guard case .found(let found, _) = AudioMasterFinder.find(query: query, queryKey: key, in: index, load: load) else { continue }
+            guard case .found(let found, _, _) = AudioMasterFinder.find(query: query, queryKey: key, in: index, load: load) else { continue }
             for candidate in found {
                 let master = try #require(load(candidate.key))
                 #expect(candidate.match == AudioFingerprintMatcher.match(query: query, master: master))
@@ -116,7 +116,7 @@ struct AudioMasterFinderTests {
         let index = try C.index()
         for (key, query) in C.catalog {
             let search = AudioMasterFinder.find(query: query, queryKey: key, in: index, load: C.loader())
-            if case .found(let found, _) = search { #expect(!found.contains { $0.key == key }) }
+            if case .found(let found, _, _) = search { #expect(!found.contains { $0.key == key }) }
             let own = index.ordinal(of: key)
             #expect(!AudioMasterFinder.candidates(query: query, excluding: own, in: index).contains { $0.ordinal == own })
         }
@@ -126,12 +126,31 @@ struct AudioMasterFinderTests {
     func unrelatedQueryReportsWhatWasSearched() throws {
         let index = try C.index()
         let search = AudioMasterFinder.find(query: C.unrelated, queryKey: CatalogIndexFixtures.key(99), in: index, load: C.loader())
-        #expect(search == .noneFound(searched: index.documents.count))
+        #expect(search == .noneFound(searched: index.documents.count, unreadable: []))
         // In the index itself: searched excludes its own content (N − 1).
         let withIt = C.catalog + [(CatalogIndexFixtures.key(99), C.unrelated)]
         let index2 = try C.index(withIt)
         #expect(AudioMasterFinder.find(query: C.unrelated, queryKey: CatalogIndexFixtures.key(99), in: index2,
-                                       load: C.loader(withIt)) == .noneFound(searched: index2.documents.count - 1))
+                                       load: C.loader(withIt)) == .noneFound(searched: index2.documents.count - 1, unreadable: []))
+    }
+
+    @Test("a candidate whose print cannot be read is reported, never a plain negative (rule 1)")
+    func unloadableCandidateIsNotANegative() throws {
+        let index = try C.index()
+        let full = C.loader()
+        let search = AudioMasterFinder.find(query: C.clip, queryKey: C.clipKey, in: index,
+                                            load: { $0 == C.masterKey ? nil : full($0) })
+        #expect(search != .noneFound(searched: 4, unreadable: []))
+        #expect(search == .noneFound(searched: 4, unreadable: [
+            AudioMasterUnreadable(key: C.masterKey, reason: "not in the sound-print file")]))
+        // A loader that THROWS is recorded with its error, not rethrown.
+        struct Broken: Error, CustomStringConvertible { var description: String { "disk went away" } }
+        let thrown = AudioMasterFinder.find(query: C.clip, queryKey: C.clipKey, in: index,
+                                            load: { key -> AudioFingerprint? in
+                                                if key == C.masterKey { throw Broken() }
+                                                return full(key)
+                                            })
+        #expect(thrown == .noneFound(searched: 4, unreadable: [AudioMasterUnreadable(key: C.masterKey, reason: "disk went away")]))
     }
 
     @Test("a 12-landmark query is refused for too little sound")
@@ -167,7 +186,7 @@ struct AudioMasterFinderTests {
         let index = try C.index(entries)
         #expect(index.postingCount(of: hum) > AudioMasterFinderPolicy.default.maxPostingsPerHash)
         let search = AudioMasterFinder.find(query: C.clip, queryKey: C.clipKey, in: index, load: C.loader(entries))
-        guard case .found(let found, _) = search else { Issue.record("got \(search)"); return }
+        guard case .found(let found, _, _) = search else { Issue.record("got \(search)"); return }
         #expect(found.first?.key == C.masterKey)
     }
 
