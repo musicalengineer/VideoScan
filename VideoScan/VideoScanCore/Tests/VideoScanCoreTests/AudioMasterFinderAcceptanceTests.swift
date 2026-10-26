@@ -102,49 +102,64 @@ struct AudioMasterFinderAcceptanceTests {
         }
 
         // Score.
-        var found = 0, sounded = 0, falseContainers: [String] = [], maxOffsetError = 0.0, misses: [String] = []
+        var score = Score()
+        for o in outcomes { score.add(o) }
+        let recall = score.sounded > 0 ? Double(score.found) / Double(score.sounded) : 0
+        print(String(format: "Find Master acceptance: recall %.3f (%d/%d sounded clips), max |offset error| %.3f s, false containers %d, muted refused %d/%d",
+                     recall, score.found, score.sounded, score.maxOffsetError, score.falseContainers.count,
+                     score.mutedRefused, Self.mutedCount))
+        for (group, tally) in score.perGroup.sorted(by: { $0.key < $1.key }) {
+            print("Find Master acceptance: \(group) \(tally.hit)/\(tally.of)")
+        }
+        for miss in score.misses { print("Find Master acceptance MISS: \(miss)") }
+        for problem in score.problems { Issue.record(Comment(rawValue: problem)) }
+        #expect(score.sounded == Self.clipCount)
+        #expect(recall >= 0.95)
+        #expect(score.falseContainers.isEmpty, "\(score.falseContainers)")
+        #expect(score.maxOffsetError <= 0.1)
+        #expect(score.mutedRefused == Self.mutedCount)
+    }
+
+    /// The bars' numbers, accumulated one outcome at a time.
+    struct Score {
+        var found = 0, sounded = 0, mutedRefused = 0, maxOffsetError = 0.0
+        var falseContainers: [String] = [], misses: [String] = [], problems: [String] = []
         var perGroup: [String: (hit: Int, of: Int)] = [:]
-        for o in outcomes {
+
+        mutating func add(_ o: Outcome) {
             let c = o.clip
-            if let error = o.decodeError { Issue.record("clip \(c.index) \(c.container) \(c.quality): \(error)"); continue }
-            guard let search = o.search else { continue }
+            if let error = o.decodeError { problems.append("clip \(c.index) \(c.container) \(c.quality): \(error)"); return }
+            guard let search = o.search else { return }
             if c.muted {
-                guard case .refused = search else { Issue.record("muted clip \(c.index) \(c.container) must be refused, got \(search)"); continue }
-                continue
+                if case .refused = search { mutedRefused += 1 } else { problems.append("muted clip \(c.index) \(c.container) must be refused, got \(search)") }
+                return
             }
             sounded += 1
             let group = "\(c.container.rawValue)/\(c.quality)"
-            var hit = false
-            if case .found(let candidates, _) = search {
-                for candidate in candidates {
-                    let isTrue = candidate.key == Self.masterKey(c.master)
-                    switch candidate.match.verdict {
-                    case .containedInMaster(let offset) where isTrue:
-                        hit = true
-                        maxOffsetError = max(maxOffsetError, abs(offset - c.offset))
-                    case .containedInMaster, .sameRecording:
-                        if !isTrue { falseContainers.append("clip \(c.index) → master \(candidate.key.contentDigest.suffix(4))") }
-                    default: break
-                    }
-                }
-            }
+            let hit = judge(c, search)
             if hit { found += 1 } else { misses.append("clip \(c.index) \(group) \(c.seconds) s at \(c.offset): \(search)") }
             perGroup[group, default: (0, 0)].of += 1
             if hit { perGroup[group, default: (0, 0)].hit += 1 }
         }
-        let recall = sounded > 0 ? Double(found) / Double(sounded) : 0
-        print(String(format: "Find Master acceptance: recall %.3f (%d/%d sounded clips), max |offset error| %.3f s, false containers %d, muted refused %d/%d",
-                     recall, found, sounded, maxOffsetError, falseContainers.count,
-                     outcomes.filter { $0.clip.muted && { if case .refused? = $0.search { return true }; return false }($0) }.count,
-                     Self.mutedCount))
-        for (group, tally) in perGroup.sorted(by: { $0.key < $1.key }) {
-            print("Find Master acceptance: \(group) \(tally.hit)/\(tally.of)")
+
+        /// True when the clip's own master is found as its container; any
+        /// OTHER master called container or same recording is recorded.
+        mutating func judge(_ c: Clip, _ search: AudioMasterSearch) -> Bool {
+            guard case .found(let candidates, _) = search else { return false }
+            var hit = false
+            for candidate in candidates {
+                let isTrue = candidate.key == AudioMasterFinderAcceptanceTests.masterKey(c.master)
+                switch candidate.match.verdict {
+                case .containedInMaster(let offset) where isTrue:
+                    hit = true
+                    maxOffsetError = max(maxOffsetError, abs(offset - c.offset))
+                case .containedInMaster, .sameRecording:
+                    if !isTrue { falseContainers.append("clip \(c.index) → master \(candidate.key.contentDigest.suffix(4))") }
+                default: break
+                }
+            }
+            return hit
         }
-        for miss in misses { print("Find Master acceptance MISS: \(miss)") }
-        #expect(sounded == Self.clipCount)
-        #expect(recall >= 0.95)
-        #expect(falseContainers.isEmpty, "\(falseContainers)")
-        #expect(maxOffsetError <= 0.1)
     }
 
     /// Encode one clip with ffmpeg, decode it through the real decoder, ask the finder.
