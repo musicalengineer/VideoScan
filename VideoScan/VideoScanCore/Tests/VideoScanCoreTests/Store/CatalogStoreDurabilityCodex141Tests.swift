@@ -1,7 +1,6 @@
 // CatalogStoreDurabilityCodex141Tests.swift
 // Codex cycle #141 (docs/reviews/codex/codex-review-catalog-store-consistency-
-// 2026-10-25.md), the Core-only findings 1 and 4 (finding 6 is on fix/store-durability-codex141, awaiting a ruling) — each seen RED before
-// its fix:
+// 2026-10-25.md), findings 1, 4 and 6 — each seen RED before its fix:
 //
 //   | finding | test                                              | red (before)                                  | green (after) |
 //   |---------|---------------------------------------------------|-----------------------------------------------|---------------|
@@ -29,10 +28,21 @@
 //   |         |                                                   | THEN refused on the version                   | dir identical |
 //   |         | aReadOnlyFolderWithoutSidecarsNeverOpensForWriting| (pin, green from the start: the read-only     | not .readWrite|
 //   |         |                                                   | folder corner the F6-2 rule must keep)        | dir identical |
-//   | 6-3 P2  | aNewerSchemaWALFileIsRefusedWithItsFolderExactly… | refused in the right words, main file         | refused; the  |
-//   |         |                                                   | identical, but the folder gained -shm and a   | directory's   |
-//   |         |                                                   | -wal (12392 bytes: GRDB's issue-102 CREATE/   | entry set and |
-//   |         |                                                   | DROP, written by the pool on a bare WAL file) | bytes equal   |
+//   | 6-3 P2  | aNewerSchemaWALFileIsRefusedWithItsMainFileAsFound| refused in the right words, main file         | refused; main |
+//   |         | (was …WithItsFolderExactlyAsFound; #387 below)    | identical, but the folder gained -shm and a   | file and every|
+//   |         |                                                   | -wal (12392 bytes: GRDB's issue-102 CREATE/   | file found    |
+//   |         |                                                   | DROP, written by the pool on a bare WAL file) | identical     |
+//
+// #387 (Rick 2026-10-26, docs/DECISIONS.md): the read-only admission and its
+// sidecar cleanup are gone — the checks run in the writer's first BEGIN
+// IMMEDIATE, and a refusal deletes nothing (CatalogStoreOpenVerdictTests has
+// Codex #144's four). What changed here: F6-1's hook now runs after the
+// writer's checks and before the first write (same test, same assertions);
+// F6-2's hot journal is refused from its bytes before any connection (same
+// assertions); F6-3 no longer promises the FOLDER as found — a refused
+// WAL-mode file with nothing beside it may gain an empty -wal and a -shm
+// (Rick accepted that) — so it pins what is still promised: the main file's
+// bytes, every file that was there, nothing removed, and the words.
 //
 // Lives under Tests/…/Store/ because it opens the same file with a plain
 // GRDB queue (the sensor allows `import GRDB` only here and in
@@ -213,6 +223,7 @@ struct CatalogStoreDurabilityCodex141Tests {
             return
         }
         #expect(words.contains("schema version \(newer) is newer"), Comment(rawValue: words))
+        #expect(words.contains("VideoScan left catalog.sqlite as found"), Comment(rawValue: words))
         await repository.close()
         let after = try Data(contentsOf: fixture.url)
         #expect(after == before, "a refused file must be byte-identical — the open switched it to WAL or wrote GRDB's init table")
@@ -222,11 +233,11 @@ struct CatalogStoreDurabilityCodex141Tests {
 
     // MARK: - Closing pass (codex #142) F6-1 (P1): an admission gone stale before the pool exists
 
-    /// Admission says yes on a read-only connection that is then closed;
-    /// the pool is a different connection. In between, another connection
+    /// The checks pass; before the open's first write, another connection
     /// bumps the schema version in the SAME file (same inode, so the identity
-    /// guard cannot see it). The open must still refuse: the version check
-    /// is re-run on the pool's own connection.
+    /// guard cannot see it). The open must still refuse. (#387: the hook now
+    /// runs after the writer's checks — there is no separate admission — and
+    /// the first write's `OpenVerdict.confirm` sees `data_version` move.)
     @Test func anAdmissionGoneStaleBeforeThePoolIsRefused() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 1)
         defer { fixture.remove() }
@@ -359,11 +370,10 @@ struct CatalogStoreDurabilityCodex141Tests {
 
     /// The read-only-folder corner the F6-2 rule must keep: a healthy
     /// WAL-mode catalog with its sidecars cleaned, in a folder that cannot
-    /// be written. The read-only admission cannot be made — the system
-    /// SQLite (3.54.0 "aapl") answers CANTOPEN for ANY read-only open of a
-    /// WAL-mode file without its sidecars, the read-only pool included, so
-    /// this folder cannot open read-only on this build at all (it could not
-    /// before the fix either). What the rule must keep: never read-write,
+    /// be written. The writer cannot make the `-shm` it needs, so the door
+    /// falls back to a read-only pool — and the system SQLite (3.54.0
+    /// "aapl") answers CANTOPEN for ANY read-only open of a WAL-mode file
+    /// without its `-wal` (GH #386). What the rule must keep: never read-write,
     /// read-only or refused in words, and the folder exactly as found. The
     /// sidecars-present variant opens read-only
     /// (GRDBCatalogRepositoryTests.aReadOnlyFolderNeverOpensForWriting).
@@ -394,13 +404,13 @@ struct CatalogStoreDurabilityCodex141Tests {
         #expect(after == before, "the read-only folder changed: \(after.keys.sorted()) vs \(before.keys.sorted())")
     }
 
-    // MARK: - Closing pass (codex #142) F6-3 (P2): a refused WAL-mode file leaves its folder exactly as found
+    // MARK: - Closing pass (codex #142) F6-3 (P2), as ruled in #387: a refused WAL-mode file's main file is left as found
 
     /// A current fixture stamped one version ahead, left in WAL mode and
     /// closed cleanly with nothing beside it — Codex's case: the open has
-    /// to make `-wal` / `-shm` to read it at all (the system SQLite will
-    /// not open a WAL-mode file read-only without them), so "left exactly
-    /// as found" is a claim about the DIRECTORY, not the main file.
+    /// to make `-wal` / `-shm` to read it at all. #387: they stay (nothing
+    /// is deleted); the main file and every file that was there must not
+    /// change, and the words must say what may now be beside it.
     private func newerSchemaFixtureInWALModeWithoutSidecars() async throws -> (StoreFixture, Int) {
         let fixture = try await StoreFixture.make(.grdb, generation: 2)
         let newer = GRDBCatalogRepository.currentSchemaVersion + 1
@@ -424,7 +434,7 @@ struct CatalogStoreDurabilityCodex141Tests {
         return (fixture, newer)
     }
 
-    @Test func aNewerSchemaWALFileIsRefusedWithItsFolderExactlyAsFound() async throws {
+    @Test func aNewerSchemaWALFileIsRefusedWithItsMainFileAsFound() async throws {
         let (fixture, newer) = try await newerSchemaFixtureInWALModeWithoutSidecars()
         defer { fixture.remove() }
         let before = try Self.directorySnapshot(fixture.directory)
@@ -437,12 +447,15 @@ struct CatalogStoreDurabilityCodex141Tests {
             return
         }
         #expect(words.contains("schema version \(newer) is newer"), Comment(rawValue: words))
+        #expect(words.contains("VideoScan left catalog.sqlite as found"), Comment(rawValue: words))
+        #expect(words.contains("catalog.sqlite-wal and catalog.sqlite-shm may now be beside it"), Comment(rawValue: words))
         await repository.close()
         let after = try Self.directorySnapshot(fixture.directory)
-        let added = after.filter { before[$0.key] == nil }.map { "\($0.key) (\($0.value.count) bytes)" }.sorted()
-        #expect(Set(after.keys) == Set(before.keys), "the directory gained \(added) / lost \(Set(before.keys).subtracting(after.keys).sorted())")
         for (name, bytes) in before {
-            #expect(after[name] == bytes, "\(name) changed beside a refused file")
+            #expect(after[name] == bytes, "\(name) changed or went missing beside a refused file")
         }
+        let added = Set(after.keys).subtracting(before.keys)
+        #expect(added.isSubset(of: ["catalog.sqlite-wal", "catalog.sqlite-shm"]), "the refused open added \(added.sorted())")
+        #expect(after["catalog.sqlite-wal"].map(\.count) ?? 0 == 0, "the refused open wrote frames to the -wal")
     }
 }

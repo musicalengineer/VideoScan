@@ -14,9 +14,13 @@
 //     cache), a busy timeout, WAL — and the writer is set to FULL AGAIN
 //     after the pool exists, because GRDB's WAL setup lowers it (codex #141 F1);
 //   - at open: integrity_check + foreign_key_check → `.refused` with the
-//     engine's words; a NEWER schema_version → `.refused` — both run on a
-//     READ-ONLY connection BEFORE the pool exists, so a refused file is never
-//     switched to WAL or otherwise written (codex #141 F6); exactly one
+//     engine's words; a NEWER schema_version → `.refused` — all three inside
+//     the WRITER's first BEGIN IMMEDIATE (5 s busy timeout), before GRDB
+//     switches the file to WAL or writes its init table, and confirmed under
+//     the lock of every later open transaction that writes (#387,
+//     `OpenVerdict`); a refusal deletes no file and leaves the main file's
+//     bytes as found; a hot rollback journal is refused from its bytes,
+//     before any connection (codex #142 F6-2); exactly one
 //     catalog_state row and one generations row; then the high-water
 //     reconciliation INSIDE one immediate transaction (codex C′ #4) against
 //     THREE witnesses — the sidecar `catalog.highwater`, the append-only
@@ -65,6 +69,7 @@
 import Foundation
 import GRDB
 import os
+import SQLite3
 
 private let storeLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogStore")
 
@@ -144,9 +149,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
     private var crashBeforeCommit: Seam? { didSet { publishGate() } }
     /// Test seam: runs at open between reading the witnesses and publishing.
     private var openHook: Seam?
-    /// Test seam (codex #142 F6-1): runs at open after the read-only
-    /// admission said yes and before the pool exists — the window in which
-    /// another connection can change the file the admission looked at.
+    /// Test seam (codex #142 F6-1, #387): runs at open after the writer's
+    /// checks passed and the pool exists, before the open's first write —
+    /// the window in which another connection can change the checked file.
     private var admittedHook: Seam?
 
     public init(host: String = GRDBCatalogRepository.defaultHost,
@@ -173,40 +178,30 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if requiringLatch, CatalogFileIdentity.read(url.deletingLastPathComponent().appendingPathComponent(CatalogFileGuard.latchFileName)) == .missing {
             return refusedToOpen(url, Self.noLatchWords(folder: url.deletingLastPathComponent()))
         }
-        // codex #142 F6-3: what was beside the file before this open touched
-        // it; a refusal gives back exactly the sidecars the open added.
-        let footprint = AdmissionFootprint.record(url)
-        let outcome = await admitAndOpen(url, requiringLatch: requiringLatch)
-        if case .refused = outcome { footprint.eraseWhatTheOpenAdded() }
-        return outcome
-    }
-
-    /// The admission, the pool and the open checks (`open` wraps this with
-    /// the footprint; the pool is published only by `finishOpen`).
-    private func admitAndOpen(_ url: URL, requiringLatch: Bool) async -> CatalogOpenOutcome {
         // GH #359: the file as it was BEFORE the pool opened it (missing for
         // a new catalog), so a swap during the open itself is caught.
         let before = CatalogFileIdentity.read(url)
-        // codex #141 F6: the checks that can say no run on a READ-ONLY
-        // connection first — the read-write pool below switches the file to
-        // WAL on construction, and a file this build must refuse (a newer
-        // schema, a corrupt page) is never written to. Codex #142 F6-2: an
-        // existing file that look could not verify gets no writer either
-        // (openPool decides: refused, or read-only in a read-only folder).
-        let admission = Self.admit(url)
-        if case .refused(let words) = admission { return refusedToOpen(url, words) }
-        if admission == .admitted, let hook = admittedHook {
-            do { try hook() } catch { return refusedToOpen(url, Self.words(error)) }
-        }
+        // A rollback journal another program left mid-write would be played
+        // back by the first read-write lock — a write — before any check can
+        // refuse the file (codex #142 F6-2). Refused here, from its bytes.
+        if let why = Self.hotJournal(beside: url) { return refusedToOpen(url, Self.unverifiedWords(url, why)) }
+        // #387 (Rick 2026-10-26): the checks run inside the WRITER's first
+        // BEGIN IMMEDIATE, before GRDB switches the file to WAL or writes its
+        // init table (makePool / OpenVerdict); a refusal deletes nothing.
         let opened: Opened
         do {
-            opened = try Self.openPool(at: url, durability: durability, admission: admission)
+            opened = try Self.openPool(at: url, durability: durability)
         } catch {
             let why = Self.words(error)
             return refusedToOpen(url, error is Refusal ? why : "could not open: \(why)")
         }
-        return await finishOpen(opened, at: url, before: before, requiringLatch: requiringLatch,
-                                admitted: admission == .admitted)
+        if let hook = admittedHook {
+            do { try hook() } catch {
+                Self.closeRefused(opened)
+                return refusedToOpen(url, Self.words(error))
+            }
+        }
+        return await finishOpen(opened, at: url, before: before, requiringLatch: requiringLatch)
     }
 
     public static let readerOnlyWords = "opened for reading only by a process that is not the catalog's writer"
@@ -225,7 +220,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let opened: Opened
         do {
             opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true),
-                            readOnlyReason: Self.readerOnlyWords)
+                            readOnlyReason: Self.readerOnlyWords, verdict: nil)
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
@@ -237,11 +232,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// settle's high-water raise checks them, and they are checked again
     /// before the session is published.
     private func finishOpen(_ opened: Opened, at url: URL, before: CatalogFileIdentity.Reading,
-                            requiringLatch: Bool = false, admitted: Bool = false) async -> CatalogOpenOutcome {
+                            requiringLatch: Bool = false) async -> CatalogOpenOutcome {
         do {
             let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
             if requiringLatch, fileGuard.latch == nil { throw Refusal(reason: Self.noLatchWords(folder: url.deletingLastPathComponent())) }
-            let loaded = try await Self.prepare(opened, host: host, admitted: admitted)
+            let loaded = try await Self.prepare(opened, host: host)
             let settled = try await settle(opened, loaded: loaded, at: url, fileGuard: fileGuard)
             if let words = fileGuard.violation() { throw Refusal(reason: words) }
             pool = opened.pool
@@ -253,7 +248,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
             storeLog.notice("catalog store OPEN \(url.lastPathComponent, privacy: .public) generation \(settled.generation, privacy: .public) → \(String(describing: settled.mode.outcome), privacy: .public)")
             return settled.mode.outcome
         } catch {
-            try? opened.pool.close()
+            Self.closeRefused(opened)
             return refusedToOpen(url, Self.words(error))
         }
     }
@@ -277,27 +272,36 @@ public actor GRDBCatalogRepository: CatalogRepository {
         /// Non-nil when the folder refused a read-write open and the file
         /// was opened read-only instead (a sealed copy, a read-only volume).
         let readOnlyReason: String?
+        /// The read-write pool's open verdict (#387): the checks passed in
+        /// the writer's first transaction; nil for a read-only pool, whose
+        /// `prepare` runs the checks itself.
+        let verdict: OpenVerdict?
     }
 
-    private static func openPool(at url: URL, durability: Durability, admission: Admission) throws -> Opened {
-        if case .unverified(let why) = admission { return try openUnverified(at: url, durability: durability, why: why) }
+    private static func openPool(at url: URL, durability: Durability) throws -> Opened {
+        let verdict = OpenVerdict(path: url.path)
         do {
-            return Opened(pool: try makePool(at: url, durability: durability, readonly: false),
-                          readOnlyReason: nil)
+            return Opened(pool: try makePool(at: url, durability: durability, readonly: false, verdict: verdict),
+                          readOnlyReason: nil, verdict: verdict)
         } catch let error as DatabaseError
                     where FileManager.default.fileExists(atPath: url.path)
                     && (error.resultCode == .SQLITE_READONLY || error.resultCode == .SQLITE_CANTOPEN) {
             let pool = try makePool(at: url, durability: durability, readonly: true)
             let folder = url.deletingLastPathComponent().path
             return Opened(pool: pool,
-                          readOnlyReason: "the folder \(folder) is not writable (\(error.message ?? "")) — opened for reading only")
+                          readOnlyReason: "the folder \(folder) is not writable (\(error.message ?? "")) — opened for reading only",
+                          verdict: nil)
         }
     }
 
     /// The ONE place a `DatabasePool` is created (CatalogStoreSensorTests
     /// pins it). Every pragma the contract names is set here, per
-    /// connection, so a reader cannot drift from the writer.
-    private static func makePool(at url: URL, durability: Durability, readonly: Bool) throws -> DatabasePool {
+    /// connection, so a reader cannot drift from the writer. `verdict`
+    /// (read-write only, #387): the open checks run on the WRITER connection
+    /// as its first transaction, after the pragmas below and BEFORE GRDB's
+    /// WAL setup — see `OpenVerdict`.
+    private static func makePool(at url: URL, durability: Durability, readonly: Bool,
+                                 verdict: OpenVerdict? = nil) throws -> DatabasePool {
         var configuration = Configuration()
         configuration.label = "VideoScan.catalog"
         configuration.readonly = readonly
@@ -306,6 +310,12 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let fullfsync = durability.fullfsync
         let busyMilliseconds = Int(busyTimeoutSeconds * 1_000)
         configuration.prepareDatabase { db in
+            // The engine's own busy handler (not GRDB's `busyMode`, which
+            // installs a callback the pragma cannot report back). FIRST:
+            // `PRAGMA synchronous` reads the schema, so it already needs a
+            // shared lock — a catalog briefly locked by another connection
+            // was refused at once when this came after it (codex #144-4).
+            try db.execute(sql: "PRAGMA busy_timeout = \(busyMilliseconds)")
             try db.execute(sql: "PRAGMA synchronous = \(synchronous)")
             try db.execute(sql: "PRAGMA fullfsync = \(fullfsync)")
             // codex C′ #1: a REPLACE conflict resolution deletes the row in
@@ -313,12 +323,22 @@ public actor GRDBCatalogRepository: CatalogRepository {
             // only when this is on. The DDL's no-delete triggers are the
             // second layer; this pragma is what lets them see the delete.
             try db.execute(sql: "PRAGMA recursive_triggers = ON")
-            // The engine's own busy handler (not GRDB's `busyMode`, which
-            // installs a callback the pragma cannot report back).
-            try db.execute(sql: "PRAGMA busy_timeout = \(busyMilliseconds)")
+            // #387: readers (and a read-only pool's writer) are read-only
+            // connections; only the read-write writer reaches the verdict.
+            if let verdict, !db.configuration.readonly { try verdict.reach(db) }
         }
-        // journal_mode = WAL is DatabasePool's own invariant; it sets it.
-        let pool = try DatabasePool(path: url.path, configuration: configuration)
+        // journal_mode = WAL is DatabasePool's own invariant; it sets it —
+        // AFTER prepareDatabase, so only a file that passed the checks is
+        // switched or written (GRDB 7.11.1 DatabasePool.init → setUpWALMode).
+        let pool: DatabasePool
+        do {
+            pool = try DatabasePool(path: url.path, configuration: configuration)
+        } catch {
+            // GRDB has closed the refusing writer by now (SerializedDatabase
+            // closes a connection whose setUp threw); the holder goes last.
+            verdict?.release()
+            throw error
+        }
         // codex #141 F1: GRDB 7.11.1 enables WAL on the WRITER after
         // prepareDatabase ran, and follows it with `PRAGMA synchronous =
         // NORMAL` (GRDB/Core/Database.swift, setUpWALMode — "many
@@ -336,8 +356,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return pool
     }
 
-    // The open checks (prepare / admit / checkEngine / checkSchemaVersion /
-    // loadGeneration) are in the "Open checks" extension below, same file.
+    // The open checks (OpenVerdict / prepare / checkEngine / checkSchemaVersion
+    // / loadGeneration) are in the "Open checks" extension below, same file.
 
     // MARK: - Migrations
 
@@ -348,11 +368,18 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// migration that recreates a table (drop + create under the same
     /// name), which needs `.deferred`; if part 2 ever needs that, the
     /// registration says so beside it.
-    private static func migrator(host: String) -> DatabaseMigrator {
+    ///
+    /// `confirm` (#387): run FIRST inside each migration's own immediate
+    /// transaction — the open verdict, proven still true under the lock
+    /// that writes (`OpenVerdict.confirm`). GRDB runs every migration in its
+    /// own transaction, so the checks' transaction cannot be the one that
+    /// migrates; this carries the verdict into each of them instead.
+    private static func migrator(host: String, confirm: (@Sendable (Database) throws -> Void)? = nil) -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         let now = unixNow()
         let version = CatalogBookkeepingSchema.schemaVersion
         migrator.registerMigration(CatalogBookkeepingSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogBookkeepingSchema.statements {
                 try db.execute(sql: statement)
             }
@@ -369,6 +396,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // AFTER v1_bookkeeping: GRDB runs migrations in registration order,
         // so a database a part-1 build created gets exactly this one added.
         migrator.registerMigration(CatalogDataSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogDataSchema.statements {
                 try db.execute(sql: statement)
             }
@@ -376,6 +404,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // Cutover B2 (v1.7): additive — one table for the app's live writes,
         // and the version raised so an older build refuses the file.
         migrator.registerMigration(CatalogLiveWritesSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogLiveWritesSchema.statements + CatalogLiveWritesSchema.versionBump {
                 try db.execute(sql: statement)
             }
@@ -383,6 +412,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // Cutover B2.1 (v1.8): additive — the holding place for new records
         // without a whole-file digest, and the version raised again.
         migrator.registerMigration(CatalogPendingRowsSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogPendingRowsSchema.statements + CatalogPendingRowsSchema.versionBump {
                 try db.execute(sql: statement)
             }
@@ -390,12 +420,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // Cutover B2.2 (v1.9): additive — a purge of a held record is a
         // tombstone beside its kept payload, never a DELETE of it.
         migrator.registerMigration(CatalogCommitB22Schema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogCommitB22Schema.statements + CatalogCommitB22Schema.versionBump {
                 try db.execute(sql: statement)
             }
         }
         // Catalog folders (v1.10): additive — `events.kind`, version 11.
         migrator.registerMigration(CatalogFolderKindSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogFolderKindSchema.statements + CatalogFolderKindSchema.versionBump {
                 try db.execute(sql: statement)
             }
@@ -403,6 +435,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // Rick's decisions (v1.11): additive — `footage_likeness` and
         // `ignored_content_put_back`, version 12.
         migrator.registerMigration(CatalogDecisionTablesSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
             for statement in CatalogDecisionTablesSchema.statements + CatalogDecisionTablesSchema.versionBump {
                 try db.execute(sql: statement)
             }
@@ -430,7 +463,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if let reason = opened.readOnlyReason ?? Self.folderNotWritableReason(for: url) {
             return Settled(generation: loaded, mode: .readOnly(reason: reason))
         }
-        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook, fileGuard: fileGuard)
+        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook, fileGuard: fileGuard,
+                            verdict: opened.verdict)
         return try await opened.pool.writeWithoutTransaction { db in try plan.run(db) }
     }
 
@@ -445,10 +479,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let publish: AtomicFilePublish.Durability
         let hook: Seam?
         let fileGuard: CatalogFileGuard
+        /// #387: the open verdict, confirmed first under this transaction's
+        /// lock — the lock that publishes the writer.
+        let verdict: OpenVerdict?
 
         func run(_ db: Database) throws -> Settled {
             var settled = Settled(generation: 0, mode: .closed)
             try db.inTransaction(.immediate) {
+                try verdict?.confirm(db)
                 settled = try reconcile(db)
                 return .commit
             }
@@ -1039,220 +1077,205 @@ extension GRDBCatalogRepository {
     }
 }
 
-// MARK: - Open checks (DDL §11), and the read-only admission (codex #141 F6)
+// MARK: - Open checks (DDL §11) and the open verdict (#387)
 //
-// Moved out of the actor body unchanged except `admitted:` (codex #141 kept
-// the body under SwiftLint's 600 lines); same file, so `Refusal` and the
-// migrator stay private. Every check takes a `Database` so the SAME code
-// runs on the admission connection and, where admission gave no verdict,
-// on the pool.
+// Moved out of the actor body (codex #141 kept the body under SwiftLint's
+// 600 lines); same file, so `Refusal` and the migrator stay private. Every
+// check takes a `Database`, so the SAME code runs in the read-write writer's
+// first transaction (`OpenVerdict.reach`) and on a read-only pool (`prepare`).
 
 extension GRDBCatalogRepository {
 
-    /// What the read-only look at the file before the pool said.
-    private enum Admission: Equatable {
-        /// Engine and schema checks passed on a read-only connection: the
-        /// pool may be built; `prepare` repeats only the schema-version check.
-        case admitted
-        /// The file is refused, in these words; no pool is built.
-        case refused(String)
-        /// An EXISTING file the read-only look could not verify (the
-        /// connection could not be made, or a check failed with an engine
-        /// error rather than a verdict — a hot rollback journal gives
-        /// SQLITE_READONLY_ROLLBACK here). Codex #142 F6-2: this never
-        /// authorises a writer, because a read-write connection would
-        /// recover the file (play the journal back, delete it, switch to
-        /// WAL) before any check could refuse it. A writable folder → the
-        /// open is refused in words saying the file was not opened; a
-        /// read-only folder → a read-only pool, with the full checks on it.
-        case unverified(String)
-        /// No file at the path yet: a new catalog, which the read-write
-        /// door creates and checks itself.
-        case noVerdict
-    }
-
-    /// The words for `.unverified` in a writable folder (codex #142 F6-2).
+    /// The words for a file the open would have to recover before it could
+    /// check it (codex #142 F6-2): nothing was opened.
     static func unverifiedWords(_ url: URL, _ why: String) -> String {
         "\(url.lastPathComponent) could not be verified before opening (\(why)) — it was not opened; nothing was written"
     }
 
-    /// `.unverified` with something an open could recover: never a
-    /// read-write pool. A folder that cannot be written (a read-only
-    /// volume, where the admission connection may fail for want of a
-    /// `-shm`) opens READ-ONLY — SQLITE_OPEN_READONLY cannot play a journal
-    /// back or switch the mode, and `prepare(admitted: false)` runs every
-    /// check on that pool. A writable folder refuses: the file stays
-    /// exactly as found.
-    private static func openUnverified(at url: URL, durability: Durability, why: String) throws -> Opened {
-        guard let reason = folderNotWritableReason(for: url) else {
-            throw Refusal(reason: unverifiedWords(url, why))
-        }
-        do {
-            return Opened(pool: try makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason)
-        } catch {
-            throw Refusal(reason: unverifiedWords(url, "\(why); read-only: \(words(error))"))
-        }
+    /// What every refusal reached by the verdict says about the file (#387).
+    /// True because the checks ran before GRDB's WAL switch and init write,
+    /// nothing in this file unlinks, and `holdFilesAsFound` keeps SQLite's
+    /// own close from checkpointing or deleting (see `OpenVerdict`).
+    static func leftAsFoundWords(_ path: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        return "VideoScan left \(name) as found: it wrote nothing to it and removed nothing beside it (SQLite's journal files \(name)-wal and \(name)-shm may now be beside it)"
     }
 
-    /// "Left exactly as found" for the DIRECTORY (codex #142 F6-3). SQLite
-    /// makes `-wal` and `-shm` beside a WAL-mode file to read it at all
-    /// (wal.html §Read-only databases: the system build will not open such
-    /// a file read-only without them), so a refused open that created
-    /// nothing else still leaves two new entries. Recorded before the
-    /// admission; after a refusal, `eraseWhatTheOpenAdded` removes ONLY what
-    /// the open added, and only with proof nothing else happened:
-    ///   - the main file's stat is unchanged (device, inode, size, mtime,
-    ///     ctime — any write by any process moves mtime/ctime; a hash would
-    ///     be O(file) twice over);
-    ///   - the `-wal` was absent before and is 0 bytes now (no frames: no
-    ///     one wrote through it); the `-shm` was absent before (an index,
-    ///     rebuilt from the WAL by the next open; never data).
-    /// An empty `-wal` and a `-shm` this open made are not media and not
-    /// records; nothing with content is ever removed here. Residual
-    /// (documented, not closed): another PROCESS that opened the same file
-    /// in the window between the snapshot and the erase would lose the
-    /// `-shm` under it. A POSIX fcntl probe from this process would be
-    /// worse — closing the probe's fd drops every lock this process holds
-    /// on the file, SQLite's included (the classic POSIX lock pitfall).
-    /// The window is a few ms inside a refused open, under the one-writer
-    /// latch. For Rick: a value type holding three stat snapshots.
-    struct AdmissionFootprint: Sendable {
-        /// The parts of `stat(2)` that move when a file is written.
-        /// Two LIVE stats of one open (before the admission, after the
-        /// refusal) — never a stored stamp; the identity half is the store's
-        /// own `CatalogFileIdentity` (the #359 guard's type).
-        private struct Fingerprint: Equatable {
-            let identity: CatalogFileIdentity
-            let size: off_t
-            let modified: (Int, Int), changed: (Int, Int)
-            static func == (lhs: Fingerprint, rhs: Fingerprint) -> Bool {
-                lhs.identity == rhs.identity && lhs.size == rhs.size
-                    && lhs.modified == rhs.modified && lhs.changed == rhs.changed
-            }
-            static func read(_ path: String) -> Fingerprint? {
-                var info = stat()
-                guard stat(path, &info) == 0 else { return nil }
-                return Fingerprint(identity: CatalogFileIdentity(device: info.st_dev, inode: info.st_ino), size: info.st_size,
-                                   modified: (info.st_mtimespec.tv_sec, info.st_mtimespec.tv_nsec),
-                                   changed: (info.st_ctimespec.tv_sec, info.st_ctimespec.tv_nsec))
-            }
-        }
-
-        private let url: URL
-        private let main: Fingerprint?
-        private let hadWAL: Bool
-        private let hadSHM: Bool
-
-        static func record(_ url: URL) -> AdmissionFootprint {
-            let fm = FileManager.default
-            return AdmissionFootprint(url: url, main: Fingerprint.read(url.path),
-                                      hadWAL: fm.fileExists(atPath: url.path + "-wal"),
-                                      hadSHM: fm.fileExists(atPath: url.path + "-shm"))
-        }
-
-        func eraseWhatTheOpenAdded() {
-            guard let main, Fingerprint.read(url.path) == main else { return }   // the file moved on; touch nothing
-            let fm = FileManager.default
-            let wal = url.path + "-wal", shm = url.path + "-shm"
-            let walNow = Fingerprint.read(wal)
-            if !hadWAL, let walNow, walNow.size == 0, (try? fm.removeItem(atPath: wal)) != nil {
-                storeLog.notice("catalog store OPEN REFUSED: removed the empty \(url.lastPathComponent)-wal this open created")
-            }
-            if !hadSHM, fm.fileExists(atPath: shm), (try? fm.removeItem(atPath: shm)) != nil {
-                storeLog.notice("catalog store OPEN REFUSED: removed the \(url.lastPathComponent)-shm this open created")
-            }
-        }
+    /// A refusal reached by the RE-check: another connection committed to
+    /// the file after the verdict, so GRDB's opening step (and any migration
+    /// that finished first) had already run. Said as it is.
+    static func changedDuringOpenWords(_ path: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        return "another program changed \(name) while VideoScan was opening it; the re-check refused it before VideoScan wrote anything more (its writes until then: the database engine's opening step and any schema upgrade already finished), and nothing beside it was removed"
     }
 
-    /// True when no open of `url` can change a byte of it: the header says
-    /// WAL (bytes 18/19 = 2) and there is no `-wal` and no `-journal` beside
-    /// it — nothing to play back, and a `journal_mode = WAL` is a no-op.
-    /// Why it matters: the system SQLite (3.54.0 "aapl", probed with
-    /// /usr/bin/sqlite3 on 2026-10-25) answers a READ-ONLY open of a
-    /// WAL-mode file whose `-wal` does not exist with SQLITE_CANTOPEN, even
-    /// in a writable folder (it creates the `-shm` for a read-only
-    /// connection, never the `-wal`); a clean close leaves a 0-byte `-wal`
-    /// and the `-shm`, so this is the state of a restored or copied
-    /// catalog. Such a file gets a second, read-write look in `admit`.
-    static func nothingToRecover(at url: URL) -> Bool {
-        let fm = FileManager.default
-        guard !fm.fileExists(atPath: url.path + "-wal"), !fm.fileExists(atPath: url.path + "-journal"),
-              let handle = try? FileHandle(forReadingFrom: url) else { return false }
+    /// A rollback journal another program left mid-write, read from its
+    /// bytes — no connection is made. SQLite's own "hot" test
+    /// (lockingv3.html §Hot Journals) without the lock probe: the file
+    /// exists, is non-empty, and the header's first byte is not zero
+    /// (journal_mode=PERSIST zeroes it, TRUNCATE leaves 0 bytes). The first
+    /// read-write lock would play it back — a write to the main file and a
+    /// delete of the journal — before any check could refuse. A catalog in
+    /// WAL mode never makes one, so this is always another program's; a
+    /// journal that is live rather than hot is refused too, and the next
+    /// open, after that program commits, succeeds.
+    static func hotJournal(beside url: URL) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: url.path + "-journal") else { return nil }
         defer { try? handle.close() }
-        let header = (try? handle.read(upToCount: 100)) ?? Data()
-        return header.count == 100 && header[18] == 2 && header[19] == 2
+        guard let first = (try? handle.read(upToCount: 1))?.first, first != 0 else { return nil }
+        return "\(url.lastPathComponent)-journal is beside it: a write another program did not finish. Open it once with that program, or sqlite3, to finish the recovery"
     }
 
-    /// "Refused, never written to" (codex #141 F6): `DatabasePool` switches
-    /// the file to WAL and may create GRDB's init table the moment it is
-    /// constructed, so a file this build must refuse — a newer schema, a
-    /// corrupt page — was being written before the refusal. A plain
-    /// `DatabaseQueue` with `readonly = true` takes only shared locks and
-    /// changes no byte of the main file (on a WAL-mode file it may create
-    /// `-shm`, which the pool creates anyway). For Rick: `fopen(path, "r")`
-    /// plus the checks, before anything opens the file for writing.
-    /// Codex #142 F6-2: only `.admitted` authorises a writer; a connection
-    /// or check that fails without a verdict is `.unverified`, never a
-    /// licence to open read-write (see `Admission`).
-    private static func admit(_ url: URL) -> Admission {
-        guard FileManager.default.fileExists(atPath: url.path) else { return .noVerdict }
-        let first = look(at: url, readonly: true)
-        guard case .unverified = first, nothingToRecover(at: url) else { return first }
-        // codex #142 F6-3: the second look. A plain read-write queue makes
-        // the 0-byte `-wal` and the `-shm` the engine needs and nothing
-        // else — no `journal_mode` pragma, no GRDB init write (that is the
-        // pool's; see makePool), nothing to play back — so a verdict is
-        // still reached BEFORE the pool, and a refusal leaves only those
-        // two files for the footprint to take back.
-        return look(at: url, readonly: false)
-    }
+    /// The open's verdict (#387, Rick 2026-10-26: "the lock that admits the
+    /// file is the lock that writes it").
+    ///
+    /// `reach` runs on the read-write pool's WRITER connection, from
+    /// `prepareDatabase` — its first transaction, after the pragmas (so the
+    /// 5 s busy timeout applies) and BEFORE GRDB 7.11.1's `setUpWALMode`
+    /// (DatabasePool.init: `PRAGMA journal_mode = WAL`, then a CREATE/DROP
+    /// of `grdb_issue_102` when the `-wal` is missing or empty). Inside
+    /// `BEGIN IMMEDIATE` it runs integrity_check, foreign_key_check and the
+    /// version check, notes `PRAGMA data_version`, and rolls back. A
+    /// refusal throws out of the pool's construction, so a refused file is
+    /// never switched to WAL and gets no init write.
+    ///
+    /// GRDB runs its own WAL setup and every migration in transactions of
+    /// its own, so the checks' transaction cannot also be the writing one.
+    /// The verdict is carried instead: every later open transaction that
+    /// writes (each migration, the high-water reconcile) calls `confirm`
+    /// first, under its own write lock. `data_version` on the same
+    /// connection changes only when ANOTHER connection committed
+    /// (pragma.html#pragma_data_version), so an unchanged value proves the
+    /// checked file is the file being written; a changed one re-runs the
+    /// checks right there, under that lock (codex #144-2).
+    ///
+    /// `holdFilesAsFound`, before a refusing writer closes (codex #144-1/-3):
+    /// nothing in the store unlinks a sidecar, and SQLite's own close must
+    /// not either — as the last connection it would checkpoint any committed
+    /// `-wal` frames into the main file and then delete the `-wal` and
+    /// `-shm`. Two guards: SQLITE_FCNTL_PERSIST_WAL on the writer (the close
+    /// never deletes), and a READ-ONLY holder connection opened before the
+    /// writer closes and closed after it. In WAL mode every connection keeps
+    /// a SHARED lock on the database file until it closes, so the writer's
+    /// close cannot take the EXCLUSIVE lock its checkpoint needs; the holder
+    /// cannot checkpoint at all (a read-only WAL connection gets
+    /// SQLITE_READONLY) and so never deletes either. (sqlite3_db_config's
+    /// NO_CKPT_ON_CLOSE would be one call, but it is variadic — Swift cannot
+    /// call it without a C shim.)
+    ///
+    /// Memory: one Int, one handle; the holder's page cache (≤ ~2 MB) lives
+    /// only between a refusal and the end of the open.
+    /// For Rick: a mutex-guarded struct the writer's setup closure and the
+    /// open share — a std::shared_ptr<Verdict> two threads touch under a lock.
+    final class OpenVerdict: @unchecked Sendable {
+        /// The database file (GRDB keeps `Database.path` internal).
+        let path: String
+        private let lock = NSLock()
+        /// `PRAGMA data_version` on the writer when the checks last passed.
+        private var dataVersion: Int?
+        /// The read-only holder, between a refusal and `release`.
+        private var holder: OpaquePointer?
 
-    /// One connection, the checks, a verdict. `readonly` is the connection
-    /// flag (SQLITE_OPEN_READONLY); the checks are reads either way.
-    private static func look(at url: URL, readonly: Bool) -> Admission {
-        var configuration = Configuration()
-        configuration.label = "VideoScan.catalog.admit"
-        configuration.readonly = readonly
-        let queue: DatabaseQueue
-        do {
-            queue = try DatabaseQueue(path: url.path, configuration: configuration)
-        } catch {
-            return .unverified(words(error))
-        }
-        defer { try? queue.close() }
-        do {
-            try queue.read { db in
-                try checkEngine(db)
-                try checkSchemaVersion(db)
+        init(path: String) { self.path = path }
+
+        /// The checks, in the writer's first transaction (see above).
+        func reach(_ db: Database) throws {
+            do {
+                var seen = 0
+                try db.inTransaction(.immediate) {
+                    try GRDBCatalogRepository.checkEngine(db)
+                    try GRDBCatalogRepository.checkSchemaVersion(db)
+                    seen = try Int.fetchOne(db, sql: "PRAGMA data_version") ?? 0
+                    return .rollback   // nothing was written; nothing to keep
+                }
+                lock.withLock { dataVersion = seen }
+            } catch let refusal as Refusal {
+                holdFilesAsFound(db)
+                throw Refusal(reason: "\(refusal.reason) — \(GRDBCatalogRepository.leftAsFoundWords(path))")
+            } catch {
+                holdFilesAsFound(db)
+                throw error
             }
-            return .admitted
-        } catch let refusal as Refusal {
-            return .refused(refusal.reason)
-        } catch {
-            // The check itself could not run (an engine error, not a
-            // verdict): the file is unverified, not refused on its merits.
-            return .unverified(words(error))
+        }
+
+        /// The verdict still holds, proven inside the caller's IMMEDIATE
+        /// transaction: no other connection committed since the checks, or
+        /// the checks pass again now.
+        func confirm(_ db: Database) throws {
+            let now = try Int.fetchOne(db, sql: "PRAGMA data_version")
+            if let now, now == lock.withLock({ dataVersion }) { return }
+            do {
+                try GRDBCatalogRepository.checkEngine(db)
+                try GRDBCatalogRepository.checkSchemaVersion(db)
+            } catch let refusal as Refusal {
+                throw Refusal(reason: "\(refusal.reason) — \(GRDBCatalogRepository.changedDuringOpenWords(path))")
+            }
+            lock.withLock { dataVersion = now }
+        }
+
+        /// Before the writer `db` closes on a refusal (see above). Best
+        /// effort by design: if the holder cannot open, PERSIST_WAL still
+        /// keeps the close from deleting anything.
+        func holdFilesAsFound(_ db: Database) {
+            guard let connection = db.sqliteConnection else { return }
+            var persist: Int32 = 1
+            _ = sqlite3_file_control(connection, "main", SQLITE_FCNTL_PERSIST_WAL, &persist)
+            var handle: OpaquePointer?
+            guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let handle else {
+                sqlite3_close(handle)
+                return
+            }
+            // One read enters WAL mode and takes the SHARED lock the
+            // connection then keeps until it closes.
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(handle, "SELECT count(*) FROM sqlite_master", -1, &statement, nil) == SQLITE_OK {
+                _ = sqlite3_step(statement)
+            }
+            sqlite3_finalize(statement)
+            let previous = lock.withLock { () -> OpaquePointer? in
+                let previous = holder
+                holder = handle
+                return previous
+            }
+            if let previous { sqlite3_close(previous) }
+        }
+
+        /// After the refusing writer has closed: the holder goes last.
+        func release() {
+            let handle = lock.withLock { () -> OpaquePointer? in
+                let handle = holder
+                holder = nil
+                return handle
+            }
+            if let handle { sqlite3_close(handle) }
         }
     }
 
-    /// The open checks, in the order the DDL's §11 lists them. Throws a
-    /// `Refusal` (words for the person) or an engine error. `admitted`: the
-    /// engine checks already passed on the read-only admission connection
-    /// for this very open; they are not run twice (integrity_check is
-    /// O(file)). The schema-version check is ALWAYS re-run here, on the
-    /// pool's own connection (codex #142 F6-1): the admission connection was
-    /// closed before the pool existed, and a version bumped in between by
-    /// another connection — same inode, so the identity guard is blind to
-    /// it — would otherwise be migrated and opened read-write. One indexed
-    /// row; cheap. Admission stays valid through this, the first step that
-    /// can mutate.
-    private static func prepare(_ opened: Opened, host: String, admitted: Bool) async throws -> Int {
-        if !admitted { try await checkEngine(opened.pool) }
-        try await opened.pool.read { db in try checkSchemaVersion(db) }
-        if opened.readOnlyReason == nil {
-            try migrator(host: host).migrate(opened.pool)
-        } else if try await !migrationsComplete(opened.pool, host: host) {
-            throw Refusal(reason: "the database is read-only and its schema is not current")
+    /// Close the pool of an open that was refused, leaving the files as
+    /// found (see `OpenVerdict.holdFilesAsFound`). A read-only pool cannot
+    /// checkpoint or delete, so it is simply closed.
+    private static func closeRefused(_ opened: Opened) {
+        if let verdict = opened.verdict {
+            try? opened.pool.writeWithoutTransaction { db in verdict.holdFilesAsFound(db) }
+        }
+        try? opened.pool.close()
+        opened.verdict?.release()
+    }
+
+    /// The open checks and the migration. A read-write pool's checks already
+    /// ran in its writer's first transaction (`OpenVerdict.reach`); each
+    /// migration confirms the verdict first. A read-only pool (the reading
+    /// doors, a read-only folder) runs the checks here and never migrates.
+    /// Throws a `Refusal` (words for the person) or an engine error.
+    private static func prepare(_ opened: Opened, host: String) async throws -> Int {
+        if let verdict = opened.verdict, opened.readOnlyReason == nil {
+            try migrator(host: host, confirm: { db in try verdict.confirm(db) }).migrate(opened.pool)
+        } else {
+            try await checkEngine(opened.pool)
+            try await opened.pool.read { db in try checkSchemaVersion(db) }
+            if try await !migrationsComplete(opened.pool, host: host) {
+                throw Refusal(reason: "the database is read-only and its schema is not current")
+            }
         }
         return try await loadGeneration(opened.pool)
     }
@@ -1356,7 +1379,7 @@ extension GRDBCatalogRepository {
     /// refused); the high-water witnesses are neither read nor raised; every
     /// write is refused for the session. The same engine and schema checks
     /// as `open` (integrity_check, foreign_key_check, schema version), run
-    /// the same way: the read-only admission first, then the pool.
+    /// on the read-only pool (it cannot write, so it has no verdict to hold).
     public func openReadOnly(at url: URL, reason: String) async -> CatalogOpenOutcome {
         guard pool == nil else {
             return .refused(reason: "already open at \(databaseURL?.path ?? "?")")
@@ -1364,29 +1387,17 @@ extension GRDBCatalogRepository {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return refusedToOpen(url, "\(url.lastPathComponent) does not exist")
         }
-        // codex #142 F6-3: this door reaches its verdict before its pool
-        // too — the admission's second look is what lets a read-only pool
-        // open a WAL-mode file with no `-wal` at all on the system SQLite —
-        // and a refusal gives back what the look added.
-        let footprint = AdmissionFootprint.record(url)
-        let outcome = await admitAndOpenReadOnly(url, reason: reason)
-        if case .refused = outcome { footprint.eraseWhatTheOpenAdded() }
-        return outcome
-    }
-
-    private func admitAndOpenReadOnly(_ url: URL, reason: String) async -> CatalogOpenOutcome {
-        let admission = Self.admit(url)
-        if case .refused(let words) = admission { return refusedToOpen(url, words) }
         let before = CatalogFileIdentity.read(url)
         let opened: Opened
         do {
-            opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason)
+            opened = Opened(pool: try Self.makePool(at: url, durability: durability, readonly: true), readOnlyReason: reason,
+                            verdict: nil)
         } catch {
             return refusedToOpen(url, "could not open: \(Self.words(error))")
         }
         do {
             let fileGuard = try CatalogFileGuard.record(databaseAt: url, before: before)
-            let loaded = try await Self.prepare(opened, host: host, admitted: admission == .admitted)
+            let loaded = try await Self.prepare(opened, host: host)
             pool = opened.pool
             databaseURL = url
             self.fileGuard = fileGuard

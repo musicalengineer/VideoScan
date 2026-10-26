@@ -2650,12 +2650,26 @@
       ],
       "tests": [
         "aNewerSchemaIsRefusedWithoutTheFileChanging",
-        "aNewerSchemaWALFileIsRefusedWithItsFolderExactlyAsFound",
+        "aNewerSchemaWALFileIsRefusedWithItsMainFileAsFound",
         "aReadOnlyFolderWithoutSidecarsNeverOpensForWriting",
         "anAdmissionGoneStaleBeforeThePoolIsRefused",
         "anUnverifiableExistingFileIsRefusedUntouched",
         "archivalWriterUsesFullSynchronization",
         "clearingTheLastCuratedValueStaysClearedAcrossRelaunch"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreOpenVerdictTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogStoreOpenVerdictTests"
+      ],
+      "tests": [
+        "aBrieflyLockedCatalogIsWaitedFor",
+        "aForeignKeyViolationAfterTheChecksIsRefused",
+        "aRefusedOpenLeavesCommittedFramesInTheirWAL",
+        "foreignSidecarsSurviveARefusal"
       ]
     },
     {
@@ -34300,7 +34314,7 @@
       ],
       "expected_floor": 289,
       "name": "regression",
-      "package_expected_floor": 265,
+      "package_expected_floor": 269,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -34341,7 +34355,8 @@
         "VideoScanCoreTests.CatalogCommitRelationTests",
         "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests",
         "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests",
-        "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests"
+        "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests",
+        "VideoScanCoreTests.CatalogStoreOpenVerdictTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

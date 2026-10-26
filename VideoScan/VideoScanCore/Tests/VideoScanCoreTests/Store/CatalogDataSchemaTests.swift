@@ -282,7 +282,9 @@ struct CatalogDataSchemaTests {
             Issue.record("expected .refused, got \(outcome)")
             return
         }
-        #expect(reason == "foreign_key_check: 1 violation(s)")
+        // #387: the check's words, then what the refusal did to the file.
+        #expect(reason.hasPrefix("foreign_key_check: 1 violation(s) — "), Comment(rawValue: reason))
+        #expect(reason.contains("VideoScan left catalog.sqlite as found"), Comment(rawValue: reason))
     }
 
     // MARK: - Isolation: REPLACE conflict resolution on a raw connection (codex C′ #1, #2)
