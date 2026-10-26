@@ -26540,18 +26540,6 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
-      "path": "tests/test_adversarial_morning_line.py",
-      "stage": "unit",
-      "suites": [
-        "test_adversarial_morning_line.py"
-      ],
-      "tests": [
-        "test_morning_line"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
       "path": "tests/test_adversarial_nightly.py",
       "stage": "unit",
       "suites": [
@@ -27583,20 +27571,6 @@
         "test_quality_holdout_rejects_leakage_warning",
         "test_quality_holdout_requires_balanced_reviewed_cases",
         "test_unreviewed_candidates_are_not_exported"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_local_review_morning_line.py",
-      "stage": "unit",
-      "suites": [
-        "test_local_review_morning_line.py"
-      ],
-      "tests": [
-        "test_hallie_voice_line_only_when_last_night_alerted",
-        "test_local_review_line",
-        "test_local_review_line_matches_what_nightly_review_writes"
       ]
     },
     {
@@ -33121,10 +33095,6 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "tests/test_adversarial_morning_line.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "tests/test_adversarial_nightly.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -33226,10 +33196,6 @@
         },
         {
           "name": "tests/test_label_queue_to_manifest.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tests/test_local_review_morning_line.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

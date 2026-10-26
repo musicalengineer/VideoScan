@@ -122,7 +122,7 @@ struct ExternalPlayerAudioRouteMediaMatrixTests {
     /// (GH #332), with the video codec the archive carries. qdm2 (and
     /// svq3) cannot be ENCODED by ffmpeg, so that one file is covered by
     /// the logic suite's unreadable-asset case, not a fixture.
-    nonisolated static let pairs: [Pair] = [  // Swift 6: the @Test macro reads it off the actor
+    nonisolated static let pairs: [Pair] = [  // Swift 6: the Test macro reads the argument table off the actor
         Pair(name: "mov_hevc_aac", ext: "mov", video: "hevc", audio: "aac",
              videoArgs: ["-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1", "-pix_fmt", "yuv420p"], audioArgs: ["-c:a", "aac"], muxArgs: []),
         Pair(name: "mov_h264_aac", ext: "mov", video: "h264", audio: "aac", videoArgs: x264, audioArgs: ["-c:a", "aac"], muxArgs: []),
