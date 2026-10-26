@@ -11163,6 +11163,20 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EditorCacheCodexRound2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "EditorCacheIgnoreListNameFallbackTests"
+      ],
+      "tests": [
+        "byteIdenticalCopyStillHides",
+        "familyVideoWithSameNameAndSizeIsNotJunk",
+        "keyPolicy",
+        "retroactiveIndexIsContentKeyedForCaches"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EditorCacheSkipReviewTests.swift",
       "stage": "unit",
       "suites": [
@@ -33406,7 +33420,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3010,
+      "expected_floor": 3014,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -33918,7 +33932,8 @@
         "VideoScanTests/EditorCacheAuditTruthTests",
         "VideoScanTests/EditorCacheScaleTests",
         "VideoScanTests/EditorCacheScanRootReviewTests",
-        "VideoScanTests/ListKeyboardNavigationSensorTests"
+        "VideoScanTests/ListKeyboardNavigationSensorTests",
+        "VideoScanTests/EditorCacheIgnoreListNameFallbackTests"
       ]
     },
     {

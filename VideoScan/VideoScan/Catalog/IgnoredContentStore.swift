@@ -17,7 +17,10 @@
 // Fallback when partialMD5 is empty (hashing skipped over SMB, an older
 // catalog): (filename lowercased, sizeBytes). Every entry is indexed under
 // BOTH keys it can form, so a hash-less rescan still recognises a file
-// that was set aside from a hashed record.
+// that was set aside from a hashed record — EXCEPT editor-cache entries,
+// which are content-keyed only (`IgnoredContentKey.usesNameFallback`,
+// 2026-10-25): a generic `Cache.mov` name must never pull an unrelated
+// family video under the label.
 //
 // Same shape as ArchiveAngelEvidenceStore: a main-actor façade, a
 // Sendable on-disk value, load/save off-main. The store is NOT the
@@ -67,8 +70,9 @@ enum IgnoredContentKey: Hashable, Sendable {
         return .name(filenameLower: lower, sizeBytes: sizeBytes)
     }
 
-    /// EVERY key an entry with these facts is indexed under (content key
-    /// when hashed, name key always).
+    /// EVERY key these facts CAN form (content key when hashed, name key
+    /// always). This is the superset the override (`remove`) looks under;
+    /// what an entry is INDEXED under is `indexKeys(…reason:)` below.
     static func indexKeys(partialMD5: String, sizeBytes: Int64, filename: String) -> [IgnoredContentKey] {
         guard sizeBytes > 0 else { return [] }
         var keys: [IgnoredContentKey] = []
@@ -76,6 +80,29 @@ enum IgnoredContentKey: Hashable, Sendable {
         let lower = filename.lowercased()
         if !lower.isEmpty { keys.append(.name(filenameLower: lower, sizeBytes: sizeBytes)) }
         return keys
+    }
+
+    /// The keys an entry with this `reason` is INDEXED under — every key it
+    /// can form, except that a content-only reason never gets the name key.
+    static func indexKeys(partialMD5: String, sizeBytes: Int64, filename: String, reason: String) -> [IgnoredContentKey] {
+        let all = indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename)
+        if usesNameFallback(reason: reason) { return all }
+        return all.filter { if case .content = $0 { return true } else { return false } }
+    }
+
+    /// Whether entries with this reason may be matched by (filename, size)
+    /// when no hash exists. Editor render caches (GH #383, codex round 2,
+    /// 2026-10-25) may NOT: they wear generic names — `Cache.mov`,
+    /// `Cache-30.mov` — that an unrelated family video can share, size and
+    /// all, and the fallback then labelled that video "junk that came back"
+    /// and kept it out of the catalog. An editor-cache entry is remembered by
+    /// content only (an unhashed cache row is not remembered at all: the
+    /// walker never admits its directory, and rescan preservation holds its
+    /// own path). Every other reason keeps the fallback — Rick set those
+    /// aside by hand or by format, and the same name + size at a new path is
+    /// what "came back" means for them.
+    static func usesNameFallback(reason: String) -> Bool {
+        reason != CatalogScopePolicy.SetAsideReason.editorCache.rawValue
     }
 }
 
@@ -103,8 +130,10 @@ struct IgnoredContentEntry: Codable, Sendable, Equatable, Identifiable {
         self.samplePath = samplePath
     }
 
+    /// The keys this entry is indexed under (reason-aware: see
+    /// `IgnoredContentKey.usesNameFallback`).
     var indexKeys: [IgnoredContentKey] {
-        IgnoredContentKey.indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename)
+        IgnoredContentKey.indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename, reason: reason)
     }
 
     /// Friendly label for the override sheet — the set-aside vocabulary
@@ -148,7 +177,7 @@ struct IgnoredContentIndex: Sendable {
     /// Index one content under every key it can form. First reason wins
     /// (an explicit store entry is added before the catalog's tombstones).
     mutating func add(partialMD5: String, sizeBytes: Int64, filename: String, reason: String) {
-        for k in IgnoredContentKey.indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename)
+        for k in IgnoredContentKey.indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename, reason: reason)
         where reasonByKey[k] == nil {
             reasonByKey[k] = reason
         }
@@ -261,11 +290,13 @@ final class IgnoredContentStore: ObservableObject {
     // MARK: Writes (in memory — see `save`)
 
     /// Remember this content. Returns false when it was already known
-    /// (no duplicate entry, the original reason and date stand). O(1).
+    /// (no duplicate entry, the original reason and date stand) — or when
+    /// there is nothing content-shaped to remember it by (an unhashed
+    /// editor-cache row: `IgnoredContentKey.usesNameFallback`). O(1).
     @discardableResult
     func add(partialMD5: String, sizeBytes: Int64, filename: String,
              reason: String, samplePath: String, now: Date = Date()) -> Bool {
-        let keys = IgnoredContentKey.indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename)
+        let keys = IgnoredContentKey.indexKeys(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename, reason: reason)
         guard !keys.isEmpty else { return false }
         if keys.contains(where: { idByKey[$0] != nil }) { return false }
         let entry = IgnoredContentEntry(partialMD5: partialMD5, sizeBytes: sizeBytes, filename: filename,
@@ -278,7 +309,8 @@ final class IgnoredContentStore: ObservableObject {
 
     /// THE OVERRIDE: forget every entry this content answers to (a
     /// rescan will catalog it again). Returns the number of entries
-    /// removed. O(1).
+    /// removed. O(1). Looks under EVERY key the facts can form (the
+    /// reason-less superset) — an override must never miss an entry.
     @discardableResult
     func remove(partialMD5: String, sizeBytes: Int64, filename: String) -> Int {
         var ids = Set<UUID>()
