@@ -280,6 +280,62 @@ struct RelocateSummaryProofTests {
         #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
     }
 
+    /// One real Migrate of a source holding hashed A (its original bytes
+    /// already copied to A's planned destination) plus hashed C with a
+    /// proven backup; `tamper` runs after cataloguing, before the run.
+    func migrateAdoption(tamper: (Rig) throws -> Void) async throws -> RelocateSummary {
+        let rig = try Rig(); defer { rig.cleanup() }
+        let srcA = rig.source.appendingPathComponent("a.mov")
+        try Self.bytes(1).write(to: srcA)
+        let rowA = Self.row(srcA, hashed: true)
+        try #require(rowA.contentFixity?.isUsableForVerification == true)
+        try Self.bytes(1).write(to: rig.dest.appendingPathComponent("a.mov"))   // the original bytes
+        let srcC = rig.source.appendingPathComponent("c.mov")
+        let copyC = rig.backup.appendingPathComponent("c.mov")
+        try Self.bytes(7).write(to: srcC)
+        try Self.bytes(7).write(to: copyC)
+        let rowC = Self.row(srcC, hashed: true), copyRow = Self.row(copyC, hashed: true)
+        try tamper(rig)
+
+        let model = VideoScanModel()
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
+        model.catalogStore = CatalogStore(directory: rig.catalog)
+        model.records = [rowA, rowC, copyRow]
+        let safe = CatalogScanTarget(searchPath: rig.backup.path)
+        safe.role = .backup; safe.trust = .reliable
+        model.scanTargets = [CatalogScanTarget(searchPath: rig.source.path), safe]
+        model.catalogStore.saveNow(records: model.records)
+        model.relocateVolume(RelocateOptions(sourceVolumeRootPath: rig.source.path, destinationRoot: rig.dest,
+                                             maxConcurrency: 1, dryRun: false,
+                                             skipAlreadyRelocated: true, skipDupsOnOtherVolumes: true))
+        let deadline = Date().addingTimeInterval(30)
+        while model.pendingRelocateSummary == nil && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return try #require(model.pendingRelocateSummary)
+    }
+
+    /// Codex round 3 recipe: A is hashed, its original bytes are copied to
+    /// the destination, then the SOURCE is overwritten in place with
+    /// different same-size bytes. The destination still matches A's stored
+    /// digest, but that digest no longer describes the source.
+    @Test func anAdoptionWhoseSourceChangedIsNotProven() async throws {
+        let s = try await migrateAdoption { rig in
+            try Self.bytes(55).write(to: rig.source.appendingPathComponent("a.mov"))
+        }
+        try #require(s.adoptedCount == 1, "adopted \(s.adoptedCount), copied \(s.succeededCount)")
+        #expect(s.provenAdoptedCount == 0)
+        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+    }
+
+    /// Control: source untouched, destination holds its bytes — proven.
+    @Test func anAdoptionOfAnUntouchedHashedSourceIsProven() async throws {
+        let s = try await migrateAdoption { _ in }
+        try #require(s.adoptedCount == 1)
+        #expect(s.provenAdoptedCount == 1)
+        #expect(RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+    }
+
     /// Codex #150 F5: the only backup is on a drive marked Aging.
     @Test func anAgingOnlyBackupNeverInvitesRetire() async throws {
         let s = try await migrate(trust: .aging)

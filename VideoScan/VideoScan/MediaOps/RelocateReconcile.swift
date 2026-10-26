@@ -87,6 +87,13 @@ struct ReconcileResult: Equatable {
     /// provenance, skips the copy.
     var adopted: [(rec: VideoRecord, destPath: String)]
 
+    /// For each adopted record, its SOURCE path and whole-file SHA-256
+    /// fixity as they were BEFORE the apply step rewrites `rec.fullPath` to
+    /// the destination (Codex round 3: the adoption proof must check that
+    /// the stored digest still describes the source file). Captured by
+    /// `materialize`; absent when the source had no usable fixity.
+    var adoptionSources: [UUID: ContentCopyProof.Claim] = [:]
+
     /// Same (size, partialMD5) exists on a volume that is neither the
     /// source nor the destination, AND at least one witness lives on a
     /// safe host volume (see `WitnessSafety`). Catalog-only mutation —
@@ -501,7 +508,7 @@ enum RelocateReconcile {
         byID.reserveCapacity(scope.count)
         for rec in scope { byID[rec.id] = rec }   // last-wins on dup id (UUIDs are unique)
 
-        return ReconcileResult(
+        var result = ReconcileResult(
             ready: plan.readyIDs.compactMap { byID[$0] },
             manuallyDeleted: plan.manuallyDeletedIDs.compactMap { byID[$0] },
             sourceSideMoves: plan.sourceSideMoves.compactMap { entry in
@@ -523,6 +530,14 @@ enum RelocateReconcile {
             },
             previouslyRelocated: plan.previouslyRelocatedIDs.compactMap { byID[$0] }
         )
+        // Before any apply step rewrites the path: where the source is, and
+        // the digest + stamp on record for it.
+        for (rec, _) in result.adopted {
+            if let f = ContentCopyProof.digest(rec) {
+                result.adoptionSources[rec.id] = ContentCopyProof.Claim(path: rec.fullPath, fixity: f)
+            }
+        }
+        return result
     }
 
     // MARK: - Sendable classify core (runs off the main actor)

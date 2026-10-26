@@ -709,15 +709,21 @@ extension VideoScanModel {
     /// adopted destination file hashes to it, fresh, now. Detached; cost =
     /// one full read of each adopted file (adoption is the rare bucket),
     /// memory one 1 MiB buffer at a time.
-    func provenAdoptedCount(_ adopted: [(rec: VideoRecord, destPath: String)]) async -> Int {
-        let claims: [ContentCopyProof.Claim] = adopted.compactMap { entry in
-            guard let f = entry.rec.contentFixity, f.algorithm == ContentFixity.sha256,
-                  ArchiveDigestIndex.isSHA256(f.digest) else { return nil }
-            return ContentCopyProof.Claim(path: entry.destPath, digest: f.digest, byteCount: f.byteCount)
+    /// Codex round 3: the source's stored digest counts only if its stamp
+    /// still describes the SOURCE file now (captured before the path was
+    /// rewritten — `reconcile.adoptionSources`; persistent digest policy,
+    /// racily-clean rule included). A source that is gone or changed proves
+    /// nothing, so its adoption needs attention.
+    func provenAdoptedCount(_ reconcile: ReconcileResult) async -> Int {
+        let pairs: [RelocateClaimSet] = reconcile.adopted.compactMap { entry in
+            guard let source = reconcile.adoptionSources[entry.rec.id] else { return nil }
+            return RelocateClaimSet(source: source,
+                                    copies: [ContentCopyProof.Claim(path: entry.destPath, digest: source.digest,
+                                                                    byteCount: source.byteCount)])
         }
-        guard !claims.isEmpty else { return 0 }
+        guard !pairs.isEmpty else { return 0 }
         return await Task.detached(priority: .userInitiated) {
-            claims.reduce(0) { $0 + (ContentCopyProof.sha256(path: $1.path, expectedBytes: $1.byteCount) == $1.digest ? 1 : 0) }
+            pairs.reduce(0) { $0 + (ContentCopyProof.proven(source: $1.source, copies: $1.copies) ? 1 : 0) }
         }.value
     }
 
@@ -773,7 +779,7 @@ extension VideoScanModel {
         // words stand only on backups and adoptions PROVEN now (a dry run
         // proves nothing and never invites retiring).
         let provenBackups = options.dryRun ? 0 : await self.provenBackupCount(reconcile.safelyRedundant)
-        let provenAdoptions = options.dryRun ? 0 : await self.provenAdoptedCount(reconcile.adopted)
+        let provenAdoptions = options.dryRun ? 0 : await self.provenAdoptedCount(reconcile)
         let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
         let mbps = elapsed > 0 ? mb / elapsed : 0
 

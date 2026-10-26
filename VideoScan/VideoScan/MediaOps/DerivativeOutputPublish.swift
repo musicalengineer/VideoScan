@@ -210,7 +210,11 @@ enum DerivativeOutputPublish {
         // that stays (or is already removing) is kept, never replaced.
         let moved: Result<URL?, Failure> = RemovalReservations.shared.whileReserved(
             final.path, survivor: nil,
-            held: { note in .failure(Failure(message: "the previous file \(note)")) },
+            held: { note in
+                .failure(Failure(message: note == RemovalReservations.reliedOnNote
+                    ? "another job is relying on the previous file as the copy that stays — nothing moved"
+                    : "the previous file \(note)"))
+            },
             {
                 do { return .success(try trash(final)) } catch {
                     return .failure(Failure(message: "the previous file could not be moved to the Trash (\(error.localizedDescription))"))
