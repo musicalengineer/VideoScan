@@ -10,6 +10,7 @@
 // ledger and the plan root are all isolated — never App Support.
 
 import Foundation
+import os
 import Testing
 import VideoScanCore
 @testable import VideoScan
@@ -242,17 +243,18 @@ struct DeleteDuplicatesJobTests {
         let rig = makeRig("cancel"); defer { rig.cleanup() }
         let probe = Probe()
         let release = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var started = false
+        // Swift 6: the hook fires on the disk thread, so the lock owns the flag
+        // (a main-actor local `var` mutated there crashes the test host).
+        let started = OSAllocatedUnfairLock(initialState: false)
         probe.onFirstDuplicateBlock = {
-            lock.withLock { started = true }
+            started.withLock { $0 = true }
             release.wait()
         }
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
         job.start()
         let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline, !lock.withLock({ started }) { await Task.yield() }
-        #expect(lock.withLock { started })
+        while ContinuousClock.now < deadline, !started.withLock({ $0 }) { await Task.yield() }
+        #expect(started.withLock { $0 })
 
         job.cancel(discardingRemaining: true)
         #expect(job.state == .cancelling)
@@ -278,15 +280,16 @@ struct DeleteDuplicatesJobTests {
         let rig = makeRig("saved"); defer { rig.cleanup() }
         let probe = Probe()
         let root = rig.root
-        let lock = NSLock()
-        var snapshotAtSecondQuarantine: DeleteDuplicatesPlan?
-        var planID: UUID?
+        // Swift 6: the hook fires on the disk thread, so the lock owns both
+        // the id it reads and the snapshot it writes.
+        struct Seen { var snapshotAtSecondQuarantine: DeleteDuplicatesPlan?; var planID: UUID? }
+        let seen = OSAllocatedUnfairLock(initialState: Seen())
         probe.onQuarantine = { n in
             // The second quarantine happens while pair 2 is being removed:
             // the plan on disk must already say pair 1 was deleted.
-            guard n == 2, let id = lock.withLock({ planID }) else { return }
+            guard n == 2, let id = seen.withLock({ $0.planID }) else { return }
             let loaded = try? DeleteDuplicatesPlanStore.load(url: DeleteDuplicatesPlanStore.planURL(for: id, root: root))
-            lock.withLock { snapshotAtSecondQuarantine = loaded }
+            seen.withLock { $0.snapshotAtSecondQuarantine = loaded }
         }
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: root)
         job.start()
@@ -295,10 +298,10 @@ struct DeleteDuplicatesJobTests {
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline, job.plan == nil { await Task.yield() }
         let id = try #require(job.plan?.id)
-        lock.withLock { planID = id }
+        seen.withLock { $0.planID = id }
         await job.task?.value
 
-        let mid = try #require(lock.withLock { snapshotAtSecondQuarantine })
+        let mid = try #require(seen.withLock { $0.snapshotAtSecondQuarantine })
         #expect(mid.entries[0].status == .trashed)
         #expect(mid.entries[1].status == .verifying || mid.entries[1].status == .pending)
         #expect(mid.entries[2].status == .pending)

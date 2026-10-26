@@ -33,6 +33,7 @@
 
 import CryptoKit
 import Foundation
+import os
 import Testing
 import VideoScanCore
 @testable import VideoScan
@@ -514,14 +515,15 @@ struct DeleteDuplicatesAngelHoldTests {
     @Test func aFreshRunLeavesAloneACopyTheAngelChoosesMidRun() async throws {
         let rig = makeRig("midrun"); defer { rig.cleanup() }
         let release = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var started = false
+        // Swift 6: the hook fires on the disk thread, so the lock owns the flag
+        // (a main-actor local `var` mutated there crashes the test host).
+        let started = OSAllocatedUnfairLock(initialState: false)
         var hooks = SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir)
         hooks.didReadBlock = { label in
             // The first pair's first read of its duplicate: hold it there.
-            guard label == "duplicate", lock.withLock({ () -> Bool in
-                if started { return false }
-                started = true
+            guard label == "duplicate", started.withLock({ s -> Bool in
+                if s { return false }
+                s = true
                 return true
             }) else { return }
             release.wait()
@@ -529,8 +531,8 @@ struct DeleteDuplicatesAngelHoldTests {
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: hooks, planRoot: rig.root)
         job.start()
         let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline, !lock.withLock({ started }) { await Task.yield() }
-        #expect(lock.withLock { started })
+        while ContinuousClock.now < deadline, !started.withLock({ $0 }) { await Task.yield() }
+        #expect(started.withLock { $0 })
         #expect(job.plan?.entries.map(\.id) == rig.copies.map(\.id), "fixture: both copies were planned")
 
         setAngel(rig.model, prepared: [rig.copies[1].id])

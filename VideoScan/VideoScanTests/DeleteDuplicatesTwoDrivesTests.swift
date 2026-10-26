@@ -26,6 +26,7 @@
 
 import CryptoKit
 import Foundation
+import os
 import Testing
 import VideoScanCore
 @testable import VideoScan
@@ -281,17 +282,17 @@ struct DeleteDuplicatesTwoDrivesTests {
         let rig = makeRig("noread", siblings: 2); defer { rig.cleanup() }
         rig.siblings[1].contentFixity = nil
         let forecast = rig.model.deleteDuplicatesForecast(onVolume: rig.dir.path)
-        let lock = NSLock()
-        var opened: [String] = []
+        // Swift 6: the open seam runs on the disk thread, so the lock owns the list.
+        let opened = OSAllocatedUnfairLock(initialState: [String]())
         var hooks = SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir)
-        hooks.didOpen = { path in lock.withLock { opened.append(path) } }
+        hooks.didOpen = { path in opened.withLock { $0.append(path) } }
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: hooks, planRoot: rig.root)
         job.start()
         await job.task?.value
         let row = try #require(job.plan?.entries.first)
         #expect(row.status == .trashed && row.remainingVerifiedCopies == 2, "\(row.status) \(row.tierReason ?? "")")
         #expect(job.runTally.siblingReads == 0, "a sibling was read although nothing could be earned")
-        #expect(!lock.withLock { opened }.contains(rig.siblings[1].fullPath))
+        #expect(!opened.withLock { $0 }.contains(rig.siblings[1].fullPath))
         #expect(rig.siblings[1].contentFixity == nil)
         #expect(forecast.bucket(for: rig.copy.id) == .trash)
     }

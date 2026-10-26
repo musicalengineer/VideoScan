@@ -12,6 +12,7 @@
 
 import CryptoKit
 import Foundation
+import os
 import Testing
 import VideoScanCore
 @testable import VideoScan
@@ -83,17 +84,19 @@ struct DeleteDuplicatesBoundaryAuthorizationTests {
     @Test func theKeeperReElectedDuringTheReadHoldsTheCopy() async throws {
         let r = rig("reelect"); defer { r.cleanup() }
         nonisolated(unsafe) let keeper = r.keeper
-        let flipped = NSLock()
-        nonisolated(unsafe) var done = false
+        // Swift 6: the hook fires on the disk thread, so the lock owns the flag.
+        // `nonisolated(unsafe) var` did NOT stop the runtime isolation check on
+        // the inner closure (test host crash, 2026-10-25).
+        let flipped = OSAllocatedUnfairLock(initialState: false)
         var hooks = SignatureVerification.Hooks.live.withScratchTrash(in: r.dir)
         hooks.didReadBlock = { _ in
-            guard flipped.withLock({ () -> Bool in defer { done = true }; return !done }) else { return }
+            guard flipped.withLock({ done -> Bool in defer { done = true }; return !done }) else { return }
             DispatchQueue.main.sync { MainActor.assumeIsolated { keeper.duplicateDisposition = .extraCopy } }
         }
         let job = try await reviewedJob(r, hooks: hooks)
         job.start(); await job.task?.value
 
-        #expect(flipped.withLock { done }, "fixture: the catalog changed during the read")
+        #expect(flipped.withLock { $0 }, "fixture: the catalog changed during the read")
         let row = try #require(job.plan?.entries.first)
         #expect(row.status != .trashed && row.outcome == .held, "\(row.status): \(row.note)")
         #expect(!r.trashed && FileManager.default.fileExists(atPath: r.copy.fullPath))

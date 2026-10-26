@@ -24,6 +24,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import os
 import Testing
 import VideoScanCore
 @testable import VideoScan
@@ -674,13 +675,14 @@ struct DeleteDuplicatesTierAndSpeedTests {
     @Test func trashRungHandsTheOriginalPathToTheTrash() async throws {
         let rig = makeRig("putback", copies: 1, keeperFixity: true); defer { rig.cleanup() }
         addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper, withSibling: false)
-        let seen = NSLock(); var handed: [String] = []
+        // Swift 6: the Trash seam runs on the disk thread, so the lock owns the list.
+        let handed = OSAllocatedUnfairLock(initialState: [String]())
         var hooks = SignatureVerification.Hooks.live
         let scratch = scratchTrash(in: rig.dir)
-        hooks.trashItem = { url in seen.withLock { handed.append(url.path) }; return try scratch(url) }
+        hooks.trashItem = { url in handed.withLock { $0.append(url.path) }; return try scratch(url) }
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: hooks, planRoot: rig.root)
         job.start(); await job.task?.value
-        #expect(seen.withLock { handed } == [rig.copies[0].fullPath], "the Trash is handed the public path")
+        #expect(handed.withLock { $0 } == [rig.copies[0].fullPath], "the Trash is handed the public path")
         #expect(job.plan?.entries[0].status == .trashed && quarantineFolders(in: rig.dir).isEmpty)
     }
 

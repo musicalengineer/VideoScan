@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -482,21 +483,25 @@ struct DuplicateCarryOverLiveRowGuardTests {
         addVerifiedArchiveFamily(to: model, keeper: master)
 
         let allowHashing = DispatchSemaphore(value: 0)
-        let gate = NSLock()
-        var paused = false, hashingStarted = false
+        // Swift 6: the hook runs on the hashing thread, so the lock owns the
+        // flags. A main-actor local `var` captured here and mutated under an
+        // NSLock is a runtime isolation violation (EXC_BREAKPOINT in
+        // swift_task_checkIsolated — test host crash, 2026-10-25).
+        struct Gate { var paused = false, hashingStarted = false }
+        let gate = OSAllocatedUnfairLock(initialState: Gate())
         let hooks = SignatureVerification.Hooks(
             shouldCancel: { Task.isCancelled },
             didReadBlock: { _ in
-                let first = gate.withLock { let f = !paused; paused = true; hashingStarted = true; return f }
+                let first = gate.withLock { g in let f = !g.paused; g.paused = true; g.hashingStarted = true; return f }
                 if first { allowHashing.wait() }
             })
         let deletion = Task { await model.deleteDuplicates(onVolume: dir.path, verificationHooks: hooks) }
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
-            if gate.withLock({ hashingStarted }) { break }
+            if gate.withLock({ $0.hashingStarted }) { break }
             await Task.yield()
         }
-        #expect(gate.withLock { hashingStarted })
+        #expect(gate.withLock { $0.hashingStarted })
         // Replace the extra's row (new id, same path) while the worker holds.
         let replacement = VideoRecord()
         replacement.fullPath = copyURL.path; replacement.filename = "copy.mov"

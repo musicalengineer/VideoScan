@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -295,16 +296,18 @@ struct DeleteDuplicatesSafetyTests {
         ]
         addVerifiedArchiveFamily(to: model, keeper: model.records[0])
         let allowHashing = DispatchSemaphore(value: 0)
-        let gate = NSLock()
-        var paused = false
-        var hashingStarted = false
+        // Swift 6: the hook runs on the hashing thread, so the lock owns the
+        // flags (a main-actor local `var` mutated there trips the runtime
+        // isolation check and crashes the test host).
+        struct Gate { var paused = false, hashingStarted = false }
+        let gate = OSAllocatedUnfairLock(initialState: Gate())
         let hooks = SignatureVerification.Hooks(
             shouldCancel: { Task.isCancelled },
             didReadBlock: { _ in
-                let shouldPause = gate.withLock {
-                    let firstBlock = !paused
-                    paused = true
-                    hashingStarted = true
+                let shouldPause = gate.withLock { g in
+                    let firstBlock = !g.paused
+                    g.paused = true
+                    g.hashingStarted = true
                     return firstBlock
                 }
                 if shouldPause {
@@ -318,11 +321,11 @@ struct DeleteDuplicatesSafetyTests {
         }
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
-            let started = gate.withLock { hashingStarted }
+            let started = gate.withLock { $0.hashingStarted }
             if started { break }
             await Task.yield()
         }
-        let didStart = gate.withLock { hashingStarted }
+        let didStart = gate.withLock { $0.hashingStarted }
         #expect(didStart)
         let replacementPath = dir.appendingPathComponent("replacement.mov").path
         model.records = [VideoRecord(id: targetID)]
@@ -359,16 +362,16 @@ struct DeleteDuplicatesSafetyTests {
         ]
         addVerifiedArchiveFamily(to: model, keeper: model.records[0])
         let release = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var started = false
-        var paused = false
+        // Swift 6: the lock owns the flags (see the test above).
+        struct Gate { var started = false, paused = false }
+        let lock = OSAllocatedUnfairLock(initialState: Gate())
         let hooks = SignatureVerification.Hooks(
             shouldCancel: { Task.isCancelled },
             didReadBlock: { _ in
-                let shouldPause = lock.withLock {
-                    let first = !paused
-                    paused = true
-                    started = true
+                let shouldPause = lock.withLock { g in
+                    let first = !g.paused
+                    g.paused = true
+                    g.started = true
                     return first
                 }
                 if shouldPause { release.wait() }
@@ -379,10 +382,10 @@ struct DeleteDuplicatesSafetyTests {
         }
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline,
-              !lock.withLock({ started }) {
+              !lock.withLock({ $0.started }) {
             await Task.yield()
         }
-        #expect(lock.withLock { started })
+        #expect(lock.withLock { $0.started })
         deletion.cancel()
         release.signal()
         let result = await deletion.value
