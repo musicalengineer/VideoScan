@@ -83,6 +83,14 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["busy_timeout"] == "5000")
         #expect(pragmas["user_version"] == "12")                // v1.11 (`v7_decision_tables`) raised it
         #expect(pragmas["recursive_triggers"] == "1")   // codex C′ #1: REPLACE's deletes reach the delete triggers
+        // codex #141 F1: the WRITER is the connection that commits; GRDB's WAL
+        // setup had left it at NORMAL while every reader said FULL.
+        let writer = try await repository.writerPragmas()
+        #expect(writer["synchronous"] == "2")           // FULL on the writer too
+        #expect(writer["fullfsync"] == "1")
+        #expect(writer["foreign_keys"] == "1")
+        #expect(writer["recursive_triggers"] == "1")
+        #expect(writer["busy_timeout"] == "5000")
         await repository.close()
     }
 
@@ -95,6 +103,9 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["journal_mode"] == "wal")
         #expect(pragmas["foreign_keys"] == "1")
         #expect(pragmas["recursive_triggers"] == "1")
+        let writer = try await repository.writerPragmas()
+        #expect(writer["synchronous"] == "1")           // NORMAL — the one place volatile is weaker, on the writer too
+        #expect(writer["fullfsync"] == "0")
         await repository.close()
     }
 

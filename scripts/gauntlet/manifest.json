@@ -2642,6 +2642,17 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreDurabilityCodex141Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogStoreDurabilityCodex141Tests"
+      ],
+      "tests": [
+        "archivalWriterUsesFullSynchronization"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SurnameVariantPropertyTests.swift",
@@ -34272,7 +34283,7 @@
       ],
       "expected_floor": 288,
       "name": "regression",
-      "package_expected_floor": 258,
+      "package_expected_floor": 259,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -34312,7 +34323,8 @@
         "VideoScanCoreTests.CatalogCommitReplacementTests",
         "VideoScanCoreTests.CatalogCommitRelationTests",
         "VideoScanCoreTests.CatalogCommitArchiveProvenanceTests",
-        "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests"
+        "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests",
+        "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

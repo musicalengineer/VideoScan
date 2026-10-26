@@ -11,7 +11,8 @@
 //   - every connection runs foreign_keys=ON, recursive_triggers=ON (so a
 //     REPLACE's implicit delete reaches the delete triggers, codex C′ #1),
 //     synchronous=FULL, fullfsync=1 (macOS: FULL alone stops at the drive's
-//     cache), a busy timeout, WAL;
+//     cache), a busy timeout, WAL — and the writer is set to FULL AGAIN
+//     after the pool exists, because GRDB's WAL setup lowers it (codex #141 F1);
 //   - at open: integrity_check + foreign_key_check → `.refused` with the
 //     engine's words; a NEWER schema_version → `.refused`; exactly one
 //     catalog_state row and one generations row; then the high-water
@@ -286,7 +287,22 @@ public actor GRDBCatalogRepository: CatalogRepository {
             try db.execute(sql: "PRAGMA busy_timeout = \(busyMilliseconds)")
         }
         // journal_mode = WAL is DatabasePool's own invariant; it sets it.
-        return try DatabasePool(path: url.path, configuration: configuration)
+        let pool = try DatabasePool(path: url.path, configuration: configuration)
+        // codex #141 F1: GRDB 7.11.1 enables WAL on the WRITER after
+        // prepareDatabase ran, and follows it with `PRAGMA synchronous =
+        // NORMAL` (GRDB/Core/Database.swift, setUpWALMode — "many
+        // applications choose NORMAL in WAL mode"). The readers never run
+        // that step, so they said FULL while the one connection that commits
+        // said NORMAL: an acknowledged commit could still be lost to a power
+        // cut before the WAL was synced. Set the writer back here, on the
+        // writer queue, before migration or any write (a read-only pool skips
+        // GRDB's WAL step, so there is nothing to undo).
+        if !readonly {
+            try pool.writeWithoutTransaction { db in
+                try db.execute(sql: "PRAGMA synchronous = \(synchronous)")
+            }
+        }
+        return pool
     }
 
     /// The open checks, in the order the DDL's §11 lists them. Throws a
@@ -1047,13 +1063,23 @@ extension GRDBCatalogRepository {
     /// (internal: the pragma test queries them back).
     func pragmas() async throws -> [String: String] {
         guard let pool else { throw CatalogRepositoryError.notOpen }
-        return try await pool.read { db in
-            var reported: [String: String] = [:]
-            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
-                reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { Self.text($0[0]) } ?? ""
-            }
-            return reported
+        return try await pool.read { db in try Self.reportPragmas(db) }
+    }
+
+    /// The same pragmas on the WRITER connection (codex #141 F1: GRDB's WAL
+    /// setup touches only the writer, so the reader's reading cannot stand
+    /// for it). Runs on the writer queue; no transaction, nothing written.
+    func writerPragmas() async throws -> [String: String] {
+        guard let pool else { throw CatalogRepositoryError.notOpen }
+        return try await pool.writeWithoutTransaction { db in try Self.reportPragmas(db) }
+    }
+
+    private static func reportPragmas(_ db: Database) throws -> [String: String] {
+        var reported: [String: String] = [:]
+        for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
+            reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { text($0[0]) } ?? ""
         }
+        return reported
     }
 
     private static func text(_ value: DatabaseValue) -> String {
