@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-25T09:30:42Z",
- "sha": "ccf547e5",
+ "ts": "2026-10-26T10:39:43Z",
+ "sha": "6deac3f9",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -868,6 +868,27 @@
    "key": "VideoScan/VideoScan/Catalog/CatalogSearchIndex.swift::CatalogSearchIndex.catalogStoreFileNames",
    "file": "VideoScan/VideoScan/Catalog/CatalogSearchIndex.swift",
    "name": "CatalogSearchIndex.catalogStoreFileNames",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift::CatalogFilterToken.accessibilityHint",
+   "file": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift",
+   "name": "CatalogFilterToken.accessibilityHint",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift::CatalogShowingSummary.selectedVolumes",
+   "file": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift",
+   "name": "CatalogShowingSummary.selectedVolumes",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift::CatalogShowingSummary.unnamedVolume",
+   "file": "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift",
+   "name": "CatalogShowingSummary.unnamedVolume",
    "kind": "let",
    "classification": "could-be-private"
   },
@@ -2475,6 +2496,20 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift::AstatsOutputParser.parsedDB",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceAnalyzer.swift",
+   "name": "AstatsOutputParser.parsedDB",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceStreamShape.declaredChannelsPerStream",
+   "file": "VideoScan/VideoScan/Media/AudioBalanceProbe.swift",
+   "name": "AudioBalanceStreamShape.declaredChannelsPerStream",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Media/CaptionOrchestrator+Dossier.swift::CaptionOrchestrator.armDossierBatchContext",
    "file": "VideoScan/VideoScan/Media/CaptionOrchestrator+Dossier.swift",
    "name": "CaptionOrchestrator.armDossierBatchContext",
@@ -3945,13 +3980,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairSheet.swift::MediaRepairSheet.needsSound",
-   "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairSheet.swift",
-   "name": "MediaRepairSheet.needsSound",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairViews.swift::MediaRepairComparisonView.rowSentence",
    "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairViews.swift",
    "name": "MediaRepairComparisonView.rowSentence",
@@ -4323,6 +4351,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/People/FeaturedVideos.swift::FeaturedVideos.resolveOne",
+   "file": "VideoScan/VideoScan/People/FeaturedVideos.swift",
+   "name": "FeaturedVideos.resolveOne",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/People/FeaturedVideos.swift::FeaturedVideos.sameSize",
    "file": "VideoScan/VideoScan/People/FeaturedVideos.swift",
    "name": "FeaturedVideos.sameSize",
@@ -4340,6 +4375,55 @@
    "key": "VideoScan/VideoScan/People/PersonFinderCatalogFilter.swift::pfIsUnscannable",
    "file": "VideoScan/VideoScan/People/PersonFinderCatalogFilter.swift",
    "name": "pfIsUnscannable",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideoFamilies.swift::PersonVideoFamilies.Evidence.saidNotSame",
+   "file": "VideoScan/VideoScan/People/PersonVideoFamilies.swift",
+   "name": "PersonVideoFamilies.Evidence.saidNotSame",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideoFamilies.swift::PersonVideoFamilies.Evidence.saidSame",
+   "file": "VideoScan/VideoScan/People/PersonVideoFamilies.swift",
+   "name": "PersonVideoFamilies.Evidence.saidSame",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideosSection.swift::PersonVideoPage.hiddenBeforeBirth",
+   "file": "VideoScan/VideoScan/People/PersonVideosSection.swift",
+   "name": "PersonVideoPage.hiddenBeforeBirth",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideosSection.swift::PersonVideoPage.maybeCount",
+   "file": "VideoScan/VideoScan/People/PersonVideosSection.swift",
+   "name": "PersonVideoPage.maybeCount",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideosSection.swift::PersonVideoPage.missingPicks",
+   "file": "VideoScan/VideoScan/People/PersonVideosSection.swift",
+   "name": "PersonVideoPage.missingPicks",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideosSection.swift::PersonVideoPage.picksWithoutMaybes",
+   "file": "VideoScan/VideoScan/People/PersonVideosSection.swift",
+   "name": "PersonVideoPage.picksWithoutMaybes",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/People/PersonVideosSection.swift::PersonVideos.associatedRecords",
+   "file": "VideoScan/VideoScan/People/PersonVideosSection.swift",
+   "name": "PersonVideos.associatedRecords",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -5534,6 +5618,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/SoundPresencePolicy.swift::SoundPresencePolicy.relaxedSilentTrackVerdict",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/SoundPresencePolicy.swift",
+   "name": "SoundPresencePolicy.relaxedSilentTrackVerdict",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/CatalogDataSchema+Import.swift::CatalogDataSchema.importItems",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/CatalogDataSchema+Import.swift",
    "name": "CatalogDataSchema.importItems",
@@ -5800,8 +5891,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 105,
+ "fixed": 111,
  "baseline_before": 2456,
- "baseline_after": 2351,
+ "baseline_after": 2345,
  "shrink_skipped": false
 }

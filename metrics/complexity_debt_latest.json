@@ -1,13 +1,13 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-25T09:30:07Z",
- "sha": "ccf547e5",
+ "ts": "2026-10-26T10:39:09Z",
+ "sha": "6deac3f9",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 392,
+ "offenders": 393,
  "baseline_before": 387,
  "baseline_after": 387,
  "new": [
@@ -16,7 +16,7 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "CatalogView.withCatalogObservers",
    "ccn": 15,
-   "nloc": 83,
+   "nloc": 84,
    "lang": "swift"
   },
   {
@@ -41,6 +41,14 @@
    "function": "RelocateSummarySheet.countsGrid",
    "ccn": 11,
    "nloc": 89,
+   "lang": "swift"
+  },
+  {
+   "key": "VideoScan/VideoScan/App/ContentView.swift::CatalogView.catalogToolbarBase",
+   "file": "VideoScan/VideoScan/App/ContentView.swift",
+   "function": "CatalogView.catalogToolbarBase",
+   "ccn": 4,
+   "nloc": 86,
    "lang": "swift"
   },
   {
@@ -72,6 +80,16 @@
    "lang": "swift",
    "base_ccn": 14,
    "base_nloc": 238
+  },
+  {
+   "key": "VideoScan/VideoScan/App/ContentView.swift::ContentView.body",
+   "file": "VideoScan/VideoScan/App/ContentView.swift",
+   "function": "ContentView.body",
+   "ccn": 13,
+   "nloc": 117,
+   "lang": "swift",
+   "base_ccn": 12,
+   "base_nloc": 108
   },
   {
    "key": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body",
@@ -114,11 +132,21 @@
    "base_nloc": 85
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/InspectorFamilyTagsView.swift::InspectorFamilyTagsView.editModeControls",
+   "file": "VideoScan/VideoScan/Catalog/InspectorFamilyTagsView.swift",
+   "function": "InspectorFamilyTagsView.editModeControls",
+   "ccn": 6,
+   "nloc": 102,
+   "lang": "swift",
+   "base_ccn": 5,
+   "base_nloc": 97
+  },
+  {
    "key": "VideoScan/VideoScan/App/ContentView.swift::CatalogView.catalogContent",
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "CatalogView.catalogContent",
    "ccn": 4,
-   "nloc": 88,
+   "nloc": 90,
    "lang": "swift",
    "base_ccn": 3,
    "base_nloc": 81

@@ -24,7 +24,7 @@
   },
   "VideoScan/VideoScan/App/BundleImporter.swift::BundleImporter.installPOIs": {
    "ccn": 12,
-   "nloc": 83
+   "nloc": 82
   },
   "VideoScan/VideoScan/App/CompactDashboard.swift::CompactDashboard.body": {
    "ccn": 11,
@@ -984,7 +984,7 @@
   },
   "VideoScan/VideoScan/Media/SeekingFrameProvider.swift::SeekingFrameProvider.frames": {
    "ccn": 8,
-   "nloc": 82
+   "nloc": 81
   },
   "VideoScan/VideoScan/Media/VideoScanModel+ContentHashBackfill.swift::VideoScanModel.runContentHashBackfill": {
    "ccn": 17,
