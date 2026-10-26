@@ -104,6 +104,7 @@
 - Original-footage classification (camera / tape / slideshow / screen recording), reversible and human-correctable.
 
 ## Model split and code health
+- CCN worst offenders after 2026-10-25 (isWorthRestoring 36→7, executePresenceLike 44→5 done): next by nightly measure — `HallieLineageQuestion.detectShape` 42, `POIStorage.migrateToUUIDFoldersIfNeeded` 42 (POI frozen; retire instead), `HallieTurnExecutor.execute` 41, `ArchiveAngelSweep.perform` 39, `ArchiveAngelJob.selectFromEvidence` 39, `ArchiveAngelJob.prepare` 37, `ArchiveAngelPromoter.promote` 35 (rule 10 → Codex).
 - (ruling Q11) VSM split slices 0–9: guard-rail sensor (≤134 extensions, ≤90 @Published), PreviewService ✓, ScanStore, RelocateQueue, NavigationStore, ArchiveStore, DuplicateJobs, change bus replacing `records.didSet`, RemovalStore, CatalogStore.
 - Activity enum replacing the Bool flag soup (needs a table of flag combinations first).
 - Dead code: ~7,500 removable lines (Periphery 10/11) after Rick's call.
@@ -120,6 +121,7 @@
 - Consolidate to one rule set and façade; wise-design stages 4–7; curation phases (fatigue, "New to you", the wings-and-bell reward); `default:` arms that swallow new floors (C07 plan); #231 Angel Checks gates stale across an await.
 
 ## People (Q9), Family Tree, Hallie (Q7)
+- Hallie presence (reviewer 2026-10-25, pinned as-is by `HalliePresenceLikeCharacterizationTests.treeOnlyKinshipRebindsThePersonButKeepsTheKinWord`): a GEDCOM-only resolution of "my dad" keeps `dad` as a content word so the answer relaxes instead of listing Dad's videos; the People-tab path marks the kin word spent. Intended or a gap? Also: `retryUntaggedNamesAsWords` takes 8 parameters — a request struct; and the Hallie characterization file sits in the gauntlet unit stage while its siblings are in `hallie` (a manifest move).
 - People: move clip compilation to a future "Create" window; #84 merge two profiles; #133 People column/tags reliability; a rejected tag must never be re-proposed (the FamilyTagging bug the provenance trigger fixes for its own tables).
 - Family Tree: family map stage 3 (year slider) and 4 (flags, #229); Record Finder Phase C + UK adapters; common-ancestor precompute into CyberBrain; #188 one invalid CyberBrain locator disables the whole brain; parked: Story of the Day (#236), Life & Times 2–3 (#238), period nicknames (#243), interval inference (#216).
 - Hallie: agent lane + E1 harness (cloud model in a bounded tool loop, Swift verifier, data-class gate); compound/filter/count queries (QueryAST v3); family web access read-only (#244) and iPad browse (#42) gated on the family-viewer ruling.

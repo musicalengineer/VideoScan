@@ -301,7 +301,7 @@ struct RescanPreservedFields: Sendable {
     var isWorthRestoring: Bool {
         carriesDossierProduct
             || carriesPeopleTags
-            || carriesCuration
+            || carriesTriage
             || carriesLifecycleState
             || carriesArchiveProvenance
             || carriesUsersAnswers
@@ -333,7 +333,7 @@ struct RescanPreservedFields: Sendable {
 
     /// Rick's triage: disposition, stage, stars, junk score, notes, tags.
     /// Each is compared against its blank default, not merely "set".
-    var carriesCuration: Bool {
+    var carriesTriage: Bool {
         mediaDisposition != .unreviewed
             || lifecycleStage != .cataloged
             || archiveStage != .none

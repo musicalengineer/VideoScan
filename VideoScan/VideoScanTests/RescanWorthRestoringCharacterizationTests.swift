@@ -144,9 +144,12 @@ struct RescanWorthRestoringCharacterizationTests {
         #expect(!RescanPreservedFields(from: r).isWorthRestoring, "\(row.name) alone must NOT keep the record in the snapshot map")
     }
 
-    /// The table covers the predicate exactly once per term: 36 disjuncts
-    /// in the original (CCN 36 = 1 + 35 `||`). A new preserved field must
-    /// add a row here, or this count says the table fell behind.
+    /// The table has one row per term of the ORIGINAL predicate: 36
+    /// disjuncts (CCN 36 = 1 + 35 `||`). This guard is one-sided — it
+    /// checks the table against itself, not against the groups (reviewer,
+    /// 2026-10-25). A term added to a `carries*` group with no row stays
+    /// invisible here; the review rule is: a new preserved field adds a
+    /// row AND bumps this count in the same commit.
     @Test func truthTableCoversEveryTermOnce() {
         #expect(WorthRestoringCase.positives.count == 36)
         #expect(Set(WorthRestoringCase.positives.map(\.name)).count == 36, "no duplicate rows")
