@@ -95,6 +95,22 @@ struct CatalogCommitBaseline {
         waiting = [:]
     }
 
+    /// Codex #141 F2: a Reopen found the store's row of `id` changed by
+    /// another writer. The store now holds `print` / `stored`; the groups
+    /// this session edited keep their OLD baseline value, so a set's next
+    /// delta is still this session's own additions and removals (never a
+    /// removal of what the other writer added).
+    mutating func rebase(_ id: UUID, print: Fingerprint, shared stored: CatalogSharedCurated,
+                         keeping groups: [CatalogSharedCurated.Group]) {
+        var next = stored
+        if let old = shared[id] {
+            for group in groups { next.take(group, from: old) }
+        }
+        prints[id] = print
+        shared[id] = next
+        waiting[id] = nil
+    }
+
     // MARK: - At a commit
 
     /// The store holds `id` (as a row, or as a held payload).

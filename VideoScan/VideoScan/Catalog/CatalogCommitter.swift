@@ -77,7 +77,12 @@
 //                                   changed, the store's words are shown, and
 //                                   NO further commit is tried until the
 //                                   person chooses Catalog ▸ Reopen SQLite
-//                                   Catalog (never retried silently);
+//                                   Catalog (never retried silently); a
+//                                   Reopen that finds another writer's
+//                                   generation reconciles the changed records
+//                                   against the store first (codex #141 F2,
+//                                   `reconcile`): nothing of theirs is ever
+//                                   overwritten by this session's stale copy;
 //   file-stop (GH #359)           → catalog.sqlite or its latch is not the
 //                                   file this session opened: refused like
 //                                   any refusal, but the words say "quit and
@@ -146,6 +151,11 @@ final class CatalogCommitter {
     var onHeldChanged: (Set<UUID>) -> Void = { _ in }
     /// A reopen or an adopt made the store writable again.
     var onWritableAgain: () -> Void = {}
+    /// Codex #141 F2: a Reopen found another writer's generation and rebuilt
+    /// these records from the store (their changes kept, this session's
+    /// curated edits re-applied); the model shows each in place of the
+    /// record with its id.
+    var onRecordsReconciled: ([VideoRecord]) -> Void = { _ in }
     /// True when `record` is THIS session's live record (not a detached
     /// snapshot, not another session's): only those can be vetoed.
     var owns: (VideoRecord) -> Bool = { _ in true }
@@ -506,16 +516,133 @@ final class CatalogCommitter {
             return
         }
         let opened = await repository.open(at: url, requiringLatch: true)   // QA r1 D (#359): no latch, no reopen
-        reopening = false
         switch opened {
         case .readWrite:
-            if let now = try? await repository.read({ $0.generation }) { knownGeneration = now }
+            // Codex #141 F2: a generation this session did not write means
+            // another writer committed — the retained edits are reconciled
+            // against the store BEFORE any of them may be committed over it.
+            let found = await generationNow()
+            if found != knownGeneration { await reconcile(found: found) }
+            reopening = false
+            knownGeneration = found
             sink("Catalog store: OUTCOME reopened catalog.sqlite — writes allowed again; committing what is still changed")
             becameWritable()
         case .readOnly(let reason), .refused(let reason):
+            reopening = false
             blockedReason = "read-only: \(reason)"
             sink("Catalog store: OUTCOME reopened catalog.sqlite READ-ONLY — \(reason)")
         }
+    }
+
+    // MARK: - Reopen after another writer (codex #141 F2)
+
+    /// Another writer committed `found` while this session knew
+    /// `knownGeneration`. Every record CHANGED in memory is checked against
+    /// the store's row (the only rows a commit would write):
+    ///   * a row the other writer left alone (its stored fingerprint is this
+    ///     session's baseline) commits as it is — every difference is ours;
+    ///   * a row they changed too is rebuilt FROM THE STORE (their values —
+    ///     a footage decision, a marker, a fact — included) with this
+    ///     session's own shared-curated edits re-applied: the per-field
+    ///     baseline knows exactly which groups this session changed. A part
+    ///     the baseline cannot attribute (a row-scoped field, a relation)
+    ///     keeps the catalog's value — refuse to guess — and the row is
+    ///     named with the parts in question. The model swaps the rebuilt
+    ///     record in (`onRecordsReconciled`).
+    /// Records this session did not change are not touched: they are never
+    /// written, so nothing of the other writer's is at risk; memory may show
+    /// them behind the catalog until a relaunch, said once.
+    /// Memory: one loaded row and one fresh record per changed record for the
+    /// length of the reopen — worst case (every record changed, every row
+    /// touched) a second copy of the catalog, what a launch holds.
+    private func reconcile(found: Int) async {
+        let records = input().records
+        let changed = changedSinceBaseline(records)
+        guard !changed.isEmpty else {
+            sink("Catalog store: Reopen — another writer committed generation \(found) (this session knew \(knownGeneration)); "
+                 + "nothing is changed in memory, so nothing of theirs is at risk; relaunch to see their changes")
+            return
+        }
+        let ids = changed.map(\.id.uuidString)
+        guard let rows = try? await repository.read({ reader in try ids.map { try reader.storedRow(id: $0) } }),
+              rows.count == changed.count else {
+            // No comparison, no commit over theirs: stay blocked with the words.
+            blockedReason = "another writer committed generation \(found) and this session's \(changed.count) changed record(s) could not be "
+                + "compared with the catalog — quit and relaunch, then redo the change(s)"
+            sink("Catalog store: REFUSED Reopen's reconciliation — \(blockedReason ?? ""). Nothing was written.")
+            return
+        }
+        let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let formatter = VideoRecord.makeRowDateFormatter()
+        var fresh: [VideoRecord] = []
+        for (record, row) in zip(changed, rows) {
+            guard let row, let rebuilt = reconcileRow(record, row: row, partners: byID, formatter: formatter, found: found) else { continue }
+            fresh.append(rebuilt)
+        }
+        sink("Catalog store: Reopen — another writer committed generation \(found) (this session knew \(knownGeneration)): "
+             + "\(changed.count) changed record(s) checked, \(fresh.count) also changed in the catalog and rebuilt from it; "
+             + "records this session did not change may be behind the catalog until a relaunch")
+        guard !fresh.isEmpty else { return }
+        markerDirty.subtract(fresh.map(\.id))
+        onRecordsReconciled(fresh)
+    }
+
+    /// The records with a baseline whose fingerprint moved since it.
+    private func changedSinceBaseline(_ records: [VideoRecord]) -> [VideoRecord] {
+        let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
+        return zip(records, prints).compactMap { record, print in
+            guard let base = baseline.prints[record.id], base != print else { return nil }
+            return record
+        }
+    }
+
+    /// nil = the other writer did not touch this row (it commits as it is).
+    /// Else the record rebuilt from the store with this session's shared
+    /// edits re-applied, its baseline moved to the store's state.
+    private func reconcileRow(_ record: VideoRecord, row: CatalogLoadedRow, partners: [UUID: VideoRecord],
+                              formatter: DateFormatter, found: Int) -> VideoRecord? {
+        guard let fresh = try? VideoRecord(row: row, dateFormatter: formatter) else { return nil }
+        Self.relinkPair(of: fresh, partners: partners)
+        let storedPrint = CatalogChangeDetector.fingerprint(VideoRecordDTO(fresh))
+        guard storedPrint != baseline.prints[record.id] else { return nil }
+        let mine = CatalogSharedCurated(record)
+        let stored = CatalogSharedCurated(fresh)
+        let edited = baseline.shared[record.id].map { CatalogSharedCurated.groups(of: Array(mine.edited(since: $0))) } ?? []
+        let parts = Self.differingParts(stored: fresh, current: record)
+        for group in edited { mine.apply(group, to: fresh) }
+        baseline.rebase(record.id, print: storedPrint, shared: stored, keeping: edited)
+        let kept = edited.isEmpty ? "none" : edited.map { "\($0)" }.joined(separator: ", ")
+        sink("Catalog store: Reopen reconciled \(record.id.uuidString) (\(record.filename)) — another writer changed it "
+             + "(generation \(found)); this session's copy differed in: \(parts). Kept this session's edits to: \(kept); "
+             + "the catalog's values for the rest.")
+        return fresh
+    }
+
+    /// The same rewiring a load does for one record (SQLiteCatalogLoader
+    /// .rewirePairs): the partner object from memory, or no pair.
+    private static func relinkPair(of fresh: VideoRecord, partners: [UUID: VideoRecord]) {
+        guard let partnerID = fresh.pendingPairedWithID else { return }
+        fresh.pairedWith = partners[partnerID]
+        fresh.pendingPairedWithID = nil
+        if fresh.pairedWith == nil {
+            fresh.pairGroupID = nil
+            fresh.pairConfidence = nil
+        }
+    }
+
+    /// The parts of the record that differ between the store and memory,
+    /// in words — the commit's own comparison (CatalogRecordDiff).
+    private static func differingParts(stored: VideoRecord, current: VideoRecord) -> String {
+        guard let s = try? CatalogRecordDTO(record: stored, migrationLoadedAt: 0),
+              let c = try? CatalogRecordDTO(record: current, migrationLoadedAt: 0) else { return "(could not be compared)" }
+        let diff = CatalogRecordDiff(stored: s, current: c)
+        let flags: [(Bool, String)] = [(diff.file, "file facts"), (diff.marker, "removal marker"), (diff.archiveCopy, "archive copy"),
+                                       (diff.backups, "backups"), (diff.footageDecisions, "footage decisions"),
+                                       (diff.duplicate, "duplicate analysis"), (diff.soundPrint, "sound print"), (diff.pair, "pair")]
+        var names = flags.filter(\.0).map(\.1)
+        names += diff.knowledge.map(\.rawValue)
+        names += diff.derived.map { "derived \($0.rawValue)" }
+        return names.isEmpty ? "nothing the store compares" : names.joined(separator: ", ")
     }
 
     /// Catalog ▸ Adopt This SQLite Catalog… (gap 5): the person accepted a

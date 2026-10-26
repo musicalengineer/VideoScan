@@ -279,6 +279,7 @@ extension VideoScanModel {
                                          sink: { [weak self] line in self?.catalogAuthorityNote(line) })
         committer.adoptBaseline(records, held: held, generation: launch.snapshot.generation)
         committer.onCopiesUpdated = { [weak self] in self?.noteCatalogMutated() }
+        committer.onRecordsReconciled = { [weak self] fresh in self?.showReconciledRecords(fresh) }   // codex #141 F2
         // B2.3: the marker veto answers only for this session's live records.
         committer.owns = { [weak self] record in self?.record(forID: record.id) === record }
         committer.onWritableAgain = { [weak self] in
@@ -324,6 +325,30 @@ extension VideoScanModel {
             EventsDecisionStore.shared.attachCatalog(EventsCatalogBacking(committer: committer))
             Task { await EventsDecisionStore.shared.load() }
         }
+    }
+
+    /// Codex #141 F2: Catalog ▸ Reopen rebuilt these records from a catalog
+    /// another writer changed — each takes the place of the record with its
+    /// id. The array is swapped ONCE (one `didSet`: the indexes un-latch, the
+    /// counts and snapshots follow), then every `pairedWith` that pointed at
+    /// a replaced instance is re-pointed to the one now in the array. The old
+    /// instances are detached: the marker veto's `owns` says no to them.
+    /// (For Rick: the same `records[i] = decoded` swap a rescan does; a
+    /// pointer fix-up pass after it.)
+    func showReconciledRecords(_ fresh: [VideoRecord]) {
+        guard !fresh.isEmpty else { return }
+        let byID = Dictionary(fresh.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var replaced: [ObjectIdentifier: VideoRecord] = [:]
+        var next = records
+        for index in next.indices {
+            guard let replacement = byID[next[index].id] else { continue }
+            replaced[ObjectIdentifier(next[index])] = replacement
+            next[index] = replacement
+        }
+        for record in next {
+            if let partner = record.pairedWith, let moved = replaced[ObjectIdentifier(partner)] { record.pairedWith = moved }
+        }
+        records = next
     }
 
     /// The catalog's generation for a synchronous stamp: catalog.sqlite's as
