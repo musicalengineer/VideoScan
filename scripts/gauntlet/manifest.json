@@ -140,6 +140,8 @@
         "hashBeyond24BitsRefusesThatPrintOnly",
         "pagingDoesNotHoldTheLockAcrossPages",
         "poisonedOrNewerSidecarRefusesBeforeBuild",
+        "readOnlyBuildChangesNothingEvenWithWALFrames",
+        "readOnlyOpenRefusesAMissingWAL",
         "sampledKeysAndOtherRecipesAreCountedNotIndexed",
         "unreadableBlobIsCountedAndBuildContinues"
       ]
@@ -225,6 +227,18 @@
         "twoThousandRows",
         "unreadableStampIsAbsent",
         "versionTwoNoSoundStampsAreSuspect"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderAcceptanceTests.swift",
+      "stage": "integration",
+      "suites": [
+        "AudioMasterFinderAcceptanceTests"
+      ],
+      "tests": [
+        "mediaMatrix"
       ]
     },
     {
@@ -13058,7 +13072,8 @@
         "findMasterFilesWriteNothing",
         "findMasterIsARegisteredKind",
         "noVerdictIsMadeOutsideCore",
-        "tableContextMenuHasTheProvenanceMenu"
+        "tableContextMenuHasTheProvenanceMenu",
+        "weakOverlapsStartCollapsed"
       ]
     },
     {
@@ -13083,6 +13098,8 @@
         "startAndOutcomeOnceWithCounts",
         "stopMidRunSaysStopped",
         "unopenableSidecarRefusesBeforeReading",
+        "weakOverlapsAreCountedAndLoggedTogether",
+        "weakOverlapsAreSplitByTheMatchersConstants",
         "writesNothing"
       ]
     },
@@ -34699,6 +34716,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderAcceptanceTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
