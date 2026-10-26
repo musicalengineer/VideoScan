@@ -133,16 +133,26 @@ enum FilesystemWalker {
         let fm = FileManager.default
         // The ROOT is checked too (383 review): a scan target at or inside
         // an editor cache dir admits nothing — the same rule as children,
-        // so the scan and Tidy Catalog can never disagree. Counted.
-        if CatalogScopePolicy.isEditorCacheDirectory(root) {
-            audit?.skippedEditorCacheDir(path: root)
-            return
-        }
+        // so the scan and Tidy Catalog can never disagree. Counted. Checked
+        // as spelled AND as resolved (codex round 2: a symlink `Preview` →
+        // `Project/Render Files` must be refused by rule, with an audit
+        // entry naming the real directory).
+        if rootIsEditorCache(root, audit: audit) { return }
         var dirStack: [URL] = [URL(fileURLWithPath: root)]
 
         while !dirStack.isEmpty {
             if Task.isCancelled { break }
             let currentDir = dirStack.removeLast()
+            // Belt and braces for every file in this directory: whatever
+            // route a path took onto the stack, nothing under a cache
+            // component is ever listed. (Children are refused by name below
+            // and never pushed, so this fires only for a shape the push
+            // check could not see.) One string pass per DIRECTORY, not per
+            // file.
+            if CatalogScopePolicy.isEditorCacheDirectory(currentDir.path) {
+                audit?.skippedEditorCacheDir(path: currentDir.path)
+                continue
+            }
             onDirectoryEntered?(currentDir)
 
             let contents: [URL]
@@ -186,22 +196,7 @@ enum FilesystemWalker {
                 }
 
                 if rv.isDirectory == true {
-                    let dirName = url.lastPathComponent.lowercased()
-                    let dirExt = url.pathExtension.lowercased()
-                    // Editor render caches (GH #383): unconditional — not
-                    // part of `policy.skipDirs`, so no scan option (not
-                    // even Scan Everything) can admit them. Directory
-                    // names only; the file branch below never consults
-                    // this set. Counted separately so the audit says so.
-                    if SkipCategories.editorCacheDirs.contains(dirName) {
-                        audit?.skippedEditorCacheDir(path: url.path)
-                    } else if policy.skipDirs.contains(dirName) {
-                        audit?.skippedSystemTreeDir()
-                    } else if policy.skipBundleExtensions.contains(dirExt) {
-                        audit?.skippedBundleDir()
-                    } else {
-                        dirStack.append(url)
-                    }
+                    processDirectoryEntry(url, policy: policy, audit: audit, dirStack: &dirStack)
                 } else if rv.isRegularFile == true {
                     if rv.isReadable == true {
                         processRegularFile(url, fileSize: rv.fileSize, policy: policy,
@@ -223,6 +218,59 @@ enum FilesystemWalker {
                     audit?.nonRegularEntry(path: url.path)
                 }
             }
+        }
+    }
+
+    /// The scan root refused as an editor cache — as spelled, or as resolved
+    /// through symlinks (realpath(3)). Counted once, under the path that
+    /// matched; the resolved path is what exists on disk, so "where did my
+    /// file go?" has an answer. False = walk it.
+    private static func rootIsEditorCache(_ root: String, audit: DiscoveryAuditCollector?) -> Bool {
+        if CatalogScopePolicy.isEditorCacheDirectory(root) {
+            audit?.skippedEditorCacheDir(path: root)
+            return true
+        }
+        let resolved = resolvedPath(root)
+        if resolved != root, CatalogScopePolicy.isEditorCacheDirectory(resolved) {
+            audit?.skippedEditorCacheDir(path: resolved)
+            return true
+        }
+        return false
+    }
+
+    /// realpath(3): every symlink in `path` followed, `.`/`..` collapsed.
+    /// Returns `path` unchanged when it cannot be resolved (ENOENT, EACCES…)
+    /// — the walk then reports the enumeration failure itself. Not
+    /// `URL.resolvingSymlinksInPath()`: that STRIPS `/private` from
+    /// `/private/var/…` instead of following the `/var` link, so it does not
+    /// canonicalise (ScanMergeScopeTests.makeTempDir has the same note).
+    static func resolvedPath(_ path: String) -> String {
+        guard let real = realpath(path, nil) else { return path }
+        defer { free(real) }
+        return String(cString: real)
+    }
+
+    /// One DIRECTORY entry of a listing: refuse it by rule (editor cache →
+    /// counted with its path; system tree; bundle) or push it for the walk.
+    /// Editor render caches (GH #383) are unconditional — not part of
+    /// `policy.skipDirs`, so no scan option (not even Scan Everything) can
+    /// admit them. Split from `walkTree` to keep that function readable.
+    private static func processDirectoryEntry(
+        _ url: URL,
+        policy: WalkPolicy,
+        audit: DiscoveryAuditCollector?,
+        dirStack: inout [URL]
+    ) {
+        let dirName = url.lastPathComponent.lowercased()
+        let dirExt = url.pathExtension.lowercased()
+        if SkipCategories.editorCacheDirs.contains(dirName) {
+            audit?.skippedEditorCacheDir(path: url.path)
+        } else if policy.skipDirs.contains(dirName) {
+            audit?.skippedSystemTreeDir()
+        } else if policy.skipBundleExtensions.contains(dirExt) {
+            audit?.skippedBundleDir()
+        } else {
+            dirStack.append(url)
         }
     }
 

@@ -80,4 +80,47 @@ struct EditorCacheScanRootReviewTests {
                 "the audit must count the cache dir the root sits in (got \(snapshot.skippedEditorCacheDirs))")
         #expect(snapshot.filesAdmitted == 0)
     }
+
+    /// Codex round 2, finding 2 (P1) — RED on db2f3fec9: the root
+    /// precondition read the root's LITERAL spelling, `contentsOfDirectory`
+    /// followed the symlink, and the file branch never looked at the
+    /// enclosing path. A scan target `Preview` → `Project/Render Files`
+    /// admitted `clip.mov`. Fix: the root is checked as spelled AND as
+    /// resolved (realpath), and every directory the walk enters is checked
+    /// again before its files are classified.
+    @Test("scan root that is a SYMLINK into a cache dir: nothing admitted, one audited cache rejection")
+    func symlinkedRootIntoCacheIsNotAdmitted() async throws {
+        let base = try reviewTempRoot("symlink")
+        defer { try? FileManager.default.removeItem(at: base) }
+        try reviewTouch(base, "Project/Render Files/clip.mov")
+        try reviewTouch(base, "Project/Render Files/Deeper/clip2.mov")
+        let link = base.appendingPathComponent("Preview", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: base.appendingPathComponent("Project/Render Files", isDirectory: true))
+
+        let thorough = ScanOptions.thorough
+        let audit = DiscoveryAuditCollector(scanRoot: link.path, volumeName: "T")
+        let found = await FilesystemWalker.walkDirectory(
+            root: link.path,
+            videoExtensions: ["mov", "mp4"],
+            skipDirs: thorough.skipDirs(),
+            skipBundleExtensions: thorough.skipBundleExtensions(),
+            skipSmallFiles: thorough.skipSmallFiles,
+            probeExtensionless: true,
+            audit: audit
+        )
+        #expect(found.isEmpty, "a symlinked root into a cache dir must admit nothing (got \(found.map(\.lastPathComponent)))")
+
+        let snapshot = audit.finish(cataloged: 0)
+        #expect(snapshot.skippedEditorCacheDirs == 1,
+                "exactly one audited cache rejection — the resolved root (got \(snapshot.skippedEditorCacheDirs)); audit: \(snapshot)")
+        #expect(snapshot.filesEnumerated == 0 && snapshot.filesAdmitted == 0)
+        // Refused by RULE, not by accident: the walk must not have failed
+        // to read the directory (that would be a different, incomplete scan).
+        #expect(snapshot.directoryEnumerationErrors == 0, "\(snapshot.unreadableDirectories)")
+        // The sampled path names the REAL directory, so "where did my file
+        // go?" has an answer that exists on disk.
+        let sample = snapshot.skippedEditorCacheDirPaths.first ?? ""
+        #expect(sample.hasSuffix("/Project/Render Files"), "got \(sample)")
+    }
 }
