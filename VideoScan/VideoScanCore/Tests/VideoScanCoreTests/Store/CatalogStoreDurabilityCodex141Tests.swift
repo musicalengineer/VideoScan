@@ -14,6 +14,9 @@
 //   | 6  P2   | aNewerSchemaIsRefusedWithoutTheFileChanging       | refused, but the bytes differed: header 18/19 | byte-identical|
 //   |         |                                                   | read 2/2 (WAL) and a -wal appeared — the pool | 1/1, no -wal  |
 //   |         |                                                   | was built before the version check            |               |
+//   | 4  P2   | clearingTheLastCuratedValueStaysClearedAcrossRelaunch | the clear committed (user_notes 0), then the | .alreadyFilled|
+//   |         |                                                   | relaunch's pass read .filled(rows: 1), the    | note "", 0    |
+//   |         |                                                   | note came back and user_notes had 1 row       | rows          |
 //
 // Lives under Tests/…/Store/ because it opens the same file with a plain
 // GRDB queue (the sensor allows `import GRDB` only here and in
@@ -199,5 +202,107 @@ struct CatalogStoreDurabilityCodex141Tests {
         #expect(after == before, "a refused file must be byte-identical — the open switched it to WAL or wrote GRDB's init table")
         #expect(after[18] == 1 && after[19] == 1, "header bytes 18/19 must still say rollback journal (1/1), not WAL (2/2)")
         #expect(!FileManager.default.fileExists(atPath: fixture.url.path + "-wal"), "no -wal may appear beside a refused file")
+    }
+
+    // MARK: - Finding 4 (P2): clearing the last curated value must not resurrect the imported one
+
+    private static let volume = "11111111-1111-1111-1111-111111111111"
+    private static let digestA = String(repeating: "a", count: 64)
+    private static let fileID = "00000000-0000-4000-8000-000000000041"
+    private static let runID = "R-codex141"
+    private static let importedNote = "the lake house, imported"
+
+    private static func importRun() -> CatalogRow.ImportRun {
+        CatalogRow.ImportRun(runID: runID, startedAt: 1_700_000_000, sourceSHA256: String(repeating: "d", count: 64),
+                             sourceGeneration: 5, integrityRunID: "IR-1", auditRunStartedAt: 1_699_990_000,
+                             auditRunFinishedAt: 1_699_990_500, auditGeneration: 5, integrityStartedAt: 1_699_995_000,
+                             integrityGeneration: 5)
+    }
+
+    private static func file(_ id: String, digest: String, path: String) -> CatalogRecordDTO.FileRow {
+        CatalogRecordDTO.FileRow(
+            id: id, contentDigest: digest, volumeUUID: volume, fullPath: path, pathFold: CatalogRecordDTO.pathFold(path),
+            filename: (path as NSString).lastPathComponent, ext: "mov", directory: (path as NSString).deletingLastPathComponent,
+            // A content fixity WITH its identity stamp: that is what gives the
+            // loaded record a whole-file digest (VideoRecord+Loaded), so the
+            // commit stores it rather than holding it as a pending row.
+            sizeBytes: 100, fsCreatedAt: nil, fsModifiedAt: nil, stampDevice: 1, stampInode: 41, stampMtimeNs: 1_700_000_000_000_000_000,
+            stampCtimeNs: 1_700_000_000_000_000_000, stampVolumeUUID: volume, digestComputedAt: 1_700_000_000, digestSource: .contentFixity,
+            sampledHash: nil, sampledHashAt: nil, partialMD5: nil, streamType: "Video+Audio", durationS: 1, container: "mov",
+            videoCodec: "", audioCodec: "", embeddedCreatedAt: nil, embeddedCreatedSource: nil, probeExtra: [:],
+            scanHost: "", scannedAt: nil, scanRootLabel: "", bundleContainer: "", sourceHost: "", originalFullPath: nil,
+            originVolume: nil, machineNotes: "", lifecycle: "Cataloged", archiveStage: "None",
+            masterLocation: "", setAsideReason: nil, needsReformat: false, workspaceActive: false,
+            removalState: nil, removalSince: nil, removalReason: nil, removalTrashPath: nil,
+            removalTrashEmptiedAt: nil, removalLastSeen: nil, removalRevision: 0,
+            auditSeenVolumeUUID: nil, auditSeenMountFrom: nil, auditSeenDeviceKey: nil, auditSeenAt: nil, cataloguedAt: nil)
+    }
+
+    /// A catalog whose ONLY curated value is one imported note on one file:
+    /// the import run, the volume, the content, the file and the
+    /// `knowledge_sources` row (the immutable evidence the display pass reads).
+    private func seedOneFileWithOneImportedNote() async throws -> StoreFixture {
+        let fixture = StoreFixture(kind: .grdb, directory: try StoreFixture.temporaryDirectory())
+        let repository = GRDBCatalogRepository(host: "codex141", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let outcome = await repository.write(as: .importRun) { tx in
+            try tx.insertImportRun(Self.importRun())
+            try tx.insertVolume(CatalogRecordDTO.VolumeRowDTO(volumeUUID: Self.volume, lastName: "A", mountType: "local", remoteServer: ""),
+                                caseSensitive: false)
+            try tx.insertContent(CatalogRecordDTO.ContentRow(digest: Self.digestA, algorithm: "sha256", byteCount: 100,
+                                                             firstSeenAt: 1_700_000_000, firstSeenHow: .import))
+            try tx.insertFile(Self.file(Self.fileID, digest: Self.digestA, path: "/Volumes/A/lake.mov"), volumeCaseSensitive: false)
+            try tx.insertKnowledgeSource(CatalogRow.KnowledgeSource(
+                importRun: Self.runID, sourceOrdinal: 0, jsonRowID: Self.fileID, digest: Self.digestA,
+                value: .init(field: .userNotes, valueJSON: .string(Self.importedNote), setAt: nil)))
+        }
+        try #require(outcome == .committed(generation: 1))
+        await repository.close()
+        return fixture
+    }
+
+    /// Open, run the load (display pass + snapshot), build the one record.
+    private func load(_ fixture: StoreFixture) async throws -> (CatalogLoad.Snapshot, VideoRecord) {
+        let repository = GRDBCatalogRepository(host: "codex141", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let snapshot = try await CatalogLoad.read(repository)
+        await repository.close()
+        let row = try #require(snapshot.rows.first)
+        return (snapshot, try VideoRecord(loaded: row))
+    }
+
+    private func userNotesRows(_ fixture: StoreFixture) throws -> Int {
+        try DatabaseQueue(path: fixture.url.path).read { try Int.fetchOne($0, sql: "SELECT count(*) FROM user_notes") ?? 0 }
+    }
+
+    @Test func clearingTheLastCuratedValueStaysClearedAcrossRelaunch() async throws {
+        let fixture = try await seedOneFileWithOneImportedNote()
+        defer { fixture.remove() }
+
+        // First load: the display pass derives the note from the evidence.
+        let (first, record) = try await load(fixture)
+        guard case .filled(let rows, _, _, _) = first.displayPass else {
+            Issue.record("expected the display pass to fill, got \(first.displayPass)"); return
+        }
+        #expect(rows == 1)
+        #expect(record.userNotes == Self.importedNote)
+
+        // Rick clears the note; the commit lands and the display row goes.
+        record.userNotes = ""
+        let repository = GRDBCatalogRepository(host: "codex141", durability: .volatileForTests)
+        try #require(await repository.open(at: fixture.url) == .readWrite)
+        let snapshot = VideoRecordDTO(record)
+        let item = CatalogCommit.Item(id: record.id, snapshot: snapshot, fingerprint: CatalogChangeDetector.fingerprint(snapshot))
+        let committed = await CatalogCommit.run(CatalogCommit.Plan(door: .save, items: [item]), on: repository)
+        await repository.close()
+        #expect(committed.isCommitted, Comment(rawValue: "\(committed)"))
+        #expect(try userNotesRows(fixture) == 0)
+
+        // Relaunch: the pass must NOT run again — the evidence is still there,
+        // but Rick's clear is the newer truth.
+        let (second, reloaded) = try await load(fixture)
+        #expect(second.displayPass == .alreadyFilled, Comment(rawValue: "\(second.displayPass)"))
+        #expect(reloaded.userNotes.isEmpty, "the imported note came back after the clear: \(reloaded.userNotes)")
+        #expect(try userNotesRows(fixture) == 0, "a user_notes row reappeared from the immutable evidence")
     }
 }

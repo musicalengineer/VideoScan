@@ -2650,7 +2650,8 @@
       ],
       "tests": [
         "aNewerSchemaIsRefusedWithoutTheFileChanging",
-        "archivalWriterUsesFullSynchronization"
+        "archivalWriterUsesFullSynchronization",
+        "clearingTheLastCuratedValueStaysClearedAcrossRelaunch"
       ]
     },
     {
