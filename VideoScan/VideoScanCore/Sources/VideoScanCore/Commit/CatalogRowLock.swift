@@ -178,10 +178,19 @@ public enum CatalogRowCheck {
     /// parts the lock and the per-field baseline cover); else why not.
     public static func check(_ expected: CatalogCommit.Expectation, snapshot: VideoRecordDTO,
                              sharedBaseline: CatalogSharedCurated?, found: Found) -> Mismatch? {
+        if let mismatch = check(expected, found: found) { return mismatch }
+        guard case .row(let row) = found else { return nil }
+        return sharedScalarMismatch(snapshot: snapshot, baseline: sharedBaseline, stored: row)
+    }
+
+    /// The lock alone — a PURGE (codex #145 F3): the id's row (or held
+    /// payload) must be the one this session last saw, or the removal would
+    /// replace another writer's newer state (their marker, their Trash path).
+    /// No shared values: a purge writes none.
+    public static func check(_ expected: CatalogCommit.Expectation, found: Found) -> Mismatch? {
         switch (expected, found) {
         case (.row(let lock), .row(let row)):
-            guard CatalogRowLock.of(row) == lock else { return .rowChanged }
-            return sharedScalarMismatch(snapshot: snapshot, baseline: sharedBaseline, stored: row)
+            return CatalogRowLock.of(row) == lock ? nil : .rowChanged
         case (.row, .pending), (.row, .nothing):
             return .rowGone
         case (.pending, .row):

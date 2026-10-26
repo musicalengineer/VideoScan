@@ -107,16 +107,23 @@ public enum CatalogCommit {
         /// held; a purge with no entry is a plain removal ("gone from disk",
         /// Delete All) and runs on its own, as before.
         public var replacements: [UUID: UUID]
+        /// purged id → what the store is expected to hold for it (codex
+        /// #145 F3): the lock of the row (or held payload) the committer last
+        /// saw. Checked inside the transaction with the items; a mismatch
+        /// refuses the whole commit. An id with no entry is not checked.
+        public var purgeExpectations: [UUID: Expectation]
         /// Unix seconds stamped on what this commit writes.
         public var now: Int64
 
         public init(door: CatalogWriter, items: [Item], designation: Designation = .leave, purges: [UUID] = [],
-                    replacements: [UUID: UUID] = [:], now: Int64 = Int64(Date().timeIntervalSince1970)) {
+                    replacements: [UUID: UUID] = [:], purgeExpectations: [UUID: Expectation] = [:],
+                    now: Int64 = Int64(Date().timeIntervalSince1970)) {
             self.door = door
             self.items = items
             self.designation = designation
             self.purges = purges
             self.replacements = replacements
+            self.purgeExpectations = purgeExpectations
             self.now = now
         }
     }

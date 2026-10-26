@@ -29,7 +29,8 @@
 // own tombstone, and the app is told the revision.
 //
 // BEFORE any of that (codex #143, the per-row lock): every submitted row's
-// EXPECTATION — the lock of the row the committer last saw stored
+// — and every purge's (codex #145 F3) — EXPECTATION: the lock of the row
+// the committer last saw stored
 // (CatalogRowLock), or the lock of the payload held for it in pending_rows
 // (codex #145 F1) — is checked against
 // the store (CatalogRowCheck, the same check Reopen's read-back makes). One
@@ -150,6 +151,14 @@ struct CatalogCommitBody {
         var mismatched: [(id: UUID, mismatch: CatalogRowCheck.Mismatch)] = []
         for item in plan.items where seen.insert(item.id).inserted {
             if let mismatch = try mismatch(of: item) { mismatched.append((item.id, mismatch)) }
+        }
+        // Codex #145 F3: a purge replaces the row's marker — the row must be
+        // the one the committer last saw, like any submitted row.
+        for id in Set(plan.purges).sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let expected = plan.purgeExpectations[id] else { continue }
+            if let mismatch = CatalogRowCheck.check(expected, found: try CatalogRowCheck.find(id: id.uuidString, in: tx)) {
+                mismatched.append((id, mismatch))
+            }
         }
         guard mismatched.isEmpty else { throw ChangedUnderYou(rows: mismatched) }
     }

@@ -250,6 +250,42 @@ struct CatalogCommitRowLockTests {
         #expect(after.records[healthyID]?.userNotes == "B's note", "its inherited note is not written over B's")
     }
 
+    /// One purge with its expectation, through the seam.
+    private static func purge(_ s: CommitScene, _ id: UUID, expected: CatalogCommit.Expectation) async throws -> CatalogCommit.Outcome {
+        let repository = GRDBCatalogRepository(host: "lock-test", durability: .volatileForTests)
+        guard await repository.open(at: s.scene.databaseURL) == .readWrite else { throw FixtureFailure(words: "purge could not open") }
+        let outcome = await CatalogCommit.run(CatalogCommit.Plan(door: .save, items: [], purges: [id], purgeExpectations: [id: expected]),
+                                              on: repository)
+        await repository.close()
+        return outcome
+    }
+
+    /// Codex #145 F3: a purge carried a bare id and was never checked — it
+    /// replaced another writer's newer state on the row.
+    @Test("a purge of a row another connection changed refuses the whole commit (their state kept); at the current lock it lands")
+    func doorRefusesAPurgeOfAChangedRow() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let healthy = try #require(loaded.records[healthyID])
+        let stale = try #require(loaded.records[staleID])
+        let seen = try await Self.lock(s, healthyID)
+        try await Self.otherWriterDecides(s, rowOf: healthy, about: stale.id)
+        let generation = try s.generation()
+
+        let refused = try await Self.purge(s, healthy.id, expected: .row(lock: seen))
+        guard case .refused(let words, _) = refused else { Issue.record("expected .refused, got \(refused)"); return }
+        #expect(words.contains(healthyID) && words.contains("another writer changed its row"), Comment(rawValue: words))
+        #expect(try s.generation() == generation, "nothing written")
+        let state: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [healthyID])
+        #expect(state == nil, "the row is not purged")
+        #expect(try Self.decisions(s, healthyID) == 1, "their decision stays")
+
+        let current = try await Self.lock(s, healthyID)
+        #expect(try await Self.purge(s, healthy.id, expected: .row(lock: current)).isCommitted)
+        let after: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [healthyID])
+        #expect(after == CatalogDDL.RemovalState.removedFromCatalog.rawValue, "at the lock the store holds, the purge lands")
+    }
+
     // MARK: - TRUTH: what the lock covers
 
     @Test("a sibling copy's shared edit does not move this row's lock; a footage decision on the row does")
