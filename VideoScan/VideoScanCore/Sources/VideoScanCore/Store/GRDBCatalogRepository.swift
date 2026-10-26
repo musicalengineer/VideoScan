@@ -144,6 +144,10 @@ public actor GRDBCatalogRepository: CatalogRepository {
     private var crashBeforeCommit: Seam? { didSet { publishGate() } }
     /// Test seam: runs at open between reading the witnesses and publishing.
     private var openHook: Seam?
+    /// Test seam (codex #142 F6-1): runs at open after the read-only
+    /// admission said yes and before the pool exists — the window in which
+    /// another connection can change the file the admission looked at.
+    private var admittedHook: Seam?
 
     public init(host: String = GRDBCatalogRepository.defaultHost,
                 durability: Durability = .archival) {
@@ -178,6 +182,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // schema, a corrupt page) is never written to.
         let admission = Self.admit(url)
         if case .refused(let words) = admission { return refusedToOpen(url, words) }
+        if admission == .admitted, let hook = admittedHook {
+            do { try hook() } catch { return refusedToOpen(url, Self.words(error)) }
+        }
         let opened: Opened
         do {
             opened = try Self.openPool(at: url, durability: durability)
@@ -496,6 +503,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// Internal test seam. See `openHook`.
     func injectOpenHook(_ seam: Seam?) {
         openHook = seam
+    }
+
+    /// Internal test seam. See `admittedHook`.
+    func injectAdmittedHook(_ seam: Seam?) {
+        admittedHook = seam
     }
 
     // MARK: - Write (one transaction, CAS, two-phase high-water)
@@ -1068,14 +1080,18 @@ extension GRDBCatalogRepository {
 
     /// The open checks, in the order the DDL's §11 lists them. Throws a
     /// `Refusal` (words for the person) or an engine error. `admitted`: the
-    /// engine and schema checks already passed on the read-only admission
-    /// connection for this very open; they are not run twice (integrity_check
-    /// is O(file)).
+    /// engine checks already passed on the read-only admission connection
+    /// for this very open; they are not run twice (integrity_check is
+    /// O(file)). The schema-version check is ALWAYS re-run here, on the
+    /// pool's own connection (codex #142 F6-1): the admission connection was
+    /// closed before the pool existed, and a version bumped in between by
+    /// another connection — same inode, so the identity guard is blind to
+    /// it — would otherwise be migrated and opened read-write. One indexed
+    /// row; cheap. Admission stays valid through this, the first step that
+    /// can mutate.
     private static func prepare(_ opened: Opened, host: String, admitted: Bool) async throws -> Int {
-        if !admitted {
-            try await checkEngine(opened.pool)
-            try await opened.pool.read { db in try checkSchemaVersion(db) }
-        }
+        if !admitted { try await checkEngine(opened.pool) }
+        try await opened.pool.read { db in try checkSchemaVersion(db) }
         if opened.readOnlyReason == nil {
             try migrator(host: host).migrate(opened.pool)
         } else if try await !migrationsComplete(opened.pool, host: host) {

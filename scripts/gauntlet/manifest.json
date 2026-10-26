@@ -2650,6 +2650,7 @@
       ],
       "tests": [
         "aNewerSchemaIsRefusedWithoutTheFileChanging",
+        "anAdmissionGoneStaleBeforeThePoolIsRefused",
         "archivalWriterUsesFullSynchronization",
         "clearingTheLastCuratedValueStaysClearedAcrossRelaunch"
       ]
@@ -34296,7 +34297,7 @@
       ],
       "expected_floor": 289,
       "name": "regression",
-      "package_expected_floor": 261,
+      "package_expected_floor": 262,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

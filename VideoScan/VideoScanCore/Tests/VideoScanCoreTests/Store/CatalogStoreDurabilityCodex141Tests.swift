@@ -18,6 +18,15 @@
 //   |         |                                                   | relaunch's pass read .filled(rows: 1), the    | note "", 0    |
 //   |         |                                                   | note came back and user_notes had 1 row       | rows          |
 //
+// Closing pass (docs/reviews/codex/codex-review-store-durability-closing-
+// 2026-10-25.md, cycle #142) — three residuals on F6, each seen RED:
+//
+//   | finding | test                                              | red (before)                                  | green (after) |
+//   |---------|---------------------------------------------------|-----------------------------------------------|---------------|
+//   | 6-1 P1  | anAdmissionGoneStaleBeforeThePoolIsRefused        | .readWrite — prepare(admitted: true) skipped   | .refused,     |
+//   |         |                                                   | the version check; the bump after admission   | write refused |
+//   |         |                                                   | (same inode) opened read-write                | "not open"    |
+//
 // Lives under Tests/…/Store/ because it opens the same file with a plain
 // GRDB queue (the sensor allows `import GRDB` only here and in
 // Sources/…/Store/). One condition per #expect.
@@ -202,6 +211,39 @@ struct CatalogStoreDurabilityCodex141Tests {
         #expect(after == before, "a refused file must be byte-identical — the open switched it to WAL or wrote GRDB's init table")
         #expect(after[18] == 1 && after[19] == 1, "header bytes 18/19 must still say rollback journal (1/1), not WAL (2/2)")
         #expect(!FileManager.default.fileExists(atPath: fixture.url.path + "-wal"), "no -wal may appear beside a refused file")
+    }
+
+    // MARK: - Closing pass (codex #142) F6-1 (P1): an admission gone stale before the pool exists
+
+    /// Admission says yes on a read-only connection that is then closed;
+    /// the pool is a different connection. In between, another connection
+    /// bumps the schema version in the SAME file (same inode, so the identity
+    /// guard cannot see it). The open must still refuse: the version check
+    /// is re-run on the pool's own connection.
+    @Test func anAdmissionGoneStaleBeforeThePoolIsRefused() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 1)
+        defer { fixture.remove() }
+        let newer = GRDBCatalogRepository.currentSchemaVersion + 1
+        let url = fixture.url
+        let repository = GRDBCatalogRepository(host: "stale-admission", durability: .volatileForTests)
+        await repository.injectAdmittedHook {
+            let other = try DatabaseQueue(path: url.path)
+            try other.write { db in
+                try db.execute(sql: "UPDATE catalog_state SET schema_version = \(newer) WHERE singleton = 1")
+                try db.execute(sql: "PRAGMA user_version = \(newer)")
+            }
+            try other.close()
+        }
+        let outcome = await repository.open(at: url)
+        guard case .refused(let words) = outcome else {
+            Issue.record("expected .refused for a schema bumped after admission, got \(outcome)")
+            await repository.close()
+            return
+        }
+        #expect(words.contains("schema version \(newer) is newer"), Comment(rawValue: words))
+        let wrote = await repository.write(as: .ui) { _ in }
+        #expect(wrote == .refused(reason: "not open"), "a stale admission left something writable: \(wrote)")
+        await repository.close()
     }
 
     // MARK: - Finding 4 (P2): clearing the last curated value must not resurrect the imported one
