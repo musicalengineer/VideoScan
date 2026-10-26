@@ -254,6 +254,86 @@ public final class AudioFingerprintStore: @unchecked Sendable {
         try lock.withLock { try scalarInt("SELECT COUNT(*) FROM fingerprints") ?? 0 }
     }
 
+    /// Rows at `engineVersion` (what `forEachFingerprint` will visit, give
+    /// or take a concurrent `put`).
+    public func count(engineVersion: Int) throws -> Int {
+        try lock.withLock {
+            try scalarInt("SELECT COUNT(*) FROM fingerprints WHERE engine_version = \(engineVersion)") ?? 0
+        }
+    }
+
+    /// Default rows per page for `forEachFingerprint`.
+    public static let defaultPageSize = 256
+    /// A page also ends once its blobs pass this many bytes, so one page of
+    /// 4-hour prints (≈ 2.3 MB each) never holds 256 of them at once.
+    public static let maxPageBytes = 16 << 20
+
+    /// Every row at `engineVersion`, in primary-key order, decoded one at a
+    /// time. KEYSET-PAGED: the lock is taken once per page (≤ `pageSize`
+    /// rows or ≤ `maxPageBytes` of blobs), the page's blobs are copied out,
+    /// the statement is finalized and the lock released BEFORE `body`
+    /// runs — so a long read never blocks a running job's `put` for more
+    /// than one page (design provenance_retroactive §sidecars rule 5). A
+    /// blob that will not decode is passed as `.failure`, never thrown.
+    /// `body` returns false to stop. Rows `put` mid-iteration after the
+    /// current key are seen; rows before it are not.
+    ///
+    /// MEMORY: one page of blobs (≤ 16 MB + one row) plus one decoded print.
+    /// (For Rick: a cursor that re-seeks with `WHERE key > last` per page,
+    /// like a B-tree range scan resumed by key rather than by OFFSET.)
+    public func forEachFingerprint(engineVersion: Int = Int(AudioFingerprint.currentVersion),
+                                   pageSize: Int = AudioFingerprintStore.defaultPageSize,
+                                   _ body: (Key, Result<AudioFingerprint, Error>) throws -> Bool) throws {
+        precondition(pageSize > 0, "forEachFingerprint: pageSize must be positive")
+        var after: Key?
+        while true {
+            let page = try readPage(engineVersion: engineVersion, after: after, limit: pageSize)
+            for (key, blob) in page {
+                let decoded = Result { try AudioFingerprint.decode(blob) }
+                guard try body(key, decoded) else { return }
+            }
+            guard page.count == pageSize || page.reachedByteCap, let last = page.last else { return }
+            after = last.key
+        }
+    }
+
+    private struct Page: Sequence {
+        var rows: [(key: Key, blob: Data)] = []
+        var reachedByteCap = false
+        var count: Int { rows.count }
+        var last: (key: Key, blob: Data)? { rows.last }
+        func makeIterator() -> IndexingIterator<[(key: Key, blob: Data)]> { rows.makeIterator() }
+    }
+
+    private func readPage(engineVersion: Int, after: Key?, limit: Int) throws -> Page {
+        try lock.withLock {
+            let sql = after == nil
+                ? "SELECT content_digest, size_bytes, blob FROM fingerprints WHERE engine_version = ? ORDER BY content_digest, size_bytes LIMIT ?"
+                : "SELECT content_digest, size_bytes, blob FROM fingerprints WHERE engine_version = ? AND (content_digest, size_bytes) > (?, ?) ORDER BY content_digest, size_bytes LIMIT ?"
+            let stmt = try prepare(sql)
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, Int64(engineVersion))
+            if let after {
+                try bindText(stmt, 2, after.contentDigest)
+                sqlite3_bind_int64(stmt, 3, after.sizeBytes)
+                sqlite3_bind_int64(stmt, 4, Int64(limit))
+            } else {
+                sqlite3_bind_int64(stmt, 2, Int64(limit))
+            }
+            var page = Page()
+            var bytes = 0
+            while try step(stmt) {
+                let key = Key(contentDigest: text(stmt, 0), sizeBytes: sqlite3_column_int64(stmt, 1))
+                let count = Int(sqlite3_column_bytes(stmt, 2))
+                let blob = sqlite3_column_blob(stmt, 2).map { Data(bytes: $0, count: count) } ?? Data()
+                page.rows.append((key, blob))
+                bytes += count
+                if bytes >= Self.maxPageBytes { page.reachedByteCap = true; break }
+            }
+            return page
+        }
+    }
+
     // MARK: Write
 
     /// Write every entry in ONE transaction (INSERT OR REPLACE on the key).

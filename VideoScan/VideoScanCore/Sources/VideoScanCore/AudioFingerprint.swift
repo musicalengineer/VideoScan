@@ -350,16 +350,21 @@ public struct AudioFingerprint: Sendable {
         } catch let error as AudioFingerprintParameters.ValidationError {
             throw DecodingError.invalidHeader(error)
         }
-        var hashes = [UInt32](), times = [UInt32]()
-        hashes.reserveCapacity(Int(count)); times.reserveCapacity(Int(count))
-        for _ in 0..<count {
-            guard let h: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
-            hashes.append(h)
+        // Bulk read (the size was checked above): one pass over the raw
+        // bytes instead of a bounds-checked copy per word — the Find Master
+        // index decodes every print in the sidecar twice (≈ 36 M landmarks).
+        // (For Rick: a memcpy-style loop over a const uint8_t*, unaligned
+        // little-endian loads.)
+        let n = Int(count)
+        let hashesAt = reader.offset, timesAt = reader.offset + 4 * n
+        var hashes = [UInt32](repeating: 0, count: n), times = [UInt32](repeating: 0, count: n)
+        data.withUnsafeBytes { raw in
+            for i in 0..<n {
+                hashes[i] = UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: hashesAt + 4 * i, as: UInt32.self))
+                times[i] = UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: timesAt + 4 * i, as: UInt32.self))
+            }
         }
-        for _ in 0..<count {
-            guard let t: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
-            times.append(t)
-        }
+        reader.offset = timesAt + 4 * n
         var active = [Bool](); active.reserveCapacity(Int(secondCount))
         var byte: UInt8 = 0
         for i in 0..<Int(secondCount) {

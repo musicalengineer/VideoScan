@@ -116,6 +116,37 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioCatalogIndexScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "AudioCatalogIndexScaleTests"
+      ],
+      "tests": [
+        "twentyFiveMillionLandmarks"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioCatalogIndexTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioCatalogIndexTests"
+      ],
+      "tests": [
+        "buildCountsEveryLandmarkOnce",
+        "buildRefusesOverPostingCap",
+        "cancelStopsTheBuild",
+        "hashBeyond24BitsRefusesThatPrintOnly",
+        "pagingDoesNotHoldTheLockAcrossPages",
+        "poisonedOrNewerSidecarRefusesBeforeBuild",
+        "sampledKeysAndOtherRecipesAreCountedNotIndexed",
+        "unreadableBlobIsCountedAndBuildContinues"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintAcceptanceTests.swift",
       "stage": "integration",
       "suites": [
@@ -194,6 +225,27 @@
         "twoThousandRows",
         "unreadableStampIsAbsent",
         "versionTwoNoSoundStampsAreSuspect"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderTests.swift",
+      "stage": "integration",
+      "suites": [
+        "AudioMasterFinderTests"
+      ],
+      "tests": [
+        "catalogWideHumIsCappedAndClipStillFound",
+        "clipIsFoundInsideItsMaster",
+        "masterQueryListsItsClips",
+        "otherRecipeQueryIsRefused",
+        "ownDigestIsNeverACandidate",
+        "rankingOrder",
+        "reencodeIsSameRecording",
+        "tooLittleSoundIsRefusedNotNoneFound",
+        "unrelatedQueryReportsWhatWasSearched",
+        "verdictIsExactlyThePairMatchers"
       ]
     },
     {
@@ -33510,6 +33562,10 @@
         {
           "name": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioCatalogIndexTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 3018,
@@ -34592,6 +34648,10 @@
         {
           "name": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioMasterFinderTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 6,
@@ -34649,6 +34709,10 @@
         {
           "name": "VideoScan/VideoScanTests/SignatureConcurrencyScaleTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioCatalogIndexScaleTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "environment": {
