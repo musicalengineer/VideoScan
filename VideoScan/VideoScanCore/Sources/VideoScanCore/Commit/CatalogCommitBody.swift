@@ -149,15 +149,37 @@ struct CatalogCommitBody {
         var seen = Set<UUID>()
         var mismatched: [(id: UUID, mismatch: CatalogRowCheck.Mismatch)] = []
         for item in plan.items where seen.insert(item.id).inserted {
-            guard let expected = item.expected else { continue }
-            let found = try CatalogRowCheck.find(id: item.id.uuidString, in: tx)
-            if case .row(let row) = found { readRows.rows[item.id.uuidString] = row }
-            if let mismatch = CatalogRowCheck.check(expected, snapshot: item.snapshot, sharedBaseline: item.sharedBaseline,
-                                                    found: found) {
-                mismatched.append((item.id, mismatch))
-            }
+            if let mismatch = try mismatch(of: item) { mismatched.append((item.id, mismatch)) }
         }
         guard mismatched.isEmpty else { throw ChangedUnderYou(rows: mismatched) }
+    }
+
+    /// One submitted row against the store: its expectation, or — a record
+    /// this session created — its shared scalars as a new copy (F2).
+    private func mismatch(of item: CatalogCommit.Item) throws -> CatalogRowCheck.Mismatch? {
+        guard let expected = item.expected else { return try newCopyMismatch(item) }
+        let found = try CatalogRowCheck.find(id: item.id.uuidString, in: tx)
+        if case .row(let row) = found { readRows.rows[item.id.uuidString] = row }
+        return CatalogRowCheck.check(expected, snapshot: item.snapshot, sharedBaseline: item.sharedBaseline, found: found)
+    }
+
+    /// Codex #145 F2: a record this session created (no expectation) with
+    /// the content's per-field baseline, whose content the store already
+    /// holds. Its insert writes that content's digest-keyed display rows, so
+    /// its shared scalars are checked like a sibling's (`checkNewCopy`), and
+    /// `land` writes only the groups it edited (`newCopies`). A record with
+    /// no baseline, no digest, or a row already (adopted without a lock)
+    /// keeps the old path.
+    private func newCopyMismatch(_ item: CatalogCommit.Item) throws -> CatalogRowCheck.Mismatch? {
+        guard item.sharedBaseline != nil, let digest = CatalogCommit.digest(of: item.snapshot) else { return nil }
+        let id = item.id.uuidString
+        if let row = try tx.storedRow(id: id) {
+            readRows.rows[id] = row
+            return nil
+        }
+        guard let content = try tx.storedContentRow(digest: digest, excluding: id) else { return nil }
+        readRows.newCopies.insert(item.id)
+        return CatalogRowCheck.checkNewCopy(snapshot: item.snapshot, sharedBaseline: item.sharedBaseline, content: content)
     }
 
     /// The stored row for `id`: the expectation pass's read when it has
@@ -354,7 +376,9 @@ struct CatalogCommitBody {
                 result.adoptedRevision = current.file.removalRevision
             }
             var diff = CatalogRecordDiff(stored: stored, current: current)
-            if stored != nil, let baseline = item.sharedBaseline {
+            // An existing row, or a new copy of a stored content (codex #145
+            // F2): only the shared groups this record edited are written.
+            if stored != nil || readRows.newCopies.contains(item.id), let baseline = item.sharedBaseline {
                 diff.restrictShared(to: CatalogSharedCurated(item.snapshot).edited(since: baseline))
             }
             guard !diff.isEmpty else {
@@ -550,6 +574,10 @@ struct CatalogCommitBody {
 /// (For Rick: a scratch map, not a cache: filled once, drained by `land`.)
 final class CommitRowCache {
     var rows: [String: CatalogLoadedRow] = [:]
+    /// Records this session created whose content the store already holds
+    /// (codex #145 F2): their insert writes only the shared groups they
+    /// edited. Bounded by the plan's items.
+    var newCopies: Set<UUID> = []
 }
 
 /// People as a delta against the record's own baseline (codex B2 P1-6), on

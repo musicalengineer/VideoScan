@@ -217,6 +217,39 @@ struct CatalogCommitRowLockTests {
         #expect(after.records[healthyID]?.userNotes == "B's note", "the note this session did not edit is not written")
     }
 
+    /// Codex #145 F2: a record this session created skipped the check, and
+    /// its insert wrote every curated value it carried into the content's
+    /// digest-keyed display rows — over another writer's.
+    @Test("a new copy of a stored content: a scalar it edited that another connection changed refuses the commit; one it only inherited is not written")
+    func doorChecksANewCopysSharedScalars() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let first = try #require(try await s.load().records[healthyID])
+        let loadedBaseline = CatalogSharedCurated(first)
+        first.userNotes = "base"
+        #expect(try await s.commitItems([Self.item(first, baseline: loadedBaseline, expected: nil)]).isCommitted)
+        let healthy = try #require(try await s.load().records[healthyID])
+        let baseline = CatalogSharedCurated(healthy).scalarsOnly          // what the app gives a new copy
+        let digest = try #require(CatalogCommit.digest(of: healthy))
+        try await Self.otherWriterSets(s, .userNotes, of: healthy) { $0.userNotes = "B's note" }
+
+        let edited = try FreshRecord.copy(healthy, path: "/Volumes/Fixture/fresh/copy-edited.mov")
+        FreshRecord.giveDigest(edited, digest)
+        edited.userNotes = "A's note"
+        let refused = try await s.commitItems([Self.item(edited, baseline: baseline, expected: nil)])
+        guard case .refused(let words, _) = refused else { Issue.record("expected .refused, got \(refused)"); return }
+        #expect(words.contains(edited.id.uuidString) && words.contains("notes"), Comment(rawValue: words))
+        #expect(try await s.load().records[healthyID]?.userNotes == "B's note", "B's note is kept")
+
+        let inherited = try FreshRecord.copy(healthy, path: "/Volumes/Fixture/fresh/copy-inherited.mov")
+        FreshRecord.giveDigest(inherited, digest)
+        #expect(inherited.userNotes == "base")
+        let stored = try await s.commitItems([Self.item(inherited, baseline: baseline, expected: nil)])
+        #expect(stored.isCommitted, "\(stored)")
+        let after = try await s.load()
+        #expect(after.records[inherited.id.uuidString] != nil, "the new copy is stored")
+        #expect(after.records[healthyID]?.userNotes == "B's note", "its inherited note is not written over B's")
+    }
+
     // MARK: - TRUTH: what the lock covers
 
     @Test("a sibling copy's shared edit does not move this row's lock; a footage decision on the row does")

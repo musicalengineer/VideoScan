@@ -115,6 +115,20 @@ public struct CatalogSharedCurated: Sendable, Equatable {
         }
     }
 
+    /// The SCALARS of `self`, the sets empty — the baseline a NEW copy of a
+    /// content takes from its stored siblings (codex #145 F2): its scalars
+    /// are written only where it edited them, and checked like a sibling's;
+    /// its sets keep the pre-#145 rule (every member it carries is ADDED —
+    /// a delta against nothing never removes another copy's member).
+    public var scalarsOnly: Self {
+        var out = self
+        out.tags = []
+        out.confirmedByUserPeople = []
+        out.rejectedPeople = []
+        out.backupAttestations = []
+        return out
+    }
+
     /// The knowledge fields whose group differs from `baseline`.
     public func edited(since baseline: Self) -> Set<CatalogDDL.KnowledgeField> {
         Set(Group.allCases.filter { !same($0, as: baseline) }.flatMap(\.fields))

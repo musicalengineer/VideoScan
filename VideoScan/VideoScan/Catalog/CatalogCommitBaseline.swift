@@ -135,6 +135,39 @@ struct CatalogCommitBaseline {
         return nil
     }
 
+    /// A record this session created that names a content this session
+    /// already holds as a row (codex #145 F2): its digest, and the
+    /// content's per-field baseline — the SCALARS a stored sibling last
+    /// agreed with the store on (`scalarsOnly`: its sets keep the add-only
+    /// rule). The door writes only the scalar groups the new copy edited
+    /// against it and checks those against the store, as for a sibling.
+    struct NewCopy: Sendable {
+        let digest: String
+        let baseline: CatalogSharedCurated
+    }
+
+    /// The new copies among `candidates` (changed records with no baseline
+    /// and no expectation) whose content a stored sibling in `all` names.
+    /// Cost: nothing when no candidate has a digest; else one pass over
+    /// `all` (a digest per record that has a baseline) — the same order as
+    /// the commit's own fingerprint pass. Memory: one entry per content with
+    /// a candidate.
+    func newCopies(_ candidates: [VideoRecord], among all: [VideoRecord]) -> [UUID: NewCopy] {
+        var wanted: [UUID: String] = [:]
+        for record in candidates where shared[record.id] == nil && expectation(of: record.id) == nil {
+            if let digest = CatalogCommit.digest(of: record) { wanted[record.id] = digest }
+        }
+        guard !wanted.isEmpty else { return [:] }
+        let digests = Set(wanted.values)
+        var byContent: [String: CatalogSharedCurated] = [:]
+        for record in all where byContent.count < digests.count {
+            guard let mine = shared[record.id], let digest = CatalogCommit.digest(of: record),
+                  digests.contains(digest), byContent[digest] == nil else { continue }
+            byContent[digest] = mine.scalarsOnly
+        }
+        return wanted.compactMapValues { digest in byContent[digest].map { NewCopy(digest: digest, baseline: $0) } }
+    }
+
     // MARK: - At a commit
 
     /// The store holds `id` (as a row, or as a held payload).

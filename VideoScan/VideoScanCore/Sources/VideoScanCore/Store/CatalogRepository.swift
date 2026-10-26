@@ -212,6 +212,12 @@ public protocol CatalogLiveReading {
     /// The commit door and Reopen compare its `CatalogRowLock.ofPending`
     /// with the payload this session last saw (codex #145 F1).
     func storedPendingJSON(id: String) throws -> String?
+    /// A `files` row of content `digest` other than `id` (the lowest id; any
+    /// state — the shared curated values are per content), as a load gives
+    /// it; nil when the store holds no other copy. Two indexed reads
+    /// (`files_by_digest`). A NEW copy's shared scalars are checked against
+    /// it (codex #145 F2).
+    func storedContentRow(digest: String, excluding id: String) throws -> CatalogLoadedRow?
 }
 
 /// The handle a `read` body receives.

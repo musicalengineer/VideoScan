@@ -71,6 +71,13 @@ extension GRDBRecordHandle {
             SELECT json FROM pending_rows WHERE id = ? AND NOT EXISTS (SELECT 1 FROM pending_purges q WHERE q.id = pending_rows.id)
             """, arguments: [id])
     }
+
+    func storedContentRow(digest: String, excluding id: String) throws -> CatalogLoadedRow? {
+        guard let sibling = try String.fetchOne(db, sql: """
+            SELECT id FROM files WHERE content_digest = ? AND id <> ? ORDER BY id LIMIT 1
+            """, arguments: [digest.lowercased(), id]) else { return nil }
+        return try storedRow(id: sibling)
+    }
 }
 
 // MARK: - Doors (the transaction)

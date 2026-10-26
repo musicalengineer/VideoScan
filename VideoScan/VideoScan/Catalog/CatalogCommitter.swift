@@ -592,7 +592,9 @@ final class CatalogCommitter {
     /// (fingerprint ≠ baseline: edited, held and new records alike; rows
     /// waiting on a refusal too, since Reopen forgets it) — checked against
     /// the store in ONE read snapshot with the generation. A record this
-    /// session created has no expectation and nothing to check. The
+    /// session created has no expectation; when its content is already
+    /// stored, its shared scalars meet the door's new-copy check against a
+    /// stored sibling (codex #145 F2) — otherwise there is nothing to check. The
     /// comparison is of the STORE against the BASELINE (CatalogRowCheck, the
     /// same check the commit door makes), so an edit made during the read
     /// changes nothing here; a record that turns dirty after the read meets
@@ -601,16 +603,10 @@ final class CatalogCommitter {
     /// read — worst case (every record changed) one copy of the catalog's
     /// rows, what a launch holds; dropped before this returns.
     private func readBack() async -> ReadBack {
-        let wanted = changedSinceBaseline(input().records).compactMap { record -> (id: UUID, expected: CatalogCommit.Expectation)? in
-            baseline.expectation(of: record.id).map { (record.id, $0) }
-        }
-        let read: (generation: Int, found: [UUID: CatalogRowCheck.Found])
+        let wanted = readBackSet()
+        let read: ReadFindings
         do {
-            read = try await repository.read { reader in
-                var found: [UUID: CatalogRowCheck.Found] = [:]
-                for entry in wanted { found[entry.id] = try CatalogRowCheck.find(id: entry.id.uuidString, in: reader) }
-                return (reader.generation, found)
-            }
+            read = try await repository.read { reader in try Self.find(wanted, in: reader) }
         } catch {
             return .failed("this session's \(wanted.count) changed record(s) could not be compared with the catalog (\(error)) — "
                            + "quit and relaunch, then redo the change(s)")
@@ -618,17 +614,81 @@ final class CatalogCommitter {
         let byID = Dictionary(input().records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var held: [UUID: String] = [:]
         for entry in wanted {
-            guard let record = byID[entry.id], let found = read.found[entry.id] else { continue }
-            guard let mismatch = CatalogRowCheck.check(entry.expected, snapshot: VideoRecordDTO(record),
-                                                       sharedBaseline: baseline.shared[entry.id], found: found) else { continue }
-            switch mismatch {
-            case .rowGone, .undecodable:
-                return .failed("record \(entry.id.uuidString) (\(record.filename)): \(mismatch.words) — quit and relaunch, then redo the change(s)")
-            case .rowChanged, .materialised, .pendingGone, .pendingChanged, .sharedChanged:
-                held[entry.id] = Self.heldWords(record, mismatch: mismatch, stored: found)
+            guard let record = byID[entry.id] else { continue }
+            switch verdict(entry, record: record, read: read) {
+            case .saveable: continue
+            case .failed(let words): return .failed(words)
+            case .held(let words): held[entry.id] = words
             }
         }
         return .checked(generation: read.generation, checked: wanted.count, conflicts: held)
+    }
+
+    /// One record the read-back checks: its expectation, or — a record this
+    /// session created — the content its shared scalars meet (codex #145 F2).
+    private struct Wanted: Sendable {
+        let id: UUID
+        let expected: CatalogCommit.Expectation?
+        let newCopy: CatalogCommitBaseline.NewCopy?
+    }
+
+    /// What one read snapshot found for the wanted records.
+    private struct ReadFindings: Sendable {
+        let generation: Int
+        var found: [UUID: CatalogRowCheck.Found] = [:]
+        var content: [UUID: CatalogLoadedRow] = [:]
+    }
+
+    /// One record's outcome on Reopen.
+    private enum Verdict {
+        case saveable
+        case held(String)
+        case failed(String)
+    }
+
+    /// The records the next commit could submit that have something to
+    /// check: a row or held payload (its expectation), or a new copy of a
+    /// content the store already holds (F2).
+    private func readBackSet() -> [Wanted] {
+        let records = input().records
+        let changed = changedSinceBaseline(records)
+        let fresh = baseline.newCopies(changed, among: records)
+        return changed.compactMap { record in
+            if let expected = baseline.expectation(of: record.id) { return Wanted(id: record.id, expected: expected, newCopy: nil) }
+            return fresh[record.id].map { Wanted(id: record.id, expected: nil, newCopy: $0) }
+        }
+    }
+
+    /// Inside the one read snapshot (off the main actor).
+    private nonisolated static func find(_ wanted: [Wanted], in reader: any CatalogReader) throws -> ReadFindings {
+        var out = ReadFindings(generation: reader.generation)
+        for entry in wanted {
+            if entry.expected != nil { out.found[entry.id] = try CatalogRowCheck.find(id: entry.id.uuidString, in: reader) }
+            if let copy = entry.newCopy {
+                out.content[entry.id] = try reader.storedContentRow(digest: copy.digest, excluding: entry.id.uuidString)
+            }
+        }
+        return out
+    }
+
+    /// The commit door's own comparison (CatalogRowCheck), in Reopen words.
+    private func verdict(_ entry: Wanted, record: VideoRecord, read: ReadFindings) -> Verdict {
+        let snapshot = VideoRecordDTO(record)
+        let found = read.found[entry.id] ?? .nothing
+        let mismatch: CatalogRowCheck.Mismatch?
+        if let expected = entry.expected {
+            mismatch = CatalogRowCheck.check(expected, snapshot: snapshot, sharedBaseline: baseline.shared[entry.id], found: found)
+        } else {
+            mismatch = CatalogRowCheck.checkNewCopy(snapshot: snapshot, sharedBaseline: entry.newCopy?.baseline,
+                                                    content: read.content[entry.id])
+        }
+        guard let mismatch else { return .saveable }
+        switch mismatch {
+        case .rowGone, .undecodable:
+            return .failed("record \(entry.id.uuidString) (\(record.filename)): \(mismatch.words) — quit and relaunch, then redo the change(s)")
+        case .rowChanged, .materialised, .pendingGone, .pendingChanged, .sharedChanged:
+            return .held(Self.heldWords(record, mismatch: mismatch, stored: found, newCopy: entry.newCopy != nil))
+        }
     }
 
     /// The records whose fingerprint is not the baseline's (none included):
@@ -642,7 +702,13 @@ final class CatalogCommitter {
     /// differ between the catalog and this session (the commit's own
     /// comparison, CatalogRecordDiff) — theirs and ours together, since a
     /// part the baseline cannot attribute is not guessed at.
-    private static func heldWords(_ record: VideoRecord, mismatch: CatalogRowCheck.Mismatch, stored: CatalogRowCheck.Found) -> String {
+    private static func heldWords(_ record: VideoRecord, mismatch: CatalogRowCheck.Mismatch, stored: CatalogRowCheck.Found,
+                                  newCopy: Bool = false) -> String {
+        if newCopy {
+            // Codex #145 F2: a record this session created is not in the catalog at all.
+            return "the catalog changed under you: \(record.filename) — a new copy of a content in the catalog: \(mismatch.words); "
+                + "this new record is NOT in the catalog and is not saved; relaunch, then rescan its folder to add it again"
+        }
         var parts = "(not compared)"
         if case .row(let row) = stored, let fresh = try? VideoRecord(loaded: row) {
             parts = differingParts(stored: fresh, current: record)
@@ -786,7 +852,9 @@ final class CatalogCommitter {
         let prints = CatalogChangeDetector.fingerprints(of: snapshots)
         let ids = records.map(\.id)
         var found = Detection()
-        for index in CatalogChangeDetector.changed(ids, fingerprints: prints, baseline: baseline.prints) {
+        let changed = CatalogChangeDetector.changed(ids, fingerprints: prints, baseline: baseline.prints)
+        let fresh = baseline.newCopies(changed.map { records[$0] }, among: all)     // codex #145 F2
+        for index in changed {
             let id = ids[index]
             if conflicts[id] != nil {
                 found.heldBack += 1               // codex #143: never sent until a relaunch
@@ -794,7 +862,8 @@ final class CatalogCommitter {
                 found.waiting.append((id, prints[index]))
             } else {
                 found.items.append(CatalogCommit.Item(id: id, snapshot: snapshots[index], fingerprint: prints[index],
-                                                      sharedBaseline: baseline.shared[id], expected: baseline.expectation(of: id)))
+                                                      sharedBaseline: baseline.shared[id] ?? fresh[id]?.baseline,
+                                                      expected: baseline.expectation(of: id)))
             }
         }
         return found

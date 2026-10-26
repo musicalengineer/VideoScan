@@ -17,18 +17,26 @@ extension CatalogCommit {
 
     /// The record's whole-file digest, as the importer would decide it.
     public static func digest(of record: VideoRecord) -> String? {
-        let size = record.sizeBytes
-        let content = record.contentFixity.flatMap { f -> String? in
+        digest(content: record.contentFixity, archive: record.archiveFixity, size: record.sizeBytes)
+    }
+
+    /// The same rule on a commit's snapshot (the door, codex #145 F2).
+    public static func digest(of snapshot: VideoRecordDTO) -> String? {
+        digest(content: snapshot.contentFixity, archive: snapshot.archiveFixity, size: snapshot.sizeBytes)
+    }
+
+    private static func digest(content contentFixity: ContentFixity?, archive archiveFixity: ArchiveFixity?, size: Int64) -> String? {
+        let content = contentFixity.flatMap { f -> String? in
             let hex = f.digest.lowercased()
             return f.algorithm == "sha256" && CatalogRecordDTO.isWholeFileDigest(hex) ? hex : nil
         }
-        let archive = record.archiveFixity.flatMap { f -> String? in
+        let archive = archiveFixity.flatMap { f -> String? in
             let hex = f.digest.lowercased()
             return f.algorithm == "sha256" && CatalogRecordDTO.isWholeFileDigest(hex) ? hex : nil
         }
         if let content, let archive, content != archive { return nil }
-        if let content, record.contentFixity?.byteCount == size { return content }
-        if let archive, record.archiveFixity?.sizeBytes == size { return archive }
+        if let content, contentFixity?.byteCount == size { return content }
+        if let archive, archiveFixity?.sizeBytes == size { return archive }
         return nil
     }
 

@@ -193,6 +193,20 @@ public enum CatalogRowCheck {
         }
     }
 
+    /// A record this session CREATED (no row, no expectation) that carries
+    /// a digest the store already holds (codex #145 F2): its insert writes
+    /// the content's digest-keyed display rows, so its shared scalars meet
+    /// the same check as an existing copy's — against `content`, a stored
+    /// row of the same content, through the content's per-field baseline
+    /// (the scalars this session last agreed with the store on). nil when
+    /// the store holds no copy yet (nothing to overwrite) or no baseline is
+    /// known (a content this session never loaded).
+    public static func checkNewCopy(snapshot: VideoRecordDTO, sharedBaseline: CatalogSharedCurated?,
+                                    content: CatalogLoadedRow?) -> Mismatch? {
+        guard let content else { return nil }
+        return sharedScalarMismatch(snapshot: snapshot, baseline: sharedBaseline, stored: content)
+    }
+
     /// A shared SCALAR group this session edited (since its own baseline)
     /// whose stored value is not that baseline: the other writer changed it
     /// too, and writing ours would overwrite theirs unnamed. A group the
