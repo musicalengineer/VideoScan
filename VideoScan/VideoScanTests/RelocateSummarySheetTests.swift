@@ -839,39 +839,11 @@ struct RelocateSummarySheetTests {
             }
         }
 
-        // The three headline-producing helpers on RelocateSummarySheet
-        // are private; we exercise the same data via the summary's
-        // structured fields. The sheet's title/body strings are pure
-        // functions of (isDryRun, succeededCount, safelyBackedUpCount,
-        // total), so re-deriving them here gives us the same surface
-        // without instantiating SwiftUI.
-        func headlineTitleFor(_ s: RelocateSummary) -> String {
-            if s.isDryRun { return "Dry-run preview" }
-            if s.succeededCount > 0 { return "Files copied and verified" }
-            return "Your files are safe"
-        }
-        func headlineBodyFor(_ s: RelocateSummary) -> String {
-            if s.isDryRun {
-                return "If you ran this for real, here's what would happen."
-            }
-            let total = s.succeededCount + s.safelyBackedUpCount
-            if s.succeededCount > 0 {
-                var line = "I copied \(s.succeededCount) file"
-                    + (s.succeededCount == 1 ? "" : "s")
-                    + " to \(s.destinationDisplay) and verified the checksums."
-                if s.safelyBackedUpCount > 0 {
-                    line += " \(s.safelyBackedUpCount) more "
-                    line += s.safelyBackedUpCount == 1 ? "is" : "are"
-                    line += " already safely backed up on other drives."
-                }
-                return line
-            }
-            return "I found backup copies of all \(total) file"
-                + (total == 1 ? "" : "s")
-                + " on safer drives and checksum-verified them. "
-                + "Everything's accounted for — you can retire "
-                + "\(s.sourceVolumeName) whenever you're ready."
-        }
+        // The sheet's title/body are `RelocateSummaryHeadline`, a pure
+        // value of the summary (since adversarial 2026-10-26 F1) — the
+        // same words the sheet shows, without instantiating SwiftUI.
+        func headlineTitleFor(_ s: RelocateSummary) -> String { RelocateSummaryHeadline(s).title }
+        func headlineBodyFor(_ s: RelocateSummary) -> String { RelocateSummaryHeadline(s).body }
 
         // Mode 1: all-safe ("Your files are safe").
         let allSafe = try await runOneAndCapture(

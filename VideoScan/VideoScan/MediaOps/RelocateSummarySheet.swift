@@ -8,12 +8,18 @@ import AppKit
 // VideoScan to feel that their old family-media drive's contents are
 // accounted for, not to read a forensic surveillance report.
 //
-// Three headline modes:
-//   - "Your files are safe"     — every record disposed; every safely-
-//                                  redundant has at least one safe witness.
+// Five headline modes (`RelocateSummaryHeadline`, RelocateSummary.swift):
+//   - "Your files are safe"     — nothing copied; every file has a
+//                                  checksum-verified copy on a safe drive.
 //   - "Files copied and verified" — some Bucket A copies happened; the
 //                                   rest were already safely backed up.
+//   - "Some files are not safe yet" — any copy failed, any file still at
+//                                  its path, not marked, or backed up only
+//                                  on aging/retired drives. Never "safe",
+//                                  never "retire" (adversarial 2026-10-26 F1).
+//   - "Nothing was copied"       — nothing copied or checked this run.
 //   - "Dry-run preview"          — preview only.
+// The "retire <drive>" line shows only for the first two.
 //
 // Drops the auto-retire prompt that used to fire from the Done button —
 // instead the sheet ends with "Open the Volumes window to retire <name>
@@ -87,50 +93,26 @@ struct RelocateSummarySheet: View {
         }
     }
 
-    private var headlineIcon: String {
-        if summary.isDryRun { return "eye.fill" }
-        if summary.succeededCount > 0 { return "checkmark.seal.fill" }
-        return "shield.checkered"
-    }
+    /// The words, icon and retire invitation — a pure value of the summary
+    /// (`RelocateSummaryHeadline`, RelocateSummary.swift), pinned by
+    /// RelocateSummaryHeadlineTests.
+    private var headlineWords: RelocateSummaryHeadline { RelocateSummaryHeadline(summary) }
+
+    private var headlineIcon: String { headlineWords.icon }
 
     private var headlineIconColor: Color {
-        if summary.isDryRun { return .blue }
-        return .green
+        switch headlineWords.tint {
+        case .blue: return .blue
+        case .green: return .green
+        case .orange: return .orange
+        }
     }
 
-    private var headlineTitle: String {
-        if summary.isDryRun { return "Dry-run preview" }
-        if summary.succeededCount > 0 { return "Files copied and verified" }
-        return "Your files are safe"
-    }
+    private var headlineTitle: String { headlineWords.title }
 
-    /// The conversational sub-headline. Notice the casual tone — "I"
-    /// instead of "The application," and "safer drives" instead of
-    /// "redundant storage volumes." Matches feedback_friendly_language.md.
-    private var headlineBody: String {
-        if summary.isDryRun {
-            return "If you ran this for real, here's what would happen."
-        }
-        let total = summary.succeededCount + summary.safelyBackedUpCount
-        if summary.succeededCount > 0 {
-            // Mixed mode — some copies, some already safe.
-            var line = "I copied \(summary.succeededCount) file"
-                + (summary.succeededCount == 1 ? "" : "s")
-                + " to \(summary.destinationDisplay) and verified the checksums."
-            if summary.safelyBackedUpCount > 0 {
-                line += " \(summary.safelyBackedUpCount) more "
-                line += summary.safelyBackedUpCount == 1 ? "is" : "are"
-                line += " already safely backed up on other drives."
-            }
-            return line
-        }
-        // All safe — the most reassuring path.
-        return "I found backup copies of all \(total) file"
-            + (total == 1 ? "" : "s")
-            + " on safer drives and checksum-verified them. "
-            + "Everything's accounted for — you can retire "
-            + "\(summary.sourceVolumeName) whenever you're ready."
-    }
+    /// The conversational sub-headline ("I" instead of "the application",
+    /// "safer drives" instead of "redundant storage volumes").
+    private var headlineBody: String { headlineWords.body }
 
     private var countsGrid: some View {
         // Suppress zero-count rows so the grid isn't padded with noise.
@@ -393,7 +375,7 @@ struct RelocateSummarySheet: View {
     /// Suppressed on dry-run + on runs that left records un-disposed.
     @ViewBuilder
     private var volumesWindowCTA: some View {
-        if !summary.isDryRun, summary.salvageFailedCount == 0 {
+        if headlineWords.invitesRetire {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "info.circle")
                     .foregroundColor(.secondary)

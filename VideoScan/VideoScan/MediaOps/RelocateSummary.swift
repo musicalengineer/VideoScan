@@ -86,6 +86,15 @@ struct RelocateSummary: Identifiable, Equatable {
     /// unmarked and not copied (adversarial 2026-10-19).
     var stillThereCount: Int = 0
 
+    /// Files this run left WITHOUT proof: the copy failed, the file was still
+    /// at its path (or could not be checked), the catalog could not mark it,
+    /// or its only backups are on aging/retired drives. The four buckets are
+    /// disjoint (A-failed, B-refused, B-present/unchecked, E-degraded). Any
+    /// of them > 0 withholds "safe" and "retire" (adversarial 2026-10-26 F1).
+    var needsAttentionCount: Int {
+        salvageFailedCount + stillThereCount + notMarkedCount + degradedOnlyCount
+    }
+
     /// One source-to-witness pairing. Carries the host volume's
     /// role + trust so the summary sheet can render the safety badge
     /// without having to query the model.
@@ -118,5 +127,89 @@ struct RelocateSummary: Identifiable, Equatable {
         var isSafe: Bool {
             VolumeSafety(role: witnessRole, trust: witnessTrust, isRetired: witnessIsRetired).isSafe
         }
+    }
+}
+
+// MARK: - RelocateSummaryHeadline
+//
+// The summary sheet's headline as a pure value of the summary, so the words
+// are testable without SwiftUI (adversarial 2026-10-26 F1, MOPS-6).
+// (A value type with a converting init ≈ a C++ struct built by an explicit
+// constructor from the payload.)
+
+struct RelocateSummaryHeadline: Equatable {
+    enum Tint: Equatable { case blue, green, orange }
+
+    let title: String
+    let body: String
+    /// SF Symbol name.
+    let icon: String
+    let tint: Tint
+    /// May the sheet say "retire <drive>"? The Volumes-window line shows only when true.
+    let invitesRetire: Bool
+
+    init(_ s: RelocateSummary) {
+        if s.isDryRun {
+            title = "Dry-run preview"
+            body = "If you ran this for real, here's what would happen."
+            icon = "eye.fill"; tint = .blue; invitesRetire = false
+            return
+        }
+        // "Safe" and "retire" only when this run proved every file: copied
+        // and verified, or a checksum-verified copy on a safe drive. Any
+        // unproven file (copy failed, still at its path, not marked, backed
+        // up only on aging/retired drives) says so and never invites a retire.
+        let unproven = s.needsAttentionCount
+        if unproven > 0 {
+            title = "Some files are not safe yet"
+            let done = s.succeededCount > 0
+                ? Self.copiedLine(s)
+                : "No files were copied." + Self.backedUpSentence(s, more: false)
+            body = done + " \(unproven) " + (unproven == 1 ? "file is" : "files are")
+                + " not safe yet — see the rows below. Keep \(s.sourceVolumeName) until "
+                + (unproven == 1 ? "it is." : "they are.")
+            icon = "exclamationmark.triangle.fill"; tint = .orange; invitesRetire = false
+            return
+        }
+        let total = s.succeededCount + s.safelyBackedUpCount
+        if s.succeededCount > 0 {
+            title = "Files copied and verified"
+            body = Self.copiedLine(s)
+            icon = "checkmark.seal.fill"; tint = .green; invitesRetire = true
+            return
+        }
+        if total == 0 {
+            // Nothing copied and nothing checked against a backup: this run
+            // proved nothing, so it claims nothing.
+            title = "Nothing was copied"
+            body = "Nothing on \(s.sourceVolumeName) was copied or checked against a backup this time — see the counts below."
+            icon = "info.circle"; tint = .blue; invitesRetire = false
+            return
+        }
+        invitesRetire = true
+        title = "Your files are safe"
+        body = "I found backup copies of all \(total) file"
+            + (total == 1 ? "" : "s")
+            + " on safer drives and checksum-verified them. "
+            + "Everything's accounted for — you can retire "
+            + "\(s.sourceVolumeName) whenever you're ready."
+        icon = "shield.checkered"; tint = .green
+    }
+
+    /// "I copied N files to D and verified the checksums. M more are already
+    /// safely backed up on other drives."
+    static func copiedLine(_ s: RelocateSummary) -> String {
+        "I copied \(s.succeededCount) file"
+            + (s.succeededCount == 1 ? "" : "s")
+            + " to \(s.destinationDisplay) and verified the checksums."
+            + backedUpSentence(s, more: true)
+    }
+
+    /// " M more are already safely backed up on other drives." ("" when none).
+    static func backedUpSentence(_ s: RelocateSummary, more: Bool) -> String {
+        guard s.safelyBackedUpCount > 0 else { return "" }
+        return " \(s.safelyBackedUpCount)" + (more ? " more " : " ")
+            + (s.safelyBackedUpCount == 1 ? "is" : "are")
+            + " already safely backed up on other drives."
     }
 }
