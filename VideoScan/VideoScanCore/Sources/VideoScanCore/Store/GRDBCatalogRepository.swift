@@ -1118,17 +1118,21 @@ extension GRDBCatalogRepository {
     /// latch. For Rick: a value type holding three stat snapshots.
     struct AdmissionFootprint: Sendable {
         /// The parts of `stat(2)` that move when a file is written.
+        /// Two LIVE stats of one open (before the admission, after the
+        /// refusal) — never a stored stamp; the identity half is the store's
+        /// own `CatalogFileIdentity` (the #359 guard's type).
         private struct Fingerprint: Equatable {
-            let device: dev_t, inode: ino_t, size: off_t
+            let identity: CatalogFileIdentity
+            let size: off_t
             let modified: (Int, Int), changed: (Int, Int)
             static func == (lhs: Fingerprint, rhs: Fingerprint) -> Bool {
-                lhs.device == rhs.device && lhs.inode == rhs.inode && lhs.size == rhs.size
+                lhs.identity == rhs.identity && lhs.size == rhs.size
                     && lhs.modified == rhs.modified && lhs.changed == rhs.changed
             }
             static func read(_ path: String) -> Fingerprint? {
                 var info = stat()
                 guard stat(path, &info) == 0 else { return nil }
-                return Fingerprint(device: info.st_dev, inode: info.st_ino, size: info.st_size,
+                return Fingerprint(identity: CatalogFileIdentity(device: info.st_dev, inode: info.st_ino), size: info.st_size,
                                    modified: (info.st_mtimespec.tv_sec, info.st_mtimespec.tv_nsec),
                                    changed: (info.st_ctimespec.tv_sec, info.st_ctimespec.tv_nsec))
             }
