@@ -353,10 +353,13 @@ struct CatalogResizeLoopSourceSensors {
 
     /// The MFO row's subtitle changes every second (Fill In Full Hashes
     /// names up to 8 files). One line, truncated — its height can never
-    /// change with the text.
+    /// change with the text. (793aab5f8 moved the row's text into
+    /// MediaFileOperationRowText; the window hands it `job.subtitle`.)
     @Test func mfoRowSubtitleIsOneTruncatedLine() throws {
-        let window = try Self.code("MediaOps/MediaFileOperationsWindow.swift")
-        let start = try #require(window.range(of: "Text(job.subtitle)"))
+        let host = try Self.code("MediaOps/MediaFileOperationsWindow.swift")
+        #expect(host.contains("MediaFileOperationRowText(title: job.title, subtitle: job.subtitle"))
+        let window = try Self.code("MediaOps/MediaFileOperationRowText.swift")
+        let start = try #require(window.range(of: "Text(subtitle)"))
         let after = window[start.upperBound...].prefix(260)
         #expect(after.contains(".lineLimit(1)"))
         #expect(after.contains(".truncationMode(.tail)"))
