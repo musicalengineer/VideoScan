@@ -29,9 +29,11 @@ extension MediaFileOperationKind {
     ]
 
     /// Kinds that read media, or add one derivative when they finish.
+    /// `.findMaster` (2026-10-26) writes nothing at all: it reads the
+    /// fingerprint sidecar read-only and logs its answers.
     static let notCatalogWriters: Set<MediaFileOperationKind> = [
         .combine, .compare, .extract, .ripFrames, .reformat, .transcode, .cleanup, .trim,
-        .balanceAudio, .rebuildAudio, .compareFootage,
+        .balanceAudio, .rebuildAudio, .compareFootage, .findMaster,
     ]
 
     var writesCatalog: Bool { Self.catalogWriters.contains(self) }

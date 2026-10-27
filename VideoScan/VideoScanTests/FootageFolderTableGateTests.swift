@@ -369,5 +369,6 @@ struct FootageFolderTableGateTests {
         #expect(MediaFileOperationKind.fillFullHashes.writesCatalog)
         #expect(MediaFileOperationKind.fingerprintSound.writesCatalog)
         #expect(!MediaFileOperationKind.compare.writesCatalog)
+        #expect(!MediaFileOperationKind.findMaster.writesCatalog, "Find Master reads the sound-print sidecar and writes nothing")
     }
 }
