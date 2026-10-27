@@ -436,7 +436,9 @@ enum ArchivistRecordExecutor {
         case .archived: return "safely in the Master Archive"
         case .none: return "not yet archived"
         case .healthy: return "healthy, not yet archived"
-        case .masterAssigned: return "master assigned, not yet archived"
+        // Stored as "Master" — the stamp a promotion puts on the file and its
+        // archive copy; shown as "Archived" (2026-10-26). Not the provenance role.
+        case .masterAssigned: return "archived (promoted into the archive)"
         case .backedUp: return "backed up, not yet archived"
         case .readyForArchive: return "ready for the archive"
         case .manuallyDeleted: return "marked manually deleted"
@@ -450,7 +452,7 @@ enum ArchivistRecordExecutor {
             + (snapshot.videoCodec.isEmpty ? "" : "/\(snapshot.videoCodec)")
             + (snapshot.audioCodec.isEmpty ? "" : "/\(snapshot.audioCodec)")
             + ", \(Int(snapshot.durationSeconds.rounded())) s, \(snapshot.sizeBytes) bytes"
-            + ", archive stage \(snapshot.archiveStage.rawValue)"
+            + ", archive stage \(snapshot.archiveStage.displayName)"
     }
 
     /// The first sentence of the transcript, bounded, for the dossier.

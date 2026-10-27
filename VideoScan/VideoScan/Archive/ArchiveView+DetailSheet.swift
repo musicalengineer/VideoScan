@@ -127,14 +127,17 @@ struct ArchiveDetailSheet: View {
 
                     detailSection("Archive Pipeline") {
                         pipelineRow("Healthy", record.archiveStage >= .healthy)
-                        pipelineRow("Master Assigned", record.archiveStage >= .masterAssigned,
+                        // Stored as "Master", shown as "Archived" (2026-10-26).
+                        pipelineRow(ArchiveStage.masterAssigned.displayName, record.archiveStage >= .masterAssigned,
                                     detail: record.masterLocation.isEmpty ? nil : record.masterLocation)
                         pipelineRow("Backed Up", record.archiveStage >= .backedUp,
                                     detail: record.backupDestinations.isEmpty
                                     ? nil
                                     : record.backupDestinations.map { "\($0.name) (\($0.kind.rawValue))" }.joined(separator: ", "))
                         pipelineRow("Ready for Archive", record.archiveStage >= .readyForArchive)
-                        pipelineRow("Archived", record.archiveStage >= .archived)
+                        // The legacy `.archived` stamp (never written since 2026-09-22) —
+                        // named apart so it never reads as a second "Archived".
+                        pipelineRow("Archived (legacy stamp)", record.archiveStage >= .archived)
                         if let archived = archivedAtForDetail {
                             detailRow("Archived On", archived.formatted(date: .long, time: .shortened))
                         }

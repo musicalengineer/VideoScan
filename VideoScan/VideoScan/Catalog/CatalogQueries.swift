@@ -450,7 +450,9 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         if rec.videoCodec.lowercased().contains(n) { return true }
         if rec.audioCodec.lowercased().contains(n) { return true }
         if rec.lifecycleStage.rawValue.lowercased().contains(n) { return true }
-        if rec.archiveStage.rawValue.lowercased().contains(n) { return true }
+        // The stage as stored AND as shown ("Master" is shown as "Archived",
+        // 2026-10-26): what the screen says is searchable; the stored word still matches.
+        if [rec.archiveStage.rawValue, rec.archiveStage.displayName].contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.notes.lowercased().contains(n) { return true }
         // userNotes split (2026-07-23): universal search always matched
         // `notes`, so the human text that migrated to `userNotes` must

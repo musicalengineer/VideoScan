@@ -183,7 +183,8 @@ struct ArchiveAngelReadinessExplanation: Identifiable, Equatable, Sendable {
         switch r {
         case "marked Important": return "You marked it Important."
         case "stage: Ready": return "You set its archive stage to Ready."
-        case "stage: Master": return "Its archive stage says Master."
+        // The rule's line keeps its stored words; the stage is shown as Archived (2026-10-26).
+        case "stage: Master": return "Its archive stage says \(ArchiveStage.masterAssigned.displayName)."
         case "the copy to keep": return "You chose this copy as the one to keep."
         case "Not assessed yet": return "Archive Angel has not looked at it yet."
         case ArchiveAngelRejection.footageOriginalArchived.rawValue:

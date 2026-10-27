@@ -13166,6 +13166,52 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveStageArchivedLabelTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveStageArchivedLabelTests"
+      ],
+      "tests": [
+        "angelSentenceSaysArchived",
+        "detailSheetPipelineSaysArchived",
+        "hallieSaysArchived",
+        "searchFindsArchivedByItsShownLabel",
+        "storedValueUnchangedShownLabelArchived"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProvenanceSetRoleTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProvenanceSetRoleLogicTests",
+        "ProvenanceSetRoleTruthTests",
+        "ProvenanceSetRoleScaleTests",
+        "ProvenanceSetRoleSensorTests"
+      ],
+      "tests": [
+        "acrossAViewerMasterFlip",
+        "already",
+        "dates",
+        "duringAWriteHold",
+        "hundredThousandSelected",
+        "insideTheDebounceWindow",
+        "inspectorReadsTheStore",
+        "inspectorWords",
+        "masterWords",
+        "menuRefusal",
+        "missingContentRollsBack",
+        "noSQLNoCommitInTheViews",
+        "poisonedRow",
+        "rowMenuCarriesTheProvenanceMenu",
+        "setShowsOnCopiesAndSurvivesRelaunch",
+        "targets",
+        "unattachedRefuses",
+        "unknownResetsAndMultiSelection"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FindPersonDedupTests.swift",
       "stage": "unit",
       "suites": [
@@ -33776,7 +33822,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3018,
+      "expected_floor": 3036,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
@@ -34098,6 +34144,10 @@
         "VideoScanTests/ProbeEngineErrorPathsTests",
         "VideoScanTests/ProbeExtractionGoldenTests",
         "VideoScanTests/ProbeResultCatalogingTests",
+        "VideoScanTests/ProvenanceSetRoleLogicTests",
+        "VideoScanTests/ProvenanceSetRoleScaleTests",
+        "VideoScanTests/ProvenanceSetRoleSensorTests",
+        "VideoScanTests/ProvenanceSetRoleTruthTests",
         "VideoScanTests/RateTrackerSampleGateTests",
         "VideoScanTests/RateTrackerTests",
         "VideoScanTests/RebuildAudioFixTests",
@@ -34600,7 +34650,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 321,
+      "expected_floor": 326,
       "name": "regression",
       "package_expected_floor": 279,
       "package_selectors": [
@@ -34654,6 +34704,7 @@
       "selectors": [
         "VideoScanTests/AdvRollCallUndatedLivingParentTests",
         "VideoScanTests/AgeAtDeathConstraintTests",
+        "VideoScanTests/ArchiveStageArchivedLabelTests",
         "VideoScanTests/BirthplaceConstraintTests",
         "VideoScanTests/CatalogScopedSaveBaselineTests",
         "VideoScanTests/CatalogSearchBudgetSensorTests",

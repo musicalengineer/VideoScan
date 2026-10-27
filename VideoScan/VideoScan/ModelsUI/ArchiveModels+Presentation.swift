@@ -31,6 +31,18 @@ extension MediaDisposition {
 }
 
 extension ArchiveStage {
+    /// The words the UI shows for a stage. The stage STORED as "Master"
+    /// (`.masterAssigned`, stamped on a promoted file and its archive copy)
+    /// is SHOWN as "Archived" (DECISIONS 2026-10-26: the Archive stops
+    /// labelling files "Masters"; "Master" is the provenance role Rick
+    /// confirms). Stored values are unchanged — never write this back.
+    var displayName: String {
+        switch self {
+        case .masterAssigned: return "Archived"
+        default: return rawValue
+        }
+    }
+
     var icon: String {
         switch self {
         case .none:            return "circle"
