@@ -34,7 +34,7 @@ pip_into() {
     local name="$1" label="$2"; shift 2
     local py="$REPO_ROOT/$name/bin/python" log
     log=$(install_log "pip-$name")
-    note "installing $label into $name…"
+    note "installing ${label} into ${name}…"
     if uv pip install --python "$py" "$@" >>"$log" 2>&1; then
         ok "$label in $name"
     else

@@ -44,7 +44,7 @@ for repo in "${HF_MODELS[@]}"; do
     if [[ -d "$cache_dir/snapshots" ]]; then
         ok "HF model $repo"
     elif [[ "$WITH_MODELS" == "1" ]] && ! checking && [[ -x "$REPO_ROOT/venv-mlx/bin/python" ]]; then
-        note "downloading $repo…"
+        note "downloading ${repo}…"
         if "$REPO_ROOT/venv-mlx/bin/python" -c \
                 "from huggingface_hub import snapshot_download; snapshot_download('$repo')" >/dev/null 2>&1; then
             installed "HF model $repo"

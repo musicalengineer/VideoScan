@@ -31022,6 +31022,19 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_shell_utf8_variable_names.py",
+      "stage": "unit",
+      "suites": [
+        "test_shell_utf8_variable_names.py"
+      ],
+      "tests": [
+        "test_bash32_really_fails_on_the_pattern",
+        "test_no_shell_script_writes_an_unbraced_variable_before_non_ascii"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_sprint_digest.py",
       "stage": "unit",
       "suites": [
@@ -33749,6 +33762,10 @@
         },
         {
           "name": "tests/test_sensor_lane_stamp.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_shell_utf8_variable_names.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
