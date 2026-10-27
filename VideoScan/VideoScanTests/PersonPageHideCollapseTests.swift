@@ -315,12 +315,16 @@ struct PersonPageHideCollapseTests {
         let m = model(records)
         let clock = ContinuousClock()
         var built = PersonVideoPage.empty
+        let loadBefore = TimingBudget.sampleLoad()
         let elapsed = clock.measure { built = PersonVideos.page(for: p, in: m) }
         let files = (built.tagged + built.hidden).reduce(0) { $0 + $1.fileCount }
         #expect(files == 2_000, "every tagged file is on the page once")
         #expect(built.hidden.reduce(0) { $0 + $1.fileCount } == 100)
         #expect(built.tagged.count + built.hidden.count < 1_100, "pairs collapse: \(built.tagged.count) rows")
-        #expect(elapsed < .milliseconds(500), "page for one person took \(elapsed)")
+        // GH #378: through the one budget rule (sanitizer-, load- and
+        // nightly-aware), never a raw `elapsed < budget`.
+        expectWithinTimingBudget("People page for one person, 100k records + 1k hides", measured: elapsed,
+                                 budget: .milliseconds(500), loadBefore: loadBefore)
     }
 }
 

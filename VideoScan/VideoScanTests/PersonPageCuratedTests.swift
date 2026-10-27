@@ -254,13 +254,17 @@ struct PersonPageCuratedPageTests {
         let m = model(records)
         let clock = ContinuousClock()
         var built = PersonVideoPage.empty
+        let loadBefore = TimingBudget.sampleLoad()
         let elapsed = clock.measure { built = PersonVideos.page(for: p, in: m) }
         #expect(built.curated.count == PersonVideoPage.curatedCap)
         #expect(built.catalogFiles == 2_000)
         #expect(built.catalogVideos == 1_000, "two edits of each raw are one piece of footage")
         #expect(built.curated.allSatisfy { $0.lead.tier == .tagged || $0.rows.contains { $0.tier == .tagged } },
                 "confirmed footage fills first")
-        #expect(elapsed < .milliseconds(500), "curated page for one person took \(elapsed)")
+        // GH #378: through the one budget rule (sanitizer-, load- and
+        // nightly-aware), never a raw `elapsed < budget`.
+        expectWithinTimingBudget("curated People page for one person, 100k records", measured: elapsed,
+                                 budget: .milliseconds(500), loadBefore: loadBefore)
     }
 }
 
@@ -283,5 +287,21 @@ struct PersonPageCuratedSensorTests {
         #expect(section.contains("hiddenFooter"), "the hide footer stays")
         let finder = try code("PersonFinderView.swift")
         #expect(finder.contains("CatalogPersonLink.showAll(of: profile, in: catalogPersonFilter)"))
+    }
+
+    /// GH #378: the People page's 100k scale tests asserted a raw
+    /// `elapsed < .milliseconds(500)`, so every weekly sanitizer run (×3–10
+    /// slower) read tests-failed. Their wall-clock budgets go through
+    /// `expectWithinTimingBudget` (TimingBudget: sanitizer-, load- and
+    /// nightly-aware) — a raw comparison must not come back.
+    @Test func thePeoplePageScaleBudgetsGoThroughTheOneTimingRule() throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let raw = "elapsed " + "< ."      // split, so this file's own needle is not a hit
+        for name in ["PersonPageCuratedTests.swift", "PersonPageHideCollapseTests.swift"] {
+            let text = try String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8)
+            let body = SourceTree.strippingComments(text)
+            #expect(!body.contains(raw), "\(name): a raw wall-clock comparison (GH #378)")
+            #expect(body.contains("expectWithinTimingBudget("), "\(name): the budget is judged by TimingBudget")
+        }
     }
 }
