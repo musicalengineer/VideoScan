@@ -7,6 +7,10 @@
 # edited after it, or never ran it), the push is refused with the command to run.
 #
 # Waiver (Rick's call, recorded): SENSOR_LANE_WAIVED="reason" git push …
+# Outside the app (Rick 2026-10-27): a push that changes nothing under
+# VideoScan/ (scripts, tools, docs, Python tests, one-offs) needs no lane — the
+# sensors only read the app and Core sources. An unknown remote tip (new ref,
+# or not fetched here) always needs the lane.
 # Pushes to other branches are not checked. Installed by scripts/install-git-hooks.sh.
 
 remote="$1"
@@ -19,6 +23,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     tree="$(git rev-parse "$local_sha^{tree}" 2>/dev/null)"
     if [ -f "$stamp" ] && grep -q "^$tree " "$stamp"; then
         echo "pre-push: sensor lane GREEN recorded for tree ${tree:0:12} ✓"
+        continue
+    fi
+    if [ "$remote_sha" != "0000000000000000000000000000000000000000" ] \
+       && git cat-file -e "$remote_sha^{commit}" 2>/dev/null \
+       && ! git diff --name-only "$remote_sha" "$local_sha" | grep -q '^VideoScan/'; then
+        echo "pre-push: nothing under VideoScan/ changed — sensor lane not needed ✓"
         continue
     fi
     if [ -n "${SENSOR_LANE_WAIVED:-}" ]; then
