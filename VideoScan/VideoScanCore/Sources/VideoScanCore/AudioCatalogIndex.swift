@@ -136,10 +136,12 @@ public struct AudioCatalogIndex: Sendable {
     // MARK: Open (refuses before reading)
 
     /// The sidecar in `directory`, opened READ-ONLY and only when the file
-    /// EXISTS — this index is a reader: it never creates, writes or
-    /// checkpoints the sidecar (`AudioFingerprintStore.init(readingOnly:)`).
+    /// EXISTS — this index is a reader: it never writes or checkpoints the
+    /// sidecar (`AudioFingerprintStore.init(readingOnly:)`); the one file it
+    /// may create is a missing EMPTY `-wal` (#386, create-only).
     /// Throws `BuildFailure.noSidecar` or the store's named `Failure` (not a
-    /// database, newer schema, no table, `-wal` missing) before any row is read.
+    /// database, newer schema, no table, `-wal` missing in a folder that will
+    /// not take one) before any row is read.
     public static func openSidecar(directory: URL) throws -> AudioFingerprintStore {
         let file = directory.appendingPathComponent(AudioFingerprintStore.fileName)
         guard FileManager.default.fileExists(atPath: file.path) else {

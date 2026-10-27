@@ -141,7 +141,8 @@
         "pagingDoesNotHoldTheLockAcrossPages",
         "poisonedOrNewerSidecarRefusesBeforeBuild",
         "readOnlyBuildChangesNothingEvenWithWALFrames",
-        "readOnlyOpenRefusesAMissingWAL",
+        "readOnlyOpenRefusesAMissingWALInAnUnwritableFolder",
+        "readOnlyOpenRestoresAMissingWAL",
         "sampledKeysAndOtherRecipesAreCountedNotIndexed",
         "unreadableBlobIsCountedAndBuildContinues"
       ]
@@ -31113,6 +31114,7 @@
       ]
     },
     {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
       "stage": "regression",
@@ -31123,8 +31125,7 @@
         "archiveTabCountsEveryLiveArchiveCopyOnce",
         "importEraArchiveCopyReplacementLands",
         "rescanKeepsEveryArchivedMastersRow"
-      ],
-      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+      ]
     },
     {
       "kind": "xcode",

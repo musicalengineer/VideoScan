@@ -187,16 +187,21 @@ public final class AudioFingerprintStore: @unchecked Sendable {
     /// (its shared-memory read index, no data) as any reader does.
     /// Refuses, before any row is read: missing file, not a database, newer
     /// schema, no fingerprints table, and a WAL-mode file whose `-wal` is
-    /// missing (SQLITE_CANTOPEN: Apple's SQLite will not read it read-only).
-    // TODO(#386): `SQLiteWALSidecar.prepareForReadOnlyOpen` (branch
-    // fix/store-durability-codex141, in Codex review) restores a missing
-    // -wal create-only when the folder is writable; call it here once it
-    // merges, instead of refusing `.readOnlyNeedsWAL`.
+    /// missing in a folder that will not take one (SQLITE_CANTOPEN: Apple's
+    /// SQLite will not read it read-only).
+    /// #386 (Rick 2026-10-26): a WAL-mode file with no `-wal` (last closed
+    /// by a sqlite3 shell, or copied alone) first gets an EMPTY `-wal`,
+    /// create-only, through `SQLiteWALSidecar.prepareForReadOnlyOpen` — the
+    /// same door the catalog's read-only opens use. An empty `-wal` holds no
+    /// frames, so the main file and what any reader sees are unchanged.
     public init(readingOnly directory: URL) throws {
         fileURL = directory.appendingPathComponent(Self.fileName)
         isReadOnly = true
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw Failure.cannotOpen(path: fileURL.path, reason: "no such file")
+        }
+        if case .refused = SQLiteWALSidecar.prepareForReadOnlyOpen(fileURL) {
+            throw Failure.readOnlyNeedsWAL(path: fileURL.path)
         }
         var handle: OpaquePointer?
         guard sqlite3_open_v2(fileURL.path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,

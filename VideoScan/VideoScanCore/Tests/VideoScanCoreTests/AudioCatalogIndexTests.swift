@@ -269,20 +269,56 @@ struct AudioCatalogIndexTests {
         #expect(try SidecarFacts.of(file) == afterWriter)
     }
 
-    @Test("a WAL sidecar whose -wal is missing is refused in plain words; no file is created")
-    func readOnlyOpenRefusesAMissingWAL() throws {
-        let dir = try F.scratchDirectory("nowal")
-        defer { try? FileManager.default.removeItem(at: dir) }
+    /// A sound-print file last closed by another program (a sqlite3 shell, a
+    /// copy of the file alone): WAL mode, no `-wal`, no `-shm`. Test-owned
+    /// scratch files; returns the file.
+    private func soundPrintFileWithoutSidecars(_ dir: URL) throws -> URL {
         let file: URL
         do {
             let writer = try AudioFingerprintStore(directory: dir)
             try writer.put([.init(key: F.key(1), fingerprint: F.randomPrint(count: 40, seed: 5), sourcePath: "test")])
             file = writer.fileURL
         }
-        // Simulate "last closed by another program": no -wal, no -shm (test-owned scratch files).
         try? FileManager.default.removeItem(atPath: file.path + "-wal")
         try? FileManager.default.removeItem(atPath: file.path + "-shm")
+        return file
+    }
+
+    // #386 (Rick 2026-10-26, "Read-only opens restore a missing WAL sidecar"):
+    // this test used to expect a refusal. The read-only open now restores an
+    // EMPTY -wal (create-only, SQLiteWALSidecar) and reads; the main file's
+    // bytes and mtime do not move.
+    @Test("a WAL sidecar whose -wal is missing opens read-only: an empty -wal is created, the main file is unchanged")
+    func readOnlyOpenRestoresAMissingWAL() throws {
+        let dir = try F.scratchDirectory("nowal")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = try soundPrintFileWithoutSidecars(dir)
         let before = try SidecarFacts.of(file)
+        #expect(before.walBytes == nil, "precondition: no -wal")
+        do {
+            let reader = try AudioCatalogIndex.openSidecar(directory: dir)
+            #expect(reader.isReadOnly)
+            #expect(try AudioCatalogIndex.build(store: reader).1.indexed == 1, "the row is read")
+        }   // reader closed here
+        let after = try SidecarFacts.of(file)
+        #expect(after.dbBytes == before.dbBytes, "the main file's bytes changed")
+        #expect(after.dbModified == before.dbModified, "the main file's mtime changed")
+        #expect(after.inodes[""] == before.inodes[""], "the main file was replaced")
+        #expect(after.walBytes == Data(), "the restored -wal is empty (no frames)")
+    }
+
+    @Test("a WAL sidecar whose -wal is missing, in a folder that will not take one, is refused in plain words; nothing is created")
+    func readOnlyOpenRefusesAMissingWALInAnUnwritableFolder() throws {
+        let dir = try F.scratchDirectory("nowal-ro")
+        let fm = FileManager.default
+        let file = try soundPrintFileWithoutSidecars(dir)
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? fm.removeItem(at: dir)
+        }
+        let before = try SidecarFacts.of(file)
+        let listing = try fm.contentsOfDirectory(atPath: dir.path).sorted()
         do {
             _ = try AudioCatalogIndex.openSidecar(directory: dir)
             Issue.record("expected a refusal")
@@ -292,7 +328,7 @@ struct AudioCatalogIndexTests {
             #expect(failure.description.contains("Nothing was read or changed"))
         }
         #expect(try SidecarFacts.of(file) == before)
-        #expect(!FileManager.default.fileExists(atPath: file.path + "-wal"))
+        #expect(try fm.contentsOfDirectory(atPath: dir.path).sorted() == listing, "a refused open created a file")
     }
 
     @Test("isCancelled stops the build with CancellationError")
