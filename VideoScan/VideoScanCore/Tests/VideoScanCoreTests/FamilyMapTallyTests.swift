@@ -229,11 +229,8 @@ struct FamilyMapTallyTests {
 
     // MARK: Scale
 
-    /// 40k people over ~120 units (Zipf-ish: a few big counties, a long
-    /// tail), with the full member ordering and surname ranking in the
-    /// measured path. Budget 50 ms (Debug, load-aware).
-    @Test func fortyThousandPeopleUnderBudget() throws {
-        let n = 40_000
+    /// `n` people over ~120 units (Zipf-ish: a few big counties, a long tail).
+    static func scalePeople(_ n: Int) -> (people: T.People, visited: [Int], mask: [Bool]) {
         let keys: [String?] = (0..<n).map { i in
             if i % 25 == 0 { return nil }
             if i % 7 == 0 { return "eng" }
@@ -250,23 +247,39 @@ struct FamilyMapTallyTests {
             generations: (0..<n).map { $0 % 13 == 0 ? nil : $0 % 20 },
             lines: (0..<n).map { L.allCases[$0 % 4] },
             unitKeys: keys)
-        let visited = Array(0..<n)
-        let mask: [Bool] = (0..<n).map { $0 % 3 != 0 }
+        return (people, Array(0..<n), (0..<n).map { $0 % 3 != 0 })
+    }
+
+    /// 40k people, with the full member ordering and surname ranking in the
+    /// measured path (a plain and a masked tally).
+    ///
+    /// GH #385: this measures the ALGORITHM (pure, synchronous, one thread),
+    /// so the check that runs everywhere is machine-independent: the same
+    /// two tallies at 10k and 40k, thread CPU time, fastest of 3 interleaved
+    /// rounds, and the 4× input may cost at most 8× (linear ≈ 4, n log n
+    /// ≈ 4.6, a quadratic walk 16). The 100 ms CPU budget (50 ms per tally,
+    /// Debug) is asserted on the reference nightly only; it failed at
+    /// 114.9 ms on a quiet M5 Pro and at 345 ms on the M4's efficiency cores
+    /// with no change to the code.
+    @Test func fortyThousandPeopleUnderBudget() throws {
+        let n = 40_000
+        let big = Self.scalePeople(n)
+        let small = Self.scalePeople(n / 4)
         var plain: T.Result?
         var filtered: T.Result?
-        // Thread CPU time (GH #208): the pass is synchronous and single-threaded.
-        var wall: Duration = .zero
-        let loadBefore = TimingBudget.sampleLoad()
-        let cpu = TimingBudget.measureThreadCPUTime {
-            wall = ContinuousClock().measure {
-                plain = try? T.counts(people: people, visited: visited)
-                filtered = try? T.counts(people: people, visited: visited, mask: mask, yearCeiling: 1800)
-            }
+        func tallies(_ s: (people: T.People, visited: [Int], mask: [Bool])) -> (T.Result?, T.Result?) {
+            (try? T.counts(people: s.people, visited: s.visited),
+             try? T.counts(people: s.people, visited: s.visited, mask: s.mask, yearCeiling: 1800))
         }
-        print("[family-map] tally 40k ×2: cpu \(cpu), wall \(wall) (\(TimingBudget.loadDescription()))")
-        expectWithinTimingBudget("two 40k family-map tallies (CPU)", measured: cpu,
-                                 budget: .milliseconds(50) * 2,   // two tallies measured
-                                 loadBefore: loadBefore)
+        let loadBefore = TimingBudget.sampleLoad()
+        let cpu = TimingBudget.interleavedMinimumCPUTime(
+            rounds: 3, reference: { _ in _ = tallies(small) }, measured: { _ in (plain, filtered) = tallies(big) })
+        print("[family-map] tally 10k ×2: cpu \(cpu.reference); 40k ×2: cpu \(cpu.measured) (\(TimingBudget.loadDescription()))")
+        expectRatio(TimingBudget.judgeGrowth("family-map tallies 10k → 40k (CPU)", small: cpu.reference,
+                                             large: cpu.measured, sizeRatio: 4, limit: 8))
+        expectWithinReferenceTimingBudget("two 40k family-map tallies (CPU)", measured: cpu.measured,
+                                          budget: .milliseconds(50) * 2,   // two tallies measured
+                                          loadBefore: loadBefore)
         let r = try #require(plain)
         #expect(r.totals.considered == n)
         #expect(r.totals.unresolved == n / 25)

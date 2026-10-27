@@ -158,7 +158,20 @@ struct DateReviewF2Tests {
     /// The scoped pass runs on the MainActor and is O(catalog) (the R1
     /// dependents scan + the bucketing walk). A donor-scoped pass over a
     /// 100k catalog must stay interactive.
-    @Test("a donor-scoped pass over a 100k catalog stays inside a load-aware budget", .timeLimit(.minutes(3)))
+    ///
+    /// GH #385: this measures the ALGORITHM (synchronous, one thread), so the
+    /// check that runs everywhere is relative to a reference on the same
+    /// host, build and moment: one FULL catch-up pass over the same 100k
+    /// catalog. Thread CPU time, fastest of 3 interleaved rounds (each round
+    /// 20 scoped passes on fresh donors). Measured 2026-10-26 on the M4: a
+    /// scoped pass costs 0.20× a full pass on the performance cores and
+    /// 0.21× on the efficiency cores, where its wall time was 5.8× (878 ms
+    /// against the old 135 ms budget). The limit, 0.5×, trips when the scope
+    /// stops paying off (a per-scope or per-group O(records) walk, or the
+    /// scope ignored: ≈ 1×). The absolute 135 ms per pass is asserted on the
+    /// reference nightly only (it failed on the M1's Release gauntlet run
+    /// with no change to the code).
+    @Test("a donor-scoped pass over a 100k catalog costs a fraction of a full pass", .timeLimit(.minutes(3)))
     func donorScopedPassAt100k() {
         let model = F.model("f2-100k")
         var records: [VideoRecord] = []
@@ -183,23 +196,30 @@ struct DateReviewF2Tests {
         let setup = model.catchUpInferredDates(trigger: "test")
         #expect(setup.footageShared == 25_000)
 
-        // 20 donor-scoped passes, each after its donor's year changed.
-        let probes = Array(donors.prefix(20))
-        let clock = ContinuousClock()
+        // Per round: one full pass (the reference), then 20 donor-scoped
+        // passes, each after a fresh donor's year changed.
+        let rounds = 3, perRound = 20
         var shared = 0
-        let elapsed = clock.measure {
-            for donor in probes {
-                donor.userDate = "2001"
-                shared += model.catchUpInferredDates(scope: [donor], trigger: "test").footageShared
-            }
-        }
-        #expect(shared == probes.count, "each scoped pass re-shares its one recipient")
-        let perPass = elapsed / probes.count
-        print("[date-sharing] donor-scoped pass over 100k: \(perPass) per pass (\(elapsed) for \(probes.count))")
+        let loadBefore = TimingBudget.sampleLoad()
+        let cpu = TimingBudget.interleavedMinimumCPUTime(
+            rounds: rounds,
+            reference: { _ in _ = model.catchUpInferredDates(trigger: "test") },
+            measured: { round in
+                for donor in donors[(round * perRound)..<((round + 1) * perRound)] {
+                    donor.userDate = "1955"   // outside the fixture's 1960–2019, so every donor changes
+                    shared += model.catchUpInferredDates(scope: [donor], trigger: "test").footageShared
+                }
+            })
+        #expect(shared == rounds * perRound, "each scoped pass re-shares its one recipient")
+        let perPass = cpu.measured / perRound
+        print("[date-sharing] donor-scoped pass over 100k: \(perPass) CPU per pass; a full pass \(cpu.reference) "
+              + "(\(PerformanceLane.loadDescription()))")
+        expectRatio(TimingBudget.judgeRelative("donor-scoped pass over 100k (CPU)", measured: perPass,
+                                               reference: cpu.reference, referenceName: "one full catch-up pass",
+                                               limit: 0.5))
         // Measured 2026-09-26 (Debug, M5, load avg ~10): 90 ms per pass
-        // (78 ms before GH #207 added the groupmate scan). 135 ms is 1.5×,
-        // load-aware; it trips on a per-scope or per-group O(records) walk.
-        #expect(perPass < PerformanceLane.loadAwareDebugCeiling(.milliseconds(135)),
-                "a donor-scoped pass over 100k took \(perPass)")
+        // (78 ms before GH #207 added the groupmate scan); 135 ms is 1.5×.
+        expectWithinReferenceTimingBudget("donor-scoped pass over 100k (CPU, per pass)", measured: perPass,
+                                          budget: .milliseconds(135), loadBefore: loadBefore)
     }
 }

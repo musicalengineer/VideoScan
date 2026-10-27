@@ -281,38 +281,6 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
-      "stage": "unit",
-      "suites": [
-        "SoundPrintSilenceVerdictTests"
-      ],
-      "tests": [
-        "describesRedoesWhatIsNotEvidence",
-        "emptyBitmapIsNotSilence",
-        "engineShortToneVersusZeros",
-        "hearingNoAudio",
-        "hearingZeroLandmarks",
-        "mediaMatrix",
-        "readingOfAFreshPrint",
-        "silentOnlyForMeasuredSilence"
-      ]
-    },
-    {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QARedSilenceFloorTests.swift",
-      "stage": "unit",
-      "suites": [
-        "QARedSilenceFloorTests"
-      ],
-      "tests": [
-        "ditherIsSilence",
-        "lowHissIsSilence"
-      ]
-    },
-    {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
-      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
       "stage": "unit",
       "suites": [
@@ -440,6 +408,35 @@
         "reviewItemsNeverMoveTheBand",
         "yellowCannotFullyVouch",
         "zeroCountsAreNoReason"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogChangeDetectorTests"
+      ],
+      "tests": [
+        "anyChangeMovesIt",
+        "parallelAndSerialAgree",
+        "theChangedListIsTheRecordsThatDiffer",
+        "theSameStateHasTheSameFingerprint"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogCommitScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogCommitScaleTests"
+      ],
+      "tests": [
+        "fourteenThousand",
+        "hundredThousand",
+        "richDetection",
+        "syncCommitOneRow",
+        "syncCommitThousandRows"
       ]
     },
     {
@@ -1836,6 +1833,131 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogImporterAppMarkerTests"
+      ],
+      "tests": [
+        "anOlderMarkerWithoutJudgedPathsIsStillRefused",
+        "theAppsMarkerAtAnotherGenerationIsRefused",
+        "theAppsMarkerLandsEveryRowWithTheAppsWord",
+        "theAppsMarkerWithItsGenerationPassesTheDryRunWithoutTheNote",
+        "theAppsMarkerWithoutAGenerationPassesTheDryRunByTimeOrder",
+        "theAppsNonPresentRowsEachNameTheirRowsPath",
+        "theMarkerTheAppWritesTodayPassesTheDryRun"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterDryRunTests"
+      ],
+      "tests": [
+        "aDryRunCarriesTheQuarantineWordsCappedAtTheSample",
+        "aDryRunLogsStartAndADryRunOutcomeThroughTheSink",
+        "aDryRunPassesWithTheSameLineARealRunWouldPrint",
+        "aDryRunWritesNothingToTheInputsTargetAndRemovesItsScratch",
+        "aGateRefusalInADryRunIsTheSameRefusal",
+        "aMissInADryRunRollsBackAndNamesItAndTheScratchIsGone",
+        "aRowWithAnEmptyContentHashLandsInFiles",
+        "aStopRequestedBeforeTheTargetOpensEndsStoppedWithNothingWritten",
+        "aStopRequestedDuringTheRowsRollsTheTransactionBack",
+        "anEmptyContentHashMapsToANilSampledHash"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogImporterScaleTests"
+      ],
+      "tests": [
+        "oneHundredThousandRowsImportWithinBudget"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterSensorTests"
+      ],
+      "tests": [
+        "importerWritesOnlyThroughTheTransactionDoors",
+        "noAppVideoRecordSymbolInImport",
+        "theComparatorReDecodesFromTheFilePath"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterStagingTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterStagingTests"
+      ],
+      "tests": [
+        "aLateCommitStaysInStaging",
+        "aRolledBackRunLeavesOnlyStaging",
+        "anExistingEmptyTargetRefuses",
+        "leftoversAreMovedAsideNotDeleted",
+        "theNextImportAfterALateCommitStartsClean",
+        "thePublishedSetIsWholeAndWritable"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterTests",
+        "CatalogImporterIdentityTests",
+        "CatalogImporterDuplicateKeyTests",
+        "CatalogImporterSidecarRereadTests",
+        "CatalogImporterAuditWordsTests",
+        "CatalogImporterLedgerTests",
+        "CatalogImporterPreflightTests",
+        "CatalogImporterEmptyTargetTests"
+      ],
+      "tests": [
+        "aCatalogThatChangesMidImportIsRefusedAndNothingIsWritten",
+        "aClearedMembershipViewIsNamedMemberByMember",
+        "aComparatorMissRollsEverythingBackAndNamesIt",
+        "aDecisionPayloadAlteredInTheViewIsAMiss",
+        "aHashedRowWithANegativeSizeIsQuarantinedAndTheRunProceeds",
+        "aLandingWhoseDigestIsNotTheRowsIsNamed",
+        "aLedgerPayloadAlteredInTheViewIsAMiss",
+        "aMalformedLastLineThatIsTerminatedRefusesTheRun",
+        "aMalformedLineBeforeTheEndRefusesTheRun",
+        "aQuarantinedRowsStarsAreInItsRawRowAndInKnowledgeSources",
+        "aReadOnlyTargetFolderFailsBeforeAnyWrite",
+        "aReportWhoseHashIsNotTheFrozenFilesIsRefused",
+        "aRowCarryingOneKeyTwiceRefusesTheRunBeforeAnyWrite",
+        "aRowWhoseVolumeIdIsNotAUUIDIsQuarantinedAndTheRunProceeds",
+        "aSecondRunIntoTheSameDatabaseIsRefused",
+        "aSidecarCarryingOneKeyTwiceRefusesTheRun",
+        "aTornLastLineLandsAsAnUnparseableRowWithItsBytes",
+        "aWriteBetweenTheOuterCheckAndTheTransactionIsRefusedInsideIt",
+        "anAuditMarkerWithoutRowResultsRefusesTheRun",
+        "anEventDecisionChangedAfterTheGateIsRefusedAndNothingIsWritten",
+        "anEventMemberWithABadRangeRefusesTheRun",
+        "anUnknownAuditResultWordRefusesTheRun",
+        "everyAuditRowLandsWithItsWordAndDetailAndTheMarkerKeepsTheFilesHash",
+        "everyShapeLandsWhereTheContractSays",
+        "knowledgeSourcesHoldsEveryCuratedValueOfEveryRowPerField",
+        "swappedFileReferencesAndSwappedBindingsAreNamed",
+        "theImportCommitsOneGenerationWithTheFileCounts",
+        "theReconciliationLineEqualsTheCounts",
+        "theSidecarsLandWithTheirOrdinals",
+        "theTombstonedShapeIsCountedAsTombstonedMain",
+        "withoutSidecarsTheImportStillCompletes"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogRecordDTOTests.swift",
       "stage": "unit",
       "suites": [
@@ -2024,6 +2146,51 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AuditMarkerJSONTests"
+      ],
+      "tests": [
+        "aCouldNotCheckWhoseDetailNamesALinkIsTheLinkClass",
+        "aCouldNotCheckWithoutADetailIsCouldNotCheck",
+        "aNonPresentAppWordNeedsAJudgedPath",
+        "aPresentClassWordNeedsNoJudgedPath",
+        "anUnknownWordIsARunLevelRefusalWithTheOrdinalAndTheWord",
+        "anUnknownWordIsNotEvidence",
+        "anUnknownWordRefusesTheRun",
+        "everyAppWordIsKnown",
+        "everyAppWordMapsToItsClass",
+        "theMarkerInTheAppsExactShapeDecodes"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/JSONDuplicateKeyScannerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JSONDuplicateKeyScannerTests",
+        "JSONDuplicateKeyScannerScaleTests"
+      ],
+      "tests": [
+        "aCleanDocumentHasNoDuplicate",
+        "aDocumentThatIsNotJSONReportsNoDuplicate",
+        "aDuplicateAfterAnEscapedStringIsStillFound",
+        "aDuplicateAtTheTopLevelHasNoOrdinal",
+        "aDuplicateInsideANestedObjectNamesTheWholePath",
+        "aDuplicateInsideAnArrayOfArraysIsPathed",
+        "aRowCarryingOneKeyTwiceIsNamedWithItsOrdinal",
+        "anEscapedKeyEqualsItsPlainSpelling",
+        "escapesInsideKeysAreResolvedBeforeComparing",
+        "hundredThousandRecordsScanWithinBudget",
+        "stringsThatLookLikeStructureDoNotConfuseIt",
+        "theLinesVariantNamesTheLine",
+        "thePoisonedFixtureScansClean",
+        "theSameKeyInTwoSiblingObjectsIsNotADuplicate"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/PoisonedCatalogFixtureTests.swift",
       "stage": "unit",
       "suites": [
@@ -2035,6 +2202,71 @@
         "theAppDecoderSeesTheSameDigestsAsTheImporter",
         "theAppDecoderSeesTheSameIdsAndPathsInFileOrder",
         "theAppDecoderSeesTheTombstoneAndTheConflictingStars"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ReconcileByDigestTests"
+      ],
+      "tests": [
+        "aDigestKnownOnlyFromQuarantineBecomesANewRowAndResolvesIt",
+        "aFileStillBeingWrittenIsDeferredNeverARow",
+        "aKnownDigestWhoseOneRowIsProvenGoneMovesThatRow",
+        "aKnownDigestWhoseRowIsStillPresentIsACopy",
+        "aKnownDigestWithOneRowGoneAndAnotherPresentMovesTheGoneRow",
+        "aKnownDigestWithSeveralRowsGoneIsACopyLeftToTheAudit",
+        "aLinkInThePathIsRefused",
+        "aMainRowAndAQuarantinedRowSharingTheDigestResolveAsCopy",
+        "aNewDigestIsANewRowWithNoKnowledge",
+        "aQuarantinedRowWhoseIdIsTakenGetsAFreshId",
+        "aRowWithFindingsStaysOpenAfterAByteMatch",
+        "digestlessPresenceReasonsAreNeverAutomatic",
+        "findingReasonsStayOpen",
+        "otherBytesAtTheSamePathReplaceTheRow",
+        "theSameBytesAtTheSamePathRefreshInPlace"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/RowPreflightTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RowPreflightTests"
+      ],
+      "tests": [
+        "aBlankAuditVolumeIsAMainViolation",
+        "aFootageDecisionNamingItsOwnRowIsAnAnyViolation",
+        "aHealthyRowIsClean",
+        "aLowercaseVolumeUUIDIsAMainViolationAsTheDDLSpellsIt",
+        "aMemberRangeThatRunsBackwardsIsAFault",
+        "aMemberRangeWithOneEndIsAFault",
+        "aNegativeDurationIsAMainViolation",
+        "aNegativeIgnoredSizeIsAFault",
+        "aNegativeRemovalRevisionIsAMainViolation",
+        "aNegativeSizeOnAHashedRowViolatesFilesAndContent",
+        "aNoAudioSoundPrintWithLandmarksIsAnAnyViolation",
+        "aNonPresentAuditResultWithoutAJudgedPathIsAFault",
+        "aPresentAuditResultNeedsNoJudgedPath",
+        "aQuarantineLandingAnswersOnlyToTheAnyChecks",
+        "aRelativePathIsAMainViolation",
+        "aShortEventIdIsAFault",
+        "aSoundPrintBelowEngineVersionOneIsAnAnyViolation",
+        "aTrashPathOnAMissingMarkerIsAMainViolation",
+        "aVolumeIdThatIsNotAUUIDIsAMainViolation",
+        "anEmptyVolumeIdIsAllowed",
+        "anInTrashMarkerOnACatalogedRowIsAMainViolation",
+        "anUnknownBackupKindIsAMainViolation",
+        "anUnknownEventStateIsAFault",
+        "anUnknownFootageVerdictIsAnAnyViolation",
+        "anUnknownLifecycleIsAMainViolation",
+        "anUnknownStreamTypeIsAMainViolation",
+        "everyFixtureShapeIsRepresentable",
+        "theFixturesSidecarsHaveNoFault",
+        "theQuarantineFloorIsAThirtySixCharacterId",
+        "theWordsNameTheGatesVerdictAndEveryCheck"
       ]
     },
     {
@@ -2191,6 +2423,92 @@
         "twentyGenerationCapAndExplicitGenerationStop",
         "twoMatchesAtTheNearestGenerationAreBothReturnedFatherSideFirst",
         "twoUnknownGenerationsDoNotRunTheTrailOut"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadRoundTripTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogLoadRoundTripTests"
+      ],
+      "tests": [
+        "conflictingCopiesLoadEmpty",
+        "displayPassRunsOnce",
+        "everyMainShapeRoundTrips",
+        "pairIDsAndConfidenceRoundTrip",
+        "quarantineIsNotRecords",
+        "theRichRowRoundTrips"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogLoadScaleTests"
+      ],
+      "tests": [
+        "oneHundredThousandRowsLoadWithinBudget"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogRecordDTORecordTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogJSONValueCoderTests",
+        "CatalogRecordDTORecordTests"
+      ],
+      "tests": [
+        "decoderMatchesTheAppDecoder",
+        "decoderRefusals",
+        "encoderMatchesTheAppEncoder",
+        "everyFixtureRowPins",
+        "fastParserMatchesTheCodableReader",
+        "nonFiniteRefuses",
+        "scalarShapes",
+        "theRichRecordPins"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DisplayValueDerivationTests"
+      ],
+      "tests": [
+        "aCopyWithoutTheFieldDoesNotVote",
+        "aDateIsPairedWithTheConfidenceOfTheSameCopy",
+        "aMatchingDatePairShowsBoth",
+        "aNameConfirmedOnOneCopyAndRejectedOnAnotherKeepsBothInConflict",
+        "aValueTheTableCannotHoldIsNeverInvented",
+        "confirmedNamesUnionWithTheEarliestDate",
+        "copiesThatAgreeShowTheValue",
+        "copiesThatDisagreeShowNothingWithConflict",
+        "digestsAreKeptApartAndFieldsOutsideTheDisplayAreIgnored",
+        "setsAreUnionsAndNeverConflict",
+        "theUserDateShapeIsTheDDLs"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/SQLiteCatalogReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SQLiteCatalogReaderTests"
+      ],
+      "tests": [
+        "freshnessIsTheHighWater",
+        "jsonPathRefused",
+        "missingDatabaseRefused",
+        "openForReadingMissingFile",
+        "openForReadingRefusesWrites",
+        "previewSourcePlansFromSQLite",
+        "previewSourceWithoutLatch",
+        "readsTheAppsRecordsReadOnly",
+        "refusedWithoutLatch"
       ]
     },
     {
@@ -2395,6 +2713,123 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/LaunchPreflightTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests"
+      ],
+      "tests": [
+        "aGapIsNeverOKForAnyCheck",
+        "alreadyCancelledRunThrowsAndReportsNothing",
+        "batteryIsANote",
+        "cancelDuringQuickCheckStopsItAtOnce",
+        "cancellationTokenRunsItsHandlerOnceAndRefusesLateRegistration",
+        "defaultsAreRicksNumbers",
+        "diskAt90PercentWarnsAndJustUnderIsOK",
+        "diskAt95PercentIsRedAndJustUnderWarns",
+        "emptyMachineEverythingMissingStillReportsEveryCheck",
+        "everyCheckThatGetsNilSaysCouldntCheck",
+        "everyCheckThatThrowsSaysCouldntCheckAndIsNotGreen",
+        "fastOnlyRunCarriesThePreviousQuickCheckWithoutRerunningIt",
+        "fastOnlyRunWithNoPreviousVerdictRunsQuickCheckAnyway",
+        "healthyMacIsAllSetWithNoBanner",
+        "journalOver256MBWarns",
+        "masterArchiveOfflineIsOnlyANote",
+        "memoryUnder16GBWarns",
+        "missingCatalogFileIsRedAndHoldsEdits",
+        "missingCutoverMarkerIsRedAndHoldsEdits",
+        "missingFFprobeWarnsAndNamesIt",
+        "missingTempVolumeIsCheckedSeparatelyAndNotGreen",
+        "notesAloneShowNoBanner",
+        "purgeableInclusiveFreeIsShownButNeverJudged",
+        "quickCheckFaultIsStickyUntilANewQuickCheckPasses",
+        "quickCheckOutcomes",
+        "realProbeFastPhaseFitsIn200ms",
+        "redDiskSummaryHoldsLongOperationsNotEdits",
+        "redFloorIsThreeTimesCatalogPlusJournal",
+        "redFloorNeverOverflows",
+        "schemaVersionEqualOKNewerRedOlderWarn",
+        "swapOver4GBIsANote",
+        "tempDiskOnAnotherVolumeIsCheckedByTheSameRule",
+        "thermalSeriousOrCriticalWarns",
+        "thousandFakeRunsFitInOneSecond",
+        "under20GBFreeIsRedEvenBelow95Percent",
+        "under50GBFreeWarnsOnASmallDisk",
+        "unwritableLogFolderWarns",
+        "usedFractionOfAZeroSizedVolumeReadsFull",
+        "worstLevelWinsAndSummaryCountsTheRest",
+        "zeroSizedVolumeIsCouldntCheckNotFull"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PreflightGateTests"
+      ],
+      "tests": [
+        "aWALThatGrewDuringTheSessionRaisesTheEditFloor",
+        "backupAndPublishNeedOneCatalog",
+        "catalogFaultRefusesEditsAndLongOperationsWithTheChecksWords",
+        "destinationThatIsTheCatalogDiskGetsTheCatalogReserve",
+        "eachRealProbeQuestionIsCheap",
+        "editFloorNeverUnder1GB",
+        "editFloorPlusMinusOneByte",
+        "exactly90PercentWarnsOneByteLessUsedIsOK",
+        "exactly95PercentIsRedOneByteLessUsedWarns",
+        "freeingTheStatedShortfallLetsTheOperationStart",
+        "freshDiskReadingKeepsTheCatalogFault",
+        "heldEditSaysHowMuchToFreeRoundedUp",
+        "hugeWALClampsInsteadOfOverflowing",
+        "launchReportBelowEditFloorSaysEditsAreHeld",
+        "launchReportHugeWALIsWarnAndHoldsEdits",
+        "leastFreeOutOfRedIsExactToTheByte",
+        "longJobMustFitAndLeaveTheDiskOutOfRed",
+        "negativeJobEstimateCountsAsZero",
+        "negativeOrOverfullReadingsNeverCrashOrOverflow",
+        "onlyRedCatalogChecksAreFaults",
+        "otherDestinationNeedsNoCatalogReserve",
+        "redCatalogFloorPlusMinusOneByte",
+        "redDiskRefusesLongOperationsButNotEdits",
+        "redFloor20GBPlusMinusOneByte",
+        "unreadableDestinationRefusesLongOperations",
+        "unreadableDiskNeverHoldsEditsButRefusesLongOperations",
+        "warnFreeLine50GBPlusMinusOneByte",
+        "zeroByteVolumeIsUnmeasurableNeverHoldsEditsButRefusesLongOperations"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR1RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests",
+        "PreflightGateTests"
+      ],
+      "tests": [
+        "qaR1_catalogThatFailedQuickCheckHoldsEdits",
+        "qaR1_longJobOnCatalogDiskMustNotLeaveTheDiskRedByPercent",
+        "qaR1_missingCutoverMarkerHoldsEdits",
+        "qaR1_realProbeNeverReportsMoreThanActuallyFreeBytes",
+        "qaR1_redRefusalStatesTheWholeShortfall"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR2RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LaunchPreflightTests",
+        "PreflightCancellationQAR2Tests"
+      ],
+      "tests": [
+        "qaR2_alreadyCancelledTokenDoesNotRunTheBody",
+        "qaR2_fastOnlyRecheckMustNotLiftALaunchQuickCheckFault"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/PreviewCacheFormatTests.swift",
@@ -2585,6 +3020,19 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/QARedSilenceFloorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QARedSilenceFloorTests"
+      ],
+      "tests": [
+        "ditherIsSilence",
+        "lowHissIsSilence"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/RecordFinderLinkTests.swift",
       "stage": "unit",
       "suites": [
@@ -2696,6 +3144,175 @@
       ]
     },
     {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SoundPrintSilenceVerdictTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundPrintSilenceVerdictTests"
+      ],
+      "tests": [
+        "describesRedoesWhatIsNotEvidence",
+        "emptyBitmapIsNotSilence",
+        "engineShortToneVersusZeros",
+        "hearingNoAudio",
+        "hearingZeroLandmarks",
+        "mediaMatrix",
+        "readingOfAFreshPrint",
+        "silentOnlyForMeasuredSilence"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseCheckpointTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCloseCheckpointTests"
+      ],
+      "tests": [
+        "aLoneCopyIsComplete",
+        "closeCheckpointsTheLog"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitArchiveProvenanceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitArchiveProvenanceTests"
+      ],
+      "tests": [
+        "importEraReplacementLands",
+        "liveInsertHasNoBarePromoteLiteral",
+        "newPromoteWithoutSourceRefused",
+        "promoteReplacementKeepsSource",
+        "replacementOfPlainRowInheritsNothing",
+        "scaleHundredImportEraReplacements"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitB21Tests"
+      ],
+      "tests": [
+        "intermediateRevisionsLand",
+        "pendingRowHeldThenStored",
+        "pendingRowsAtLoad",
+        "peopleConflictSurvivesUnrelatedEdit",
+        "purgeTombstonesAndLoadSkips",
+        "purgeTombstonesPending",
+        "purgedRowComesBack",
+        "refusedDerivedIsPartial",
+        "staleSiblingKeepsEdit"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB24Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitB24Tests"
+      ],
+      "tests": [
+        "attestationsAreDeltas",
+        "tagsAreDeltas"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB25Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitB25Tests"
+      ],
+      "tests": [
+        "relabelAlone",
+        "removalAlone",
+        "removeVersusRelabel"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitB26Tests"
+      ],
+      "tests": [
+        "redateAlone",
+        "rejectOwnConfirmation",
+        "rejectVersusRedateIsOrderIndependent",
+        "removalAlone",
+        "removeVersusRedate"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitRelationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitRelationTests"
+      ],
+      "tests": [
+        "alreadyPurgedReplacementUnchangedKeepsTheOldRow",
+        "caseSensitiveSiblingDoesNotSatisfyThePurge",
+        "incidentShapeLosesNothing",
+        "oneOfTwoSnapshotsLanding",
+        "pendingPredecessorKept",
+        "repeatedSnapshotsKeepTheOldRow",
+        "replacementAbsentAndUnstoredKeeps",
+        "replacementAlreadyStoredPurges",
+        "replacementEndingInTrashLetsThePurgeStand",
+        "replacementPurgedLaterInTheGroupKeepsTheOldRow"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitReplacementTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitReplacementTests"
+      ],
+      "tests": [
+        "archiveCopyWithoutStoredSourceKeepsOldRow",
+        "bodyPairsPurgesWithReplacements",
+        "heldReplacementPurges",
+        "landedReplacementPurges",
+        "lonePurgeLands",
+        "refusedReplacementKeepsOldRow",
+        "scaleAllRefusedNonePurged"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitRoundTripTests",
+        "CatalogCommitIsolationTests"
+      ],
+      "tests": [
+        "conflictSurvivesUnrelatedEdit",
+        "derivedProvenance",
+        "designationGuard",
+        "injectedRefusalAloneChangesNothing",
+        "injectedRefusalIsOneRow",
+        "liveRoundTrip",
+        "markerJumpIsRefused",
+        "newRowIsInserted",
+        "noDigestIsDeferred",
+        "oneHistoryRowPerCommit",
+        "p0FactsSurvive",
+        "pairLinkRoundTrips",
+        "personResolvesConflict",
+        "readOnlyRefuses",
+        "unchangedWritesNothing"
+      ]
+    },
+    {
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCornerCases2026_10_25Tests.swift",
       "stage": "regression",
@@ -2718,6 +3335,45 @@
         "theReadOnlyDoorReadsFollowsTheWriterAndNeverWrites",
         "theReadOnlyDoorRefusesAnOlderSchemaInsteadOfMigratingIt",
         "tornWALOpensAtACommittedPrefixAndTheWitnessesSpeak"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogDataSchemaScaleTests"
+      ],
+      "tests": [
+        "hundredThousandFilesInOneImportTransaction",
+        "identicalDerivedValuesFlagConflictsInLinearWork"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogDataSchemaTests"
+      ],
+      "tests": [
+        "aCaseAliasOnACaseInsensitiveVolumeIsRefusedWithTheTriggersWords",
+        "aDanglingReferenceIsRefused",
+        "aPartOneDatabaseGainsTheDataTablesOnOpen",
+        "aPlainGenerationJumpIsRefusedWithTheTriggersWords",
+        "aRemovalMarkerWithoutItsTombstoneIsRefusedWithTheTriggersWords",
+        "aRowSmuggledInWithForeignKeysOffIsCaughtAtTheNextOpen",
+        "everyStatementOfTheDDLIsWhatTheMigrationCreated",
+        "insertOrReplaceOverTheCurrentHistoryRowIsRefused",
+        "insertOrReplaceOverTheGenerationCounterIsRefused",
+        "nothingBeyondTheDDLWasCreated",
+        "replaceReachesTheDeleteTriggerOnlyWithRecursiveTriggers",
+        "searchTextFindsWordsAcrossCaseAndDiacritics",
+        "theChecksFileHoldsAgainstTheMigration",
+        "theEngineHasWhatTheDDLNeeds",
+        "theMigrationCreatesTheDocumentsObjects",
+        "theSwiftSchemaIsSplitByTableInDocumentOrder",
+        "updateOrReplaceOntoAnotherLivePathIsRefusedAndTheOtherRowStays"
       ]
     },
     {
@@ -2764,6 +3420,235 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDiskFullTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogDiskFullTests"
+      ],
+      "tests": [
+        "diskFullCommitRefusesAndRetries"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardCodex117Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFileGuardCodex117Tests"
+      ],
+      "tests": [
+        "swapDuringTheWriterWaitIsSeen",
+        "unreadableIdentityNeverMovesTheWAL"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardQAR1Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFileGuardQAR1Tests",
+        "CatalogOpenCornerTests"
+      ],
+      "tests": [
+        "adoptTransactionRechecksTheDatabase",
+        "adoptTransactionRechecksTheLatch",
+        "differentReplacementIsNotOverwrittenByTheSessionsWAL",
+        "latchRemovedAfterPhaseOneStopsBeforeCommit",
+        "latchRemovedDuringBodyStopsBeforePhaseOne",
+        "replacementDoesNotInheritTheSessionsWAL",
+        "sealedCopyRefusedAfterReplace"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardQAR2Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFileGuardQAR2Tests"
+      ],
+      "tests": [
+        "latchOnlyStopKeepsTheLiveCatalogsCommits",
+        "movedAwayAndBackKeepsItsCommits"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFolderDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogFolderDoorsTests"
+      ],
+      "tests": [
+        "aFolderRoundTripsWithItsKindTheStreamAndItsMembers",
+        "aKindOutsideTheThreeIsRefusedAndNothingLands",
+        "aSealedCopyCarriesTheFoldersTheStreamAndTheMembers",
+        "aV19DatabasesEventsReadKindEventAfterTheOpen",
+        "anUpsertKeepsCreatedAtAndChangesNameKindAndState",
+        "replaceFolderMembersSaysHowManyLanded"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogHardKillTests"
+      ],
+      "tests": [
+        "randomKillsLeaveACommittedPrefix"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogLoadReadingTests"
+      ],
+      "tests": [
+        "aLoadWritesNothing",
+        "boundBeatsUnverified",
+        "readOnlyStoreRefusesTheLoad",
+        "unverifiedWhenNothingIsBound"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogOpenCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogOpenCornerTests"
+      ],
+      "tests": [
+        "adoptAfterTheFileMovedIsRefused",
+        "closeAfterSwapQuarantinesTheSessionsWAL",
+        "closeLeavesSomeoneElsesWALAlone",
+        "closeNotesCarryTheQuarantineLines",
+        "corruptCatalogIsRefusedAndNeverWritten",
+        "databaseMovedAwayStaysStopped",
+        "databaseReplacedUnderneath",
+        "latchGoneOrReplacedMidSession",
+        "newerSchemaIsRefused",
+        "noLatchAtOpenIsNotWatched",
+        "openRequiringTheLatchRefusesWithoutIt",
+        "quarantineFallsBackToAnInPlaceRename",
+        "quarantineThatCannotMoveSaysWhatToMove",
+        "readOnlyFileIsNotWritten",
+        "skippedQuarantineSaysWhatToMove",
+        "writeLockHeldElsewhere"
+      ]
+    },
+    {
+      "blocked_reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightMeasureTests"
+      ],
+      "tests": [
+        "measureOnACatalogCopy"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR1Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "qaR1_quickCheckBesideALiveWALWriterPassesAndNeverBlocksACommit",
+        "qaR1_readerOnAClosedWALCatalogLeavesNoSidecars"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "qaR2_interruptWithNoStatementRunningIsDropped"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPreflightReaderTests"
+      ],
+      "tests": [
+        "aBudgetThatRunsOutBeforeTheFirstStepIsNotLost",
+        "aCancelLandingJustBeforeTheFirstStepIsNotLost",
+        "cancelDuringQuickCheckInterruptsItAndSaysCancelled",
+        "cancelledBeforeStartNeverOpensTheFile",
+        "damagedFileIsNeverAPass",
+        "expectedVersionIsTheStoresCurrentVersion",
+        "lateWatchdogsAndCancelsAfterCloseAreHarmless",
+        "missingFileThrows",
+        "noCatalogStateTableIsNil",
+        "quickCheckIsInterruptedAtItsBudget",
+        "quickCheckLeavesTheFileUnchanged",
+        "quickCheckPassesOnAHealthyFile",
+        "readsTheSchemaVersion",
+        "thePinnedMachineStillRunsTheRealQuickCheck",
+        "theRealProbeRunsQuickCheckThroughThisReader",
+        "theRealQuickCheckHonoursAnInterruptMidWalk",
+        "theRealQuickCheckStopsAtItsBudgetMidWalk"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogReadBackPlanTests"
+      ],
+      "tests": [
+        "boundDerivedForOneDigestIsIndexed",
+        "oneRowIsIndexed"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRepositoryContractTests"
+      ],
+      "tests": [
+        "closeIsIdempotent",
+        "generationIsTheStoresGeneration",
+        "generationIsZeroBeforeOpen",
+        "missingFolderIsRefused",
+        "openNamesItsMode",
+        "openingTwiceIsRefused",
+        "readBeforeOpenThrows",
+        "readRethrowsTheBodysError",
+        "readSeesTheGeneration",
+        "verifyBeforeOpen",
+        "verifyIsOk"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogRepositoryScaleTests"
+      ],
+      "tests": [
+        "hundredThousandAdvances",
+        "hundredThousandCommitsOfIdentityChecks",
+        "tenThousandAdvances",
+        "twoHundredArchivalCommitsRecordTheirCost"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreDurabilityCodex141Tests.swift",
       "stage": "regression",
       "suites": [
@@ -2793,6 +3678,111 @@
         "aMalformedSchemaCrashImageIsRefusedWithItsFramesInTheirWAL",
         "aRefusedOpenLeavesCommittedFramesInTheirWAL",
         "foreignSidecarsSurviveARefusal"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogStoreSensorTests"
+      ],
+      "tests": [
+        "bookkeepingStatementsAreRawSQL",
+        "databasePoolIsCreatedInOnePlace",
+        "everyTableOfTheDDLIsInTheSwiftSchema",
+        "everyTriggerOfTheDDLIsInTheSwiftSchema",
+        "noReplaceOrIgnoreConflictResolutionInTheStore",
+        "normalisationKeepsWhitespaceInsideStringLiterals",
+        "onlyStoreFoldersImportGRDB",
+        "theDDLMatchesTheDesignDocumentsTriggers",
+        "theMigrationCreatesNoTableOutsideTheDDL",
+        "volatileDurabilityNeverLeavesTheTests"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogTransactionDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogTransactionDoorsTests"
+      ],
+      "tests": [
+        "aRowTheDDLRefusesRollsTheWriteBack",
+        "anEmptyRunFinishesWithTrueCountersAndTheItemsMap",
+        "eventMembershipIsLandedOnceAndThenAlreadyPresent",
+        "fileContentAndVolumeDoorsWriteTheirRowsAndTheCommitCountsThem",
+        "finishingARunWithLyingCountersIsRefusedByTheTrigger",
+        "quarantineKnowledgeAndDerivedDoorsWriteOneRowEach",
+        "theRelationDoorAnswersLandedAlreadyPresentAndRefused"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogWriteCornerDiskTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogWriteCornerDiskTests"
+      ],
+      "tests": [
+        "belowTheFloorRefuses",
+        "diskFullAtCommit",
+        "diskFullMidJob",
+        "hundredThousandUnderPressure"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "GRDBCatalogRepositoryLedgerTests"
+      ],
+      "tests": [
+        "aLongLogIsReadFromItsTail",
+        "anAppendNeverMergesIntoATornLastLine",
+        "anUnreadableLogOpensReadOnly",
+        "everyCommitAppendsOneLineToTheLog",
+        "theLogsLastParseableLineIsItsValue"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
+      "stage": "regression",
+      "suites": [
+        "GRDBCatalogRepositoryTests"
+      ],
+      "tests": [
+        "aCorruptedFileIsRefusedWithTheEnginesWords",
+        "aCrashBetweenPhasesOpensReadOnlyUntilAdopted",
+        "aDatabaseRestoredFromAnOlderCopyOpensReadOnlyAndSaysSo",
+        "aFreshFileIsCreatedAtGenerationZero",
+        "aLowerHighWaterIsRaisedToTheGeneration",
+        "aMissingHighWaterIsRecreatedFromTheDatabase",
+        "aNewerSchemaIsRefused",
+        "aPlainJumpIsRefusedByTheTrigger",
+        "aPlusOneStepThroughRawSQLStillWorks",
+        "aPoisonedHighWaterIsRepairedByAnExplicitAdoption",
+        "aReadOnlyFolderNeverOpensForWriting",
+        "aReplaceInsideAWriteBodyIsRefusedAndRolledBack",
+        "aStaleSessionGetsGenerationMismatch",
+        "aSurvivingWriterDoesNotConsumeACrashWarning",
+        "aThrowingBodyRollsBackEverything",
+        "aWriteAdvancesByOneAndRecordsHistory",
+        "adoptFiveToTenSucceedsWithItsOwnHistoryRow",
+        "adoptingANumberTheFileDoesNotHoldIsRefused",
+        "adoptingWithNothingToAdoptIsRefused",
+        "archivalPragmasQueriedBack",
+        "garbageWalAndShmBesideACheckpointedDatabaseAreHarmless",
+        "poisonedHighWaterOpensReadOnly",
+        "reconciliationAtOpenNeverLowersTheMark",
+        "replaceOverTheCounterOrItsHistoryInsideAWriteIsRefused",
+        "restoringAllThreeFilesTogetherIsNotDetectable",
+        "restoringDatabaseAndSidecarTogetherIsCaughtByTheLog",
+        "theBodySeesTheGenerationItWritesTo",
+        "twoWritesQueuedOnOneRepositoryCommitSixThenSeven",
+        "volatileDurabilityIsOnlyWeakerWhereItSays"
       ]
     },
     {
@@ -2874,9 +3864,11 @@
       "stage": "unit",
       "suites": [
         "TimingBudgetTests",
-        "TimingBudgetSanitizerTests"
+        "TimingBudgetSanitizerTests",
+        "TimingBudgetRatioTests"
       ],
       "tests": [
+        "aQuadraticLoopFailsTheGrowthLimitALinearOnePasses",
         "aSanitizerRunPassesInstrumentedSlownessButStillFailsAHang",
         "budgetIsNotRaised",
         "busyBand",
@@ -2884,12 +3876,15 @@
         "debugCeilingWidensOnlyUnderASanitizer",
         "eitherSampleMakesItBusy",
         "factorsFollowTheSanitizer",
+        "growthPassesUpToTheLimitAndFailsBeyondIt",
         "hostedIsTripled",
         "hostedRunnerIsBusy",
         "loadRule",
         "localCeilingIsTheBudget",
         "logLine",
+        "onlyTheNightlysStrictPinIsTheReferenceRun",
         "quietIsStrict",
+        "relativePassesUnderTheLimitAndAZeroReferenceNeverPasses",
         "secondsConversion",
         "strictOverride",
         "swiftTestingMapping",
@@ -3264,6 +4259,126 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvHeldCatalogDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvUndoPurgeWhileHeldTests",
+        "AdvRelocateBucketBHeldTests",
+        "AdvJunkDeleteHeldTests"
+      ],
+      "tests": [
+        "blockedRefusesBeforeDiskWork",
+        "diskFactNotRecordedIsSaid",
+        "freeBucketBMarks",
+        "freeMovesAndMarks",
+        "heldBucketBIsNotCountedAsMarked",
+        "heldRefusesBeforeDiskWork",
+        "manyRefusedRowsOneLine",
+        "undoNotHeldUnchanged",
+        "undoWhileHeldKeepsTheBanner"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvRescanEditDuringScanTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvRescanEditDuringScanTests"
+      ],
+      "tests": [
+        "activeRowWinsOverAReplacedRowAtTheSamePath",
+        "clearedDuringTheScanStaysCleared",
+        "closingUpdateCatalogForgetsTheRestoredPaths",
+        "editDuringTheMergeAwaitSurvives",
+        "firstNoteOnAPlainRecordDuringTheScanSurvives",
+        "firstStarDuringTheScanKeepsTheFreshProbeNote",
+        "notesKeepHistoryAndTakeThisScansProbeDiagnostics",
+        "notesTypedDuringTheScanReachCatalogSQLite",
+        "notesTypedDuringTheScanSurviveTheMerge",
+        "parkingAfterCloseForgetsTheRestoredPaths",
+        "probeDiagnosticClassifierSplitsHistoryFromProbe",
+        "scale_100kEditedDuringTheScanMergeWithinBudget",
+        "scanDerivedValuesStillRefresh",
+        "trashedDuringTheScanStaysRemoved",
+        "trashedSuccessorStillBeatsAReplacedRowAtTheSamePath"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvReview20261019Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvRelocateSnapshotUnderSQLiteTests",
+        "AdvRelocateBucketBPresentFileTests",
+        "AdvRelocateClosingSummaryTests",
+        "AdvRescanKeepsReplacedHistoryTests",
+        "AdvRescanLiveAppliedCountTests"
+      ],
+      "tests": [
+        "aFileStillAtItsPathIsNeverMarkedNotFound",
+        "historyRowSurvivesInCatalogSQLite",
+        "jsonAuthoritySnapshotHoldsMemory",
+        "liveAppliedCountReachesTheOutcome",
+        "manyPresentRowsOneLine",
+        "nothingRefusedNoRow",
+        "partialRescanKeepsHistory",
+        "preMigrateSnapshotIsTheCatalogInUse",
+        "presenceDecidesEachRow",
+        "refusedRowsAreInTheClosingSummary",
+        "rescanKeepsTheCuratedReplacedAtPathRow",
+        "scale_100kWithHistoryWithinBudget"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvReview20261026Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "RelocateSummaryAllSafeHeadlineTests",
+        "RelocateSummaryHeadlineTests",
+        "RelocateSummaryProofTests"
+      ],
+      "tests": [
+        "aHashedUntouchedBackupInvitesRetire",
+        "aMissingSourceWithholdsSafeAndRetire",
+        "anAdoptionOfAnUntouchedHashedSourceIsProven",
+        "anAdoptionWhoseSourceChangedIsNotProven",
+        "aSizeOnlyAdoptionNeverInvitesRetire",
+        "allSafeWordsAskAboutFailedAndUnmatchedFiles",
+        "anAgingOnlyBackupNeverInvitesRetire",
+        "anOverwrittenBackupIsNotProven",
+        "anUnhashedBackupIsNotProven",
+        "anUnprovenBackupWithholdsSafeAndRetire",
+        "eachUnprovenBucketWithholdsSafeAndRetire",
+        "nothingCopiedAndThreeFailedNeverSaysSafeOrRetire",
+        "nothingCopiedNothingBackedUpIsNotSafe",
+        "provenRunsKeepTheirWords"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvReview20261026TrashTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogTrashOnlyCopyAtTheMoveTests"
+      ],
+      "tests": [
+        "aCopyMovedAwayOnDiskIsNotProvenAtTheMove",
+        "aCopyOnARetiredDriveDoesNotCount",
+        "aCopyRewrittenOnDiskIsNotProvenAtTheMove",
+        "aCopyThatBecameTheOnlyOneAfterTheConfirmationIsHeld",
+        "aRowTheConfirmationHeldBackNeverMoves",
+        "aWarnedOnlyCopyStillMoves",
+        "aWeakerOrConflictingIdentityIsNotACopy",
+        "anArchiveOnlyCopyReplacedOnDiskIsNotProven",
+        "anOfflineCopyIsNotASurvivingCopy",
+        "anUntouchedArchiveOnlyCopyIsProvenByAFreshHash",
+        "scale_perTurnCheckAt100kWithinBudget",
+        "twoSelectedCopiesWhoseThirdWentAwayLeaveOne"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AdvRollCallUndatedLivingParentTests.swift",
       "stage": "regression",
       "suites": [
@@ -3271,6 +4386,36 @@
       ],
       "tests": [
         "anUndatedLivingMotherIsNeverInTheCredits"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvSQLiteSafetyCopyTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvSQLiteSafetyCopyTests"
+      ],
+      "tests": [
+        "asyncSafetyCopyCarriesTheEdit",
+        "heldCatalogRefusesTheCopy",
+        "removedRowsLatestEditIsRecoverable",
+        "safetyCopyCarriesAnEditNotYetCommitted"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AdvVolumeRenameUndoSQLiteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AdvVolumeRenameUndoSQLiteTests"
+      ],
+      "tests": [
+        "jsonSafetyCopyIsRefused",
+        "revertScale",
+        "undoKeepsWhatChangedSince",
+        "undoLeavesARecordChangedSinceAlone",
+        "undoReadLeavesTheSafetyCopyByteIdentical",
+        "undoReadsTheSafetyCopyItWasGiven"
       ]
     },
     {
@@ -5146,6 +6291,33 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveDetailSheetWordsTests",
+        "ArchiveDoorSourceSensors",
+        "ArchivePlayableRecordIsolationTests",
+        "ArchivePlayableRecordTests"
+      ],
+      "tests": [
+        "aLostFileShowsTheArchiveWords",
+        "aRowWithNoArchivedCopyIsItselfEvenWhenGone",
+        "aSubstitutedCopyIsSaidSoWithBothPathsAndBothVolumes",
+        "anArchiveCopyRowResolvesToItself",
+        "bothGoneNamesTheArchivePathNeverTheSource",
+        "copyGoneSourceOnDiskFallsBackToTheRow",
+        "copyOnDiskBeatsASourceThatIsAlsoThere",
+        "danglingSymlinkSourcePlaysTheRealCopy",
+        "everyArchiveViewDoorGoesThroughTheResolver",
+        "missingWordsArePureAndNameTheArchive",
+        "rowStateWordsCoverEveryPresence",
+        "sourceGoneCopyOnDiskPlaysTheCopy",
+        "theRowItselfKeepsItsOwnPathAndOneVolume"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveProgressTests.swift",
       "stage": "unit",
@@ -5319,6 +6491,22 @@
         "theProbedPathCarriesTheMeasurementToo",
         "undatedIsTreatedAsAfter1980",
         "verifysSoundRowNeverCallsAGapSilent"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveTimelineCompletenessSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveTimelineCompletenessSensorTests"
+      ],
+      "tests": [
+        "everyInactiveSourceStateLeavesTheCopy",
+        "everyLiveArchiveCopyIsOnTheTimeline",
+        "liveSourceStillRepresents",
+        "promotedThenPrunedShowsUnder1998",
+        "scaleAllSourcesTrashed",
+        "snapshotAsksSourceRepresents"
       ]
     },
     {
@@ -6329,6 +7517,26 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioFingerprintBackfillSilenceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioFingerprintBackfillSilenceTests",
+        "AudioFingerprintBackfillSilenceMediaTests"
+      ],
+      "tests": [
+        "ditherIsMeasuredSilenceNotARetryLoop",
+        "existingZeroLandmarkStampsAreRedecided",
+        "heardTooLittleIsNeverStampedSilent",
+        "measuredSilenceIsStamped",
+        "silenceMatrix",
+        "unmeasuredPrintIsNotJudged",
+        "zeroLandmarkSidecarRowIsNotShared",
+        "zeroSampleDecodeIsCouldNotCheck"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
       "stage": "unit",
       "suites": [
@@ -6376,26 +7584,6 @@
         "stampsSurviveAReload",
         "stopAndPause",
         "words"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AudioFingerprintBackfillSilenceTests.swift",
-      "stage": "unit",
-      "suites": [
-        "AudioFingerprintBackfillSilenceTests",
-        "AudioFingerprintBackfillSilenceMediaTests"
-      ],
-      "tests": [
-        "ditherIsMeasuredSilenceNotARetryLoop",
-        "existingZeroLandmarkStampsAreRedecided",
-        "heardTooLittleIsNeverStampedSilent",
-        "measuredSilenceIsStamped",
-        "silenceMatrix",
-        "unmeasuredPrintIsNotJudged",
-        "zeroLandmarkSidecarRowIsNotShared",
-        "zeroSampleDecodeIsCouldNotCheck"
       ]
     },
     {
@@ -7140,6 +8328,46 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogAuthorityCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogAuthorityCornerTests"
+      ],
+      "tests": [
+        "damagedOrNewerCatalogIsRefusedAndUntouched",
+        "latchVanishesMidSession",
+        "masterWithoutLatch",
+        "quitAfterLatchOnlyStopSaysClosedNormally",
+        "quitAfterReplaceQuarantinesAndSaysSo",
+        "quitCloseIsBoundedAndKeepsTheLiveWAL",
+        "quitTimeoutAfterReplaceStillQuarantines",
+        "reopenRechecksAfterClose",
+        "replacedCatalogRefusesReopen",
+        "viewerWithoutLatch"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogBackupSQLiteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogBackupSQLiteTests",
+        "CatalogBackupImportTests",
+        "CatalogBackupScaleTests"
+      ],
+      "tests": [
+        "backupRoundTrip",
+        "backupWritesNothingBesideTheLiveCatalog",
+        "decisionTable",
+        "heldCatalogRefuses",
+        "jsonAuthorityRefuses",
+        "jsonBundleRefusedDatabaseUnchanged",
+        "sqliteBundleRefused",
+        "twelveThousandRows"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCodex141ScopedBaselineTests.swift",
       "stage": "regression",
       "suites": [
@@ -7147,6 +8375,34 @@
       ],
       "tests": [
         "scopedSavePreservesBothCopiesTagAdditions"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCodexSlice2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogCodexSlice2Tests"
+      ],
+      "tests": [
+        "noLatchLaunchDoesNotBackfillFromTheCache",
+        "roleSwitchCommitsPendingEdits",
+        "roleSwitchWithFailedCommitKeepsTheRescue",
+        "sideTableCommitMovesKnownGeneration",
+        "sqliteMasterStillBackfills",
+        "viewerLaunchDoesNotBackfillFromTheCache"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCommitterFailFastTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitterFailFastTests"
+      ],
+      "tests": [
+        "diskFullBlocksThenReopenLands",
+        "jobCheckpointAfterDiskFills"
       ]
     },
     {
@@ -7162,6 +8418,229 @@
         "dialPercentReflectsExcludedJunk",
         "emptyCatalogIsAllZeros",
         "purgedRecordsExcluded"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitterSerialTests",
+        "CatalogPendingRowsTests",
+        "CatalogMarkerRevisionTests",
+        "CatalogPurgeMarkerTests",
+        "CatalogDirectSaveSensorTests",
+        "CatalogAdoptTests"
+      ],
+      "tests": [
+        "adoptRestoredCatalog",
+        "deleteAllStaysEmpty",
+        "dirtySiblingKeepsEdit",
+        "hashLandsThenStored",
+        "heldRowsOfferedToTheJob",
+        "holdOwnerCompared",
+        "newRowSurvivesRelaunch",
+        "noDirectStoreSaves",
+        "notOfferedWhenWritable",
+        "propagationKeepsLaterEdit",
+        "purgedStaysGone",
+        "quitAfterAcknowledged",
+        "trashEmptiedBumps",
+        "trashThenUndo"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitSyncTests",
+        "CatalogCommitterSyncSensorTests"
+      ],
+      "tests": [
+        "absentTwiceKept",
+        "baselineIsSynchronous",
+        "batchIsOneCommit",
+        "commitSectionIsSynchronous",
+        "copiesEditedDifferentlyAreAConflict",
+        "curatedReversionAcrossMarkers",
+        "explicitPurgeOfHeldRow",
+        "failedPendingUpdateNotDurable",
+        "momentaryAbsenceKeepsPayload",
+        "noFlightMachinery",
+        "onlyTheCommitterBlocks",
+        "quitIsOneCall",
+        "trashUndoAfterFirstInsert"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB23Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogMarkerVetoTests",
+        "CatalogExplicitPurgeTests",
+        "CatalogMarkerVetoDoorTests",
+        "CatalogCopyConflictTests",
+        "CatalogSQLiteSnapshotTests",
+        "CatalogPurgeDoorSensorTests"
+      ],
+      "tests": [
+        "absenceNeverPurges",
+        "bothValuesKept",
+        "deleteAllPurges",
+        "detachedSnapshotNotVetoed",
+        "everyDoorPurges",
+        "heldTrashIsRefused",
+        "identicalRestampNeverRefused",
+        "jsonAuthorityUnchanged",
+        "noInference",
+        "refusalWords",
+        "removeFromCatalogKeepsTheRow",
+        "removeWhileHeld",
+        "rescanSwapsKeepValues",
+        "restoreWhileHeld",
+        "sealedCopy",
+        "undoWhileHeldIsVetoed"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB24Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSharedSetTests",
+        "CatalogPlaceRecordTests"
+      ],
+      "tests": [
+        "attestationsDelta",
+        "balanceAudioRerunKeepsCuration",
+        "differentDigestKeepsOldRow",
+        "peopleUnion",
+        "sameDigestInherits",
+        "tagsUnion"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB25Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogPlaceRecordUnsavedEditTests",
+        "CatalogAttestationRelabelTests"
+      ],
+      "tests": [
+        "heldStoreReplacesNothing",
+        "logNamesBothValues",
+        "removeVersusRelabel",
+        "unsavedEditBeforeRetire",
+        "unsavedEditReachesHistory"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogPeopleRedateTests"
+      ],
+      "tests": [
+        "removeVersusRedate"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogPlaceRecordSameIDTests"
+      ],
+      "tests": [
+        "heldStoreKeepsTheLiveRecord",
+        "staleSnapshotKeepsTheEditAfterRelaunch",
+        "staleSnapshotKeepsTheEditInMemory"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
+      "stage": "regression",
+      "suites": [
+        "SQLiteCatalogLoaderTests",
+        "CatalogAuthorityFlipTests",
+        "P0TruthThroughSQLiteTests"
+      ],
+      "tests": [
+        "aSampledSoundStampIsNotImported",
+        "conflictCopiesLoadEmpty",
+        "databaseWithoutLatchIsInert",
+        "displayStringsAndPairs",
+        "journeyWordsAreUnchanged",
+        "landedRowsKeepTheirFacts",
+        "latchLaunchesOnSQLite",
+        "latchWithDamagedDatabaseRefuses",
+        "latchWithGoodImportIsSQLite",
+        "latchWithUnfinishedImportRefuses",
+        "latchWithoutDatabaseRefuses",
+        "modelLoadsSQLiteWithLatch",
+        "modelRefusedOpensNoCatalog",
+        "modelRefusesWithoutLatch",
+        "noLatchLaunchStaysReadOnlyBothWays",
+        "normalSQLiteLaunchFollowsTheRole",
+        "nothingIsNoLatch",
+        "pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives",
+        "quarantineAndCounts",
+        "readOnlyHasOneWriter",
+        "readOnlySQLiteSurvivesApplyReadOnlyMode",
+        "refusedLaunchSurvivesApplyReadOnlyMode",
+        "sqliteRecordsEqualJSONRecords",
+        "theSeamIsOneLine",
+        "unprovenRowsAreNotRecords",
+        "viewerLaunchNeverOpensItsOwnCatalogSQLite",
+        "viewerWithNothingSynced",
+        "viewerWithSyncedSnapshotShowsIt"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CutoverFirstWeekEditsTests",
+        "CutoverRemovalTests",
+        "CutoverNewRowTests",
+        "CutoverArchiveTests",
+        "CutoverHoldTests",
+        "CutoverSwitchRestoreTests",
+        "CutoverManyEditsTests"
+      ],
+      "tests": [
+        "copiesShareEditsAndLaterEditWins",
+        "curatedEditsSurviveRelaunch",
+        "editDuringHoldLands",
+        "fiftyEditsTenWindows",
+        "newFileBeforeAndAfterHash",
+        "promotedCopySurvives",
+        "purgedRowStaysGone",
+        "restoreThenAdopt",
+        "trashUndoEmptied"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitterTests"
+      ],
+      "tests": [
+        "copiesFollow",
+        "debouncedCommits",
+        "funnelSourceOrder",
+        "funnelsNeverTouchJSON",
+        "holdWaits",
+        "readOnlyKeepsChanges",
+        "saveNowCommits"
       ]
     },
     {
@@ -7287,6 +8766,34 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogJSONReadSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogJSONReadSensorTests"
+      ],
+      "tests": [
+        "theLiveReloadIsGone",
+        "theReadersAreReviewed",
+        "theSQLiteLaunchNeverLoadsTheJSON",
+        "theViewerNeverLooksForCatalogJSON"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogKeptPurgeRetryTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogKeptPurgeRetryTests"
+      ],
+      "tests": [
+        "correctedReplacementCompletesThePair",
+        "keptPurgeFollowsTheNextReplacement",
+        "removedReplacementReleasesTheKeptRow",
+        "swapDoorsNameTheirReplacement"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogLivePreviewTests.swift",
@@ -7315,6 +8822,18 @@
         "staleSelectionIgnored",
         "stopExitsMode",
         "stopWhileOff"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogLockRealBackupTests"
+      ],
+      "tests": [
+        "testPythonRoundTripOfRealBackupDecodes"
       ]
     },
     {
@@ -7439,6 +8958,105 @@
         "renderMemoExplicitInvalidate",
         "renderMemoKeyedInvalidation",
         "streamTypeCounts"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPersonFilterTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPersonFilterLogicTests",
+        "CatalogPersonPillTests",
+        "CatalogPersonFilterStoreTests",
+        "CatalogPersonFilterScaleTests",
+        "CatalogPersonFilterSensorTests"
+      ],
+      "tests": [
+        "aChosenPersonWhoseProfileDisappearsFallsBackToEveryone",
+        "aConfirmedTagWinsOverAStaleRejection",
+        "aNamelessProfileListsAndMatchesNothing",
+        "aPersonChosenBeforeTheListLoadedIsKept",
+        "aRenamedPersonStaysChosenUnderTheNewName",
+        "agreesWithThePeopleTabTierRuleOnEveryRecord",
+        "anEmptyTableNamesThePerson",
+        "choosingAPersonAndEveryone",
+        "clickingThePillClearsToEveryoneAndNothingElseDoes",
+        "computeFilteredAppliesItAfterTheSearchBeforeTheVolumeFilter",
+        "everyoneIsTheIdentity",
+        "focusModeOverridesThePersonPillToo",
+        "hundredThousandRecordsWithinTheCatalogFilterBudget",
+        "keepsTaggedAndFaceMatchedDropsTheRest",
+        "launchIsEveryone",
+        "listsThePeopleTabsProfilesInItsOrderByDisplayName",
+        "noPersonNoPill",
+        "oneMatcherAndNoPersistence",
+        "theParentOwnsOneSessionStoreAndTheTableRefreshesOnIt",
+        "thePersonPillFollowsTheVolumePillThenTheBox",
+        "theSpokenSentenceCarriesIt",
+        "theTokenViewIsSharedNotCopied",
+        "toolbarDrawsTheMenuLeftOfTheSearchAndThePillAfterTheVolumePill"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPersonNamingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPersonNamingTests",
+        "CatalogPersonNamingSensorTests"
+      ],
+      "tests": [
+        "blankAliasesFallBackAndWhitespaceIsTrimmed",
+        "duplicateNamesShowBirthYears",
+        "duplicateNicknamesAndMissingDatesRemainDistinctAndStable",
+        "duplicateNicknamesCannotWriteAnAmbiguousTag",
+        "emptyNameAndFamilyWildcardAreNotPersonTags",
+        "galleryAndCatalogShareDisambiguation",
+        "labelDecorationsNeverBecomeTagsOrChangeProfiles",
+        "narrowCardsExposeTheFullDisambiguatedName",
+        "nicknameIsTheWrittenTagAndDoesNotTagTheNamesake",
+        "nicknameWinsAndSelectionKeepsItsIdentity",
+        "sharedFormalTagDoesNotCheckBothNicknames",
+        "tagMenusDoNotDiscardProfileIdentityOrNicknames",
+        "uncheckHandsTheEngineTheRowsOwnSpellings",
+        "uncheckKeepsTheRecordsSpelling",
+        "uniqueLegacyFormalTagCanStillBeUnchecked"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogPhaseHoldAndQuitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogPhaseLogicTests",
+        "CatalogStoreHoldTests",
+        "CatalogQuitRecoveryTests",
+        "CatalogQuitRecoverySensorTests"
+      ],
+      "tests": [
+        "aBackwardClockStepWaitsAgain",
+        "aClockThatKeepsSteppingBackGivesUp",
+        "aViewerOnJSONWritesNoCopy",
+        "aViewerUnderSQLiteWritesNoCopy",
+        "anAcknowledgedSaveInFlightIsUnsaved",
+        "anotherTokenIsHeld",
+        "digestFindingNamesALiveDoor",
+        "phaseVerdicts",
+        "theCopyWriterIsBehindTheGate",
+        "theDelegateQuitWiring",
+        "theHoldDrainsAnAdmittedSave",
+        "theHoldGivesUpOnAStalledSave",
+        "theMasterUnderSQLiteNeverSaysRenameToCatalogJSON",
+        "theNextLaunchSaysACopyIsThere",
+        "theOwnerTokenPath",
+        "theOwnersSavePasses",
+        "theRetiredMenuItemsAreGone",
+        "theStoreHoldRefusesEveryDoor",
+        "theTerminalSaveBothFailing",
+        "theTerminalSaveIsChecked",
+        "theTerminalSaveSkipsAStalledWriter",
+        "theVolumeMenuKeepsRescanAndUpdate",
+        "theWaitBeforeVerify"
       ]
     },
     {
@@ -7598,6 +9216,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogQuitCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogQuitCornerTests"
+      ],
+      "tests": [
+        "keepOpenChoiceNeedsTheCommitBeforeTerminate",
+        "masterQuitWithFailedFinalCommit",
+        "viewerQuitSavesNothingAndSaysNothing"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogReachableDefaultSensorTests.swift",
@@ -7699,6 +9330,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRescanRefusedReplacementTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRescanRefusedReplacementTests"
+      ],
+      "tests": [
+        "importEraReplacementLands",
+        "refusedReplacementKeepsOriginalRow"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogResizeLoopSensorTests.swift",
       "stage": "unit",
       "suites": [
@@ -7791,6 +9434,25 @@
         "test_pairGlyph_followsTheStreamType",
         "test_plainRowHasNoGlyph",
         "test_symbolsAndColours"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSQLiteLaunchNoJSONTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogSQLiteLaunchNoJSONTests",
+        "CatalogNoCatalogDoorsTests"
+      ],
+      "tests": [
+        "aClearedDesignationStaysCleared",
+        "aMissingDesignationIsSaid",
+        "eventsStoreRefusesInAReadOnlySession",
+        "ignoredContentRefusesInANoCatalogSession",
+        "theSQLiteLaunchNeedsNoCatalogJSON",
+        "theSQLiteLaunchTouchesNoJSONFile",
+        "validateWithoutLatchRefuses",
+        "verifyOnAViewerRefuses"
       ]
     },
     {
@@ -7915,7 +9577,7 @@
       "tests": [
         "badgeRespectsPurgeAndSetAsideBase",
         "emptyQueryYieldsZeroBadge",
-        "settledKeystrokeBudgetAndAgreementAt100k"
+        "settledKeystrokeAgreementAt100k"
       ]
     },
     {
@@ -7980,6 +9642,17 @@
         "updateRebuildsSingleRecordHaystack",
         "updateReflectsTagMutation",
         "yearRangeShorthandAgreesWithCanonical"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSearchKeystrokeBudgetTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogSearchKeystrokeBudgetTests"
+      ],
+      "tests": [
+        "settledKeystrokeBudgetAt100k"
       ]
     },
     {
@@ -8138,6 +9811,59 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogStatusFreshnessTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogFreshnessRowsTests",
+        "CatalogFreshnessFactsTests",
+        "CatalogStatusWordsTests",
+        "CatalogFreshnessScaleTests",
+        "CatalogFreshnessSnapshotTests",
+        "CatalogStatusUpdateQueueTests",
+        "CatalogStatusSensorTests",
+        "CatalogStatusStructureTests"
+      ],
+      "tests": [
+        "aKindThatStopsRereadsTheMarker",
+        "aPartialRunContributesNoDecision",
+        "aPoisonedSidecarIsAProblemAndAnAbsentOneIsNot",
+        "aRealMarkerRoundTrips",
+        "aRunningDossierStageIsNotStale",
+        "aRunningMetadataEngineIsNotStale",
+        "anAbsentSidecarInAReadOnlyFolderIsNotAProblem",
+        "anAuditFromBeforeTheSwitchIsNotThisCatalogs",
+        "analyzeMenusFirstItemIsTheSummary",
+        "bandMirrorsTheJobTheMFORowObserves",
+        "chipMenuItemAndDotObserveOnlyTheSnapshot",
+        "clearPendingKeepsTheKindInFlight",
+        "coverageReportCarriesTheIntegrityKinds",
+        "doorRule",
+        "fullHashCountingExcludesTheSampledHash",
+        "greenChipSaysReflectsReality",
+        "hundredThousandRowsStayInsideTheCoverageBudget",
+        "identicalCoverageAtALaterTimePublishesOnce",
+        "integrityRunsGoThroughTheCenterWithTheModelsMarkers",
+        "markerFileNameMatchesTheReader",
+        "missingAndGarbageMarkersReadAsNeverRan",
+        "modelOwnsOneSnapshotAndItsPassFeedsIt",
+        "noStatusSurfaceWalksRecords",
+        "outcomeMapping",
+        "presenceRowReadsTheAuditMarker",
+        "publishIsEqualityGatedAndRunningRejudges",
+        "rowsFollowTheRegistryIntegrityFirst",
+        "runnerKnowsWhichKindsAreRunning",
+        "soundStampCountingTakesFingerprintedAndNoAudio",
+        "soundStoreProblemAndRunningLandOnTheRows",
+        "startsOneKindAtATimeInTheOrderGiven",
+        "stateJudgesEveryRowAndSummarizes",
+        "storageTabCheckIsRetitledAndKept",
+        "theThreeIntegrityRowsComeFirst",
+        "uncomputedStaysQuietAndNothingKnownCannotVouch",
+        "yellowAndRedChipsAreShort"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogStorageTotalsTests.swift",
@@ -8247,6 +9973,31 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogSyncSQLiteSnapshotTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSyncSQLiteSnapshotPublishTests",
+        "CatalogSyncSQLiteSnapshotViewerTests",
+        "CatalogSyncSQLiteSnapshotLegacyTests"
+      ],
+      "tests": [
+        "aShownSnapshotIsNeverCalledNothingSynced",
+        "jsonOnlyFolderShowsNothingSynced",
+        "manifestMismatchKeepsTheOldSnapshot",
+        "olderMasterIsRefusedWithWords",
+        "productionScopeCarriesTheSnapshotNotTheJSON",
+        "publishSealsAVerifiableSnapshot",
+        "publishWithoutLatchRefuses",
+        "publisherCommitsFirstAndThrottlesOnGeneration",
+        "publisherLoopRechecksSoonWhileHeld",
+        "publisherWaitsForARunningJobThenPublishesOnce",
+        "sealedOpenRefusesAWALDatabase",
+        "unchangedSnapshotIsNotReloaded",
+        "viewerOpenNeverModifiesTheSnapshot"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogSyncTests.swift",
@@ -8304,31 +10055,6 @@
         "writableStorePersistsRecordsByDefault",
         "writeAndVerifyRoundTripSucceeds",
         "writeManifestIsNoOpOnViewer"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogSyncSQLiteSnapshotTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogSyncSQLiteSnapshotPublishTests",
-        "CatalogSyncSQLiteSnapshotViewerTests",
-        "CatalogSyncSQLiteSnapshotLegacyTests"
-      ],
-      "tests": [
-        "aShownSnapshotIsNeverCalledNothingSynced",
-        "jsonOnlyFolderShowsNothingSynced",
-        "manifestMismatchKeepsTheOldSnapshot",
-        "olderMasterIsRefusedWithWords",
-        "productionScopeCarriesTheSnapshotNotTheJSON",
-        "publishSealsAVerifiableSnapshot",
-        "publishWithoutLatchRefuses",
-        "publisherCommitsFirstAndThrottlesOnGeneration",
-        "publisherLoopRechecksSoonWhileHeld",
-        "publisherWaitsForARunningJobThenPublishesOnce",
-        "sealedOpenRefusesAWALDatabase",
-        "unchangedSnapshotIsNotReloaded",
-        "viewerOpenNeverModifiesTheSnapshot"
       ]
     },
     {
@@ -8569,6 +10295,18 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogViewerPublishCornerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogViewerPublishCornerTests"
+      ],
+      "tests": [
+        "interruptedSealPublishesNothing",
+        "writerHoldsThePublishThenPublishesOnce"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogVolumeNameAuditTests.swift",
@@ -8581,6 +10319,31 @@
         "noRecordHasFilenameAsVolumeName",
         "recentlyScannedRecordsHaveStoredName",
         "volumeNameIsNeverEmpty"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogVolumePillTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogVolumePillLogicTests",
+        "CatalogVolumePillRegressionTests",
+        "CatalogVolumePillSensorTests"
+      ],
+      "tests": [
+        "aBlankLabelNeverDrawsAnEmptyPill",
+        "clearingViaThePillEmptiesTheSelection",
+        "emptyFolderNoteNamesTheVolumeWhenTheSelectionIsWhy",
+        "emptyNoteGetsTheLabels",
+        "longNamesShortenInTheMiddleAndShortOnesStay",
+        "noSelectionHasNoVolumePill",
+        "oneVolumeIsTheFirstPillByItsPaneLabel",
+        "oneVolumeSelectedShowsExactlyItsFoldersAndTheLineSaysSo",
+        "parentFeedsPaneLabelsAndClearsThroughTheOneSeam",
+        "theBoxTextLeavesTheVolumeToItsOwnPill",
+        "theSpokenSentenceCarriesTheVolumePill",
+        "toolbarDrawsThePillAndClearsThroughTheParent",
+        "twoOrMoreReadSelectedVolumesWithTheNamesInTheTooltip"
       ]
     },
     {
@@ -11534,6 +13297,23 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsCatalogBackingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsCatalogBackingTests"
+      ],
+      "tests": [
+        "aSealedBackupContainsTheFolders",
+        "changedFileIsReconciled",
+        "editsPersistToTheCatalogOnly",
+        "importCarriesEverythingAndVerifies",
+        "importIsIdempotent",
+        "noFileImportsNothing",
+        "readOnlySessionRefuses"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/EventsDecisionStoreTests.swift",
       "stage": "unit",
       "suites": [
@@ -13077,6 +14857,33 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyTruthTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FileJourneyTruthTests",
+        "JourneyPresenceTests",
+        "PreservationChecklistContentTests"
+      ],
+      "tests": [
+        "aCopyWithoutFixityProvesNothing",
+        "ancestorLinkOntoAnotherDiskIsNamed",
+        "archivedCopyFixitySignsAndArchivesTheSource",
+        "archivedCopyGoneFromDiskDoesNotCompleteArchivedLocally",
+        "archivedCopyPresenceIsSaidInItsOwnWords",
+        "deadLinkSourceWithArchivedCopyIsSignedAndArchivedLocally",
+        "firstEventIsTheFilesOwnDateNeverAScan",
+        "lastEventIsAVerifiedPresenceThatNamesTheArchivedCopy",
+        "md5CopyNeverCompletesArchivedLocally",
+        "permissionDeniedIsUnknownNeverGone",
+        "plainLiveRowIsUnchanged",
+        "probeTellsARegularFileFromALinkFromNothing",
+        "withoutACopyTheLadderIsAsBefore",
+        "wordsNameTheLinkTheGapAndTheArchivedCopy"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FilmstripAdversarialTests.swift",
@@ -13401,6 +15208,59 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FolderLabelsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FolderLabelsLogicTests",
+        "FolderLabelsScaleTests",
+        "FolderLabelsSensorTests"
+      ],
+      "tests": [
+        "aliasIsStable",
+        "eventRecordKindDecodes",
+        "hundredThousandInTwoFoldersEach",
+        "inspectorFactsAtScale",
+        "inspectorFactsCount",
+        "kindTintsAreDistinct",
+        "logLinesNameFiles",
+        "overlapShowsUnderEveryFolderWithUniqueRowIDs",
+        "rowIDsBecomeRecordsAndTheInspectorIsAHandler",
+        "rowSelectionMapsBothWays",
+        "versionFollowsEveryLeadingFolder"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FoldersOnlyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FoldersOnlyLogicTests",
+        "FoldersOnlyIsolationTests",
+        "FoldersOnlySensorTests"
+      ],
+      "tests": [
+        "aClosedFolderIsItsOneRow",
+        "aLooseDerivativeIsNotClaimedSelectedUnderFoldersOnly",
+        "composeReadsTheMirrorAndAddsNoRefreshRows",
+        "emptyNoteShowsOnlyAtTheTopWithTheFolderView",
+        "filtersAndSearchStillApplyInsideFolders",
+        "foldersOnlyImpliesTheFolderViewBothWays",
+        "launchNeedsTheFolderViewToo",
+        "looseRowsAndLooseFamiliesAreDropped",
+        "nothingMatchingIsAnEmptyFlaggedDisplay",
+        "offIsTodaysDisplayExactly",
+        "onlyAPlistBooleanReadsAsOn",
+        "pillSaysFoldersOnlyInsteadOfAsFolders",
+        "rememberedAndImpliedInTheParent",
+        "scopesAreShownAsTheyAre",
+        "snapshotCarriesTheFlagThroughTheRequest",
+        "theSearchsNoMatchesWinsOverNoFolders",
+        "toggleSitsInTheFoldersSectionAndClearAllLeavesIt"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FootageCalibrationTests.swift",
@@ -13505,6 +15365,74 @@
         "theWritersAndTheClockAreWiredWhereTheyAreRead",
         "whileAJobWritesAtMostOnePaintPerTenSeconds",
         "writerWords"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FootageFoldersLogicTests",
+        "FootageFoldersScaleTests",
+        "FootageFoldersIsolationTests",
+        "FootageFoldersSensorTests",
+        "FootageFoldersStructureTests",
+        "FootageFoldersSelectionTests",
+        "FootageFolderTitleSearchTests"
+      ],
+      "tests": [
+        "aByteCopyOfADerivativeInheritsTheDerivativesPlace",
+        "addingKeepsHitsFirstAndNeverResurrectsAFilteredRow",
+        "anUnassignedCopyFollowsItsOwnCopyGroupsEvent",
+        "computeFilteredAddsTitledFolderMembers",
+        "confirmedEventBecomesAFolderAndTheRestStaysLoose",
+        "copiesByWholeFileDigestAndSizeReadGreyUnderTheRecording",
+        "copyOutsideAnyEventFollowsItsOriginalIntoTheFolder",
+        "damagedEventsFileMakesNoFoldersAndDoesNotCrash",
+        "decomposedTitleMatchesComposedQuery",
+        "derivativeFromAnotherEventLandsUnselectedWhileScopedElsewhere",
+        "duplicateGroupMakesACopyWhenThereIsNoDigest",
+        "eventScopeShowsOneFolderOpenAndFamilyScopeShowsOneFamily",
+        "eventsComeStraightFromTheDecisions",
+        "everyDerivativeAppendGoesThroughTheOneDoor",
+        "everyRowActionGoesThroughTheDisplayedSelection",
+        "familyOrderIsRecordingThenMadeFromThenCopies",
+        "folderKeysUseTheMonitorNotATableKeyHandler",
+        "folderRowsObserveOnlyTheSnapshot",
+        "folderSummaryCountsFilesCopiesTimeArchivedAndDate",
+        "folderTableNeverReadsRecords",
+        "foldersAndLooseFilesSortTogetherByTheTableKey",
+        "hundredThousandRowsUnderBudget",
+        "joinRunsOnlyWhileWanted",
+        "keeperIsTheArchivedFileElseTheBetterTransferElseTheLongest",
+        "legendAppearsOnlyWhileOn",
+        "lineageReadsMadeFromItUnderTheSource",
+        "looseFamilyCarriesItsRelativesUnderItsFirstVisibleMember",
+        "lowercaseWordShowsTheFolderWithItsMembers",
+        "membersInsideAFolderFollowFamilyOrderThenTheSort",
+        "noEventsAndNoCopiesIsTodaysRowsInTodaysOrder",
+        "onlyAPlistBooleanReadsAsOn",
+        "optionOffStillPrunesAgainstTheLinearRows",
+        "otherQueriesDoNotAnswerByTitle",
+        "poisonedShowSettingReadsAsOff",
+        "pruningAfterAScopeChangeDropsHiddenIDs",
+        "relationGlyphsAndWordsAreTheDesignsFour",
+        "revealPlanSelectsOnlyWhatTheListCanShow",
+        "rowMenuItemsOnlyWhileOn",
+        "sampledV1HashIsNeverACopy",
+        "scopedBulkActionNeverSeesMembersOutsideTheScope",
+        "selectionPruneIsUnchangedAndAFolderIdSurvivesThroughRefreshRows",
+        "showOptionExistsAndDefaultsOff",
+        "showingPillOnlyWhileOn",
+        "snapshotPublishesOnlyOnChange",
+        "sortMappingRoundTripsEveryColumn",
+        "supersededRowStaysWithItsFamilyWhenShown",
+        "theArchiveCopyOfARecordingCarriesTheFamily",
+        "theRevealChecksTheDisplayBeforeSelecting",
+        "titleAnswersInEveryCasing",
+        "titleSearchAtScale",
+        "versionOutsideAnyEventFollowsItsSourceToo"
       ]
     },
     {
@@ -17945,6 +19873,24 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ImportAuditVocabularySensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ImportAuditVocabularySensorTests"
+      ],
+      "tests": [
+        "aPresentRowCarriesNoJudgedPath",
+        "everyAppRowHasAGateClass",
+        "theAppsLinkDetailIsTheLinkClass",
+        "theBulkOnlyWordIsNotARowWord",
+        "theImporterKnowsExactlyTheAppsPerRowWords",
+        "theImportersGateFactsOfTheAppsMarkerAreWhole",
+        "theImportersPreflightRefusesNothingInTheAppsMarker",
+        "theJudgedPathArrivesInTheImporter"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/InferredDatePropagationTests.swift",
@@ -18696,6 +20642,28 @@
         "signedPrefixesLegacyLinesOnceAndLeavesSelfDescribingText",
         "singleLineIsSigned",
         "vocabularyIsFixed"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveSearchSharedSensorTests",
+        "MainTabTagSensorTests"
+      ],
+      "tests": [
+        "archiveTag",
+        "archiveUsesTheSharedIndex",
+        "catalogTag",
+        "familyTreeTag",
+        "showInArchiveUsesTheName",
+        "timelineHidesNonMatch",
+        "timelineShowsIndexedMatch",
+        "timelineUsesTheSharedIndex",
+        "transcriptOnlyRecordIsFound",
+        "triageTag"
       ]
     },
     {
@@ -20186,6 +22154,70 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/P0TruthFixture.swift",
+      "stage": "regression",
+      "suites": [
+        "P0TruthFixtureTests"
+      ],
+      "tests": [
+        "deadLinkAndArchivedCopyAreWhatTheySay",
+        "everyRowOfTheTableIsBuilt",
+        "mtimeRowCarriesBothClocks",
+        "sampledMatchIsACollisionNotACopy",
+        "sampledPairIsByteIdenticalWithOnlyAV1Hash",
+        "silentHeaderStampSaysNothingWasHeard"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "P0TruthRegressionTests"
+      ],
+      "tests": [
+        "archiveDoorsGoOnlyThroughTheResolver",
+        "archivePlayResolvesToTheArchivedCopy",
+        "auditListsALinkRowForFixLinksAndMarksNothing",
+        "catalogCellsRenderFileFacts",
+        "catalogColumnsNameTheirEvidence",
+        "compareMediaAsksForTheHashOnASampledPair",
+        "everyPlayerStartChecksTheAudio",
+        "featuredPickNeverPlaysASampledMatch",
+        "firstJourneyEventIsTheFilesOwnDate",
+        "folderViewNeverCallsASampledPairCopies",
+        "journeyNeverSaysNowAtForADeadLink",
+        "journeyRendersNoPathAsPresenceWithoutAStat",
+        "ladderAnswersForTheContent",
+        "noSampledHashDecidesACopy",
+        "onlyWorklistSitesAskTheSampledArchivedCopy",
+        "personRowsNeverFoldIntoASampledMatch",
+        "playerNoticesMP3InM4V",
+        "sampledMatchIsNeverTheArchivedCopy",
+        "silentHeaderIsNotHasSound",
+        "soundCopyNeverOffersASampledMatch",
+        "statedArchivedCopyIsProven",
+        "transcodeFolderNeverFromASampledMatch"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/P0TruthRemainingTests.swift",
+      "stage": "regression",
+      "suites": [
+        "P0TruthRemainingTests"
+      ],
+      "tests": [
+        "eachRemainingSurfaceAsksTheProof",
+        "exactCopyNeedsEqualFullDigests",
+        "featuredPickIsNeverRefoundBySampledHash",
+        "sampledEqualityIsNeverRoleCopy",
+        "sampledMatchHidesButNeverCounts",
+        "sampledSignatureIsNeverSigned"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/POIDeletionTests.swift",
@@ -21218,6 +23250,53 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonPageCuratedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonPageCuratedRankingTests",
+        "PersonPageCuratedPageTests",
+        "PersonPageCuratedSensorTests"
+      ],
+      "tests": [
+        "confirmedBeforeFaceArchivedBeforeNotLongerBeforeShorter",
+        "hiddenVideosNeverAppear",
+        "hundredThousandRecordsCuratedPageInBudget",
+        "noTwoRowsOfOneFootage",
+        "picksAreAllShownEvenPastTheCap",
+        "theCatalogCountIsHonest",
+        "theCatalogLinkSetsThePickerAndTurnsFoldersOnlyOff",
+        "theFillStopsAtTheCapBestFirst",
+        "theLongListIsGoneAndTheLinkGoesThroughTheSeam",
+        "thePeoplePageScaleBudgetsGoThroughTheOneTimingRule",
+        "theSeeAllWords"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonPageHideCollapseTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonPageHideCollapseTests",
+        "PersonPageCollapseSensorTests"
+      ],
+      "tests": [
+        "aConfirmedSameFootagePairCollapses",
+        "aDerivedFromChainCollapsesUnderTheKeeper",
+        "aFoldedSourceAndArchiveCopyAreBothHidden",
+        "aHideListOfUnknownsIsIgnoredAndKept",
+        "aHideSurvivesAReloadAndAStaleSave",
+        "byteCopiesCollapseAndTheArchivedFileLeads",
+        "collapseUsesOnlyProvenEvidence",
+        "everyRowOffersTheHideAndTheWordsAreNeutral",
+        "hidingAPickDropsThePickAndKeepsTheTag",
+        "hidingATaggedRowLeavesTagsAndFaceMatchesUntouched",
+        "hundredThousandRecordsPageInBudget",
+        "notTheSameAndSampledGroupsNeverCollapse",
+        "putBackRestoresTheRow"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonPhotoOnePerPersonTests.swift",
@@ -21346,30 +23425,6 @@
         "splitMultiwordIdentityIsRepairedBeforeDeclining",
         "timAndTimmyStayDistinct",
         "unknownIsUnknownNotInvented"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PersonPageHideCollapseTests.swift",
-      "stage": "unit",
-      "suites": [
-        "PersonPageHideCollapseTests",
-        "PersonPageCollapseSensorTests"
-      ],
-      "tests": [
-        "aConfirmedSameFootagePairCollapses",
-        "aDerivedFromChainCollapsesUnderTheKeeper",
-        "aFoldedSourceAndArchiveCopyAreBothHidden",
-        "aHideListOfUnknownsIsIgnoredAndKept",
-        "aHideSurvivesAReloadAndAStaleSave",
-        "byteCopiesCollapseAndTheArchivedFileLeads",
-        "collapseUsesOnlyProvenEvidence",
-        "everyRowOffersTheHideAndTheWordsAreNeutral",
-        "hidingAPickDropsThePickAndKeepsTheTag",
-        "hidingATaggedRowLeavesTagsAndFaceMatchesUntouched",
-        "hundredThousandRecordsPageInBudget",
-        "notTheSameAndSampledGroupsNeverCollapse",
-        "putBackRestoresTheRow"
       ]
     },
     {
@@ -21506,6 +23561,33 @@
         "repairInheritanceMergesByKindLatestWinsAndNeverDropsANo",
         "repairInheritanceNeverClobbersRepairsPlace",
         "trimJobInheritsRicksPlace"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
+      "stage": "integration",
+      "suites": [
+        "PlaybackAudioCheckerTests",
+        "PlaybackAudioMismatchMediaMatrixTests",
+        "PlaybackAudioMismatchSourceSensors",
+        "PlaybackAudioMismatchTests"
+      ],
+      "tests": [
+        "aCheckThatFinishesAfterTheNextStartIsStale",
+        "aCurrentCheckReportsItsWordsOrItsFailure",
+        "aacInMp4",
+        "catalogCodecOwesANoticeForVideoAudioWithAnEmptyCodecField",
+        "everyLocalAVPlayerStartChecksTheAudioTracks",
+        "everyPlayerStartIsNumbered",
+        "mp3InM4v",
+        "mp3InMkv",
+        "mp3WithNoAVTrackIsTheNotice",
+        "namesTheRealCodecFromTheCatalog",
+        "noNoticeWhenAVFoundationReadsATrack",
+        "noNoticeWhenTheCatalogHasNoSound",
+        "pcmInMov"
       ]
     },
     {
@@ -22045,6 +24127,20 @@
       ]
     },
     {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeRescanSensorTests"
+      ],
+      "tests": [
+        "archiveTabCountsEveryLiveArchiveCopyOnce",
+        "importEraArchiveCopyReplacementLands",
+        "rescanKeepsEveryArchivedMastersRow"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PromoteAdoptionProofTests.swift",
@@ -22278,6 +24374,31 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PruneApplyJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PruneApplyJobTests"
+      ],
+      "tests": [
+        "aBatchThatOnlyHoldsHandsOn",
+        "aSecondBatchQueues",
+        "aTrashFailureFailsTheBatch",
+        "anErrorDropsTheLine",
+        "anOverlappingCopyIsMovedOnce",
+        "stoppingAWaitingBatch",
+        "stoppingTheRunningBatchDropsTheLine",
+        "theJobNamesHeldCopies",
+        "theJobPausesBetweenFiles",
+        "theJobRunsThePipeline",
+        "theJobStopsBetweenFiles",
+        "theJunkDeletionGuardRefuses",
+        "theProgressSubtitle",
+        "theQueueLogLines"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PruneApplyTests.swift",
       "stage": "unit",
       "suites": [
@@ -22305,6 +24426,48 @@
         "uncheckedCopiesStay",
         "versionsAndNameAlikesNeverReachTheMove",
         "whichCopyResultsAreErrors"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PruneCuratedSurvivesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PruneCuratedSurvivesTests"
+      ],
+      "tests": [
+        "unsavedCurationOnTheCopySurvivesTheMove"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "PruneQARound1Tests"
+      ],
+      "tests": [
+        "adviceCountsAMissingHeldCopyAsGone",
+        "symlinkedFolderIntoTheArchiveNeverMoves",
+        "tidyBacklogWithNothingOfferedSaysSo",
+        "tidyHeadlineCountMatchesItsBytes"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PruneSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PruneSensorTests"
+      ],
+      "tests": [
+        "noFileOperationOfItsOwn",
+        "noViewWalksRecords",
+        "theOldMachineryIsGone",
+        "theOneDoorIsTheTrash",
+        "theProofComesOnlyFromBothFullReads"
       ]
     },
     {
@@ -22356,6 +24519,19 @@
         "retireRechecksTheDriveIsConnectedAfterTheStats",
         "retireRefusesWhenALabelledFilesFolderIsGoneFromAConnectedDrive",
         "theSameFileUnderACaseVariantPathIsNotACopy"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QASlice2RedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QASlice2RedTests"
+      ],
+      "tests": [
+        "auditGenerationUnderSQLiteIsTheDatabases",
+        "refusedLaunchWritesNoJSONSideFile",
+        "viewerWithOwnLatchAndNoDatabaseNeverReadsJSON"
       ]
     },
     {
@@ -23191,6 +25367,32 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RemovalReservationRound3Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "RemovalReservationRound3Tests"
+      ],
+      "tests": [
+        "aCopyReliedOnByAMoveIsNotRemovedByAnotherDoor",
+        "anAliasOfALeavingCopyIsNoSurvivor"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RemovalReservationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RemovalReservationTests"
+      ],
+      "tests": [
+        "aFileAlreadyBeingRemovedIsHeld",
+        "aReservedPathCannotBeReservedTwiceAndIsFreedOnRelease",
+        "everyRemovalDoorTakesTheReservation",
+        "twoBatchesForTwoCopiesNeverMoveBoth"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RemoveScanTargetTests.swift",
       "stage": "unit",
       "suites": [
@@ -23628,6 +25830,56 @@
         "onChangeFiresOnFirstFillAndOnValueChangeOnly",
         "staleHitReturnsOldValueThenRefreshes",
         "unknownKeyReturnsMissDefaultWithoutBlocking"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SameFootageAcrossCodecsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SameFootageLikenessRuleTests",
+        "SameFootageDetectorTests",
+        "SameFootageGroupingTests",
+        "SameFootageSplitPlanTests",
+        "SameFootageHeldDoorTests",
+        "SameFootageInspectorTests",
+        "SameFootageDeleteIsolationTests",
+        "SameFootageSensorTests",
+        "SameFootageScaleTests",
+        "SameFootageMediaMatrixTests",
+        "SameFootageTruthTests",
+        "SameFootageRealCopyEvidence"
+      ],
+      "tests": [
+        "collision",
+        "collisionNotLinked",
+        "copiesAndUnknown",
+        "copiesStillGroup",
+        "defaultTimecodeIsPossible",
+        "deletePathsNeverReadFootage",
+        "detectorAt100k",
+        "endToEnd",
+        "evidence",
+        "footageAt100k",
+        "footageIsNotDeletable",
+        "heldAtTheDoor",
+        "heldWhenWeak",
+        "idempotent",
+        "idempotent",
+        "line",
+        "matrix",
+        "mixed",
+        "oneRule",
+        "personSplits",
+        "planAt100k",
+        "splitKeepsIt",
+        "splitWhenLinkedOrDifferent",
+        "trioIsNotCopies",
+        "trioLeavesAsSameFootage",
+        "trioLinks",
+        "trioOneGroup",
+        "verifyIgnoresFootage",
+        "words"
       ]
     },
     {
@@ -24422,6 +26674,32 @@
         "undatedIsTreatedAsAfter1980",
         "unmeasuredPictureOffersOnlyAMaybeBySameNameStart",
         "yourDateWinsAndAPre1980DateMakesSilentFilmNormal"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundPrintSilentVerdictTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SoundPrintSilentVerdictTier3Tests",
+        "SoundPrintSilentVerdictSurfaceTests",
+        "SoundPrintSilentVerdictScaleTests",
+        "QARedCompareOneSidedStripTests"
+      ],
+      "tests": [
+        "compareSide",
+        "fingerprintKeyOnlyForEvidence",
+        "groupAStillFires",
+        "groupsBAndCAreCouldNotCheck",
+        "heardVersusMeasuredSilentSides",
+        "measuredSideKeepsItsStrip",
+        "personCheckedPreFourStillSettles",
+        "reasonWordsPerHearing",
+        "stampStripPerSide",
+        "streamColumn",
+        "summaryKeepsCouldNotCheckBesideDecisions",
+        "tier3At100k",
+        "unmeasuredStripIsNotSilence"
       ]
     },
     {
@@ -25912,6 +28190,80 @@
         "verifiedRecordRoundTripsLosslessly",
         "verifyAudioStampIsClassifiedMachine",
         "verifyNoteStaysOutOfPlainSearch"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "VerifyCatalogConstraintTests",
+        "VerifyCatalogTierTests",
+        "VerifyCatalogReportTests",
+        "VerifyCatalogScaleTests",
+        "VerifyCatalogJobTests",
+        "VerifyCatalogStatusTests",
+        "VerifyCatalogSensorTests"
+      ],
+      "tests": [
+        "aReportFromBeforeTheSwitchIsNotThisCatalogs",
+        "aRunWritesTheReportAndLogs",
+        "auditLaunchLineFromBeforeTheSwitch",
+        "auditStampNamesItsVolume",
+        "checkAt100k",
+        "datedCopyFailureFailsTheJobAndKeepsTheLatest",
+        "datedCopyFirstThenLatest",
+        "derivedStampsMatchContent",
+        "derivedThenConstraints",
+        "doorAndBand",
+        "duplicateGroupDigestsAgree",
+        "eventFactsFromTheDecisionSnapshot",
+        "eventMembersExist",
+        "factsFromAReport",
+        "identityFromTheStamps",
+        "identityWordsSplitByConnectivity",
+        "lineageTargetsExist",
+        "lineageToARemovedRowIsUnverifiedNotADecision",
+        "notBuiltAndStopped",
+        "oneLiveRowPerPath",
+        "oneWriterNoFileHandle",
+        "pathAliasByCase",
+        "poisonedLatestReport",
+        "presenceFromBeforeTheSwitchIsNotRun",
+        "presenceFromTheAuditMarker",
+        "projectionCarriesTheContainer",
+        "promotionsHaveASource",
+        "readOnlyCatalogFolder",
+        "referenceMovie",
+        "referenceMovieIsAQuickTimeQuestion",
+        "referenceMovieIsUnverified",
+        "referenceMovieWithNoAudioIsNotATier3Decision",
+        "registry",
+        "removalMirrorsLifecycle",
+        "removalRevisionNonNegative",
+        "reportRoundTrips",
+        "requiredFields",
+        "rowColours",
+        "ruleTableIsComplete",
+        "runNowStartsVerifyCatalog",
+        "schemaVersionTwo",
+        "secondRunIsRefused",
+        "shapeOfTheJob",
+        "soundAgainstTheHeader",
+        "sourcesTouchNoFileNoRowNoMedia",
+        "stopEndsAfterTheCurrentTier",
+        "strictReader",
+        "supersessionCycle",
+        "supersessionToARemovedRowIsADecision",
+        "theJobNeverHashesCatalogJSON",
+        "theP0ShapesProduceFindings",
+        "theP0ShapesProduceFindingsThroughTheJob",
+        "tier3JudgesOnlyCurrentStamps",
+        "tierFiveNeverReadsCatalogJSON",
+        "uniqueIDs",
+        "verdictFromTheBuiltTiers",
+        "wholeFileDigestsAreWhole",
+        "writeLatestAndDated"
       ]
     },
     {
@@ -27632,6 +29984,25 @@
       ]
     },
     {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_gauntlet_package_adapter.py",
+      "stage": "regression",
+      "suites": [
+        "test_gauntlet_package_adapter.py"
+      ],
+      "tests": [
+        "test_below_package_floor_fails",
+        "test_mismatched_package_selectors_fail_preflight",
+        "test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env",
+        "test_package_build_failure_never_passes_and_skips_package_runs",
+        "test_package_failure_fails_a_stage_whose_xcode_part_passed",
+        "test_package_known_issue_and_missing_summary_are_not_passes",
+        "test_package_only_stage_runs",
+        "test_unblocked_package_suite_without_selectors_fails_preflight"
+      ]
+    },
+    {
       "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
       "kind": "python",
       "path": "tests/test_gauntlet_publish.py",
@@ -28268,6 +30639,25 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_no_script_writes_catalog.py",
+      "stage": "unit",
+      "suites": [
+        "test_no_script_writes_catalog.py"
+      ],
+      "tests": [
+        "test_allowlist_has_no_stale_entries",
+        "test_catalog_db_opens_read_only_by_construction",
+        "test_engine_refuses_a_write_through_catalog_db",
+        "test_no_script_writes_catalog_json",
+        "test_no_shell_script_touches_the_catalog_files",
+        "test_only_catalog_db_names_catalog_sqlite",
+        "test_refuses_without_cutover_latch_and_never_reads_json",
+        "test_scan_sees_the_scripts"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_person_eval.py",
       "stage": "unit",
       "suites": [
@@ -28863,2379 +31253,6 @@
         "test_dirty_target_is_unchanged",
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogStatusFreshnessTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogFreshnessRowsTests",
-        "CatalogFreshnessFactsTests",
-        "CatalogStatusWordsTests",
-        "CatalogFreshnessScaleTests",
-        "CatalogFreshnessSnapshotTests",
-        "CatalogStatusUpdateQueueTests",
-        "CatalogStatusSensorTests",
-        "CatalogStatusStructureTests"
-      ],
-      "tests": [
-        "aKindThatStopsRereadsTheMarker",
-        "aPartialRunContributesNoDecision",
-        "aPoisonedSidecarIsAProblemAndAnAbsentOneIsNot",
-        "aRealMarkerRoundTrips",
-        "aRunningDossierStageIsNotStale",
-        "aRunningMetadataEngineIsNotStale",
-        "anAbsentSidecarInAReadOnlyFolderIsNotAProblem",
-        "anAuditFromBeforeTheSwitchIsNotThisCatalogs",
-        "analyzeMenusFirstItemIsTheSummary",
-        "bandMirrorsTheJobTheMFORowObserves",
-        "chipMenuItemAndDotObserveOnlyTheSnapshot",
-        "clearPendingKeepsTheKindInFlight",
-        "coverageReportCarriesTheIntegrityKinds",
-        "doorRule",
-        "fullHashCountingExcludesTheSampledHash",
-        "greenChipSaysReflectsReality",
-        "hundredThousandRowsStayInsideTheCoverageBudget",
-        "identicalCoverageAtALaterTimePublishesOnce",
-        "integrityRunsGoThroughTheCenterWithTheModelsMarkers",
-        "markerFileNameMatchesTheReader",
-        "missingAndGarbageMarkersReadAsNeverRan",
-        "modelOwnsOneSnapshotAndItsPassFeedsIt",
-        "noStatusSurfaceWalksRecords",
-        "outcomeMapping",
-        "presenceRowReadsTheAuditMarker",
-        "publishIsEqualityGatedAndRunningRejudges",
-        "rowsFollowTheRegistryIntegrityFirst",
-        "runnerKnowsWhichKindsAreRunning",
-        "soundStampCountingTakesFingerprintedAndNoAudio",
-        "soundStoreProblemAndRunningLandOnTheRows",
-        "startsOneKindAtATimeInTheOrderGiven",
-        "stateJudgesEveryRowAndSummarizes",
-        "storageTabCheckIsRetitledAndKept",
-        "theThreeIntegrityRowsComeFirst",
-        "uncomputedStaysQuietAndNothingKnownCannotVouch",
-        "yellowAndRedChipsAreShort"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
-      "stage": "unit",
-      "suites": [
-        "FootageFoldersLogicTests",
-        "FootageFoldersScaleTests",
-        "FootageFoldersIsolationTests",
-        "FootageFoldersSensorTests",
-        "FootageFoldersStructureTests",
-        "FootageFoldersSelectionTests",
-        "FootageFolderTitleSearchTests"
-      ],
-      "tests": [
-        "aByteCopyOfADerivativeInheritsTheDerivativesPlace",
-        "addingKeepsHitsFirstAndNeverResurrectsAFilteredRow",
-        "anUnassignedCopyFollowsItsOwnCopyGroupsEvent",
-        "computeFilteredAddsTitledFolderMembers",
-        "confirmedEventBecomesAFolderAndTheRestStaysLoose",
-        "copiesByWholeFileDigestAndSizeReadGreyUnderTheRecording",
-        "copyOutsideAnyEventFollowsItsOriginalIntoTheFolder",
-        "damagedEventsFileMakesNoFoldersAndDoesNotCrash",
-        "decomposedTitleMatchesComposedQuery",
-        "derivativeFromAnotherEventLandsUnselectedWhileScopedElsewhere",
-        "duplicateGroupMakesACopyWhenThereIsNoDigest",
-        "eventScopeShowsOneFolderOpenAndFamilyScopeShowsOneFamily",
-        "eventsComeStraightFromTheDecisions",
-        "everyDerivativeAppendGoesThroughTheOneDoor",
-        "everyRowActionGoesThroughTheDisplayedSelection",
-        "familyOrderIsRecordingThenMadeFromThenCopies",
-        "folderKeysUseTheMonitorNotATableKeyHandler",
-        "folderRowsObserveOnlyTheSnapshot",
-        "folderSummaryCountsFilesCopiesTimeArchivedAndDate",
-        "folderTableNeverReadsRecords",
-        "foldersAndLooseFilesSortTogetherByTheTableKey",
-        "hundredThousandRowsUnderBudget",
-        "joinRunsOnlyWhileWanted",
-        "keeperIsTheArchivedFileElseTheBetterTransferElseTheLongest",
-        "legendAppearsOnlyWhileOn",
-        "lineageReadsMadeFromItUnderTheSource",
-        "looseFamilyCarriesItsRelativesUnderItsFirstVisibleMember",
-        "lowercaseWordShowsTheFolderWithItsMembers",
-        "membersInsideAFolderFollowFamilyOrderThenTheSort",
-        "noEventsAndNoCopiesIsTodaysRowsInTodaysOrder",
-        "onlyAPlistBooleanReadsAsOn",
-        "optionOffStillPrunesAgainstTheLinearRows",
-        "otherQueriesDoNotAnswerByTitle",
-        "poisonedShowSettingReadsAsOff",
-        "pruningAfterAScopeChangeDropsHiddenIDs",
-        "relationGlyphsAndWordsAreTheDesignsFour",
-        "revealPlanSelectsOnlyWhatTheListCanShow",
-        "rowMenuItemsOnlyWhileOn",
-        "sampledV1HashIsNeverACopy",
-        "scopedBulkActionNeverSeesMembersOutsideTheScope",
-        "selectionPruneIsUnchangedAndAFolderIdSurvivesThroughRefreshRows",
-        "showOptionExistsAndDefaultsOff",
-        "showingPillOnlyWhileOn",
-        "snapshotPublishesOnlyOnChange",
-        "sortMappingRoundTripsEveryColumn",
-        "supersededRowStaysWithItsFamilyWhenShown",
-        "theArchiveCopyOfARecordingCarriesTheFamily",
-        "theRevealChecksTheDisplayBeforeSelecting",
-        "titleAnswersInEveryCasing",
-        "titleSearchAtScale",
-        "versionOutsideAnyEventFollowsItsSourceToo"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FoldersOnlyTests.swift",
-      "stage": "unit",
-      "suites": [
-        "FoldersOnlyLogicTests",
-        "FoldersOnlyIsolationTests",
-        "FoldersOnlySensorTests"
-      ],
-      "tests": [
-        "aClosedFolderIsItsOneRow",
-        "aLooseDerivativeIsNotClaimedSelectedUnderFoldersOnly",
-        "composeReadsTheMirrorAndAddsNoRefreshRows",
-        "emptyNoteShowsOnlyAtTheTopWithTheFolderView",
-        "filtersAndSearchStillApplyInsideFolders",
-        "foldersOnlyImpliesTheFolderViewBothWays",
-        "launchNeedsTheFolderViewToo",
-        "looseRowsAndLooseFamiliesAreDropped",
-        "nothingMatchingIsAnEmptyFlaggedDisplay",
-        "offIsTodaysDisplayExactly",
-        "onlyAPlistBooleanReadsAsOn",
-        "pillSaysFoldersOnlyInsteadOfAsFolders",
-        "rememberedAndImpliedInTheParent",
-        "scopesAreShownAsTheyAre",
-        "snapshotCarriesTheFlagThroughTheRequest",
-        "theSearchsNoMatchesWinsOverNoFolders",
-        "toggleSitsInTheFoldersSectionAndClearAllLeavesIt"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
-      "stage": "regression",
-      "suites": [
-        "ArchiveDetailSheetWordsTests",
-        "ArchiveDoorSourceSensors",
-        "ArchivePlayableRecordIsolationTests",
-        "ArchivePlayableRecordTests"
-      ],
-      "tests": [
-        "aLostFileShowsTheArchiveWords",
-        "aRowWithNoArchivedCopyIsItselfEvenWhenGone",
-        "aSubstitutedCopyIsSaidSoWithBothPathsAndBothVolumes",
-        "anArchiveCopyRowResolvesToItself",
-        "bothGoneNamesTheArchivePathNeverTheSource",
-        "copyGoneSourceOnDiskFallsBackToTheRow",
-        "copyOnDiskBeatsASourceThatIsAlsoThere",
-        "danglingSymlinkSourcePlaysTheRealCopy",
-        "everyArchiveViewDoorGoesThroughTheResolver",
-        "missingWordsArePureAndNameTheArchive",
-        "rowStateWordsCoverEveryPresence",
-        "sourceGoneCopyOnDiskPlaysTheCopy",
-        "theRowItselfKeepsItsOwnPathAndOneVolume"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
-      "stage": "integration",
-      "suites": [
-        "PlaybackAudioCheckerTests",
-        "PlaybackAudioMismatchMediaMatrixTests",
-        "PlaybackAudioMismatchSourceSensors",
-        "PlaybackAudioMismatchTests"
-      ],
-      "tests": [
-        "aCheckThatFinishesAfterTheNextStartIsStale",
-        "aCurrentCheckReportsItsWordsOrItsFailure",
-        "aacInMp4",
-        "catalogCodecOwesANoticeForVideoAudioWithAnEmptyCodecField",
-        "everyLocalAVPlayerStartChecksTheAudioTracks",
-        "everyPlayerStartIsNumbered",
-        "mp3InM4v",
-        "mp3InMkv",
-        "mp3WithNoAVTrackIsTheNotice",
-        "namesTheRealCodecFromTheCatalog",
-        "noNoticeWhenAVFoundationReadsATrack",
-        "noNoticeWhenTheCatalogHasNoSound",
-        "pcmInMov"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FileJourneyTruthTests.swift",
-      "stage": "regression",
-      "suites": [
-        "FileJourneyTruthTests",
-        "JourneyPresenceTests",
-        "PreservationChecklistContentTests"
-      ],
-      "tests": [
-        "aCopyWithoutFixityProvesNothing",
-        "ancestorLinkOntoAnotherDiskIsNamed",
-        "archivedCopyFixitySignsAndArchivesTheSource",
-        "archivedCopyGoneFromDiskDoesNotCompleteArchivedLocally",
-        "archivedCopyPresenceIsSaidInItsOwnWords",
-        "deadLinkSourceWithArchivedCopyIsSignedAndArchivedLocally",
-        "firstEventIsTheFilesOwnDateNeverAScan",
-        "lastEventIsAVerifiedPresenceThatNamesTheArchivedCopy",
-        "md5CopyNeverCompletesArchivedLocally",
-        "permissionDeniedIsUnknownNeverGone",
-        "plainLiveRowIsUnchanged",
-        "probeTellsARegularFileFromALinkFromNothing",
-        "withoutACopyTheLadderIsAsBefore",
-        "wordsNameTheLinkTheGapAndTheArchivedCopy"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
-      "stage": "unit",
-      "suites": [
-        "VerifyCatalogConstraintTests",
-        "VerifyCatalogTierTests",
-        "VerifyCatalogReportTests",
-        "VerifyCatalogScaleTests",
-        "VerifyCatalogJobTests",
-        "VerifyCatalogStatusTests",
-        "VerifyCatalogSensorTests"
-      ],
-      "tests": [
-        "aReportFromBeforeTheSwitchIsNotThisCatalogs",
-        "aRunWritesTheReportAndLogs",
-        "auditLaunchLineFromBeforeTheSwitch",
-        "auditStampNamesItsVolume",
-        "checkAt100k",
-        "datedCopyFailureFailsTheJobAndKeepsTheLatest",
-        "datedCopyFirstThenLatest",
-        "derivedStampsMatchContent",
-        "derivedThenConstraints",
-        "doorAndBand",
-        "duplicateGroupDigestsAgree",
-        "eventFactsFromTheDecisionSnapshot",
-        "eventMembersExist",
-        "factsFromAReport",
-        "identityFromTheStamps",
-        "identityWordsSplitByConnectivity",
-        "lineageTargetsExist",
-        "lineageToARemovedRowIsUnverifiedNotADecision",
-        "notBuiltAndStopped",
-        "oneLiveRowPerPath",
-        "oneWriterNoFileHandle",
-        "pathAliasByCase",
-        "poisonedLatestReport",
-        "presenceFromBeforeTheSwitchIsNotRun",
-        "presenceFromTheAuditMarker",
-        "projectionCarriesTheContainer",
-        "promotionsHaveASource",
-        "readOnlyCatalogFolder",
-        "referenceMovie",
-        "referenceMovieIsAQuickTimeQuestion",
-        "referenceMovieIsUnverified",
-        "referenceMovieWithNoAudioIsNotATier3Decision",
-        "registry",
-        "removalMirrorsLifecycle",
-        "removalRevisionNonNegative",
-        "reportRoundTrips",
-        "requiredFields",
-        "rowColours",
-        "ruleTableIsComplete",
-        "runNowStartsVerifyCatalog",
-        "schemaVersionTwo",
-        "secondRunIsRefused",
-        "shapeOfTheJob",
-        "soundAgainstTheHeader",
-        "sourcesTouchNoFileNoRowNoMedia",
-        "stopEndsAfterTheCurrentTier",
-        "strictReader",
-        "supersessionCycle",
-        "supersessionToARemovedRowIsADecision",
-        "theJobNeverHashesCatalogJSON",
-        "theP0ShapesProduceFindings",
-        "theP0ShapesProduceFindingsThroughTheJob",
-        "tier3JudgesOnlyCurrentStamps",
-        "tierFiveNeverReadsCatalogJSON",
-        "uniqueIDs",
-        "verdictFromTheBuiltTiers",
-        "wholeFileDigestsAreWhole",
-        "writeLatestAndDated"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/SoundPrintSilentVerdictTests.swift",
-      "stage": "unit",
-      "suites": [
-        "SoundPrintSilentVerdictTier3Tests",
-        "SoundPrintSilentVerdictSurfaceTests",
-        "SoundPrintSilentVerdictScaleTests",
-        "QARedCompareOneSidedStripTests"
-      ],
-      "tests": [
-        "compareSide",
-        "fingerprintKeyOnlyForEvidence",
-        "groupAStillFires",
-        "groupsBAndCAreCouldNotCheck",
-        "heardVersusMeasuredSilentSides",
-        "measuredSideKeepsItsStrip",
-        "personCheckedPreFourStillSettles",
-        "reasonWordsPerHearing",
-        "stampStripPerSide",
-        "streamColumn",
-        "summaryKeepsCouldNotCheckBesideDecisions",
-        "tier3At100k",
-        "unmeasuredStripIsNotSilence"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/P0TruthFixture.swift",
-      "stage": "regression",
-      "suites": [
-        "P0TruthFixtureTests"
-      ],
-      "tests": [
-        "deadLinkAndArchivedCopyAreWhatTheySay",
-        "everyRowOfTheTableIsBuilt",
-        "mtimeRowCarriesBothClocks",
-        "sampledMatchIsACollisionNotACopy",
-        "sampledPairIsByteIdenticalWithOnlyAV1Hash",
-        "silentHeaderStampSaysNothingWasHeard"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
-      "stage": "regression",
-      "suites": [
-        "P0TruthRegressionTests"
-      ],
-      "tests": [
-        "archiveDoorsGoOnlyThroughTheResolver",
-        "archivePlayResolvesToTheArchivedCopy",
-        "auditListsALinkRowForFixLinksAndMarksNothing",
-        "catalogCellsRenderFileFacts",
-        "catalogColumnsNameTheirEvidence",
-        "compareMediaAsksForTheHashOnASampledPair",
-        "everyPlayerStartChecksTheAudio",
-        "featuredPickNeverPlaysASampledMatch",
-        "firstJourneyEventIsTheFilesOwnDate",
-        "folderViewNeverCallsASampledPairCopies",
-        "journeyNeverSaysNowAtForADeadLink",
-        "journeyRendersNoPathAsPresenceWithoutAStat",
-        "ladderAnswersForTheContent",
-        "noSampledHashDecidesACopy",
-        "onlyWorklistSitesAskTheSampledArchivedCopy",
-        "personRowsNeverFoldIntoASampledMatch",
-        "playerNoticesMP3InM4V",
-        "sampledMatchIsNeverTheArchivedCopy",
-        "silentHeaderIsNotHasSound",
-        "soundCopyNeverOffersASampledMatch",
-        "statedArchivedCopyIsProven",
-        "transcodeFolderNeverFromASampledMatch"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/P0TruthRemainingTests.swift",
-      "stage": "regression",
-      "suites": [
-        "P0TruthRemainingTests"
-      ],
-      "tests": [
-        "eachRemainingSurfaceAsksTheProof",
-        "exactCopyNeedsEqualFullDigests",
-        "featuredPickIsNeverRefoundBySampledHash",
-        "sampledEqualityIsNeverRoleCopy",
-        "sampledMatchHidesButNeverCounts",
-        "sampledSignatureIsNeverSigned"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogRepositoryContractTests"
-      ],
-      "tests": [
-        "closeIsIdempotent",
-        "generationIsTheStoresGeneration",
-        "generationIsZeroBeforeOpen",
-        "missingFolderIsRefused",
-        "openNamesItsMode",
-        "openingTwiceIsRefused",
-        "readBeforeOpenThrows",
-        "readRethrowsTheBodysError",
-        "readSeesTheGeneration",
-        "verifyBeforeOpen",
-        "verifyIsOk"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
-      "stage": "regression",
-      "suites": [
-        "GRDBCatalogRepositoryTests"
-      ],
-      "tests": [
-        "aCorruptedFileIsRefusedWithTheEnginesWords",
-        "aCrashBetweenPhasesOpensReadOnlyUntilAdopted",
-        "aDatabaseRestoredFromAnOlderCopyOpensReadOnlyAndSaysSo",
-        "aFreshFileIsCreatedAtGenerationZero",
-        "aLowerHighWaterIsRaisedToTheGeneration",
-        "aMissingHighWaterIsRecreatedFromTheDatabase",
-        "aNewerSchemaIsRefused",
-        "aPlainJumpIsRefusedByTheTrigger",
-        "aPlusOneStepThroughRawSQLStillWorks",
-        "aPoisonedHighWaterIsRepairedByAnExplicitAdoption",
-        "aReadOnlyFolderNeverOpensForWriting",
-        "aReplaceInsideAWriteBodyIsRefusedAndRolledBack",
-        "aStaleSessionGetsGenerationMismatch",
-        "aSurvivingWriterDoesNotConsumeACrashWarning",
-        "aThrowingBodyRollsBackEverything",
-        "aWriteAdvancesByOneAndRecordsHistory",
-        "adoptFiveToTenSucceedsWithItsOwnHistoryRow",
-        "adoptingANumberTheFileDoesNotHoldIsRefused",
-        "adoptingWithNothingToAdoptIsRefused",
-        "archivalPragmasQueriedBack",
-        "garbageWalAndShmBesideACheckpointedDatabaseAreHarmless",
-        "poisonedHighWaterOpensReadOnly",
-        "reconciliationAtOpenNeverLowersTheMark",
-        "replaceOverTheCounterOrItsHistoryInsideAWriteIsRefused",
-        "restoringAllThreeFilesTogetherIsNotDetectable",
-        "restoringDatabaseAndSidecarTogetherIsCaughtByTheLog",
-        "theBodySeesTheGenerationItWritesTo",
-        "twoWritesQueuedOnOneRepositoryCommitSixThenSeven",
-        "volatileDurabilityIsOnlyWeakerWhereItSays"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
-      "stage": "regression",
-      "suites": [
-        "GRDBCatalogRepositoryLedgerTests"
-      ],
-      "tests": [
-        "aLongLogIsReadFromItsTail",
-        "anAppendNeverMergesIntoATornLastLine",
-        "anUnreadableLogOpensReadOnly",
-        "everyCommitAppendsOneLineToTheLog",
-        "theLogsLastParseableLineIsItsValue"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
-      "stage": "performance",
-      "suites": [
-        "CatalogRepositoryScaleTests"
-      ],
-      "tests": [
-        "hundredThousandAdvances",
-        "hundredThousandCommitsOfIdentityChecks",
-        "tenThousandAdvances",
-        "twoHundredArchivalCommitsRecordTheirCost"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCloseCheckpointTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCloseCheckpointTests"
-      ],
-      "tests": [
-        "aLoneCopyIsComplete",
-        "closeCheckpointsTheLog"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogStoreSensorTests"
-      ],
-      "tests": [
-        "bookkeepingStatementsAreRawSQL",
-        "databasePoolIsCreatedInOnePlace",
-        "everyTableOfTheDDLIsInTheSwiftSchema",
-        "everyTriggerOfTheDDLIsInTheSwiftSchema",
-        "noReplaceOrIgnoreConflictResolutionInTheStore",
-        "normalisationKeepsWhitespaceInsideStringLiterals",
-        "onlyStoreFoldersImportGRDB",
-        "theDDLMatchesTheDesignDocumentsTriggers",
-        "theMigrationCreatesNoTableOutsideTheDDL",
-        "volatileDurabilityNeverLeavesTheTests"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogDataSchemaTests"
-      ],
-      "tests": [
-        "aCaseAliasOnACaseInsensitiveVolumeIsRefusedWithTheTriggersWords",
-        "aDanglingReferenceIsRefused",
-        "aPartOneDatabaseGainsTheDataTablesOnOpen",
-        "aPlainGenerationJumpIsRefusedWithTheTriggersWords",
-        "aRemovalMarkerWithoutItsTombstoneIsRefusedWithTheTriggersWords",
-        "aRowSmuggledInWithForeignKeysOffIsCaughtAtTheNextOpen",
-        "everyStatementOfTheDDLIsWhatTheMigrationCreated",
-        "insertOrReplaceOverTheCurrentHistoryRowIsRefused",
-        "insertOrReplaceOverTheGenerationCounterIsRefused",
-        "nothingBeyondTheDDLWasCreated",
-        "replaceReachesTheDeleteTriggerOnlyWithRecursiveTriggers",
-        "searchTextFindsWordsAcrossCaseAndDiacritics",
-        "theChecksFileHoldsAgainstTheMigration",
-        "theEngineHasWhatTheDDLNeeds",
-        "theMigrationCreatesTheDocumentsObjects",
-        "theSwiftSchemaIsSplitByTableInDocumentOrder",
-        "updateOrReplaceOntoAnotherLivePathIsRefusedAndTheOtherRowStays"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
-      "stage": "performance",
-      "suites": [
-        "CatalogDataSchemaScaleTests"
-      ],
-      "tests": [
-        "hundredThousandFilesInOneImportTransaction",
-        "identicalDerivedValuesFlagConflictsInLinearWork"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogTransactionDoorsTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogTransactionDoorsTests"
-      ],
-      "tests": [
-        "aRowTheDDLRefusesRollsTheWriteBack",
-        "anEmptyRunFinishesWithTrueCountersAndTheItemsMap",
-        "eventMembershipIsLandedOnceAndThenAlreadyPresent",
-        "fileContentAndVolumeDoorsWriteTheirRowsAndTheCommitCountsThem",
-        "finishingARunWithLyingCountersIsRefusedByTheTrigger",
-        "quarantineKnowledgeAndDerivedDoorsWriteOneRowEach",
-        "theRelationDoorAnswersLandedAlreadyPresentAndRefused"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogImporterTests",
-        "CatalogImporterIdentityTests",
-        "CatalogImporterDuplicateKeyTests",
-        "CatalogImporterSidecarRereadTests",
-        "CatalogImporterAuditWordsTests",
-        "CatalogImporterLedgerTests",
-        "CatalogImporterPreflightTests",
-        "CatalogImporterEmptyTargetTests"
-      ],
-      "tests": [
-        "aCatalogThatChangesMidImportIsRefusedAndNothingIsWritten",
-        "aClearedMembershipViewIsNamedMemberByMember",
-        "aComparatorMissRollsEverythingBackAndNamesIt",
-        "aDecisionPayloadAlteredInTheViewIsAMiss",
-        "aHashedRowWithANegativeSizeIsQuarantinedAndTheRunProceeds",
-        "aLandingWhoseDigestIsNotTheRowsIsNamed",
-        "aLedgerPayloadAlteredInTheViewIsAMiss",
-        "aMalformedLastLineThatIsTerminatedRefusesTheRun",
-        "aMalformedLineBeforeTheEndRefusesTheRun",
-        "aQuarantinedRowsStarsAreInItsRawRowAndInKnowledgeSources",
-        "aReadOnlyTargetFolderFailsBeforeAnyWrite",
-        "aReportWhoseHashIsNotTheFrozenFilesIsRefused",
-        "aRowCarryingOneKeyTwiceRefusesTheRunBeforeAnyWrite",
-        "aRowWhoseVolumeIdIsNotAUUIDIsQuarantinedAndTheRunProceeds",
-        "aSecondRunIntoTheSameDatabaseIsRefused",
-        "aSidecarCarryingOneKeyTwiceRefusesTheRun",
-        "aTornLastLineLandsAsAnUnparseableRowWithItsBytes",
-        "aWriteBetweenTheOuterCheckAndTheTransactionIsRefusedInsideIt",
-        "anAuditMarkerWithoutRowResultsRefusesTheRun",
-        "anEventDecisionChangedAfterTheGateIsRefusedAndNothingIsWritten",
-        "anEventMemberWithABadRangeRefusesTheRun",
-        "anUnknownAuditResultWordRefusesTheRun",
-        "everyAuditRowLandsWithItsWordAndDetailAndTheMarkerKeepsTheFilesHash",
-        "everyShapeLandsWhereTheContractSays",
-        "knowledgeSourcesHoldsEveryCuratedValueOfEveryRowPerField",
-        "swappedFileReferencesAndSwappedBindingsAreNamed",
-        "theImportCommitsOneGenerationWithTheFileCounts",
-        "theReconciliationLineEqualsTheCounts",
-        "theSidecarsLandWithTheirOrdinals",
-        "theTombstonedShapeIsCountedAsTombstonedMain",
-        "withoutSidecarsTheImportStillCompletes"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogImporterDryRunTests"
-      ],
-      "tests": [
-        "aDryRunCarriesTheQuarantineWordsCappedAtTheSample",
-        "aDryRunLogsStartAndADryRunOutcomeThroughTheSink",
-        "aDryRunPassesWithTheSameLineARealRunWouldPrint",
-        "aDryRunWritesNothingToTheInputsTargetAndRemovesItsScratch",
-        "aGateRefusalInADryRunIsTheSameRefusal",
-        "aMissInADryRunRollsBackAndNamesItAndTheScratchIsGone",
-        "aRowWithAnEmptyContentHashLandsInFiles",
-        "aStopRequestedBeforeTheTargetOpensEndsStoppedWithNothingWritten",
-        "aStopRequestedDuringTheRowsRollsTheTransactionBack",
-        "anEmptyContentHashMapsToANilSampledHash"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterStagingTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogImporterStagingTests"
-      ],
-      "tests": [
-        "aLateCommitStaysInStaging",
-        "aRolledBackRunLeavesOnlyStaging",
-        "anExistingEmptyTargetRefuses",
-        "leftoversAreMovedAsideNotDeleted",
-        "theNextImportAfterALateCommitStartsClean",
-        "thePublishedSetIsWholeAndWritable"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterSensorTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogImporterSensorTests"
-      ],
-      "tests": [
-        "importerWritesOnlyThroughTheTransactionDoors",
-        "noAppVideoRecordSymbolInImport",
-        "theComparatorReDecodesFromTheFilePath"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
-      "stage": "regression",
-      "suites": [
-        "ReconcileByDigestTests"
-      ],
-      "tests": [
-        "aDigestKnownOnlyFromQuarantineBecomesANewRowAndResolvesIt",
-        "aFileStillBeingWrittenIsDeferredNeverARow",
-        "aKnownDigestWhoseOneRowIsProvenGoneMovesThatRow",
-        "aKnownDigestWhoseRowIsStillPresentIsACopy",
-        "aKnownDigestWithOneRowGoneAndAnotherPresentMovesTheGoneRow",
-        "aKnownDigestWithSeveralRowsGoneIsACopyLeftToTheAudit",
-        "aLinkInThePathIsRefused",
-        "aMainRowAndAQuarantinedRowSharingTheDigestResolveAsCopy",
-        "aNewDigestIsANewRowWithNoKnowledge",
-        "aQuarantinedRowWhoseIdIsTakenGetsAFreshId",
-        "aRowWithFindingsStaysOpenAfterAByteMatch",
-        "digestlessPresenceReasonsAreNeverAutomatic",
-        "findingReasonsStayOpen",
-        "otherBytesAtTheSamePathReplaceTheRow",
-        "theSameBytesAtTheSamePathRefreshInPlace"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
-      "stage": "performance",
-      "suites": [
-        "CatalogImporterScaleTests"
-      ],
-      "tests": [
-        "oneHundredThousandRowsImportWithinBudget"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/JSONDuplicateKeyScannerTests.swift",
-      "stage": "unit",
-      "suites": [
-        "JSONDuplicateKeyScannerTests",
-        "JSONDuplicateKeyScannerScaleTests"
-      ],
-      "tests": [
-        "aCleanDocumentHasNoDuplicate",
-        "aDocumentThatIsNotJSONReportsNoDuplicate",
-        "aDuplicateAfterAnEscapedStringIsStillFound",
-        "aDuplicateAtTheTopLevelHasNoOrdinal",
-        "aDuplicateInsideANestedObjectNamesTheWholePath",
-        "aDuplicateInsideAnArrayOfArraysIsPathed",
-        "aRowCarryingOneKeyTwiceIsNamedWithItsOrdinal",
-        "anEscapedKeyEqualsItsPlainSpelling",
-        "escapesInsideKeysAreResolvedBeforeComparing",
-        "hundredThousandRecordsScanWithinBudget",
-        "stringsThatLookLikeStructureDoNotConfuseIt",
-        "theLinesVariantNamesTheLine",
-        "thePoisonedFixtureScansClean",
-        "theSameKeyInTwoSiblingObjectsIsNotADuplicate"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/RowPreflightTests.swift",
-      "stage": "unit",
-      "suites": [
-        "RowPreflightTests"
-      ],
-      "tests": [
-        "aBlankAuditVolumeIsAMainViolation",
-        "aFootageDecisionNamingItsOwnRowIsAnAnyViolation",
-        "aHealthyRowIsClean",
-        "aLowercaseVolumeUUIDIsAMainViolationAsTheDDLSpellsIt",
-        "aMemberRangeThatRunsBackwardsIsAFault",
-        "aMemberRangeWithOneEndIsAFault",
-        "aNegativeDurationIsAMainViolation",
-        "aNegativeIgnoredSizeIsAFault",
-        "aNegativeRemovalRevisionIsAMainViolation",
-        "aNegativeSizeOnAHashedRowViolatesFilesAndContent",
-        "aNoAudioSoundPrintWithLandmarksIsAnAnyViolation",
-        "aNonPresentAuditResultWithoutAJudgedPathIsAFault",
-        "aPresentAuditResultNeedsNoJudgedPath",
-        "aQuarantineLandingAnswersOnlyToTheAnyChecks",
-        "aRelativePathIsAMainViolation",
-        "aShortEventIdIsAFault",
-        "aSoundPrintBelowEngineVersionOneIsAnAnyViolation",
-        "aTrashPathOnAMissingMarkerIsAMainViolation",
-        "aVolumeIdThatIsNotAUUIDIsAMainViolation",
-        "anEmptyVolumeIdIsAllowed",
-        "anInTrashMarkerOnACatalogedRowIsAMainViolation",
-        "anUnknownBackupKindIsAMainViolation",
-        "anUnknownEventStateIsAFault",
-        "anUnknownFootageVerdictIsAnAnyViolation",
-        "anUnknownLifecycleIsAMainViolation",
-        "anUnknownStreamTypeIsAMainViolation",
-        "everyFixtureShapeIsRepresentable",
-        "theFixturesSidecarsHaveNoFault",
-        "theQuarantineFloorIsAThirtySixCharacterId",
-        "theWordsNameTheGatesVerdictAndEveryCheck"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogImporterAppMarkerTests"
-      ],
-      "tests": [
-        "anOlderMarkerWithoutJudgedPathsIsStillRefused",
-        "theAppsMarkerAtAnotherGenerationIsRefused",
-        "theAppsMarkerLandsEveryRowWithTheAppsWord",
-        "theAppsMarkerWithItsGenerationPassesTheDryRunWithoutTheNote",
-        "theAppsMarkerWithoutAGenerationPassesTheDryRunByTimeOrder",
-        "theAppsNonPresentRowsEachNameTheirRowsPath",
-        "theMarkerTheAppWritesTodayPassesTheDryRun"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
-      "stage": "unit",
-      "suites": [
-        "AuditMarkerJSONTests"
-      ],
-      "tests": [
-        "aCouldNotCheckWhoseDetailNamesALinkIsTheLinkClass",
-        "aCouldNotCheckWithoutADetailIsCouldNotCheck",
-        "aNonPresentAppWordNeedsAJudgedPath",
-        "aPresentClassWordNeedsNoJudgedPath",
-        "anUnknownWordIsARunLevelRefusalWithTheOrdinalAndTheWord",
-        "anUnknownWordIsNotEvidence",
-        "anUnknownWordRefusesTheRun",
-        "everyAppWordIsKnown",
-        "everyAppWordMapsToItsClass",
-        "theMarkerInTheAppsExactShapeDecodes"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ImportAuditVocabularySensorTests.swift",
-      "stage": "unit",
-      "suites": [
-        "ImportAuditVocabularySensorTests"
-      ],
-      "tests": [
-        "aPresentRowCarriesNoJudgedPath",
-        "everyAppRowHasAGateClass",
-        "theAppsLinkDetailIsTheLinkClass",
-        "theBulkOnlyWordIsNotARowWord",
-        "theImporterKnowsExactlyTheAppsPerRowWords",
-        "theImportersGateFactsOfTheAppsMarkerAreWhole",
-        "theImportersPreflightRefusesNothingInTheAppsMarker",
-        "theJudgedPathArrivesInTheImporter"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogRecordDTORecordTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogJSONValueCoderTests",
-        "CatalogRecordDTORecordTests"
-      ],
-      "tests": [
-        "decoderMatchesTheAppDecoder",
-        "decoderRefusals",
-        "encoderMatchesTheAppEncoder",
-        "everyFixtureRowPins",
-        "fastParserMatchesTheCodableReader",
-        "nonFiniteRefuses",
-        "scalarShapes",
-        "theRichRecordPins"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
-      "stage": "unit",
-      "suites": [
-        "DisplayValueDerivationTests"
-      ],
-      "tests": [
-        "aCopyWithoutTheFieldDoesNotVote",
-        "aDateIsPairedWithTheConfidenceOfTheSameCopy",
-        "aMatchingDatePairShowsBoth",
-        "aNameConfirmedOnOneCopyAndRejectedOnAnotherKeepsBothInConflict",
-        "aValueTheTableCannotHoldIsNeverInvented",
-        "confirmedNamesUnionWithTheEarliestDate",
-        "copiesThatAgreeShowTheValue",
-        "copiesThatDisagreeShowNothingWithConflict",
-        "digestsAreKeptApartAndFieldsOutsideTheDisplayAreIgnored",
-        "setsAreUnionsAndNeverConflict",
-        "theUserDateShapeIsTheDDLs"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadRoundTripTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogLoadRoundTripTests"
-      ],
-      "tests": [
-        "conflictingCopiesLoadEmpty",
-        "displayPassRunsOnce",
-        "everyMainShapeRoundTrips",
-        "pairIDsAndConfidenceRoundTrip",
-        "quarantineIsNotRecords",
-        "theRichRowRoundTrips"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
-      "stage": "performance",
-      "suites": [
-        "CatalogLoadScaleTests"
-      ],
-      "tests": [
-        "oneHundredThousandRowsLoadWithinBudget"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/SQLiteCatalogReaderTests.swift",
-      "stage": "unit",
-      "suites": [
-        "SQLiteCatalogReaderTests"
-      ],
-      "tests": [
-        "freshnessIsTheHighWater",
-        "jsonPathRefused",
-        "missingDatabaseRefused",
-        "openForReadingMissingFile",
-        "openForReadingRefusesWrites",
-        "previewSourcePlansFromSQLite",
-        "previewSourceWithoutLatch",
-        "readsTheAppsRecordsReadOnly",
-        "refusedWithoutLatch"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/LaunchPreflightTests.swift",
-      "stage": "unit",
-      "suites": [
-        "LaunchPreflightTests"
-      ],
-      "tests": [
-        "aGapIsNeverOKForAnyCheck",
-        "alreadyCancelledRunThrowsAndReportsNothing",
-        "batteryIsANote",
-        "cancelDuringQuickCheckStopsItAtOnce",
-        "cancellationTokenRunsItsHandlerOnceAndRefusesLateRegistration",
-        "defaultsAreRicksNumbers",
-        "diskAt90PercentWarnsAndJustUnderIsOK",
-        "diskAt95PercentIsRedAndJustUnderWarns",
-        "emptyMachineEverythingMissingStillReportsEveryCheck",
-        "everyCheckThatGetsNilSaysCouldntCheck",
-        "everyCheckThatThrowsSaysCouldntCheckAndIsNotGreen",
-        "fastOnlyRunCarriesThePreviousQuickCheckWithoutRerunningIt",
-        "fastOnlyRunWithNoPreviousVerdictRunsQuickCheckAnyway",
-        "healthyMacIsAllSetWithNoBanner",
-        "journalOver256MBWarns",
-        "masterArchiveOfflineIsOnlyANote",
-        "memoryUnder16GBWarns",
-        "missingCatalogFileIsRedAndHoldsEdits",
-        "missingCutoverMarkerIsRedAndHoldsEdits",
-        "missingFFprobeWarnsAndNamesIt",
-        "missingTempVolumeIsCheckedSeparatelyAndNotGreen",
-        "notesAloneShowNoBanner",
-        "purgeableInclusiveFreeIsShownButNeverJudged",
-        "quickCheckFaultIsStickyUntilANewQuickCheckPasses",
-        "quickCheckOutcomes",
-        "realProbeFastPhaseFitsIn200ms",
-        "redDiskSummaryHoldsLongOperationsNotEdits",
-        "redFloorIsThreeTimesCatalogPlusJournal",
-        "redFloorNeverOverflows",
-        "schemaVersionEqualOKNewerRedOlderWarn",
-        "swapOver4GBIsANote",
-        "tempDiskOnAnotherVolumeIsCheckedByTheSameRule",
-        "thermalSeriousOrCriticalWarns",
-        "thousandFakeRunsFitInOneSecond",
-        "under20GBFreeIsRedEvenBelow95Percent",
-        "under50GBFreeWarnsOnASmallDisk",
-        "unwritableLogFolderWarns",
-        "usedFractionOfAZeroSizedVolumeReadsFull",
-        "worstLevelWinsAndSummaryCountsTheRest",
-        "zeroSizedVolumeIsCouldntCheckNotFull"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightGateTests.swift",
-      "stage": "unit",
-      "suites": [
-        "PreflightGateTests"
-      ],
-      "tests": [
-        "aWALThatGrewDuringTheSessionRaisesTheEditFloor",
-        "backupAndPublishNeedOneCatalog",
-        "catalogFaultRefusesEditsAndLongOperationsWithTheChecksWords",
-        "destinationThatIsTheCatalogDiskGetsTheCatalogReserve",
-        "eachRealProbeQuestionIsCheap",
-        "editFloorNeverUnder1GB",
-        "editFloorPlusMinusOneByte",
-        "exactly90PercentWarnsOneByteLessUsedIsOK",
-        "exactly95PercentIsRedOneByteLessUsedWarns",
-        "freeingTheStatedShortfallLetsTheOperationStart",
-        "freshDiskReadingKeepsTheCatalogFault",
-        "heldEditSaysHowMuchToFreeRoundedUp",
-        "hugeWALClampsInsteadOfOverflowing",
-        "launchReportBelowEditFloorSaysEditsAreHeld",
-        "launchReportHugeWALIsWarnAndHoldsEdits",
-        "leastFreeOutOfRedIsExactToTheByte",
-        "longJobMustFitAndLeaveTheDiskOutOfRed",
-        "negativeJobEstimateCountsAsZero",
-        "negativeOrOverfullReadingsNeverCrashOrOverflow",
-        "onlyRedCatalogChecksAreFaults",
-        "otherDestinationNeedsNoCatalogReserve",
-        "redCatalogFloorPlusMinusOneByte",
-        "redDiskRefusesLongOperationsButNotEdits",
-        "redFloor20GBPlusMinusOneByte",
-        "unreadableDestinationRefusesLongOperations",
-        "unreadableDiskNeverHoldsEditsButRefusesLongOperations",
-        "warnFreeLine50GBPlusMinusOneByte",
-        "zeroByteVolumeIsUnmeasurableNeverHoldsEditsButRefusesLongOperations"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPreflightReaderTests"
-      ],
-      "tests": [
-        "aBudgetThatRunsOutBeforeTheFirstStepIsNotLost",
-        "aCancelLandingJustBeforeTheFirstStepIsNotLost",
-        "cancelDuringQuickCheckInterruptsItAndSaysCancelled",
-        "cancelledBeforeStartNeverOpensTheFile",
-        "damagedFileIsNeverAPass",
-        "expectedVersionIsTheStoresCurrentVersion",
-        "lateWatchdogsAndCancelsAfterCloseAreHarmless",
-        "missingFileThrows",
-        "noCatalogStateTableIsNil",
-        "quickCheckIsInterruptedAtItsBudget",
-        "quickCheckLeavesTheFileUnchanged",
-        "quickCheckPassesOnAHealthyFile",
-        "readsTheSchemaVersion",
-        "theRealProbeRunsQuickCheckThroughThisReader",
-        "theRealQuickCheckHonoursAnInterruptMidWalk",
-        "theRealQuickCheckStopsAtItsBudgetMidWalk"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR1RedTests.swift",
-      "stage": "unit",
-      "suites": [
-        "LaunchPreflightTests",
-        "PreflightGateTests"
-      ],
-      "tests": [
-        "qaR1_catalogThatFailedQuickCheckHoldsEdits",
-        "qaR1_longJobOnCatalogDiskMustNotLeaveTheDiskRedByPercent",
-        "qaR1_missingCutoverMarkerHoldsEdits",
-        "qaR1_realProbeNeverReportsMoreThanActuallyFreeBytes",
-        "qaR1_redRefusalStatesTheWholeShortfall"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR1Tests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPreflightReaderTests"
-      ],
-      "tests": [
-        "qaR1_quickCheckBesideALiveWALWriterPassesAndNeverBlocksACommit",
-        "qaR1_readerOnAClosedWALCatalogLeavesNoSidecars"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightReaderQAR2Tests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPreflightReaderTests"
-      ],
-      "tests": [
-        "qaR2_interruptWithNoStatementRunningIsDropped"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR2RedTests.swift",
-      "stage": "unit",
-      "suites": [
-        "LaunchPreflightTests",
-        "PreflightCancellationQAR2Tests"
-      ],
-      "tests": [
-        "qaR2_alreadyCancelledTokenDoesNotRunTheBody",
-        "qaR2_fastOnlyRecheckMustNotLiftALaunchQuickCheckFault"
-      ]
-    },
-    {
-      "blocked_reason": "opt-in measurement: runs only with VIDEOSCAN_PREFLIGHT_DB set to a .backup copy of a real catalog",
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogPreflightMeasureTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPreflightMeasureTests"
-      ],
-      "tests": [
-        "measureOnACatalogCopy"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogLoadReadingTests"
-      ],
-      "tests": [
-        "aLoadWritesNothing",
-        "boundBeatsUnverified",
-        "readOnlyStoreRefusesTheLoad",
-        "unverifiedWhenNothingIsBound"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
-      "stage": "regression",
-      "suites": [
-        "SQLiteCatalogLoaderTests",
-        "CatalogAuthorityFlipTests",
-        "P0TruthThroughSQLiteTests"
-      ],
-      "tests": [
-        "aSampledSoundStampIsNotImported",
-        "conflictCopiesLoadEmpty",
-        "databaseWithoutLatchIsInert",
-        "displayStringsAndPairs",
-        "journeyWordsAreUnchanged",
-        "landedRowsKeepTheirFacts",
-        "latchLaunchesOnSQLite",
-        "latchWithDamagedDatabaseRefuses",
-        "latchWithGoodImportIsSQLite",
-        "latchWithUnfinishedImportRefuses",
-        "latchWithoutDatabaseRefuses",
-        "modelLoadsSQLiteWithLatch",
-        "modelRefusedOpensNoCatalog",
-        "modelRefusesWithoutLatch",
-        "noLatchLaunchStaysReadOnlyBothWays",
-        "normalSQLiteLaunchFollowsTheRole",
-        "nothingIsNoLatch",
-        "pendingLaunchCommitIsRefusedOnceTheViewerRoleArrives",
-        "quarantineAndCounts",
-        "readOnlyHasOneWriter",
-        "readOnlySQLiteSurvivesApplyReadOnlyMode",
-        "refusedLaunchSurvivesApplyReadOnlyMode",
-        "sqliteRecordsEqualJSONRecords",
-        "theSeamIsOneLine",
-        "unprovenRowsAreNotRecords",
-        "viewerLaunchNeverOpensItsOwnCatalogSQLite",
-        "viewerWithNothingSynced",
-        "viewerWithSyncedSnapshotShowsIt"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitRoundTripTests",
-        "CatalogCommitIsolationTests"
-      ],
-      "tests": [
-        "conflictSurvivesUnrelatedEdit",
-        "derivedProvenance",
-        "designationGuard",
-        "injectedRefusalAloneChangesNothing",
-        "injectedRefusalIsOneRow",
-        "liveRoundTrip",
-        "markerJumpIsRefused",
-        "newRowIsInserted",
-        "noDigestIsDeferred",
-        "oneHistoryRowPerCommit",
-        "p0FactsSurvive",
-        "pairLinkRoundTrips",
-        "personResolvesConflict",
-        "readOnlyRefuses",
-        "unchangedWritesNothing"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogChangeDetectorTests"
-      ],
-      "tests": [
-        "anyChangeMovesIt",
-        "parallelAndSerialAgree",
-        "theChangedListIsTheRecordsThatDiffer",
-        "theSameStateHasTheSameFingerprint"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogCommitScaleTests.swift",
-      "stage": "performance",
-      "suites": [
-        "CatalogCommitScaleTests"
-      ],
-      "tests": [
-        "fourteenThousand",
-        "hundredThousand",
-        "richDetection",
-        "syncCommitOneRow",
-        "syncCommitThousandRows"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitterTests"
-      ],
-      "tests": [
-        "copiesFollow",
-        "debouncedCommits",
-        "funnelSourceOrder",
-        "funnelsNeverTouchJSON",
-        "holdWaits",
-        "readOnlyKeepsChanges",
-        "saveNowCommits"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitB21Tests"
-      ],
-      "tests": [
-        "intermediateRevisionsLand",
-        "pendingRowHeldThenStored",
-        "pendingRowsAtLoad",
-        "peopleConflictSurvivesUnrelatedEdit",
-        "purgeTombstonesAndLoadSkips",
-        "purgeTombstonesPending",
-        "purgedRowComesBack",
-        "refusedDerivedIsPartial",
-        "staleSiblingKeepsEdit"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitterSerialTests",
-        "CatalogPendingRowsTests",
-        "CatalogMarkerRevisionTests",
-        "CatalogPurgeMarkerTests",
-        "CatalogDirectSaveSensorTests",
-        "CatalogAdoptTests"
-      ],
-      "tests": [
-        "adoptRestoredCatalog",
-        "deleteAllStaysEmpty",
-        "dirtySiblingKeepsEdit",
-        "hashLandsThenStored",
-        "heldRowsOfferedToTheJob",
-        "holdOwnerCompared",
-        "newRowSurvivesRelaunch",
-        "noDirectStoreSaves",
-        "notOfferedWhenWritable",
-        "propagationKeepsLaterEdit",
-        "purgedStaysGone",
-        "quitAfterAcknowledged",
-        "trashEmptiedBumps",
-        "trashThenUndo"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitSyncTests",
-        "CatalogCommitterSyncSensorTests"
-      ],
-      "tests": [
-        "absentTwiceKept",
-        "baselineIsSynchronous",
-        "batchIsOneCommit",
-        "commitSectionIsSynchronous",
-        "copiesEditedDifferentlyAreAConflict",
-        "curatedReversionAcrossMarkers",
-        "explicitPurgeOfHeldRow",
-        "failedPendingUpdateNotDurable",
-        "momentaryAbsenceKeepsPayload",
-        "noFlightMachinery",
-        "onlyTheCommitterBlocks",
-        "quitIsOneCall",
-        "trashUndoAfterFirstInsert"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB23Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogMarkerVetoTests",
-        "CatalogExplicitPurgeTests",
-        "CatalogMarkerVetoDoorTests",
-        "CatalogCopyConflictTests",
-        "CatalogSQLiteSnapshotTests",
-        "CatalogPurgeDoorSensorTests"
-      ],
-      "tests": [
-        "absenceNeverPurges",
-        "bothValuesKept",
-        "deleteAllPurges",
-        "detachedSnapshotNotVetoed",
-        "everyDoorPurges",
-        "heldTrashIsRefused",
-        "identicalRestampNeverRefused",
-        "jsonAuthorityUnchanged",
-        "noInference",
-        "refusalWords",
-        "removeFromCatalogKeepsTheRow",
-        "removeWhileHeld",
-        "rescanSwapsKeepValues",
-        "restoreWhileHeld",
-        "sealedCopy",
-        "undoWhileHeldIsVetoed"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogReadBackPlanTests"
-      ],
-      "tests": [
-        "boundDerivedForOneDigestIsIndexed",
-        "oneRowIsIndexed"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverRegressionTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CutoverFirstWeekEditsTests",
-        "CutoverRemovalTests",
-        "CutoverNewRowTests",
-        "CutoverArchiveTests",
-        "CutoverHoldTests",
-        "CutoverSwitchRestoreTests",
-        "CutoverManyEditsTests"
-      ],
-      "tests": [
-        "copiesShareEditsAndLaterEditWins",
-        "curatedEditsSurviveRelaunch",
-        "editDuringHoldLands",
-        "fiftyEditsTenWindows",
-        "newFileBeforeAndAfterHash",
-        "promotedCopySurvives",
-        "purgedRowStaysGone",
-        "restoreThenAdopt",
-        "trashUndoEmptied"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB24Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitB24Tests"
-      ],
-      "tests": [
-        "attestationsAreDeltas",
-        "tagsAreDeltas"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB24Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogSharedSetTests",
-        "CatalogPlaceRecordTests"
-      ],
-      "tests": [
-        "attestationsDelta",
-        "balanceAudioRerunKeepsCuration",
-        "differentDigestKeepsOldRow",
-        "peopleUnion",
-        "sameDigestInherits",
-        "tagsUnion"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB25Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitB25Tests"
-      ],
-      "tests": [
-        "relabelAlone",
-        "removalAlone",
-        "removeVersusRelabel"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB25Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogPlaceRecordUnsavedEditTests",
-        "CatalogAttestationRelabelTests"
-      ],
-      "tests": [
-        "heldStoreReplacesNothing",
-        "logNamesBothValues",
-        "removeVersusRelabel",
-        "unsavedEditBeforeRetire",
-        "unsavedEditReachesHistory"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitB26Tests"
-      ],
-      "tests": [
-        "redateAlone",
-        "rejectOwnConfirmation",
-        "rejectVersusRedateIsOrderIndependent",
-        "removalAlone",
-        "removeVersusRedate"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogPeopleRedateTests"
-      ],
-      "tests": [
-        "removeVersusRedate"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
-      "stage": "regression",
-      "suites": [
-        "ArchiveSearchSharedSensorTests",
-        "MainTabTagSensorTests"
-      ],
-      "tests": [
-        "archiveTag",
-        "archiveUsesTheSharedIndex",
-        "catalogTag",
-        "familyTreeTag",
-        "showInArchiveUsesTheName",
-        "timelineHidesNonMatch",
-        "timelineShowsIndexedMatch",
-        "timelineUsesTheSharedIndex",
-        "transcriptOnlyRecordIsFound",
-        "triageTag"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogPlaceRecordSameIDTests"
-      ],
-      "tests": [
-        "heldStoreKeepsTheLiveRecord",
-        "staleSnapshotKeepsTheEditAfterRelaunch",
-        "staleSnapshotKeepsTheEditInMemory"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvRescanEditDuringScanTests.swift",
-      "stage": "regression",
-      "suites": [
-        "AdvRescanEditDuringScanTests"
-      ],
-      "tests": [
-        "activeRowWinsOverAReplacedRowAtTheSamePath",
-        "clearedDuringTheScanStaysCleared",
-        "closingUpdateCatalogForgetsTheRestoredPaths",
-        "editDuringTheMergeAwaitSurvives",
-        "firstNoteOnAPlainRecordDuringTheScanSurvives",
-        "firstStarDuringTheScanKeepsTheFreshProbeNote",
-        "notesKeepHistoryAndTakeThisScansProbeDiagnostics",
-        "notesTypedDuringTheScanReachCatalogSQLite",
-        "notesTypedDuringTheScanSurviveTheMerge",
-        "parkingAfterCloseForgetsTheRestoredPaths",
-        "probeDiagnosticClassifierSplitsHistoryFromProbe",
-        "scale_100kEditedDuringTheScanMergeWithinBudget",
-        "scanDerivedValuesStillRefresh",
-        "trashedDuringTheScanStaysRemoved",
-        "trashedSuccessorStillBeatsAReplacedRowAtTheSamePath"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvSQLiteSafetyCopyTests.swift",
-      "stage": "regression",
-      "suites": [
-        "AdvSQLiteSafetyCopyTests"
-      ],
-      "tests": [
-        "asyncSafetyCopyCarriesTheEdit",
-        "heldCatalogRefusesTheCopy",
-        "removedRowsLatestEditIsRecoverable",
-        "safetyCopyCarriesAnEditNotYetCommitted"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvVolumeRenameUndoSQLiteTests.swift",
-      "stage": "regression",
-      "suites": [
-        "AdvVolumeRenameUndoSQLiteTests"
-      ],
-      "tests": [
-        "jsonSafetyCopyIsRefused",
-        "revertScale",
-        "undoKeepsWhatChangedSince",
-        "undoLeavesARecordChangedSinceAlone",
-        "undoReadLeavesTheSafetyCopyByteIdentical",
-        "undoReadsTheSafetyCopyItWasGiven"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvHeldCatalogDoorsTests.swift",
-      "stage": "regression",
-      "suites": [
-        "AdvUndoPurgeWhileHeldTests",
-        "AdvRelocateBucketBHeldTests",
-        "AdvJunkDeleteHeldTests"
-      ],
-      "tests": [
-        "blockedRefusesBeforeDiskWork",
-        "diskFactNotRecordedIsSaid",
-        "freeBucketBMarks",
-        "freeMovesAndMarks",
-        "heldBucketBIsNotCountedAsMarked",
-        "heldRefusesBeforeDiskWork",
-        "manyRefusedRowsOneLine",
-        "undoNotHeldUnchanged",
-        "undoWhileHeldKeepsTheBanner"
-      ]
-    },
-    {
-      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogLockRealBackupTests"
-      ],
-      "tests": [
-        "testPythonRoundTripOfRealBackupDecodes"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogHardKillTests"
-      ],
-      "tests": [
-        "randomKillsLeaveACommittedPrefix"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDiskFullTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogDiskFullTests"
-      ],
-      "tests": [
-        "diskFullCommitRefusesAndRetries"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_gauntlet_package_adapter.py",
-      "stage": "regression",
-      "suites": [
-        "test_gauntlet_package_adapter.py"
-      ],
-      "tests": [
-        "test_below_package_floor_fails",
-        "test_mismatched_package_selectors_fail_preflight",
-        "test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env",
-        "test_package_build_failure_never_passes_and_skips_package_runs",
-        "test_package_failure_fails_a_stage_whose_xcode_part_passed",
-        "test_package_known_issue_and_missing_summary_are_not_passes",
-        "test_package_only_stage_runs",
-        "test_unblocked_package_suite_without_selectors_fails_preflight"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
-      "path": "tests/test_no_script_writes_catalog.py",
-      "stage": "unit",
-      "suites": [
-        "test_no_script_writes_catalog.py"
-      ],
-      "tests": [
-        "test_allowlist_has_no_stale_entries",
-        "test_catalog_db_opens_read_only_by_construction",
-        "test_engine_refuses_a_write_through_catalog_db",
-        "test_no_script_writes_catalog_json",
-        "test_no_shell_script_touches_the_catalog_files",
-        "test_only_catalog_db_names_catalog_sqlite",
-        "test_refuses_without_cutover_latch_and_never_reads_json",
-        "test_scan_sees_the_scripts"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvReview20261019Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "AdvRelocateSnapshotUnderSQLiteTests",
-        "AdvRelocateBucketBPresentFileTests",
-        "AdvRelocateClosingSummaryTests",
-        "AdvRescanKeepsReplacedHistoryTests",
-        "AdvRescanLiveAppliedCountTests"
-      ],
-      "tests": [
-        "aFileStillAtItsPathIsNeverMarkedNotFound",
-        "historyRowSurvivesInCatalogSQLite",
-        "jsonAuthoritySnapshotHoldsMemory",
-        "liveAppliedCountReachesTheOutcome",
-        "manyPresentRowsOneLine",
-        "nothingRefusedNoRow",
-        "partialRescanKeepsHistory",
-        "preMigrateSnapshotIsTheCatalogInUse",
-        "presenceDecidesEachRow",
-        "refusedRowsAreInTheClosingSummary",
-        "rescanKeepsTheCuratedReplacedAtPathRow",
-        "scale_100kWithHistoryWithinBudget"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvReview20261026Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "RelocateSummaryAllSafeHeadlineTests",
-        "RelocateSummaryHeadlineTests",
-        "RelocateSummaryProofTests"
-      ],
-      "tests": [
-        "aHashedUntouchedBackupInvitesRetire",
-        "aMissingSourceWithholdsSafeAndRetire",
-        "anAdoptionOfAnUntouchedHashedSourceIsProven",
-        "anAdoptionWhoseSourceChangedIsNotProven",
-        "aSizeOnlyAdoptionNeverInvitesRetire",
-        "allSafeWordsAskAboutFailedAndUnmatchedFiles",
-        "anAgingOnlyBackupNeverInvitesRetire",
-        "anOverwrittenBackupIsNotProven",
-        "anUnhashedBackupIsNotProven",
-        "anUnprovenBackupWithholdsSafeAndRetire",
-        "eachUnprovenBucketWithholdsSafeAndRetire",
-        "nothingCopiedAndThreeFailedNeverSaysSafeOrRetire",
-        "nothingCopiedNothingBackedUpIsNotSafe",
-        "provenRunsKeepTheirWords"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/RemovalReservationRound3Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "RemovalReservationRound3Tests"
-      ],
-      "tests": [
-        "aCopyReliedOnByAMoveIsNotRemovedByAnotherDoor",
-        "anAliasOfALeavingCopyIsNoSurvivor"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/RemovalReservationTests.swift",
-      "stage": "regression",
-      "suites": [
-        "RemovalReservationTests"
-      ],
-      "tests": [
-        "aFileAlreadyBeingRemovedIsHeld",
-        "aReservedPathCannotBeReservedTwiceAndIsFreedOnRelease",
-        "everyRemovalDoorTakesTheReservation",
-        "twoBatchesForTwoCopiesNeverMoveBoth"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AdvReview20261026TrashTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogTrashOnlyCopyAtTheMoveTests"
-      ],
-      "tests": [
-        "aCopyMovedAwayOnDiskIsNotProvenAtTheMove",
-        "aCopyOnARetiredDriveDoesNotCount",
-        "aCopyRewrittenOnDiskIsNotProvenAtTheMove",
-        "aCopyThatBecameTheOnlyOneAfterTheConfirmationIsHeld",
-        "aRowTheConfirmationHeldBackNeverMoves",
-        "aWarnedOnlyCopyStillMoves",
-        "aWeakerOrConflictingIdentityIsNotACopy",
-        "anArchiveOnlyCopyReplacedOnDiskIsNotProven",
-        "anOfflineCopyIsNotASurvivingCopy",
-        "anUntouchedArchiveOnlyCopyIsProvenByAFreshHash",
-        "scale_perTurnCheckAt100kWithinBudget",
-        "twoSelectedCopiesWhoseThirdWentAwayLeaveOne"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogBackupSQLiteTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogBackupSQLiteTests",
-        "CatalogBackupImportTests",
-        "CatalogBackupScaleTests"
-      ],
-      "tests": [
-        "backupRoundTrip",
-        "backupWritesNothingBesideTheLiveCatalog",
-        "decisionTable",
-        "heldCatalogRefuses",
-        "jsonAuthorityRefuses",
-        "jsonBundleRefusedDatabaseUnchanged",
-        "sqliteBundleRefused",
-        "twelveThousandRows"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFolderDoorsTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogFolderDoorsTests"
-      ],
-      "tests": [
-        "aFolderRoundTripsWithItsKindTheStreamAndItsMembers",
-        "aKindOutsideTheThreeIsRefusedAndNothingLands",
-        "aSealedCopyCarriesTheFoldersTheStreamAndTheMembers",
-        "aV19DatabasesEventsReadKindEventAfterTheOpen",
-        "anUpsertKeepsCreatedAtAndChangesNameKindAndState",
-        "replaceFolderMembersSaysHowManyLanded"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/EventsCatalogBackingTests.swift",
-      "stage": "unit",
-      "suites": [
-        "EventsCatalogBackingTests"
-      ],
-      "tests": [
-        "aSealedBackupContainsTheFolders",
-        "changedFileIsReconciled",
-        "editsPersistToTheCatalogOnly",
-        "importCarriesEverythingAndVerifies",
-        "importIsIdempotent",
-        "noFileImportsNothing",
-        "readOnlySessionRefuses"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FolderLabelsTests.swift",
-      "stage": "unit",
-      "suites": [
-        "FolderLabelsLogicTests",
-        "FolderLabelsScaleTests",
-        "FolderLabelsSensorTests"
-      ],
-      "tests": [
-        "aliasIsStable",
-        "eventRecordKindDecodes",
-        "hundredThousandInTwoFoldersEach",
-        "inspectorFactsAtScale",
-        "inspectorFactsCount",
-        "kindTintsAreDistinct",
-        "logLinesNameFiles",
-        "overlapShowsUnderEveryFolderWithUniqueRowIDs",
-        "rowIDsBecomeRecordsAndTheInspectorIsAHandler",
-        "rowSelectionMapsBothWays",
-        "versionFollowsEveryLeadingFolder"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/SameFootageAcrossCodecsTests.swift",
-      "stage": "unit",
-      "suites": [
-        "SameFootageLikenessRuleTests",
-        "SameFootageDetectorTests",
-        "SameFootageGroupingTests",
-        "SameFootageSplitPlanTests",
-        "SameFootageHeldDoorTests",
-        "SameFootageInspectorTests",
-        "SameFootageDeleteIsolationTests",
-        "SameFootageSensorTests",
-        "SameFootageScaleTests",
-        "SameFootageMediaMatrixTests",
-        "SameFootageTruthTests",
-        "SameFootageRealCopyEvidence"
-      ],
-      "tests": [
-        "collision",
-        "collisionNotLinked",
-        "copiesAndUnknown",
-        "copiesStillGroup",
-        "defaultTimecodeIsPossible",
-        "deletePathsNeverReadFootage",
-        "detectorAt100k",
-        "endToEnd",
-        "evidence",
-        "footageAt100k",
-        "footageIsNotDeletable",
-        "heldAtTheDoor",
-        "heldWhenWeak",
-        "idempotent",
-        "idempotent",
-        "line",
-        "matrix",
-        "mixed",
-        "oneRule",
-        "personSplits",
-        "planAt100k",
-        "splitKeepsIt",
-        "splitWhenLinkedOrDifferent",
-        "trioIsNotCopies",
-        "trioLeavesAsSameFootage",
-        "trioLinks",
-        "trioOneGroup",
-        "verifyIgnoresFootage",
-        "words"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogPhaseHoldAndQuitTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPhaseLogicTests",
-        "CatalogStoreHoldTests",
-        "CatalogQuitRecoveryTests",
-        "CatalogQuitRecoverySensorTests"
-      ],
-      "tests": [
-        "aBackwardClockStepWaitsAgain",
-        "aClockThatKeepsSteppingBackGivesUp",
-        "aViewerOnJSONWritesNoCopy",
-        "aViewerUnderSQLiteWritesNoCopy",
-        "anAcknowledgedSaveInFlightIsUnsaved",
-        "anotherTokenIsHeld",
-        "digestFindingNamesALiveDoor",
-        "phaseVerdicts",
-        "theCopyWriterIsBehindTheGate",
-        "theDelegateQuitWiring",
-        "theHoldDrainsAnAdmittedSave",
-        "theHoldGivesUpOnAStalledSave",
-        "theMasterUnderSQLiteNeverSaysRenameToCatalogJSON",
-        "theNextLaunchSaysACopyIsThere",
-        "theOwnerTokenPath",
-        "theOwnersSavePasses",
-        "theRetiredMenuItemsAreGone",
-        "theStoreHoldRefusesEveryDoor",
-        "theTerminalSaveBothFailing",
-        "theTerminalSaveIsChecked",
-        "theTerminalSaveSkipsAStalledWriter",
-        "theVolumeMenuKeepsRescanAndUpdate",
-        "theWaitBeforeVerify"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogWriteCornerDiskTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogWriteCornerDiskTests"
-      ],
-      "tests": [
-        "belowTheFloorRefuses",
-        "diskFullAtCommit",
-        "diskFullMidJob",
-        "hundredThousandUnderPressure"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogOpenCornerTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogOpenCornerTests"
-      ],
-      "tests": [
-        "adoptAfterTheFileMovedIsRefused",
-        "closeAfterSwapQuarantinesTheSessionsWAL",
-        "closeLeavesSomeoneElsesWALAlone",
-        "closeNotesCarryTheQuarantineLines",
-        "corruptCatalogIsRefusedAndNeverWritten",
-        "databaseMovedAwayStaysStopped",
-        "databaseReplacedUnderneath",
-        "latchGoneOrReplacedMidSession",
-        "newerSchemaIsRefused",
-        "noLatchAtOpenIsNotWatched",
-        "openRequiringTheLatchRefusesWithoutIt",
-        "quarantineFallsBackToAnInPlaceRename",
-        "quarantineThatCannotMoveSaysWhatToMove",
-        "readOnlyFileIsNotWritten",
-        "skippedQuarantineSaysWhatToMove",
-        "writeLockHeldElsewhere"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardQAR1Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogFileGuardQAR1Tests",
-        "CatalogOpenCornerTests"
-      ],
-      "tests": [
-        "adoptTransactionRechecksTheDatabase",
-        "adoptTransactionRechecksTheLatch",
-        "differentReplacementIsNotOverwrittenByTheSessionsWAL",
-        "latchRemovedAfterPhaseOneStopsBeforeCommit",
-        "latchRemovedDuringBodyStopsBeforePhaseOne",
-        "replacementDoesNotInheritTheSessionsWAL",
-        "sealedCopyRefusedAfterReplace"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardCodex117Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogFileGuardCodex117Tests"
-      ],
-      "tests": [
-        "swapDuringTheWriterWaitIsSeen",
-        "unreadableIdentityNeverMovesTheWAL"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogFileGuardQAR2Tests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogFileGuardQAR2Tests"
-      ],
-      "tests": [
-        "latchOnlyStopKeepsTheLiveCatalogsCommits",
-        "movedAwayAndBackKeepsItsCommits"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogQuitCornerTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogQuitCornerTests"
-      ],
-      "tests": [
-        "keepOpenChoiceNeedsTheCommitBeforeTerminate",
-        "masterQuitWithFailedFinalCommit",
-        "viewerQuitSavesNothingAndSaysNothing"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogAuthorityCornerTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogAuthorityCornerTests"
-      ],
-      "tests": [
-        "damagedOrNewerCatalogIsRefusedAndUntouched",
-        "latchVanishesMidSession",
-        "masterWithoutLatch",
-        "quitAfterLatchOnlyStopSaysClosedNormally",
-        "quitAfterReplaceQuarantinesAndSaysSo",
-        "quitCloseIsBoundedAndKeepsTheLiveWAL",
-        "quitTimeoutAfterReplaceStillQuarantines",
-        "reopenRechecksAfterClose",
-        "replacedCatalogRefusesReopen",
-        "viewerWithoutLatch"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCommitterFailFastTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitterFailFastTests"
-      ],
-      "tests": [
-        "diskFullBlocksThenReopenLands",
-        "jobCheckpointAfterDiskFills"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogViewerPublishCornerTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogViewerPublishCornerTests"
-      ],
-      "tests": [
-        "interruptedSealPublishesNothing",
-        "writerHoldsThePublishThenPublishesOnce"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogJSONReadSensorTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogJSONReadSensorTests"
-      ],
-      "tests": [
-        "theLiveReloadIsGone",
-        "theReadersAreReviewed",
-        "theSQLiteLaunchNeverLoadsTheJSON",
-        "theViewerNeverLooksForCatalogJSON"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogSQLiteLaunchNoJSONTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogSQLiteLaunchNoJSONTests",
-        "CatalogNoCatalogDoorsTests"
-      ],
-      "tests": [
-        "aClearedDesignationStaysCleared",
-        "aMissingDesignationIsSaid",
-        "eventsStoreRefusesInAReadOnlySession",
-        "ignoredContentRefusesInANoCatalogSession",
-        "theSQLiteLaunchNeedsNoCatalogJSON",
-        "theSQLiteLaunchTouchesNoJSONFile",
-        "validateWithoutLatchRefuses",
-        "verifyOnAViewerRefuses"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/QASlice2RedTests.swift",
-      "stage": "unit",
-      "suites": [
-        "QASlice2RedTests"
-      ],
-      "tests": [
-        "auditGenerationUnderSQLiteIsTheDatabases",
-        "refusedLaunchWritesNoJSONSideFile",
-        "viewerWithOwnLatchAndNoDatabaseNeverReadsJSON"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogCodexSlice2Tests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogCodexSlice2Tests"
-      ],
-      "tests": [
-        "noLatchLaunchDoesNotBackfillFromTheCache",
-        "roleSwitchCommitsPendingEdits",
-        "roleSwitchWithFailedCommitKeepsTheRescue",
-        "sideTableCommitMovesKnownGeneration",
-        "sqliteMasterStillBackfills",
-        "viewerLaunchDoesNotBackfillFromTheCache"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PruneApplyJobTests.swift",
-      "stage": "unit",
-      "suites": [
-        "PruneApplyJobTests"
-      ],
-      "tests": [
-        "aBatchThatOnlyHoldsHandsOn",
-        "aSecondBatchQueues",
-        "aTrashFailureFailsTheBatch",
-        "anErrorDropsTheLine",
-        "anOverlappingCopyIsMovedOnce",
-        "stoppingAWaitingBatch",
-        "stoppingTheRunningBatchDropsTheLine",
-        "theJobNamesHeldCopies",
-        "theJobPausesBetweenFiles",
-        "theJobRunsThePipeline",
-        "theJobStopsBetweenFiles",
-        "theJunkDeletionGuardRefuses",
-        "theProgressSubtitle",
-        "theQueueLogLines"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PruneQARound1Tests.swift",
-      "stage": "unit",
-      "suites": [
-        "PruneQARound1Tests"
-      ],
-      "tests": [
-        "adviceCountsAMissingHeldCopyAsGone",
-        "symlinkedFolderIntoTheArchiveNeverMoves",
-        "tidyBacklogWithNothingOfferedSaysSo",
-        "tidyHeadlineCountMatchesItsBytes"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PruneCuratedSurvivesTests.swift",
-      "stage": "unit",
-      "suites": [
-        "PruneCuratedSurvivesTests"
-      ],
-      "tests": [
-        "unsavedCurationOnTheCopySurvivesTheMove"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PruneSensorTests.swift",
-      "stage": "unit",
-      "suites": [
-        "PruneSensorTests"
-      ],
-      "tests": [
-        "noFileOperationOfItsOwn",
-        "noViewWalksRecords",
-        "theOldMachineryIsGone",
-        "theOneDoorIsTheTrash",
-        "theProofComesOnlyFromBothFullReads"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitReplacementTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitReplacementTests"
-      ],
-      "tests": [
-        "archiveCopyWithoutStoredSourceKeepsOldRow",
-        "bodyPairsPurgesWithReplacements",
-        "heldReplacementPurges",
-        "landedReplacementPurges",
-        "lonePurgeLands",
-        "refusedReplacementKeepsOldRow",
-        "scaleAllRefusedNonePurged"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ArchiveTimelineCompletenessSensorTests.swift",
-      "stage": "regression",
-      "suites": [
-        "ArchiveTimelineCompletenessSensorTests"
-      ],
-      "tests": [
-        "everyInactiveSourceStateLeavesTheCopy",
-        "everyLiveArchiveCopyIsOnTheTimeline",
-        "liveSourceStillRepresents",
-        "promotedThenPrunedShowsUnder1998",
-        "scaleAllSourcesTrashed",
-        "snapshotAsksSourceRepresents"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogRescanRefusedReplacementTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogRescanRefusedReplacementTests"
-      ],
-      "tests": [
-        "importEraReplacementLands",
-        "refusedReplacementKeepsOriginalRow"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitArchiveProvenanceTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitArchiveProvenanceTests"
-      ],
-      "tests": [
-        "importEraReplacementLands",
-        "liveInsertHasNoBarePromoteLiteral",
-        "newPromoteWithoutSourceRefused",
-        "promoteReplacementKeepsSource",
-        "replacementOfPlainRowInheritsNothing",
-        "scaleHundredImportEraReplacements"
-      ]
-    },
-    {
-      "kind": "package",
-      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitRelationTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogCommitRelationTests"
-      ],
-      "tests": [
-        "alreadyPurgedReplacementUnchangedKeepsTheOldRow",
-        "caseSensitiveSiblingDoesNotSatisfyThePurge",
-        "incidentShapeLosesNothing",
-        "oneOfTwoSnapshotsLanding",
-        "pendingPredecessorKept",
-        "repeatedSnapshotsKeepTheOldRow",
-        "replacementAbsentAndUnstoredKeeps",
-        "replacementAlreadyStoredPurges",
-        "replacementEndingInTrashLetsThePurgeStand",
-        "replacementPurgedLaterInTheGroupKeepsTheOldRow"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogKeptPurgeRetryTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogKeptPurgeRetryTests"
-      ],
-      "tests": [
-        "correctedReplacementCompletesThePair",
-        "keptPurgeFollowsTheNextReplacement",
-        "removedReplacementReleasesTheKeptRow",
-        "swapDoorsNameTheirReplacement"
-      ]
-    },
-    {
-      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
-      "stage": "regression",
-      "suites": [
-        "ProductionShapeRescanSensorTests"
-      ],
-      "tests": [
-        "archiveTabCountsEveryLiveArchiveCopyOnce",
-        "importEraArchiveCopyReplacementLands",
-        "rescanKeepsEveryArchivedMastersRow"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogVolumePillTests.swift",
-      "stage": "regression",
-      "suites": [
-        "CatalogVolumePillLogicTests",
-        "CatalogVolumePillRegressionTests",
-        "CatalogVolumePillSensorTests"
-      ],
-      "tests": [
-        "aBlankLabelNeverDrawsAnEmptyPill",
-        "clearingViaThePillEmptiesTheSelection",
-        "emptyFolderNoteNamesTheVolumeWhenTheSelectionIsWhy",
-        "emptyNoteGetsTheLabels",
-        "longNamesShortenInTheMiddleAndShortOnesStay",
-        "noSelectionHasNoVolumePill",
-        "oneVolumeIsTheFirstPillByItsPaneLabel",
-        "oneVolumeSelectedShowsExactlyItsFoldersAndTheLineSaysSo",
-        "parentFeedsPaneLabelsAndClearsThroughTheOneSeam",
-        "theBoxTextLeavesTheVolumeToItsOwnPill",
-        "theSpokenSentenceCarriesTheVolumePill",
-        "toolbarDrawsThePillAndClearsThroughTheParent",
-        "twoOrMoreReadSelectedVolumesWithTheNamesInTheTooltip"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogPersonNamingTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPersonNamingTests",
-        "CatalogPersonNamingSensorTests"
-      ],
-      "tests": [
-        "blankAliasesFallBackAndWhitespaceIsTrimmed",
-        "duplicateNamesShowBirthYears",
-        "duplicateNicknamesAndMissingDatesRemainDistinctAndStable",
-        "duplicateNicknamesCannotWriteAnAmbiguousTag",
-        "emptyNameAndFamilyWildcardAreNotPersonTags",
-        "galleryAndCatalogShareDisambiguation",
-        "labelDecorationsNeverBecomeTagsOrChangeProfiles",
-        "narrowCardsExposeTheFullDisambiguatedName",
-        "nicknameIsTheWrittenTagAndDoesNotTagTheNamesake",
-        "nicknameWinsAndSelectionKeepsItsIdentity",
-        "sharedFormalTagDoesNotCheckBothNicknames",
-        "tagMenusDoNotDiscardProfileIdentityOrNicknames",
-        "uncheckHandsTheEngineTheRowsOwnSpellings",
-        "uncheckKeepsTheRecordsSpelling",
-        "uniqueLegacyFormalTagCanStillBeUnchecked"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/CatalogPersonFilterTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CatalogPersonFilterLogicTests",
-        "CatalogPersonPillTests",
-        "CatalogPersonFilterStoreTests",
-        "CatalogPersonFilterScaleTests",
-        "CatalogPersonFilterSensorTests"
-      ],
-      "tests": [
-        "aChosenPersonWhoseProfileDisappearsFallsBackToEveryone",
-        "aConfirmedTagWinsOverAStaleRejection",
-        "aNamelessProfileListsAndMatchesNothing",
-        "aPersonChosenBeforeTheListLoadedIsKept",
-        "aRenamedPersonStaysChosenUnderTheNewName",
-        "agreesWithThePeopleTabTierRuleOnEveryRecord",
-        "anEmptyTableNamesThePerson",
-        "choosingAPersonAndEveryone",
-        "clickingThePillClearsToEveryoneAndNothingElseDoes",
-        "computeFilteredAppliesItAfterTheSearchBeforeTheVolumeFilter",
-        "everyoneIsTheIdentity",
-        "focusModeOverridesThePersonPillToo",
-        "hundredThousandRecordsWithinTheCatalogFilterBudget",
-        "keepsTaggedAndFaceMatchedDropsTheRest",
-        "launchIsEveryone",
-        "listsThePeopleTabsProfilesInItsOrderByDisplayName",
-        "noPersonNoPill",
-        "oneMatcherAndNoPersistence",
-        "theParentOwnsOneSessionStoreAndTheTableRefreshesOnIt",
-        "thePersonPillFollowsTheVolumePillThenTheBox",
-        "theSpokenSentenceCarriesIt",
-        "theTokenViewIsSharedNotCopied",
-        "toolbarDrawsTheMenuLeftOfTheSearchAndThePillAfterTheVolumePill"
-      ]
-    },
-    {
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/PersonPageCuratedTests.swift",
-      "stage": "unit",
-      "suites": [
-        "PersonPageCuratedRankingTests",
-        "PersonPageCuratedPageTests",
-        "PersonPageCuratedSensorTests"
-      ],
-      "tests": [
-        "confirmedBeforeFaceArchivedBeforeNotLongerBeforeShorter",
-        "hiddenVideosNeverAppear",
-        "hundredThousandRecordsCuratedPageInBudget",
-        "noTwoRowsOfOneFootage",
-        "picksAreAllShownEvenPastTheCap",
-        "theCatalogCountIsHonest",
-        "theCatalogLinkSetsThePickerAndTurnsFoldersOnlyOff",
-        "theFillStopsAtTheCapBestFirst",
-        "theLongListIsGoneAndTheLinkGoesThroughTheSeam",
-        "thePeoplePageScaleBudgetsGoThroughTheOneTimingRule",
-        "theSeeAllWords"
       ]
     }
   ],
@@ -33831,7 +33848,7 @@
       ],
       "expected_floor": 3041,
       "name": "unit",
-      "package_expected_floor": 405,
+      "package_expected_floor": 406,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -35002,7 +35019,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 66,
+      "expected_floor": 67,
       "name": "performance",
       "package_expected_floor": 13,
       "package_selectors": [
@@ -35037,7 +35054,8 @@
         "VideoScanTests/MasterArchiveScaleTests",
         "VideoScanTests/PreviewSweepScaleTests",
         "VideoScanTests/TreeIdentityPinPerformanceTests",
-        "VideoScanTests/VerifyAudioScaleSensorTests"
+        "VideoScanTests/VerifyAudioScaleSensorTests",
+        "VideoScanTests/CatalogSearchKeystrokeBudgetTests"
       ]
     },
     {

@@ -277,6 +277,91 @@ public enum TimingBudget {
         return currentThreadCPUTime() - start
     }
 
+    // MARK: Relative budgets: the algorithm, not the host (GH #385, 2026-10-26)
+    //
+    // A budget in milliseconds says as much about the HOST as about the
+    // code. The same two 40k family-map tallies cost 72 ms of CPU on an M4
+    // performance core and 345 ms on its efficiency cores (`taskpolicy -b`);
+    // a laptop, an M1 or a busy Mac fails such a budget with no regression
+    // in sight. So a scale test that measures an ALGORITHM may instead time
+    // its work against a REFERENCE run on the same thread, build and moment,
+    // and judge the ratio. Host speed, core type, Debug/Release and sanitizer
+    // slowdown all divide out. Two shapes:
+    //   - growth: the same work at n and k·n (linear ≈ k, n log n a little
+    //     more, quadratic ≈ k²) — `judgeGrowth`. (C++ analogy:
+    //     google-benchmark's BigO fit instead of an absolute ns/iteration.)
+    //   - relative: the work against a known pass over the same data (a
+    //     scoped pass against the full pass it must stay well under) —
+    //     `judgeRelative`.
+    //
+    // The absolute number is still the product's: such a test asserts its
+    // millisecond budget only on the reference run (`isReferenceRun`: the
+    // 2 AM Mac Studio nightly, which pins VIDEOSCAN_TIMING_STRICT=1) and
+    // logs it everywhere else.
+
+    /// `measured` may cost at most `limit` × `reference`.
+    public struct RatioJudgement: Sendable, Equatable {
+        public let label: String
+        public let reference: Duration
+        public let measured: Duration
+        /// What the reference is, for the log line ("the ¼-size input").
+        public let referenceName: String
+        public let limit: Double
+
+        public var ratio: Double {
+            let r = TimingBudget.seconds(reference)
+            return r > 0 ? TimingBudget.seconds(measured) / r : .infinity
+        }
+        public var passed: Bool { ratio <= limit }
+
+        public var logLine: String {
+            let ms = { (d: Duration) in String(format: "%.1f ms", TimingBudget.seconds(d) * 1_000) }
+            return "[timing-ratio] \(label): \(ms(measured)) against \(ms(reference)) for \(referenceName) "
+                + "= ×\(String(format: "%.2f", ratio)) (limit ×\(String(format: "%.2f", limit))) → "
+                + (passed ? "pass" : "fail")
+        }
+    }
+
+    /// Growth: `large` (the input `sizeRatio` times bigger) may cost at most
+    /// `limit` × `small`.
+    public static func judgeGrowth(_ label: String, small: Duration, large: Duration,
+                                   sizeRatio: Int, limit: Double) -> RatioJudgement {
+        RatioJudgement(label: label, reference: small, measured: large,
+                       referenceName: "the 1/\(sizeRatio)-size input", limit: limit)
+    }
+
+    /// Relative: `measured` may cost at most `limit` × `reference`.
+    public static func judgeRelative(_ label: String, measured: Duration, reference: Duration,
+                                     referenceName: String, limit: Double) -> RatioJudgement {
+        RatioJudgement(label: label, reference: reference, measured: measured,
+                       referenceName: referenceName, limit: limit)
+    }
+
+    /// Thread CPU time of `reference` and `measured`, run alternately
+    /// `rounds` times, keeping each one's fastest run: the least-disturbed
+    /// sample of each, taken under the same conditions. Both bodies
+    /// synchronous and single-threaded (see measureThreadCPUTime). `round` is
+    /// 0-based, for bodies that need fresh inputs each time.
+    public static func interleavedMinimumCPUTime(
+        rounds: Int, reference: (_ round: Int) throws -> Void, measured: (_ round: Int) throws -> Void
+    ) rethrows -> (reference: Duration, measured: Duration) {
+        var best: (reference: Duration, measured: Duration) = (.seconds(1_000_000), .seconds(1_000_000))
+        for round in 0..<max(1, rounds) {
+            best.reference = min(best.reference, try measureThreadCPUTime { try reference(round) })
+            best.measured = min(best.measured, try measureThreadCPUTime { try measured(round) })
+        }
+        return best
+    }
+
+    /// True on the run whose absolute milliseconds are the product's numbers:
+    /// the reference nightly, which pins VIDEOSCAN_TIMING_STRICT=1
+    /// (scripts/nightly_local_tests.sh; Mac Studios only, nightly_rota.json).
+    public static func isReferenceRun(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment[strictEnvironmentKey] == "1"
+    }
+
     /// Seconds as a Double, for messages and Double-typed budgets.
     public static func seconds(_ duration: Duration) -> Double {
         let c = duration.components

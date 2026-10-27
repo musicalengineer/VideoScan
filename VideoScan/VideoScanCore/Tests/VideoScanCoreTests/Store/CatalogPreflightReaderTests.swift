@@ -276,23 +276,82 @@ struct CatalogPreflightReaderTests {
         }
     }
 
+    /// The real probe for every question about the CATALOG (the file, its
+    /// size, the folders, the tools, the schema, and the real
+    /// `PRAGMA quick_check` through CatalogPreflightReader) and a fine
+    /// machine for the questions about the HOST (disk free, RAM, swap,
+    /// thermal state, power). GH #385: with the host's real answers the
+    /// end-to-end test measured the Mac, not the reader. The M1 (a laptop)
+    /// and the M4 (agent builds running, system disk 95 % used, 2026-10-26)
+    /// both answered `.longOperations`. The hold rules have their own unit
+    /// tests (PreflightGateTests, LaunchPreflightTests' FakePreflightProbe).
+    struct RealCatalogFineMachineProbe: PreflightProbe {
+        let real = SystemPreflightProbe()
+
+        func volume(containing url: URL) throws -> PreflightVolume? {
+            PreflightVolume(id: "/", name: "Macintosh HD", availableBytes: 500 * PreflightThresholds.gigabyte,
+                            totalBytes: 1_000 * PreflightThresholds.gigabyte)
+        }
+        func isVolumeMounted(at url: URL) -> Bool { real.isVolumeMounted(at: url) }
+        func physicalMemoryBytes() -> UInt64? { 64 * PreflightThresholds.gibibyte }
+        func swapUsedBytes() throws -> UInt64? { 0 }
+        func thermalState() -> PreflightThermalState? { .nominal }
+        func powerSource() -> PreflightPowerSource? { .mains }
+        func fileExists(at url: URL) -> Bool { real.fileExists(at: url) }
+        func fileSize(at url: URL) -> UInt64? { real.fileSize(at: url) }
+        func isWritableFolder(at url: URL) -> Bool { real.isWritableFolder(at: url) }
+        func executablePath(for tool: PreflightTool) -> String? { real.executablePath(for: tool) }
+        func catalogSchemaVersion(at databaseURL: URL) throws -> Int? {
+            try real.catalogSchemaVersion(at: databaseURL)
+        }
+        func catalogQuickCheck(at databaseURL: URL, budget: Duration,
+                               cancellation: PreflightCancellation) throws -> PreflightQuickCheckOutcome {
+            try real.catalogQuickCheck(at: databaseURL, budget: budget, cancellation: cancellation)
+        }
+    }
+
+    private func endToEndContext(_ scratch: Scratch, _ url: URL) throws -> PreflightContext {
+        try Data("test".utf8).write(to: scratch.url(SQLiteCatalogReader.latchFileName))
+        return PreflightContext(supportFolder: scratch.folder, databaseURL: url,
+                                temporaryFolder: scratch.folder, logFolder: scratch.folder,
+                                masterArchiveVolume: nil,
+                                expectedSchemaVersion: CatalogPreflightReader.expectedSchemaVersion)
+    }
+
     @Test func theRealProbeRunsQuickCheckThroughThisReader() async throws {
-        // End to end: a generated catalog + marker, the real probe, the whole run.
+        // End to end: a generated catalog + marker, the real probe's catalog
+        // questions (quick_check through this reader), the whole run, on a
+        // machine pinned to "fine" so the host's own disk, load and power
+        // cannot decide the hold (GH #385).
         let scratch = try Scratch()
         let url = scratch.url("catalog.sqlite")
         try makeFixture(at: url, schemaVersion: CatalogPreflightReader.expectedSchemaVersion)
-        try Data("test".utf8).write(to: scratch.url(SQLiteCatalogReader.latchFileName))
-        let context = PreflightContext(supportFolder: scratch.folder, databaseURL: url,
-                                       temporaryFolder: scratch.folder, logFolder: scratch.folder,
-                                       masterArchiveVolume: nil,
-                                       expectedSchemaVersion: CatalogPreflightReader.expectedSchemaVersion)
-        let report = try await LaunchPreflight.run(context, probe: SystemPreflightProbe())
+        let report = try await LaunchPreflight.run(try endToEndContext(scratch, url),
+                                                   probe: RealCatalogFineMachineProbe())
         let byID = Dictionary(uniqueKeysWithValues: report.checks.map { ($0.id, $0) })
         #expect(byID[.catalogSwitched]?.level == .ok)
         #expect(byID[.catalogSchema]?.level == .ok, "\(byID[.catalogSchema]?.logLine ?? "")")
         #expect(byID[.catalogJournal]?.level == .ok)
         #expect(byID[.catalogQuickCheck]?.level == .ok, "\(byID[.catalogQuickCheck]?.logLine ?? "")")
         #expect(report.quickCheckElapsed != nil)
-        #expect(report.hold == .none)
+        #expect(report.hold == .none, "\(report.checks.map(\.logLine))")
+    }
+
+    /// The pinned machine hides nothing about the CATALOG: a damaged file
+    /// through the same probe is still caught by the real quick_check.
+    @Test func thePinnedMachineStillRunsTheRealQuickCheck() async throws {
+        let scratch = try Scratch()
+        let url = scratch.url("catalog.sqlite")
+        try makeFixture(at: url, schemaVersion: CatalogPreflightReader.expectedSchemaVersion, rows: 2_000)
+        var bytes = try Data(contentsOf: url)
+        let page = 4_096, start = page * 3
+        let end = min(bytes.count - page, start + page * 20)
+        try #require(end > start, "fixture has enough pages to damage")
+        bytes.replaceSubrange(start..<end, with: Data(repeating: 0xA5, count: end - start))
+        try bytes.write(to: url)
+        let report = try await LaunchPreflight.run(try endToEndContext(scratch, url),
+                                                   probe: RealCatalogFineMachineProbe())
+        let quick = report.checks.first { $0.id == .catalogQuickCheck }
+        #expect(quick != nil && quick?.level != .ok, "\(quick?.logLine ?? "no quick_check row")")
     }
 }

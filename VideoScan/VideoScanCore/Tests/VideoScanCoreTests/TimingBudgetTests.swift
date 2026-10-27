@@ -241,3 +241,60 @@ struct TimingBudgetSanitizerTests {
         #expect(j.verdict == .fail)
     }
 }
+
+// MARK: - Relative budgets (GH #385, 2026-10-26)
+
+@Suite("TimingBudget — relative budgets: the algorithm, not the host")
+struct TimingBudgetRatioTests {
+
+    @Test func growthPassesUpToTheLimitAndFailsBeyondIt() {
+        let linear = TimingBudget.judgeGrowth("g", small: .milliseconds(10), large: .milliseconds(40),
+                                              sizeRatio: 4, limit: 8)
+        #expect(linear.passed && linear.ratio == 4)
+        #expect(TimingBudget.judgeGrowth("g", small: .milliseconds(10), large: .milliseconds(80),
+                                         sizeRatio: 4, limit: 8).passed, "at the limit passes")
+        let quadratic = TimingBudget.judgeGrowth("g", small: .milliseconds(10), large: .milliseconds(160),
+                                                 sizeRatio: 4, limit: 8)
+        #expect(!quadratic.passed)
+        #expect(quadratic.logLine.contains("1/4-size input") && quadratic.logLine.hasSuffix("fail"))
+    }
+
+    @Test func relativePassesUnderTheLimitAndAZeroReferenceNeverPasses() {
+        #expect(TimingBudget.judgeRelative("r", measured: .milliseconds(20), reference: .milliseconds(100),
+                                           referenceName: "a full pass", limit: 0.5).passed)
+        #expect(!TimingBudget.judgeRelative("r", measured: .milliseconds(60), reference: .milliseconds(100),
+                                            referenceName: "a full pass", limit: 0.5).passed)
+        #expect(!TimingBudget.judgeRelative("r", measured: .milliseconds(1), reference: .zero,
+                                            referenceName: "nothing", limit: 100).passed,
+                "a reference that took no time cannot vouch for anything")
+    }
+
+    @Test func onlyTheNightlysStrictPinIsTheReferenceRun() {
+        #expect(TimingBudget.isReferenceRun(environment: ["VIDEOSCAN_TIMING_STRICT": "1"]))
+        #expect(!TimingBudget.isReferenceRun(environment: [:]))
+        #expect(!TimingBudget.isReferenceRun(environment: ["VIDEOSCAN_TIMING_STRICT": "0"]))
+        #expect(!TimingBudget.isReferenceRun(environment: ["VIDEOSCAN_SANITIZER": "address"]))
+    }
+
+    /// The detector on real work, on this host whatever its speed: a linear
+    /// loop grows ≈ 4× for a 4× input and passes ×8; a quadratic one grows
+    /// ≈ 16× and fails it.
+    @Test func aQuadraticLoopFailsTheGrowthLimitALinearOnePasses() {
+        // A dependent LCG chain per step: no optimizer can fold it into a
+        // closed form, so Release measures the loop as written.
+        var sink: UInt64 = 1
+        func step() { sink = sink &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407 }
+        func linear(_ n: Int) { for _ in 0..<n { step() } }
+        func quadratic(_ n: Int) { for _ in 0..<n { for _ in 0..<n { step() } } }
+        let lin = TimingBudget.interleavedMinimumCPUTime(rounds: 3, reference: { _ in linear(500_000) },
+                                                         measured: { _ in linear(2_000_000) })
+        let quad = TimingBudget.interleavedMinimumCPUTime(rounds: 3, reference: { _ in quadratic(500) },
+                                                          measured: { _ in quadratic(2_000) })
+        let l = TimingBudget.judgeGrowth("linear", small: lin.reference, large: lin.measured, sizeRatio: 4, limit: 8)
+        let q = TimingBudget.judgeGrowth("quadratic", small: quad.reference, large: quad.measured,
+                                         sizeRatio: 4, limit: 8)
+        #expect(l.passed, Comment(rawValue: l.logLine))
+        #expect(!q.passed, Comment(rawValue: q.logLine))
+        #expect(sink != 42)   // keep the loops observable
+    }
+}
