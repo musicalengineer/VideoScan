@@ -15,14 +15,22 @@
 //
 // Truth: catalog.sqlite is the truth; `byDigest` is a read-only projection
 // of the CURRENT row per content, loaded when catalog.sqlite becomes the
-// authority and refreshed from the transaction's own read-back after every
-// commit. The Inspector does not trust it — it reads the store
-// (`readCurrent`) for the selected content every time the revision moves.
-// A key this build cannot read is shown as Unknown and said once.
+// authority and refreshed — for EVERY selected content — from the
+// transaction's own read-back after every commit. It is DISPLAY ONLY (the
+// menu's checkmarks): `set` decides changed / unchanged inside the
+// transaction from the table, never from the map (Codex #156 F1), and a
+// load snapshot whose read began before a commit or attach is discarded
+// (`commitEpoch`). The Inspector does not trust the map either — it reads
+// the store (`readCurrent`) for the selected content every time the
+// revision moves. A key this build cannot read is shown as Unknown and
+// said once.
 //
 // Outcomes of a set (each tested, none reported as success unless written):
 //   .set(changed:unchanged:)  rows appended for `changed` contents; contents
-//                             already in that role are left (no duplicate row);
+//                             already in that role (by the table) are left —
+//                             no duplicate row; the transaction still
+//                             commits (one generation, no role rows) so the
+//                             map is corrected from what the table holds;
 //   .refused(words)           nothing written — no catalog, a read-only or
 //                             viewer session, a hold, a blocked store, a
 //                             content the catalog does not hold yet.
@@ -170,11 +178,20 @@ final class ProvenanceRoleStore: ObservableObject {
         case refused(String)
     }
 
-    /// What the Inspector reads for one content, from catalog.sqlite.
+    /// What the Inspector reads for one content, from catalog.sqlite. Every
+    /// case names the content it was read for (Codex #156 F2), so a reading
+    /// can never be shown beside another content.
     enum CurrentReading: Equatable {
-        case none
+        case noRow(digest: String)
         case row(CatalogRow.ProvenanceRoleReading)
-        case unavailable(String)
+        case unavailable(digest: String, why: String)
+
+        var digest: String {
+            switch self {
+            case .noRow(let digest), .unavailable(let digest, _): return digest
+            case .row(let row): return row.digest
+            }
+        }
     }
 
     /// Bumped after every load and every commit — the Inspector's re-read key.
@@ -193,6 +210,7 @@ final class ProvenanceRoleStore: ObservableObject {
         self.backing = backing
         byDigest = [:]
         unreadable = 0
+        commitEpoch &+= 1          // a load begun on the old backing is stale
         revision &+= 1
     }
 
@@ -200,25 +218,46 @@ final class ProvenanceRoleStore: ObservableObject {
     /// nil = read; else the words (the map is left as it was).
     @discardableResult
     func load() async -> String? {
-        guard let backing else { return "the catalog is not open" }
+        // A commit (or attach) during the read makes the snapshot stale:
+        // read again, a few times; the committed entries stay meanwhile.
         do {
-            let rows = try await backing.repository.read { reader -> [CatalogRow.ProvenanceRoleReading] in
-                var out: [CatalogRow.ProvenanceRoleReading] = []
-                try reader.currentProvenanceRoles { out.append($0) }
-                return out
+            for _ in 0..<3 {
+                guard let backing else { return "the catalog is not open" }
+                let epoch = commitEpoch
+                let rows = try await backing.repository.read { reader -> [CatalogRow.ProvenanceRoleReading] in
+                    var out: [CatalogRow.ProvenanceRoleReading] = []
+                    try reader.currentProvenanceRoles { out.append($0) }
+                    return out
+                }
+                if apply(rows, takenAt: epoch) { return nil }
             }
-            byDigest = Dictionary(rows.map { ($0.digest, $0) }, uniquingKeysWith: { _, newer in newer })
-            let bad = rows.filter { $0.known == nil }
-            unreadable = bad.count
-            for row in bad.prefix(10) { sayUnreadable(row) }
-            if bad.count > 10 { note("… and \(bad.count - 10) more role row(s) this version cannot read — shown as Unknown") }
-            revision &+= 1
+            note("roles were changing while they were read — the menu's checkmarks follow each change as it commits")
             return nil
         } catch {
             let words = String(describing: error)
             note("roles could not be read from catalog.sqlite (\(words)) — every file shows Role: Unknown")
             return words
         }
+    }
+
+    /// Bumped by every commit (`set`) and every `attach`; a load snapshot is
+    /// stamped with it when its read starts (Codex #156 F1).
+    private(set) var commitEpoch = 0
+
+    /// Replace the map with a whole-table snapshot taken at `epoch`.
+    /// Returns false — and changes nothing — when a commit or an attach
+    /// happened after the snapshot's read began: an older snapshot never
+    /// replaces newer committed state.
+    @discardableResult
+    func apply(_ rows: [CatalogRow.ProvenanceRoleReading], takenAt epoch: Int) -> Bool {
+        guard epoch == commitEpoch else { return false }
+        byDigest = Dictionary(rows.map { ($0.digest, $0) }, uniquingKeysWith: { _, newer in newer })
+        let bad = rows.filter { $0.known == nil }
+        unreadable = bad.count
+        for row in bad.prefix(10) { sayUnreadable(row) }
+        if bad.count > 10 { note("… and \(bad.count - 10) more role row(s) this version cannot read — shown as Unknown") }
+        revision &+= 1
+        return true
     }
 
     // MARK: Reading
@@ -237,15 +276,15 @@ final class ProvenanceRoleStore: ObservableObject {
     /// The Inspector's truth: the current row of `digest` read from
     /// catalog.sqlite now (one index probe, off the main actor).
     func readCurrent(digest: String) async -> CurrentReading {
-        guard let backing else { return .unavailable("the catalog is not open") }
         let key = digest.lowercased()
+        guard let backing else { return .unavailable(digest: key, why: "the catalog is not open") }
         do {
             let found = try await backing.repository.read { try $0.currentProvenanceRoles(digests: [key]) }
-            guard let row = found[key] else { return .none }
+            guard let row = found[key] else { return .noRow(digest: key) }
             if row.known == nil { sayUnreadable(row) }
             return .row(row)
         } catch {
-            return .unavailable(String(describing: error))
+            return .unavailable(digest: key, why: String(describing: error))
         }
     }
 
@@ -270,29 +309,28 @@ final class ProvenanceRoleStore: ObservableObject {
         note("START set role \(words) on \(scope)")
         guard let backing else { return refuse("the catalog is not open for writing in this session", words, scope) }
         if let why = backing.writeRefusal() { return refuse(why, words, scope) }
-        // Contents already in this role (as the map — this session's own
-        // commits — knows it) are left alone; the transaction re-checks
-        // each one against the table itself.
-        let todo = keys.filter { !Self.isAlready(role, flag, byDigest[$0]) }
-        guard !todo.isEmpty else {
-            note("OUTCOME set role \(words) on \(scope) — every one already \(words); nothing written")
-            return .set(changed: 0, unchanged: keys.count)
-        }
+        // Codex #156 F1: the map is DISPLAY ONLY. Which contents change is
+        // decided inside the transaction, from the table, for EVERY
+        // selected digest — a cleared or stale map can never skip a change.
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
         var changes: [(digest: String, from: CatalogRow.ProvenanceRoleReading?)] = []
         var after: [String: CatalogRow.ProvenanceRoleReading] = [:]
-        let refusal = backing.write("set role \(words) on \(todo.count) content(s)") { tx in
+        let refusal = backing.write("set role \(words) on \(keys.count) content(s)") { tx in
             changes = []
-            let before = try tx.currentProvenanceRoles(digests: todo)
-            for digest in todo where !Self.isAlready(role, flag, before[digest]) {
+            let before = try tx.currentProvenanceRoles(digests: keys)
+            for digest in keys where !Self.isAlready(role, flag, before[digest]) {
                 let decision = CatalogRow.ProvenanceRoleDecision(digest: digest, role: role, decidedAt: seconds, sourceMissing: flag)
                 guard try tx.appendProvenanceRole(decision) == .recorded else { throw ProvenanceRoleContentMissing(digest: digest) }
                 changes.append((digest, before[digest]))
             }
-            after = try tx.currentProvenanceRoles(digests: changes.map(\.digest))   // the read-back, inside the commit
+            after = try tx.currentProvenanceRoles(digests: keys)   // the read-back of every selected content, inside the commit
         }
         if let refusal { return refuse(refusal, words, scope) }
-        for (digest, row) in after { byDigest[digest] = row }
+        // Every selected content's entry now says what the table said at
+        // commit (no row = Unknown), and any load snapshot taken before
+        // this commit is stale (`apply` refuses it).
+        for digest in keys { byDigest[digest] = after[digest] }
+        commitEpoch &+= 1
         revision &+= 1
         for change in changes.prefix(20) {
             let from = change.from.map { ProvenanceRoleWords.roleWords($0.role, sourceMissing: $0.sourceNotInCatalog) } ?? "Unknown"

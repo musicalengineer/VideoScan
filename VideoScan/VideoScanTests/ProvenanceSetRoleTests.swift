@@ -103,13 +103,25 @@ struct ProvenanceSetRoleLogicTests {
         let master = CatalogRow.ProvenanceRoleReading(roleID: 1, digest: hex(1), storedRole: "master", decidedAt: day, storedSourceMissing: true, note: nil)
         let bad = CatalogRow.ProvenanceRoleReading(roleID: 2, digest: hex(1), storedRole: "zzz", decidedAt: day, storedSourceMissing: false, note: nil)
         let date = ProvenanceRoleWords.shortDate(day, now: roleNow)
-        #expect(InspectorProvenanceRoleLine.lines(digest: hex(1), reading: ProvenanceRoleStore.CurrentReading.none, now: roleNow) == ["Role: Unknown"])
+        #expect(InspectorProvenanceRoleLine.lines(digest: hex(1), reading: .noRow(digest: hex(1)), now: roleNow) == ["Role: Unknown"])
         #expect(InspectorProvenanceRoleLine.lines(digest: hex(1), reading: .row(master), now: roleNow)
                 == ["Role: Master — set by Rick, \(date)", "Source not in the catalog — the only surviving version"])
         #expect(InspectorProvenanceRoleLine.lines(digest: hex(1), reading: .row(bad), now: roleNow)
                 == ["Role: Unknown — the catalog holds a role this version cannot read"])
         #expect(InspectorProvenanceRoleLine.lines(digest: nil, reading: nil) == [ProvenanceRoleWords.noDigestLine])
         #expect(InspectorProvenanceRoleLine.lines(digest: hex(1), reading: nil) == ["Role: …"], "never a guess while reading")
+    }
+
+    @Test("F2: a reading for content A is never rendered for content B — 'Role: …' until B's own read lands (Codex #156)")
+    func aReadingForAnotherContentIsNeverShown() {
+        let masterA = CatalogRow.ProvenanceRoleReading(roleID: 1, digest: hex(1), storedRole: "master", decidedAt: 1, storedSourceMissing: false, note: nil)
+        #expect(InspectorProvenanceRoleLine.lines(digest: hex(2), reading: .row(masterA)) == ["Role: …"])
+        #expect(InspectorProvenanceRoleLine.lines(digest: hex(2), reading: .noRow(digest: hex(1))) == ["Role: …"])
+        // Same content, but the revision moved since that read finished: not shown either.
+        let now = InspectorProvenanceRoleLine.ReadKey(digest: hex(1), revision: 8)
+        let old = InspectorProvenanceRoleLine.ReadKey(digest: hex(1), revision: 7)
+        #expect(InspectorProvenanceRoleLine.shownReading(for: now, completedKey: old, reading: .row(masterA)) == nil)
+        #expect(InspectorProvenanceRoleLine.shownReading(for: now, completedKey: now, reading: .row(masterA)) == .row(masterA))
     }
 
     @Test("dates: this year without the year, another year with it")
@@ -304,6 +316,58 @@ struct ProvenanceSetRoleTruthTests {
         #expect(said == 1, "said once, not per read")
         #expect(store.set(.testCopy, digests: [d], now: roleNow) == .set(changed: 1, unchanged: 0))
         #expect(store.role(of: d) == .testCopy)
+    }
+
+    // MARK: Codex #156 F1 — the map is display only; SQLite decides changed / unchanged
+
+    @Test("F1: a cleared map (attach before load) never reports 'unchanged' while SQLite holds another role (Codex #156)")
+    func clearedMapDoesNotSkipARealChange() async throws {
+        let scene = try CutoverScene.make("role_f1_cleared"); defer { scene.cleanup() }
+        try await launch(scene)
+        let d = try digest(scene, .healthy)
+        let store = scene.model.provenanceRoles
+        _ = store.set(.master, digests: [d])
+        store.attach(try #require(store.backing))
+        #expect(store.set(.unknown, digests: [d]) == .set(changed: 1, unchanged: 0))
+        #expect(try await history(scene.model, d).map(\.role) == [.master, .unknown])
+    }
+
+    @Test("F1: a stale map that already shows the chosen role still writes it when SQLite holds another")
+    func staleMapDoesNotSkipARealChange() async throws {
+        let scene = try CutoverScene.make("role_f1_stale"); defer { scene.cleanup() }
+        try await launch(scene)
+        let d = try digest(scene, .healthy)
+        let store = scene.model.provenanceRoles
+        _ = store.set(.master, digests: [d], now: roleNow)
+        let stale = CatalogRow.ProvenanceRoleReading(roleID: 0, digest: d, storedRole: "viewCopy", decidedAt: 1, storedSourceMissing: false, note: nil)
+        store.apply([stale], takenAt: store.commitEpoch)          // the map now lies: View Copy
+        #expect(store.set(.viewCopy, digests: [d], now: roleNow) == .set(changed: 1, unchanged: 0))
+        #expect(try await history(scene.model, d).map(\.role) == [.master, .viewCopy])
+    }
+
+    @Test("F1: every selected digest's map entry is refreshed from the in-transaction read-back, the unchanged ones too")
+    func unchangedDigestsAreRefreshedFromTheReadBack() async throws {
+        let scene = try CutoverScene.make("role_f1_refresh"); defer { scene.cleanup() }
+        try await launch(scene)
+        let d = try digest(scene, .healthy)
+        let store = scene.model.provenanceRoles
+        _ = store.set(.master, digests: [d], now: roleNow)
+        store.attach(try #require(store.backing))                 // map cleared: shows Unknown
+        #expect(store.set(.master, digests: [d], now: roleNow) == .set(changed: 0, unchanged: 1))
+        #expect(store.role(of: d) == .master, "the read-back corrected the map")
+        #expect(try await history(scene.model, d).count == 1, "no duplicate row")
+    }
+
+    @Test("F1: a load snapshot taken before a commit never replaces the newer committed state")
+    func anOlderLoadSnapshotNeverWins() async throws {
+        let scene = try CutoverScene.make("role_f1_load"); defer { scene.cleanup() }
+        try await launch(scene)
+        let d = try digest(scene, .healthy)
+        let store = scene.model.provenanceRoles
+        let takenAt = store.commitEpoch                           // a load reads here (no rows yet)…
+        _ = store.set(.excerpt, digests: [d], now: roleNow)       // …a commit lands while it is suspended…
+        #expect(store.apply([], takenAt: takenAt) == false, "…and its older snapshot is not applied")
+        #expect(store.role(of: d) == .excerpt)
     }
 
     @Test("ISOLATION: a content catalog.sqlite does not hold rolls the WHOLE change back — the other content is not written either")

@@ -13190,8 +13190,11 @@
         "ProvenanceSetRoleSensorTests"
       ],
       "tests": [
+        "aReadingForAnotherContentIsNeverShown",
         "acrossAViewerMasterFlip",
         "already",
+        "anOlderLoadSnapshotNeverWins",
+        "clearedMapDoesNotSkipARealChange",
         "dates",
         "duringAWriteHold",
         "hundredThousandSelected",
@@ -13205,8 +13208,10 @@
         "poisonedRow",
         "rowMenuCarriesTheProvenanceMenu",
         "setShowsOnCopiesAndSurvivesRelaunch",
+        "staleMapDoesNotSkipARealChange",
         "targets",
         "unattachedRefuses",
+        "unchangedDigestsAreRefreshedFromTheReadBack",
         "unknownResetsAndMultiSelection"
       ]
     },
@@ -33822,7 +33827,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3036,
+      "expected_floor": 3041,
       "name": "unit",
       "package_expected_floor": 405,
       "package_selectors": [
