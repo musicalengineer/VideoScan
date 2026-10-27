@@ -57,6 +57,11 @@ struct InspectorPanel: View {
     /// Archive Angel phase 2: the background sweep's verdict for this
     /// record (O(1) sidecar lookup by the CALLER). nil = not scored yet.
     var angelEvidence: ArchiveAngel.Evidence?
+    /// Provenance ▸ Set Role (2026-10-26): the store the "Role: …" line
+    /// reads catalog.sqlite through, and the selected file's whole-file
+    /// digest (resolved by the CALLER, O(1)). nil store = no line (previews).
+    var provenanceRoles: ProvenanceRoleStore?
+    var contentDigest: String?
 
     // The sections, top to bottom. Each builder lives in
     // InspectorPanel+Sections.swift and decides its own visibility through
@@ -68,6 +73,10 @@ struct InspectorPanel: View {
                     headerSection(rec)
 
                     InspectorFoldersLine(contentKey: folderKey)   // nothing when in no folder
+
+                    if let provenanceRoles {
+                        InspectorProvenanceRoleLine(digest: contentDigest, store: provenanceRoles)
+                    }
 
                     Divider().padding(.horizontal, 16)
 

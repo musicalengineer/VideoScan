@@ -845,7 +845,9 @@ struct CatalogContent: View {
             },
             masterCopy: masterCopyOfSelected,
             promotionSource: promotionSourceOfSelected,
-            angelEvidence: selectedAngelEvidence
+            angelEvidence: selectedAngelEvidence,
+            provenanceRoles: model.provenanceRoles,
+            contentDigest: selectedRecord.flatMap(CatalogCommit.digest(of:))
         )
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
     }

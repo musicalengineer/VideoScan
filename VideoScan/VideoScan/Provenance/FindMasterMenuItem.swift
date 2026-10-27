@@ -1,5 +1,7 @@
-// FindMasterMenuItem.swift — Catalog row menu ▸ Provenance ▸ Find Master.
-// Design: docs/design/provenance_retroactive_2026_10_26.md §Phase A.
+// FindMasterMenuItem.swift — Catalog row menu ▸ Provenance ▸ Find ▸ Master
+// (sound). Design: docs/design/provenance_retroactive_2026_10_26.md §Phase A;
+// the Provenance submenu itself is ProvenanceMenu.swift (2026-10-26: Find ▸
+// beside Set Role ▸ — the item moved, its behaviour did not).
 //
 // A View, not a model extension (rule 12): on click it snapshots the
 // selected records, builds the plan ONCE (O(records), in the action, never
@@ -19,11 +21,9 @@ struct FindMasterMenuItem: View {
     let recordIDs: Set<UUID>
 
     var body: some View {
-        Menu("Provenance") {
-            Button("Find Master (sound)") { start() }
-                .disabled(recordIDs.isEmpty)
-                .help("Find every other content in the catalog whose sound lines up with the selected file(s): the same recording, a longer recording it sits inside, a clip of it, or a shared stretch. Uses the sound prints already made by Fingerprint Sound; writes nothing.")
-        }
+        Button("Master (sound)") { start() }
+            .disabled(recordIDs.isEmpty)
+            .help("Find every other content in the catalog whose sound lines up with the selected file(s): the same recording, a longer recording it sits inside, a clip of it, or a shared stretch. Uses the sound prints already made by Fingerprint Sound; writes nothing.")
     }
 
     private func start() {

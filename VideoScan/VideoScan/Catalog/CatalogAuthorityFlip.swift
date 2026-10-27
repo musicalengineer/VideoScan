@@ -315,6 +315,14 @@ extension VideoScanModel {
             self.catalogAuthorityNote("footage likeness could not be read from catalog.sqlite (\(why)) — the inspector shows none")
         }
         attachIgnoredContentToCatalog(committer)
+        // Provenance roles (schema v1.12): every Set Role through this
+        // committer; the menu's checkmarks read the store's projection.
+        provenanceRoles.note = { [weak self] line in
+            self?.log("Provenance: " + line)
+            appLog.write("[provenance] " + line)
+        }
+        provenanceRoles.attach(ProvenanceRoleCatalogBacking(committer: committer))
+        Task { [weak self] in _ = await self?.provenanceRoles.load() }
         // Catalog folders live in catalog.sqlite (2026-10-19): the one store
         // writes through this committer from now on; its first load imports
         // events-decisions.json once. Not under a test host — a sandbox

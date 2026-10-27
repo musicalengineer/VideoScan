@@ -56,14 +56,20 @@ struct FindMasterSensorTests {
         #expect(MediaFileOperationKind.findMaster.logVerb == "find master")
     }
 
-    @Test("the catalog row menu carries Provenance ▸ Find Master")
+    /// 2026-10-26: the item moved to Provenance ▸ Find ▸ Master (sound)
+    /// (ProvenanceMenu.swift, beside Set Role ▸); its behaviour did not.
+    @Test("the catalog row menu carries Provenance ▸ Find ▸ Master (sound)")
     func tableContextMenuHasTheProvenanceMenu() throws {
         let code = try SourceTree.appCode(named: "Catalog/CatalogContent+FolderTable.swift")
         let start = try #require(code.range(of: "func tableContextMenu("))
         let body = code[start.lowerBound...].prefix(900)
-        #expect(body.contains("FindMasterMenuItem("))
-        let menu = try SourceTree.appCode(named: "Provenance/FindMasterMenuItem.swift")
-        #expect(menu.contains("Menu(\"Provenance\")"))
-        #expect(menu.contains("startFindMaster("))
+        #expect(body.contains("ProvenanceMenu("))
+        let provenance = try SourceTree.appCode(named: "Provenance/ProvenanceMenu.swift")
+        #expect(provenance.contains("Menu(ProvenanceRoleWords.menuTitle)"))
+        #expect(provenance.contains("Menu(ProvenanceRoleWords.findTitle)"))
+        #expect(provenance.contains("FindMasterMenuItem(model: model, recordIDs: recordIDs)"))
+        let item = try SourceTree.appCode(named: "Provenance/FindMasterMenuItem.swift")
+        #expect(item.contains("Button(\"Master (sound)\")"))
+        #expect(item.contains("startFindMaster("))
     }
 }

@@ -379,12 +379,14 @@ final class CatalogCommitter {
     }
 
     /// The side tables a person's decision writes outside the records:
-    /// Catalog folders (2026-10-19), the footage likeness the split records
-    /// and the ignore list (schema v1.11). Each says which in the log line.
+    /// Catalog folders (2026-10-19), the footage likeness the split records,
+    /// the ignore list (schema v1.11) and provenance roles (v1.12,
+    /// Provenance ▸ Set Role). Each says which in the log line.
     enum SideTable: String, Sendable {
         case folders
         case footageLikeness = "footage likeness"
         case ignoredContent = "ignored content"
+        case provenanceRoles = "provenance roles"
 
         var change: String { self == .folders ? "a folder change" : "a \(rawValue) change" }
     }

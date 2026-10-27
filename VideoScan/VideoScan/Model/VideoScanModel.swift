@@ -1780,6 +1780,13 @@ final class VideoScanModel: ObservableObject {
     /// pairs. Evidence only; never read by a delete path.
     let footageLikeness = FootageLikenessStore()
 
+    /// Provenance roles in catalog.sqlite (schema v1.12): what each content
+    /// is, set by Rick through Provenance ▸ Set Role — the feature's store
+    /// (ProvenanceRoleStore.swift; rule 12: state behind a seam, no model
+    /// extension). Attached to the committer when catalog.sqlite becomes the
+    /// authority; a viewer or a JSON session leaves it unattached (refuses).
+    let provenanceRoles = ProvenanceRoleStore()
+
     /// Alert driver: "You need to designate a volume as the master
     /// archive." Carries the ids the user tried to promote so the fix-it
     /// button can re-offer the promotion after Initialize.
