@@ -14967,6 +14967,8 @@
         "unreadableCandidateIsNotANegative",
         "unreadableQueryPrintIsNotNoSoundPrint",
         "unstampedRecordIsNamedFromTheCatalog",
+        "walLessSidecarInAnUnwritableFolderIsRefused",
+        "walLessSidecarOpensWithARestoredEmptyWAL",
         "weakOverlapsAreCountedAndLoggedTogether",
         "weakOverlapsAreSplitByTheMatchersConstants",
         "writesNothing"

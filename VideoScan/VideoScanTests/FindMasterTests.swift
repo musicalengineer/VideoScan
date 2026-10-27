@@ -481,35 +481,86 @@ struct FindMasterJobTests {
         guard case .finished = job.state else { Issue.record("\(job.state)"); return }
     }
 
-    @Test("a missing, poisoned or -wal-less sidecar is refused before reading; no query runs")
+    @Test("a missing or poisoned sidecar is refused before reading; no query runs")
     func unopenableSidecarRefusesBeforeReading() async throws {
         let missing = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test_findmaster_missing_\(UUID().uuidString)")
         let poisoned = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test_findmaster_poison_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: poisoned, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: poisoned) }
         try Data(repeating: 0x5A, count: 4_096).write(to: poisoned.appendingPathComponent(AudioFingerprintStore.fileName))
-        // A WAL sidecar "last closed by another program": no -wal, no -shm
-        // (test-owned scratch files). Refused (TODO #386), never re-created.
-        let noWAL = try F.sidecar()
-        defer { try? FileManager.default.removeItem(at: noWAL) }
-        let noWALFile = noWAL.appendingPathComponent(AudioFingerprintStore.fileName).path
-        try? FileManager.default.removeItem(atPath: noWALFile + "-wal")
-        try? FileManager.default.removeItem(atPath: noWALFile + "-shm")
-        for (dir, words) in [(missing, "no sound prints yet"), (poisoned, "not a database"), (noWAL, "write-ahead log")] {
-            let sink = FindMasterLineSink()
-            let job = FindMasterJob(plan: F.plan(selected: [2, 3]), sidecarDirectory: dir, note: sink.note)
-            job.start()
-            await job.task?.value
-            #expect(job.wasRefused)
-            guard case .failed(let message) = job.state else { Issue.record("\(job.state)"); continue }
-            #expect(message.contains(words), "\(message)")
+        for (dir, words) in [(missing, "no sound prints yet"), (poisoned, "not a database")] {
+            let job = try await Self.runRefused(dir: dir, words: words)
             #expect(job.tally.searched == 0)
-            #expect(job.results.isEmpty)
-            #expect(sink.lines.filter { $0.hasPrefix("OUTCOME find master") }.count == 1)
         }
-        // Refusing never created the missing sidecar, nor the missing -wal.
+        // Refusing never created the missing sidecar.
         #expect(!FileManager.default.fileExists(atPath: missing.path))
-        #expect(!FileManager.default.fileExists(atPath: noWALFile + "-wal"))
+    }
+
+    /// A WAL sidecar "last closed by another program" (a sqlite3 shell, a
+    /// copy of the file alone): no -wal, no -shm. Test-owned scratch files.
+    static func walLessSidecar() throws -> (dir: URL, file: String) {
+        let dir = try F.sidecar()
+        let file = dir.appendingPathComponent(AudioFingerprintStore.fileName).path
+        try? FileManager.default.removeItem(atPath: file + "-wal")
+        try? FileManager.default.removeItem(atPath: file + "-shm")
+        return (dir, file)
+    }
+
+    /// Runs a job expected to be refused before reading; checks the words,
+    /// no result, one OUTCOME line.
+    static func runRefused(dir: URL, words: String) async throws -> FindMasterJob {
+        let sink = FindMasterLineSink()
+        let job = FindMasterJob(plan: F.plan(selected: [2, 3]), sidecarDirectory: dir, note: sink.note)
+        job.start()
+        await job.task?.value
+        #expect(job.wasRefused)
+        guard case .failed(let message) = job.state else { Issue.record("\(job.state)"); return job }
+        #expect(message.contains(words), "\(message)")
+        #expect(job.results.isEmpty)
+        #expect(sink.lines.filter { $0.hasPrefix("OUTCOME find master") }.count == 1)
+        return job
+    }
+
+    // #386 (Rick 2026-10-26, DECISIONS "Read-only opens restore a missing WAL
+    // sidecar"; Core commit 7c39c2ebc): the read-only open restores an EMPTY
+    // -wal (create-only) and reads. This case used to expect a refusal.
+    @Test("a -wal-less sidecar opens and runs: an empty -wal is restored, the main file's bytes and mtime unchanged")
+    func walLessSidecarOpensWithARestoredEmptyWAL() async throws {
+        let (dir, file) = try Self.walLessSidecar()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mainBefore = try Data(contentsOf: URL(fileURLWithPath: file))
+        let modifiedBefore = try FileManager.default.attributesOfItem(atPath: file)[.modificationDate] as? Date
+        #expect(!FileManager.default.fileExists(atPath: file + "-wal"), "precondition: no -wal")
+        let sink = FindMasterLineSink()
+        let job = FindMasterJob(plan: F.plan(selected: [2, 3]), sidecarDirectory: dir, note: sink.note)
+        job.start()
+        await job.task?.value
+        #expect(!job.wasRefused)
+        guard case .finished = job.state else { Issue.record("\(job.state)"); return }
+        #expect(job.tally.searched == 2)
+        #expect(job.results.count == 2)
+        #expect(sink.lines.filter { $0.hasPrefix("OUTCOME find master") }.count == 1)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: file + "-wal")) == Data(), "the restored -wal is empty")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: file)) == mainBefore, "the main file's bytes changed")
+        #expect(try FileManager.default.attributesOfItem(atPath: file)[.modificationDate] as? Date == modifiedBefore,
+                "the main file's mtime changed")
+    }
+
+    @Test("a -wal-less sidecar in a folder that will not take a -wal is refused before reading; nothing is created")
+    func walLessSidecarInAnUnwritableFolderIsRefused() async throws {
+        let (dir, file) = try Self.walLessSidecar()
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? fm.removeItem(at: dir)
+        }
+        let mainBefore = try Data(contentsOf: URL(fileURLWithPath: file))
+        let listing = try fm.contentsOfDirectory(atPath: dir.path).sorted()
+        let job = try await Self.runRefused(dir: dir, words: "write-ahead log")
+        #expect(job.tally.searched == 0)
+        #expect(try fm.contentsOfDirectory(atPath: dir.path).sorted() == listing, "a refused open created a file")
+        #expect(try Data(contentsOf: URL(fileURLWithPath: file)) == mainBefore)
     }
 
     /// Bytes + mtime of the main file and -wal; inode of each sidecar file.
