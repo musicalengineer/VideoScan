@@ -14,7 +14,8 @@
 //   test                                                      | mutation that makes it red
 //   ----------------------------------------------------------+---------------------------------------------------------------
 //   tornWALOpensAtACommittedPrefixAndTheWitnessesSpeak        | OpenPlan.mode: `witnesses.highest > generation` returns .readWrite (header-only and mid-frame cases)
-//   closeWaitsForAReaderAndStillLeavesOneFile                 | makePool: `PRAGMA busy_timeout = 0` (the -wal keeps its frames after close)
+//   closeWaitsForAReaderAndStillLeavesOneFile                 | makePool: `PRAGMA busy_timeout = 0` (close returns while the reader holds; the -wal keeps its frames)
+//                                                             |   (2026-10-26: a barrier, not a 400 ms timer on GCD's global pool — that timer missed the 5 s busy window when a full suite exhausted the pool)
 //   everyOlderSchemaVersionMigratesToCurrent…                 | CatalogDecisionTablesSchema.versionBump: `PRAGMA user_version` dropped
 //   reopeningACurrentFileRunsNoMigration…                     | migrator: the v7 identifier made non-permanent (+ UUID) — every open re-runs the DDL, open is refused
 //                                                             |   (a plain rename is NOT red: the fixture is built by the same mutated code)
@@ -210,15 +211,24 @@ struct CatalogCornerCases2026_10_25Tests {
         for expected in 6...8 { try #require(await repository.write(as: .ui) { _ in } == .committed(generation: expected)) }
         try #require(Self.size(Self.wal(fixture.url)) > 32, "precondition: the commits sit in the -wal")
         let reader = try SnapshotReader(fixture.url)
-        let holdMilliseconds = 400
-        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(holdMilliseconds)) { reader.release() }
+        // A BARRIER, not a race against the busy timeout (laptop full suite
+        // 2026-10-26: the release used to be a DispatchQueue.global()
+        // asyncAfter, which a suite that exhausts GCD's global pool ran only
+        // after the 5 s timeout — close then rightly gave up). The releaser
+        // is its own thread and lets go only once close's TRUNCATE
+        // checkpoint has copied the -wal into catalog.sqlite — its last step
+        // before it waits for this reader.
+        let releaser = BarrierReleaser(reader: reader, database: fixture.url, before: try Data(contentsOf: fixture.url))
+        releaser.start()
         let clock = ContinuousClock()
         let start = clock.now
         await repository.close()
         let waited = clock.now - start
-        print("[corner-2026-10-25] close under a reader waited \(waited)")
-        #expect(waited >= .milliseconds(holdMilliseconds - 50), "close did not wait for the reader — it skipped or failed its checkpoint")
-        #expect(waited < .seconds(GRDBCatalogRepository.busyTimeoutSeconds), "close waited the whole busy timeout although the reader let go")
+        releaser.closeReturned()
+        let verdict = try await releaser.verdict()
+        print("[corner-2026-10-25] close under a reader waited \(waited); \(verdict)")
+        #expect(verdict.backfillSeen, "close never copied the -wal into catalog.sqlite (no checkpoint ran)")
+        #expect(!verdict.closeHadReturnedAtRelease, "close returned while the reader still held its snapshot — it skipped or failed its checkpoint")
         #expect(Self.size(Self.wal(fixture.url)) == 0, "the -wal still holds frames after close: a copy of catalog.sqlite alone would lose commits")
         let copy = fixture.directory.appendingPathComponent("alone.sqlite")
         try FileManager.default.copyItem(at: fixture.url, to: copy)
@@ -816,6 +826,60 @@ extension CatalogCornerCases2026_10_25Tests {
             self.handle = nil
         }
         deinit { release() }
+    }
+
+    /// Releases a `SnapshotReader` at a barrier: once catalog.sqlite's bytes
+    /// differ from `before` (close's TRUNCATE checkpoint has backfilled the
+    /// -wal and is now waiting for the reader), or once close has returned
+    /// (then the checkpoint did not wait — the verdict says so). Runs on its
+    /// OWN thread, never GCD's global pool, which a busy suite can exhaust.
+    /// Memory: two copies of the small fixture file at a time (≈ 100 KB).
+    /// For Rick: a std::thread polling a file, with a mutex-guarded verdict.
+    final class BarrierReleaser: @unchecked Sendable {
+        struct Verdict: CustomStringConvertible {
+            let backfillSeen: Bool
+            let closeHadReturnedAtRelease: Bool
+            var description: String { "backfill seen \(backfillSeen), close had returned at release \(closeHadReturnedAtRelease)" }
+        }
+        private let reader: SnapshotReader
+        private let database: URL
+        private let before: Data
+        private let lock = NSLock()
+        private var returned = false
+        private var outcome: Verdict?
+
+        init(reader: SnapshotReader, database: URL, before: Data) {
+            self.reader = reader
+            self.database = database
+            self.before = before
+        }
+
+        func start() {
+            let thread = Thread { [self] in run() }
+            thread.qualityOfService = .userInitiated
+            thread.start()
+        }
+
+        func closeReturned() { lock.withLock { returned = true } }
+
+        /// Waits (bounded by the test's time limit) for the release.
+        func verdict() async throws -> Verdict {
+            while true {
+                if let outcome = lock.withLock({ outcome }) { return outcome }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+
+        private func run() {
+            var backfilled = false
+            while !backfilled, !lock.withLock({ returned }) {
+                backfilled = (try? Data(contentsOf: database)).map { $0 != before } ?? false
+                if !backfilled { usleep(2_000) }
+            }
+            let hadReturned = lock.withLock { returned }
+            reader.release()
+            lock.withLock { outcome = Verdict(backfillSeen: backfilled, closeHadReturnedAtRelease: hadReturned) }
+        }
     }
 
 }
