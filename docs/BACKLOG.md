@@ -143,6 +143,7 @@
 - Log retention prune job (#199); metrics page down to a few vital signs (#310).
 - Adversarial 10/18 findings #4–#7 (deferred to the Import removal): close with pinning tests or decline with reasons.
 - Fleet roles on the Ultra: a resource plan (cores/RAM per job, weekly calendar), not just a role list.
+- Put the Ultra to work (Rick 2026-10-28: "see some silicon melt… in a productive way"): (1) A/B bigger Hallie brains (qwen2.5:72b, llama3.3:70b) on the 870-question harness, both Macs, same build; (2) a primed prefix: the family-tree summary + catalog facts as a cached long-context prefix (KV/prompt cache), facts still answered from evidence; (3) LoRA fine-tune (mlx-lm, local) for SKILL not facts: question → Hallie query, trained on the harvested corpus; weights hold family names → never in git/cloud; (4) GPU/ANE batch work: vision-LLM scene captions, Whisper segments, faces/Find Tag throughput; (5) the engines Gemini suggested (list from Rick); (6) the `.1999_maybe` stem: output names treat it as an extension.
 
 - Metrics board: a per-file "Swift 6 warnings" column straight from `scripts/warnings_baseline.tsv`, and watch CCN / grades across the migration (Rick 10/25; stage 2 of `docs/design/swift6_migration_2026_10_25.md`).
 
