@@ -1,16 +1,24 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-27T10:07:40Z",
- "sha": "6deac3f9",
+ "ts": "2026-10-28T10:54:24Z",
+ "sha": "7370a559",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 393,
+ "offenders": 391,
  "baseline_before": 387,
- "baseline_after": 387,
+ "baseline_after": 384,
  "new": [
+  {
+   "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
+   "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
+   "function": "DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
+   "ccn": 24,
+   "nloc": 90,
+   "lang": "swift"
+  },
   {
    "key": "VideoScan/VideoScan/App/ContentView.swift::CatalogView.withCatalogObservers",
    "file": "VideoScan/VideoScan/App/ContentView.swift",
@@ -39,8 +47,8 @@
    "key": "VideoScan/VideoScan/MediaOps/RelocateSummarySheet.swift::RelocateSummarySheet.countsGrid",
    "file": "VideoScan/VideoScan/MediaOps/RelocateSummarySheet.swift",
    "function": "RelocateSummarySheet.countsGrid",
-   "ccn": 11,
-   "nloc": 89,
+   "ccn": 12,
+   "nloc": 98,
    "lang": "swift"
   },
   {
@@ -82,11 +90,21 @@
    "base_nloc": 238
   },
   {
+   "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift::VideoScanModel.resumeTarget",
+   "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift",
+   "function": "VideoScanModel.resumeTarget",
+   "ccn": 15,
+   "nloc": 86,
+   "lang": "swift",
+   "base_ccn": 13,
+   "base_nloc": 82
+  },
+  {
    "key": "VideoScan/VideoScan/App/ContentView.swift::ContentView.body",
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "ContentView.body",
    "ccn": 13,
-   "nloc": 117,
+   "nloc": 120,
    "lang": "swift",
    "base_ccn": 12,
    "base_nloc": 108
@@ -100,16 +118,6 @@
    "lang": "swift",
    "base_ccn": 11,
    "base_nloc": 149
-  },
-  {
-   "key": "VideoScan/VideoScan/Catalog/TidyCatalogSheet.swift::TidyCatalogSheet.body",
-   "file": "VideoScan/VideoScan/Catalog/TidyCatalogSheet.swift",
-   "function": "TidyCatalogSheet.body",
-   "ccn": 10,
-   "nloc": 115,
-   "lang": "swift",
-   "base_ccn": 8,
-   "base_nloc": 108
   },
   {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",
@@ -172,6 +180,10 @@
    "base_nloc": 125
   }
  ],
- "fixed": [],
+ "fixed": [
+  "VideoScan/VideoScan/Catalog/VideoScanModel+RescanPreservation.swift::RescanPreservedFields.isWorthRestoring",
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift::HallieTurnExecutor.executePresenceLike",
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantined"
+ ],
  "shrink_skipped": null
 }
