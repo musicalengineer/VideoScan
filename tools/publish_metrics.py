@@ -803,7 +803,7 @@ def reason_code(reason) -> Optional[str]:
     return kind if CODE_RE.match(kind) else None
 
 
-HOST_ORDER = ("M4", "M5", "M1")
+HOST_ORDER = ("M4", "Ultra")   # the two Mac Studios (Rick 2026-10-28)
 # THE nightly rotation (GH #360): which Macs run the 2 AM nightly. One file, read by
 # the installer, the failover guard, the morning digest and this publisher.
 NIGHTLY_ROTA = REPO / "scripts" / "nightly_rota.json"

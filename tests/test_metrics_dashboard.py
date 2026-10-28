@@ -533,33 +533,37 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
 
 
 @needs_node
-def test_an_off_rota_mac_reads_off_the_rota_never_did_not_run(tmp_path):
-    """GH #360 item 4: the M1 is out of the nightly. The publisher drops its
-    column and lists it in nightly.off_rota; the page names it once, grey, as
-    "off the rotation" — never "did not run", never "no nightly on the M1", and it
-    never pulls the tests line or the last-night tile off green."""
+def test_only_the_two_studios_show_and_an_off_rota_mac_is_never_named(tmp_path):
+    """Rick 2026-10-28: the page shows only the M4 and the M5 Ultra. The laptops
+    (M1, M5 Pro) stay off the rotation in nightly_rota.json, have no column and
+    are not named anywhere, even when an older summary still lists them in
+    nightly.off_rota. The Ultra's short label "Ultra" reads "M5 Ultra"."""
     now = datetime.now(timezone.utc)
     fx = full_fixtures(now)
     s = fx["summary_latest.json"]
     for night in s["nightly"]["nights"]:
-        night["hosts"].pop("M1", None)
+        for h in ("M1", "M5"):
+            night["hosts"].pop(h, None)
         if night is s["nightly"]["nights"][-1]:
-            for h in ("M4", "M5"):
+            for h in ("M4", "Ultra"):
                 night["hosts"][h] = {"state": "green", "passed": 12300, "failed": 0, "total": 12300, "reason": None}
-    s["nightly"]["hosts"] = ["M4", "M5"]
-    s["nightly"]["off_rota"] = ["M1"]
+    s["nightly"]["hosts"] = ["M4", "Ultra"]
+    s["nightly"]["off_rota"] = ["M1", "M5"]
     out = run_page(tmp_path, fx, {"hash": "#all"})
     assert out["errors"] == []
+    page = "".join(out["sections"].values())
+    assert "off the rotation" not in page and "off the nightly rotation" not in page
+    nightly = "".join(out["sections"][k] for k in ("head", "sum-tests", "tl", "stab"))
+    assert "<b>M1</b>" not in nightly and "<b>M5</b>" not in nightly
+    assert "the M1 " not in nightly and not re.search(r"the M5(?! Ultra)", nightly)
     head = out["sections"]["head"]
-    assert "<b>M1</b> off the rotation" in head and 'class="grey"' in head
-    assert "M1</b> did not run" not in head and "M1</b> no run" not in head
+    assert "<b>M4</b>" in head and "<b>M5 Ultra</b>" in head
     assert '<div class="tile" data-state="green"><div class="label">Last night&#39;s tests</div>' in head \
         or '<div class="tile" data-state="green"><div class="label">Last night\'s tests</div>' in head
     tests_line = out["sections"]["sum-tests"]
-    assert "the M1 is off the nightly rotation" in tests_line
-    assert "no nightly on the M1" not in tests_line and "M1 <b>did not run</b>" not in tests_line
-    assert out["sections"]["tl"].count('class="cell ') == 2 * 90 and 'title="M1 · ' not in out["sections"]["tl"]
-    assert "off the nightly rotation: <b>M1</b>" in out["sections"]["stab"]
+    assert "the M5 Ultra is green" in tests_line
+    tl = out["sections"]["tl"]
+    assert tl.count('class="cell ') == 2 * 90 and 'title="M5 Ultra · ' in tl and 'title="M1 · ' not in tl
 
 
 @needs_node

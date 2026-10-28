@@ -816,12 +816,14 @@ function nights(d) {
   const s = d.summary && d.summary.nightly;
   if (!s || !Array.isArray(s.nights)) return null;
   const hosts = Array.isArray(s.hosts) ? s.hosts.slice() : [];
-  // GH #360: a Mac taken OFF the nightly rotation (the M1) has no column at all; the
-  // page names it once as "off the rotation" so its absence never reads as a failure.
-  const offRota = Array.isArray(s.off_rota) ? s.off_rota.filter(h => typeof h === "string" && !hosts.includes(h)) : [];
-  return { hosts, offRota, list: s.nights.filter(x => x && typeof x.date === "string" && x.hosts && typeof x.hosts === "object") };
+  // Rick 2026-10-28: the nightly is the two Mac Studios (M4, M5 Ultra) and the page
+  // shows only them. A Mac off the rotation (nightly_rota.json "off") has no column
+  // and is not named at all; the publisher already drops its rows.
+  return { hosts, list: s.nights.filter(x => x && typeof x.date === "string" && x.hosts && typeof x.hosts === "object") };
 }
-const offRotaChips = N => N.offRota.map(h => `<span class="grey">${dot("grey")}<b>${esc(h)}</b> off the rotation</span>`).join("");
+// The published label is short ("Ultra", HOSTLABEL_RE); the page says the Mac's name.
+const HOST_NAMES = { Ultra: "M5 Ultra" };
+const hostName = h => HOST_NAMES[h] || h;
 const cellOf = (night, h) => (night && night.hosts && night.hosts[h] && typeof night.hosts[h] === "object") ? night.hosts[h] : null;
 const nightStates = night => Object.values(night.hosts || {}).map(c => c && c.state).filter(Boolean);
 const anyRed = night => nightStates(night).includes("red");
@@ -935,7 +937,7 @@ function renderHead(d) {
   // Last night's tests: one dot per Mac
   if (N && N.list.length) {
     const lastNight = N.list[N.list.length - 1];
-    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey"; return `<span class="${esc(state)}">${dot(state)}<b>${esc(h)}</b> ${esc(cellWords(c))}</span>`; }).join("");
+    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey"; return `<span class="${esc(state)}">${dot(state)}<b>${esc(hostName(h))}</b> ${esc(cellWords(c))}</span>`; }).join("");
     const lastWatch = anyWatch(lastNight);
     const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
     const primary = ran[0];
@@ -948,7 +950,7 @@ function renderHead(d) {
       : greenHosts >= 2 ? "green" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber"
       : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}${offRotaChips(N)}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, testState));
+      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, testState));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
@@ -1000,9 +1002,9 @@ function renderTimeline(d) {
   const cols = `grid-template-columns: repeat(${T.length}, minmax(0, 1fr))`;
   let html = "";
   for (const h of N.hosts) {
-    html += `<div class="host">${esc(h)}</div><div class="cells" style="${cols}">` + T.map((t, i) => {
+    html += `<div class="host">${esc(hostName(h))}</div><div class="cells" style="${cols}">` + T.map((t, i) => {
       const c = cellOf(t, h);
-      return `<div class="cell ${c ? c.state : ""}" tabindex="0" data-i="${i}" data-h="${esc(h)}" title="${esc(`${h} · ${t.date}: ${cellWords(c)}`)}"></div>`;
+      return `<div class="cell ${c ? c.state : ""}" tabindex="0" data-i="${i}" data-h="${esc(h)}" title="${esc(`${hostName(h)} · ${t.date}: ${cellWords(c)}`)}"></div>`;
     }).join("") + "</div>";
   }
   html += `<div class="host"></div><div class="cells" style="${cols}">` + T.map(t => { const tg = tagFor(t.date); return `<div class="mark" title="${esc(tg)}">${tg ? "<b></b>" : ""}</div>`; }).join("") + "</div>";
@@ -1018,7 +1020,7 @@ function renderTimeline(d) {
       const t = T[+el.getAttribute("data-i")];
       const tg = tagFor(t.date);
       document.getElementById("readout").innerHTML = `<b>${day(t.date)}</b>${tg ? ` · ${esc(tg)}` : ""} — ` +
-        N.hosts.map(h => `${esc(h)} ${esc(cellWords(cellOf(t, h)))}`).join(" · ");
+        N.hosts.map(h => `${esc(hostName(h))} ${esc(cellWords(cellOf(t, h)))}`).join(" · ");
     };
     tl.addEventListener("mouseover", show);
     tl.addEventListener("focusin", show);
@@ -1030,7 +1032,6 @@ function renderTimeline(d) {
     `<span><b>${st.fewNights}</b> nights a few tests failed</span>` +
     `<span><b>${st.redNights}</b> nights broken</span>` +
     `<span><b>${st.notRunNights}</b> nights no Mac ran</span>` +
-    (N.offRota.length ? `<span>off the nightly rotation: ${N.offRota.map(h => `<b>${esc(h)}</b>`).join(", ")}</span>` : "") +
     (tags.length ? `<span>demo tags: ${tags.map(t => `<b>${esc(t.name)}</b> ${day(t.date)}`).join(", ")}</span>` : "");
   const bad = T.filter(t => nightStates(t).some(s => s !== "green")).reverse();
   document.getElementById("tl-table").innerHTML = bad.length ? table(["Night", ...N.hosts, "Tag"],
@@ -1088,12 +1089,11 @@ const SUMMARY = {
     const state = reds.length ? "red" : watches.length ? "watch" : (greens.length ? (skipped.length || none.length ? "watch" : "green") : "amber");
     const suite = Math.max(0, ...cells.map(([, c]) => c ? c.total : 0));
     const parts = [];
-    if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? " fails" : "s fail"} on the ${esc(h)}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
-    if (watches.length) parts.push(watches.map(([h, c]) => `a few fail on the ${esc(h)} (<b>${n(c.failed)}</b> of ${n(c.total)})`).join(" and "));
-    if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(h)} is green (${n(c.passed)} passed)`).join(", "));
-    if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(h)} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
-    if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(h)).join(" or ")}`);
-    if (N.offRota.length) parts.push(`the ${N.offRota.map(esc).join(" and the ")} ${N.offRota.length === 1 ? "is" : "are"} off the nightly rotation`);
+    if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? " fails" : "s fail"} on the ${esc(hostName(h))}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
+    if (watches.length) parts.push(watches.map(([h, c]) => `a few fail on the ${esc(hostName(h))} (<b>${n(c.failed)}</b> of ${n(c.total)})`).join(" and "));
+    if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(hostName(h))} is green (${n(c.passed)} passed)`).join(", "));
+    if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(hostName(h))} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
+    if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(hostName(h))).join(" or ")}`);
     const lead = st.redStreak ? `Red <b>${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running</b>: ` : st.greenStreak ? `Green <b>${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running</b>: ` : "";
     const primary = (greens[0] || watches[0] || reds[0] || [null, null]);
     const ph = primary[0], pc = primary[1];

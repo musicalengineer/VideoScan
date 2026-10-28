@@ -116,9 +116,10 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
 def test_the_real_rota_runs_the_nightly_on_mac_studios_only():
     """GH #360 item 4 (10/21) took the M1 out; Rick 10/22: laptops are not
     nightly hosts (a closed lid slept the M5 37 times in one night), so the M5
-    MacBook Pro is out too. One file says so; the publisher reads it."""
+    MacBook Pro is out too. From the week of 10/27 the M5 Ultra Mac Studio joins
+    the M4 (Rick 2026-10-27). One file says so; the publisher reads it."""
     rota = _real_load_rota(pm.NIGHTLY_ROTA)
-    assert rota["on"] == ["M4"] and sorted(rota["off"]) == ["M1", "M5"]
+    assert rota["on"] == ["M4", "Ultra"] and sorted(rota["off"]) == ["M1", "M5"]
 
 
 def test_an_unreadable_rota_drops_nobody(tmp_path):
@@ -486,8 +487,12 @@ def test_daily_gate_refuses_a_published_null_before_anything_is_written(tmp_path
 
 
 def run_cli(*args, env=None):
+    # --no-events: the events prototype reads Rick's real ~/Downloads for his
+    # exported marks. On a Mac where Python has no Downloads grant (the M5
+    # Ultra, 2026-10-28) that opendir() blocks on a privacy prompt and the CLI
+    # never returns. A test reads fixtures, never a real user folder.
     e = dict(os.environ, **(env or {}))
-    return subprocess.run(["python3", str(ROOT / "tools" / "publish_metrics.py"), *args],
+    return subprocess.run(["python3", str(ROOT / "tools" / "publish_metrics.py"), "--no-events", *args],
                           capture_output=True, text=True, env=e, timeout=60, stdin=subprocess.DEVNULL)
 
 
