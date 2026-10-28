@@ -15,7 +15,8 @@ import Foundation
 /// guessed:
 ///   - GitHub-hosted runner (`GITHUB_ACTIONS=true`, set only by GitHub):
 ///     ×3. Shared virtual M1s, measured 2–3× slower than the fleet.
-///   - A busy Debug run (1-minute load ≥ half the active cores): ×headroom
+///   - A busy Debug run (1-minute load ≥ half the active cores, or 70% of
+///     the fast tier when that is lower — `busyLoadThreshold`): ×headroom
 ///     (default 1.5). A full battery runs suites in parallel on every core.
 /// A quiet local run is held to the budget exactly.
 ///
@@ -82,15 +83,17 @@ public enum TimingBudget {
     ) -> Duration {
         let factor = loadFactor(debugBuild: debugBuild, loadAverage: currentLoadAverage(),
                                 activeProcessors: ProcessInfo.processInfo.activeProcessorCount,
+                                fastCores: fastTierCores(),
                                 loadedHeadroom: loadedHeadroom)
         return debugCeiling(budget) * factor
     }
 
     /// Pure form of the load rule.
+    /// Same busy threshold as `LoadSample.isBusy` (tier-aware).
     public static func loadFactor(debugBuild: Bool, loadAverage: Double?, activeProcessors: Int,
-                                  loadedHeadroom: Double) -> Double {
+                                  fastCores: Int? = nil, loadedHeadroom: Double) -> Double {
         guard debugBuild, let load = loadAverage, activeProcessors > 0,
-              load >= Double(activeProcessors) / 2 else { return 1 }
+              load >= busyLoadThreshold(logicalCores: activeProcessors, fastCores: fastCores) else { return 1 }
         return max(1, loadedHeadroom)
     }
 
@@ -103,7 +106,9 @@ public enum TimingBudget {
     /// "Debug, load 9.3 on 16 cores" — for failure messages.
     public static func loadDescription(debugBuild: Bool = isDebugBuild) -> String {
         let load = currentLoadAverage().map { String(format: "%.1f", $0) } ?? "?"
-        return "\(debugBuild ? "Debug" : "Release"), load \(load) on \(ProcessInfo.processInfo.activeProcessorCount) cores"
+        let cores = LoadSample(load: nil, logicalCores: ProcessInfo.processInfo.activeProcessorCount,
+                               fastCores: fastTierCores()).coresText
+        return "\(debugBuild ? "Debug" : "Release"), load \(load) on \(cores)"
     }
 
     // MARK: Strict on a quiet machine, known issue on a busy one (GH #208)
@@ -113,11 +118,13 @@ public enum TimingBudget {
     // was busy (parallel agent builds, `swift test --parallel`, a full app
     // battery, GitHub runners). So a budget is judged in one of two modes:
     //
-    //   STRICT — the 1-minute load average stays below half the logical
-    //   cores, sampled before AND after the measurement (or
+    //   STRICT — the 1-minute load average stays below the busy threshold
+    //   (half the logical cores, or `fastTierBusyFraction` of the fast tier
+    //   on a two-tier host when that is lower), sampled before AND after
+    //   the measurement (or
     //   VIDEOSCAN_TIMING_STRICT=1, which the nightly pins). Any miss fails.
     //
-    //   BUSY — either sample at or above half the cores, or a GitHub-hosted
+    //   BUSY — either sample at or above that threshold, or a GitHub-hosted
     //   runner. A miss up to `busyMissLimit`× the budget is a KNOWN ISSUE
     //   (visible, run stays green); a miss beyond that still FAILS — that is
     //   a hang or a regression no amount of load explains.
@@ -135,20 +142,67 @@ public enum TimingBudget {
     /// known issue; beyond it the test fails.
     public static let busyMissLimit: Double = 3
 
-    /// One 1-minute load-average reading and the core count it is judged
-    /// against. `load` is nil when the kernel won't say.
+    /// Busy = 1-minute load at or above this fraction of the FAST-tier cores,
+    /// when the host has more than one performance tier (GH #208 follow-up,
+    /// 2026-10-27). The threshold is the smaller of this and
+    /// `busyLoadFraction` × all logical cores.
+    ///
+    /// Why: on Apple silicon a default-QoS thread is scheduled on the top
+    /// tier first and spills to the slower tier once that tier is full, and
+    /// both wall time AND thread CPU time grow when it lands there. Half of
+    /// ALL cores says nothing about that on a host whose fast tier is the
+    /// minority: the M5 Ultra has 10 "Super" + 20 "Performance" cores, so
+    /// the old rule called load 14 "quiet" with its fast tier overfull. The
+    /// fraction is set from the knee measured on the Ultra (see the commit
+    /// for the table) and keeps the M4 Max (12 P + 4 E) at its old
+    /// threshold, 8: min(16 × 0.5, 12 × fastTierBusyFraction) = 8.
+    public static let fastTierBusyFraction = 0.7
+
+    /// Logical cores in the top performance tier (`hw.perflevel0.logicalcpu`),
+    /// or nil on a host with one tier or that won't say (Intel, some VMs).
+    public static func fastTierCores() -> Int? {
+        var levels: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("hw.nperflevels", &levels, &size, nil, 0) == 0, levels > 1 else { return nil }
+        var cores: Int32 = 0
+        size = MemoryLayout<Int32>.size
+        guard sysctlbyname("hw.perflevel0.logicalcpu", &cores, &size, nil, 0) == 0, cores > 0 else { return nil }
+        return Int(cores)
+    }
+
+    /// The load at which the host counts as busy: half the logical cores,
+    /// or `fastTierBusyFraction` of the fast tier when that is lower.
+    public static func busyLoadThreshold(logicalCores: Int, fastCores: Int?) -> Double {
+        let all = Double(logicalCores) * busyLoadFraction
+        guard let fastCores, fastCores > 0, fastCores < logicalCores else { return all }
+        return min(all, Double(fastCores) * fastTierBusyFraction)
+    }
+
+    /// One 1-minute load-average reading and the core counts it is judged
+    /// against. `load` is nil when the kernel won't say; `fastCores` is nil
+    /// on a single-tier host (then the rule is half the logical cores).
     public struct LoadSample: Sendable, Equatable {
         public var load: Double?
         public var logicalCores: Int
-        public init(load: Double?, logicalCores: Int) {
+        public var fastCores: Int?
+        public init(load: Double?, logicalCores: Int, fastCores: Int? = nil) {
             self.load = load
             self.logicalCores = logicalCores
+            self.fastCores = fastCores
+        }
+        public var busyThreshold: Double {
+            TimingBudget.busyLoadThreshold(logicalCores: logicalCores, fastCores: fastCores)
         }
         public var isBusy: Bool {
             guard let load, logicalCores > 0 else { return false }
-            return load >= Double(logicalCores) * TimingBudget.busyLoadFraction
+            return load >= busyThreshold
         }
         var text: String { load.map { String(format: "%.1f", $0) } ?? "?" }
+        /// "30 cores (10 fast)" or "16 cores (12 fast)"; "4 cores" on one tier.
+        var coresText: String {
+            guard let fastCores, fastCores < logicalCores else { return "\(logicalCores) cores" }
+            return "\(logicalCores) cores (\(fastCores) fast)"
+        }
     }
 
     public enum Verdict: String, Sendable, Equatable {
@@ -179,14 +233,15 @@ public enum TimingBudget {
             let ms = { (d: Duration) in String(format: "%.1f ms", TimingBudget.seconds(d) * 1_000) }
             return "[timing-budget] \(label): budget \(ms(budget)), measured \(ms(measured)) "
                 + "(\(String(format: "%.2f", ratio))×), load \(before.text)→\(after.text) on "
-                + "\(after.logicalCores) cores, \(strict ? "strict" : "busy") (\(modeReason)) → \(verdict.rawValue)"
+                + "\(after.coresText), \(strict ? "strict" : "busy") (\(modeReason)) → \(verdict.rawValue)"
         }
     }
 
     /// Reads the current 1-minute load and logical core count.
     public static func sampleLoad() -> LoadSample {
         LoadSample(load: currentLoadAverage(),
-                   logicalCores: ProcessInfo.processInfo.activeProcessorCount)
+                   logicalCores: ProcessInfo.processInfo.activeProcessorCount,
+                   fastCores: fastTierCores())
     }
 
     /// The pure rule. `before` is sampled before the measured work starts,

@@ -146,22 +146,25 @@ enum PerformanceLane {
     /// over budget. Use this only where the measured time is honest
     /// per-record work with no algorithmic slack left — speed up first.
     /// `loadedHeadroom` (default 1.5×) applies only when the machine is
-    /// busy (1-minute load average at or above half the active cores); a
+    /// busy (1-minute load average at or above `TimingBudget.busyLoadThreshold`:
+    /// half the active cores, or 70% of the fast tier when lower); a
     /// quiet Debug run is held to the plain budget. Release never
     /// stretches: it gets `budget` (× the hosted-runner factor only, as
     /// `debugCeiling`), so the product's numbers stay authoritative.
     static func loadAwareDebugCeiling(_ budget: Duration, loadedHeadroom: Double = 1.5) -> Duration {
         let factor = loadFactor(debugBuild: isDebugBuild, loadAverage: currentLoadAverage(),
                                 activeProcessors: ProcessInfo.processInfo.activeProcessorCount,
+                                fastCores: TimingBudget.fastTierCores(),
                                 loadedHeadroom: loadedHeadroom)
         return debugCeiling(budget) * factor
     }
 
     /// Pure form of the load rule, for tests of the rule itself.
     static func loadFactor(debugBuild: Bool, loadAverage: Double?, activeProcessors: Int,
-                           loadedHeadroom: Double) -> Double {
+                           fastCores: Int? = nil, loadedHeadroom: Double) -> Double {
         TimingBudget.loadFactor(debugBuild: debugBuild, loadAverage: loadAverage,
-                                activeProcessors: activeProcessors, loadedHeadroom: loadedHeadroom)
+                                activeProcessors: activeProcessors, fastCores: fastCores,
+                                loadedHeadroom: loadedHeadroom)
     }
 
     /// The 1-minute load average, or nil when the kernel won't say.
