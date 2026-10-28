@@ -28693,6 +28693,7 @@
         "bundleSnapshot_legacyStringsMigrate",
         "bundleSnapshot_roundTripPreservesEveryRole",
         "homeFolderPathPredicate",
+        "iconGuard_tempFolderTestIsExact",
         "initializeMasterArchive_resolvesQueuedTarget_andQueuesPreviousMaster",
         "isRetired_isRetiredAtOnly",
         "m1_legacyRetired_persistedOnceOnRestore_stampStable",

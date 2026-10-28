@@ -57,7 +57,7 @@ struct CatalogSQLiteLaunchNoJSONTests {
         let scene = try CutoverScene.make("no_json_353"); defer { scene.cleanup() }
         // As on the M4: catalog.json (frozen) carries the designation, and so
         // does catalog_state.
-        let designation = try scene.writeDesignation(rootPath: "/Volumes/Archive/Family_353")
+        let designation = try scene.writeDesignation(rootPath: scene.folder.appendingPathComponent("Archive/Family_353").path)
         try await scene.launchOnSQLite()
         scene.model.masterArchive = designation
         #expect(scene.model.saveCatalogNow())

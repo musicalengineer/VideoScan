@@ -579,14 +579,52 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     @Test func m3_clearMasterArchive_demotesExMaster_noQueue() {
         let m = makeModel()
-        let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
+        // A temp path, never a real volume name (it does not need to exist).
+        let archive = FileManager.default.temporaryDirectory
+            .appendingPathComponent("roletax-m3-\(UUID().uuidString.prefix(8))/FamilyArchive").path
+        let master = CatalogScanTarget(searchPath: archive)
         master.role = .archive; master.isReachable = true
         m.scanTargets = [master]
-        designateMaster(m, at: "/Volumes/FamilyArchive")
+        designateMaster(m, at: archive)
+        // clearMasterArchive() un-badges the designated folder and volume on
+        // disk. 2026-10-28: with the Pegasus attached this reached the REAL
+        // archive; MasterArchiveIcon now refuses that in a test host, and
+        // this pins that the test no longer asks. (Synchronous on the main
+        // actor, so no other test's refusal can land in between.)
+        let refusalsBefore = MasterArchiveIcon.testHostRefusals.count
         m.clearMasterArchive()
+        #expect(MasterArchiveIcon.testHostRefusals.count == refusalsBefore,
+                "the test reached a real path: \(MasterArchiveIcon.testHostRefusals.dropFirst(refusalsBefore))")
         #expect(m.masterArchive == nil)
         #expect(master.role == .unassigned, "ex-master is not the Master Archive any more")
         #expect(m.pendingRoleReclassifications.isEmpty)
+    }
+
+    @Test func iconGuard_tempFolderTestIsExact() throws {
+        let tmp = FileManager.default.temporaryDirectory
+        let inside = tmp.appendingPathComponent("roletax-icon/Breen_Family_Archive").path
+        #expect(MasterArchiveIcon.isInsideTemporaryDirectory(inside, temporaryDirectory: tmp))
+        #expect(MasterArchiveIcon.isInsideTemporaryDirectory(tmp.path, temporaryDirectory: tmp))
+        // /var/folders/… and /private/var/folders/… are the same place.
+        let viaVar = inside.replacingOccurrences(of: "/private/var/", with: "/var/")
+        #expect(MasterArchiveIcon.isInsideTemporaryDirectory(viaVar, temporaryDirectory: tmp))
+        // A not-yet-existing path in the /private form (what a scene folder
+        // hands out). resolvingSymlinksInPath strips "/private" only when
+        // the path exists, so the first version of the guard refused this.
+        let viaPrivate = (inside.hasPrefix("/var/") ? "/private" + inside : inside) + "-\(UUID().uuidString)"
+        #expect(MasterArchiveIcon.isInsideTemporaryDirectory(viaPrivate, temporaryDirectory: tmp))
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory("/Volumes/FamilyArchive", temporaryDirectory: tmp))
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory("/Volumes/FamilyArchive/Breen_Family_Archive", temporaryDirectory: tmp))
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(tmp.path + "/../../../../Volumes/FamilyArchive", temporaryDirectory: tmp))
+        let resolved = tmp.resolvingSymlinksInPath().path
+        let trimmed = resolved.hasSuffix("/") ? String(resolved.dropLast()) : resolved
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(trimmed + "X/Breen_Family_Archive", temporaryDirectory: tmp),
+                "a sibling sharing the prefix is not inside")
+        // A symlink inside temp that points at a real volume is not inside.
+        let link = tmp.appendingPathComponent("roletax-link-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "/Volumes")
+        defer { try? FileManager.default.removeItem(at: link) }
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(link.appendingPathComponent("FamilyArchive").path, temporaryDirectory: tmp))
     }
 
     @Test func m3_adoptImportedDesignation_rerunsMigration() {
