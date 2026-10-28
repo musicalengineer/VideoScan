@@ -3426,6 +3426,7 @@
         "CatalogDiskFullTests"
       ],
       "tests": [
+        "ballastIsNotInheritedByChildren",
         "diskFullCommitRefusesAndRetries"
       ]
     },
@@ -3876,20 +3877,26 @@
         "debugCeilingWidensOnlyUnderASanitizer",
         "eitherSampleMakesItBusy",
         "factorsFollowTheSanitizer",
+        "fastTierProbeIsSane",
         "growthPassesUpToTheLimitAndFailsBeyondIt",
         "hostedIsTripled",
         "hostedRunnerIsBusy",
+        "legacyLoadFactorIsTierAware",
         "loadRule",
         "localCeilingIsTheBudget",
         "logLine",
+        "m4ThresholdUnchanged",
         "onlyTheNightlysStrictPinIsTheReferenceRun",
         "quietIsStrict",
         "relativePassesUnderTheLimitAndAZeroReferenceNeverPasses",
         "secondsConversion",
+        "singleTierFallsBack",
         "strictOverride",
         "swiftTestingMapping",
         "threadCPUTimeCountsWorkNotWaiting",
         "threadCPUTimeIsPerThread",
+        "ultraGauntletMissIsKnownIssue",
+        "ultraIsJudgedByItsFastTier",
         "withoutASanitizerAQuietMissStillFails"
       ]
     },
@@ -31035,6 +31042,18 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_watchdog_samples_tree.py",
+      "stage": "unit",
+      "suites": [
+        "test_watchdog_samples_tree.py"
+      ],
+      "tests": [
+        "test_a_grandchild_in_its_own_group_is_sampled"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_sprint_digest.py",
       "stage": "unit",
       "suites": [
@@ -33769,6 +33788,10 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_watchdog_samples_tree.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_sprint_digest.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -34695,7 +34718,7 @@
       ],
       "expected_floor": 326,
       "name": "regression",
-      "package_expected_floor": 279,
+      "package_expected_floor": 280,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
