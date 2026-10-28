@@ -96,8 +96,11 @@ def wait_watching_output(output):
 
 
 def sample_group(pgid):
-    """Record the stacks of every live group member before the kill. Bounded:
-    pgrep 10 s, each sample 60 s. A failure here never blocks the kill."""
+    """Record the stacks of every live group member, and every descendant of
+    the leader, before the kill. Descendants matter: SwiftPM starts xctest in
+    a group of its own, so the hung test was invisible to `pgrep -g`
+    (2026-10-28, the Ultra). Bounded: ps/pgrep 10 s each, each sample 60 s.
+    A failure here never blocks the kill."""
     try:
         pids = subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True,
                               text=True, timeout=10).stdout.split()
@@ -106,6 +109,25 @@ def sample_group(pgid):
         note = "pgrep failed: %s\n" % error
     else:
         note = "group %d members: %s\n" % (pgid, " ".join(pids) or "(none)")
+    try:
+        table = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True,
+                               text=True, timeout=10).stdout.split("\n")
+        children = {}
+        for line in table:
+            fields = line.split()
+            if len(fields) == 2:
+                children.setdefault(fields[1], []).append(fields[0])
+        tree, todo = [], [str(pgid)]
+        while todo:
+            for kid in children.get(todo.pop(), []):
+                if kid not in tree:
+                    tree.append(kid)
+                    todo.append(kid)
+        outside = [p for p in tree if p not in pids]
+        pids += outside
+        note += "descendants outside the group: %s\n" % (" ".join(outside) or "(none)")
+    except Exception as error:
+        note += "ps failed: %s\n" % error
     with open(sample_path, "w", encoding="utf-8") as out:
         out.write("watchdog %s stop at %s\n%s" % (stop_kind, time.strftime("%Y-%m-%d %H:%M:%S"), note))
     for pid in pids:
