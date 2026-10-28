@@ -80,7 +80,8 @@ private func selection(for diagnosis: AudioVerifyDiagnosis) -> MediaRepairSelect
             Issue.record("expected the combined pass"); return
         }
         #expect(recipe.applied == [.remux])
-        let skip = try? #require(recipe.skipped.first { $0.fix == .balanceAudio })
+        let skip = recipe.skipped.first { $0.fix == .balanceAudio }
+        #expect(skip != nil, "Balance Audio must be reported as not in this pass")
         #expect(skip?.reason.contains("Balance Audio on its own") == true, "\(skip?.reason ?? "")")
     }
 
