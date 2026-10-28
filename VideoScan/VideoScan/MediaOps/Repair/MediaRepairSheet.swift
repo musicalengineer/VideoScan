@@ -46,6 +46,9 @@ struct MediaRepairSheet: View {
     @State private var chosenFolder: URL?
     @State private var folderRefusal: String?
     @State private var job: MediaRepairJob?
+    /// Repair Now's dedicated Balance Audio job (raw DV / several sound
+    /// tracks — MediaRepairNow.dedicatedBalance).
+    @State private var balanceJob: BalanceAudioJob?
     /// The add-sound step's sound file (Rick 2026-10-10): the request's,
     /// else this sheet's own lookup.
     @State private var soundSource: MediaRepairSoundSource?
@@ -77,10 +80,17 @@ struct MediaRepairSheet: View {
     /// The plan Repair Now runs. Remove repeated frames rides it only once
     /// its check has finished (the other fixes never wait for it).
     private var recipe: MediaRepairRecipe {
-        var effective = selection
-        if !picture.isReady { effective.set(.removeRepeatedFrames, on: false) }
-        return effective.recipe(balance: balance, soundFile: soundSource?.measured?.audio.fullPath)
+        selection.effectiveRecipe(balance: balance, soundFile: soundSource?.measured?.audio.fullPath,
+                                  pictureReady: picture.isReady)
     }
+
+    /// What Repair Now starts.
+    private var repairNow: MediaRepairNow {
+        selection.repairNow(balance: balance, soundFile: soundSource?.measured?.audio.fullPath,
+                            pictureReady: picture.isReady)
+    }
+
+    private var isRunning: Bool { job != nil || balanceJob != nil }
 
     /// Every fix: the card's earned ones first (ticked), then "More
     /// repairs", each available or not with the reason.
@@ -102,6 +112,8 @@ struct MediaRepairSheet: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if let job {
                         MediaRepairRunningView(job: job)
+                    } else if let balanceJob {
+                        MediaRepairBalanceRunningView(job: balanceJob)
                     } else {
                         planBody
                     }
@@ -155,6 +167,10 @@ struct MediaRepairSheet: View {
         streamsBox
         destinationBox
         MediaRepairLifecycleSection(record: record, onSelectRecord: request.onSelectRecord)
+        if repairNow != .dedicatedBalance { manualStepsBox }
+    }
+
+    private var manualStepsBox: some View {
         DisclosureGroup("The same steps by hand (for reference)") {
             ForEach(MediaRepairAdvice.manualSteps(recipe, sourceName: record.filename), id: \.self) { step in
                 Text(step).font(.callout.monospaced()).textSelection(.enabled)
@@ -200,7 +216,7 @@ struct MediaRepairSheet: View {
     private var streamsBox: some View {
         let plan: MediaRepairPicturePlan? = { if case .ready(let p, _) = picture { return p }; return nil }()
         let lines = MediaRepairSelection.streamLines(recipe, picture: plan)
-            + recipe.skipped.map { "Not in this pass — \($0.fix.title): \($0.reason)." }
+            + (repairNow == .dedicatedBalance ? [] : recipe.skipped.map { "Not in this pass — \($0.fix.title): \($0.reason)." })
         return VStack(alignment: .leading, spacing: 4) {
             ForEach(lines, id: \.self) { Text($0).font(.callout).fixedSize(horizontal: false, vertical: true) }
         }
@@ -209,7 +225,11 @@ struct MediaRepairSheet: View {
     // MARK: Destination
 
     private var outputName: String {
-        MediaRepairOutput.fileName(sourcePath: record.fullPath, recipe: recipe, audioCodec: record.audioCodec)
+        if repairNow == .dedicatedBalance, let shape = request.audioDiagnosis?.balanceAnalysis?.shape {
+            return MediaRepairOutput.dedicatedBalanceFileName(sourcePath: record.fullPath,
+                                                              containerFormat: shape.containerFormat)
+        }
+        return MediaRepairOutput.fileName(sourcePath: record.fullPath, recipe: recipe, audioCodec: record.audioCodec)
     }
 
     private var destination: MediaRepairOutput.Destination {
@@ -269,12 +289,12 @@ struct MediaRepairSheet: View {
     // MARK: Buttons
 
     private var canRun: Bool {
-        job == nil && !recipe.isEmpty && outputURL != nil
+        !isRunning && repairNow != .nothing && outputURL != nil
     }
 
     private var buttons: some View {
         HStack {
-            if job == nil {
+            if !isRunning {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.escape)
                 if card == nil {
                     Button(CatalogRowMenuText.verify(count: 1)) {
@@ -284,7 +304,7 @@ struct MediaRepairSheet: View {
                 }
             }
             Spacer()
-            if job != nil {
+            if isRunning {
                 Button("Show Operations") { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
                 Button("Close") { dismiss() }.keyboardShortcut(.defaultAction)
             } else {
@@ -301,6 +321,10 @@ struct MediaRepairSheet: View {
 
     private func start() {
         guard let output = outputURL else { return }
+        if repairNow == .dedicatedBalance {
+            startDedicatedBalance(output: output)
+            return
+        }
         let besideOriginal: Bool = { if case .beside = destination { return true }; return false }()
         let fixes = Array(selection.chosen)
         let plannedFrames: Int? = { if case .ready(_, let n) = picture { return n }; return nil }()
@@ -310,6 +334,22 @@ struct MediaRepairSheet: View {
                                besideOriginal: besideOriginal, model: model,
                                plannedPictureFrames: plannedFrames,
                                addingSound: soundSource?.measured?.audio)
+        }
+        MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+    }
+
+    /// The one Balance Audio engine (startBalanceAudio, as Verify Audio's
+    /// and Archive Angel's buttons call it), writing to THIS sheet's
+    /// destination — beside the original, or the chosen folder when the
+    /// original is protected (the job's publish fallback stays in that
+    /// folder). A refused duplicate dispatch returns nil: the sheet stays
+    /// on its plan and the log carries the refusal line.
+    private func startDedicatedBalance(output: URL) {
+        guard let diagnosis = request.audioDiagnosis else { return }
+        _ = model.noteMissingFileForUserAction(record)
+        balanceJob = fileOpsCenter.startedByUser { center in
+            center.startBalanceAudio(record: record, fromDiagnosis: diagnosis, model: model,
+                                     plannedOutput: output)
         }
         MediaFileOperationsWindowOpener.openBehindMain(openWindow)
     }
@@ -435,6 +475,29 @@ struct MediaRepairRunningView: View {
         case .cancelled: return "stop.circle"
         default: return "exclamationmark.triangle"
         }
+    }
+}
+
+/// The sheet after Repair Now started the dedicated Balance Audio job.
+struct MediaRepairBalanceRunningView: View {
+    @ObservedObject var job: BalanceAudioJob
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if job.state.isActive {
+                ProgressView(value: job.fraction)
+                Text(job.subtitle).font(.callout).foregroundStyle(.secondary)
+                Text("You can close this window \u{2014} the balance keeps going in the operations window.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Label(job.subtitle, systemImage: MediaRepairRunningView.icon(job.state))
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                if let url = job.publishedURL {
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }
+            }
+        }
+        .accessibilityIdentifier("repair.running")
     }
 }
 

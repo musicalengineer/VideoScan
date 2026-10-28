@@ -48,6 +48,15 @@ enum MediaRepairOutput {
         return fileName(sourcePath: sourcePath, fileExtension: ext)
     }
 
+    /// The name when Repair Now runs the dedicated Balance Audio job (raw
+    /// DV / several sound tracks): that job's own `<stem>_balanced.<ext>`,
+    /// QuickTime for raw DV. The job re-uniquifies at publish, in the
+    /// same folder.
+    static func dedicatedBalanceFileName(sourcePath: String, containerFormat: String) -> String {
+        BalanceAudioFix.balancedOutputURL(forSourcePath: sourcePath, containerFormat: containerFormat,
+                                          fileExists: { _ in false }).lastPathComponent
+    }
+
     /// Where the new file should go.
     enum Destination: Equatable {
         /// Beside the original (its drive is not protected).

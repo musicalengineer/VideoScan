@@ -14998,6 +14998,27 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairDedicatedBalanceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MediaRepairDedicatedBalanceTests",
+        "MediaRepairMenuSheetAgreementTests"
+      ],
+      "tests": [
+        "bannerFixLine_namesTheBalance_notARemux",
+        "dedicatedOutputName_rawDVIsQuickTime",
+        "menuEnabledWithFixes_impliesRepairNowRuns",
+        "menuEnablesRepair",
+        "noMeasurement_nothingRuns",
+        "publishFallback_staysInThePlannedFolder",
+        "rawDV_balanceAlone_routesToTheDedicatedJob",
+        "rawDV_balanceWithRemux_runsThePass_andSaysWhy",
+        "severalSoundTracks_balanceAlone_routesToTheDedicatedJob",
+        "singleTrackMov_balanceRidesTheCombinedPass"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProvenanceSetRoleTests.swift",
       "stage": "unit",
       "suites": [
@@ -33907,7 +33928,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3041,
+      "expected_floor": 3051,
       "name": "unit",
       "package_expected_floor": 406,
       "package_selectors": [
@@ -34425,7 +34446,9 @@
         "VideoScanTests/EditorCacheScanRootReviewTests",
         "VideoScanTests/ListKeyboardNavigationSensorTests",
         "VideoScanTests/EditorCacheIgnoreListNameFallbackTests",
-        "VideoScanTests/EditorCacheResumeAuditTests"
+        "VideoScanTests/EditorCacheResumeAuditTests",
+        "VideoScanTests/MediaRepairDedicatedBalanceTests",
+        "VideoScanTests/MediaRepairMenuSheetAgreementTests"
       ]
     },
     {

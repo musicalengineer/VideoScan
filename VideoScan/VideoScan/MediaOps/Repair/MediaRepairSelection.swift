@@ -12,6 +12,18 @@ import Foundation
 // a readable format). Improving a good file (denoise, stabilise, colour)
 // is not repair and never appears here.
 
+/// What "Repair Now" starts (pure; the sheet dispatches on it).
+enum MediaRepairNow: Equatable {
+    /// The one-pass MediaRepairJob writing ONE new file.
+    case combined(MediaRepairRecipe)
+    /// BalanceAudioJob (startBalanceAudio(fromDiagnosis:)): raw DV is
+    /// re-read at its probed rate and written as QuickTime; several sound
+    /// tracks keep only the program track.
+    case dedicatedBalance
+    /// Nothing runnable is ticked — Repair Now is disabled.
+    case nothing
+}
+
 struct MediaRepairSelection: Equatable {
     let offers: [MediaRepairOffer]
     private(set) var chosen: Set<MediaRepairFix>
@@ -41,11 +53,41 @@ struct MediaRepairSelection: Equatable {
         MediaRepairRecipe(fixes: Array(chosen), balance: balance, soundFile: soundFile)
     }
 
+    /// The plan Repair Now runs: Remove repeated frames rides it only once
+    /// its picture check is ready (the other fixes never wait for it).
+    func effectiveRecipe(balance: MediaRepairBalanceInput?, soundFile: String?, pictureReady: Bool) -> MediaRepairRecipe {
+        var effective = self
+        if !pictureReady { effective.set(.removeRepeatedFrames, on: false) }
+        return effective.recipe(balance: balance, soundFile: soundFile)
+    }
+
+    /// What Repair Now starts. Balance Audio ticked ALONE on a sound
+    /// layout the combined pass can't touch (raw DV, several sound
+    /// tracks) runs the dedicated Balance Audio job — the one engine for
+    /// that verb (CLAUDE.md rule 4) — instead of leaving Repair Now dead.
+    /// Ticked with other fixes, the combined pass runs and the "Not in
+    /// this pass" line says why balance is not in it.
+    func repairNow(balance: MediaRepairBalanceInput?, soundFile: String?, pictureReady: Bool) -> MediaRepairNow {
+        let recipe = effectiveRecipe(balance: balance, soundFile: soundFile, pictureReady: pictureReady)
+        if !recipe.isEmpty { return .combined(recipe) }
+        if chosen == [.balanceAudio], recipe.isDedicatedBalanceOnly { return .dedicatedBalance }
+        return .nothing
+    }
+
     // MARK: What the plan does to each stream
+
+    /// The dedicated Balance Audio job, in the same three lines.
+    static let dedicatedBalanceLines = [
+        "Repair Now runs the Balance Audio job for this file's sound layout (raw DV, or several sound tracks).",
+        "Picture: copied exactly \u{2014} not re-encoded. Raw DV is packaged as QuickTime (.mov).",
+        "Sound: the live channel goes to both speakers; with several tracks only the one carrying sound is kept.",
+        "Checked afterwards: the balanced copy is re-measured before it is kept.",
+    ]
 
     /// One line each for picture, sound and length — copied vs re-encoded,
     /// and the expected change (codex consult #4).
     static func streamLines(_ recipe: MediaRepairRecipe, picture: MediaRepairPicturePlan?) -> [String] {
+        if recipe.isDedicatedBalanceOnly { return dedicatedBalanceLines }
         guard !recipe.isEmpty else { return [] }
         var lines: [String] = []
         switch recipe.picture {
