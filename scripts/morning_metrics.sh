@@ -87,7 +87,8 @@ import sys, os, json, datetime
 
 def norm_host(h):
     h = (h or "").lower()
-    if "m5" in h or "studio" in h: return "M5"
+    if "ultra" in h: return "Ultra"   # RicksUltra, the M5 Ultra Mac Studio
+    if "m5" in h: return "M5"          # ricksm5, the M5 Pro laptop (off the rota)
     if "m4" in h: return "M4"
     if "m1" in h or "macbook" in h: return "M1"
     return (h or "?").upper()[:6]
@@ -184,9 +185,9 @@ print(f"VideoScan — Test Metrics   {W} (UTC)")
 print("─" * 46)
 print(f"{'Host':<5} {'Status':<8} {'P/F/S':<13} {'Cov':>6}  {'When':<11}")
 
-order = ["M5", "M4", "M1"]
-# GH #360: a Mac OFF the nightly rotation (scripts/nightly_rota.json — the M1) says
-# so instead of showing its last stale failure.
+order = ["M4", "Ultra"]
+# Rick 2026-10-28: the nightly is the two Mac Studios. A Mac OFF the rotation
+# (scripts/nightly_rota.json "off": the laptops) is not shown at all.
 try:
     off_rota = set((json.load(open(os.environ.get("ROTA_FILE", ""))).get("off") or {}))
 except Exception:
@@ -194,7 +195,6 @@ except Exception:
 seen = set()
 def emit(h):
     if h in off_rota:
-        print(f"{h:<5} — off the nightly rotation")
         seen.add(h)
         return
     r = latest.get(h)
@@ -214,7 +214,7 @@ def emit(h):
     seen.add(h)
 
 for h in order:
-    if h in latest or h in off_rota: emit(h)
+    if h in latest: emit(h)
 for h in latest:
     if h not in seen and h not in order: emit(h)
 
