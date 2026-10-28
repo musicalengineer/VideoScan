@@ -30364,7 +30364,6 @@
         "test_metrics_dashboard.py"
       ],
       "tests": [
-        "test_an_off_rota_mac_reads_off_the_rota_never_did_not_run",
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
@@ -30373,6 +30372,7 @@
         "test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes",
         "test_module_health_table_grades_sorts_and_excludes_tests",
         "test_module_health_without_per_module_rows_uses_folder_rows",
+        "test_only_the_two_studios_show_and_an_off_rota_mac_is_never_named",
         "test_open_bugs_tile_is_two_counts_and_github_links",
         "test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link",
         "test_page_data_comes_from_public_sources_only",
