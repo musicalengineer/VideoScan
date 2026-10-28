@@ -108,9 +108,12 @@ enum MasterArchiveIcon {
     /// below it that do not exist yet. Not resolvingSymlinksInPath: that
     /// strips "/private" only from paths that exist, so an existing temp
     /// root and a not-yet-created file under it came out in different forms.
-    /// `..` is removed lexically first; nil (refuse) if nothing resolves.
+    /// Any `..` is refused outright (codex #162 P1): collapsing it on paper
+    /// before resolving a symlink lets `<temp>/link/../x` name a file the
+    /// filesystem finds outside temp. nil (refuse) if nothing resolves.
     nonisolated private static func canonicalPath(_ path: String) -> String? {
-        var head = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard !path.isEmpty, !path.split(separator: "/").contains("..") else { return nil }
+        var head = URL(fileURLWithPath: path).path
         var tail: [String] = []
         while true {
             if let real = realpath(head, nil) {

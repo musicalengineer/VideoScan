@@ -627,6 +627,27 @@ struct VolumeRoleTaxonomyMigrationTests {
         #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(link.appendingPathComponent("FamilyArchive").path, temporaryDirectory: tmp))
     }
 
+    /// Codex #162 P1: `<temp>/link/../victim` collapses lexically to
+    /// `<temp>/victim`, but the filesystem follows `link` out first and
+    /// lands on `<outside>/victim`. Both trees live in one disposable fixture.
+    @Test func iconGuard_symlinkThenDotDotIsRefused() throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("roletax-dotdot-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let fakeTemp = fixture.appendingPathComponent("temp")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("child"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("victim"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fakeTemp, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: fakeTemp.appendingPathComponent("link").path,
+                                                   withDestinationPath: outside.appendingPathComponent("child").path)
+        let sneaky = fakeTemp.path + "/link/../victim"
+        #expect(FileManager.default.fileExists(atPath: sneaky), "the fixture really reaches outside/victim")
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(sneaky, temporaryDirectory: fakeTemp))
+        #expect(!MasterArchiveIcon.isInsideTemporaryDirectory(fakeTemp.path + "/a/../b", temporaryDirectory: fakeTemp),
+                "any `..` is refused: a test never needs one")
+    }
+
     @Test func m3_adoptImportedDesignation_rerunsMigration() {
         let m = makeModel()
         let master = CatalogScanTarget(searchPath: "/Volumes/FamilyArchive")
