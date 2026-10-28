@@ -74,8 +74,9 @@ struct CatalogDiskFullTests {
         #expect(try Self.noteCount(database, "before-full") == noted, "\(depth): a refused commit changed what is stored")
         #expect(try Self.noteCount(database, "during-full") == 0, "\(depth): part of a refused commit is stored")
 
-        // 3. Space comes back. The caller still holds its edited records.
-        try FileManager.default.removeItem(at: ballast)
+        // 3. Space comes back — the volume REPORTS it (see returnSpace). The
+        //    caller still holds its edited records.
+        try await volume.returnSpace(ballast)
         var retried = await session.commitNotesOutcome("during-full", reuseEdits: true)
         var reopenedAs: CatalogOpenOutcome = .readWrite
         if case .refused(let reason, _) = retried {
@@ -127,6 +128,61 @@ struct CatalogDiskFullTests {
             #expect(reopenedAs == .readWrite,
                     "\(depth): after a disk-full refusal the catalog reopened \(reopenedAs) — a person must adopt it")
         }
+    }
+
+    // MARK: - Regression: the ballast must not outlive its unlink
+
+    /// Gauntlet run 1, M5 Ultra, Release, 7370a559 (2026-10-27): `full` failed
+    /// its retry with ENOSPC creating `.catalog.highwater.<uuid>.vspublish.tmp`
+    /// although the ballast had been removed. Mechanism (proved with a probe):
+    /// the ballast fd was opened without O_CLOEXEC, so any child process the
+    /// test PROCESS spawned while the fill ran — other suites run in parallel
+    /// and spawn hdiutil, ffprobe, hard-kill children — inherited it. An
+    /// unlinked file whose blocks are still referenced by an open descriptor
+    /// keeps them: statfs read 0 free until that child exited.
+    /// C++ analogy: an fd without FD_CLOEXEC is a handle every later fork/exec
+    /// copies, like a shared_ptr you did not mean to hand out.
+    @Test("REGRESSION: a child process started while the ballast is written does not keep its space — removing the ballast returns the space while the child still runs",
+          .timeLimit(.minutes(1)))
+    func ballastIsNotInheritedByChildren() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diskfull-inherit-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let volume = try DiskImageVolume.attach(megabytes: 32, under: folder)
+        defer { volume.detach() }
+
+        // The gauntlet's shape made explicit: a child is born while the fill's fd is open.
+        var child: pid_t = 0
+        let ballast = try volume.fill(leavingFree: 0, whileOpen: { child = try Self.spawnSleeper() })
+        defer { Self.reap(child) }
+        try #require(child > 0, "the sleeper was not spawned")
+        try #require(kill(child, 0) == 0, "the sleeper exited before the check — the test would prove nothing")
+
+        // Short deadline: the child sleeps far longer, so only a ballast it does
+        // not hold can come back in time.
+        try await volume.returnSpace(ballast, within: .seconds(5))
+        #expect(kill(child, 0) == 0, "the space came back only because the child had exited")
+    }
+
+    /// A child that outlives every deadline in the test (reaped by `reap`).
+    static func spawnSleeper() throws -> pid_t {
+        let words: [String] = ["/bin/sleep", "120"]
+        let argv = words.map { strdup($0) }
+        defer { argv.forEach { free($0) } }
+        var cArgs = argv + [nil]
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, "/bin/sleep", nil, nil, &cArgs, environ)
+        guard spawned == 0 else { throw FixtureFailure(words: "posix_spawn sleep: \(String(cString: strerror(spawned)))") }
+        return pid
+    }
+
+    /// Stop and reap this test's own sleeper (never another process).
+    static func reap(_ pid: pid_t) {
+        guard pid > 0 else { return }
+        kill(pid, SIGKILL)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
     }
 
     /// "database or disk is full" (SQLITE_FULL) or "No space left on device" (ENOSPC).
@@ -231,11 +287,17 @@ struct DiskImageVolume {
     }
 
     /// Write a ballast file until the volume has `leavingFree` bytes or fewer left.
-    func fill(leavingFree: Int) throws -> URL {
+    /// `whileOpen` runs with the ballast's descriptor open (regression test hook).
+    func fill(leavingFree: Int, whileOpen: () throws -> Void = {}) throws -> URL {
         let ballast = mountPoint.appendingPathComponent("ballast.bin")
-        let fd = Darwin.open(ballast.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        // O_CLOEXEC: suites run in parallel in one process and spawn children
+        // (hdiutil, ffprobe, hard-kill helpers). Without it a child born during
+        // the fill inherits this fd and pins the ballast's blocks after the
+        // unlink — the volume stays full (gauntlet 2026-10-27).
+        let fd = Darwin.open(ballast.path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw FixtureFailure(words: "ballast open errno \(errno)") }
         defer { Darwin.close(fd) }
+        try whileOpen()
         let chunk = [UInt8](repeating: 0xA5, count: 4096)
         while freeBytes() > leavingFree {
             let written = chunk.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, min(chunk.count, max(4096, freeBytes() - leavingFree))) }
@@ -243,6 +305,26 @@ struct DiskImageVolume {
         }
         fsync(fd)
         return ballast
+    }
+
+    /// Remove the ballast and return once the volume REPORTS the space back:
+    /// statfs shows at least 90 % of the ballast's bytes more than before the
+    /// unlink. Polls a condition with a deadline — not a sleep standing in for
+    /// one. Throws, naming the free bytes, if the deadline passes: then
+    /// something still holds the unlinked file's blocks (an open descriptor).
+    func returnSpace(_ ballast: URL, within deadline: Duration = .seconds(30)) async throws {
+        let ballastBytes = (try FileManager.default.attributesOfItem(atPath: ballast.path)[.size] as? Int) ?? 0
+        let target = freeBytes() + ballastBytes / 10 * 9
+        try FileManager.default.removeItem(at: ballast)
+        let clock = ContinuousClock()
+        let giveUp = clock.now + deadline
+        while freeBytes() < target {
+            guard clock.now < giveUp else {
+                throw FixtureFailure(words: "space did not return within \(deadline) of removing the \(ballastBytes)-byte ballast: "
+                                     + "\(freeBytes()) B free, wanted \(target) — something still holds the unlinked ballast open")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     func freeBytes() -> Int {

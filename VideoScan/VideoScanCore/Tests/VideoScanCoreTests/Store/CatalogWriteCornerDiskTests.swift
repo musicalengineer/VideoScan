@@ -87,8 +87,8 @@ struct CatalogWriteCornerDiskTests {
             #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
         }
 
-        // Space returns: the same edits (reuseEdits) land.
-        try FileManager.default.removeItem(at: ballast)
+        // Space returns — the volume reports it (returnSpace): the same edits (reuseEdits) land.
+        try await volume.returnSpace(ballast)
         var retried = await session.commitNotesOutcome("c1-during", reuseEdits: true)
         if case .refused = retried {
             // Today at .nearlyFull the session refuses its own retry (#338);
@@ -217,7 +217,7 @@ struct CatalogWriteCornerDiskTests {
         #expect(try CatalogDiskFullTests.storedGeneration(database) == before)
         #expect(try CatalogHardKillTests.integrityCheck(database) == ["ok"])
 
-        try FileManager.default.removeItem(at: ballast)
+        try await volume.returnSpace(ballast)   // the volume reports the space back
         start = clock.now
         var landed = await session.commitNotesOutcome("scale-under-pressure", reuseEdits: true)
         if case .refused = landed {
