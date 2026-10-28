@@ -4,8 +4,6 @@ import XCTest
 /// Codec round-trip + corruption handling + Release timings for the
 /// compiled artifact (GedcomCompiledTree). Timings print as COMPILED[…].
 final class GedcomCompiledTreeTests: XCTestCase {
-    static let bigTree = URL(fileURLWithPath:
-        "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
     /// Exhaustive-verify budget (Debug `swift test`; Release is several×
     /// faster). 100k people + ~50k families + index compare.
@@ -221,25 +219,22 @@ final class GedcomCompiledTreeTests: XCTestCase {
     }
 
     func testRealExport() throws {
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path))
+        let bigTree = try RealFamilyData.require(RealFamilyData.bigTree)
         var graph: GedcomFamilyGraph?
-        print("COMPILED[real] parse: \(ms { graph = GedcomFamilyGraph(fileURL: Self.bigTree) }) ms")
+        print("COMPILED[real] parse: \(ms { graph = GedcomFamilyGraph(fileURL: bigTree) }) ms")
         try roundTrip(try XCTUnwrap(graph), label: "real")
-        print("COMPILED[real] sourceKey: \(try ms { _ = try GedcomCompiledTree.sourceKey(for: Self.bigTree) }) ms")
-        print("COMPILED[real] fullSHA256: \(try ms { _ = try GedcomCompiledTree.fullSHA256(of: Self.bigTree) }) ms")
+        print("COMPILED[real] sourceKey: \(try ms { _ = try GedcomCompiledTree.sourceKey(for: bigTree) }) ms")
+        print("COMPILED[real] fullSHA256: \(try ms { _ = try GedcomCompiledTree.fullSHA256(of: bigTree) }) ms")
     }
 
     // MARK: Store contract (codex #792 / #797) — headless, Core-only
 
-    static let donnaPull = URL(fileURLWithPath:
-        "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/pulls/familysearch-donna-20generations.ged")
 
     /// The launch cost of full-hash invalidation on the two real pulls
     /// (read-only). Printed, and bounded loosely so a regression to
     /// per-byte hashing would show.
     func testFullHashCostOnRealPulls() throws {
-        let pulls = [Self.bigTree, Self.donnaPull].filter { FileManager.default.fileExists(atPath: $0.path) }
-        try XCTSkipUnless(!pulls.isEmpty)
+        let pulls = try [RealFamilyData.bigTree, RealFamilyData.donnaPull].map { try RealFamilyData.require($0) }
         var total = 0.0
         for url in pulls {
             let size = try GedcomCompiledTree.sourceStat(url).size

@@ -7,8 +7,6 @@ import XCTest
 /// run both ways on the synthetic 100k tree, on a hand-built edge-case
 /// tree, and — when the archive is mounted — on the real 16k export.
 final class GedcomIndexEquivalenceTests: XCTestCase {
-    static let bigTree = URL(fileURLWithPath:
-        "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
     // MARK: Frozen linear reference implementations (do not "fix")
 
@@ -422,8 +420,8 @@ final class GedcomIndexEquivalenceTests: XCTestCase {
     }
 
     func testRealExport() throws {
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path))
-        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
+        let bigTree = try RealFamilyData.require(RealFamilyData.bigTree)
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: bigTree))
         check(graph, label: "real")
         let ids = graph.people.keys.sorted()
         checkWalks(graph, label: "real", pairs: [

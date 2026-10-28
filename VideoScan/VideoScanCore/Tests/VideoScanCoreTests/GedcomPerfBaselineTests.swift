@@ -4,8 +4,6 @@ import XCTest
 /// Perf baseline (2026-08-28). Prints timings; asserts nothing beyond
 /// sanity so the numbers can be read from `swift test -c release`.
 final class GedcomPerfBaselineTests: XCTestCase {
-    static let bigTree = URL(fileURLWithPath:
-        "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
     func ms(_ body: () -> Void) -> Double {
         let t0 = DispatchTime.now().uptimeNanoseconds
@@ -67,9 +65,9 @@ final class GedcomPerfBaselineTests: XCTestCase {
     }
 
     func testMemoryReal() throws {
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path))
+        let bigTree = try RealFamilyData.require(RealFamilyData.bigTree)
         let base = Self.residentMB()
-        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: bigTree))
         let afterParse = Self.residentMB()
         _ = graph.index
         let afterIndex = Self.residentMB()
@@ -81,9 +79,9 @@ final class GedcomPerfBaselineTests: XCTestCase {
     }
 
     func testRealFileBaseline() throws {
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path))
+        let bigTree = try RealFamilyData.require(RealFamilyData.bigTree)
         var graph: GedcomFamilyGraph?
-        print("BASE[real] parse: \(ms { graph = GedcomFamilyGraph(fileURL: Self.bigTree) }) ms")
+        print("BASE[real] parse: \(ms { graph = GedcomFamilyGraph(fileURL: bigTree) }) ms")
         report("real", graph!, root: graph!.rootPersonID)
     }
 

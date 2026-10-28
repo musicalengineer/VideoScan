@@ -31031,6 +31031,19 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_no_real_volume_reads_in_tests.py",
+      "stage": "unit",
+      "suites": [
+        "test_no_real_volume_reads_in_tests.py"
+      ],
+      "tests": [
+        "test_real_volume_urls_only_behind_the_opt_in",
+        "test_the_pattern_catches_the_2026_10_28_shape"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_shell_utf8_variable_names.py",
       "stage": "unit",
       "suites": [
@@ -33783,6 +33796,10 @@
         },
         {
           "name": "tests/test_sensor_lane_stamp.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_no_real_volume_reads_in_tests.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

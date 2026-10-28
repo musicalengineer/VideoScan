@@ -6,8 +6,6 @@ import XCTest
 /// replace computed. The reference implementations below are the
 /// pre-change versions, copied verbatim and frozen (do not "fix").
 final class GedcomLaunchTablesEquivalenceTests: XCTestCase {
-    static let bigTree = URL(fileURLWithPath:
-        "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-tree-20generations.ged")
 
     // MARK: Frozen: FamilyAssetIdentityDirectory pass 1 (2026-08-26 builder)
 
@@ -292,8 +290,8 @@ final class GedcomLaunchTablesEquivalenceTests: XCTestCase {
     }
 
     func testRealExportMatchesFrozenReference() throws {
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: Self.bigTree.path), "archive not mounted")
-        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: Self.bigTree))
+        let bigTree = try RealFamilyData.require(RealFamilyData.bigTree)
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: bigTree))
         check(graph, label: "real")
     }
 
