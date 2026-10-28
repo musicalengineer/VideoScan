@@ -71,6 +71,72 @@ struct TimingBudgetTests {
         #expect(!TimingBudget.LoadSample(load: 99, logicalCores: 0).isBusy)
     }
 
+    // GH #208 follow-up (2026-10-27): the threshold is tier-aware. Injected
+    // core counts: M5 Ultra 30 logical / 10 fast ("Super"), M4 Max 16 / 12,
+    // M1 Max 10 / 8, a single-tier host (fastCores nil).
+
+    @Test("tier-aware: the Ultra (30 cores, 10 fast) is busy at 7 — the gauntlet's 8.0 and swift test's 11–14 are busy")
+    func ultraIsJudgedByItsFastTier() {
+        let ultra = { (load: Double) in TimingBudget.LoadSample(load: load, logicalCores: 30, fastCores: 10) }
+        #expect(ultra(8.0).isBusy, "gauntlet 2026-10-27: load 8.0 on the Ultra was called quiet")
+        #expect(ultra(11).isBusy)
+        #expect(ultra(14).isBusy)
+        #expect(ultra(7.0).isBusy, "threshold = 10 × 0.7 = 7, inclusive")
+        #expect(!ultra(6.99).isBusy)
+        #expect(!ultra(2).isBusy)
+        #expect(ultra(1).busyThreshold == 7)
+    }
+
+    @Test("tier-aware: the M4 Max (16 cores, 12 fast) keeps its old threshold of 8")
+    func m4ThresholdUnchanged() {
+        let m4 = { (load: Double) in TimingBudget.LoadSample(load: load, logicalCores: 16, fastCores: 12) }
+        #expect(m4(1).busyThreshold == 8)
+        #expect(m4(8.0).isBusy)
+        #expect(!m4(7.9).isBusy)
+        #expect(m4(1).busyThreshold == TimingBudget.LoadSample(load: 1, logicalCores: 16).busyThreshold)
+    }
+
+    @Test("tier-aware: a single-tier host, or a nonsense tier count, falls back to half the logical cores")
+    func singleTierFallsBack() {
+        #expect(TimingBudget.busyLoadThreshold(logicalCores: 16, fastCores: nil) == 8)
+        #expect(TimingBudget.busyLoadThreshold(logicalCores: 16, fastCores: 0) == 8)
+        #expect(TimingBudget.busyLoadThreshold(logicalCores: 16, fastCores: 16) == 8, "all cores fast = one tier")
+        #expect(TimingBudget.busyLoadThreshold(logicalCores: 16, fastCores: 40) == 8)
+        #expect(TimingBudget.busyLoadThreshold(logicalCores: 10, fastCores: 8) == 5, "M1 Max: min(5, 5.6)")
+        #expect(TimingBudget.busyLoadThreshold(logicalCores: 3, fastCores: nil) == 1.5, "GitHub runner VM")
+    }
+
+    @Test("tier-aware: judge on the Ultra at the gauntlet's load is a known issue, not a strict fail")
+    func ultraGauntletMissIsKnownIssue() {
+        let s = TimingBudget.LoadSample(load: 8.0, logicalCores: 30, fastCores: 10)
+        let j = TimingBudget.judge("100k settled keystroke '1990s' (median of 5)", budget: .milliseconds(50),
+                                   measured: .milliseconds(53), before: s, after: s, environment: [:])
+        #expect(j.verdict == .knownIssue)
+        #expect(j.modeReason == "busy")
+        #expect(j.logLine.contains("on 30 cores (10 fast)"))
+        // The nightly's strict pin still wins.
+        let pinned = TimingBudget.judge("t", budget: .milliseconds(50), measured: .milliseconds(53), before: s, after: s,
+                                        environment: [TimingBudget.strictEnvironmentKey: "1"])
+        #expect(pinned.verdict == .fail)
+    }
+
+    @Test("tier-aware: the legacy load factor uses the same threshold")
+    func legacyLoadFactorIsTierAware() {
+        #expect(TimingBudget.loadFactor(debugBuild: true, loadAverage: 8, activeProcessors: 30, fastCores: 10, loadedHeadroom: 1.5) == 1.5)
+        #expect(TimingBudget.loadFactor(debugBuild: true, loadAverage: 6, activeProcessors: 30, fastCores: 10, loadedHeadroom: 1.5) == 1)
+        #expect(TimingBudget.loadFactor(debugBuild: true, loadAverage: 7.9, activeProcessors: 16, fastCores: 12, loadedHeadroom: 1.5) == 1)
+        #expect(TimingBudget.loadFactor(debugBuild: true, loadAverage: 8, activeProcessors: 16, fastCores: 12, loadedHeadroom: 1.5) == 1.5)
+    }
+
+    @Test("this host's tier probe is consistent with its core count")
+    func fastTierProbeIsSane() {
+        let logical = ProcessInfo.processInfo.activeProcessorCount
+        if let fast = TimingBudget.fastTierCores() {
+            #expect(fast > 0 && fast < logical, "perflevel0 is a strict subset of the active cores")
+        }
+        #expect(TimingBudget.sampleLoad().fastCores == TimingBudget.fastTierCores())
+    }
+
     @Test("busy: a miss up to 3× is a known issue, over 3× fails; a pass is still a pass")
     func busyBand() {
         #expect(Self.judge(99, before: Self.busy).verdict == .pass)
