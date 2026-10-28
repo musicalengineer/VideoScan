@@ -113,18 +113,34 @@ enum HallieBenchStats {
 final class MainActorHopProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [Double] = []
+    private var hopPending = false
     private var task: Task<Void, Never>?
 
     func start(intervalMilliseconds: UInt64 = 2) {
         task = Task.detached(priority: .userInitiated) { [self] in
             while !Task.isCancelled {
                 let start = ContinuousClock.now
+                lock.withLock { hopPending = true }
                 await MainActor.run { }
                 let elapsed = HallieBenchClock.seconds(since: start)
-                lock.withLock { samples.append(elapsed) }
+                lock.withLock { hopPending = false; samples.append(elapsed) }
                 try? await Task.sleep(nanoseconds: intervalMilliseconds * 1_000_000)
             }
         }
+    }
+
+    /// For a caller that holds the main actor without suspending: a hop can
+    /// only land when the actor is released, so a synchronous pass between
+    /// `start()` and `stop()` is invisible unless a hop is already queued
+    /// when it begins. Blocks (no suspension) until one is, or the deadline.
+    @discardableResult
+    func waitUntilHopPending(timeoutSeconds: Double = 2) -> Bool {
+        let deadline = ContinuousClock.now + .milliseconds(Int(timeoutSeconds * 1000))
+        while ContinuousClock.now < deadline {
+            if lock.withLock({ hopPending }) { return true }
+            usleep(100)
+        }
+        return false
     }
 
     func stop() -> [Double] {
@@ -636,9 +652,16 @@ struct HallieQueryBench {
             probe.start(intervalMilliseconds: 1)
             var blocking: [Double] = []
             for _ in 0..<3 {
+                // No suspension point inside the pass, so the probe sees it
+                // only through a hop queued BEFORE it starts (Swift 6 moved
+                // the pass onto this actor directly, 8429cf3b, and the probe
+                // went blind: max hop 0.0 ms against a 760 ms pass).
+                // Queue one, run the pass, then yield so that hop lands.
+                #expect(probe.waitUntilHopPending(), "the hop probe never queued a hop")
                 let start = ContinuousClock.now
                 _ = HallieCatalogStats.compute(records: records)
                 blocking.append(HallieBenchClock.seconds(since: start))
+                try? await Task.sleep(nanoseconds: 5_000_000)
             }
             let blockingHops = probe.stop()
 
