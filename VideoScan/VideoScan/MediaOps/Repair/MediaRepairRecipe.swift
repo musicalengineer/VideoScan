@@ -85,6 +85,13 @@ struct MediaRepairRecipe: Equatable, Sendable {
     private(set) var skipped: [Skipped] = []
     private(set) var picture: MediaRepairPicture = .copy
     private(set) var sound: MediaRepairSound = .copy
+    /// Balance was wanted on a sound layout only the dedicated Balance
+    /// Audio job handles (raw DV, several sound tracks).
+    private(set) var balanceNeedsDedicatedJob = false
+
+    /// Nothing runs in this pass but the balance the dedicated job does:
+    /// Repair Now starts that job (MediaRepairSelection.repairNow).
+    var isDedicatedBalanceOnly: Bool { applied.isEmpty && balanceNeedsDedicatedJob }
 
     /// Nothing is decoded: the remux's packet-for-packet proof applies.
     var isLossless: Bool { picture == .copy && sound == .copy }
@@ -120,6 +127,7 @@ struct MediaRepairRecipe: Equatable, Sendable {
             skipped.append(Skipped(fix: fix, reason: Self.noSoundFileReason))
         case .balanceAudio:
             if let why = Self.balanceRefusal(balance, sound: sound) {
+                balanceNeedsDedicatedJob = why == Self.dedicatedBalanceReason
                 skipped.append(Skipped(fix: fix, reason: why))
             } else if let balance, let pan = balance.pan {
                 sound = .balance(pan: pan, encodeArgs: balance.encodeArgs)
@@ -136,11 +144,19 @@ struct MediaRepairRecipe: Equatable, Sendable {
         guard let balance, balance.pan != nil else {
             return "this session has no channel measurement for the sound — run a full Verify, then Repair"
         }
-        if !balance.singleSoundStream || balance.rawDV {
-            return "this file's sound layout (several sound tracks, or raw DV) needs the dedicated Balance Audio job"
-        }
+        if needsDedicatedBalanceJob(balance) { return dedicatedBalanceReason }
         return nil
     }
+
+    /// Raw DV (re-read at its probed rate, written as QuickTime) and
+    /// several sound tracks (only the program track kept) are the
+    /// dedicated BalanceAudioJob's; the combined pass never touches them.
+    static func needsDedicatedBalanceJob(_ balance: MediaRepairBalanceInput) -> Bool {
+        !balance.singleSoundStream || balance.rawDV
+    }
+
+    static let dedicatedBalanceReason =
+        "this file's sound layout (several sound tracks, or raw DV) needs the dedicated Balance Audio job — tick Balance Audio on its own and Repair Now runs it"
 
     /// The new file's extension: a pure stream copy keeps the container;
     /// a re-encoded picture follows MediaRepairOutput's rule; rebuilt PCM

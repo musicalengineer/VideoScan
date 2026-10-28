@@ -381,7 +381,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
         "CatalogRowContextMenu+Media.swift": 0,   // (Repair Damaged Audio moved behind Repair…, 2026-10-08)
         "CheckMediaSheet.swift": 1,               // Check Media (quick / full), 2026-10-07
-        "MediaRepairSheet.swift": 1,              // Repair Now (the one repair door), 2026-10-08
+        "MediaRepairSheet.swift": 2,              // Repair Now (the one repair door), 2026-10-08; its Balance Audio route (raw DV / several tracks), 2026-10-28
         "CatalogRowContextMenu+Actions.swift": 5, // analyze×2, reformat×2, "Analyze Anyway" (2026-10-10)
         "CatalogHelpers.swift": 0,                // (Extract Facial Frames retired 2026-10-07)
         "CleanupSheet.swift": 1,

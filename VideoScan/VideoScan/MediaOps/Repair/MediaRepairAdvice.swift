@@ -41,6 +41,9 @@ enum MediaRepairAdvice: Equatable {
 
     /// The fix, in one line.
     static func fixLine(_ recipe: MediaRepairRecipe) -> String {
+        if recipe.isDedicatedBalanceOnly {
+            return "Repair Now balances the sound to both speakers (the Balance Audio job) \u{2014} into a new file; the original is never changed."
+        }
         if recipe.isLossless {
             return "A lossless remux puts sound and picture side by side; nothing is re-encoded. The original is never changed."
         }

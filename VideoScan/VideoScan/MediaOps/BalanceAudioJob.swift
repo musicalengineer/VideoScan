@@ -296,6 +296,18 @@ enum BalanceAudioFix {
         return candidate
     }
 
+    /// The publish-time name when the planned one is taken: the next free
+    /// `<stem>_balanced N` IN THE PLANNED FOLDER. A planned folder is a
+    /// choice (Repair's chosen folder for a protected original, Archive
+    /// Angel's entry folder); falling back beside the source would write
+    /// next to a protected original (regression 2026-10-28).
+    static func publishFallbackURL(planned: URL, sourcePath: String, containerFormat: String,
+                                   taken: (String) -> Bool) -> URL {
+        let sourceName = URL(fileURLWithPath: sourcePath).lastPathComponent
+        let inPlannedFolder = planned.deletingLastPathComponent().appendingPathComponent(sourceName).path
+        return balancedOutputURL(forSourcePath: inPlannedFolder, containerFormat: containerFormat, fileExists: taken)
+    }
+
     /// Free-space requirement: output ≈ source size (streams copied)
     /// plus worst-case audio growth (lossy → 48 kHz stereo PCM is
     /// ~192 KB/s) plus a 64 MB muxer/headroom cushion. Pure.
@@ -496,10 +508,9 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
         }
         var candidate = outputURL
         if taken(candidate.path) {
-            candidate = BalanceAudioFix.balancedOutputURL(
-                forSourcePath: inputPath,
-                containerFormat: analysis.shape.containerFormat,
-                fileExists: taken)
+            candidate = BalanceAudioFix.publishFallbackURL(
+                planned: outputURL, sourcePath: inputPath,
+                containerFormat: analysis.shape.containerFormat, taken: taken)
         }
         let partialURL = ReformatJob.partialURL(for: candidate)
 
@@ -606,10 +617,9 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
                     finish(failed: "Could not place the balanced copy next to the original: \(error.localizedDescription)")
                     return
                 }
-                candidate = BalanceAudioFix.balancedOutputURL(
-                    forSourcePath: inputPath,
-                    containerFormat: analysis.shape.containerFormat,
-                    fileExists: taken)
+                candidate = BalanceAudioFix.publishFallbackURL(
+                    planned: outputURL, sourcePath: inputPath,
+                    containerFormat: analysis.shape.containerFormat, taken: taken)
             }
         }
         publishedURL = candidate
