@@ -82,7 +82,9 @@ extension CutoverScene {
     func writeDesignation(rootPath: String) throws -> MasterArchiveDesignation {
         let store = CatalogStore(directory: folder)
         let records = store.load()
-        let designation = MasterArchiveDesignation(targetPath: "/Volumes/Archive", rootPath: rootPath,
+        // The target is the root's parent: a test passes a temp path, never a
+        // real volume (clearMasterArchive un-badges both on disk; 2026-10-28).
+        let designation = MasterArchiveDesignation(targetPath: (rootPath as NSString).deletingLastPathComponent, rootPath: rootPath,
                                                    designatedAt: Date(timeIntervalSince1970: 1_790_000_000))
         store.masterArchive = designation
         guard store.saveNow(records: records) else { throw CutoverFailure(words: "catalog.json was not saved") }
