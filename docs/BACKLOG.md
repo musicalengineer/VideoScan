@@ -67,6 +67,7 @@
 - (ruling) Event categories beyond the nine; dismiss semantics; Open = QuickTime or in-app seek.
 - (ruling) Cloud use on derived text (captions/transcripts) for later labelling, or local only.
 - Bounded retrieval experiment: rules vs SigLIP 2 vs Qwen3-VL-Embedding-2B on held-out occasions, split by occasion and lineage.
+- Video LLM: frozen local VLM + structured scene JSON → assertions (era claim, place_signature); era benchmark and 18-event retrieval test first, LoRA only on extraction errors. `docs/research/video_llm_for_family_media_2026-10-29.md`.
 - "Same / different / uncertain occasion" as a first-class correction exported as versioned examples.
 - Re-run Whisper for segment timestamps on FamilyArchive (~21 machine-hours); retain segment timing.
 - "Share text across copies" cycler (captions/transcript/OCR by content identity, with provenance).
