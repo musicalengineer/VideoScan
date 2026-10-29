@@ -128,11 +128,17 @@ def log(line: str) -> None:
 
 
 def notify(message: str) -> None:
-    run(["osascript", "-e", f'display notification "{message}" with title "Disk check"'])
+    # The message travels as argv, never spliced into the script: volume names may hold quotes.
+    run(["osascript",
+         "-e", "on run argv",
+         "-e", 'display notification (item 1 of argv) with title "Disk check"',
+         "-e", "end run",
+         message])
 
 
 def videoscan_running() -> bool:
-    return run(["pgrep", "-x", "VideoScan"]).returncode == 0
+    """Fail closed: only pgrep's "no match" (exit 1) proves VideoScan is not running."""
+    return run(["pgrep", "-x", "VideoScan"]).returncode != 1
 
 
 # Outcomes. Only "ok" and "repaired" count as success.
@@ -201,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
         print("--repair writes file-system metadata and needs sudo.", file=sys.stderr)
         return 2
     if mode != "live" and videoscan_running():
-        print("VideoScan is running; quit it first (offline/repair unmount volumes).", file=sys.stderr)
+        print("VideoScan is running (or pgrep could not tell); quit it first "
+              "(offline/repair unmount volumes).", file=sys.stderr)
         return 2
 
     try:
@@ -220,6 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     log(f"START disk_check mode={mode} containers={len(picked)}")
     for s in skipped:
         log(f"  skip {s}")
+    if not picked:
+        log(f"OUTCOME disk_check mode={mode} error: no containers to check; nothing was checked")
+        notify("No disks were checked.")
+        return 1
     failed = []
     for c in picked:
         try:

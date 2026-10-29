@@ -187,5 +187,49 @@ class Outcomes(unittest.TestCase):
         self.assertNotIn("repairVolume", calls)
 
 
+class MainGuards(unittest.TestCase):
+    """Codex closing pass 2026-10-29: fail closed around main()."""
+
+    def setUp(self):
+        self.saved = {n: getattr(disk_check, n) for n in ("run", "log", "notify", "discover", "check_one")}
+        disk_check.log = lambda line: None
+        self.notes, self.checked = [], []
+        disk_check.notify = self.notes.append
+        disk_check.check_one = lambda c, mode: (self.checked.append(c.ref), ("ok", ""))[1]
+        disk_check.discover = containers
+
+    def tearDown(self):
+        for n, f in self.saved.items():
+            setattr(disk_check, n, f)
+
+    def test_pgrep_error_refuses_offline(self):
+        disk_check.run = lambda cmd: subprocess.CompletedProcess(cmd, 2, "", "pgrep: bad")
+        self.assertNotEqual(disk_check.main(["--offline", "--quiet"]), 0)
+        self.assertEqual(self.checked, [])
+
+    def test_pgrep_not_found_allows_offline(self):
+        disk_check.run = lambda cmd: subprocess.CompletedProcess(cmd, 1, "", "")
+        self.assertEqual(disk_check.main(["--offline", "--quiet"]), 0)
+        self.assertEqual(self.checked, ["disk13", "disk11"])
+
+    def test_zero_containers_checked_is_a_failure(self):
+        disk_check.discover = lambda: []
+        self.assertEqual(disk_check.main(["--quiet"]), 1)
+        self.assertEqual(len(self.notes), 1)
+
+
+class Notify(unittest.TestCase):
+    def test_message_is_passed_as_an_argument_never_spliced_into_applescript(self):
+        saved, calls = disk_check.run, []
+        disk_check.run = lambda cmd: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+        try:
+            disk_check.notify('disk13 (Rick "Archive"): problemsFound')
+        finally:
+            disk_check.run = saved
+        cmd = calls[0]
+        self.assertEqual(cmd[-1], 'disk13 (Rick "Archive"): problemsFound')
+        self.assertFalse(any("Archive" in part for part in cmd[:-1]))
+
+
 if __name__ == "__main__":
     unittest.main()

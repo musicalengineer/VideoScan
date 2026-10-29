@@ -29805,10 +29805,13 @@
         "test_exit_zero_without_ok_text_is_a_failure",
         "test_live_checks_internal_and_external_skips_disk_image",
         "test_live_ok_and_problems_never_unmount",
+        "test_message_is_passed_as_an_argument_never_spliced_into_applescript",
         "test_nonzero_exit_is_a_failure_even_with_ok_text",
         "test_offline_never_touches_the_internal_disk",
         "test_ok_needs_exit_zero_and_ok_text",
         "test_partial_unmount_failure_still_remounts_and_is_not_checked",
+        "test_pgrep_error_refuses_offline",
+        "test_pgrep_not_found_allows_offline",
         "test_remount_failure_after_clean_verify_is_never_ok",
         "test_remount_failure_after_unmount_failure_is_left_unmounted",
         "test_repair_matches_by_volume_name_or_ref",
@@ -29817,7 +29820,8 @@
         "test_repair_runs_only_after_a_failed_verify",
         "test_repair_that_fails_is_problems_found_not_repaired",
         "test_target_naming_a_protected_container_never_selects_another",
-        "test_unknown_store_info_is_never_unmounted_or_repaired"
+        "test_unknown_store_info_is_never_unmounted_or_repaired",
+        "test_zero_containers_checked_is_a_failure"
       ]
     },
     {
