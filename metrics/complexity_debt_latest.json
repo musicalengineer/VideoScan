@@ -1,14 +1,14 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-28T10:54:24Z",
- "sha": "7370a559",
+ "ts": "2026-10-29T11:11:41Z",
+ "sha": "f59ba0ae",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
  "offenders": 391,
- "baseline_before": 387,
+ "baseline_before": 384,
  "baseline_after": 384,
  "new": [
   {
@@ -180,10 +180,6 @@
    "base_nloc": 125
   }
  ],
- "fixed": [
-  "VideoScan/VideoScan/Catalog/VideoScanModel+RescanPreservation.swift::RescanPreservedFields.isWorthRestoring",
-  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift::HallieTurnExecutor.executePresenceLike",
-  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantined"
- ],
+ "fixed": [],
  "shrink_skipped": null
 }

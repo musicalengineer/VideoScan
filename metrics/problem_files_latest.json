@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-28T10:55:00Z",
- "sha": "7370a559",
+ "ts": "2026-10-29T11:12:26Z",
+ "sha": "f59ba0ae",
  "formula_version": 1,
  "files_scored": 808,
  "rows": [
@@ -13,19 +13,19 @@
    "lines": 1903,
    "could_be_private": 5,
    "widened_for_split": 20,
-   "churn_7d": 7,
-   "score": 100.8
+   "churn_7d": 5,
+   "score": 84.0
   },
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
-   "offenders": 6,
+   "offenders": 5,
    "worst_ccn": 31,
    "new_or_worse": 1,
    "lines": 2942,
    "could_be_private": 38,
    "widened_for_split": 0,
    "churn_7d": 1,
-   "score": 59.9
+   "score": 57.5
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
@@ -57,30 +57,8 @@
    "lines": 1646,
    "could_be_private": 18,
    "widened_for_split": 0,
-   "churn_7d": 14,
+   "churn_7d": 10,
    "score": 39.7
-  },
-  {
-   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
-   "offenders": 2,
-   "worst_ccn": 24,
-   "new_or_worse": 1,
-   "lines": 1353,
-   "could_be_private": 11,
-   "widened_for_split": 0,
-   "churn_7d": 4,
-   "score": 34.3
-  },
-  {
-   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 1917,
-   "could_be_private": 6,
-   "widened_for_split": 28,
-   "churn_7d": 6,
-   "score": 34.3
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift",
@@ -169,6 +147,28 @@
    "widened_for_split": 2,
    "churn_7d": 1,
    "score": 24.5
+  },
+  {
+   "file": "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift",
+   "offenders": 7,
+   "worst_ccn": 32,
+   "new_or_worse": 0,
+   "lines": 716,
+   "could_be_private": 13,
+   "widened_for_split": 0,
+   "churn_7d": 0,
+   "score": 23.9
+  },
+  {
+   "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift",
+   "offenders": 1,
+   "worst_ccn": 39,
+   "new_or_worse": 0,
+   "lines": 622,
+   "could_be_private": 16,
+   "widened_for_split": 0,
+   "churn_7d": 3,
+   "score": 23.7
   }
  ]
 }
