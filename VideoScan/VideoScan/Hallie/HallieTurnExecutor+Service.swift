@@ -488,21 +488,16 @@ extension HallieTurnExecutor {
         }
 
         /// The sentences of a passage that speak of THIS person's service:
-        /// a service word, and the person's own name (or a sentence-initial
-        /// "he"/"she") in the same sentence. A research note about Ellen that
-        /// says her husband "was … a soldier" is not about Ellen's service
-        /// (live data, 2026-09-23).
+        /// a service word and the person, by a full name or a pronoun that
+        /// is still them, as the one who served (HallieServiceAttribution).
+        /// A research note about Ellen that says her husband "was … a
+        /// soldier" is not about Ellen's service (live data, 2026-09-23);
+        /// nor is "Wife of <her husband>, a … soldier" through her married
+        /// surname (strict-052, 2026-10-28).
         static func serviceSentences(in text: String, about person: CyberBrainPerson) -> [String] {
-            let names = Set(([person.canonicalName] + person.aliases.filter { !CyberBrainIndex.isPossessiveAlias(FamilyIdentityText.normalized($0)) })
-                .flatMap { FamilyIdentityText.tokens($0) }
-                .filter { $0.count >= 3 })
-            return sentences(of: text).filter { sentence in
-                guard HallieServiceQuestion.mentionsService(sentence) else { return false }
-                let words = Set(FamilyIdentityText.tokens(sentence))
-                if !words.isDisjoint(with: names) { return true }
-                let lower = sentence.lowercased()
-                return lower.hasPrefix("he ") || lower.hasPrefix("she ")
-            }
+            let aliases = person.aliases.filter { !CyberBrainIndex.isPossessiveAlias(FamilyIdentityText.normalized($0)) }
+            let names = HallieServiceAttribution.names(canonicalName: person.canonicalName, aliases: aliases)
+            return HallieServiceAttribution.serviceSentences(sentences(of: text), about: names)
         }
 
         private static func sentences(of text: String) -> [String] {

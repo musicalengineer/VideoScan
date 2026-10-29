@@ -18393,6 +18393,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieServiceStoriesTests+Attribution.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieServiceStoriesTests"
+      ],
+      "tests": [
+        "ownServiceStillAttributed",
+        "relativesServiceNotAttributed",
+        "soldiersWifeNotListed"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieServiceStoriesTests+QA.swift",
       "stage": "hallie",
       "suites": [
@@ -35405,7 +35418,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1109,
+      "expected_floor": 1112,
       "modes": [
         {
           "name": "strict",
