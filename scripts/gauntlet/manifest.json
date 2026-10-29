@@ -28879,7 +28879,8 @@
       "suites": [
         "DirectoryListingRetryTests",
         "WalkIntegrityTests",
-        "RealVolumeWalkSensorTests"
+        "RealVolumeWalkSensorTests",
+        "RealVolumeWalkSensorGateTests"
       ],
       "tests": [
         "bareCocoa256IsRetried",
@@ -28887,6 +28888,7 @@
         "nonRegularEntriesAreAudited",
         "permissionDeniedFailsImmediately",
         "persistentFailureThrowsAfterBoundedAttempts",
+        "realVolumeSensorIsOptIn",
         "transientFailureRecoversOnRetry",
         "unknownErrorClassFailsImmediately",
         "unreadableDirectoryDoesNotLoseSiblings",
