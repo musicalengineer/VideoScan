@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 387,
+ "entry_count": 384,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -24,7 +24,7 @@
   },
   "VideoScan/VideoScan/App/BundleImporter.swift::BundleImporter.installPOIs": {
    "ccn": 12,
-   "nloc": 83
+   "nloc": 82
   },
   "VideoScan/VideoScan/App/CompactDashboard.swift::CompactDashboard.body": {
    "ccn": 11,
@@ -296,7 +296,7 @@
   },
   "VideoScan/VideoScan/Catalog/TidyCatalogSheet.swift::TidyCatalogSheet.body": {
    "ccn": 8,
-   "nloc": 108
+   "nloc": 85
   },
   "VideoScan/VideoScan/Catalog/TriageSnapshot.swift::TriageSnapshotBuilder.build": {
    "ccn": 17,
@@ -349,10 +349,6 @@
   "VideoScan/VideoScan/Catalog/VideoScanModel+Rename.swift::VideoScanModel.renameRecord": {
    "ccn": 26,
    "nloc": 94
-  },
-  "VideoScan/VideoScan/Catalog/VideoScanModel+RescanPreservation.swift::RescanPreservedFields.isWorthRestoring": {
-   "ccn": 36,
-   "nloc": 38
   },
   "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift::FamilyAssetImageValidator.isStructurallyComplete": {
    "ccn": 17,
@@ -770,10 +766,6 @@
    "ccn": 19,
    "nloc": 48
   },
-  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift::HallieTurnExecutor.executePresenceLike": {
-   "ccn": 44,
-   "nloc": 218
-  },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+RelativeFacts.swift::HallieTurnExecutor.executeRelativeFact": {
    "ccn": 29,
    "nloc": 93
@@ -980,7 +972,7 @@
   },
   "VideoScan/VideoScan/Media/SeekingFrameProvider.swift::SeekingFrameProvider.frames": {
    "ccn": 8,
-   "nloc": 82
+   "nloc": 81
   },
   "VideoScan/VideoScan/Media/VideoScanModel+ContentHashBackfill.swift::VideoScanModel.runContentHashBackfill": {
    "ccn": 17,
@@ -1021,10 +1013,6 @@
   "VideoScan/VideoScan/MediaOps/CorrelationScorer+Snaps.swift::CorrelationScorer.assignPairs": {
    "ccn": 18,
    "nloc": 81
-  },
-  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantined": {
-   "ccn": 24,
-   "nloc": 86
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.phaseOne": {
    "ccn": 20,

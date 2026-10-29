@@ -1,7 +1,7 @@
 {
  "note": "CCN 15 excess ratchet (Rick 2026-10-07): CI preflight (scripts/complexity_gate.py --all) fails when the tree's total excess, the sum of max(0, CCN - 15) over every function, is above `total_excess` (excess a recorded override let in is not counted). CCN is a signal, not the goal. `files` is a per-file snapshot for the error message only. `total_excess` only shrinks: the 2 AM nightly lowers it; regenerate deliberately with `scripts/complexity_metrics.py --update-ccn15-excess` and say why in the commit.",
  "threshold_ccn": 15,
- "total_excess": 2009,
+ "total_excess": 1959,
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": 10,
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift": 3,
@@ -52,7 +52,6 @@
   "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift": 5,
   "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift": 5,
   "VideoScan/VideoScan/Catalog/VideoScanModel+Rename.swift": 11,
-  "VideoScan/VideoScan/Catalog/VideoScanModel+RescanPreservation.swift": 21,
   "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift": 5,
   "VideoScan/VideoScan/FamilyTree/FamilyKinshipInference.swift": 1,
   "VideoScan/VideoScan/FamilyTree/FamilyKinshipOverlay.swift": 6,
@@ -113,7 +112,6 @@
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+DateOrdered.swift": 14,
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+PeopleTab.swift": 21,
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+PhotoAsk.swift": 4,
-  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift": 29,
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+RelativeFacts.swift": 14,
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Service.swift": 6,
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+SpeakerKinship.swift": 9,
