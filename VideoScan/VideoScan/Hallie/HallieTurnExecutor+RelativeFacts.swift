@@ -118,12 +118,29 @@ extension HallieTurnExecutor {
     /// People-tab profiles and CyberBrain only — Rick's own names, never
     /// the imported tree's 39k tokens. The bare-kin rule (GH #180) yields
     /// to these and to nothing else.
+    ///
+    /// A claim is a WHOLE name, on both sides (live 2026-10-28, strict-056,
+    /// 8 of 8 replays): `CyberBrainIndex.resolve` also matches by single
+    /// TOKEN, so Dad Breen's CyberBrain alias "Dad Breen" made the bare word
+    /// "dad" look curated. The kin rule then yielded, the CyberBrain bridge
+    /// could not land (that record's tree pointer was from an older tree and
+    /// is absent from the merged one), and the name lookup below it found
+    /// the 1360 Welshman whose alternate NAME is "Dad ab Giwn". "Dad Breen"
+    /// is a name that CONTAINS a kin word; it does not claim the kin word.
+    /// Only an exact canonical name or alias does ("Ma" for Eileen, GH #180).
     static func isCuratedPerson(_ name: String, context: Context) -> Bool {
         if isPeopleTabPerson(name, context: context) { return true }
-        if let cyberBrain = context.cyberBrain {
-            if case .notFound = cyberBrain.resolve(name) {} else { return true }
+        guard let cyberBrain = context.cyberBrain else { return false }
+        let key = FamilyIdentityText.normalized(name)
+        let people: [CyberBrainPerson]
+        switch cyberBrain.resolve(name) {
+        case .notFound: return false
+        case .resolved(let person): people = [person]
+        case .ambiguous(let many): people = many
         }
-        return false
+        return people.contains { person in
+            ([person.canonicalName] + person.aliases).contains { FamilyIdentityText.normalized($0) == key }
+        }
     }
 
     struct RelativeFactSubject: Equatable {
