@@ -273,12 +273,20 @@ struct RealVolumeWalkSensorTests {
     static let incidentRoot =
         "/Volumes/LaCieWorkspace/CheesegraterArchive/InternalRaid/MiscVideoProjects"
 
+    /// The gate, as a pure function so it can be pinned. Opt-in, never just
+    /// "the drive is mounted" (2026-10-29): the unattended nightly must not
+    /// read a real drive. Run it by hand with VIDEOSCAN_REAL_VOLUME_SENSORS=1.
+    static func isEnabled(environment: [String: String], fileExists: (String) -> Bool) -> Bool {
+        environment["VIDEOSCAN_REAL_VOLUME_SENSORS"] == "1" && fileExists(incidentRoot)
+    }
+
     /// Read-only sensor against the directory the 2026-07-02 incident lost.
-    /// Runs only when the LaCie archive is mounted (M4 Studio); asserts the
+    /// Runs only when asked and the LaCie archive is mounted; asserts the
     /// walker sees every subtree — including TripAcrossCountry_1995_video-only,
     /// whose extensionless video-only exports (t2-v, t3-v) were the headline
     /// casualties.
-    @Test(.enabled(if: FileManager.default.fileExists(atPath: incidentRoot)))
+    @Test(.enabled(if: isEnabled(environment: ProcessInfo.processInfo.environment,
+                                 fileExists: FileManager.default.fileExists(atPath:))))
     func walkerSeesEverySubtreeOfIncidentDirectory() async throws {
         let audit = DiscoveryAuditCollector(scanRoot: Self.incidentRoot, volumeName: "MiscVideoProjects")
         let found = await collectStream(
@@ -308,5 +316,24 @@ struct RealVolumeWalkSensorTests {
         let snapshot = audit.finish(cataloged: 0)
         #expect(snapshot.directoryEnumerationErrors == 0,
                 "every subtree of the incident directory is readable in isolation")
+    }
+}
+
+/// Its own suite, so it can run (`-only-testing` filters by suite) without
+/// running the real-volume walk itself.
+@Suite("Real-volume walk sensor — gate")
+struct RealVolumeWalkSensorGateTests {
+
+    /// regression: 2026-10-29 Ultra nightly — the LaCie is now mounted on the
+    /// M5 Ultra, so this sensor ran unattended in the 05:00 nightly and the
+    /// walk never returned (95 min, killed by the 7200 s watchdog; 112 tests
+    /// never ran). A sensor that reads a real drive runs only when asked.
+    @Test("the real-volume sensor needs VIDEOSCAN_REAL_VOLUME_SENSORS=1, not just a mounted drive")
+    func realVolumeSensorIsOptIn() {
+        let mounted: (String) -> Bool = { _ in true }
+        #expect(!RealVolumeWalkSensorTests.isEnabled(environment: [:], fileExists: mounted))
+        #expect(!RealVolumeWalkSensorTests.isEnabled(environment: ["VIDEOSCAN_REAL_VOLUME_SENSORS": "0"], fileExists: mounted))
+        #expect(RealVolumeWalkSensorTests.isEnabled(environment: ["VIDEOSCAN_REAL_VOLUME_SENSORS": "1"], fileExists: mounted))
+        #expect(!RealVolumeWalkSensorTests.isEnabled(environment: ["VIDEOSCAN_REAL_VOLUME_SENSORS": "1"], fileExists: { _ in false }))
     }
 }
