@@ -16440,6 +16440,7 @@
         "HallieDadNotDafyddTests"
       ],
       "tests": [
+        "aCyberBrainTokenHitIsNotACuratedClaimButAnExactAliasIs",
         "aDeclinedCorrectionBindsNothing",
         "aDeepKinTermIsNeverANameLookup",
         "aFatherBindingNeverLeaksToMother",
@@ -16447,14 +16448,18 @@
         "afterTheCorrectionVideosOfDadKeepsRichardSr",
         "bareDadResolvesThroughThePeopleTab",
         "findVideosOfDadNeverAnswersWithDafydd",
+        "findVideosOfDadWithTheLiveCyberBrainNeverAnswersWithDafydd",
         "memoryKeepsTheSettledKinTermByRelation",
         "photosOfDadAreAboutRichardSr",
         "showDadsFamilyTreeIsNeverDafydd",
+        "siblingLanesWithTheLiveCyberBrainAreNeverDafydd",
         "sureButIAlsoWantVideosOfDadNeverAnswersWithDafydd",
+        "theLiveCyberBrainMatchesDadByTokenAndItsPointerIsStale",
         "theLiveExchangeEndsOnRichardSr",
         "theTreeReallyHasAManNamedDad",
         "whoIsDadsMotherIsNeverDafydd",
         "withNoFatherAnywhereDadIsAnHonestDeclineNeverDafydd",
+        "withTheLiveCyberBrainAndNoRowsTheTreeRecordBindsDad",
         "withoutPeopleTabRowsTheOwnersTreeRecordBindsDad"
       ]
     },
