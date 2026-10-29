@@ -53,6 +53,7 @@ class Container:
     volumes: list[str] = field(default_factory=list)
     external: bool = False   # positive evidence only: Internal == False and a non-image bus
     disk_image: bool = False
+    system: bool = False     # any volume has an APFS role (System, Data, Preboot...): a boot container
 
     @property
     def label(self) -> str:
@@ -80,6 +81,7 @@ def parse_containers(apfs_list: dict, store_info: dict[str, dict]) -> list[Conta
             external=all(i.get("Internal") is False and bool(b) and b != "Disk Image"
                          for i, b in zip(infos, buses)),
             disk_image=any(b == "Disk Image" for b in buses),
+            system=any(v.get("Roles") for v in c.get("Volumes", [])),
         ))
     return out
 
@@ -109,6 +111,9 @@ def select(containers: list[Container], mode: str, target: str | None) -> tuple[
     for c in containers:
         if c.disk_image:
             skipped.append(f"{c.label}: disk image")
+        elif mode != "live" and c.system:
+            skipped.append(f"{c.label}: holds system-role volumes (a boot container); "
+                           f"live verify only, repair from Recovery")
         elif mode != "live" and not c.external:
             skipped.append(f"{c.label}: not proven external (internal disk, or no diskutil info); "
                            f"live verify only, repair from Recovery")
@@ -201,9 +206,12 @@ def check_one(c: Container, mode: str) -> tuple[str, str]:
         if not mounted:
             warning = (f"!! {c.label} is NOT MOUNTED (check outcome was {outcome}). "
                        f"Mount it: diskutil mountDisk {c.ref}")
-            log(warning)    # logged here too: on Ctrl-C nothing after this runs
+            outcome = "leftUnmounted"   # set before anything that can raise
             text += f"{warning}\n{mtext}"
-            outcome = "leftUnmounted"
+            try:
+                log(warning)    # logged here too: on Ctrl-C nothing after this runs
+            except Exception:
+                print(warning, file=sys.stderr, flush=True)
     return outcome, text
 
 

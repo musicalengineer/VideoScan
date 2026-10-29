@@ -29804,6 +29804,8 @@
         "test_exception_during_verify_still_remounts",
         "test_exception_from_remount_is_left_unmounted",
         "test_exit_zero_without_ok_text_is_a_failure",
+        "test_external_boot_container_is_protected",
+        "test_failed_remount_is_left_unmounted_even_if_logging_fails",
         "test_live_checks_internal_and_external_skips_disk_image",
         "test_live_ok_and_problems_never_unmount",
         "test_message_is_passed_as_an_argument_never_spliced_into_applescript",

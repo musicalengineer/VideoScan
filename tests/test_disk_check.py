@@ -82,6 +82,17 @@ class Selection(unittest.TestCase):
             cs = disk_check.parse_containers(apfs, {"disk20s2": {"Internal": False, "BusProtocol": "USB"}, "disk0s4": second})
             self.assertEqual(disk_check.select(cs, "repair", "Fused")[0], [], second)
 
+    def test_external_boot_container_is_protected(self):
+        # Codex closing 3, P1: booted from an external drive, its container holds role volumes.
+        apfs = {"Containers": [
+            {"ContainerReference": "disk21", "PhysicalStores": [{"DeviceIdentifier": "disk20s2"}],
+             "Volumes": [{"Name": "Boot", "DeviceIdentifier": "disk21s1", "Roles": ["System"]},
+                         {"Name": "Boot - Data", "DeviceIdentifier": "disk21s2", "Roles": ["Data"]}]}]}
+        cs = disk_check.parse_containers(apfs, {"disk20s2": {"Internal": False, "BusProtocol": "USB"}})
+        self.assertEqual(disk_check.select(cs, "repair", "Boot")[0], [])
+        self.assertEqual(disk_check.select(cs, "offline", None)[0], [])
+        self.assertEqual(refs(disk_check.select(cs, "live", None)[0]), ["disk21"])
+
     def test_duplicate_volume_names_across_containers_select_nothing(self):
         apfs = {"Containers": APFS["Containers"] + [
             {"ContainerReference": "disk21", "PhysicalStores": [{"DeviceIdentifier": "disk20s2"}],
@@ -215,6 +226,14 @@ class Outcomes(unittest.TestCase):
 
     def test_exception_from_remount_is_left_unmounted(self):
         outcome, _ = self.check("offline", mountDisk=OSError("boom"))
+        self.assertEqual(outcome, "leftUnmounted")
+
+    def test_failed_remount_is_left_unmounted_even_if_logging_fails(self):
+        # Codex closing 3, P2.
+        def broken_log(line):
+            raise OSError("log volume full")
+        disk_check.log = broken_log
+        outcome, _ = self.check("offline", mountDisk=(1, "mount failed"))
         self.assertEqual(outcome, "leftUnmounted")
 
     def test_busy_disk_is_never_repaired(self):
