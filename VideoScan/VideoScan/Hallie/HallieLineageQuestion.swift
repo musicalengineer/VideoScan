@@ -1545,21 +1545,24 @@ enum HallieLineageAnswer {
         case .gedcomAwareness:
             // "No family tree is loaded" would be false while a refused
             // generation waits on a recompile (live miss #8).
-            if let recompile = needsRecompileResult(context, queryDescription: "capability gedcom") { return recompile }
-            return gedcomAwareness(context.graph)
+            return needsRecompileResult(context, queryDescription: "capability gedcom")
+                ?? gedcomAwareness(context.graph)
         case .getFamilyTree:
-            if let recompile = needsRecompileResult(context, queryDescription: "lineage: get family tree") { return recompile }
-            return getFamilyTreeAnswer(context.graph)
+            return needsRecompileResult(context, queryDescription: "lineage: get family tree")
+                ?? getFamilyTreeAnswer(context.graph)
         case .gedcomProvenance(let person, let surname):
             return gedcomProvenance(person: person, surname: surname, context: context)
         case .commonAncestor(let a, let b):
             return commonAncestor(a, b, context: context)
-        case .centerTree(let person):
+        case .centerTree, .superlative, .deepAncestor, .surnameTree, .ancestorLine, .originTrail:
+            // The shapes that walk the loaded tree: no tree, one honest line.
             guard let graph = context.graph else { return noTree(context) }
-            return centerTree(person, graph: graph, context: context)
-        case .personTree:
-            // Not answered here: preTranslation turns it into a graph
-            // family-tree intent (the person card) — see lineageTurn.
+            return treeWalkAnswer(question, graph: graph, context: context)
+        case .personTree, .kinship:
+            // Not answered here: preTranslation turns `.personTree` into a
+            // graph family-tree intent (the person card) — see lineageTurn —
+            // and `.kinship` into a graph kinship intent the ordinary
+            // executor route runs.
             return nil
         case .personDescription(let person, let focus):
             return personDescription(person, focus: focus, context: context)
@@ -1567,43 +1570,64 @@ enum HallieLineageAnswer {
             return personPhoto(person, context: context)
         case .personVideos(let person):
             return personVideos(person, context: context)
-        case .kinship:
-            // Not answered here: preTranslation turns it into a graph
-            // kinship intent and the ordinary executor route runs it.
-            return nil
         case .kinshipNamed(let apposition):
             return kinshipApposition(apposition, context: context)
+        case .birthplaceTrail, .birthplaceTrailPage, .treeStatistics, .ancestorStatistics:
+            return trailOrStatisticsAnswer(question, context: context)
+        }
+    }
+
+    /// The six tree-walking shapes, given a loaded tree. `answer` routes
+    /// only those here (after its no-tree check); any other shape is not a
+    /// tree walk and gets nil, which `answer` never asks for. C++ readers:
+    /// a second-level dispatch on a subset of the variant.
+    private static func treeWalkAnswer(_ question: HallieLineageQuestion,
+                                       graph: GedcomFamilyGraph,
+                                       context: HallieTurnExecutor.Context) -> Result? {
+        switch question {
+        case .centerTree(let person):
+            return centerTree(person, graph: graph, context: context)
         case .superlative(let kind, let scope, _):
-            guard let graph = context.graph else { return noTree(context) }
             return superlative(kind, scope: scope, graph: graph, context: context)
-        case .deepAncestor(let person, let depth, let sex, let side):
-            guard let graph = context.graph else { return noTree(context) }
-            switch resolve(person, context: context, graph: graph) {
-            case .failure(let r): return r
-            case .success(let p, let note):
-                return deepAncestors(of: p, depth: depth, sex: sex, side: side, graph: graph,
-                                     basisNote: note, lens: HallieVitalDates.Lens.forTurn(context))
-            }
         case .surnameTree(let surname):
-            guard let graph = context.graph else { return noTree(context) }
             return surnameTree(surname, graph: graph)
+        case .deepAncestor(let person, let depth, let sex, let side):
+            return walkResolved(person, graph: graph, context: context) { p, note in
+                deepAncestors(of: p, depth: depth, sex: sex, side: side, graph: graph,
+                              basisNote: note, lens: HallieVitalDates.Lens.forTurn(context))
+            }
         case .ancestorLine(let person, let line, let generations, let untilYear):
-            guard let graph = context.graph else { return noTree(context) }
-            switch resolve(person, context: context, graph: graph) {
-            case .failure(let r): return r
-            case .success(let p, let note):
-                return ancestorLine(of: p, line: line, generations: generations, untilYear: untilYear,
-                                    graph: graph, basisNote: note,
-                                    lens: HallieVitalDates.Lens.forTurn(context))
+            return walkResolved(person, graph: graph, context: context) { p, note in
+                ancestorLine(of: p, line: line, generations: generations, untilYear: untilYear,
+                             graph: graph, basisNote: note,
+                             lens: HallieVitalDates.Lens.forTurn(context))
             }
         case .originTrail(let person, let country, let line):
-            guard let graph = context.graph else { return noTree(context) }
-            switch resolve(person, context: context, graph: graph) {
-            case .failure(let r): return r
-            case .success(let p, let note):
-                return originTrail(of: p, country: country, line: line, graph: graph,
-                                   basisNote: note, lens: HallieVitalDates.Lens.forTurn(context))
+            return walkResolved(person, graph: graph, context: context) { p, note in
+                originTrail(of: p, country: country, line: line, graph: graph,
+                            basisNote: note, lens: HallieVitalDates.Lens.forTurn(context))
             }
+        default:
+            return nil
+        }
+    }
+
+    /// Resolve the typed person (nil = the owner) and walk from them; a
+    /// resolver failure — a which-one, a decline, or nil — is the answer.
+    private static func walkResolved(_ typed: String?, graph: GedcomFamilyGraph,
+                                     context: HallieTurnExecutor.Context,
+                                     _ walk: (GedcomFamilyGraph.Person, String?) -> Result?) -> Result? {
+        switch resolve(typed, context: context, graph: graph) {
+        case .failure(let r): return r
+        case .success(let p, let note): return walk(p, note)
+        }
+    }
+
+    /// Birthplace trails (and their next page) and the two statistics
+    /// shapes. `answer` routes only those four here; any other shape gets nil.
+    private static func trailOrStatisticsAnswer(_ question: HallieLineageQuestion,
+                                                context: HallieTurnExecutor.Context) -> Result? {
+        switch question {
         case .birthplaceTrail(let person, let line, let stop, let ask):
             return birthplaceTrail(person: person, line: line, stop: stop, ask: ask, context: context)
         case .treeStatistics(let ask):
@@ -1613,6 +1637,8 @@ enum HallieLineageAnswer {
         case .birthplaceTrailPage(let personID, let personName, let treeToken, let line, let stop, let from):
             return birthplaceTrailPage(personID: personID, personName: personName, treeToken: treeToken,
                                        line: line, stop: stop, from: from, context: context)
+        default:
+            return nil
         }
     }
 
