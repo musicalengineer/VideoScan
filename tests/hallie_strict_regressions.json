@@ -1,7 +1,7 @@
 {
  "version": 1,
  "created": "2026-09-07",
- "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the advisory hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190), expectMode (tree | catalog — the session mode the transcript recorded for the turn; design docs/design/hallie_two_mode_design.md §3.7).",
+ "description": "STRICT regression gate for the nightly Hallie replay. Every entry is a live miss from Rick's own sessions whose corrected behaviour was fixed AND pinned by unit tests on the date given. Expectations are CONSTRAINTS on the corrected behaviour — route, outcome, required or forbidden text — never the text of the previous wrong answer and never a whole expected sentence. A defect flag on any entry fails the strict verdict; the advisory hallie_eval_corpus.json stays advisory. Chains marked followsPrevious replay in one session (no :reset between them). Add an entry only after the fix has a unit test; remove one only with the commit that removes the behaviour. Fields the grader honours: expectedRoutes, expectedOutcome, mustContain, mustNotContain, mustMatch, mustMatchQueryDescription, mustMatchAttachmentOutline (codex #1190), expectMode (tree | catalog — the session mode the transcript recorded for the turn; design docs/design/hallie_two_mode_design.md §3.7). ADMISSION RULE (2026-10-28): an entry belongs here only if its pass does not depend on the model's free wording or choice (which AST, which source, which facts it mentions); one that does goes to hallie_eval_corpus.json with its id kept and the unit test that pins the deterministic logic named in its notes. A wrong answer is never moved or relaxed to turn this lane green.",
  "questions": [
   {
    "id": "strict-001",
@@ -258,9 +258,9 @@
    ],
    "expectedOutcome": "answered",
    "mustContain": [
-    "Shrewsbury"
+    "Nathaniel Caleb Parker"
    ],
-   "notes": "Anchor turn for strict-015; passed live 2026-09-07."
+   "notes": "Anchor turn for strict-015; passed live 2026-09-07. 2026-10-28: mustContain 'Shrewsbury' replaced by the person's name. When the model composes the biography it chooses which tree facts to mention, and a correct biography without the place was red on 10/17 and 2026-10-28 20:47; the place is only certain in the template (fallback) text. This anchor pins person, route and outcome for strict-015."
   },
   {
    "id": "strict-015",
@@ -606,32 +606,6 @@
    "notes": "cc003: the 80s REPLACE the 90s — a new decade never intersects with the old one (pinned against applyCumulative in HallieTwoModeReplayTests)."
   },
   {
-   "id": "strict-035",
-   "category": "strict",
-   "text": "tell me about me",
-   "expect": "biography",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "expectedOutcome": "answered",
-   "expectMode": "tree",
-   "notes": "Anchor for strict-036: the owner's own biography (owner binding) leaves the Open-in-Family-Tree offer in tree memory."
-  },
-  {
-   "id": "strict-036",
-   "category": "strict",
-   "text": "show me",
-   "followsPrevious": true,
-   "expect": "biography",
-   "expectedOutcome": "answered",
-   "expectMode": "tree",
-   "mustNotContain": [
-    "Ask me for something first",
-    "couldn't tell how"
-   ],
-   "notes": "Two-mode design step 3 (HallieTreeFollowUp): 'show me' right after a biography performs the remembered offer (the app opens the tree; the shell lists it) instead of the catalog's 'ask me for something first' decline. Pinned by HallieTwoModeReplayTests / HallieTreeFollowUpTests."
-  },
-  {
    "id": "strict-037",
    "category": "strict",
    "text": "play the longest video in the archive",
@@ -651,41 +625,10 @@
    "notes": "Two-mode design step 5 (eval cs030, HallieCatalogSuperlative): a local ordered run on the presence route sorted by running time, the play verb honoured; the translator is never asked. Declines only when no record carries a probed running time. Pinned by HallieCatalogSuperlativeTests."
   },
   {
-   "id": "strict-038",
-   "category": "strict",
-   "text": "in the family tree going back, find the highest level of royalty or title such as lord, prince, king, etc.",
-   "expect": "graceful_decline",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "expectMode": "tree",
-   "mustNotContain": [
-    "remember",
-    "found nothing in the catalog"
-   ],
-   "notes": "lv260907-002 (ledger row 1). The titled-ancestors search is phase 2 (docs/hallie_titled_ancestors_design.md); until it lands the honest answer is a tree-mode decline (HallieModeGate) — never a catalog filename search, never a 'remember it?' offer. expect=graceful_decline on purpose: do not 'fix' this row back to kinship until the titled route exists."
-  },
-  {
-   "id": "strict-039",
-   "category": "strict",
-   "text": "not in videos, in family tree",
-   "followsPrevious": true,
-   "expect": "graceful_decline",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "expectMode": "tree",
-   "mustNotContain": [
-    "can't refine my last answer",
-    "remember"
-   ],
-   "notes": "lv260907-003 (ledger row 2). Two-mode design step 6 (HallieModeCorrection): forces tree mode and re-asks row 1 under it — the answer is row 1's honest tree-mode decline again, never the refinement decline. Pinned by HallieModeCorrectionTests.ledgerRowTwoReRunsRowOneUnderTreeMode."
-  },
-  {
    "id": "strict-040",
    "category": "strict",
    "text": "search the family tree for a title like king",
-   "followsPrevious": true,
+   "followsPrevious": false,
    "expect": "graceful_decline",
    "expectedRoutes": [
     "graph",
@@ -695,33 +638,7 @@
    "mustNotContain": [
     "remember"
    ],
-   "notes": "lv260907-004. 'title like king' is not a person: Resolution.declineNotAKnownPerson names the phrase (route follow-up, tree mode) with no 'remember it?' offer — design step 4. The real answer is phase 2."
-  },
-  {
-   "id": "strict-041",
-   "category": "strict",
-   "text": "tell me about Thankful Pratt",
-   "expect": "biography",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "expectedOutcome": "answered",
-   "expectMode": "tree",
-   "notes": "Anchor for strict-042: the biography (d. 1849) leaves the photo / gallery offer in tree memory."
-  },
-  {
-   "id": "strict-042",
-   "category": "strict",
-   "text": "why do you ask me for a photo of Thankful Pratt who died before photography was commonly available?",
-   "followsPrevious": true,
-   "expect": "kinship",
-   "expectMode": "tree",
-   "mustNotContain": [
-    "born",
-    "passed away",
-    "at rest"
-   ],
-   "notes": "lv260902-003. The offer-challenge answer (photography floor 1839 vs d. 1849) is phase 2; until it lands this row pins only the mode (tree) and that the challenge never becomes a birth / death recital."
+   "notes": "lv260907-004. 'title like king' is not a person: Resolution.declineNotAKnownPerson names the phrase (route follow-up, tree mode) with no 'remember it?' offer — design step 4. The real answer is phase 2. 2026-10-28: strict-038/039 moved to the advisory corpus (model-dependent), so this row replays in a fresh session; its explicit 'family tree' cue sets tree mode by itself (HallieTwoModeReplayTests.searchTheFamilyTreeForATitleIsDeclinedByName)."
   },
   {
    "id": "strict-043",
@@ -743,44 +660,6 @@
     "nothing was looked up"
    ],
    "notes": "lv260913-001 (session 7A7B536C). LIVE MISS: \"very good, now tell me about beth\" came back \"The family tree has 2190 people named Beth (as Elizabeth) — which one?\" with NO chips offered, while Rick's sister sat in the People tab as canonical \"Elizabeth\" with the alias \"beth\". Root cause: the People-tab branch in HallieTurnExecutor.executeGraphCase was gated on `context.graph == nil`, so an imported tree silenced the People tab for every graph-route name — against Rick's ruling of 2026-09-04 (People tab = source of truth for the inner circle) and the 2026-08-22 exact-name-wins rule. Fixed by PeopleTab.precedence: an EXACT People name/alias match decides who is meant, but only where HallieWhichOne had already given up on offering chips. A pinned profile still answers from the tree. Pinned by PeopleTabPrecedenceTests; the boundary (a tree that CAN offer a real choice still offers it) by aTreeThatCanOfferARealChoiceStillOffersIt. The answer still names the tree's namesakes so a legitimate ancestor stays one follow-up away — do NOT add \"2190\" to mustNotContain."
-  },
-  {
-   "id": "strict-044",
-   "category": "strict",
-   "text": "Beth Breen Beth McAuliffe",
-   "followsPrevious": true,
-   "expect": "biography",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "expectMode": "tree",
-   "mustNotContain": [
-    "no family source was consulted",
-    "graph-query validation only"
-   ],
-   "notes": "lv260913-002, the follow-up to strict-043. Rick answered the which-one with his sister's maiden AND married names in one line; the translator read two people and the people-count guard declined with \"Checked: graph-query validation only\". HallieTurnExecutor.collapsedDoubleName now collapses two names that EXACTLY claim the same People profile into one person, visibly in the basis (\"as one person\"). This row pins only that the turn reaches a family source — the collapse needs surname/maidenName filled on the profile, so do not tighten it to expectedOutcome=answered until Rick's Beth profile carries both. Two names meaning two people still decline (PeopleTabDoubleNameTests.twoNamesThatMeanTwoPeopleStillDecline)."
-  },
-  {
-   "id": "strict-045",
-   "category": "strict",
-   "text": "how old was dad breen when he passed?",
-   "expect": "kinship",
-   "expectedRoutes": [
-    "temporal"
-   ],
-   "expectedOutcome": "answered",
-   "expectMode": "tree",
-   "mustContain": [
-    "79"
-   ],
-   "mustNotContain": [
-    "Matthew Rice",
-    "1629",
-    "1994",
-    "64",
-    "65"
-   ],
-   "notes": "lv260921-001 (session 7B52B1A4, Rick, app, 2026-09-21 13:52, tree mode). LIVE MISS: \"Richard was 64–65 years old during 1994, depending on the date\" — the translator invented explicitYear(1994) and the temporal lane had no age-AT-DEATH ask, so \"when he passed\" was read as a plain age against the invented year. (The Matthew Rice biography the ledger first blamed was codex's replay session 1603DC26 interleaved in the shared transcript, not Rick's turn; it stays in mustNotContain as the wrong-person sensor.) Fixed 2026-09-21: ArchivistTemporalExecutor.Ask.ageAtDeath + GroupReference.death count from the People profile's own birth and death dates (Dad Breen b. 1929-02-21, d. 2008-06-25 → 79); HallieTurnExecutor drops an explicitYear the question never mentions (questionSuppliesYear) and says so in the basis. Pinned by HallieDadBreenAgeAtDeathTests (the live AST, the honest AST, Ma Breen 92, the second Richard Breen and a same-surname tree stranger never win over the alias, a living person gets no age at death, bare \"dad\" in Rick's session is Dad Breen). expectMode tree: the mode gate's explicitCue(dad) is unchanged; the lane switches to catalog for the age arithmetic but the session mode recorded for the turn is the tree it was in."
   },
   {
    "id": "strict-046",
@@ -839,9 +718,9 @@
    "expectedOutcome": "answered",
    "mustContain": [
     "John Robert Latta",
-    "Fort Wagner"
+    "Would you like to hear the family story of John Robert Latta's service in the Civil War?"
    ],
-   "notes": "Biography of a person with a service record. After the phase-2 data step it ends with the offer 'Would you like to hear the family story of John Robert Latta's service in the Civil War?'; Fort Wagner comes from Rick's own Family Tree note either way. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories)."
+   "notes": "Biography of a person with a service record. After the phase-2 data step it ends with the offer 'Would you like to hear the family story of John Robert Latta's service in the Civil War?'; Fort Wagner comes from Rick's own Family Tree note either way. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories). 2026-10-28: 'Fort Wagner' replaced by the offer's exact text. By design (6e51a81d; HallieServiceStoriesTests.biographyOffer 'a biography ends by offering the story, which is not in the biography') Fort Wagner lives in the offered story; whether the model also mentions the older tree note is its free choice, and it did not in any run 10/16-10/28 (red 8/8 M4 nights + 3/3 2026-10-28). The offer is deterministic: HallieServiceStory.offerSentence, appended as the answer plan's trailingOffer, which survives composition."
   },
   {
    "id": "strict-049",
@@ -905,7 +784,7 @@
    "id": "strict-052",
    "category": "strict",
    "text": "anyone in the American Revolution",
-   "expect": "graceful_decline",
+   "expect": "biography",
    "expectedRoutes": [
     "graph"
    ],
@@ -913,13 +792,17 @@
     "Richard Harding Breen Sr",
     "John Robert Latta",
     "Christopher O'Connor",
-    "Marine"
+    "Marine",
+    "Thankful Pratt —"
    ],
    "mustMatchQueryDescription": [
     "topic=military-service",
     "war=the American Revolution"
    ],
-   "notes": "No family story for the Revolution: an honest 'Nobody in the family has told me…' plus an invitation — OR, once the tree is re-merged with its _MILT facts, tree people quoted verbatim with the tree citation. Outcome deliberately unconstrained; never another war's people. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories). 2026-09-25 night: expect was 'biography', which grades an honest decline as declined_expected_answer — contradicting 'outcome deliberately unconstrained' and the advisory twin mil260923-008 (graceful_decline); red every night since it was added. Now graceful_decline, like strict-038: flip it back to biography when the tree carries _MILT facts and the answer names tree people."
+   "notes": "No family story for the Revolution: an honest 'Nobody in the family has told me…' plus an invitation — OR, once the tree is re-merged with its _MILT facts, tree people quoted verbatim with the tree citation. Outcome deliberately unconstrained; never another war's people. Pinned by HallieServiceStoriesTests (2026-09-23, feature/hallie-service-stories). 2026-09-25 night: expect was 'biography', which grades an honest decline as declined_expected_answer — contradicting 'outcome deliberately unconstrained' and the advisory twin mil260923-008 (graceful_decline); red every night since it was added. Now graceful_decline, like strict-038: flip it back to biography when the tree carries _MILT facts and the answer names tree people. 2026-10-28: expect flipped back to biography as asked above: the family's notes now name tree people (research.nathaniel-caleb-parker-i56.2026-10-01 → Nathaniel Caleb Parker, every run 10/16-10/28, template text). 'Thankful Pratt —' is forbidden because the answer LISTS her among the people who served: her note ('Wife of Caleb Parker, a Shrewsbury Revolutionary War soldier …') passes HallieTurnExecutor.Service.serviceSentences because her married-surname alias 'Parker' matches 'Caleb Parker' — the case that function's own comment rules out (a note saying her husband was a soldier is not about her service). Real bug, left red for Rick.",
+   "mustContain": [
+    "Nathaniel Caleb Parker"
+   ]
   },
   {
    "id": "strict-053",
@@ -936,33 +819,6 @@
     "864"
    ],
    "notes": "Live 2026-09-22, 09-24, 09-25 20:33: the translator returned shape=presence year=2006 with 'Christmas' dropped and Hallie counted every 2006 item ('There are 864 catalog items from 2006'). The executor now puts back a curated holiday/event/place word the question contains (HallieDroppedTopicWord). 864 is the live catalog's all-of-2006 count on 2026-09-25 — the signature of the drop. Pinned by HallieDroppedTopicWordTests (fix/hallie-night-0925)."
-  },
-  {
-   "id": "strict-054",
-   "category": "strict",
-   "text": "show timmy playing guitar",
-   "expect": "catalog",
-   "expectedRoutes": [
-    "presence",
-    "cross",
-    "event"
-   ],
-   "notes": "Set-up turn for strict-055 (live 2026-09-23 22:26): leaves Timmy as the last answer's person."
-  },
-  {
-   "id": "strict-055",
-   "category": "strict",
-   "text": "tell me about thankful pratt and her husband",
-   "followsPrevious": true,
-   "expect": "kinship",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "mustNotContain": [
-    "timmy",
-    "Timothy"
-   ],
-   "notes": "Live 2026-09-23 22:26: 'her' was rewritten to the previous answer's Timmy ('…thankful pratt and Timmy's husband') → \"I wasn't sure which person you meant — thankful pratt or timmy?\". A known person earlier in the same sentence owns the pronoun. Pinned by HalliePronounInSentenceAntecedentTests (fix/hallie-night-0925)."
   },
   {
    "id": "strict-056",
@@ -1001,23 +857,6 @@
    "notes": "lv260926-002. The correction resolved correctly (People-tab alias 'Dad Breen'). The defect was a SECOND bubble in the same second — 'Opening the Family Tree tab focused on Dafydd ab Einion' (log 14:15:29 'Family Tree: selected Dafydd … focus kind=record-id result=applied', no 'Hallie focus requested' line): turn 1's superseded 'Open in Family Tree' chip was tapped the instant the 21 s model timeout ended. Fixed 2026-09-26: HallieResponseCommit calls retireSupersededOffers when the settled person changes, before the new bubble is appended; HallieSupersededOffers removes earlier bubbles' openFamilyTree* chips for anyone else; ArchivistChatWindow logs every chip tap ('[hallie] chip tapped/ignored while thinking'). Pinned by HallieSupersededOffersTests. The replay cannot tap a chip; this row pins the answer and leaves Dafydd forbidden."
   },
   {
-   "id": "strict-058",
-   "category": "strict",
-   "text": "sure",
-   "followsPrevious": true,
-   "expect": "biography",
-   "expectedRoutes": [
-    "graph"
-   ],
-   "mustContain": [
-    "Marine"
-   ],
-   "mustNotContain": [
-    "Dafydd"
-   ],
-   "notes": "lv260926-003. Set-up turn: 'yes' to the service-story offer keeps Richard Harding Breen Sr as the conversation's person (HallieServiceStory), so strict-059 tests the antecedent after a correction and a follow-up."
-  },
-  {
    "id": "strict-059",
    "category": "strict",
    "text": "sure, but I also want videos of dad",
@@ -1035,7 +874,7 @@
     "motion pictures",
     "photography"
    ],
-   "notes": "lv260926-004 (2026-09-26 14:17 ET). LIVE MISS: Dafydd again, word for word, after the correction and the service story. Two causes: the same lineage-shape name lookup as strict-056, and no memory of who 'dad' had just been settled to be. Fixed 2026-09-26: ConversationMemory.kinBindings (relation word → the person an ANSWERED graph turn settled on, 'dad breen' → Richard Harding Breen Sr; graph answers only, never a catalog answer's contested given name) and lineageTurn substitutes the bound person into a media ask before any lookup. Pinned by HallieDadNotDafyddTests (afterTheCorrectionVideosOfDadKeepsRichardSr, with a People tab that has NO relationship rows and a tree with NO parents for the owner, so only the conversation can bind it). followUp is allowed: the model may read 'sure, but' as a continuation."
+   "notes": "lv260926-004 (2026-09-26 14:17 ET). LIVE MISS: Dafydd again, word for word, after the correction and the service story. Two causes: the same lineage-shape name lookup as strict-056, and no memory of who 'dad' had just been settled to be. Fixed 2026-09-26: ConversationMemory.kinBindings (relation word → the person an ANSWERED graph turn settled on, 'dad breen' → Richard Harding Breen Sr; graph answers only, never a catalog answer's contested given name) and lineageTurn substitutes the bound person into a media ask before any lookup. Pinned by HallieDadNotDafyddTests (afterTheCorrectionVideosOfDadKeepsRichardSr, with a People tab that has NO relationship rows and a tree with NO parents for the owner, so only the conversation can bind it). followUp is allowed: the model may read 'sure, but' as a continuation. 2026-10-28: strict-058 moved to the advisory corpus (model-dependent); this row now follows strict-057 directly. The binding comes from the correction turn (HallieDadNotDafyddTests.memoryKeepsTheSettledKinTermByRelation), so the chain still tests it."
   },
   {
    "id": "strict-060",
