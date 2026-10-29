@@ -70,3 +70,7 @@ Then findings ranked P0–P3 by data-loss risk, each with `file:line`, a
 concrete failing scenario, and a RED test where possible. For every in-scope
 file with nothing to report write "read, no findings." Do not explore outside
 these files.
+
+## Closed
+
+Closed by `b3013d9d` at 2026-10-29T20:16:07Z. all 11 findings across 5 rounds closed by pinning tests; loop stopped at P2
