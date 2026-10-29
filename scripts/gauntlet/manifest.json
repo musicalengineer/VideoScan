@@ -29205,6 +29205,19 @@
     {
       "blocked_reason": "phase 2",
       "kind": "ui",
+      "path": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet06TabClicksUITests.swift",
+      "stage": "ui",
+      "suites": [
+        "Gauntlet06TabClicksUITests"
+      ],
+      "tests": [
+        "testFamilyTreeTabOpens",
+        "testHallieButtonOpensArchivistWindow"
+      ]
+    },
+    {
+      "blocked_reason": "phase 2",
+      "kind": "ui",
       "path": "VideoScan/VideoScanUITests/SmokeUITests.swift",
       "stage": "ui",
       "suites": [
@@ -35675,6 +35688,10 @@
         },
         {
           "name": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet05NavigationUITests.swift",
+          "reason": "phase 2"
+        },
+        {
+          "name": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet06TabClicksUITests.swift",
           "reason": "phase 2"
         },
         {

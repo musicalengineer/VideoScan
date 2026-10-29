@@ -31,7 +31,8 @@
         "Gauntlet02CatalogSearchUITests",
         "Gauntlet03SetDateUITests",
         "Gauntlet04BalanceAudioUITests",
-        "Gauntlet05NavigationUITests"
+        "Gauntlet05NavigationUITests",
+        "Gauntlet06TabClicksUITests"
       ],
       "target": {
         "containerPath": "container:VideoScan.xcodeproj",
