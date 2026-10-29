@@ -1342,6 +1342,76 @@ $ULTRA_GREEN" \
     || fail "the Ultra ran twice in one day"
 
 # ───────────────────────────────────────────────────────────────────
+# Test 18 (2026-10-29): the toolchain update an hour before the nightly.
+# (a) the guard waits for its lock, capped; (b) the update runs brew with
+# no terminal (no "Y/n", no sudo password), never --greedy, logs what it
+# upgraded, writes the summary and releases its lock; (c) the installer
+# schedules it one hour before the rota slot.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 18: toolchain update before the nightly =="
+LOCKDIR="$RT/home/Library/Logs/VideoScan/toolchain_update.lock"
+mkdir -p "$LOCKDIR"
+printf '%s\n' "$M4_GREEN" > "$RT/rows.jsonl"; : > "$RT/caff.log"
+HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_ROWS="$RT/rows.jsonl" FAKE_CAFF_LOG="$RT/caff.log" \
+    NIGHTLY_TOOLCHAIN_WAIT_SECONDS=1 PATH="$RT/bin:$PATH" \
+    bash "$RT/scripts/nightly_guarded.sh" > "$RT/out.log" 2>&1
+if grep -q 'nightly_local_tests.sh' "$RT/caff.log" &&
+   grep -q 'toolchain update still running after 1s' "$RT/home/Library/Logs/VideoScan/nightly_guard.log"; then
+    pass "the guard waits for a running toolchain update, capped, then runs the nightly"
+else
+    fail "guard vs toolchain lock: $(tail -1 "$RT/home/Library/Logs/VideoScan/nightly_guard.log")"
+fi
+rmdir "$LOCKDIR"
+
+cp "$SCRIPT_DIR/update_toolchain.sh" "$SCRIPT_DIR/install_toolchain_update.sh" "$RT/scripts/"
+# A brew that records its arguments and whether stdin is a terminal; its
+# second `list --versions` reports ffmpeg one version newer.
+cat > "$RT/bin/brew" <<'SH'
+#!/bin/sh
+echo "$* tty=$([ -t 0 ] && echo yes || echo no)" >> "$FAKE_BREW_LOG"
+if [ "$1 $2" = "list --versions" ]; then
+    n=$(cat "$FAKE_BREW_COUNT" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_BREW_COUNT"
+    [ "$n" -eq 0 ] && echo "ffmpeg 9.0.2" || echo "ffmpeg 9.0.3"
+    echo "uv 0.9.1"
+fi
+exit 0
+SH
+printf '%s\n' '#!/bin/sh' 'case "$1" in -version) echo "Xcode 27.1"; echo "Build version 27A9275" ;; esac' 'exit 0' > "$RT/bin/xcodebuild"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$RT/bin/xcrun"
+chmod +x "$RT/bin/brew" "$RT/bin/xcodebuild" "$RT/bin/xcrun"
+: > "$RT/brew.log"; rm -f "$RT/brew.count"
+HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUNT="$RT/brew.count" \
+    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN=no-such-process-xyzzy \
+    PATH="$RT/bin:$PATH" bash "$RT/scripts/update_toolchain.sh" < /dev/null > "$RT/out.log" 2>&1
+TC_LOG="$RT/home/Library/Logs/VideoScan/toolchain_update.log"
+TC_SUM="$RT/home/Library/Logs/VideoScan/toolchain_update_latest.json"
+if grep -q '^upgrade --formula tty=no$' "$RT/brew.log" && grep -q '^upgrade --cask tty=no$' "$RT/brew.log" &&
+   ! grep -q -- '--greedy' "$RT/brew.log" && ! grep -q 'tty=yes' "$RT/brew.log" &&
+   grep -q 'upgraded: ffmpeg 9.0.2 -> 9.0.3' "$TC_LOG" && grep -q 'OUTCOME ok: 1 package(s) upgraded' "$TC_LOG" &&
+   python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j['status']=='ok' and j['upgraded']==['ffmpeg 9.0.2 -> 9.0.3'] else 1)" "$TC_SUM" &&
+   [ ! -d "$LOCKDIR" ]; then
+    pass "the update runs brew with no terminal, never --greedy, logs and summarises the upgrade, releases its lock"
+else
+    fail "toolchain update: brew='$(tr '\n' ';' < "$RT/brew.log")' log='$(tail -3 "$TC_LOG" 2>/dev/null | tr '\n' ' ')'"
+fi
+mkdir -p "$LOCKDIR"; : > "$RT/brew.log"
+HOME="$RT/home" FAKE_HOST=RicksUltra FAKE_BREW_LOG="$RT/brew.log" FAKE_BREW_COUNT="$RT/brew.count" \
+    TOOLCHAIN_BREW="$RT/bin/brew" TOOLCHAIN_MAS=/nonexistent TOOLCHAIN_BUSY_PATTERN=no-such-process-xyzzy \
+    PATH="$RT/bin:$PATH" bash "$RT/scripts/update_toolchain.sh" < /dev/null > "$RT/out.log" 2>&1
+[ ! -s "$RT/brew.log" ] && [ -d "$LOCKDIR" ] && grep -q 'SKIPPED: another toolchain update holds' "$TC_LOG" \
+    && pass "a second update while one holds the lock touches nothing and leaves the lock alone" \
+    || fail "concurrent toolchain update ran brew: $(tr '\n' ';' < "$RT/brew.log")"
+rmdir "$LOCKDIR"
+rota_run RicksM4 install_toolchain_update.sh
+TC_PLIST="$RT/home/Library/LaunchAgents/com.videoscan.toolchain-update.plist"
+[ "$(plutil -extract StartCalendarInterval.Hour raw "$TC_PLIST" 2>/dev/null)" = "1" ] &&
+[ "$(plutil -extract StartCalendarInterval.Minute raw "$TC_PLIST" 2>/dev/null)" = "0" ] &&
+grep -q '^bootstrap gui/' "$RT/launchctl.log" \
+    && pass "the installer schedules the update one hour before the M4's 02:00 slot (01:00)" \
+    || fail "toolchain installer: out='$(tr '\n' ' ' < "$RT/out.log")'"
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo
