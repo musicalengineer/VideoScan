@@ -134,11 +134,19 @@ def verdict(proc: subprocess.CompletedProcess[str], ref: str) -> bool:
 
 
 def log(line: str) -> None:
+    """Never raises: an unwritable log must not hide an outcome or skip a notification."""
     stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(line, flush=True)
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
-        f.write(f"{stamp} {line}\n")
+    _append(f"{stamp} {line}\n")
+
+
+def _append(text: str) -> None:
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a") as f:
+            f.write(text)
+    except OSError as e:
+        print(f"(could not write {LOG}: {e})", file=sys.stderr, flush=True)
 
 
 def notify(message: str) -> None:
@@ -264,8 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         log(f"  {outcome:<13} {c.label}")
         if not ok:
             failed.append(f"{c.label}: {outcome}")
-            with LOG.open("a") as f:
-                f.write(output)
+            _append(output)
     log(f"OUTCOME disk_check mode={mode} ok={len(picked) - len(failed)} failed={len(failed)}"
         + (f" [{'; '.join(failed)}]" if failed else ""))
     if failed:

@@ -273,6 +273,24 @@ class MainGuards(unittest.TestCase):
         self.assertEqual(len(self.notes), 1)
 
 
+class LogNeverHidesAFailure(unittest.TestCase):
+    """Codex closing 4, P2: an unwritable log must not suppress the failure notification."""
+
+    def test_failure_notifies_even_when_the_log_cannot_be_written(self):
+        saved = {n: getattr(disk_check, n) for n in ("LOG", "notify", "discover", "check_one")}
+        notes = []
+        try:
+            disk_check.LOG = Path("/nonexistent-volume/disk_check.log")   # mkdir/open raise
+            disk_check.notify = notes.append
+            disk_check.discover = containers
+            disk_check.check_one = lambda c, mode: ("problemsFound", "bad\n")
+            self.assertEqual(disk_check.main(["--quiet"]), 1)
+            self.assertEqual(len(notes), 1)
+        finally:
+            for n, f in saved.items():
+                setattr(disk_check, n, f)
+
+
 class Notify(unittest.TestCase):
     def test_message_is_passed_as_an_argument_never_spliced_into_applescript(self):
         saved, calls = disk_check.run, []
