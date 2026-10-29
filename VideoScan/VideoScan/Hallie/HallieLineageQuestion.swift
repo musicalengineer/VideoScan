@@ -1178,56 +1178,79 @@ enum HallieLineageQuestion: Equatable, Sendable {
         // of X" — not "for", not "tree", not "ancestor TO", not a trailing
         // "for rick".
         let personScope = personScope(in: text)
-        let kind: SuperlativeKind
-        if let m = text.firstMatch(of: /\b(?:first|earliest|oldest)\b.*\bborn\s+in\s+(?:the\s+)?([a-z][a-z .'-]+?)\s*$/) {
-            var place = m.1
-            if let personScope, place.startIndex < personScope.range.lowerBound,
-               place.endIndex > personScope.range.lowerBound {
-                place = text[place.startIndex..<personScope.range.lowerBound]
-            }
-            kind = .firstBornIn(place: capitalizedName(String(place).trimmingCharacters(in: .whitespaces)))
-        } else if text.firstMatch(of: /\b(?:deepest|farthest|furthest|most distant|remotest)\b[a-z' ]*\bancestors?\b/) != nil
-                    || text.firstMatch(of: /\bancestors?\b.*\b(?:farthest|furthest|deepest|most distant)\s+back\b/) != nil
-                    || text.firstMatch(of: /\bhow far back\b.*\b(?:go|goes|reach|reaches)\b/) != nil {
-            kind = .deepestAncestor
-        } else if text.firstMatch(of: /\b(?:lived?|living)\s+(?:the\s+)?longest\b|\blongest[- ](?:lived|living|life)\b|\b(?:oldest|greatest|highest)\s+age\b|\bmost\s+years\b/) != nil {
-            kind = .longestLived
-        } else if text.firstMatch(of: /\b(?:most\s+recent(?:ly)?|last|latest)\b[a-z' ]*\b(?:died|death|passed|die)\b|\b(?:died|passed(?: away)?)\s+(?:most\s+recently|last|latest)\b/) != nil {
-            kind = .latestDied
-        } else if text.firstMatch(of: /\b(?:earliest|first|oldest)\b[a-z' ]*\b(?:married|marriage|marry|wedding|wed)\b|\b(?:married|wed)\s+(?:first|earliest)\b/) != nil {
-            kind = .earliestMarried
-        } else if text.firstMatch(of: /\bmost\s+(?:children|kids|sons|daughters|offspring|descendants)\b|\b(?:largest|biggest)\s+(?:family|brood|household)\b/) != nil {
-            kind = .mostChildren
-        } else if text.firstMatch(of: /\byoungest\b|\b(?:latest|most\s+recent(?:ly)?|last)\s+(?:born|birth)\b|\bborn\s+(?:last|most\s+recently|latest)\b/) != nil {
-            kind = .latestBorn
-        } else if text.firstMatch(of: /\boldest\b|\beldest\b|\bearliest\s+(?:birth|born)\b|\bborn\s+(?:first|earliest)\b|\bfirst\s+(?:person\s+|one\s+)?born\b|\bearliest\b[a-z' ]*\bbirth\b/) != nil {
-            // "oldest" alone must be about a person: "oldest person", "the
-            // oldest breen", "oldest member of the family"…
-            guard text.firstMatch(of: /\b(?:persons?|people|members?|relatives?|ancestors?|forebears?|ones?|man|men|woman|women|male|female|birth|born|individuals?|humans?|guys?|lady|family|tree|surname|named|lineage|line)\b/) != nil
-                || text.firstMatch(of: /\b(?:oldest|eldest)\s+[a-z]+s?\s*$/) != nil else { return nil }
-            kind = .earliestBorn
-        } else {
-            return nil
-        }
-
+        guard let kind = superlativeKind(in: text, personScope: personScope) else { return nil }
         // Scope. Deepest-ancestor is always "of somebody" (default: owner).
-        var scope: SuperlativeScope = .wholeTree
-        if let personScope {
-            scope = personScope.scope
-        } else if let m = text.firstMatch(of: /\b(?:my|our)\s+(?:oldest|earliest|deepest|farthest|furthest|most distant|remotest)\s+ancestor/) {
-            _ = m; scope = .ancestorsOf(nil)
-        } else if let m = text.firstMatch(of: /\b(?:named|surnamed|called|with the (?:last name|surname|family name))\s+([a-z]+)\b/) {
-            scope = .surname(String(m.1))
-        } else if let m = text.firstMatch(of: /\b(?:in|of|among)\s+the\s+([a-z]+)\s+(?:family|clan|line)\b/) {
-            scope = .surname(String(m.1))
-        } else if let m = text.firstMatch(of: /\b(?:of|among|in)\s+the\s+([a-z]+)s\s*$/) {
-            scope = .surname(String(m.1))   // "of the breens"
-        } else if let m = text.firstMatch(of: /\b(?:oldest|eldest|youngest|earliest|first|last)\s+([a-z]+)\b/),
-                  !superlativeStopWords.contains(String(m.1)) {
-            scope = .surname(String(m.1))   // "the oldest breen"
-        }
+        // A person scope wins; otherwise the surname / owner phrasing.
+        var scope = personScope?.scope ?? superlativeTextScope(in: text)
         if kind == .deepestAncestor, case .wholeTree = scope { scope = .ancestorsOf(nil) }
         return (kind, scope)
+    }
+
+    /// The ranking a superlative phrase asks for; the first kind that
+    /// matches wins, in this order. Nil = superlative words that name no
+    /// ranking (a bare "oldest" that is not about a person).
+    private static func superlativeKind(in text: String, personScope: PersonScope?) -> SuperlativeKind? {
+        if let place = firstBornInPlace(in: text, personScope: personScope) {
+            return .firstBornIn(place: place)
+        }
+        if text.firstMatch(of: /\b(?:deepest|farthest|furthest|most distant|remotest)\b[a-z' ]*\bancestors?\b/) != nil
+            || text.firstMatch(of: /\bancestors?\b.*\b(?:farthest|furthest|deepest|most distant)\s+back\b/) != nil
+            || text.firstMatch(of: /\bhow far back\b.*\b(?:go|goes|reach|reaches)\b/) != nil {
+            return .deepestAncestor
+        }
+        // The remaining kinds, one pattern each, in precedence order.
+        let ranked: [(Regex<Substring>, SuperlativeKind)] = [
+            (/\b(?:lived?|living)\s+(?:the\s+)?longest\b|\blongest[- ](?:lived|living|life)\b|\b(?:oldest|greatest|highest)\s+age\b|\bmost\s+years\b/, .longestLived),
+            (/\b(?:most\s+recent(?:ly)?|last|latest)\b[a-z' ]*\b(?:died|death|passed|die)\b|\b(?:died|passed(?: away)?)\s+(?:most\s+recently|last|latest)\b/, .latestDied),
+            (/\b(?:earliest|first|oldest)\b[a-z' ]*\b(?:married|marriage|marry|wedding|wed)\b|\b(?:married|wed)\s+(?:first|earliest)\b/, .earliestMarried),
+            (/\bmost\s+(?:children|kids|sons|daughters|offspring|descendants)\b|\b(?:largest|biggest)\s+(?:family|brood|household)\b/, .mostChildren),
+            (/\byoungest\b|\b(?:latest|most\s+recent(?:ly)?|last)\s+(?:born|birth)\b|\bborn\s+(?:last|most\s+recently|latest)\b/, .latestBorn),
+        ]
+        if let hit = ranked.first(where: { text.firstMatch(of: $0.0) != nil }) {
+            return hit.1
+        }
+        guard text.firstMatch(of: /\boldest\b|\beldest\b|\bearliest\s+(?:birth|born)\b|\bborn\s+(?:first|earliest)\b|\bfirst\s+(?:person\s+|one\s+)?born\b|\bearliest\b[a-z' ]*\bbirth\b/) != nil else { return nil }
+        // "oldest" alone must be about a person: "oldest person", "the
+        // oldest breen", "oldest member of the family"…
+        guard text.firstMatch(of: /\b(?:persons?|people|members?|relatives?|ancestors?|forebears?|ones?|man|men|woman|women|male|female|birth|born|individuals?|humans?|guys?|lady|family|tree|surname|named|lineage|line)\b/) != nil
+            || text.firstMatch(of: /\b(?:oldest|eldest)\s+[a-z]+s?\s*$/) != nil else { return nil }
+        return .earliestBorn
+    }
+
+    /// "first born in ireland" → "Ireland": the place, cut where a person
+    /// scope phrase starts ("born in ireland among rick's ancestors" is
+    /// Ireland). Nil = not the first-born-in shape. A place that trims to
+    /// nothing is still the shape (returned as-is, as it always was).
+    private static func firstBornInPlace(in text: String, personScope: PersonScope?) -> String? {
+        guard let m = text.firstMatch(of: /\b(?:first|earliest|oldest)\b.*\bborn\s+in\s+(?:the\s+)?([a-z][a-z .'-]+?)\s*$/) else { return nil }
+        var place = m.1
+        if let personScope, place.startIndex < personScope.range.lowerBound,
+           place.endIndex > personScope.range.lowerBound {
+            place = text[place.startIndex..<personScope.range.lowerBound]
+        }
+        return capitalizedName(String(place).trimmingCharacters(in: .whitespaces))
+    }
+
+    /// The scope when no PERSON scope was read: the owner's own deepest
+    /// ancestor, a surname by name or by family phrase, else the whole tree.
+    private static func superlativeTextScope(in text: String) -> SuperlativeScope {
+        if text.firstMatch(of: /\b(?:my|our)\s+(?:oldest|earliest|deepest|farthest|furthest|most distant|remotest)\s+ancestor/) != nil {
+            return .ancestorsOf(nil)
+        }
+        if let m = text.firstMatch(of: /\b(?:named|surnamed|called|with the (?:last name|surname|family name))\s+([a-z]+)\b/) {
+            return .surname(String(m.1))
+        }
+        if let m = text.firstMatch(of: /\b(?:in|of|among)\s+the\s+([a-z]+)\s+(?:family|clan|line)\b/) {
+            return .surname(String(m.1))
+        }
+        if let m = text.firstMatch(of: /\b(?:of|among|in)\s+the\s+([a-z]+)s\s*$/) {
+            return .surname(String(m.1))   // "of the breens"
+        }
+        if let m = text.firstMatch(of: /\b(?:oldest|eldest|youngest|earliest|first|last)\s+([a-z]+)\b/),
+           !superlativeStopWords.contains(String(m.1)) {
+            return .surname(String(m.1))   // "the oldest breen"
+        }
+        return .wholeTree
     }
 
     /// A superlative's PERSON scope and where in the sentence it sits.
