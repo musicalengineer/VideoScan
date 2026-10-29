@@ -397,6 +397,10 @@ enum HallieServiceQuestion {
         match(passagePattern, in: passage) != nil
     }
 
+    /// The same service words, compiled once: where each one sits in a
+    /// sentence (HallieServiceAttribution needs positions, not a yes/no).
+    static let serviceTermRegex = try? NSRegularExpression(pattern: passagePattern, options: .caseInsensitive)
+
     /// The one war a free-text passage or tree fact names, or nil.
     static func war(namedIn text: String) -> War? {
         war(in: text)
