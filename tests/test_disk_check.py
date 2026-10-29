@@ -73,6 +73,15 @@ class Selection(unittest.TestCase):
         self.assertEqual(picked, [])
         self.assertTrue(any("ambiguous" in s for s in skipped))
 
+    def test_every_physical_store_must_be_proven_external(self):
+        # Codex closing 2, P1-1: an internal (or unknown, or image) SECOND store protects the container.
+        for second in ({"Internal": True, "BusProtocol": "Apple Fabric"}, {}, {"Internal": False, "BusProtocol": "Disk Image"}):
+            apfs = {"Containers": [
+                {"ContainerReference": "disk21", "PhysicalStores": [{"DeviceIdentifier": "disk20s2"}, {"DeviceIdentifier": "disk0s4"}],
+                 "Volumes": [{"Name": "Fused", "DeviceIdentifier": "disk21s1"}]}]}
+            cs = disk_check.parse_containers(apfs, {"disk20s2": {"Internal": False, "BusProtocol": "USB"}, "disk0s4": second})
+            self.assertEqual(disk_check.select(cs, "repair", "Fused")[0], [], second)
+
     def test_duplicate_volume_names_across_containers_select_nothing(self):
         apfs = {"Containers": APFS["Containers"] + [
             {"ContainerReference": "disk21", "PhysicalStores": [{"DeviceIdentifier": "disk20s2"}],
@@ -86,13 +95,33 @@ class Verdict(unittest.TestCase):
         return subprocess.CompletedProcess([], code, out, "")
 
     def test_ok_needs_exit_zero_and_ok_text(self):
-        self.assertTrue(disk_check.verdict(self.proc(0, "The container /dev/rdisk11 appears to be OK\n")))
+        self.assertTrue(disk_check.verdict(self.proc(0, "The container /dev/rdisk11 appears to be OK\n"), "disk11"))
 
     def test_exit_zero_without_ok_text_is_a_failure(self):
-        self.assertFalse(disk_check.verdict(self.proc(0, "Storage system check exit code is 0\n")))
+        self.assertFalse(disk_check.verdict(self.proc(0, "Storage system check exit code is 0\n"), "disk11"))
 
     def test_nonzero_exit_is_a_failure_even_with_ok_text(self):
-        self.assertFalse(disk_check.verdict(self.proc(1, "volume appears to be OK\ncontainer is corrupt\n")))
+        self.assertFalse(disk_check.verdict(self.proc(1, "volume appears to be OK\ncontainer is corrupt\n"), "disk11"))
+
+    def test_volume_ok_does_not_mask_an_incomplete_container_check(self):
+        # Codex closing 2, P1-2.
+        out = "The volume A appears to be OK\nThe container could not be verified completely\n"
+        self.assertFalse(disk_check.verdict(self.proc(0, out), "disk11"))
+        out = ("The volume /dev/rdisk11s1 appears to be OK\n"
+               "The container /dev/rdisk11 appears to be OK\n"
+               "error: the container /dev/rdisk11 could not be verified completely\n")
+        self.assertFalse(disk_check.verdict(self.proc(0, out), "disk11"))
+
+    def test_ok_line_must_name_the_checked_container(self):
+        self.assertFalse(disk_check.verdict(self.proc(0, "The container /dev/rdisk7 appears to be OK\n"), "disk11"))
+
+    def test_real_clean_output_is_ok(self):
+        out = ("Checking volume /dev/rdisk11s1\n"
+               "The volume /dev/rdisk11s1 with UUID 2E5BD3AE appears to be OK\n"
+               "Verifying allocated space\n"
+               "The container /dev/rdisk11 appears to be OK\n"
+               "Storage system check exit code is 0\n")
+        self.assertTrue(disk_check.verdict(self.proc(0, out), "disk11"))
 
 
 OK_OUT = "The container /dev/rdisk13 appears to be OK\n"
@@ -110,6 +139,8 @@ class FakeDiskutil:
         verb = cmd[1]
         self.calls.append(verb)
         answer = self.codes.get(verb, (0, OK_OUT if verb.endswith("Volume") else ""))
+        if isinstance(answer, list):            # successive answers for repeated calls
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, BaseException):
             raise answer
         code, out = answer
@@ -155,13 +186,18 @@ class Outcomes(unittest.TestCase):
         self.assertNotIn("repairVolume", calls)
         self.assertEqual(calls, ["unmountDisk", "verifyVolume", "mountDisk"])
 
-    def test_repair_runs_only_after_a_failed_verify(self):
-        outcome, calls = self.check("repair", verifyVolume=(1, BAD_OUT))
+    def test_repair_runs_only_after_a_failed_verify_and_is_proven_by_a_fresh_verify(self):
+        outcome, calls = self.check("repair", verifyVolume=[(1, BAD_OUT), (0, OK_OUT)],
+                                    repairVolume=(0, "The volume was repaired successfully\n"))
         self.assertEqual(outcome, "repaired")
-        self.assertEqual(calls, ["unmountDisk", "verifyVolume", "repairVolume", "mountDisk"])
+        self.assertEqual(calls, ["unmountDisk", "verifyVolume", "repairVolume", "verifyVolume", "mountDisk"])
 
     def test_repair_that_fails_is_problems_found_not_repaired(self):
         outcome, _ = self.check("repair", verifyVolume=(1, BAD_OUT), repairVolume=(1, BAD_OUT))
+        self.assertEqual(outcome, "problemsFound")
+
+    def test_repair_whose_fresh_verify_still_fails_is_not_repaired(self):
+        outcome, _ = self.check("repair", verifyVolume=[(1, BAD_OUT), (1, BAD_OUT)], repairVolume=(0, OK_OUT))
         self.assertEqual(outcome, "problemsFound")
 
     def test_exception_during_verify_still_remounts(self):

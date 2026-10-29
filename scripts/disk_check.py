@@ -70,14 +70,16 @@ def parse_containers(apfs_list: dict, store_info: dict[str, dict]) -> list[Conta
         stores = [s["DeviceIdentifier"] for s in c.get("PhysicalStores", [])]
         if not stores:
             continue
-        info = store_info.get(stores[0], {})
-        bus = info.get("BusProtocol")
+        infos = [store_info.get(s, {}) for s in stores]
+        buses = [i.get("BusProtocol") for i in infos]
         out.append(Container(
             ref=c["ContainerReference"],
             store=stores[0],
             volumes=[v.get("Name", v["DeviceIdentifier"]) for v in c.get("Volumes", [])],
-            external=info.get("Internal") is False and bool(bus) and bus != "Disk Image",
-            disk_image=bus == "Disk Image",
+            # Every physical store must prove itself external; one doubtful store protects the container.
+            external=all(i.get("Internal") is False and bool(b) and b != "Disk Image"
+                         for i, b in zip(infos, buses)),
+            disk_image=any(b == "Disk Image" for b in buses),
         ))
     return out
 
@@ -115,8 +117,15 @@ def select(containers: list[Container], mode: str, target: str | None) -> tuple[
     return picked, skipped
 
 
-def verdict(proc: subprocess.CompletedProcess[str]) -> bool:
-    return proc.returncode == 0 and OK_MARK in proc.stdout
+def verdict(proc: subprocess.CompletedProcess[str], ref: str) -> bool:
+    """Clean only if: exit 0, the CHECKED container's own OK line, and no line
+    saying anything could not be verified or reporting an error. A volume's
+    OK line never stands in for the container's."""
+    text = proc.stdout + proc.stderr
+    lines = [ln.strip().lower() for ln in text.splitlines()]
+    container_ok = f"the container /dev/r{ref} {OK_MARK}".lower() in lines
+    doubt = any("could not be verified" in ln or ln.startswith("error") for ln in lines)
+    return proc.returncode == 0 and container_ok and not doubt
 
 
 def log(line: str) -> None:
@@ -153,12 +162,16 @@ SUCCESS = ("ok", "repaired")
 def _verify_then_maybe_repair(c: Container, mode: str) -> tuple[str, str]:
     p = run(["diskutil", "verifyVolume", c.ref])
     text = p.stdout + p.stderr
-    if verdict(p):
+    if verdict(p, c.ref):
         return "ok", text
     if mode != "repair":
         return "problemsFound", text
     r = run(["diskutil", "repairVolume", c.ref])
-    return ("repaired" if verdict(r) else "problemsFound"), text + r.stdout + r.stderr
+    text += r.stdout + r.stderr
+    # "repaired" is proven by a fresh verify, not by repairVolume's own words.
+    v = run(["diskutil", "verifyVolume", c.ref])
+    text += "--- verify after repair ---\n" + v.stdout + v.stderr
+    return ("repaired" if r.returncode == 0 and verdict(v, c.ref) else "problemsFound"), text
 
 
 def check_one(c: Container, mode: str) -> tuple[str, str]:
