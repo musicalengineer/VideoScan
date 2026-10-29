@@ -36,6 +36,7 @@ Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Ever
 - Conventional, honest commit messages (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`). A fix's message carries its red/green table.
 - Never delete files; move to `.trash/`. Rick empties it.
 - Tag before anything structural: `git tag pre-<thing>-<date>`.
+- CLEANUP after merge, after merging a branch which passes all related tests and/or gets the OK from Rick should be deleted, worktrees etc, deleted.
 
 ## 4. Testing
 
@@ -50,6 +51,7 @@ Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Ever
 
 ## 5. Review and Codex
 
+- A code path that refuses and names another engine ("needs the dedicated X") must call that engine, with a test that goes through to it.
 - **When Codex:** paths where a miss costs data (delete/move/rewrite of media, ledger, archive, fixity, resume/recovery, catalog commit). UI, wording, ranking heuristics, docs, tests-only: `reviewer` agent + Rick.
 - **Cheap tiers first:** compiler + strict concurrency + SwiftLint → `reviewer` agent → Codex. One Codex pass per batch of merged SHAs, never per commit.
 - **Brief shape** (keeps Codex inside the fence): SHA range · exact files/functions · the invariant to attack · test evidence already run · output contract (`Credits spent: … | Finding count: N`, `Verdict: merge|fix|block`) · "do not explore outside these files." Template: `docs/reviews/BRIEF_TEMPLATE.md`.
