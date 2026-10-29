@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
-# Failover guard for the nightly test run.
+# Guard for the nightly test run: one green run per on-rota Mac per day.
 #
-# The fleet runs this staggered so we ALWAYS have a green run to look at in
-# the morning, even if the primary host is wedged:
-#
-#   M4 @ 02:00   (primary — most dev happens here)
-#   M5 @ 03:15   (runs only if M4 didn't land a green run)
-#   M1           OFF the rotation (GH #360, 2026-10-21: a travel laptop, often on
-#                battery). scripts/nightly_rota.json is the one source; a Mac
-#                that is off it never runs, even if its launchd job still fires.
+# Every Mac on the rotation (scripts/nightly_rota.json: the two Mac Studios,
+# M4 and M5 Ultra, both at 02:00) runs its own nightly, because the metrics
+# page shows one row per Studio (DECISIONS 2026-10-28). Off-rota Macs (the
+# laptops) never run, even if their launchd job still fires.
 #
 # Logic: fetch origin/metrics; if a GREEN (status:ok, total>0) testdriver row
-# dated *today* (UTC) already exists from any host, there's nothing to do —
-# exit 0. Otherwise run the real nightly. A *failed* row does NOT count, so
-# failover fires exactly when the primary is "weird" (build break, hang, etc).
-#
-# Idempotent and safe to run on every host — the guard collapses to a no-op
-# once any host succeeds.
+# dated *today* (UTC) already exists from THIS host, there's nothing to do —
+# exit 0 (a second launch the same day, e.g. a kickstart, is a no-op).
+# Otherwise run the real nightly. A *failed* row does NOT count, so a re-run
+# after a red night still goes ahead. Another host's green row never counts
+# (until 2026-10-29 it did, and the Ultra skipped whenever the M4 was green).
 
 set -eu
 
@@ -43,15 +38,17 @@ git fetch origin metrics --quiet 2>/dev/null || true
 TODAY="$(date -u +%Y-%m-%d)"
 ROWS="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"
 
-HAS_GREEN="$(TD_ROWS="$ROWS" TODAY="$TODAY" python3 - <<'PY'
+HAS_GREEN="$(TD_ROWS="$ROWS" TODAY="$TODAY" HOST="$HOST" python3 - <<'PY'
 import os, json
 today = os.environ.get("TODAY","")
+host = os.environ.get("HOST","")
 for line in os.environ.get("TD_ROWS","").splitlines():
     line = line.strip()
     if not line: continue
     try: r = json.loads(line)
     except Exception: continue
-    if r.get("status") == "ok" and str(r.get("ts",""))[:10] == today and int(r.get("total") or 0) > 0:
+    if (r.get("status") == "ok" and str(r.get("ts",""))[:10] == today
+            and r.get("host") == host and int(r.get("total") or 0) > 0):
         print("yes"); break
 else:
     print("no")
@@ -59,7 +56,7 @@ PY
 )"
 
 if [ "$HAS_GREEN" = "yes" ]; then
-    log "green run already present for $TODAY — skipping (no-op failover)."
+    log "green run from $HOST already present for $TODAY — skipping (no-op)."
     exit 0
 fi
 

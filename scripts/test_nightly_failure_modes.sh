@@ -1312,6 +1312,36 @@ INST_RC=$?
     || fail "unknown host was installed (rc=$INST_RC)"
 
 # ───────────────────────────────────────────────────────────────────
+# Test 17 (2026-10-29): every on-rota Studio runs its own nightly. The
+# metrics page shows both Studios (DECISIONS 2026-10-28), but the guard
+# skipped the Ultra at 05:00 because the M4 had already published green.
+# Only this host's own green row today makes the guard a no-op.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 17: the guard counts only this host's green row =="
+TODAY_UTC="$(date -u +%Y-%m-%d)"
+# A git whose `show` prints $FAKE_ROWS; a caffeinate that records the run.
+printf '%s\n' '#!/bin/sh' 'case "$1" in show) cat "$FAKE_ROWS" ;; esac' 'exit 0' > "$RT/bin/git"
+printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$FAKE_CAFF_LOG"' 'exit 0' > "$RT/bin/caffeinate"
+chmod +x "$RT/bin/git" "$RT/bin/caffeinate"
+guard_ran() {
+    # args: host rows-json-lines -> 0 when the guard started the nightly
+    printf '%s\n' "$2" > "$RT/rows.jsonl"; : > "$RT/caff.log"
+    HOME="$RT/home" FAKE_HOST="$1" FAKE_ROWS="$RT/rows.jsonl" FAKE_CAFF_LOG="$RT/caff.log" \
+        PATH="$RT/bin:$PATH" bash "$RT/scripts/nightly_guarded.sh" > "$RT/out.log" 2>&1
+    grep -q 'nightly_local_tests.sh' "$RT/caff.log"
+}
+M4_GREEN="{\"ts\":\"${TODAY_UTC}T06:47:12Z\",\"host\":\"RicksM4\",\"status\":\"ok\",\"total\":12632}"
+ULTRA_GREEN="{\"ts\":\"${TODAY_UTC}T09:50:00Z\",\"host\":\"RicksUltra\",\"status\":\"ok\",\"total\":12632}"
+guard_ran RicksUltra "$M4_GREEN" \
+    && pass "the Ultra runs its nightly although the M4 is already green today" \
+    || fail "the Ultra was skipped because another host was green: $(tail -1 "$RT/home/Library/Logs/VideoScan/nightly_guard.log")"
+! guard_ran RicksUltra "$M4_GREEN
+$ULTRA_GREEN" \
+    && pass "a second launch on the same day is a no-op once this host is green" \
+    || fail "the Ultra ran twice in one day"
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo
