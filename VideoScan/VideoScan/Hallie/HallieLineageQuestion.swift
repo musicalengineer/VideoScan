@@ -225,33 +225,88 @@ enum HallieLineageQuestion: Equatable, Sendable {
         return HallieTreeStatisticsQuestion.detect(lower).map { .treeStatistics($0) }
     }
 
+    /// The shapes in precedence order; the first that claims the sentence
+    /// wins. The ORDER is the grammar — each entry's comment says why it
+    /// sits where it does. Every detector is pure text, so evaluating them
+    /// lazily in sequence is the same as the old if-chain. C++ readers: an
+    /// array of lambdas walked until one returns a non-null optional.
     private static func detectShape(_ lower: String) -> HallieLineageQuestion? {
-        if isGetFamilyTree(lower) { return .getFamilyTree }
-        if let provenance = gedcomProvenanceQuestion(in: lower) { return provenance }
-        if isGedcomAwareness(lower) { return .gedcomAwareness }
-        // "how are rick and donna related" — two people, one relatedness
-        // word; never a media ask ("videos of rick and donna" has none).
-        if let pair = commonAncestorQuestion(in: lower) { return pair }
-        // "center the tree on martha lamson" — a navigation verb phrase
-        // with a person; before every shape that could read the name.
-        if let center = centerTreeQuestion(in: lower) { return center }
-        // "birthplaces on donna's mother's side" / "how many generations
-        // back to find someone born in europe" — before the superlatives
-        // ("first ancestor born outside america") and the trace shapes
-        // (which would read the same sentence as a plain line walk).
-        // "how many people were born in england" / "average lifespan" — BEFORE
-        // the trail: the trail's bare-line cue ("my ancestors" + "born") was
-        // claiming "how many of my ancestors were born in ireland" and
-        // answering with a read-out list. The recognizer abstains on any
-        // sentence carrying "generation(s)", so it can never take the trail's
-        // own counting shape ("how many generations back …").
-        if let stats = statisticsQuestion(in: lower) { return stats }
-        if let trail = birthplaceTrailQuestion(in: lower) { return trail }
+        // "… as far back as you can go" / "… as far back as possible" is a
+        // depth wish, not a destination; drop it before the trace shapes
+        // so "back" inside it can't be mistaken for "back to <country>"
+        // (live 2026-08-26). A named start person with no destination
+        // becomes an ancestor line at full depth (see `traceTarget`).
+        let trace = lower.replacing(/\s+as far (?:back )?as (?:you can(?: go)?|possible|it goes|we can)\s*$/, with: "")
+        let detectors: [() -> HallieLineageQuestion?] = [
+            { isGetFamilyTree(lower) ? .getFamilyTree : nil },
+            { gedcomProvenanceQuestion(in: lower) },
+            { isGedcomAwareness(lower) ? .gedcomAwareness : nil },
+            // "how are rick and donna related" — two people, one relatedness
+            // word; never a media ask ("videos of rick and donna" has none).
+            { commonAncestorQuestion(in: lower) },
+            // "center the tree on martha lamson" — a navigation verb phrase
+            // with a person; before every shape that could read the name.
+            { centerTreeQuestion(in: lower) },
+            // "birthplaces on donna's mother's side" / "how many generations
+            // back to find someone born in europe" — before the superlatives
+            // ("first ancestor born outside america") and the trace shapes
+            // (which would read the same sentence as a plain line walk).
+            // "how many people were born in england" / "average lifespan" — BEFORE
+            // the trail: the trail's bare-line cue ("my ancestors" + "born") was
+            // claiming "how many of my ancestors were born in ireland" and
+            // answering with a read-out list. The recognizer abstains on any
+            // sentence carrying "generation(s)", so it can never take the trail's
+            // own counting shape ("how many generations back …").
+            { statisticsQuestion(in: lower) },
+            { birthplaceTrailQuestion(in: lower) },
+            // Superlatives BEFORE the photo shape: "photo of the oldest person
+            // in the tree" is a person to find first, not a person named "the
+            // oldest person in the tree".
+            { superlativeQuestion(in: lower) },
+            // "show me a photo of Fred Lamb" / "what documents do we have
+            // for X" / "show me his photo" — see `personPhotoQuestion`.
+            { personPhotoQuestion(in: lower) },
+            // "describe X", "what was X like", "X's appearance/personality".
+            { personDescriptionQuestion(in: lower) },
+            // "trace (the|our|my|X's) (family|…) back to Ireland" — on the
+            // depth-wish-stripped sentence; see `traceShapeQuestion`.
+            { traceShapeQuestion(trace) },
+            // "where does the family come from" / "what country is the family from"
+            { originQuestion(in: lower) },
+            // "tell me about rick's family tree, his brothers, sisters, parents,
+            // and grandparents" — a person's tree, with the card's own kin
+            // categories trailing. Before the kinship shapes, which would read
+            // "his brothers" as a relation ask; after the trace / origin ones.
+            { personTreeQuestion(in: lower) },
+            // "X's great great grandpa on his paternal side" / "my maternal
+            // grandmother" — AFTER the trace shapes (where a kinship word is an
+            // apposition: "from my great great grandmother edith lucy parker")
+            // and BEFORE the line shape, which would otherwise read "paternal
+            // side" as a line request and swallow the kinship words into the
+            // person (live 2026-08-26).
+            // "find rick's grandma muriel and tell me about her": relation +
+            // name = one person (live 2026-08-26). After the trace shapes (a
+            // trace's start person is the same words after "from"), before
+            // the relation-only parser, which steps aside for a trailing name.
+            { HallieKinshipApposition.parse(lower).map { .kinshipNamed($0) } },
+            { kinshipQuestion(in: lower) },
+            // "(show me) rick's maternal line back 5 generations" / "rick's
+            // ancestors back 4 generations".
+            { ancestorLineQuestion(in: lower) },
+            // "the family tree from rick breen all the way back to 1600" /
+            // "family tree for the latta family" / "tell me about the breen family".
+            { familyTreeQuestion(in: lower, trace: trace) },
+            // "videos of nathaniel parker sr" — last; see `.personVideos`.
+            { personVideosQuestion(in: lower) },
+        ]
+        for detect in detectors {
+            if let shape = detect() { return shape }
+        }
+        return nil
+    }
 
-        // Superlatives BEFORE the photo shape: "photo of the oldest person
-        // in the tree" is a person to find first, not a person named "the
-        // oldest person in the tree".
-        if let sup = superlativeQuestion(in: lower) { return sup }
+    /// The portrait / papers shapes (`.personPhoto`).
+    private static func personPhotoQuestion(in lower: String) -> HallieLineageQuestion? {
         // "show me a photo of Fred Lamb" (typos in the lead words are the
         // translator's problem no longer — this is deterministic).
         // The name may carry a namesake qualifier — "(b. 1651)", "born
@@ -284,7 +339,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
            lower.firstMatch(of: /\b(?:show|see|display|view|got|have|any|find|there)\b/) != nil {
             return .personPhoto(person: HallieLineageQuestion.capitalizedName(String(m.1)))
         }
-        // "describe X", "what was X like", "X's appearance/personality/character".
+        return nil
+    }
+
+    /// "describe X", "what was X like", "X's appearance/personality/character".
+    private static func personDescriptionQuestion(in lower: String) -> HallieLineageQuestion? {
         if let m = lower.firstMatch(of: /^describe\s+(?:the\s+)?([a-z][a-z .'-]+?)(?:'s?\s+(?:physical\s+)?(?:appearance|personality|character|looks|traits))?(?:\s+(?:and|as)\b.*)?$/) {
             let name = String(m.1).trimmingCharacters(in: .whitespaces)
             if !name.isEmpty {
@@ -309,19 +368,18 @@ enum HallieLineageQuestion: Equatable, Sendable {
                     focus: descriptionFocus(in: lower))
             }
         }
+        return nil
+    }
 
+    /// The trace shapes, read from `trace` — the sentence with any "as far
+    /// back as you can go" depth wish already stripped (see `detectShape`).
+    private static func traceShapeQuestion(_ trace: String) -> HallieLineageQuestion? {
         // "trace (the|our|my|X's) (family|ancestors|links|side…) back to
         // Ireland" — "links"/"side"/"heritage" joined the vocabulary and
         // maternal/paternal restrict the walked line (Rick live, 8/24).
         // Destination forms accept more verbs than bare "trace" — "find my
         // family links back to England" (live, 8/24). Verb+family-word+
         // destination together keep "find videos of donna" out.
-        // "… as far back as you can go" / "… as far back as possible" is a
-        // depth wish, not a destination; drop it before the trace shapes
-        // so "back" inside it can't be mistaken for "back to <country>"
-        // (live 2026-08-26). A named start person with no destination
-        // becomes an ancestor line at full depth (see `traceTarget`).
-        let trace = lower.replacing(/\s+as far (?:back )?as (?:you can(?: go)?|possible|it goes|we can)\s*$/, with: "")
         if let m = trace.firstMatch(of: /\b(?:trace|follow|find|walk|take)\b(.*?)\b(?:back|down|up)(?:\s+to\s+([a-z][a-z .'-]*))?$/) {
             let subject = String(m.1)
             if subject.firstMatch(of: /\b(?:famil\w*|ancest\w*|roots?|line|lineage|links?|side|heritage|people|tree)\b/) != nil {
@@ -348,30 +406,20 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return traceQuestion(person: possessor(in: String(m.1)) ?? namedTarget(in: rest),
                                  country: nil, line: lineWord(in: trace))
         }
-        // "where does the family come from" / "where did we come from originally"
+        return nil
+    }
+
+    /// "where does the family come from" / "where did we come from originally"
+    private static func originQuestion(in lower: String) -> HallieLineageQuestion? {
         if lower.firstMatch(of: /\bwhere (?:did|does|do) (?:the |our |my |we |us )?(?:family|ancestors|people)?\s*(?:originally )?come from\b/) != nil
             || lower.firstMatch(of: /\bwhat country (?:did|does|is) (?:the |our |my )?family (?:come )?from\b/) != nil {
             return .originTrail(person: nil, country: nil, line: .both)
         }
+        return nil
+    }
 
-        // "tell me about rick's family tree, his brothers, sisters, parents,
-        // and grandparents" — a person's tree, with the card's own kin
-        // categories trailing. Before the kinship shapes, which would read
-        // "his brothers" as a relation ask; after the trace / origin ones.
-        if let tree = personTreeQuestion(in: lower) { return tree }
-        // "X's great great grandpa on his paternal side" / "my maternal
-        // grandmother" — AFTER the trace shapes (where a kinship word is an
-        // apposition: "from my great great grandmother edith lucy parker")
-        // and BEFORE the line shape, which would otherwise read "paternal
-        // side" as a line request and swallow the kinship words into the
-        // person (live 2026-08-26).
-        // "find rick's grandma muriel and tell me about her": relation +
-        // name = one person (live 2026-08-26). After the trace shapes (a
-        // trace's start person is the same words after "from"), before
-        // the relation-only parser, which steps aside for a trailing name.
-        if let named = HallieKinshipApposition.parse(lower) { return .kinshipNamed(named) }
-        if let kin = kinshipQuestion(in: lower) { return kin }
-
+    /// The generation-counted ancestor walks.
+    private static func ancestorLineQuestion(in lower: String) -> HallieLineageQuestion? {
         // "(show me) rick's maternal line back 5 generations"
         if let m = lower.firstMatch(of: /(?:^|\s)(.*?)\b(maternal|paternal|mother'?s|father'?s)\s+(?:line|side|ancestors|ancestry|lineage)\b(.*)$/) {
             let line: GedcomFamilyGraph.Line = String(m.2).hasPrefix("m") ? .maternal : .paternal
@@ -385,7 +433,13 @@ enum HallieLineageQuestion: Equatable, Sendable {
             return .ancestorLine(person: possessor(in: String(m.1)) ?? namedTarget(in: String(m.2)),
                                  line: .both, generations: gens)
         }
+        return nil
+    }
 
+    /// The family-tree phrasings: a named start walked back, or a surname
+    /// tree. `trace` is the depth-wish-stripped sentence; a difference from
+    /// `lower` means a depth wish was present.
+    private static func familyTreeQuestion(in lower: String, trace: String) -> HallieLineageQuestion? {
         // "the family tree from rick breen all the way back to 1600" (live
         // 2026-08-26): a named start and a "back" → an ancestor walk at
         // full depth; "back to <year>" stops the walk at that year.
@@ -417,6 +471,11 @@ enum HallieLineageQuestion: Equatable, Sendable {
         if let m = lower.firstMatch(of: /^(?:(?:hallie|please|ok|okay|so),?\s+)*(?:tell (?:me|us) about|what about|who (?:are|were)|describe|show (?:me|us)|about)\s+the\s+([a-z][a-z'-]+)\s+(?:family|clan)\s*\??\s*$/) {
             return .surnameTree(surname: String(m.1))
         }
+        return nil
+    }
+
+    /// "videos of X" / "show me his videos" (`.personVideos`).
+    private static func personVideosQuestion(in lower: String) -> HallieLineageQuestion? {
         // "videos of nathaniel parker sr" — last, and only so the answer
         // can decline for a pre-photography person; see `.personVideos`.
         if let m = lower.firstMatch(of: /\b(?:videos?|films?|footage|movies?|clips?|home movies)\s+of\s+([a-z][a-z .'-]+?)\s*$/) {
