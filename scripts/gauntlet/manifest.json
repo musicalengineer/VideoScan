@@ -29798,6 +29798,10 @@
       ],
       "tests": [
         "test_busy_disk_is_never_repaired",
+        "test_ctrl_c_during_repair_still_remounts_then_propagates",
+        "test_duplicate_volume_names_across_containers_select_nothing",
+        "test_exception_during_verify_still_remounts",
+        "test_exception_from_remount_is_left_unmounted",
         "test_exit_zero_without_ok_text_is_a_failure",
         "test_live_checks_internal_and_external_skips_disk_image",
         "test_live_ok_and_problems_never_unmount",
@@ -29812,7 +29816,8 @@
         "test_repair_refuses_boot_disk_and_unknown_names",
         "test_repair_runs_only_after_a_failed_verify",
         "test_repair_that_fails_is_problems_found_not_repaired",
-        "test_unknown_store_info_is_not_treated_as_internal_or_image"
+        "test_target_naming_a_protected_container_never_selects_another",
+        "test_unknown_store_info_is_never_unmounted_or_repaired"
       ]
     },
     {

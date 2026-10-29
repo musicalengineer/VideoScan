@@ -51,7 +51,7 @@ class Container:
     ref: str                 # disk13
     store: str               # disk12s2
     volumes: list[str] = field(default_factory=list)
-    internal: bool = False
+    external: bool = False   # positive evidence only: Internal == False and a non-image bus
     disk_image: bool = False
 
     @property
@@ -71,12 +71,13 @@ def parse_containers(apfs_list: dict, store_info: dict[str, dict]) -> list[Conta
         if not stores:
             continue
         info = store_info.get(stores[0], {})
+        bus = info.get("BusProtocol")
         out.append(Container(
             ref=c["ContainerReference"],
             store=stores[0],
             volumes=[v.get("Name", v["DeviceIdentifier"]) for v in c.get("Volumes", [])],
-            internal=bool(info.get("Internal", False)),
-            disk_image=info.get("BusProtocol") == "Disk Image",
+            external=info.get("Internal") is False and bool(bus) and bus != "Disk Image",
+            disk_image=bus == "Disk Image",
         ))
     return out
 
@@ -94,14 +95,21 @@ def discover() -> list[Container]:
 
 def select(containers: list[Container], mode: str, target: str | None) -> tuple[list[Container], list[str]]:
     """What this mode checks, and why anything was left out (said, never silent)."""
+    if target:
+        # Resolve the name against EVERY container before eligibility, so a
+        # name shared with a protected container can never fall through to
+        # the one eligible match.
+        matches = [c for c in containers if target in (c.ref, *c.volumes)]
+        if len(matches) > 1:
+            return [], [f"{target!r} is ambiguous: {'; '.join(c.label for c in matches)}"]
+        containers = matches
     picked, skipped = [], []
     for c in containers:
         if c.disk_image:
             skipped.append(f"{c.label}: disk image")
-        elif mode != "live" and c.internal:
-            skipped.append(f"{c.label}: internal disk is live-verify only (repair from Recovery)")
-        elif target and target not in (c.ref, *c.volumes):
-            continue
+        elif mode != "live" and not c.external:
+            skipped.append(f"{c.label}: not proven external (internal disk, or no diskutil info); "
+                           f"live verify only, repair from Recovery")
         else:
             picked.append(c)
     return picked, skipped
@@ -153,19 +161,30 @@ def check_one(c: Container, mode: str) -> tuple[str, str]:
 
     # offline / repair: unmount without force; busy means refuse, not guess.
     # unmountDisk can fail part-way (one volume busy, its sibling already
-    # unmounted), so every attempt is followed by a remount attempt.
-    u = run(["diskutil", "unmountDisk", c.ref])
-    if u.returncode == 0:
-        outcome, text = _verify_then_maybe_repair(c, mode)
-    else:
-        outcome = "notChecked"
-        text = (f"NOT CHECKED: could not unmount {c.label} (busy?): {u.stdout}{u.stderr}"
-                f"  Who holds it: lsof +f -- /Volumes/<name>\n")
-    m = run(["diskutil", "mountDisk", c.ref])
-    if m.returncode != 0:
-        text += (f"!! {c.label} is NOT MOUNTED (check outcome was {outcome}). "
-                 f"Mount it: diskutil mountDisk {c.ref}\n{m.stdout}{m.stderr}")
-        outcome = "leftUnmounted"
+    # unmounted), and anything after it can raise (Ctrl-C included), so the
+    # remount attempt sits in `finally`. Like a C++ destructor (RAII guard).
+    outcome, text = "notChecked", ""
+    try:
+        u = run(["diskutil", "unmountDisk", c.ref])
+        if u.returncode == 0:
+            outcome, text = _verify_then_maybe_repair(c, mode)
+        else:
+            text = (f"NOT CHECKED: could not unmount {c.label} (busy?): {u.stdout}{u.stderr}"
+                    f"  Who holds it: lsof +f -- /Volumes/<name>\n")
+    except Exception as e:
+        outcome, text = "notChecked", text + f"NOT CHECKED: {c.label}: {e!r}\n"
+    finally:
+        try:
+            m = run(["diskutil", "mountDisk", c.ref])
+            mounted, mtext = m.returncode == 0, m.stdout + m.stderr
+        except Exception as e:
+            mounted, mtext = False, repr(e)
+        if not mounted:
+            warning = (f"!! {c.label} is NOT MOUNTED (check outcome was {outcome}). "
+                       f"Mount it: diskutil mountDisk {c.ref}")
+            log(warning)    # logged here too: on Ctrl-C nothing after this runs
+            text += f"{warning}\n{mtext}"
+            outcome = "leftUnmounted"
     return outcome, text
 
 
@@ -185,8 +204,16 @@ def main(argv: list[str] | None = None) -> int:
         print("VideoScan is running; quit it first (offline/repair unmount volumes).", file=sys.stderr)
         return 2
 
-    picked, skipped = select(discover(), mode, a.repair)
+    try:
+        containers = discover()
+    except Exception as e:
+        log(f"OUTCOME disk_check mode={mode} error: could not list containers: {e!r}")
+        notify("Could not list disks; nothing was checked.")
+        return 1
+    picked, skipped = select(containers, mode, a.repair)
     if mode == "repair" and len(picked) != 1:
+        for s in skipped:
+            print(f"  {s}", file=sys.stderr)
         print(f"--repair {a.repair!r} matched {len(picked)} external containers; name exactly one.", file=sys.stderr)
         return 2
 
@@ -195,7 +222,10 @@ def main(argv: list[str] | None = None) -> int:
         log(f"  skip {s}")
     failed = []
     for c in picked:
-        outcome, output = check_one(c, mode)
+        try:
+            outcome, output = check_one(c, mode)
+        except Exception as e:      # live verify raised; offline already handled inside
+            outcome, output = "notChecked", f"NOT CHECKED: {c.label}: {e!r}\n"
         ok = outcome in SUCCESS
         if not a.quiet or not ok:
             print(output, flush=True)

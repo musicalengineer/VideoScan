@@ -56,9 +56,29 @@ class Selection(unittest.TestCase):
         self.assertEqual(disk_check.select(containers(), "repair", "UltraDrive")[0], [])
         self.assertEqual(disk_check.select(containers(), "repair", "Nope")[0], [])
 
-    def test_unknown_store_info_is_not_treated_as_internal_or_image(self):
+    def test_unknown_store_info_is_never_unmounted_or_repaired(self):
+        # Codex 2026-10-29 P1-1: missing `diskutil info` must not mean "external".
         cs = disk_check.parse_containers(APFS, {})
-        self.assertFalse(any(c.internal or c.disk_image for c in cs))
+        self.assertEqual(disk_check.select(cs, "repair", "Data")[0], [])
+        self.assertEqual(disk_check.select(cs, "offline", None)[0], [])
+        self.assertEqual(refs(disk_check.select(cs, "live", None)[0]), ["disk3", "disk13", "disk11", "disk15"])
+
+    def test_target_naming_a_protected_container_never_selects_another(self):
+        # Codex 2026-10-29 P1-2: an external volume named "disk3" vs internal container disk3.
+        apfs = {"Containers": APFS["Containers"] + [
+            {"ContainerReference": "disk21", "PhysicalStores": [{"DeviceIdentifier": "disk20s2"}],
+             "Volumes": [{"Name": "disk3", "DeviceIdentifier": "disk21s1"}]}]}
+        cs = disk_check.parse_containers(apfs, {**INFO, "disk20s2": {"Internal": False, "BusProtocol": "USB"}})
+        picked, skipped = disk_check.select(cs, "repair", "disk3")
+        self.assertEqual(picked, [])
+        self.assertTrue(any("ambiguous" in s for s in skipped))
+
+    def test_duplicate_volume_names_across_containers_select_nothing(self):
+        apfs = {"Containers": APFS["Containers"] + [
+            {"ContainerReference": "disk21", "PhysicalStores": [{"DeviceIdentifier": "disk20s2"}],
+             "Volumes": [{"Name": "FamilyArchive", "DeviceIdentifier": "disk21s1"}]}]}
+        cs = disk_check.parse_containers(apfs, {**INFO, "disk20s2": {"Internal": False, "BusProtocol": "USB"}})
+        self.assertEqual(disk_check.select(cs, "repair", "FamilyArchive")[0], [])
 
 
 class Verdict(unittest.TestCase):
@@ -89,7 +109,10 @@ class FakeDiskutil:
     def __call__(self, cmd):
         verb = cmd[1]
         self.calls.append(verb)
-        code, out = self.codes.get(verb, (0, OK_OUT if verb.endswith("Volume") else ""))
+        answer = self.codes.get(verb, (0, OK_OUT if verb.endswith("Volume") else ""))
+        if isinstance(answer, BaseException):
+            raise answer
+        code, out = answer
         return subprocess.CompletedProcess(cmd, code, out, "")
 
 
@@ -140,6 +163,23 @@ class Outcomes(unittest.TestCase):
     def test_repair_that_fails_is_problems_found_not_repaired(self):
         outcome, _ = self.check("repair", verifyVolume=(1, BAD_OUT), repairVolume=(1, BAD_OUT))
         self.assertEqual(outcome, "problemsFound")
+
+    def test_exception_during_verify_still_remounts(self):
+        # Codex 2026-10-29 P1-3.
+        outcome, calls = self.check("offline", verifyVolume=OSError("diskutil vanished"))
+        self.assertEqual(outcome, "notChecked")
+        self.assertEqual(calls, ["unmountDisk", "verifyVolume", "mountDisk"])
+
+    def test_ctrl_c_during_repair_still_remounts_then_propagates(self):
+        fake = FakeDiskutil(verifyVolume=(1, BAD_OUT), repairVolume=KeyboardInterrupt())
+        disk_check.run = fake
+        with self.assertRaises(KeyboardInterrupt):
+            disk_check.check_one(self.archive, "repair")
+        self.assertEqual(fake.calls[-1], "mountDisk")
+
+    def test_exception_from_remount_is_left_unmounted(self):
+        outcome, _ = self.check("offline", mountDisk=OSError("boom"))
+        self.assertEqual(outcome, "leftUnmounted")
 
     def test_busy_disk_is_never_repaired(self):
         outcome, calls = self.check("repair", unmountDisk=(1, "busy"))
