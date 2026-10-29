@@ -339,6 +339,114 @@ struct HallieDadNotDafyddTests {
         }
     }
 
+    // MARK: - A, the real data shape: a CyberBrain whose name CONTAINS "dad"
+    //
+    // Live 2026-10-20…10-28 (strict-056, 8 of 8 replays, while every test
+    // above passed): Rick's CyberBrain carries Dad Breen with the alias
+    // "Dad Breen", and CyberBrainIndex.resolve matches by single TOKEN, so
+    // the bare word "dad" read as a curated name and the kin rule (rung 0)
+    // yielded. The CyberBrain bridge then had to land on the tree, but that
+    // record's pointer came from an older tree and is absent from the merged
+    // one — so resolveDetailed fell to the graph's name lookup and found
+    // "Dad ab Giwn". The fixtures above had no CyberBrain at all.
+
+    /// Synthetic stale pointer: present in the CyberBrain, absent from the
+    /// tree, as the live record's is.
+    private static let stalePointer = "@I900000000001@"
+
+    private static func liveShapeCyberBrain(exactAlias: String? = nil) throws -> CyberBrainIndex {
+        try CyberBrainIndex(archive: .init(
+            archiveID: "dad-dafydd-live-shape",
+            displayName: "Dad/Dafydd live-shape CyberBrain",
+            people: [
+                CyberBrainPerson(id: "person.richard-harding-breen-sr.i900000000001",
+                                 gedcomPersonID: stalePointer,
+                                 canonicalName: richardSr,
+                                 aliases: ["Richard Breen Sr", "Dad Breen", "Grampa Breen",
+                                           "Rick's dad", "Dick"] + (exactAlias.map { [$0] } ?? [])),
+            ],
+            sources: []))
+    }
+
+    private func liveShapeContext(rows: Bool = true, exactAlias: String? = nil) throws -> Exec.Context {
+        Exec.Context(
+            profiles: Self.profiles(rows: rows),
+            graph: graph(),
+            assetConfiguration: Self.scratchAssets,
+            cyberBrain: try Self.liveShapeCyberBrain(exactAlias: exactAlias),
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae",
+                            archivistPersonName: nil, ownerFamilySearchID: "GVQV-NW3"))
+    }
+
+    /// SENSOR for the mechanism: the CyberBrain really does answer "dad" by
+    /// token (if that ever stops, the tests below stop proving anything),
+    /// and the stale pointer really is absent from the tree.
+    @Test func theLiveCyberBrainMatchesDadByTokenAndItsPointerIsStale() throws {
+        let index = try Self.liveShapeCyberBrain()
+        guard case .resolved(let person) = index.resolve("dad") else {
+            Issue.record("the CyberBrain no longer matches 'dad' by token"); return
+        }
+        #expect(person.canonicalName == Self.richardSr)
+        #expect(graph().people[Self.stalePointer] == nil)
+    }
+
+    /// The rule itself: a name that CONTAINS a kin word does not claim it;
+    /// an exact alias still does (GH #180).
+    @Test func aCyberBrainTokenHitIsNotACuratedClaimButAnExactAliasIs() throws {
+        let tokenOnly = try liveShapeContext()
+        #expect(!Exec.isCuratedPerson("dad", context: tokenOnly))
+        #expect(Exec.isCuratedPerson("Dad Breen", context: tokenOnly))
+        let exact = try liveShapeContext(exactAlias: "Pa")
+        #expect(Exec.isCuratedPerson("pa", context: exact))
+    }
+
+    /// THE live turn on the live shape: "dad" binds Dad Breen through the
+    /// People tab, and the film floor stays silent (he died in 2008).
+    @Test func findVideosOfDadWithTheLiveCyberBrainNeverAnswersWithDafydd() throws {
+        let context = try liveShapeContext()
+        switch Answer.resolveDetailed("dad", context: context, graph: context.graph!) {
+        case .success(let person, _):
+            #expect(person.id == "@I2@", Comment(rawValue: person.name))
+        case .ambiguous(let people):
+            Issue.record("ambiguous: \(people.map(\.name))")
+        case .failure(let result):
+            Issue.record("failed: \(result?.prose ?? "nil")")
+        }
+        for question in ["find videos of dad", "sure, but I also want videos of dad"] {
+            if case .answer(let r) = pre(question, context: context) {
+                #expect(!r.prose.contains("Dafydd"), Comment(rawValue: "\(question): \(r.prose)"))
+                #expect(!r.prose.contains("motion pictures"), Comment(rawValue: "\(question): \(r.prose)"))
+                #expect(r.queryDescription?.contains("Dafydd") != true,
+                        Comment(rawValue: "\(question): \(r.queryDescription ?? "")"))
+            }
+        }
+    }
+
+    /// Without People-tab rows the owner's pinned tree record binds him —
+    /// still never the name lookup.
+    @Test func withTheLiveCyberBrainAndNoRowsTheTreeRecordBindsDad() throws {
+        let context = try liveShapeContext(rows: false)
+        #expect(resolved("dad", context: context)?.id == "@I2@",
+                Comment(rawValue: resolved("dad", context: context)?.name ?? "nobody"))
+    }
+
+    /// The two sibling lanes that share `isCuratedPerson` (person-fact,
+    /// graph preflight), on the live shape.
+    @Test func siblingLanesWithTheLiveCyberBrainAreNeverDafydd() async throws {
+        let context = try liveShapeContext()
+        let asks: [(String, ArchivistQueryAST.Graph)] = [
+            ("show dad's family tree", .init(people: ["dad"], operation: .familyTree)),
+            ("tell me about dad", .init(people: ["dad"], operation: .biography)),
+        ]
+        for (question, ast) in asks {
+            let r = try await Exec.execute(
+                .init(intent: .init(originalQuestion: question, ast: .graph(ast))), context: context)
+            #expect(!r.prose.contains("Dafydd"), Comment(rawValue: "\(question): \(r.prose)"))
+            #expect(r.catalogPersonName?.contains("Dafydd") != true,
+                    Comment(rawValue: "\(question): \(r.catalogPersonName ?? "nil")"))
+        }
+    }
+
     // MARK: - Sibling roads: the graph route's own resolver
 
     /// The same word on the graph route ("show dad's family tree" is a
