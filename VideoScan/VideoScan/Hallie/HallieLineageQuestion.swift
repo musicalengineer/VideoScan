@@ -1776,11 +1776,8 @@ enum HallieLineageAnswer {
         // owner's own name to one record before any name or alias lookup.
         let isOwnerSpelling = typed == nil
             || HallieOwnerResolver.isOwnerSpelling(name, owner: context.speakers.ownerName)
-        if isOwnerSpelling,
-           case .one(let pinned, let note) = HallieOwnerResolver.resolve(
-               name, graph: graph, familySearchID: context.speakers.ownerFamilySearchID),
-           graph.person(familySearchID: context.speakers.ownerFamilySearchID) != nil {
-            return .success(pinned, note: note)
+        if isOwnerSpelling, let pinned = ownerPinned(name, context: context, graph: graph) {
+            return pinned
         }
         // Step 0b (live 2026-09-26): a kin term — "dad", "my dad", "our
         // mother" — is the OWNER's relative and is never looked up as a
@@ -1796,18 +1793,48 @@ enum HallieLineageAnswer {
         // Same bridge the kinship routes use: the family CyberBrain knows
         // that "Rick" is a particular GEDCOM record even when the tree
         // spells him "Richard Harding Breen Jr".
-        if let index = context.cyberBrain {
-            switch index.resolve(name) {
-            case .resolved(let known):
-                if let id = known.gedcomPersonID, let p = graph.people[id] { return .success(p) }
-            case .ambiguous(let people):
-                let linked = people.compactMap { $0.gedcomPersonID.flatMap { graph.people[$0] } }
-                if linked.count == 1 { return .success(linked[0]) }
-                if linked.count > 1 { return .ambiguous(linked) }
-            case .notFound:
-                break
-            }
+        if let known = cyberBrainResolution(name, context: context, graph: graph) {
+            return known
         }
+        return graphResolution(name, isOwnerSpelling: isOwnerSpelling, context: context, graph: graph)
+    }
+
+    /// Step 0: the pinned FamilySearch record, when the owner's own
+    /// FamilySearch ID is in the tree and resolves to one person.
+    private static func ownerPinned(_ name: String,
+                                    context: HallieTurnExecutor.Context,
+                                    graph: GedcomFamilyGraph) -> Detailed? {
+        guard case .one(let pinned, let note) = HallieOwnerResolver.resolve(
+                  name, graph: graph, familySearchID: context.speakers.ownerFamilySearchID),
+              graph.person(familySearchID: context.speakers.ownerFamilySearchID) != nil else { return nil }
+        return .success(pinned, note: note)
+    }
+
+    /// The family CyberBrain's GEDCOM link for `name`; nil = no index, no
+    /// link, or not found — the caller goes on to the graph resolver.
+    private static func cyberBrainResolution(_ name: String,
+                                             context: HallieTurnExecutor.Context,
+                                             graph: GedcomFamilyGraph) -> Detailed? {
+        guard let index = context.cyberBrain else { return nil }
+        switch index.resolve(name) {
+        case .resolved(let known):
+            if let id = known.gedcomPersonID, let p = graph.people[id] { return .success(p) }
+        case .ambiguous(let people):
+            let linked = people.compactMap { $0.gedcomPersonID.flatMap { graph.people[$0] } }
+            if linked.count == 1 { return .success(linked[0]) }
+            if linked.count > 1 { return .ambiguous(linked) }
+        case .notFound:
+            break
+        }
+        return nil
+    }
+
+    /// The graph route's own subject resolver, then (on its miss) the
+    /// owner fallback chain, the recorded-root namesake rule and the
+    /// titled-name recovery, in that order.
+    private static func graphResolution(_ name: String, isOwnerSpelling: Bool,
+                                        context: HallieTurnExecutor.Context,
+                                        graph: GedcomFamilyGraph) -> Detailed {
         let inputs = ArchivistGraphInputs(
             graph: graph,
             profiles: (context.profiles ?? []).map {
@@ -1822,57 +1849,71 @@ enum HallieLineageAnswer {
             // shape substitutes silently (2026-08-29; it was dropped here).
             return .success(p, note: correction.map { spellingRecoveryNote(typed: $0, person: p) })
         case .result(let r):
-            // The owner ("my line", or their own name typed) gets the
-            // fallback chain before the honest decline: the tree spells
-            // Rick "Richard Harding Breen Jr" (live 2026-08-26).
-            if isOwnerSpelling {
-                let owner = resolveOwner(name, graph: graph,
-                                         familySearchID: context.speakers.ownerFamilySearchID)
-                switch owner {
-                case .success(let p, let note): return .success(p, note: note)
-                case .failure(let r?): return .failure(r)
-                case .failure(nil): break
-                }
+            return resolverMiss(r, name: name, isOwnerSpelling: isOwnerSpelling, context: context, graph: graph)
+        }
+    }
+
+    /// After the graph resolver's miss `r`: the owner's fallback chain, then
+    /// a root namesake, then a titled/initialled name, else `r` itself.
+    private static func resolverMiss(_ r: ArchivistGraphResult, name: String, isOwnerSpelling: Bool,
+                                     context: HallieTurnExecutor.Context,
+                                     graph: GedcomFamilyGraph) -> Detailed {
+        // The owner ("my line", or their own name typed) gets the
+        // fallback chain before the honest decline: the tree spells
+        // Rick "Richard Harding Breen Jr" (live 2026-08-26).
+        if isOwnerSpelling, let owner = ownerFallback(name, context: context, graph: graph) {
+            return owner
+        }
+        // Several namesakes: the caller decides between chips and a
+        // declined sentence (`resolve` picks the sentence).
+        let namesakes = r.candidates.compactMap { graph.people[$0.id] }
+        if r.conclusion == .personAmbiguous, namesakes.count > 1 {
+            // A bare name that several people share, exactly one of
+            // them a root of the tree (Rick 2026-08-28 live: "Donna"
+            // → Agatha Donna Knauss b. 1520 vs Donna Hudson b. 1959):
+            // the root is who the family means. Stated in the basis.
+            // Only a RECORDED root (merge HEAD) counts: a plain export's
+            // root is the first-INDI assumption, and "photos of
+            // Nathaniel Parker" with Sr first in the file must still ask
+            // Sr or Caleb (regression 2026-08-28, HalliePhotoAskWhichOneTests).
+            let roots = graph.rootsAreRecorded
+                ? namesakes.filter { graph.rootPersonIDs.contains($0.id) } : []
+            if roots.count == 1 {
+                let others = namesakes.count - 1
+                return .success(roots[0], note: "“\(name)” taken as \(roots[0].name), a root of this tree (\(others) other namesake\(others == 1 ? "" : "s") in it).")
             }
-            // Several namesakes: the caller decides between chips and a
-            // declined sentence (`resolve` picks the sentence).
-            let namesakes = r.candidates.compactMap { graph.people[$0.id] }
-            if r.conclusion == .personAmbiguous, namesakes.count > 1 {
-                // A bare name that several people share, exactly one of
-                // them a root of the tree (Rick 2026-08-28 live: "Donna"
-                // → Agatha Donna Knauss b. 1520 vs Donna Hudson b. 1959):
-                // the root is who the family means. Stated in the basis.
-                // Only a RECORDED root (merge HEAD) counts: a plain export's
-                // root is the first-INDI assumption, and "photos of
-                // Nathaniel Parker" with Sr first in the file must still ask
-                // Sr or Caleb (regression 2026-08-28, HalliePhotoAskWhichOneTests).
-                let roots = graph.rootsAreRecorded
-                    ? namesakes.filter { graph.rootPersonIDs.contains($0.id) } : []
-                if roots.count == 1 {
-                    let others = namesakes.count - 1
-                    return .success(roots[0], note: "“\(name)” taken as \(roots[0].name), a root of this tree (\(others) other namesake\(others == 1 ? "" : "s") in it).")
-                }
-                return .ambiguous(namesakes)
-            }
-            // A TITLED OR INITIALLED NAME, last (first strict replay, 2026-09-07):
-            // "king edward iii of england" is recorded as "Edward III of
-            // Windsor King of England" and "richard h breen jr" as "Richard
-            // Harding Breen Jr"; both fell through every rung above to "I
-            // don't find". Every remaining token of the typed name must
-            // appear in the record's name (an initial matches a token's first
-            // letter); title and grammar words are not tokens. Never for a
-            // bare given name — two or more real tokens — so it cannot widen
-            // the given-name-only rule codex #1162 guards; one match is the
-            // person, several is a which-one, none falls to the decline.
-            if let recovered = titledNameRecovery(name, graph: graph) {
-                return recovered
-            }
-            // The resolver's own honest answer (not found / which one?).
-            return .failure(Result(
-                route: .graph,
-                outcome: r.conclusion == .answered ? .answered : .declined,
-                prose: r.prose, basisLine: r.basisLine,
-                queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
+            return .ambiguous(namesakes)
+        }
+        // A TITLED OR INITIALLED NAME, last (first strict replay, 2026-09-07):
+        // "king edward iii of england" is recorded as "Edward III of
+        // Windsor King of England" and "richard h breen jr" as "Richard
+        // Harding Breen Jr"; both fell through every rung above to "I
+        // don't find". Every remaining token of the typed name must
+        // appear in the record's name (an initial matches a token's first
+        // letter); title and grammar words are not tokens. Never for a
+        // bare given name — two or more real tokens — so it cannot widen
+        // the given-name-only rule codex #1162 guards; one match is the
+        // person, several is a which-one, none falls to the decline.
+        if let recovered = titledNameRecovery(name, graph: graph) {
+            return recovered
+        }
+        // The resolver's own honest answer (not found / which one?).
+        return .failure(Result(
+            route: .graph,
+            outcome: r.conclusion == .answered ? .answered : .declined,
+            prose: r.prose, basisLine: r.basisLine,
+            queryDescription: "lineage: resolve \(name)", citations: [], catalogPersonName: nil))
+    }
+
+    /// The owner fallback chain as a `Detailed`; nil = no owner record and
+    /// no reason to give (the caller keeps going).
+    private static func ownerFallback(_ name: String,
+                                      context: HallieTurnExecutor.Context,
+                                      graph: GedcomFamilyGraph) -> Detailed? {
+        switch resolveOwner(name, graph: graph, familySearchID: context.speakers.ownerFamilySearchID) {
+        case .success(let p, let note): return .success(p, note: note)
+        case .failure(let r?): return .failure(r)
+        case .failure(nil): return nil
         }
     }
 
@@ -1953,18 +1994,8 @@ enum HallieLineageAnswer {
                 // Stopped by the year (PROVEN by a dated parent past it),
                 // by a date gap (undated parents nobody can place), or by
                 // the tree itself — say which (codex #707 major 7).
-                let walked = graph.ancestorLine(of: person, line: line,
-                                                generations: generations, untilYear: untilYear)
-                let gap = graph.yearBoundGap(of: person, generations: walked, untilYear: untilYear)
-                if !gap.provenBeyond.isEmpty {
-                    sentences.append("I stopped at \(untilYear) as you asked; the tree goes further back.")
-                } else if gap.hasDateGap {
-                    let n = gap.undatedUnwalked.count
-                    let above = gap.undatedFrontier.map(\.name).joined(separator: " and ")
-                    sentences.append("That is as far as the dates take that line back to \(untilYear) — \(n) ancestor\(n == 1 ? "" : "s") above \(above) \(n == 1 ? "has" : "have") no recorded dates, so the line may reach further.")
-                } else {
-                    sentences.append("That is as far as the tree reaches on that line before \(untilYear).")
-                }
+                sentences.append(yearBoundStopSentence(of: person, line: line, generations: generations,
+                                                       untilYear: untilYear, graph: graph))
             } else if !card.reachedAll, let last = card.generations.last?.people.first {
                 let who = line == .maternal ? "mother" : line == .paternal ? "father" : "parents"
                 sentences.append("The tree stops there — no \(who) recorded for \(last.name).")
@@ -1980,6 +2011,26 @@ enum HallieLineageAnswer {
             offeredActions: [.openFamilyTreePerson(
                 personID: person.id, personName: person.name)],
             attachments: card.generations.isEmpty ? [] : [.lineage(card)])
+    }
+
+    /// Why a year-bounded walk stopped where it did: the year (PROVEN by a
+    /// dated parent past it), a date gap (undated parents nobody can
+    /// place), or the tree itself (codex #707 major 7).
+    private static func yearBoundStopSentence(of person: GedcomFamilyGraph.Person,
+                                              line: GedcomFamilyGraph.Line, generations: Int,
+                                              untilYear: Int, graph: GedcomFamilyGraph) -> String {
+        let walked = graph.ancestorLine(of: person, line: line,
+                                        generations: generations, untilYear: untilYear)
+        let gap = graph.yearBoundGap(of: person, generations: walked, untilYear: untilYear)
+        if !gap.provenBeyond.isEmpty {
+            return "I stopped at \(untilYear) as you asked; the tree goes further back."
+        }
+        if gap.hasDateGap {
+            let n = gap.undatedUnwalked.count
+            let above = gap.undatedFrontier.map(\.name).joined(separator: " and ")
+            return "That is as far as the dates take that line back to \(untilYear) — \(n) ancestor\(n == 1 ? "" : "s") above \(above) \(n == 1 ? "has" : "have") no recorded dates, so the line may reach further."
+        }
+        return "That is as far as the tree reaches on that line before \(untilYear)."
     }
 
     // Superlatives, deep ancestors and the origin trail live in
