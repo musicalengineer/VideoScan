@@ -173,9 +173,11 @@ struct FamilyTreeWalkSheet: View {
                     Button("Walk") { walkInForeground() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(starts.isEmpty)
+                        .accessibilityIdentifier("ft.walk.start")
                 case .watching(let animator, let highlighter):
                     ShowOnMapButton(animator: animator, busy: mapTask != nil) { showMap(animator, highlighter) }
                     Button("Done") { close() }.keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("ft.walk.done")
                 case .map(let animator, let highlighter, _):
                     // Switch whose family the map shows without going back
                     // to the setup dialog (Rick 2026-10-05).
@@ -202,6 +204,7 @@ struct FamilyTreeWalkSheet: View {
                     .accessibilityIdentifier("ft.map.mapFor")
                     Button("Back to the fan") { stage = .watching(animator, highlighter) }
                     Button("Done") { close() }.keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("ft.walk.done")
                 case .walking, .failed:
                     Button("Done") { close() }.keyboardShortcut(.defaultAction)
                 }
@@ -536,6 +539,7 @@ struct ShowOnMapButton: View {
             if busy { ProgressView().controlSize(.small) }
             Button("Show on map") { action() }
                 .disabled(!animator.frame.finished || busy)
+                .accessibilityIdentifier("ft.walk.showOnMap")
                 .help(animator.frame.finished ? "Shade the places they were born" : "Available when the replay finishes")
         }
     }

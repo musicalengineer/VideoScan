@@ -20,7 +20,14 @@ struct ContentView: View {
     /// Owned here, not by the tab, so the loaded tree survives switching
     /// away and back (Rick 2026-09-08: the demo tree flashed for 3-4 s on
     /// every switch while the tab rebuilt its model and reloaded).
-    @StateObject private var familyTreeModel = FamilyTreeLiveModel()
+    @StateObject private var familyTreeModel = FamilyTreeLiveModel(
+        originalsDirectory: ContentView.gauntletFamilyTreeDirectory)
+    /// Gauntlet flow 7 only (GauntletSeams.familyTreeDirectory): the tree
+    /// comes from a synthetic fixture folder instead of the archive. nil
+    /// outside a test host, so production builds the model exactly as
+    /// `FamilyTreeLiveModel()` did. Read once per process (a `static let`
+    /// is lazily initialised once, like a C++ function-local static).
+    private static let gauntletFamilyTreeDirectory = GauntletSeams.familyTreeDirectory
     /// The Catalog's Person ▾ picker (2026-10-24, CatalogPersonFilter.swift).
     /// Owned HERE, above the tabs, so the People page's "See all … in the
     /// Catalog →" can set it before the Catalog tab is rebuilt; in memory
@@ -127,9 +134,16 @@ struct ContentView: View {
                     // this pass when those are unchanged (GH #307: every
                     // catalog publish rebuilt the tree's cards and any
                     // open right-click menu).
-                    FamilyTreeView(sharedModel: familyTreeModel, catalog: model,
-                                   sourceRevision: FamilyTreeView.sourceRevision(of: model))
-                        .equatable()
+                    if ContentView.gauntletFamilyTreeDirectory != nil {
+                        // The injected-model init: never configured from
+                        // the archive, so the fixture tree stays put.
+                        FamilyTreeView(model: familyTreeModel, catalog: model)
+                            .equatable()
+                    } else {
+                        FamilyTreeView(sharedModel: familyTreeModel, catalog: model,
+                                       sourceRevision: FamilyTreeView.sourceRevision(of: model))
+                            .equatable()
+                    }
                 case 6:
                     VolumesWindow(embedded: true)
                 default:

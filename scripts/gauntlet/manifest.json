@@ -29218,6 +29218,18 @@
     {
       "blocked_reason": "phase 2",
       "kind": "ui",
+      "path": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet07FamilyMapUITests.swift",
+      "stage": "ui",
+      "suites": [
+        "Gauntlet07FamilyMapUITests"
+      ],
+      "tests": [
+        "testWalkTreeOpensTheFamilyMap"
+      ]
+    },
+    {
+      "blocked_reason": "phase 2",
+      "kind": "ui",
       "path": "VideoScan/VideoScanUITests/SmokeUITests.swift",
       "stage": "ui",
       "suites": [
@@ -31356,6 +31368,60 @@
         "test_dirty_target_is_unchanged",
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GauntletFamilyTreeFixtureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GauntletFamilyTreeFixtureTests"
+      ],
+      "tests": [
+        "aWalkFromTheRootReachesTheGrandparents",
+        "everyoneHasABirthplaceForTheMapToShade",
+        "fileNameFollowsTheFixtureConvention",
+        "parsesToElevenNamedPeopleWithOneRoot"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/GauntletFamilyTreeSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GauntletFamilyTreeSeamTests"
+      ],
+      "tests": [
+        "aTestHostGetsTheStandardizedAbsoluteFolder",
+        "absentEmptyOrRelativeIsRefused",
+        "everyWalkedPersonIsPlacedByTheBundledMap",
+        "productionIgnoresTheArgument",
+        "theFixtureFolderLoadsLiveThroughTheInjectedInit"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
+      "kind": "python",
+      "path": "tests/test_m4_run.py",
+      "stage": "regression",
+      "suites": [
+        "test_m4_run.py"
+      ],
+      "tests": [
+        "test_cli_writes_the_table_and_exits_by_verdict",
+        "test_counts_names_and_seconds",
+        "test_dead_holder_lock_is_reclaimed",
+        "test_deep_on_the_ultra_stays_local_and_says_it_runs_as_m5",
+        "test_free_lock_is_taken_and_released",
+        "test_green_needs_rc_zero_no_failures_and_a_pass",
+        "test_live_holder_refuses_and_latest_is_untouched",
+        "test_status_dry_run_prints_the_probe",
+        "test_timeout_is_red_and_says_so",
+        "test_ui_on_m4_ships_the_commit_and_bootstraps_a_gui_agent",
+        "test_usage_errors_exit_2",
+        "test_zero_tests_is_red"
       ]
     }
   ],
@@ -33959,6 +34025,14 @@
         {
           "name": "VideoScan/VideoScanTests/FindMasterTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GauntletFamilyTreeFixtureTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/GauntletFamilyTreeSeamTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 3051,
@@ -34789,6 +34863,10 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeRescanSensorTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips all 3 tests, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "tests/test_m4_run.py",
+          "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
       "expected_floor": 326,
@@ -35692,6 +35770,10 @@
         },
         {
           "name": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet06TabClicksUITests.swift",
+          "reason": "phase 2"
+        },
+        {
+          "name": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet07FamilyMapUITests.swift",
           "reason": "phase 2"
         },
         {

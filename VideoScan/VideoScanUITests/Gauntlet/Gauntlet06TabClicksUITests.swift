@@ -8,9 +8,9 @@
 //  assertion, and the app must still be running afterwards (a crash on
 //  the click fails here). Empty isolated catalog, no fixtures.
 //
-//  Next increment: open the Family Map from the Family Tree tab. That
-//  needs a synthetic (non-family) tree behind a test-host seam; the
-//  isolated app has no Master Archive, so no tree loads.
+//  Opening the Family Map from the Family Tree tab is flow 7
+//  (Gauntlet07FamilyMapUITests: a synthetic tree behind the
+//  -gauntletFamilyTreeDir test-host seam).
 //
 
 import XCTest
