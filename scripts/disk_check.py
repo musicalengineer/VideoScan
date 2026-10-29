@@ -14,9 +14,14 @@ Modes, weakest to strongest:
            is skipped and reported), verify it, remount it. A quieter check
            than live because nothing can write mid-check. Run after a reboot,
            before starting work, when you want the stronger answer.
-  repair   One named external container, by volume name or diskN. Writes
-           file-system metadata, so it is Rick's decision each time and is
+  repair   One named external container, by volume name or diskN. Unmounts,
+           verifies, and runs repairVolume only if that verify found
+           problems: a clean disk is never written. Rick's decision each time,
            never scheduled. Refuses the boot disk (repair that from Recovery).
+
+Each container ends in one named outcome: ok, repaired, problemsFound,
+notChecked (busy; remounted), leftUnmounted (remount failed: the log says
+which container and the command to mount it). Only ok and repaired are success.
 
 Disk images (Xcode's Metal toolchain cryptex and the like) are skipped.
 Offline and repair refuse while VideoScan is running.
@@ -122,24 +127,46 @@ def videoscan_running() -> bool:
     return run(["pgrep", "-x", "VideoScan"]).returncode == 0
 
 
-def check_one(c: Container, mode: str) -> tuple[bool, str]:
-    verb = "repairVolume" if mode == "repair" else "verifyVolume"
+# Outcomes. Only "ok" and "repaired" count as success.
+#   ok             verified clean (repair mode: clean, so nothing was written)
+#   repaired       verify found problems, repairVolume then succeeded
+#   problemsFound  verify (or repair) did not come back clean
+#   notChecked     could not unmount (busy); remounted, nothing checked
+#   leftUnmounted  remount failed: the container is NOT mounted now
+SUCCESS = ("ok", "repaired")
+
+
+def _verify_then_maybe_repair(c: Container, mode: str) -> tuple[str, str]:
+    p = run(["diskutil", "verifyVolume", c.ref])
+    text = p.stdout + p.stderr
+    if verdict(p):
+        return "ok", text
+    if mode != "repair":
+        return "problemsFound", text
+    r = run(["diskutil", "repairVolume", c.ref])
+    return ("repaired" if verdict(r) else "problemsFound"), text + r.stdout + r.stderr
+
+
+def check_one(c: Container, mode: str) -> tuple[str, str]:
     if mode == "live":
-        p = run(["diskutil", verb, c.ref])
-        return verdict(p), p.stdout + p.stderr
+        return _verify_then_maybe_repair(c, mode)
 
     # offline / repair: unmount without force; busy means refuse, not guess.
+    # unmountDisk can fail part-way (one volume busy, its sibling already
+    # unmounted), so every attempt is followed by a remount attempt.
     u = run(["diskutil", "unmountDisk", c.ref])
-    if u.returncode != 0:
-        return False, f"NOT CHECKED: could not unmount (busy?): {u.stdout}{u.stderr}" \
-                      f"  See who holds it: lsof +f -- /Volumes/<name>\n"
-    try:
-        p = run(["diskutil", verb, c.ref])
-        return verdict(p), p.stdout + p.stderr
-    finally:
-        m = run(["diskutil", "mountDisk", c.ref])
-        if m.returncode != 0:
-            log(f"  !! {c.label}: REMOUNT FAILED — run: diskutil mountDisk {c.ref}")
+    if u.returncode == 0:
+        outcome, text = _verify_then_maybe_repair(c, mode)
+    else:
+        outcome = "notChecked"
+        text = (f"NOT CHECKED: could not unmount {c.label} (busy?): {u.stdout}{u.stderr}"
+                f"  Who holds it: lsof +f -- /Volumes/<name>\n")
+    m = run(["diskutil", "mountDisk", c.ref])
+    if m.returncode != 0:
+        text += (f"!! {c.label} is NOT MOUNTED (check outcome was {outcome}). "
+                 f"Mount it: diskutil mountDisk {c.ref}\n{m.stdout}{m.stderr}")
+        outcome = "leftUnmounted"
+    return outcome, text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -168,12 +195,13 @@ def main(argv: list[str] | None = None) -> int:
         log(f"  skip {s}")
     failed = []
     for c in picked:
-        ok, output = check_one(c, mode)
+        outcome, output = check_one(c, mode)
+        ok = outcome in SUCCESS
         if not a.quiet or not ok:
             print(output, flush=True)
-        log(f"  {'OK  ' if ok else 'FAIL'} {c.label}")
+        log(f"  {outcome:<13} {c.label}")
         if not ok:
-            failed.append(c.label)
+            failed.append(f"{c.label}: {outcome}")
             with LOG.open("a") as f:
                 f.write(output)
     log(f"OUTCOME disk_check mode={mode} ok={len(picked) - len(failed)} failed={len(failed)}"

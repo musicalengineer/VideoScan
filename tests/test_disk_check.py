@@ -75,5 +75,77 @@ class Verdict(unittest.TestCase):
         self.assertFalse(disk_check.verdict(self.proc(1, "volume appears to be OK\ncontainer is corrupt\n")))
 
 
+OK_OUT = "The container /dev/rdisk13 appears to be OK\n"
+BAD_OUT = "error: btn: invalid key\nThe container /dev/rdisk13 could not be verified completely\n"
+
+
+class FakeDiskutil:
+    """Scripted `diskutil` answers by verb; records every call in order."""
+
+    def __init__(self, **codes):
+        self.codes = codes          # verb -> (returncode, stdout)
+        self.calls = []
+
+    def __call__(self, cmd):
+        verb = cmd[1]
+        self.calls.append(verb)
+        code, out = self.codes.get(verb, (0, OK_OUT if verb.endswith("Volume") else ""))
+        return subprocess.CompletedProcess(cmd, code, out, "")
+
+
+class Outcomes(unittest.TestCase):
+    def setUp(self):
+        self.real_run, self.real_log = disk_check.run, disk_check.log
+        disk_check.log = lambda line: None
+        self.archive = containers()[1]
+
+    def tearDown(self):
+        disk_check.run, disk_check.log = self.real_run, self.real_log
+
+    def check(self, mode, **codes):
+        fake = FakeDiskutil(**codes)
+        disk_check.run = fake
+        outcome, _ = disk_check.check_one(self.archive, mode)
+        return outcome, fake.calls
+
+    def test_live_ok_and_problems_never_unmount(self):
+        self.assertEqual(self.check("live"), ("ok", ["verifyVolume"]))
+        self.assertEqual(self.check("live", verifyVolume=(1, BAD_OUT)), ("problemsFound", ["verifyVolume"]))
+
+    def test_partial_unmount_failure_still_remounts_and_is_not_checked(self):
+        outcome, calls = self.check("offline", unmountDisk=(1, "at least one volume could not be unmounted"))
+        self.assertEqual(outcome, "notChecked")
+        self.assertEqual(calls, ["unmountDisk", "mountDisk"])
+
+    def test_remount_failure_after_clean_verify_is_never_ok(self):
+        outcome, calls = self.check("offline", mountDisk=(1, "mount failed"))
+        self.assertEqual(outcome, "leftUnmounted")
+        self.assertEqual(calls, ["unmountDisk", "verifyVolume", "mountDisk"])
+
+    def test_remount_failure_after_unmount_failure_is_left_unmounted(self):
+        outcome, _ = self.check("offline", unmountDisk=(1, "busy"), mountDisk=(1, "mount failed"))
+        self.assertEqual(outcome, "leftUnmounted")
+
+    def test_repair_on_a_clean_disk_writes_nothing(self):
+        outcome, calls = self.check("repair")
+        self.assertEqual(outcome, "ok")
+        self.assertNotIn("repairVolume", calls)
+        self.assertEqual(calls, ["unmountDisk", "verifyVolume", "mountDisk"])
+
+    def test_repair_runs_only_after_a_failed_verify(self):
+        outcome, calls = self.check("repair", verifyVolume=(1, BAD_OUT))
+        self.assertEqual(outcome, "repaired")
+        self.assertEqual(calls, ["unmountDisk", "verifyVolume", "repairVolume", "mountDisk"])
+
+    def test_repair_that_fails_is_problems_found_not_repaired(self):
+        outcome, _ = self.check("repair", verifyVolume=(1, BAD_OUT), repairVolume=(1, BAD_OUT))
+        self.assertEqual(outcome, "problemsFound")
+
+    def test_busy_disk_is_never_repaired(self):
+        outcome, calls = self.check("repair", unmountDisk=(1, "busy"))
+        self.assertEqual(outcome, "notChecked")
+        self.assertNotIn("repairVolume", calls)
+
+
 if __name__ == "__main__":
     unittest.main()
