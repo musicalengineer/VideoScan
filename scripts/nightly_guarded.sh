@@ -34,6 +34,21 @@ case "$SLOT" in
         ;;
 esac
 
+# The toolchain update (scripts/update_toolchain.sh, an hour earlier) may
+# still be installing brew packages or Xcode: wait for it, never build on a
+# half-installed toolchain. Capped, so a stuck update cannot cost the night.
+TOOLCHAIN_LOCK="${TOOLCHAIN_UPDATE_LOCK:-$LOGDIR/toolchain_update.lock}"
+WAIT_MAX="${NIGHTLY_TOOLCHAIN_WAIT_SECONDS:-5400}"
+waited=0
+while [ -d "$TOOLCHAIN_LOCK" ] && [ "$waited" -lt "$WAIT_MAX" ]; do
+    sleep 1; waited=$((waited + 1))
+done
+if [ -d "$TOOLCHAIN_LOCK" ]; then
+    log "toolchain update still running after ${waited}s — running the nightly anyway."
+elif [ "$waited" -gt 0 ]; then
+    log "waited ${waited}s for the toolchain update to finish."
+fi
+
 git fetch origin metrics --quiet 2>/dev/null || true
 TODAY="$(date -u +%Y-%m-%d)"
 ROWS="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"

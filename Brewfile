@@ -28,6 +28,7 @@ brew "jpeg-turbo"    # libjpeg for dlib's CMake, linked into /opt/homebrew/lib. 
 # ---- Developer tooling ----
 brew "git-lfs"       # scripts/install_hallie_kokoro.sh pulls the Kokoro voice model over LFS
 brew "gh"            # GitHub CLI — issues, PRs, metrics, adversarial nightly
+brew "mas"           # App Store CLI — scripts/update_toolchain.sh upgrades Xcode (App Store) before the nightly
 brew "node"          # Node ≥ 24: tools/engineering-room, scripts/run_python_tests.sh (the M4 runs brew node, not nvm)
 brew "swiftlint"     # Swift static analysis (pre-commit + CI)
 brew "periphery"     # Swift unused-code finder (CI)
