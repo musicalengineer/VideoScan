@@ -40,9 +40,38 @@ enum GauntletSeams {
     /// the NSOpenPanel Browse… step (see PersonFinderView.recentPaths).
     static var recentSearchPath: String? { seamString("gauntletRecentPath") }
 
+    /// `-gauntletFamilyTreeDir <dir>` — a folder holding a SYNTHETIC
+    /// GEDCOM (flow 7: open the Family Map from the Family Tree tab). The
+    /// isolated app has no Master Archive, so without this no tree loads
+    /// and "Walk Tree…" never appears. ContentView builds its tree model
+    /// with this as the injected `originalsDirectory` — the same seam the
+    /// unit tests use — so the model gets no CyberBrain, no bookmarks, no
+    /// focus defaults, no compiled store and no archive authority (each
+    /// is nil for an injected directory; FamilyTreeLiveModel.init).
+    /// Absolute paths only; nil in production.
+    static var familyTreeDirectory: URL? {
+        familyTreeDirectory(isTestHost: TestEnvironment.isTestHost, defaults: .standard)
+    }
+
+    static let familyTreeDirectoryKey = "gauntletFamilyTreeDir"
+
+    /// Pure form of `familyTreeDirectory`, for the unit test. A relative
+    /// path is refused rather than resolved against whatever the app's
+    /// working directory happens to be.
+    static func familyTreeDirectory(isTestHost: Bool, defaults: UserDefaults) -> URL? {
+        guard let value = seamString(familyTreeDirectoryKey, isTestHost: isTestHost, defaults: defaults),
+              value.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: value, isDirectory: true).standardizedFileURL
+    }
+
     private static func seamString(_ key: String) -> String? {
-        guard TestEnvironment.isTestHost else { return nil }
-        guard let value = UserDefaults.standard.string(forKey: key),
+        seamString(key, isTestHost: TestEnvironment.isTestHost, defaults: .standard)
+    }
+
+    private static func seamString(_ key: String, isTestHost: Bool, defaults: UserDefaults) -> String? {
+        // Gate first: production never touches the defaults for a seam key.
+        guard isTestHost else { return nil }
+        guard let value = defaults.string(forKey: key),
               !value.isEmpty else { return nil }
         return value
     }

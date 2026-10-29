@@ -29218,6 +29218,18 @@
     {
       "blocked_reason": "phase 2",
       "kind": "ui",
+      "path": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet07FamilyMapUITests.swift",
+      "stage": "ui",
+      "suites": [
+        "Gauntlet07FamilyMapUITests"
+      ],
+      "tests": [
+        "testWalkTreeOpensTheFamilyMap"
+      ]
+    },
+    {
+      "blocked_reason": "phase 2",
+      "kind": "ui",
       "path": "VideoScan/VideoScanUITests/SmokeUITests.swift",
       "stage": "ui",
       "suites": [
@@ -31356,6 +31368,37 @@
         "test_dirty_target_is_unchanged",
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GauntletFamilyTreeFixtureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GauntletFamilyTreeFixtureTests"
+      ],
+      "tests": [
+        "aWalkFromTheRootReachesTheGrandparents",
+        "everyoneHasABirthplaceForTheMapToShade",
+        "fileNameFollowsTheFixtureConvention",
+        "parsesToElevenNamedPeopleWithOneRoot"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/GauntletFamilyTreeSeamTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GauntletFamilyTreeSeamTests"
+      ],
+      "tests": [
+        "aTestHostGetsTheStandardizedAbsoluteFolder",
+        "absentEmptyOrRelativeIsRefused",
+        "everyWalkedPersonIsPlacedByTheBundledMap",
+        "productionIgnoresTheArgument",
+        "theFixtureFolderLoadsLiveThroughTheInjectedInit"
       ]
     }
   ],
@@ -33959,6 +34002,14 @@
         {
           "name": "VideoScan/VideoScanTests/FindMasterTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GauntletFamilyTreeFixtureTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/GauntletFamilyTreeSeamTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 3051,
@@ -35692,6 +35743,10 @@
         },
         {
           "name": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet06TabClicksUITests.swift",
+          "reason": "phase 2"
+        },
+        {
+          "name": "VideoScan/VideoScanUITests/Gauntlet/Gauntlet07FamilyMapUITests.swift",
           "reason": "phase 2"
         },
         {

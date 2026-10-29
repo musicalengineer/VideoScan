@@ -429,6 +429,7 @@ struct TreeWalkAnimationView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Button("Skip to end") { animator.skipToEnd() }
+                    .accessibilityIdentifier("ft.walk.skipToEnd")
                 Button(animator.paused ? "Resume" : "Pause") { animator.paused.toggle() }
             }
             .controlSize(.small)
