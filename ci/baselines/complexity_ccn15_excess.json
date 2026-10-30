@@ -1,7 +1,7 @@
 {
  "note": "CCN 15 excess ratchet (Rick 2026-10-07): CI preflight (scripts/complexity_gate.py --all) fails when the tree's total excess, the sum of max(0, CCN - 15) over every function, is above `total_excess` (excess a recorded override let in is not counted). CCN is a signal, not the goal. `files` is a per-file snapshot for the error message only. `total_excess` only shrinks: the 2 AM nightly lowers it; regenerate deliberately with `scripts/complexity_metrics.py --update-ccn15-excess` and say why in the commit.",
  "threshold_ccn": 15,
- "total_excess": 1959,
+ "total_excess": 1891,
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": 10,
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift": 3,
@@ -96,7 +96,6 @@
   "VideoScan/VideoScan/Hallie/HallieLineageAnswer+CommonAncestor.swift": 17,
   "VideoScan/VideoScan/Hallie/HallieLineageAnswer+DeepAncestors.swift": 17,
   "VideoScan/VideoScan/Hallie/HallieLineageAnswer+GedcomAwareness.swift": 12,
-  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift": 68,
   "VideoScan/VideoScan/Hallie/HallieMediaActivityAsk.swift": 6,
   "VideoScan/VideoScan/Hallie/HallieModeCorrection.swift": 7,
   "VideoScan/VideoScan/Hallie/HalliePhotoCaption.swift": 3,

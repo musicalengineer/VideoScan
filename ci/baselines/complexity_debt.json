@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 384,
+ "entry_count": 379,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -642,26 +642,6 @@
    "ccn": 27,
    "nloc": 100
   },
-  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageAnswer.ancestorLine": {
-   "ccn": 16,
-   "nloc": 62
-  },
-  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageAnswer.answer": {
-   "ccn": 35,
-   "nloc": 70
-  },
-  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageAnswer.resolveDetailed": {
-   "ccn": 25,
-   "nloc": 76
-  },
-  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageQuestion.detectShape": {
-   "ccn": 42,
-   "nloc": 120
-  },
-  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageQuestion.superlativeKindAndScope": {
-   "ccn": 25,
-   "nloc": 53
-  },
   "VideoScan/VideoScan/Hallie/HallieMediaActivityAsk.swift::HallieMediaActivityAsk.detect": {
    "ccn": 21,
    "nloc": 29
@@ -992,7 +972,7 @@
   },
   "VideoScan/VideoScan/MediaOps/BalanceAudioJob.swift::BalanceAudioJob.runBalance": {
    "ccn": 30,
-   "nloc": 164
+   "nloc": 162
   },
   "VideoScan/VideoScan/MediaOps/CleanupJob.swift::CleanupJob.runCleanup": {
    "ccn": 20,
