@@ -1,35 +1,32 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-30 (afternoon). Rick corrects this file; agents read it at session start.*
+*Updated 2026-10-30 (evening, before session restart). Rick corrects this file; agents read it at session start.*
 
-## Today
-**Until 16:00: verify, no new features.** Rick's goal: 100 % stability on both Studios (M4 = headless test/LLM host, `RicksM4`; M5 Ultra = Rick's machine, `RicksUltra`). **After 16:00: Rapid Dev + deep design** on the video LLM approach lab (Fable available). Main is pushed again (local-only hold ended 10/29); push after each merge, pull at session start. No FamilyArchive rescan until Rick says so.
+## Next session
+**Deep Design with Fable: video LLM / "Breen media expert".** Mode: Rapid Dev + Deep Design. Read in order: `docs/reviews/video_llm_design.md` → `docs/proposed_video_llms_for_breen_media.md` → `docs/research/video_llm_for_family_media_2026-10-29.md` → `~/Downloads/video_intelligence_architecture.pdf` (not in repo yet). Settle first: the model lab and Content Analysis share **one engine**, hosted by a **background service** (runs after quit, one supervisor, visible/stoppable with the app closed, journals only, own name and icon in Activity Monitor, backs off while Rick works, no extra permission grants). Phase 0 = baseline the existing 3B captioner against held answers (no schema, no rulings). Also in scope: Provenance Grade #396; the Family Tree AI helper (BACKLOG). Privacy rule 13 holds: no living family pixels/audio to a cloud model. Main is pushed; push after each merge.
 
-## State of the machines (10/30)
-- **02:00 nightly 10/30 GREEN on both:** M4 `a86bb5fc` app 12,577 pass / 0 fail / 63 skip, Core 1,962 / 0; Ultra `604fd5fc` app 12,576 / 0, Core 1,962 / 0. #381/#385 did not recur.
-- **SSH Ultra → M4** was refused 10/29 night (Ultra key missing from the M4's `authorized_keys`; no repo script touches that file); Rick re-added it 10/30 14:23. Works.
-- **M4 catalog copy** replaced 10/30 14:26 with a sqlite `.backup` of the Ultra's (schema 13, integrity ok, SHA-256 `a790a9fd…`); old copy kept as `catalog.schema12-20261030.sqlite`. This is why the M4's nightly Hallie replay read 0/56 since 10/27 (Ollama 0.40.12 and both models are fine there).
-- **M4 deep gauntlet:** first run 10/30 BLOCKED (manifest missing 5 new Python tests) → fixed `a8e62bb1`, #400 filed for the hook gap; rerun in progress. Then: push main, run the M4 Hallie strict replay to prove the nightly lane.
-- Gauntlet cannot go green as built: its regression stage counts `withKnownIssue` tests as failures, and "blocked" stages report "safe subset passed" — a runner-policy question for Rick.
-- 557 Thread Performance Checker priority-inversion traces in the Ultra test log (main waiting on Default QoS via `CatalogLaunchWait.run`); not failures; not yet checked against issues.
+## State of the machines (10/30 evening)
+- **02:00 nightly 10/30 GREEN on both** (M4 app 12,577/0, Ultra 12,576/0, Core 1,962/0 each).
+- **M4 = mirror test host:** catalog `.backup` of the Ultra's (schema 13, 14:26); GEDCOM copy at `~/Library/Application Support/VideoScan/test-host/GEDCOM`; media stays on the Ultra (over TB5). **M4 Hallie strict 56/56** with that copy (`ebf34dce`, `--gedcom`). The copies are snapshots: a `sync_test_host_data.sh` is still to write.
+- **Tonight's nightly** carries the new GEDCOM row: each Mac's pulls (date + short SHA) on the metrics page, green when they match, yellow when not. Over SSH both Macs hash the pulls the same (11151ff3, e83bed92). Surnames are kept off the public page (repo is PUBLIC).
+- SSH Ultra → M4 works (key re-added 10/30 14:23). M4 deep gauntlet 5,282 / 0 but RED by runner policy (withKnownIssue counted as failures; BLOCKED stages) — Rick's call.
 
-## Landed 10/29–30 (on main, pushed except `a8e62bb1`)
-- **Hallie grade C → B** (`night/hallie-grade`): 8 functions over CCN 30 split (max 41 → 14), characterization tests first, Codex merge/0 per slice. The B is marginal (mean 2.50; bug density 39.5 of 40). #397 (dead "how" help route — Rick's call), #398 (lizard mis-measures nested interpolation with an apostrophe).
-- **Hallie baselines** (`docs/reviews/hallie_benchmarks.md`, Ultra): qwen3.8:27b-mlx strict 56/56 twice, advisory 671/826, median 0.54 s / p90 1.9 s; llama3.3:70b 55/56 (strict-034 is wording-dependent — Rick to rule), 633/826, 3× slower. Per-turn `latencyMs` in the transcript; 9 harvested questions added. M4 half still to run.
-- **Live replay viewer:** `scripts/nightly_hallie_replay.sh --live [--strict-only|--advisory-only] [--speech]` — queries cyan, answers green, blank line after each answer.
-- **Find Tag (POI) background daemon switched off** (setting `findTag.backgroundEnabled` false; DECISIONS 10/23 froze recognition). #395: its journal ingest rejects every journal as "different catalog".
-- Docs: `docs/proposed_video_llms_for_breen_media.md` (design, cloud session), `docs/research/video_llm_for_family_media_2026-10-29.md`, `docs/reviews/video_llm_design.md` (Claude's plain-language review: what to settle first).
+## Landed 10/30 (on main, pushed)
+- **#401 (P0)** a scan location counts and removes only its own volume's files (`eeb50f9d`, Codex fix `b9bcc6dc` → merge/0). Follow-up to file: 6 live rows with stale `volume_uuid` after cross-volume moves.
+- **GEDCOM pull dates** (`f4984529`): "Breen GEDCOM 26 Aug 2026 / Hudson GEDCOM 28 Aug 2026" under the Family Tree title (labels from each pull's first person, dates from its header, matched by SHA-256 to the compiled manifest; ingest date in the tooltip); one `[family-tree] gedcom pull` log line per pull per load. Rick to spot-test in Debug: confirm `ingest=`/`generation=` are not `unknown` (shared-cache path not covered by a test).
+- **AI sparkle** shared view `Shared/AISparkleIcon.swift` (Hallie's gradient/twinkle/glow), now also on the Family Tree memories button.
+- #400 filed (hooks miss new tests in existing files); gauntlet manifest fixed `a8e62bb1`.
+- Hallie grade C→B, baselines (`docs/reviews/hallie_benchmarks.md`), live replay viewer, Find Tag daemon off (#395) — 10/29.
 
 ## Waiting on Rick
-- **Modes draft**, branch `docs/process-modes` (day: Rapid Dev / Safety Critical / Bug Fix / Deep Design; night: Testbed / Hardening / Research & Dev) — yes or edits.
-- **Rulings:** strict-034 (advisory or template answer); #397 (turn on the help route).
-- **Spot tests (Debug):** Hallie after the refactor; Provenance ▸ Set Role and Find Master; Archive 144 Masters; #375 nickname (Timmy); #345 no-sound mark; People row removal; arrow keys in lists; Migrate summary words; ⌘⌫ on a duplicate pair. #383: Tidy Catalog…, then Skip Small Files back on.
-- **Allowlist:** read-only ssh/status commands for unattended nights (a permission prompt stalled the 10/29 night shift); Claude proposes, Rick approves.
+- **Uncommitted:** `docs/Purpose-and-Charter.md` in Rick's checkout (his edit, 17:09 10/30).
+- **Modes draft**, branch `docs/process-modes` — yes or edits.
+- **Rulings:** strict-034; #397 help route; gauntlet runner policy; toolchain list (`tools/toolchain.json`, Xcode 27.1 vs 27.0, Ollama brew vs app); Charter line 148 (4 MB hash vs rule 6).
+- **Allowlist:** read-only ssh/status commands for unattended nights.
+- **Spot tests (Debug):** GEDCOM dates + sparkle; Hallie after the refactor; Provenance ▸ Set Role and Find Master; Archive 144 Masters; #375 nickname; #345 no-sound mark; People row removal; arrow keys in lists; Migrate summary words; ⌘⌫ on a duplicate pair; #383 Tidy Catalog….
 
-## After 16:00 — video LLM deep design (read first)
-1. `docs/reviews/video_llm_design.md` — settle first: the model lab and Content Analysis share **one engine**, hosted by a **background service** that runs after quit (needs list from 10/29: what runs after quit, one supervisor, visible/stoppable with the app closed, journals only, own name in Activity Monitor, backs off while Rick works, no extra permission grants unless unavoidable).
-2. Phase 0 of the design (baseline the existing 3B captioner against held answers) needs no schema and no rulings.
-3. **Provenance Grade** (auto-generated, per file, evidence-only): #396.
+## To file
+- Stale `volume_uuid` rows (6); ~330 Hallie questions never replayed (interaction ~200, question_testbed 67, live_misses ~45, acceptance ~25); 557 Thread Performance Checker traces (`CatalogLaunchWait.run`) — check against existing issues first.
 
 ## In flight (unchanged)
 - `fix/committer-lost-writes-codex141`: Codex round 3 block/3; parked (two writers on one catalog only).
