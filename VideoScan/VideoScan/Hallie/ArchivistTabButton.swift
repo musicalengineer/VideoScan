@@ -7,10 +7,8 @@
 //  the Pink AI Archivist to be after the Family Tree tab, prominently
 //  displayed, and make the ai icon twinkle."
 //
-//  Twinkle is driven by TimelineView, not an implicit repeatForever
-//  animation — macOS drops/desyncs implicit repeating animations on
-//  re-render (see the SpinningRing memo); a time-based curve is stable
-//  and costs nothing while the window is hidden. Respects Reduce Motion.
+//  The sparkle itself is AISparkleIcon (Shared/), shared with the Family
+//  Tree's "Show me some memories…" button so the two never drift apart.
 //
 
 import SwiftUI
@@ -24,29 +22,13 @@ struct ArchivistTabButton: View {
     /// Hover lift + brighter sparkle glow (Liquid Glass refresh, 2026-10-04).
     @State private var isHovering = false
 
-    private static let gradient = LinearGradient(
-        colors: [Color(red: 0.98, green: 0.45, blue: 0.70), Color.purple],
-        startPoint: .topLeading, endPoint: .bottomTrailing)
-
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { ctx in
-                    let t = ctx.date.timeIntervalSinceReferenceDate
-                    // Two slow sines out of phase → a soft, irregular twinkle.
-                    let a = reduceMotion ? 1.0 : 0.72 + 0.28 * (0.5 + 0.5 * sin(t * 2.1))
-                    let s = reduceMotion ? 1.0 : 0.94 + 0.10 * (0.5 + 0.5 * sin(t * 3.3 + 1.0))
-                    Image(systemName: "sparkles")
-                        .font(.system(size: fontSize + 2, weight: .semibold))
-                        .foregroundStyle(Self.gradient)
-                        .opacity(a)
-                        .scaleEffect(s)
-                        .shadow(color: Color.pink.opacity((isHovering ? 0.6 : 0.35) * a),
-                                radius: isHovering ? 9 : 6)
-                }
+                AISparkleIcon(size: fontSize + 2, isHovering: isHovering)
                 Text(archivistName.isEmpty || archivistName == "Name TBD" ? "Archivist" : "Ask " + archivistName)
                     .font(.system(size: fontSize, weight: .semibold))
-                    .foregroundStyle(Self.gradient)
+                    .foregroundStyle(AISparkleIcon.gradient)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

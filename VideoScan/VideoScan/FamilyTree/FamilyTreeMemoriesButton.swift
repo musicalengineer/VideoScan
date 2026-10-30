@@ -20,6 +20,11 @@ struct FamilyTreeMemoriesButton: View {
     @ObservedObject var model: FamilyTreeLiveModel
 
     @State private var isPresented = false
+    @State private var isHovering = false
+    /// .title2 is 17 pt at the default size; the glyph sits a touch larger,
+    /// as Hallie's does beside her label. `@ScaledMetric` ≈ a constant that
+    /// follows the system text-size setting.
+    @ScaledMetric(relativeTo: .title2) private var sparkleSize: CGFloat = 19
     /// nil while a gather is running (or before the first click).
     @State private var items: [FamilyMemory]?
     /// Bumps on each open so a slow gather from an earlier open never lands.
@@ -30,11 +35,13 @@ struct FamilyTreeMemoriesButton: View {
             Button {
                 isPresented.toggle()
             } label: {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                // Hallie's sparkle (one shared view), sized to the
+                // .title2 "Family Tree" title beside it — Rick 2026-10-30:
+                // the grey 13 pt glyph was too small.
+                AISparkleIcon(size: sparkleSize, isHovering: isHovering)
             }
             .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
             .help("Show me some memories…")
             .accessibilityLabel("Show me some memories")
             .accessibilityIdentifier("ft.memories")
