@@ -279,12 +279,7 @@ extension HallieTurnExecutor {
             // A spoken mode correction rode in on the intent or the answer
             // (design §3.6): applied BEFORE the mode moves, so from here
             // on the forced family outranks this turn's route family.
-            if let force = intent?.modeForce ?? result.modeForce {
-                switch force {
-                case .force(let mode): forcedMode = mode
-                case .unforce: forcedMode = nil
-                }
-            }
+            applyModeForce(intent?.modeForce ?? result.modeForce)
             recordMode(intent: intent, result: result)
             // The mode contexts are typed views over the fields below; they
             // are synced LAST, on every path out of this function — the
@@ -299,6 +294,26 @@ extension HallieTurnExecutor {
             // last one's offer is gone, and only an answer that OFFERED a
             // retry in its own prose leaves a new one.
             pendingOffer = result.retryOffer
+            recordLaneEvidence(result)
+            recordAnsweredSubject(intent: intent, result: result, question: question)
+            guard let intent else { return }
+            recordQueryScope(intent: intent, result: result)
+            recordListMemory(intent: intent, result: result)
+        }
+
+        // MARK: record's steps (split 2026-10-29, order unchanged)
+
+        private mutating func applyModeForce(_ force: HallieModeForce?) {
+            switch force {
+            case .force(let mode): forcedMode = mode
+            case .unforce: forcedMode = nil
+            case nil: break
+            }
+        }
+
+        /// Provenance, the last ranking and the last shown photo: what a
+        /// lane answer leaves for "where did that come from?" / "that one".
+        private mutating func recordLaneEvidence(_ result: Result) {
             switch result.route {
             case .presence, .cross, .event, .aggregate, .temporal, .graph, .telling, .record:
                 lastProvenance = HallieProvenanceFollowUp.Provenance(result: result)
@@ -321,6 +336,12 @@ extension HallieTurnExecutor {
             default:
                 break
             }
+        }
+
+        /// The person the answer itself named, the kin words it settled,
+        /// and a non-list answer's refinable scope. Runs for intent-less
+        /// answers too.
+        private mutating func recordAnsweredSubject(intent: Intent?, result: Result, question: String?) {
             // A resolved subject outranks the typed name: the answer knows
             // WHICH Nathaniel Parker it just described. Local answers with
             // no intent (the deterministic photo / description routes) count
@@ -348,7 +369,11 @@ extension HallieTurnExecutor {
             if let refinable = result.refinableQuery, result.outcome == .answered {
                 lastRefinable = refinable
             }
-            guard let intent else { return }
+        }
+
+        /// The executed AST, its refinement chain, and the people/years
+        /// it was about.
+        private mutating func recordQueryScope(intent: Intent, result: Result) {
             let ast = intent.ast
             lastAST = ast
             lastChain = intent.refinementChain
@@ -361,23 +386,15 @@ extension HallieTurnExecutor {
             } else if result.catalogPersonName == nil, lastPeople.count > 1 {
                 lastSubject = nil
             }
+        }
+
+        /// "One of them" / "show more" state, by route.
+        private mutating func recordListMemory(intent: Intent, result: Result) {
+            let ast = intent.ast
             switch result.route {
             case .presence, .cross, .event, .aggregate:
                 if result.outcome == .answered {
-                    lastResultSet = ResultSet(
-                        ast: ast,
-                        citations: result.citations,
-                        shownCount: intent.citationOffset + result.citations.count,
-                        totalMatchCount: result.matchCount ?? result.citations.count)
-                    if !result.citations.isEmpty { lastShownList = lastResultSet }
-                    lastRecordDecline = nil
-                    if let ordered = intent.order {
-                        // "and the newest?" keeps the scope it sorted, so
-                        // "and the oldest?" sorts the same thing.
-                        lastRefinable = ordered.scope
-                    } else if result.refinableQuery == nil {
-                        lastRefinable = result.route == .aggregate ? nil : .list(ast, anyOfPeople: false)
-                    }
+                    recordAnsweredList(intent: intent, result: result)
                 } else if intent.citationOffset == 0 {
                     // A fresh list question with no evidence: there is no
                     // "one of them" any more. A REFINEMENT that found
@@ -395,6 +412,23 @@ extension HallieTurnExecutor {
             case .temporal, .followUp, .capability,
                  .help, .smalltalk, .conversation, .telling, .reset:
                 break
+            }
+        }
+
+        private mutating func recordAnsweredList(intent: Intent, result: Result) {
+            lastResultSet = ResultSet(
+                ast: intent.ast,
+                citations: result.citations,
+                shownCount: intent.citationOffset + result.citations.count,
+                totalMatchCount: result.matchCount ?? result.citations.count)
+            if !result.citations.isEmpty { lastShownList = lastResultSet }
+            lastRecordDecline = nil
+            if let ordered = intent.order {
+                // "and the newest?" keeps the scope it sorted, so
+                // "and the oldest?" sorts the same thing.
+                lastRefinable = ordered.scope
+            } else if result.refinableQuery == nil {
+                lastRefinable = result.route == .aggregate ? nil : .list(intent.ast, anyOfPeople: false)
             }
         }
 
