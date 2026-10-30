@@ -111,6 +111,10 @@ def pair_turns(turns):
             for key in ("mediaEvidence", "knowledgeEvidence", "attachmentOutline"):
                 if t.get(key):
                     prev[key] = list(prev.get(key) or []) + list(t[key])
+            # Each clause carries ms since the ONE user turn; the question's
+            # latency is the last (largest) of them.
+            if t.get("latencyMs") is not None:
+                prev["latencyMs"] = max(prev.get("latencyMs") or 0, t["latencyMs"])
             # A decline in ANY clause is a defect for the whole question:
             # half an answer is the failure this exists to measure.
             if t.get("outcome") == "declined" and prev.get("outcome") != "declined":
@@ -325,6 +329,9 @@ def build_records(questions, turns):
                 "model": ans.get("model"),
                 "sessionID": ans.get("sessionID"),
                 "eventID": ans.get("eventID"),
+                # ms from the user turn to the answer (shell builds from
+                # 2026-10-29 on); None for older transcripts.
+                "latencyMs": ans.get("latencyMs"),
             }
         )
     return records, used, unmatched
@@ -694,6 +701,20 @@ def grade_record(r):
     return flags
 
 
+def latency_summary(records):
+    """Median and nearest-rank p90 of the records' `latencyMs`. Records from
+    older transcripts carry none and are left out; n says how many counted."""
+    values = sorted(r["latencyMs"] for r in records
+                    if isinstance(r.get("latencyMs"), (int, float)))
+    if not values:
+        return {"n": 0, "median_ms": None, "p90_ms": None}
+    n = len(values)
+    middle = n // 2
+    median = values[middle] if n % 2 else (values[middle - 1] + values[middle]) / 2
+    p90 = values[max(0, -(-9 * n // 10) - 1)]          # ceil(0.9 n) - 1
+    return {"n": n, "median_ms": round(median), "p90_ms": round(p90)}
+
+
 def grade(args):
     recs = []
     with open(args.run) as f:
@@ -722,7 +743,11 @@ def grade(args):
     print(f"\n=== Hallie eval: {args.run}")
     print(f"turns: {total}   clean: {clean} ({100*clean/max(total,1):.0f}%)   "
           f"elapsed: {m.get('elapsed_s','?')}s")
-    print(f"git {m.get('git','?')}   binary built {m.get('binary_built','?')}\n")
+    print(f"git {m.get('git','?')}   binary built {m.get('binary_built','?')}")
+    lat = latency_summary(recs)
+    if lat["n"]:
+        print(f"latency: median {lat['median_ms']} ms, p90 {lat['p90_ms']} ms ({lat['n']} turns)")
+    print()
 
     print(f"{'category':22} {'n':>4} {'clean':>6} {'%':>5}")
     for cat in sorted(by_cat):
@@ -780,6 +805,7 @@ def grade(args):
         "incomplete": bool(incomplete),
         "missing": max(0, (m.get("questions") or total) - total),
         "runID": m.get("runID"), "meta": m,
+        "latency": latency_summary(recs),
     }
     summary_path = Path(args.run).with_suffix(".summary.json")
     summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

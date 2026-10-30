@@ -68,6 +68,11 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
     /// can assert the FAMILY a turn was answered in (`expectMode`). Optional
     /// so older lines decode unchanged; nil on user and system events.
     let mode: String?
+    /// Milliseconds from the user turn to this assistant/error event, on a
+    /// monotonic clock (the shell stamps it; `timestamp` is whole seconds).
+    /// A split question's later clauses carry the time since the ONE user
+    /// turn. Optional so older lines decode unchanged; nil elsewhere.
+    let latencyMs: Int?
 
     init(
         timestamp: Date = Date(),
@@ -89,7 +94,8 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         knowledgeEvidence: [KnowledgeEvidence] = [],
         attachmentOutline: [String]? = nil,
         composedBy: String? = nil,
-        mode: String? = nil
+        mode: String? = nil,
+        latencyMs: Int? = nil
     ) {
         self.version = Self.schemaVersion
         self.timestamp = timestamp
@@ -112,6 +118,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
         self.attachmentOutline = attachmentOutline
         self.composedBy = composedBy
         self.mode = mode
+        self.latencyMs = latencyMs
     }
 
     /// The evidence kept when a line would exceed the store's cap. A
@@ -139,7 +146,8 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
             basisLine: basisLine, responder: responder, model: model,
             route: route, outcome: outcome, offeredActions: offeredActions,
             mediaEvidence: [], knowledgeEvidence: [],
-            attachmentOutline: nil, composedBy: composedBy, mode: mode)
+            attachmentOutline: nil, composedBy: composedBy, mode: mode,
+            latencyMs: latencyMs)
     }
 
     /// This event with its evidence trimmed to the bounds above. The text,
@@ -166,7 +174,7 @@ struct HallieTranscriptEvent: Codable, Equatable, Sendable {
             route: route, outcome: outcome, offeredActions: offeredActions,
             mediaEvidence: trimmedMedia, knowledgeEvidence: trimmedKnowledge,
             attachmentOutline: attachmentOutline.map { Array($0.prefix(Self.boundedEvidenceItems)) },
-            composedBy: composedBy, mode: mode)
+            composedBy: composedBy, mode: mode, latencyMs: latencyMs)
     }
 }
 
