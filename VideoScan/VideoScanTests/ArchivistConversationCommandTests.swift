@@ -394,6 +394,10 @@ struct ArchivistConversationCommandTests {
             ("It's pouring rain here in the Berkshires today.", .smalltalk(.weather)),
             ("how do i", .help()),
             ("how do i use this", .help()),
+            // Not a help phrase, so it reaches the how-to vocabulary check —
+            // which can never pass ("how" is not in helpVocabulary): nil
+            // today. Pinned as-is; the fix is GH #397 (codex cycle on 0940f9a9).
+            ("how do i ask things", nil),
             ("how do i change donna's bio", nil),
             ("what can you do", .help()),
             ("what could i ask hallie", .help()),
