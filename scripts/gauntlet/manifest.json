@@ -18573,6 +18573,7 @@
         "maternalBirthLocationTrailReadsDonnaOutThroughTheShell",
         "naturalResetPreemptsEveryActiveConversationMode",
         "noActionsBlocksRequestedPlaybackAndStampsTheRunID",
+        "noActionsNamesTheCitationAndNeverTouchesMedia",
         "normalConversationHidesDiagnosticsButLogRetainsThem",
         "onceRecordsExactQuestionAndBoundedAnswerEvidence",
         "onceTranslatesExactlyOnceAndNeverReadsInteractiveInput",
@@ -18581,6 +18582,7 @@
         "onlyDeployedGEDCOMLayoutConfersPhotoAuthority",
         "parsesDefaultsAndEverySupportedOption",
         "personAgeWithSelectionCountsFromTheResolvedDateNotTheTranscodeStamp",
+        "photoCommandsWithNoPhotoInformThenFail",
         "photoPronounWithTrailingClauseKeepsThePreviousSubject",
         "playItAfterADeclinedRecordTurnPlaysNothingAndSaysSo",
         "productionProfileLoaderFailsClosedForUnreadableAndCorruptProfiles",
@@ -18588,6 +18590,7 @@
         "recordTurnOverOneHundredThousandRecordsStaysWithinBudget",
         "recordTurnsIgnorePoisonedTranslatorPreferences",
         "refusedMediaActionNeverClaimsSuccessAndReturnsMediaFailure",
+        "refusedPhotoActionNeverClaimsItOpened",
         "rejectsUnknownMissingAndEmptyOptions",
         "resetSessionClearsEveryActiveConversationMode",
         "selectByFilenameFragmentSetsTheSameSelectionAsSelectN",
@@ -18604,6 +18607,7 @@
         "theFourLiveNewHampshireQuestionsAreRecordTurnsByName",
         "translatorFailureAssertsNoFactAndPerformsNoMediaAction",
         "unavailableCitationNeverClaimsPlayOrRevealAndReturnsMediaFailure",
+        "unknownCommandAndIdleCancelAnswerWithoutLeavingTheSession",
         "unsupportedRoutesRenderSharedResultWithoutShellOverride",
         "whoElseIsInItAnswersFromTheSelectedRecordWithoutTheModel"
       ]
@@ -35588,7 +35592,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1112,
+      "expected_floor": 1116,
       "modes": [
         {
           "name": "strict",

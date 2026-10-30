@@ -1787,6 +1787,9 @@ enum HallieShellCLI {
         HallieTurnExecutor.clarificationSelection(reply, from: candidates)
     }
 
+    /// One colon command. Multi-step commands live in the helpers below
+    /// (split 2026-10-29, behaviour unchanged); media is touched only by
+    /// `photoAction` and `citationCommand`, each after its own checks.
     private static func handleCommand(
         _ line: String,
         options: Options,
@@ -1799,106 +1802,158 @@ enum HallieShellCLI {
         case ":quit", ":q": output("Goodbye."); return .quit
         case ":help": output(help)
         case ":reset":
-            let event = resetSession(&state)
-            output("reset: conversation forgotten")
-            if options.diagnostics {
-                output("session-id: \(state.transcriptSessionID.uuidString)")
-            }
-            await dependencies.recordTranscript([event])
+            await resetCommand(options: options, state: &state, output: output, dependencies: dependencies)
         case ":mode":
             output(modeCommand(parts, state: &state))
         case ":cancel":
-            if state.pendingClarification != nil {
-                state.pendingClarification = nil
-                output("Clarification cancelled; I won't guess.")
-            } else {
-                output("No clarification is pending.")
-            }
+            output(cancelClarification(&state))
         case ":session":
-            let selected = state.selectedRecordID?.uuidString ?? "none"
-            let pending = state.pendingClarification == nil ? "none" : "identity"
-            let voice = HallieNeuralSpeechDiagnostics.shared.snapshot()
-            output("session: \(state.transcriptSessionID.uuidString) · \(state.citations.count) citations · selected \(selected) · responder \(state.lastResponder) · pending \(pending) · neural failures \(voice.failureCount) · retry recoveries \(voice.retryRecoveryCount)")
-            if let detail = voice.lastFailure {
-                output("neural voice last failure: \(detail)")
-            }
+            sessionLines(state).forEach(output)
         case ":photo":
-            if let photo = state.biographyPhoto {
-                output("photo: \(photo.fileURL.path)")
-            } else {
-                output("No biography photo is available for the last answer.")
-            }
+            output(state.biographyPhoto.map { "photo: \($0.fileURL.path)" } ?? noBiographyPhotoNotice)
         case ":open-photo", ":reveal-photo":
-            guard options.allowActions else {
-                output(actionsDisabledNotice)
-                return .continueSession
-            }
-            guard let photo = state.biographyPhoto else {
-                output("No biography photo is available for the last answer.")
-                return .mediaFailure
-            }
-            guard let verifiedURL = photo.revalidatedURL() else {
-                state.biographyPhoto = nil
-                output("The biography photo changed or is no longer a verified image.")
-                return .mediaFailure
-            }
-            guard dependencies.mediaURLIsAvailable(verifiedURL) else {
-                output("The biography photo is unavailable or unreadable; no media action was performed.")
-                return .mediaFailure
-            }
-            let action: MediaAction = parts[0].lowercased() == ":open-photo"
-                ? .play(verifiedURL) : .reveal(verifiedURL)
-            guard dependencies.tryPerformMediaAction(action) else {
-                output("The system refused the media action; nothing was opened.")
-                return .mediaFailure
-            }
-            output(parts[0].lowercased() == ":open-photo"
-                   ? "opening \(photo.fileURL.lastPathComponent)"
-                   : "revealing \(photo.fileURL.lastPathComponent)")
+            return photoAction(open: parts[0].lowercased() == ":open-photo", options: options,
+                               state: &state, output: output, dependencies: dependencies)
         case ":list": printCitations(state.citations, output: output)
         case ":select" where parts.count >= 2 && Int(parts[1]) == nil:
-            // ":select Christmas_1994_etc.mkv" — by filename fragment, not
-            // by citation number, so a harness (or a person who knows the
-            // file) can select without asking first. Mirrors ":select N":
-            // the only state the numeric form sets is selectedRecordID; the
-            // temporal date is derived from it on every turn.
-            let needle = parts.dropFirst().joined(separator: " ")
-            guard let match = selectRecord(matchingFilename: needle, in: state.records) else {
-                output("no file matches “\(needle)”")
-                return .continueSession
-            }
-            state.selectedRecordID = match.id
-            output("selected \(match.filename) (\(catalogYear(of: match).map(String.init) ?? "undated"))")
+            selectByFilename(parts.dropFirst().joined(separator: " "), state: &state, output: output)
         case ":select", ":play", ":reveal":
-            guard parts.count == 2, let number = Int(parts[1]),
-                  state.citations.indices.contains(number - 1) else {
-                output("No such citation. Use :list, then choose 1...\(state.citations.count).")
-                return .continueSession
-            }
-            let citation = state.citations[number - 1]
-            if parts[0].lowercased() == ":select" {
-                state.selectedRecordID = citation.recordID
-                output("selected \(number): \(citation.filename)")
-            } else if !options.allowActions {
-                output("\(actionsDisabledNotice) (\(citation.filename))")
-            } else {
-                let url = URL(fileURLWithPath: citation.fullPath)
-                guard dependencies.mediaURLIsAvailable(url) else {
-                    output("\(citation.filename) is unavailable or unreadable; no media action was performed.")
-                    return .mediaFailure
-                }
-                let isPlay = parts[0].lowercased() == ":play"
-                let action: MediaAction = isPlay ? .play(url) : .reveal(url)
-                guard dependencies.tryPerformMediaAction(action) else {
-                    output("The system refused to \(isPlay ? "open" : "reveal") \(citation.filename); no media action was completed.")
-                    return .mediaFailure
-                }
-                output(isPlay
-                    ? "opening \(citation.filename)"
-                    : "revealing \(citation.filename)")
-            }
+            return citationCommand(parts, options: options, state: &state,
+                                   output: output, dependencies: dependencies)
         default: output("Unknown command. Type :help.")
         }
+        return .continueSession
+    }
+
+    static let noBiographyPhotoNotice = "No biography photo is available for the last answer."
+
+    private static func resetCommand(
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async {
+        let event = resetSession(&state)
+        output("reset: conversation forgotten")
+        if options.diagnostics {
+            output("session-id: \(state.transcriptSessionID.uuidString)")
+        }
+        await dependencies.recordTranscript([event])
+    }
+
+    private static func cancelClarification(_ state: inout Session) -> String {
+        guard state.pendingClarification != nil else { return "No clarification is pending." }
+        state.pendingClarification = nil
+        return "Clarification cancelled; I won't guess."
+    }
+
+    private static func sessionLines(_ state: Session) -> [String] {
+        let selected = state.selectedRecordID?.uuidString ?? "none"
+        let pending = state.pendingClarification == nil ? "none" : "identity"
+        let voice = HallieNeuralSpeechDiagnostics.shared.snapshot()
+        var lines = ["session: \(state.transcriptSessionID.uuidString) · \(state.citations.count) citations · selected \(selected) · responder \(state.lastResponder) · pending \(pending) · neural failures \(voice.failureCount) · retry recoveries \(voice.retryRecoveryCount)"]
+        if let detail = voice.lastFailure {
+            lines.append("neural voice last failure: \(detail)")
+        }
+        return lines
+    }
+
+    /// ":open-photo" / ":reveal-photo" on the last biography photo:
+    /// --no-actions first, then the photo must exist, re-verify, be
+    /// readable, and the system must accept the action before success is
+    /// claimed.
+    private static func photoAction(
+        open: Bool,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) -> CommandOutcome {
+        guard options.allowActions else {
+            output(actionsDisabledNotice)
+            return .continueSession
+        }
+        guard let photo = state.biographyPhoto else {
+            output(noBiographyPhotoNotice)
+            return .mediaFailure
+        }
+        guard let verifiedURL = photo.revalidatedURL() else {
+            state.biographyPhoto = nil
+            output("The biography photo changed or is no longer a verified image.")
+            return .mediaFailure
+        }
+        guard dependencies.mediaURLIsAvailable(verifiedURL) else {
+            output("The biography photo is unavailable or unreadable; no media action was performed.")
+            return .mediaFailure
+        }
+        let action: MediaAction = open ? .play(verifiedURL) : .reveal(verifiedURL)
+        guard dependencies.tryPerformMediaAction(action) else {
+            output("The system refused the media action; nothing was opened.")
+            return .mediaFailure
+        }
+        output(open
+               ? "opening \(photo.fileURL.lastPathComponent)"
+               : "revealing \(photo.fileURL.lastPathComponent)")
+        return .continueSession
+    }
+
+    /// ":select Christmas_1994_etc.mkv" — by filename fragment, not
+    /// by citation number, so a harness (or a person who knows the
+    /// file) can select without asking first. Mirrors ":select N":
+    /// the only state the numeric form sets is selectedRecordID; the
+    /// temporal date is derived from it on every turn.
+    private static func selectByFilename(
+        _ needle: String,
+        state: inout Session,
+        output: (String) -> Void
+    ) {
+        guard let match = selectRecord(matchingFilename: needle, in: state.records) else {
+            output("no file matches “\(needle)”")
+            return
+        }
+        state.selectedRecordID = match.id
+        output("selected \(match.filename) (\(catalogYear(of: match).map(String.init) ?? "undated"))")
+    }
+
+    /// ":select N" / ":play N" / ":reveal N" on the last answer's
+    /// citations. Only :play and :reveal reach media, and only after
+    /// --no-actions, availability, and the system's own acceptance.
+    private static func citationCommand(
+        _ parts: [String],
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) -> CommandOutcome {
+        guard parts.count == 2, let number = Int(parts[1]),
+              state.citations.indices.contains(number - 1) else {
+            output("No such citation. Use :list, then choose 1...\(state.citations.count).")
+            return .continueSession
+        }
+        let citation = state.citations[number - 1]
+        if parts[0].lowercased() == ":select" {
+            state.selectedRecordID = citation.recordID
+            output("selected \(number): \(citation.filename)")
+            return .continueSession
+        }
+        guard options.allowActions else {
+            output("\(actionsDisabledNotice) (\(citation.filename))")
+            return .continueSession
+        }
+        let url = URL(fileURLWithPath: citation.fullPath)
+        guard dependencies.mediaURLIsAvailable(url) else {
+            output("\(citation.filename) is unavailable or unreadable; no media action was performed.")
+            return .mediaFailure
+        }
+        let isPlay = parts[0].lowercased() == ":play"
+        let action: MediaAction = isPlay ? .play(url) : .reveal(url)
+        guard dependencies.tryPerformMediaAction(action) else {
+            output("The system refused to \(isPlay ? "open" : "reveal") \(citation.filename); no media action was completed.")
+            return .mediaFailure
+        }
+        output(isPlay
+            ? "opening \(citation.filename)"
+            : "revealing \(citation.filename)")
         return .continueSession
     }
 
