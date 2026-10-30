@@ -31,9 +31,20 @@ class WatchHallieChatTests(unittest.TestCase):
                 colored = self.render(event, True)
                 plain = self.render(event, False)
                 self.assertIn(f"\033[{tint}m", colored)
-                self.assertTrue(colored.endswith("\033[0m\n"))
+                self.assertTrue(colored.endswith("\033[0m\n") or colored.endswith("\033[0m\n\n"))
                 self.assertEqual(re.sub(r"\x1b\[[0-9;]*m", "", colored), plain)
                 self.assertNotIn("\033", plain)
+
+    def test_answer_is_followed_by_a_blank_line_and_query_is_not(self):
+        # Rick 2026-10-30: query, answer, two newlines, next query.
+        for color in (True, False):
+            with self.subTest(color=color):
+                query = self.render({"kind": "user", "text": "Who was Hallie?"}, color)
+                answer = self.render({"kind": "assistant", "text": "My great grandmother."}, color)
+                error = self.render({"kind": "error", "text": "timed out"}, color)
+                self.assertFalse(query.endswith("\n\n"))
+                self.assertTrue(answer.endswith("\n\n"))
+                self.assertTrue(error.endswith("\n\n"))
 
     def test_warning_stays_yellow_while_answer_stays_green(self):
         colored = self.render({"kind": "assistant", "outcome": "failed", "text": "Try again"}, True)

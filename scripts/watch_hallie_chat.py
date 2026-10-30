@@ -114,9 +114,11 @@ def render(line: str, include_system: bool, *, color: bool = False, stream=None)
         tint = {"user": "36", "assistant": "32", "error": "31"}.get(kind)
         if tint:
             text = f"\033[{tint}m{text}\033[0m"
+    # A blank line after each answer (or error) so every query/answer pair reads as a block.
+    end = "\n\n" if kind in ("assistant", "error") else "\n"
     print(
         f"{marker}{text}",
-        file=stream, flush=True)
+        end=end, file=stream, flush=True)
 
 
 class LiveTranscript:
