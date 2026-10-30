@@ -52,7 +52,7 @@
 - (ruling) The four open questions: Provenance.csv vs manifest v4 (deep dive says CSV); role vocabulary (ours vs PBCore generations); hard vs soft gate the first month; the July device-chain line.
 - (ruling) Re-digitize the kept tapes natively (10-bit 4:2:2) as a second capture event; does a confirmed better re-capture supersede the July FFV1 masters?
 - Later: PBCore XML export; QCTools/MediaConch post-capture QC.
-- (idea, Rick 2026-10-25) Catalog right-click **Provenance ▸** {Find Master, Find Similar Footage, Find Duplicates, Find Best/Repaired Version} — ONE door to engines that exist (lineage/archive copies, footage likeness, duplicate groups, Events pick-the-master); phased; a per-file provenance score (option 3: grade and work up the chain, never a catalog restart) comes after the four 10/22 answers.
+- (idea, Rick 2026-10-25) Catalog right-click **Provenance ▸** {Find Master, Find Similar Footage, Find Duplicates, Find Best/Repaired Version} — ONE door to engines that exist (lineage/archive copies, footage likeness, duplicate groups, Events pick-the-master); phased; a per-file provenance score (option 3: grade and work up the chain, never a catalog restart) comes after the four 10/22 answers. → **Provenance Grade** (auto-generated, per file, evidence-only): #396 (Rick 2026-10-29).
 
 ## Events, Compare Media, segments
 - Events page gets the Compare Media verdict band + two spools per suggested group ("same occasion or different years?" pre-answered); constellation view.

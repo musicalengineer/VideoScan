@@ -47,4 +47,4 @@ change, no rulings needed, none of Rick's time. Every later model is compared to
 
 - Background service needs (10/29 conversation): what may run after quit; one supervisor; visible and stoppable with
   the app closed; journals only, the app applies them; its own name in Activity Monitor; backs off when Rick works.
-- Per-file provenance grade: BACKLOG line "Catalog right-click Provenance ▸ …" (10/25), option 3.
+- Provenance Grade (auto-generated, per file): #396; BACKLOG line "Catalog right-click Provenance ▸ …". Model assertions from this design would feed it.
