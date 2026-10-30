@@ -30352,6 +30352,7 @@
         "test_harvested_rows_are_marked_unconfirmed",
         "test_ids_are_unique_and_the_description_count_is_honest",
         "test_invalid_structural_regex_is_a_defect",
+        "test_latency_passes_through_build_records",
         "test_live_miss_exact_known_bad_phrases_are_rejected",
         "test_live_miss_phrase_guards_do_not_claim_general_polarity",
         "test_live_miss_textual_fact_contracts_reject_generic_answers",
@@ -30374,10 +30375,13 @@
         "test_run_carries_must_match_from_corpus_into_emitted_record",
         "test_safe_persona_boundary_is_not_mistaken_for_a_memory_claim",
         "test_settings_win",
+        "test_split_answer_latency_is_the_last_clause_since_the_user_turn",
         "test_split_answers_fold_into_the_question_they_answer",
         "test_strict_completeness_checks_ids_not_just_count",
         "test_strict_correct_complete_run_passes",
         "test_strict_mismatch_fails_advisory_is_not_called_passed",
+        "test_summary_latency_is_empty_not_zero_without_measurements",
+        "test_summary_reports_latency_median_and_p90",
         "test_synthetic_rows_state_the_intended_behaviour",
         "test_timeout_preserves_failure_artifact",
         "test_zero_turns_and_legacy_unattested_run_cannot_pass_strict"
@@ -31410,6 +31414,7 @@
         "test_watch_hallie_chat.py"
       ],
       "tests": [
+        "test_answer_is_followed_by_a_blank_line_and_query_is_not",
         "test_auto_respects_terminal_and_no_color_with_explicit_overrides",
         "test_colors_distinguish_speakers_without_changing_conversation",
         "test_live_stream_is_immediate_filtered_and_drains_rotation_and_partial_lines",
