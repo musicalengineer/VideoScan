@@ -306,6 +306,8 @@ enum HalliePronunciationRespelling {
 
     /// Nil when the hint cannot be mapped safely (rhymes-with, an unknown
     /// exemplar, a syllable Rick named that the name does not contain).
+    /// One case per hint kind; the reshaping steps are the helpers below
+    /// (split 2026-10-29, behaviour unchanged).
     static func respelling(
         for name: String,
         hint: HalliePronunciationHint,
@@ -313,13 +315,7 @@ enum HalliePronunciationRespelling {
     ) -> String? {
         var parts = syllables(name)
         guard !parts.isEmpty else { return nil }
-        // After a "tt" split the second syllable would re-say the t: drop it.
-        for index in 1..<max(parts.count, 1) where parts.count > 1 {
-            if let last = parts[index - 1].last, parts[index].first == last, !vowels.contains(last) {
-                parts[index] = String(parts[index].dropFirst())
-            }
-        }
-        var stressed = 0
+        dropRepeatedConsonants(&parts)
         switch hint {
         case .rhymes:
             return nil
@@ -328,69 +324,112 @@ enum HalliePronunciationRespelling {
             let at = given.firstIndex { $0.exemplar != nil } ?? 0
             return render(texts, stressed: at, schwaFinalA: false)
         case .stress(let ordinal):
-            stressed = ordinal.index.map { min($0, parts.count - 1) } ?? (parts.count - 1)
+            let stressed = ordinal.index.map { min($0, parts.count - 1) } ?? (parts.count - 1)
+            return render(parts, stressed: stressed, schwaFinalA: true)
         case .vowel(let letter, let length, let syllable):
-            guard let at = syllableIndex(parts, named: syllable, vowel: letter) else { return nil }
-            stressed = at
+            guard let at = applyVowelLength(&parts, letter: letter, length: length, syllable: syllable) else { return nil }
+            return render(parts, stressed: at, schwaFinalA: true)
+        case .vowelLike(let letter, let exemplar):
+            return vowelLikeRespelling(name, parts: parts, letter: letter, exemplar: exemplar, gold: gold)
+        case .silent(let letter):
+            guard let shorter = removingSilentLetter(letter, from: parts) else { return nil }
+            return render(shorter, stressed: 0, schwaFinalA: true)
+        case .softG:
+            return render(parts.map { $0.replacingOccurrences(of: "g", with: "j") },
+                          stressed: 0, schwaFinalA: true)
+        case .hardG:
+            return render(parts.map { $0.replacingOccurrences(of: "ge", with: "ghe").replacingOccurrences(of: "gi", with: "ghi") },
+                          stressed: 0, schwaFinalA: true)
+        }
+    }
+
+    /// After a "tt" split the second syllable would re-say the t: drop it.
+    private static func dropRepeatedConsonants(_ parts: inout [String]) {
+        for index in 1..<max(parts.count, 1) where parts.count > 1 {
+            if let last = parts[index - 1].last, parts[index].first == last, !vowels.contains(last) {
+                parts[index] = String(parts[index].dropFirst())
+            }
+        }
+    }
+
+    /// How a long vowel letter is spelled out loud ("a" → "ay"); anything
+    /// else reads "oo".
+    private static let longVowelSpoken: [Character: String] = [
+        "a": "ay", "e": "ee", "i": "eye", "o": "oh",
+    ]
+
+    /// Reshapes `parts` for a short/long `letter` (in the named syllable,
+    /// else the first syllable carrying it) and returns that syllable's
+    /// index — the stressed one — or nil when the name has no such vowel.
+    private static func applyVowelLength(
+        _ parts: inout [String],
+        letter: Character,
+        length: HalliePronunciationHint.VowelLength,
+        syllable: String?
+    ) -> Int? {
+        guard let at = syllableIndex(parts, named: syllable, vowel: letter) else { return nil }
+        var target = parts[at]
+        guard let vowelAt = target.firstIndex(of: letter) else { return nil }
+        switch length {
+        case .short:
+            // A short vowel wants a closed syllable: pull the next
+            // syllable's opening consonant in ("na|tha" → "nath|a").
+            if target.last.map({ vowels.contains($0) }) == true, at + 1 < parts.count,
+               let opener = parts[at + 1].first, !vowels.contains(opener) {
+                target.append(opener)
+                parts[at + 1] = String(parts[at + 1].dropFirst())
+            }
+        case .long:
+            let spoken = longVowelSpoken[letter] ?? "oo"
+            // A long vowel wants an open syllable: hand a closing
+            // consonant to the next one ("lat|a" → "lay|ta").
+            let tail = String(target[target.index(after: vowelAt)...])
+            if !tail.isEmpty, at + 1 < parts.count {
+                parts[at + 1] = tail + parts[at + 1]
+                target = String(target[..<target.index(after: vowelAt)])
+            }
+            target.replaceSubrange(vowelAt...vowelAt, with: spoken)
+        }
+        parts[at] = target
+        return at
+    }
+
+    /// "the a in Latta is like in father": a short/long exemplar becomes
+    /// that vowel hint; an "ah"-type exemplar spells the vowel out.
+    private static func vowelLikeRespelling(
+        _ name: String,
+        parts: [String],
+        letter: Character,
+        exemplar: String,
+        gold: MisakiGoldLexicon
+    ) -> String? {
+        guard let at = syllableIndex(parts, named: nil, vowel: letter),
+              let sound = exemplarSound(exemplar, letter: letter, gold: gold) else { return nil }
+        switch sound {
+        case .short:
+            return respelling(
+                for: name, hint: .vowel(letter: letter, length: .short, syllable: nil), gold: gold)
+        case .long:
+            return respelling(
+                for: name, hint: .vowel(letter: letter, length: .long, syllable: nil), gold: gold)
+        case .spelled(let text):
+            var parts = parts
             var target = parts[at]
             guard let vowelAt = target.firstIndex(of: letter) else { return nil }
-            switch length {
-            case .short:
-                // A short vowel wants a closed syllable: pull the next
-                // syllable's opening consonant in ("na|tha" → "nath|a").
-                if target.last.map({ vowels.contains($0) }) == true, at + 1 < parts.count,
-                   let opener = parts[at + 1].first, !vowels.contains(opener) {
-                    target.append(opener)
-                    parts[at + 1] = String(parts[at + 1].dropFirst())
-                }
-            case .long:
-                let spoken: String
-                switch letter {
-                case "a": spoken = "ay"
-                case "e": spoken = "ee"
-                case "i": spoken = "eye"
-                case "o": spoken = "oh"
-                default: spoken = "oo"
-                }
-                // A long vowel wants an open syllable: hand a closing
-                // consonant to the next one ("lat|a" → "lay|ta").
-                let tail = String(target[target.index(after: vowelAt)...])
-                if !tail.isEmpty, at + 1 < parts.count {
-                    parts[at + 1] = tail + parts[at + 1]
-                    target = String(target[..<target.index(after: vowelAt)])
-                }
-                target.replaceSubrange(vowelAt...vowelAt, with: spoken)
-            }
+            target.replaceSubrange(vowelAt...vowelAt, with: text)
             parts[at] = target
-        case .vowelLike(let letter, let exemplar):
-            guard let at = syllableIndex(parts, named: nil, vowel: letter),
-                  let sound = exemplarSound(exemplar, letter: letter, gold: gold) else { return nil }
-            stressed = at
-            switch sound {
-            case .short:
-                return respelling(
-                    for: name, hint: .vowel(letter: letter, length: .short, syllable: nil), gold: gold)
-            case .long:
-                return respelling(
-                    for: name, hint: .vowel(letter: letter, length: .long, syllable: nil), gold: gold)
-            case .spelled(let text):
-                var target = parts[at]
-                guard let vowelAt = target.firstIndex(of: letter) else { return nil }
-                target.replaceSubrange(vowelAt...vowelAt, with: text)
-                parts[at] = target
-            }
-        case .silent(let letter):
-            var joined = parts.joined(separator: "|")
-            guard let at = joined.dropFirst().firstIndex(of: letter) else { return nil }
-            joined.remove(at: at)
-            parts = joined.split(separator: "|").map(String.init).filter { !$0.isEmpty }
-            guard !parts.isEmpty else { return nil }
-        case .softG:
-            parts = parts.map { $0.replacingOccurrences(of: "g", with: "j") }
-        case .hardG:
-            parts = parts.map { $0.replacingOccurrences(of: "ge", with: "ghe").replacingOccurrences(of: "gi", with: "ghi") }
+            return render(parts, stressed: at, schwaFinalA: true)
         }
-        return render(parts, stressed: stressed, schwaFinalA: true)
+    }
+
+    /// The syllables with the first `letter` after the name's first letter
+    /// removed; nil when there is none or nothing is left.
+    private static func removingSilentLetter(_ letter: Character, from parts: [String]) -> [String]? {
+        var joined = parts.joined(separator: "|")
+        guard let at = joined.dropFirst().firstIndex(of: letter) else { return nil }
+        joined.remove(at: at)
+        let shorter = joined.split(separator: "|").map(String.init).filter { !$0.isEmpty }
+        return shorter.isEmpty ? nil : shorter
     }
 
     private enum ExemplarSound { case short, long, spelled(String) }

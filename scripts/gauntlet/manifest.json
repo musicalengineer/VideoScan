@@ -17948,6 +17948,17 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HalliePronunciationRespellingCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HalliePronunciationRespellingCharacterizationTests"
+      ],
+      "tests": [
+        "respellingForEachHintKind"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HalliePronunciationGuardTests.swift",
@@ -34124,7 +34135,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3065,
+      "expected_floor": 3066,
       "name": "unit",
       "package_expected_floor": 406,
       "package_selectors": [
@@ -34352,6 +34363,7 @@
         "VideoScanTests/GeneratedInputAppFindingsTests",
         "VideoScanTests/HallieAncestorRoutingPropertyTests",
         "VideoScanTests/HalliePresenceLikeCharacterizationTests",
+        "VideoScanTests/HalliePronunciationRespellingCharacterizationTests",
         "VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests",
         "VideoScanTests/HammingTests",
         "VideoScanTests/IdentityNarrowingRegressionSensors",
