@@ -18573,7 +18573,6 @@
         "maternalBirthLocationTrailReadsDonnaOutThroughTheShell",
         "naturalResetPreemptsEveryActiveConversationMode",
         "noActionsBlocksRequestedPlaybackAndStampsTheRunID",
-        "noActionsNamesTheCitationAndNeverTouchesMedia",
         "normalConversationHidesDiagnosticsButLogRetainsThem",
         "onceRecordsExactQuestionAndBoundedAnswerEvidence",
         "onceTranslatesExactlyOnceAndNeverReadsInteractiveInput",
@@ -18582,7 +18581,6 @@
         "onlyDeployedGEDCOMLayoutConfersPhotoAuthority",
         "parsesDefaultsAndEverySupportedOption",
         "personAgeWithSelectionCountsFromTheResolvedDateNotTheTranscodeStamp",
-        "photoCommandsWithNoPhotoInformThenFail",
         "photoPronounWithTrailingClauseKeepsThePreviousSubject",
         "playItAfterADeclinedRecordTurnPlaysNothingAndSaysSo",
         "productionProfileLoaderFailsClosedForUnreadableAndCorruptProfiles",
@@ -18590,7 +18588,6 @@
         "recordTurnOverOneHundredThousandRecordsStaysWithinBudget",
         "recordTurnsIgnorePoisonedTranslatorPreferences",
         "refusedMediaActionNeverClaimsSuccessAndReturnsMediaFailure",
-        "refusedPhotoActionNeverClaimsItOpened",
         "rejectsUnknownMissingAndEmptyOptions",
         "resetSessionClearsEveryActiveConversationMode",
         "selectByFilenameFragmentSetsTheSameSelectionAsSelectN",
@@ -18607,9 +18604,23 @@
         "theFourLiveNewHampshireQuestionsAreRecordTurnsByName",
         "translatorFailureAssertsNoFactAndPerformsNoMediaAction",
         "unavailableCitationNeverClaimsPlayOrRevealAndReturnsMediaFailure",
-        "unknownCommandAndIdleCancelAnswerWithoutLeavingTheSession",
         "unsupportedRoutesRenderSharedResultWithoutShellOverride",
         "whoElseIsInItAnswersFromTheSelectedRecordWithoutTheModel"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieShellCLICommandCharacterizationTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieShellCLITests"
+      ],
+      "tests": [
+        "noActionsNamesTheCitationAndNeverTouchesMedia",
+        "photoCommandsWithNoPhotoInformThenFail",
+        "refusedPhotoActionNeverClaimsItOpened",
+        "unknownCommandAndIdleCancelAnswerWithoutLeavingTheSession"
       ]
     },
     {
@@ -35504,6 +35515,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/HallieShellCLICommandCharacterizationTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
           "name": "VideoScan/VideoScanTests/HallieShellCLITests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -35592,7 +35607,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1116,
+      "expected_floor": 1112,
       "modes": [
         {
           "name": "strict",
