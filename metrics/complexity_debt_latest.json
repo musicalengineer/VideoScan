@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-29T11:11:41Z",
- "sha": "f59ba0ae",
+ "ts": "2026-10-30T11:06:06Z",
+ "sha": "55acf88c",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 391,
- "baseline_before": 384,
- "baseline_after": 384,
+ "offenders": 386,
+ "baseline_before": 379,
+ "baseline_after": 379,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
@@ -103,8 +103,8 @@
    "key": "VideoScan/VideoScan/App/ContentView.swift::ContentView.body",
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "ContentView.body",
-   "ccn": 13,
-   "nloc": 120,
+   "ccn": 14,
+   "nloc": 125,
    "lang": "swift",
    "base_ccn": 12,
    "base_nloc": 108

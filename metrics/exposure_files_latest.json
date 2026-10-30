@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-29T11:12:17Z",
- "sha": "f59ba0ae",
+ "ts": "2026-10-30T11:06:28Z",
+ "sha": "55acf88c",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 457,
@@ -195,7 +195,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/ContentView.swift": {
-   "lines": 1903,
+   "lines": 1917,
    "decls": 45,
    "could_be_private": [
     "CatalogView.volumeShowFilterDidChange",
@@ -745,8 +745,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Archive/MasterArchiveIcon.swift": {
-   "lines": 90,
-   "decls": 3,
+   "lines": 143,
+   "decls": 5,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -3512,7 +3512,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeWalkAnimation.swift": {
-   "lines": 457,
+   "lines": 458,
    "decls": 44,
    "could_be_private": [
     "TreeWalkFanLayout.dotRadius",
@@ -3548,7 +3548,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeWalkSheet.swift": {
-   "lines": 542,
+   "lines": 546,
    "decls": 14,
    "could_be_private": [
     "FamilyTreeWalkSheet.hostInset"
@@ -4672,7 +4672,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift": {
-   "lines": 2083,
+   "lines": 2242,
    "decls": 77,
    "could_be_private": [
     "HallieLineageQuestion.defaultGenerations",
@@ -4912,9 +4912,18 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/Hallie/HallieServiceAttribution.swift": {
+   "lines": 213,
+   "decls": 12,
+   "could_be_private": [
+    "HallieServiceAttribution.marriageWords",
+    "HallieServiceAttribution.serviceTerms"
+   ],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScan/Hallie/HallieServiceQuestion.swift": {
-   "lines": 404,
-   "decls": 18,
+   "lines": 408,
+   "decls": 19,
    "could_be_private": [
     "HallieServiceQuestion.Branch",
     "HallieServiceQuestion.namedBranch"
@@ -5162,7 +5171,7 @@
    ]
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+RelativeFacts.swift": {
-   "lines": 184,
+   "lines": 201,
    "decls": 9,
    "could_be_private": [],
    "widened_for_split": [
@@ -5170,7 +5179,7 @@
    ]
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Service.swift": {
-   "lines": 622,
+   "lines": 617,
    "decls": 15,
    "could_be_private": [
     "HallieTurnExecutor.ServiceAnswer.topicDescription",
@@ -6291,8 +6300,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/BalanceAudioJob.swift": {
-   "lines": 853,
-   "decls": 25,
+   "lines": 863,
+   "decls": 26,
    "could_be_private": [],
    "widened_for_split": []
   },
@@ -7440,7 +7449,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Repair/MediaRepairAdvice.swift": {
-   "lines": 161,
+   "lines": 164,
    "decls": 19,
    "could_be_private": [
     "MediaRepairAdvice.noAutomaticFixAdvice",
@@ -7477,8 +7486,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Repair/MediaRepairOutput.swift": {
-   "lines": 91,
-   "decls": 7,
+   "lines": 100,
+   "decls": 8,
    "could_be_private": [
     "MediaRepairOutput.mp4SoundCodecs"
    ],
@@ -7518,12 +7527,14 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift": {
-   "lines": 253,
-   "decls": 24,
+   "lines": 269,
+   "decls": 28,
    "could_be_private": [
     "MediaRepairBalanceInput.singleSoundStream",
-    "MediaRepairBalanceInput.rawDV",
+    "MediaRepairRecipe.balanceNeedsDedicatedJob",
     "MediaRepairRecipe.balanceRefusal",
+    "MediaRepairRecipe.needsDedicatedBalanceJob",
+    "MediaRepairRecipe.dedicatedBalanceReason",
     "MediaRepairRecipe.addedSoundExtension",
     "MediaRepairRecipe.noSoundFileReason",
     "MediaRepairRecipe.addSoundArgs"
@@ -7531,14 +7542,16 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Repair/MediaRepairSelection.swift": {
-   "lines": 72,
-   "decls": 9,
-   "could_be_private": [],
+   "lines": 114,
+   "decls": 12,
+   "could_be_private": [
+    "MediaRepairSelection.dedicatedBalanceLines"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Repair/MediaRepairSheet.swift": {
-   "lines": 515,
-   "decls": 14,
+   "lines": 578,
+   "decls": 15,
    "could_be_private": [
     "MediaRepairSheet.PictureLoad"
    ],
@@ -9135,8 +9148,8 @@
    ]
   },
   "VideoScan/VideoScan/Shared/GauntletSeams.swift": {
-   "lines": 96,
-   "decls": 6,
+   "lines": 125,
+   "decls": 8,
    "could_be_private": [
     "GauntletSeams.catalogScanTargetPath",
     "GauntletSeams.poiName",
@@ -10546,6 +10559,12 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GauntletFamilyTreeFixture.swift": {
+   "lines": 159,
+   "decls": 0,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/GauntletFixturePlan.swift": {
    "lines": 198,
    "decls": 0,
@@ -11776,9 +11795,11 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/TimingBudget.swift": {
-   "lines": 370,
-   "decls": 1,
-   "could_be_private": [],
+   "lines": 425,
+   "decls": 2,
+   "could_be_private": [
+    "TimingBudget.LoadSample.coresText"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/TreeIntegrityCheck.swift": {

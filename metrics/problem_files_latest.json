@@ -1,20 +1,20 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-29T11:12:26Z",
- "sha": "f59ba0ae",
+ "ts": "2026-10-30T11:06:33Z",
+ "sha": "55acf88c",
  "formula_version": 1,
- "files_scored": 808,
+ "files_scored": 811,
  "rows": [
   {
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "offenders": 4,
    "worst_ccn": 20,
    "new_or_worse": 4,
-   "lines": 1903,
+   "lines": 1917,
    "could_be_private": 5,
    "widened_for_split": 20,
-   "churn_7d": 5,
-   "score": 84.0
+   "churn_7d": 6,
+   "score": 92.6
   },
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -28,17 +28,6 @@
    "score": 57.5
   },
   {
-   "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
-   "offenders": 5,
-   "worst_ccn": 42,
-   "new_or_worse": 0,
-   "lines": 2083,
-   "could_be_private": 25,
-   "widened_for_split": 2,
-   "churn_7d": 1,
-   "score": 41.8
-  },
-  {
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
    "offenders": 3,
    "worst_ccn": 31,
@@ -48,6 +37,17 @@
    "widened_for_split": 1,
    "churn_7d": 4,
    "score": 41.5
+  },
+  {
+   "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 2242,
+   "could_be_private": 25,
+   "widened_for_split": 2,
+   "churn_7d": 5,
+   "score": 40.4
   },
   {
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift",

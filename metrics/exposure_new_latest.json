@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-29T11:12:17Z",
- "sha": "f59ba0ae",
+ "ts": "2026-10-30T11:06:28Z",
+ "sha": "55acf88c",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -2265,6 +2265,20 @@
    "classification": "widened-for-split"
   },
   {
+   "key": "VideoScan/VideoScan/Hallie/HallieServiceAttribution.swift::HallieServiceAttribution.marriageWords",
+   "file": "VideoScan/VideoScan/Hallie/HallieServiceAttribution.swift",
+   "name": "HallieServiceAttribution.marriageWords",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/HallieServiceAttribution.swift::HallieServiceAttribution.serviceTerms",
+   "file": "VideoScan/VideoScan/Hallie/HallieServiceAttribution.swift",
+   "name": "HallieServiceAttribution.serviceTerms",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Hallie/HallieTagOnlyName.swift::HallieTagOnlyName.exactTag",
    "file": "VideoScan/VideoScan/Hallie/HallieTagOnlyName.swift",
    "name": "HallieTagOnlyName.exactTag",
@@ -4106,13 +4120,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairBalanceInput.rawDV",
-   "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
-   "name": "MediaRepairBalanceInput.rawDV",
-   "kind": "var",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairBalanceInput.singleSoundStream",
    "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
    "name": "MediaRepairBalanceInput.singleSoundStream",
@@ -4134,6 +4141,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairRecipe.balanceNeedsDedicatedJob",
+   "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
+   "name": "MediaRepairRecipe.balanceNeedsDedicatedJob",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairRecipe.balanceRefusal",
    "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
    "name": "MediaRepairRecipe.balanceRefusal",
@@ -4141,9 +4155,30 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairRecipe.dedicatedBalanceReason",
+   "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
+   "name": "MediaRepairRecipe.dedicatedBalanceReason",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairRecipe.needsDedicatedBalanceJob",
+   "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
+   "name": "MediaRepairRecipe.needsDedicatedBalanceJob",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift::MediaRepairRecipe.noSoundFileReason",
    "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairRecipe.swift",
    "name": "MediaRepairRecipe.noSoundFileReason",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairSelection.swift::MediaRepairSelection.dedicatedBalanceLines",
+   "file": "VideoScan/VideoScan/MediaOps/Repair/MediaRepairSelection.swift",
+   "name": "MediaRepairSelection.dedicatedBalanceLines",
    "kind": "let",
    "classification": "could-be-private"
   },
@@ -6217,6 +6252,13 @@
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/SQLiteWALSidecar.swift",
    "name": "SQLiteWALSidecar.missingWords",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/TimingBudget.swift::TimingBudget.LoadSample.coresText",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/TimingBudget.swift",
+   "name": "TimingBudget.LoadSample.coresText",
+   "kind": "var",
    "classification": "could-be-private"
   },
   {
