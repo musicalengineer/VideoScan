@@ -179,4 +179,82 @@ struct HallieDeepAncestorTests {
         #expect(mat.outcome == .declined)
         #expect(mat.prose.contains("mother (Eileen Latta) → her mother (Mary McGill), but no parents for Mary McGill"))
     }
+
+    // MARK: deepAncestors — characterization (2026-10-29, before the split)
+    //
+    // The branches the tests above do not reach: a person with no parents
+    // at all (with and without a side), the caller's basis note, and the
+    // walk budget declining before the asked-for generation.
+
+    @Test func noParentsAtAllIsSaidWithTheSideWord() throws {
+        let brendan = try #require(graph.people["@I7@"])
+        let none = HallieLineageAnswer.deepAncestors(of: brendan, depth: 3, sex: nil, side: nil, graph: graph)
+        #expect(none.outcome == .declined)
+        #expect(none.prose == "The family tree doesn’t record parents for Brendan Breen, so I can’t reach a great-grandparent.")
+        #expect(none.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 3 generations up.")
+        #expect(none.offeredActions == [.openFamilyTreePerson(personID: "@I7@", personName: "Brendan Breen")])
+        let mary = try #require(graph.people["@I9@"])
+        let maternal = HallieLineageAnswer.deepAncestors(of: mary, depth: 3, sex: "F", side: .maternal, graph: graph)
+        #expect(maternal.outcome == .declined)
+        #expect(maternal.prose == "The family tree doesn’t record a mother for Mary McGill, so I can’t reach a maternal great-grandmother.")
+        #expect(maternal.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 3 generations up, first hop through the maternal side.")
+    }
+
+    @Test func basisNoteFollowsTheWalkDescription() throws {
+        let rick = try #require(graph.people["@I1@"])
+        let r = HallieLineageAnswer.deepAncestors(of: rick, depth: 5, sex: "M", side: .paternal, graph: graph,
+                                                  basisNote: "Taking “my” as Rick Breen.")
+        #expect(r.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 5 generations up, first hop through the paternal side. Taking “my” as Rick Breen.")
+        #expect(r.queryDescription == "deep ancestor ×5 M: Rick Breen")
+    }
+
+    /// Both budget branches, reached by COUNT: an 8-generation pedigree
+    /// (255 people) with a 100-expansion cap and an hour on the clock.
+    /// Generations 1–6 take 63 expansions; the cap trips 37 people into
+    /// generation 7. (codex 2026-10-29: the first version used the real
+    /// 0.15 s clock on 131k people, which a loaded host could trip earlier.)
+    @Test func walkBudgetIsSaidOnAPartialAnswerAndDeclinesShortOfTheGeneration() throws {
+        let graph = GedcomFamilyGraph(gedcomText: Self.binaryPedigree(generations: 8))
+        let root = try #require(graph.people["@I1@"])
+        let budget = HallieLineageAnswer.DeepAncestorBudget(maxExpanded: 100, timeBudget: 3600)
+        // Budget trips while filling the asked generation: a partial list, said so.
+        let partial = HallieLineageAnswer.deepAncestors(of: root, depth: 7, sex: nil, side: nil,
+                                                        graph: graph, budget: budget)
+        #expect(partial.outcome == .answered)
+        #expect(partial.prose.hasPrefix("Person N1’s 5th-great-grandparents: Person N128 ("), Comment(rawValue: String(partial.prose.prefix(120))))
+        #expect(partial.prose.hasSuffix(" There are 49 more at that generation I haven’t listed (74 in all). I stopped the walk at its budget (100 people examined), so there may be others."),
+                Comment(rawValue: partial.prose))
+        #expect(partial.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 7 generations up. Walk stopped at its budget; there may be more.")
+        #expect(partial.offeredActions.count == 3)
+        // One generation further: the budget trips before generation 8 has anyone.
+        let short = HallieLineageAnswer.deepAncestors(of: root, depth: 8, sex: nil, side: nil,
+                                                      graph: graph, budget: budget)
+        #expect(short.outcome == .declined)
+        #expect(short.prose == "Person N1’s ancestry fans out too far for me to reach a 6th-great-grandparent in one go — I examined 100 people across 7 generations and stopped. Try one line (paternal or maternal) or a smaller count.")
+        #expect(short.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 8 generations up. Walk stopped at its budget.")
+        // The production budget is the two static caps, unchanged.
+        #expect(HallieLineageAnswer.DeepAncestorBudget.production.maxExpanded == 50_000)
+        #expect(HallieLineageAnswer.DeepAncestorBudget.production.timeBudget == 0.15)
+    }
+
+    /// Heap-indexed binary pedigree (person n's parents are 2n and 2n+1).
+    private static func binaryPedigree(generations: Int) -> String {
+        let count = (1 << generations) - 1
+        var out = ["0 HEAD"]
+        for n in 1...count {
+            out.append("0 @I\(n)@ INDI")
+            out.append("1 NAME Person /N\(n)/")
+            out.append("1 SEX \(n == 1 || n % 2 == 0 ? "M" : "F")")
+            if 2 * n + 1 <= count { out.append("1 FAMC @F\(n)@") }
+            if n > 1 { out.append("1 FAMS @F\(n / 2)@") }
+        }
+        for n in 1...count where 2 * n + 1 <= count {
+            out.append("0 @F\(n)@ FAM")
+            out.append("1 HUSB @I\(2 * n)@")
+            out.append("1 WIFE @I\(2 * n + 1)@")
+            out.append("1 CHIL @I\(n)@")
+        }
+        out.append("0 TRLR")
+        return out.joined(separator: "\n")
+    }
 }

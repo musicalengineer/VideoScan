@@ -1152,6 +1152,10 @@ enum HallieTurnExecutor {
             context: context, dependencies: dependencies)
     }
 
+    /// The AST router: one lane per case. Each lane's guards and basis
+    /// notes live in its route function below; this switch only picks one.
+    /// Lanes that never ask a which-one question refuse a chip selection
+    /// as stale (`invalidContinuationResult`).
     static func execute(
         _ request: Request,
         context: Context,
@@ -1161,203 +1165,25 @@ enum HallieTurnExecutor {
         let ast = request.intent.ast
         switch ast {
         case .presence(let payload):
-            // "photos of X" about a family-tree person: portrait /
-            // photography floor / which-one chips, never a catalog search
-            // (+PhotoAsk). Nil = not a photo ask about a tree person.
-            if let photo = photoAsk(payload, request: request, context: context,
-                                    dependencies: dependencies) {
-                return photo
-            }
-            guard request.selectedIdentity == nil else {
-                return invalidContinuationResult(for: ast)
-            }
-            return try await executePresenceLike(
-                payload, route: .presence, request: request,
-                context: context, dependencies: dependencies)
-
-        case .cross(let payload):
-            guard request.selectedIdentity == nil else {
-                return invalidContinuationResult(for: ast)
-            }
-            // Spoken terms and visible/topic terms are both keyword
-            // constraints on the presence executor: every keyword must be
-            // proven by SOME field (transcript, caption, filename, …) and
-            // the basis names which. Nothing is coerced or widened.
-            let merged = ArchivistQueryAST.Presence(
-                people: payload.people,
-                yearStart: payload.yearStart,
-                yearEnd: payload.yearEnd,
-                mediaKind: payload.mediaKind,
-                keywords: (payload.keywords ?? []) + (payload.transcript ?? []))
-            return try await executePresenceLike(
-                merged, route: .cross, request: request,
-                context: context, dependencies: dependencies)
-
-        case .temporal(let rawPayload):
-            // A year the question never said is not a reference (live
-            // 2026-09-21: "how old was dad breen when he passed?" arrived
-            // as explicitYear(1994)). Dropped before anything counts.
-            // Only a translator-fresh turn can carry an invented year: a
-            // refined follow-up ("what about Rick?" after "how old was Donna
-            // in 1994") inherits its year from the previous turn on purpose.
-            let question = request.intent.originalQuestion
-            let isRefinement = request.intent.refinementChain != nil
-                || request.intent.refinementNote != nil
-                || request.intent.refinementChange != nil
-            // With no question text at all (the AST-only entry point, the
-            // shell's fixture translator) there is nothing to judge against:
-            // the year stands.
-            let hasQuestionText = !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            // "Christmas videos from 2006" read as an age question (live
-            // 2026-09-24): a media ask with no age word is searched.
-            if !isRefinement, hasQuestionText, request.selectedIdentity == nil,
-               let presence = mediaAskMisreadAsAge(question, subject: rawPayload.subject) {
-                return try await executePresenceLike(
-                    presence, route: .presence, request: request,
-                    context: context, dependencies: dependencies)
-                .prefixingBasis("the question has a media word and no age word, so it is not an age question; I searched the catalog")
-            }
-            var payload = rawPayload
-            var inventedYear: Int?
-            if !isRefinement, hasQuestionText, case .explicitYear(let year) = rawPayload.reference,
-               !ArchivistTemporalExecutor.questionSuppliesYear(year, in: question) {
-                payload.reference = .currentSelection
-                inventedYear = year
-            }
-            // The mirror case (replay 2026-09-25): the question states a
-            // year and the translator dropped it — "how old was dad in
-            // 1985" arrived as currentSelection and Hallie asked for a
-            // dated video.
-            var restoredYear: Int?
-            if !isRefinement, hasQuestionText, inventedYear == nil,
-               case .currentSelection = rawPayload.reference,
-               let year = ArchivistTemporalExecutor.statedYear(in: question) {
-                payload.reference = .explicitYear(year)
-                restoredYear = year
-            }
-            var result = try await executeTemporalCase(
+            return try await executePresenceRoute(
                 payload, request: request, context: context, dependencies: dependencies)
-            if let inventedYear {
-                result = result.prefixingBasis(
-                    "the translator supplied year \(inventedYear), which the question never mentions, so it was ignored")
-            }
-            if let restoredYear {
-                result = result.prefixingBasis(
-                    "the question says \(restoredYear); the translator left it out, so I counted to \(restoredYear)")
-            }
-            // The mode gate KEEPS a tree-mode session on an age question
-            // (HallieModeGate.reconcileTree); say so on the answer, or
-            // conversation memory derives catalog from the route and the
-            // transcript records a mode the gate never chose (2026-09-21).
-            if context.mode == .tree, result.mode == nil {
-                result = result.inMode(.tree)
-            }
-            return result
-
+        case .cross(let payload):
+            return try await executeCrossRoute(
+                payload, request: request, context: context, dependencies: dependencies)
+        case .temporal(let rawPayload):
+            return try await executeTemporalRoute(
+                rawPayload, request: request, context: context, dependencies: dependencies)
         case .aggregate(let payload):
-            guard request.selectedIdentity == nil else {
-                return invalidContinuationResult(for: ast)
-            }
-            guard let profiles = context.profiles else {
-                return unavailableProfilesResult(route: .aggregate)
-            }
-            let query = ArchivistAggregateQuery(payload)
-            let records = context.aggregateRecords
-            let identities = aggregateIdentities(profiles: profiles)
-            // GH #182: an anchor the lane cannot resolve is not a dead end.
-            // A known person → presence search with the question's other
-            // words; a known surname → the surname tree; else the honest
-            // decline below.
-            let unresolved = payload.anchorPeople.filter {
-                if case .unknown = identities.resolve($0) { return true }
-                return false
-            }
-            switch HallieAggregateFallback.route(
-                question: request.intent.originalQuestion, anchors: payload.anchorPeople, unresolved: unresolved,
-                isKnownPerson: { isSearchablePerson($0, context: context) },
-                isKnownSurname: { !isKnownPerson($0, context: context) && isKnownPerson($0, context: context, acceptSurname: true) }) {
-            case .presence(let people, let keywords, let wantsVideo) where context.mode != .tree:
-                var result = try await executePresenceLike(
-                    .init(people: people, mediaKind: wantsVideo ? .video : nil, keywords: keywords.isEmpty ? nil : keywords),
-                    route: .presence, request: request, context: context, dependencies: dependencies)
-                result = result.prefixingBasis(
-                    "\(people.joined(separator: ", ")) is a person, not a co-occurrence anchor here, so I searched the catalog. ")
-                return result
-            case .surnameTree(let surname):
-                if let answer = HallieLineageAnswer.answer(.surnameTree(surname: surname), context: context) {
-                    return answer.prefixingBasis("\"\(surname)\" is a family name, not a person, so I read the family tree. ")
-                }
-            case .presence, .decline:
-                // Tree mode (design §3.4 C): an unresolved anchor never
-                // becomes a catalog search; the honest decline below stands.
-                break
-            }
-            let execute = dependencies.executeAggregate
-            let result = try await detached {
-                execute(query, records, identities)
-            }
-            let answer = result.factualAnswer
-            let citations = answer.rankings.flatMap(\.sampleCitations)
-                .prefix(25)
-                .map { normalize($0) }
-            return Result(
-                route: .aggregate,
-                outcome: result.conclusion == .ranked ? .answered : .declined,
-                prose: answer.prose,
-                basisLine: answer.basisLine,
-                queryDescription: result.interpretedQuery,
-                citations: citations,
-                catalogPersonName: nil)
-
+            return try await executeAggregateRoute(
+                payload, request: request, context: context, dependencies: dependencies)
         case .graph(let rawPayload):
-            if let relative = try await executeRelativeFact(
-                payload: rawPayload, request: request, context: context, dependencies: dependencies) {
-                return relative
-            }
-            // The lineage common-ancestor shape resolves both names through
-            // the lineage chain (owner pin, CyberBrain alias, tree index) —
-            // not the graph preflight — and carries which-one chips that
-            // resume it (2026-08-29).
-            if rawPayload.operation == .commonAncestor {
-                let names = rawPayload.people.map { name -> String? in
-                    HallieLineageAnswer.isFirstPerson(name) ? nil : name
-                }
-                guard names.count == 2 else {
-                    return invalidContinuationResult(for: ast)
-                }
-                return HallieLineageAnswer.commonAncestor(
-                    names[0], names[1], request: request, context: context)
-                    ?? invalidContinuationResult(for: ast)
-            }
-            // Everything that must happen BEFORE a family-tree lookup on a
-            // fresh turn — wedding-date guard, bare-pronoun guard, "my dad"
-            // rebinding, "I"/"you" binding — lives in +GraphPreflight; a
-            // continuation's intent already carries bound names.
-            if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty,
-               let handled = try await graphPreflight(
-                   rawPayload, request: request, context: context, dependencies: dependencies) {
-                return handled
-            }
-            var result = try await executeGraphCase(
-                rawPayload, request: request, context: context,
-                dependencies: dependencies)
-            // A biography of someone with a service story ends by offering
-            // it (+Service, Rick 2026-09-23): "Would you like to hear how
-            // … served his country?" — "yes" tells the brief story.
-            result = ServiceAnswer.offeringStory(
-                on: result, payload: rawPayload, request: request, context: context)
-            // The binding is evidence: say what "you" and "I" meant.
-            if let note = bindingNote(request.intent.speakerBindings) {
-                return result.prefixingBasis(note)
-            }
-            return result
-
+            return try await executeGraphRoute(
+                rawPayload, request: request, context: context, dependencies: dependencies)
         case .record(let payload):
             guard request.selectedIdentity == nil else {
                 return invalidContinuationResult(for: ast)
             }
             return executeRecord(payload, request: request, context: context)
-
         case .event(let payload):
             guard request.selectedIdentity == nil else {
                 return invalidContinuationResult(for: ast)
@@ -1367,6 +1193,268 @@ enum HallieTurnExecutor {
         }
     }
 
+    // MARK: Route lanes (split out of `execute` 2026-10-29, behaviour unchanged)
+
+    private static func executePresenceRoute(
+        _ payload: ArchivistQueryAST.Presence,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        // "photos of X" about a family-tree person: portrait /
+        // photography floor / which-one chips, never a catalog search
+        // (+PhotoAsk). Nil = not a photo ask about a tree person.
+        if let photo = photoAsk(payload, request: request, context: context,
+                                dependencies: dependencies) {
+            return photo
+        }
+        guard request.selectedIdentity == nil else {
+            return invalidContinuationResult(for: request.intent.ast)
+        }
+        return try await executePresenceLike(
+            payload, route: .presence, request: request,
+            context: context, dependencies: dependencies)
+    }
+
+    private static func executeCrossRoute(
+        _ payload: ArchivistQueryAST.Cross,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        guard request.selectedIdentity == nil else {
+            return invalidContinuationResult(for: request.intent.ast)
+        }
+        // Spoken terms and visible/topic terms are both keyword
+        // constraints on the presence executor: every keyword must be
+        // proven by SOME field (transcript, caption, filename, …) and
+        // the basis names which. Nothing is coerced or widened.
+        let merged = ArchivistQueryAST.Presence(
+            people: payload.people,
+            yearStart: payload.yearStart,
+            yearEnd: payload.yearEnd,
+            mediaKind: payload.mediaKind,
+            keywords: (payload.keywords ?? []) + (payload.transcript ?? []))
+        return try await executePresenceLike(
+            merged, route: .cross, request: request,
+            context: context, dependencies: dependencies)
+    }
+
+    private static func executeTemporalRoute(
+        _ rawPayload: ArchivistQueryAST.Temporal,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        // A year the question never said is not a reference (live
+        // 2026-09-21: "how old was dad breen when he passed?" arrived
+        // as explicitYear(1994)). Dropped before anything counts.
+        // Only a translator-fresh turn can carry an invented year: a
+        // refined follow-up ("what about Rick?" after "how old was Donna
+        // in 1994") inherits its year from the previous turn on purpose.
+        // With no question text at all (the AST-only entry point, the
+        // shell's fixture translator) there is nothing to judge against:
+        // the year stands.
+        let question = request.intent.originalQuestion
+        let judgesTheTranslator = !isRefinement(request.intent)
+            && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // "Christmas videos from 2006" read as an age question (live
+        // 2026-09-24): a media ask with no age word is searched.
+        if judgesTheTranslator, request.selectedIdentity == nil,
+           let presence = mediaAskMisreadAsAge(question, subject: rawPayload.subject) {
+            return try await executePresenceLike(
+                presence, route: .presence, request: request,
+                context: context, dependencies: dependencies)
+            .prefixingBasis("the question has a media word and no age word, so it is not an age question; I searched the catalog")
+        }
+        let repaired = judgesTheTranslator
+            ? repairTranslatorYear(rawPayload, question: question)
+            : (payload: rawPayload, invented: nil, restored: nil)
+        var result = try await executeTemporalCase(
+            repaired.payload, request: request, context: context, dependencies: dependencies)
+        if let inventedYear = repaired.invented {
+            result = result.prefixingBasis(
+                "the translator supplied year \(inventedYear), which the question never mentions, so it was ignored")
+        }
+        if let restoredYear = repaired.restored {
+            result = result.prefixingBasis(
+                "the question says \(restoredYear); the translator left it out, so I counted to \(restoredYear)")
+        }
+        // The mode gate KEEPS a tree-mode session on an age question
+        // (HallieModeGate.reconcileTree); say so on the answer, or
+        // conversation memory derives catalog from the route and the
+        // transcript records a mode the gate never chose (2026-09-21).
+        if context.mode == .tree, result.mode == nil {
+            result = result.inMode(.tree)
+        }
+        return result
+    }
+
+    /// A refined follow-up inherits its AST (and its year) from the
+    /// previous turn on purpose; only a fresh translation is judged.
+    private static func isRefinement(_ intent: Intent) -> Bool {
+        intent.refinementChain != nil
+            || intent.refinementNote != nil
+            || intent.refinementChange != nil
+    }
+
+    /// The translator's year checked against the question text. An
+    /// explicit year the question never mentions is dropped (`invented`);
+    /// failing that, a year the question states but the translator left
+    /// as `currentSelection` is put back (`restored`, replay 2026-09-25:
+    /// "how old was dad in 1985" arrived as currentSelection and Hallie
+    /// asked for a dated video). At most one of the two is set.
+    private static func repairTranslatorYear(
+        _ raw: ArchivistQueryAST.Temporal,
+        question: String
+    ) -> (payload: ArchivistQueryAST.Temporal, invented: Int?, restored: Int?) {
+        var payload = raw
+        switch raw.reference {
+        case .explicitYear(let year)
+            where !ArchivistTemporalExecutor.questionSuppliesYear(year, in: question):
+            payload.reference = .currentSelection
+            return (payload, year, nil)
+        case .currentSelection:
+            guard let year = ArchivistTemporalExecutor.statedYear(in: question) else {
+                return (payload, nil, nil)
+            }
+            payload.reference = .explicitYear(year)
+            return (payload, nil, year)
+        default:
+            return (payload, nil, nil)
+        }
+    }
+
+    private static func executeAggregateRoute(
+        _ payload: ArchivistQueryAST.Aggregate,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        guard request.selectedIdentity == nil else {
+            return invalidContinuationResult(for: request.intent.ast)
+        }
+        guard let profiles = context.profiles else {
+            return unavailableProfilesResult(route: .aggregate)
+        }
+        let query = ArchivistAggregateQuery(payload)
+        let records = context.aggregateRecords
+        let identities = aggregateIdentities(profiles: profiles)
+        if let fallback = try await aggregateAnchorFallback(
+            payload, identities: identities, request: request,
+            context: context, dependencies: dependencies) {
+            return fallback
+        }
+        let execute = dependencies.executeAggregate
+        let result = try await detached {
+            execute(query, records, identities)
+        }
+        let answer = result.factualAnswer
+        let citations = answer.rankings.flatMap(\.sampleCitations)
+            .prefix(25)
+            .map { normalize($0) }
+        return Result(
+            route: .aggregate,
+            outcome: result.conclusion == .ranked ? .answered : .declined,
+            prose: answer.prose,
+            basisLine: answer.basisLine,
+            queryDescription: result.interpretedQuery,
+            citations: citations,
+            catalogPersonName: nil)
+    }
+
+    /// GH #182: an anchor the lane cannot resolve is not a dead end.
+    /// A known person → presence search with the question's other
+    /// words; a known surname → the surname tree; else nil, and the
+    /// aggregate lane's honest decline stands.
+    private static func aggregateAnchorFallback(
+        _ payload: ArchivistQueryAST.Aggregate,
+        identities: ArchivistAggregateIdentityCatalog,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result? {
+        let unresolved = payload.anchorPeople.filter {
+            if case .unknown = identities.resolve($0) { return true }
+            return false
+        }
+        switch HallieAggregateFallback.route(
+            question: request.intent.originalQuestion, anchors: payload.anchorPeople, unresolved: unresolved,
+            isKnownPerson: { isSearchablePerson($0, context: context) },
+            isKnownSurname: { !isKnownPerson($0, context: context) && isKnownPerson($0, context: context, acceptSurname: true) }) {
+        case .presence(let people, let keywords, let wantsVideo) where context.mode != .tree:
+            var result = try await executePresenceLike(
+                .init(people: people, mediaKind: wantsVideo ? .video : nil, keywords: keywords.isEmpty ? nil : keywords),
+                route: .presence, request: request, context: context, dependencies: dependencies)
+            result = result.prefixingBasis(
+                "\(people.joined(separator: ", ")) is a person, not a co-occurrence anchor here, so I searched the catalog. ")
+            return result
+        case .surnameTree(let surname):
+            return HallieLineageAnswer.answer(.surnameTree(surname: surname), context: context)?
+                .prefixingBasis("\"\(surname)\" is a family name, not a person, so I read the family tree. ")
+        case .presence, .decline:
+            // Tree mode (design §3.4 C): an unresolved anchor never
+            // becomes a catalog search; the honest decline stands.
+            return nil
+        }
+    }
+
+    private static func executeGraphRoute(
+        _ rawPayload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        if let relative = try await executeRelativeFact(
+            payload: rawPayload, request: request, context: context, dependencies: dependencies) {
+            return relative
+        }
+        if rawPayload.operation == .commonAncestor {
+            return commonAncestorRoute(rawPayload, request: request, context: context)
+        }
+        // Everything that must happen BEFORE a family-tree lookup on a
+        // fresh turn — wedding-date guard, bare-pronoun guard, "my dad"
+        // rebinding, "I"/"you" binding — lives in +GraphPreflight; a
+        // continuation's intent already carries bound names.
+        if request.selectedIdentity == nil, request.intent.speakerBindings.isEmpty,
+           let handled = try await graphPreflight(
+               rawPayload, request: request, context: context, dependencies: dependencies) {
+            return handled
+        }
+        var result = try await executeGraphCase(
+            rawPayload, request: request, context: context,
+            dependencies: dependencies)
+        // A biography of someone with a service story ends by offering
+        // it (+Service, Rick 2026-09-23): "Would you like to hear how
+        // … served his country?" — "yes" tells the brief story.
+        result = ServiceAnswer.offeringStory(
+            on: result, payload: rawPayload, request: request, context: context)
+        // The binding is evidence: say what "you" and "I" meant.
+        if let note = bindingNote(request.intent.speakerBindings) {
+            return result.prefixingBasis(note)
+        }
+        return result
+    }
+
+    /// The lineage common-ancestor shape resolves both names through
+    /// the lineage chain (owner pin, CyberBrain alias, tree index) —
+    /// not the graph preflight — and carries which-one chips that
+    /// resume it (2026-08-29).
+    private static func commonAncestorRoute(
+        _ rawPayload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context
+    ) -> Result {
+        let names = rawPayload.people.map { name -> String? in
+            HallieLineageAnswer.isFirstPerson(name) ? nil : name
+        }
+        guard names.count == 2 else {
+            return invalidContinuationResult(for: request.intent.ast)
+        }
+        return HallieLineageAnswer.commonAncestor(
+            names[0], names[1], request: request, context: context)
+            ?? invalidContinuationResult(for: request.intent.ast)
+    }
 
     /// The temporal (age) route proper, after the invented-year guard.
     private static func executeTemporalCase(

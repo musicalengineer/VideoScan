@@ -210,7 +210,7 @@ struct HallieShellCLITests {
         return value
     }
 
-    private func citedAnswer(path: String) -> HallieTurnExecutor.Result {
+    func citedAnswer(path: String) -> HallieTurnExecutor.Result {
         HallieTurnExecutor.Result(
             route: .presence,
             outcome: .answered,
@@ -276,7 +276,7 @@ struct HallieShellCLITests {
         try SourceTree.appSource(named: filename)
     }
 
-    private var onePixelPNG: Data {
+    var onePixelPNG: Data {
         // Real decoded 1x1 PNG, not merely a filename-shaped byte blob.
         Data(base64Encoded:
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!

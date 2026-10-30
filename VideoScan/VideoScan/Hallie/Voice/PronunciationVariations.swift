@@ -242,37 +242,60 @@ enum PronunciationVariations {
     /// best first. A closed syllable ("lat") leans short; an open one
     /// ("la", "e") leans long (research doc §2.1).
     static func stressedVowels(_ spelling: String, open: Bool) -> [String] {
-        switch spelling {
-        case "a": return open ? ["ɑ", "A", "æ"] : ["æ", "ɑ", "A"]
-        case "e": return open ? ["i", "ɛ", "A"] : ["ɛ", "i", "A"]
-        case "i": return open ? ["I", "i", "ɪ"] : ["ɪ", "i", "I"]
-        case "o": return open ? ["O", "ɑ", "ʌ"] : ["ɑ", "O", "ʌ"]
-        case "u": return open ? ["u", "ʌ", "ju"] : ["ʌ", "u", "ʊ"]
-        case "y": return open ? ["I", "i"] : ["ɪ", "I"]
-        case "ee", "ea": return ["i", "A", "ɛ"]
-        case "ai", "ay": return ["A", "I", "æ"]
-        case "oo": return ["u", "ʊ"]
-        case "ou", "ow": return ["W", "O", "u"]
-        case "ie": return ["i", "I", "A"]
-        case "ei", "ey": return ["A", "i", "I"]
-        case "au", "aw": return ["ɔ", "ɑ"]
-        case "oi", "oy": return ["Y"]
-        case "eu", "ew", "ue": return ["u", "ju"]
-        case "oa", "oe": return ["O"]
-        case "ia": return ["iə", "I", "A"]
-        case "io": return ["iO", "iə"]
-        case "ar": return ["ɑɹ", "ɛɹ"]
-        case "er", "ir", "ur", "yr": return ["ɜɹ", "ɛɹ"]
-        case "or": return ["ɔɹ"]
-        case "ear", "eer": return ["ɪɹ", "ɛɹ"]
-        case "air": return ["ɛɹ"]
-        case "oor", "our": return ["ɔɹ", "W"]
-        default:
-            // An unlisted digraph reads by its first letter.
-            if let first = spelling.first { return stressedVowels(String(first), open: open) }
-            return []
+        if let readings = stressedReadings[spelling] {
+            return open ? readings.open : readings.closed
         }
+        // An unlisted digraph reads by its first letter. (Every nucleus
+        // starts with a vowel letter, and each single vowel letter has a
+        // row, so this recurses at most once.)
+        if let first = spelling.first { return stressedVowels(String(first), open: open) }
+        return []
     }
+
+    /// Stressed readings by vowel spelling: (open syllable, closed
+    /// syllable), best first. Single letters differ by syllable shape;
+    /// digraphs and r-coloured vowels read the same either way.
+    /// (Was a 38-row `switch`; a table since 2026-10-29, same rows.)
+    private static let stressedReadings: [String: (open: [String], closed: [String])] = [
+        "a": (["ɑ", "A", "æ"], ["æ", "ɑ", "A"]),
+        "e": (["i", "ɛ", "A"], ["ɛ", "i", "A"]),
+        "i": (["I", "i", "ɪ"], ["ɪ", "i", "I"]),
+        "o": (["O", "ɑ", "ʌ"], ["ɑ", "O", "ʌ"]),
+        "u": (["u", "ʌ", "ju"], ["ʌ", "u", "ʊ"]),
+        "y": (["I", "i"], ["ɪ", "I"]),
+        "ee": (["i", "A", "ɛ"], ["i", "A", "ɛ"]),
+        "ea": (["i", "A", "ɛ"], ["i", "A", "ɛ"]),
+        "ai": (["A", "I", "æ"], ["A", "I", "æ"]),
+        "ay": (["A", "I", "æ"], ["A", "I", "æ"]),
+        "oo": (["u", "ʊ"], ["u", "ʊ"]),
+        "ou": (["W", "O", "u"], ["W", "O", "u"]),
+        "ow": (["W", "O", "u"], ["W", "O", "u"]),
+        "ie": (["i", "I", "A"], ["i", "I", "A"]),
+        "ei": (["A", "i", "I"], ["A", "i", "I"]),
+        "ey": (["A", "i", "I"], ["A", "i", "I"]),
+        "au": (["ɔ", "ɑ"], ["ɔ", "ɑ"]),
+        "aw": (["ɔ", "ɑ"], ["ɔ", "ɑ"]),
+        "oi": (["Y"], ["Y"]),
+        "oy": (["Y"], ["Y"]),
+        "eu": (["u", "ju"], ["u", "ju"]),
+        "ew": (["u", "ju"], ["u", "ju"]),
+        "ue": (["u", "ju"], ["u", "ju"]),
+        "oa": (["O"], ["O"]),
+        "oe": (["O"], ["O"]),
+        "ia": (["iə", "I", "A"], ["iə", "I", "A"]),
+        "io": (["iO", "iə"], ["iO", "iə"]),
+        "ar": (["ɑɹ", "ɛɹ"], ["ɑɹ", "ɛɹ"]),
+        "er": (["ɜɹ", "ɛɹ"], ["ɜɹ", "ɛɹ"]),
+        "ir": (["ɜɹ", "ɛɹ"], ["ɜɹ", "ɛɹ"]),
+        "ur": (["ɜɹ", "ɛɹ"], ["ɜɹ", "ɛɹ"]),
+        "yr": (["ɜɹ", "ɛɹ"], ["ɜɹ", "ɛɹ"]),
+        "or": (["ɔɹ"], ["ɔɹ"]),
+        "ear": (["ɪɹ", "ɛɹ"], ["ɪɹ", "ɛɹ"]),
+        "eer": (["ɪɹ", "ɛɹ"], ["ɪɹ", "ɛɹ"]),
+        "air": (["ɛɹ"], ["ɛɹ"]),
+        "oor": (["ɔɹ", "W"], ["ɔɹ", "W"]),
+        "our": (["ɔɹ", "W"], ["ɔɹ", "W"]),
+    ]
 
     /// The reading of a vowel spelling without stress.
     static func unstressedVowel(_ spelling: String, isFinal: Bool) -> String {

@@ -119,6 +119,27 @@ enum ArchivistConversationCommand: Equatable, Sendable {
         // "?" / "??" alone is a request for help.
         if lowered.allSatisfy({ "?!.".contains($0) }) { return .help() }
 
+        let (words, addressedOnly) = contentWords(lowered)
+        guard !words.isEmpty else {
+            // "hey hallie" / "hallie?" is a greeting; "ok" / "please" alone is
+            // nothing (the follow-up resolver says so honestly).
+            let greeting = addressedOnly
+                && (lowered.contains("hallie") || lowered.hasPrefix("hey"))
+            return greeting ? .smalltalk(.greeting) : nil
+        }
+        let phrase = words.joined(separator: " ")
+        // Three stages, tried in this order (split out 2026-10-29,
+        // behaviour unchanged). C++ analogy: `a ?? b` ≈ `a ? *a : b()` —
+        // the right side runs only when the left found nothing.
+        return exactCommand(phrase: phrase, words: words)
+            ?? smalltalkByShape(words: words, lowered: lowered, text: text).map { .smalltalk($0) }
+            ?? howToHelp(phrase: phrase, words: words)
+    }
+
+    /// The line with trailing punctuation split off, Hallie's name and
+    /// "please" removed, and leading address words ("hey", "ok") dropped;
+    /// `addressedOnly` = every original word was an address word.
+    private static func contentWords(_ lowered: String) -> (words: [String], addressedOnly: Bool) {
         // Strip trailing punctuation, then a leading/trailing "hallie" and
         // politeness so "thanks hallie!" and "hallie, help" both classify.
         var words = lowered
@@ -133,71 +154,69 @@ enum ArchivistConversationCommand: Equatable, Sendable {
               leadingAddressWords.contains(first) {
             words.removeFirst()
         }
-        guard !words.isEmpty else {
-            // "hey hallie" / "hallie?" is a greeting; "ok" / "please" alone is
-            // nothing (the follow-up resolver says so honestly).
-            let greeting = addressedOnly
-                && (lowered.contains("hallie") || lowered.hasPrefix("hey"))
-            return greeting ? .smalltalk(.greeting) : nil
-        }
-        let phrase = words.joined(separator: " ")
+        return (words, addressedOnly)
+    }
 
+    /// Whole-phrase tables: help, reset, a help topic, an exact small-talk
+    /// phrase.
+    private static func exactCommand(phrase: String, words: [String]) -> ArchivistConversationCommand? {
         if helpPhrases.contains(phrase) || helpPhrases.contains(unapostrophized(phrase)) { return .help() }
         if resetPhrases.contains(phrase) || resetPhrases.contains(unapostrophized(phrase)) { return .reset }
         if let scoped = detectHelpTopic(words: words) { return scoped }
-        if let smalltalk = smalltalkPhrase(phrase) { return .smalltalk(smalltalk) }
+        return smalltalkPhrase(phrase).map { .smalltalk($0) }
+    }
 
+    /// Small talk no phrase table can list: a salutation plus a small-talk
+    /// phrase, a small-talk clause addressed to Hallie, a social line by
+    /// shape, a weather aside.
+    private static func smalltalkByShape(words: [String], lowered: String, text: String) -> Smalltalk? {
         // Family members naturally combine a salutation and a social
         // question: "Hi Hallie, how are you today?" Hallie's name has
         // already been stripped above, leaving "hi how are you today".
         // Peel only a known leading salutation, then require that the rest
         // is itself an exact small-talk phrase. This keeps "hello Donna"
         // and actual catalog questions on the ordinary query path.
-        if let first = words.first, leadingSalutations.contains(first) {
-            let remainder = words.dropFirst().joined(separator: " ")
-            if let smalltalk = smalltalkPhrase(remainder) {
-                return .smalltalk(smalltalk)
-            }
+        if let first = words.first, leadingSalutations.contains(first),
+           let smalltalk = smalltalkPhrase(words.dropFirst().joined(separator: " ")) {
+            return smalltalk
         }
-
-        // Live 8/25: "How hallie, how are you?" — a mistyped salutation
-        // ("How" for "Hi") addressed to Hallie BY NAME, followed by an exact
-        // small-talk clause — answered as her 1876 namesake's biography.
-        // When the person names Hallie and one comma-separated clause is
-        // exactly a small-talk phrase, the leftover may be at most one
-        // stray word: that is a greeting, not a family question. "Donna,
-        // how are you?" (no Hallie) and "Hallie, how old is Donna?" (not a
-        // small-talk clause) are untouched.
-        if lowered.contains("hallie") {
-            let clauses = lowered
-                .split(whereSeparator: { ",;.!?".contains($0) })
-                .map { clause -> [String] in
-                    clause.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
-                        .map(String.init)
-                        .filter { $0 != "hallie" && $0 != "please" }
-                }
-            let hits = clauses.compactMap { smalltalkPhrase($0.joined(separator: " ")) }
-            let leftovers = clauses.filter { smalltalkPhrase($0.joined(separator: " ")) == nil }
-            if let smalltalk = hits.first,
-               leftovers.allSatisfy({ $0.count <= 1 }) {
-                return .smalltalk(smalltalk)
-            }
-        }
-
+        if let smalltalk = addressedSmalltalkClause(lowered) { return smalltalk }
         // Thanks / apology / hold-on / goodbye in their everyday shapes,
         // which no phrase table can enumerate.
-        if let social = detectSocialLine(words: words, raw: lowered) {
-            return .smalltalk(social)
-        }
+        if let social = detectSocialLine(words: words, raw: lowered) { return social }
         // A weather aside ("It's pouring rain here in the Berkshires
         // today.") — a statement built from weather words and everyday
         // glue, with at most a place name after a preposition. Bounded by
         // a closed vocabulary so "it rained on our wedding day" (a family
         // fact) and "did it snow in 1994" (a question) stay on the pipeline.
-        if isWeatherAside(text) {
-            return .smalltalk(.weather)
-        }
+        return isWeatherAside(text) ? .weather : nil
+    }
 
+    /// Live 8/25: "How hallie, how are you?" — a mistyped salutation
+    /// ("How" for "Hi") addressed to Hallie BY NAME, followed by an exact
+    /// small-talk clause — answered as her 1876 namesake's biography.
+    /// When the person names Hallie and one comma-separated clause is
+    /// exactly a small-talk phrase, the leftover may be at most one
+    /// stray word: that is a greeting, not a family question. "Donna,
+    /// how are you?" (no Hallie) and "Hallie, how old is Donna?" (not a
+    /// small-talk clause) are untouched.
+    private static func addressedSmalltalkClause(_ lowered: String) -> Smalltalk? {
+        guard lowered.contains("hallie") else { return nil }
+        let clauses = lowered
+            .split(whereSeparator: { ",;.!?".contains($0) })
+            .map { clause -> [String] in
+                clause.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" })
+                    .map(String.init)
+                    .filter { $0 != "hallie" && $0 != "please" }
+            }
+        let hits = clauses.compactMap { smalltalkPhrase($0.joined(separator: " ")) }
+        let leftovers = clauses.filter { smalltalkPhrase($0.joined(separator: " ")) == nil }
+        guard let smalltalk = hits.first, leftovers.allSatisfy({ $0.count <= 1 }) else { return nil }
+        return smalltalk
+    }
+
+    /// How-to questions about Hallie herself, and "what can you do" shapes.
+    private static func howToHelp(phrase: String, words: [String]) -> ArchivistConversationCommand? {
         // "how do i …" / "how can we …" is a how-to question about Hallie
         // herself; the help card answers it with worked examples. Capability
         // questions ("how do i change donna's bio") are classified BEFORE

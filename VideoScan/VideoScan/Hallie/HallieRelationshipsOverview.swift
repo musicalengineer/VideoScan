@@ -142,137 +142,187 @@ enum HallieRelationshipsOverview {
 
     // MARK: - Answer
 
+    /// Guards → the subject → one kinship answer per other profile →
+    /// prose, basis, chips. (Split into those steps 2026-10-29, behaviour
+    /// unchanged.)
     static func answer(_ ask: Ask, context: Context) -> Result {
         let description = "shape=relationships-overview subject=\(describe(ask.subject))"
-        func plain(_ prose: String, basis: String, outcome: HallieTurnExecutor.Outcome,
-                   offers: [HallieTurnExecutor.OfferedAction] = []) -> Result {
-            Result(route: .capability, outcome: outcome, prose: prose, basisLine: basis,
-                   queryDescription: description, citations: [], catalogPersonName: nil,
-                   offeredActions: offers)
-        }
         guard let profiles = context.profiles else {
             return plain("I couldn't read the People tab just now, so I can't work out who is related to whom.",
-                         basis: "Basis: People profiles were unreadable; no model call.", outcome: .declined)
+                         basis: "Basis: People profiles were unreadable; no model call.", outcome: .declined,
+                         description: description)
         }
         let people = PeopleTab.merged(profiles)
         guard !people.isEmpty else {
             return plain("The People tab is empty so far — add people there, record their relationships, and I'll lay them out.",
                          basis: "Basis: People profiles (0); no model call.", outcome: .declined,
-                         offers: [.openPeopleTab])
+                         description: description, offers: [.openPeopleTab])
         }
-
-        // The subject: the owner's profile, or the named one.
         let subject: ProfileSnapshot
         let isOwner: Bool
-        switch ask.subject {
+        switch resolveSubject(ask.subject, people: people, context: context, description: description) {
+        case .subject(let profile, let owner):
+            subject = profile
+            isOwner = owner
+        case .reply(let early):
+            return early
+        }
+
+        let others = people.filter { $0.stableID != subject.stableID }
+        let subjectName = subject.canonicalName
+        guard !others.isEmpty else {
+            // Named locals, not nested interpolation: lizard (the complexity
+            // counter) misreads a quote inside `\( … ? "You're" : … )` and
+            // then loses the rest of the function.
+            let who = isOwner ? "You're" : "\(subjectName) is"
+            let them = isOwner ? "you" : "them"
+            return plain("\(who) the only person in the People tab so far, so there's nobody to relate \(them) to yet.",
+                         basis: "Basis: People profiles (1); no model call.", outcome: .declined,
+                         description: description, offers: [.openPeopleTab])
+        }
+
+        let inference = FamilyKinshipInference(
+            snapshots: people.map(graphSnapshot), graph: context.graph)
+        guard let subjectNode = inference.overlay.node(profileStableID: subject.stableID) else {
+            return plain("I couldn't place \(subjectName) in the People-tab relationships just now.",
+                         basis: "Basis: People profiles (\(people.count)); the kinship overlay has no vertex for “\(subjectName)”; no model call.",
+                         outcome: .declined, description: description)
+        }
+        let found = relations(from: subjectNode, to: others, inference: inference)
+        let lines = groupedLines(found.entries, possessive: isOwner ? "your" : KinshipDisplay.possessive(subjectName))
+        return Result(route: .capability, outcome: .answered,
+                      prose: overviewProse(lines: lines, found: found, others: others.count,
+                                           subjectName: subjectName, isOwner: isOwner),
+                      basisLine: overviewBasis(found: found, people: people.count, subjectName: subjectName,
+                                               context: context, overlay: inference.overlay),
+                      queryDescription: description,
+                      citations: [], catalogPersonName: nil,
+                      offeredActions: overviewOffers(lines: lines, unrecorded: found.unrecorded))
+    }
+
+    /// A declined / capability answer with no citations.
+    private static func plain(_ prose: String, basis: String, outcome: HallieTurnExecutor.Outcome,
+                              description: String,
+                              offers: [HallieTurnExecutor.OfferedAction] = []) -> Result {
+        Result(route: .capability, outcome: outcome, prose: prose, basisLine: basis,
+               queryDescription: description, citations: [], catalogPersonName: nil,
+               offeredActions: offers)
+    }
+
+    /// The subject's profile, or the answer that ends the turn first
+    /// (no owner set, nobody / two profiles claim the name).
+    private enum SubjectPick {
+        case subject(ProfileSnapshot, isOwner: Bool)
+        case reply(Result)
+    }
+
+    private static func resolveSubject(_ asked: Ask.Subject, people: [ProfileSnapshot],
+                                       context: Context, description: String) -> SubjectPick {
+        switch asked {
         case .owner:
             guard let ownerName = context.speakers.ownerName else {
-                return plain("I don't know who “I” is yet — tell me your name (right-click my portrait → “Who is talking to her…”) and ask again.",
-                             basis: "Basis: no owner is set, so “me” could not be bound; nothing was looked up.",
-                             outcome: .declined)
+                return .reply(plain("I don't know who “I” is yet — tell me your name (right-click my portrait → “Who is talking to her…”) and ask again.",
+                                    basis: "Basis: no owner is set, so “me” could not be bound; nothing was looked up.",
+                                    outcome: .declined, description: description))
             }
             switch ownerClaim(ownerName, in: people) {
             case .one(let profile):
-                subject = profile
-                isOwner = true
+                return .subject(profile, isOwner: true)
             case .ambiguous(let candidates):
-                return whichOne(ownerName, candidates: candidates, description: description)
+                return .reply(whichOne(ownerName, candidates: candidates, description: description))
             case .none:
-                return plain("I know you're \(ownerName), but there's no People-tab profile by that name — add one and record your relationships there, and I'll lay them out.",
-                             basis: "Basis: owner “\(ownerName)”; People profiles (\(people.count)) — none claims that name; no model call.",
-                             outcome: .declined, offers: [.openPeopleTab])
+                return .reply(plain("I know you're \(ownerName), but there's no People-tab profile by that name — add one and record your relationships there, and I'll lay them out.",
+                                    basis: "Basis: owner “\(ownerName)”; People profiles (\(people.count)) — none claims that name; no model call.",
+                                    outcome: .declined, description: description, offers: [.openPeopleTab]))
             }
         case .named(let typed):
             // The owner's own name, typed by the owner, is still "you".
             let ownerTyped = HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName)
             switch PeopleTab.claim(typed, in: people) {
             case .one(let profile):
-                subject = profile
-                isOwner = ownerTyped
+                return .subject(profile, isOwner: ownerTyped)
             case .ambiguous(let candidates):
-                return whichOne(typed, candidates: candidates, description: description)
+                return .reply(whichOne(typed, candidates: candidates, description: description))
             case .none:
                 if ownerTyped, let ownerName = context.speakers.ownerName,
                    case .one(let profile) = ownerClaim(ownerName, in: people) {
-                    subject = profile
-                    isOwner = true
-                } else {
-                    return plain("I don't have a People-tab profile for “\(HallieWhichOne.display(typed))”, so I can't lay out their relationships. Add one there and I'll know the name.",
-                                 basis: "Basis: People profiles (\(people.count)) — none claims “\(typed)”; no model call.",
-                                 outcome: .declined, offers: [.openPeopleTab])
+                    return .subject(profile, isOwner: true)
                 }
+                return .reply(plain("I don't have a People-tab profile for “\(HallieWhichOne.display(typed))”, so I can't lay out their relationships. Add one there and I'll know the name.",
+                                    basis: "Basis: People profiles (\(people.count)) — none claims “\(typed)”; no model call.",
+                                    outcome: .declined, description: description, offers: [.openPeopleTab]))
             }
         }
+    }
 
-        let others = people.filter { $0.stableID != subject.stableID }
-        let subjectName = subject.canonicalName
-        let possessive = isOwner ? "your" : KinshipDisplay.possessive(subjectName)
-        guard !others.isEmpty else {
-            return plain("\(isOwner ? "You're" : "\(subjectName) is") the only person in the People tab so far, so there's nobody to relate \(isOwner ? "you" : "them") to yet.",
-                         basis: "Basis: People profiles (1); no model call.", outcome: .declined,
-                         offers: [.openPeopleTab])
-        }
-
-        let inference = FamilyKinshipInference(
-            snapshots: people.map(graphSnapshot), graph: context.graph)
-        let overlay = inference.overlay
-        guard let subjectNode = overlay.node(profileStableID: subject.stableID) else {
-            return plain("I couldn't place \(subjectName) in the People-tab relationships just now.",
-                         basis: "Basis: People profiles (\(people.count)); the kinship overlay has no vertex for “\(subjectName)”; no model call.",
-                         outcome: .declined)
-        }
-
+    /// One kinship answer per other profile: the related ones as entries,
+    /// the rest by name, and every overlay vertex the answer touched (for
+    /// the failed-closed sibling warning).
+    private struct Found {
         var entries: [Entry] = []
         var unrecorded: [String] = []
-        var touched: [Node] = [subjectNode]
+        var touched: [Node]
+    }
+
+    private static func relations(from subjectNode: Node, to others: [ProfileSnapshot],
+                                  inference: FamilyKinshipInference) -> Found {
+        let overlay = inference.overlay
+        var found = Found(touched: [subjectNode])
         for other in others {
             guard let node = overlay.node(profileStableID: other.stableID) else {
-                unrecorded.append(other.canonicalName)
+                found.unrecorded.append(other.canonicalName)
                 continue
             }
-            touched.append(node)
+            found.touched.append(node)
             guard let derived = inference.relation(from: subjectNode, to: node) else {
-                unrecorded.append(other.canonicalName)
+                found.unrecorded.append(other.canonicalName)
                 continue
             }
-            entries.append(Entry(name: other.canonicalName, sex: other.sex, derived: derived))
+            found.entries.append(Entry(name: other.canonicalName, sex: other.sex, derived: derived))
         }
+        return found
+    }
 
-        let lines = groupedLines(entries, possessive: possessive)
+    private static func overviewProse(lines: [Line], found: Found, others: Int,
+                                      subjectName: String, isOwner: Bool) -> String {
         var pieces = lines.map { "\($0.names.joined(separator: ", ")) — \($0.text)" }
-        if !unrecorded.isEmpty {
-            pieces.append("\(unrecorded.joined(separator: ", ")) — no relationship recorded yet")
+        if !found.unrecorded.isEmpty {
+            pieces.append("\(found.unrecorded.joined(separator: ", ")) — no relationship recorded yet")
         }
-        let related = entries.count
-        let derivedCount = entries.filter { $0.derived.route.count > 1 && !$0.derived.usesDerivation }.count
-
-        var sentences: [String] = []
         let who = isOwner ? "You're" : "\(subjectName) is"
-        sentences.append("\(who) related to \(related) of the \(others.count) other \(others.count == 1 ? "person" : "people") in the People tab.")
-        sentences.append("Nearest first: " + pieces.joined(separator: " · ") + ".")
-        sentences.append(isOwner
-            ? "That's from your entries in the People tab; derived where marked."
-            : "That's from the entries in the People tab; derived where marked.")
+        return [
+            "\(who) related to \(found.entries.count) of the \(others) other \(others == 1 ? "person" : "people") in the People tab.",
+            "Nearest first: " + pieces.joined(separator: " · ") + ".",
+            isOwner
+                ? "That's from your entries in the People tab; derived where marked."
+                : "That's from the entries in the People tab; derived where marked.",
+        ].joined(separator: " ")
+    }
 
-        var basis = "Basis: People-tab relationships (\(people.count) profiles; \(related) linked to \(subjectName), \(unrecorded.count) unrecorded"
+    private static func overviewBasis(found: Found, people: Int, subjectName: String, context: Context,
+                                      overlay: FamilyKinshipOverlay) -> String {
+        let derivedCount = found.entries.filter { $0.derived.route.count > 1 && !$0.derived.usesDerivation }.count
+        var basis = "Basis: People-tab relationships (\(people) profiles; \(found.entries.count) linked to \(subjectName), \(found.unrecorded.count) unrecorded"
         if derivedCount > 0 { basis += "; \(derivedCount) derived" }
-        basis += derivationRuleCounts(entries)
+        basis += derivationRuleCounts(found.entries)
         basis += ")"
         basis += context.graph == nil ? "; no family tree installed (local-only)" : "; family tree installed"
         basis += "; no model call."
         // A sibling set of the subject's (or of anyone listed) that failed
         // closed: the SAME warning the card badge and the kinship route show.
-        basis += ArchivistGraphExecutor.overlayWarningClause(overlay.derivationWarnings(touching: touched))
+        basis += ArchivistGraphExecutor.overlayWarningClause(overlay.derivationWarnings(touching: found.touched))
+        return basis
+    }
 
+    /// Open the People tab, then "tell me about <name>" chips, nearest
+    /// first like the prose, capped.
+    private static func overviewOffers(lines: [Line], unrecorded: [String]) -> [HallieTurnExecutor.OfferedAction] {
         var offers: [HallieTurnExecutor.OfferedAction] = [.openPeopleTab]
-        let chipNames = lines.flatMap(\.names) + unrecorded   // nearest first, like the prose
+        let chipNames = lines.flatMap(\.names) + unrecorded
         for name in chipNames.prefix(HallieWhichOne.cap) {
             offers.append(.ask(question: "who is \(name)?", label: "tell me about \(name)"))
         }
-        return Result(route: .capability, outcome: .answered,
-                      prose: sentences.joined(separator: " "),
-                      basisLine: basis, queryDescription: description,
-                      citations: [], catalogPersonName: nil, offeredActions: offers)
+        return offers
     }
 
     /// "; 2 derived: full siblings share parents" — answers resting on a

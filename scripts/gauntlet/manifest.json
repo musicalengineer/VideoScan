@@ -6911,6 +6911,7 @@
         "capabilityQuestionsWinOverHowToHelp",
         "compoundGreetingNeverReachesTheEvidencePipeline",
         "conversationalAcknowledgementsMatchWhatThePersonSaid",
+        "detectBranchWalkInOrder",
         "everydaySocialLinesGetAFriendlyReply",
         "helpAnswersLocallyWithOfferChipsAndRoute",
         "helpCardListsFamilyLanguageExamplesByKind",
@@ -16484,10 +16485,13 @@
         "HallieDeepAncestorTests"
       ],
       "tests": [
+        "basisNoteFollowsTheWalkDescription",
         "countingGreats",
         "depthFiveListsSeamusWithThePath",
         "depthThreeFourFiveAndOrdinalFormsDetect",
-        "missingHopAndMissingSexAreSaidExactly"
+        "missingHopAndMissingSexAreSaidExactly",
+        "noParentsAtAllIsSaidWithTheSideWord",
+        "walkBudgetIsSaidOnAPartialAnswerAndDeclinesShortOfTheGeneration"
       ]
     },
     {
@@ -17777,6 +17781,29 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieTurnExecutorDispatchCharacterizationTests"
+      ],
+      "tests": [
+        "aggregateWithoutProfilesDeclinesHonestly",
+        "astOnlyEntryHasNoQuestionToJudgeAgainst",
+        "commonAncestorNeedsExactlyTwoNames",
+        "crossMergesSpokenTermsIntoTheKeywordSearch",
+        "inventedYearIsDroppedAndSaidFirst",
+        "inventedYearIsNotCountedTo",
+        "mediaAskMisreadAsAgeIsSearchedInstead",
+        "refinedTurnKeepsItsInheritedYear",
+        "restoredYearIsTheYearTheAgeIsCountedTo",
+        "statedYearTheTranslatorDroppedIsRestored",
+        "treeModeAgeAnswerIsStampedTree",
+        "treeModeNeverTurnsAnUnresolvedAnchorIntoACatalogSearch",
+        "yearTheQuestionStatesIsKeptWithoutANote"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HalliePresenceRenamedProfileTagsTests.swift",
       "stage": "hallie",
       "suites": [
@@ -17921,6 +17948,17 @@
         "shellWithoutRememberKeepsTeachingForTheSessionOnly",
         "storeRoundTripsAndAPoisonedFileIsNotClobberedUntilSaved",
         "thirtyNineThousandNamesOrderInUnder200Milliseconds"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HalliePronunciationRespellingCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HalliePronunciationRespellingCharacterizationTests"
+      ],
+      "tests": [
+        "respellingForEachHintKind"
       ]
     },
     {
@@ -18197,6 +18235,7 @@
         "HallieRelationshipsOverviewTests"
       ],
       "tests": [
+        "earlyAnswersAndThirdPersonPhrasing",
         "graphNilAndGraphPresentAgree",
         "ownerOverviewIsGroupedNearestFirstWithCountAndBasis",
         "pluralsReadNaturally",
@@ -18583,6 +18622,21 @@
         "unavailableCitationNeverClaimsPlayOrRevealAndReturnsMediaFailure",
         "unsupportedRoutesRenderSharedResultWithoutShellOverride",
         "whoElseIsInItAnswersFromTheSelectedRecordWithoutTheModel"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieShellCLICommandCharacterizationTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieShellCLITests"
+      ],
+      "tests": [
+        "noActionsNamesTheCitationAndNeverTouchesMedia",
+        "photoCommandsWithNoPhotoInformThenFail",
+        "refusedPhotoActionNeverClaimsItOpened",
+        "unknownCommandAndIdleCancelAnswerWithoutLeavingTheSession"
       ]
     },
     {
@@ -24394,6 +24448,8 @@
         "rhymesWithUsesTheGoldTail",
         "ricksOwnRespellingsComeFirstExactly",
         "stressHintMovesTheStressToTheFront",
+        "stressedVowelsReadAnUnlistedSpellingByItsFirstLetter",
+        "stressedVowelsReadEveryListedSpellingOpenAndClosed",
         "twoThousandNamesGenerateInUnderASecond",
         "unreadableNamesGiveNothingRatherThanAGuess"
       ]
@@ -34083,7 +34139,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3051,
+      "expected_floor": 3066,
       "name": "unit",
       "package_expected_floor": 406,
       "package_selectors": [
@@ -34311,6 +34367,8 @@
         "VideoScanTests/GeneratedInputAppFindingsTests",
         "VideoScanTests/HallieAncestorRoutingPropertyTests",
         "VideoScanTests/HalliePresenceLikeCharacterizationTests",
+        "VideoScanTests/HalliePronunciationRespellingCharacterizationTests",
+        "VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests",
         "VideoScanTests/HammingTests",
         "VideoScanTests/IdentityNarrowingRegressionSensors",
         "VideoScanTests/IdentityNarrowingTests",
@@ -35476,6 +35534,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/HallieShellCLICommandCharacterizationTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
           "name": "VideoScan/VideoScanTests/HallieShellCLITests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -35564,7 +35626,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1112,
+      "expected_floor": 1116,
       "modes": [
         {
           "name": "strict",

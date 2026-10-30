@@ -240,4 +240,70 @@ struct PronunciationVariationsTests {
         try JSONSerialization.data(withJSONObject: table).write(to: url)
         return MisakiGoldLexicon(url: url)
     }
+
+    // MARK: - stressedVowels table — characterization (2026-10-29)
+    //
+    // Every spelling the switch listed, open and closed, generated from the
+    // switch's own source before it became a lookup table, plus the
+    // first-letter fallback. Green before and after the table refactor.
+
+    private static let stressedGolden: [String: (open: [String], closed: [String])] = [
+        "a": (open: ["ɑ", "A", "æ"], closed: ["æ", "ɑ", "A"]),
+        "e": (open: ["i", "ɛ", "A"], closed: ["ɛ", "i", "A"]),
+        "i": (open: ["I", "i", "ɪ"], closed: ["ɪ", "i", "I"]),
+        "o": (open: ["O", "ɑ", "ʌ"], closed: ["ɑ", "O", "ʌ"]),
+        "u": (open: ["u", "ʌ", "ju"], closed: ["ʌ", "u", "ʊ"]),
+        "y": (open: ["I", "i"], closed: ["ɪ", "I"]),
+        "ee": (open: ["i", "A", "ɛ"], closed: ["i", "A", "ɛ"]),
+        "ea": (open: ["i", "A", "ɛ"], closed: ["i", "A", "ɛ"]),
+        "ai": (open: ["A", "I", "æ"], closed: ["A", "I", "æ"]),
+        "ay": (open: ["A", "I", "æ"], closed: ["A", "I", "æ"]),
+        "oo": (open: ["u", "ʊ"], closed: ["u", "ʊ"]),
+        "ou": (open: ["W", "O", "u"], closed: ["W", "O", "u"]),
+        "ow": (open: ["W", "O", "u"], closed: ["W", "O", "u"]),
+        "ie": (open: ["i", "I", "A"], closed: ["i", "I", "A"]),
+        "ei": (open: ["A", "i", "I"], closed: ["A", "i", "I"]),
+        "ey": (open: ["A", "i", "I"], closed: ["A", "i", "I"]),
+        "au": (open: ["ɔ", "ɑ"], closed: ["ɔ", "ɑ"]),
+        "aw": (open: ["ɔ", "ɑ"], closed: ["ɔ", "ɑ"]),
+        "oi": (open: ["Y"], closed: ["Y"]),
+        "oy": (open: ["Y"], closed: ["Y"]),
+        "eu": (open: ["u", "ju"], closed: ["u", "ju"]),
+        "ew": (open: ["u", "ju"], closed: ["u", "ju"]),
+        "ue": (open: ["u", "ju"], closed: ["u", "ju"]),
+        "oa": (open: ["O"], closed: ["O"]),
+        "oe": (open: ["O"], closed: ["O"]),
+        "ia": (open: ["iə", "I", "A"], closed: ["iə", "I", "A"]),
+        "io": (open: ["iO", "iə"], closed: ["iO", "iə"]),
+        "ar": (open: ["ɑɹ", "ɛɹ"], closed: ["ɑɹ", "ɛɹ"]),
+        "er": (open: ["ɜɹ", "ɛɹ"], closed: ["ɜɹ", "ɛɹ"]),
+        "ir": (open: ["ɜɹ", "ɛɹ"], closed: ["ɜɹ", "ɛɹ"]),
+        "ur": (open: ["ɜɹ", "ɛɹ"], closed: ["ɜɹ", "ɛɹ"]),
+        "yr": (open: ["ɜɹ", "ɛɹ"], closed: ["ɜɹ", "ɛɹ"]),
+        "or": (open: ["ɔɹ"], closed: ["ɔɹ"]),
+        "ear": (open: ["ɪɹ", "ɛɹ"], closed: ["ɪɹ", "ɛɹ"]),
+        "eer": (open: ["ɪɹ", "ɛɹ"], closed: ["ɪɹ", "ɛɹ"]),
+        "air": (open: ["ɛɹ"], closed: ["ɛɹ"]),
+        "oor": (open: ["ɔɹ", "W"], closed: ["ɔɹ", "W"]),
+        "our": (open: ["ɔɹ", "W"], closed: ["ɔɹ", "W"]),
+    ]
+
+    @Test func stressedVowelsReadEveryListedSpellingOpenAndClosed() {
+        #expect(Self.stressedGolden.count == 38)
+        for (spelling, want) in Self.stressedGolden {
+            #expect(PronunciationVariations.stressedVowels(spelling, open: true) == want.open, Comment(rawValue: spelling))
+            #expect(PronunciationVariations.stressedVowels(spelling, open: false) == want.closed, Comment(rawValue: spelling))
+        }
+    }
+
+    @Test func stressedVowelsReadAnUnlistedSpellingByItsFirstLetter() {
+        for open in [true, false] {
+            #expect(PronunciationVariations.stressedVowels("eo", open: open) == PronunciationVariations.stressedVowels("e", open: open))
+            #expect(PronunciationVariations.stressedVowels("aa", open: open) == PronunciationVariations.stressedVowels("a", open: open))
+            #expect(PronunciationVariations.stressedVowels("yo", open: open) == PronunciationVariations.stressedVowels("y", open: open))
+            #expect(PronunciationVariations.stressedVowels("uir", open: open) == PronunciationVariations.stressedVowels("u", open: open))
+            #expect(PronunciationVariations.stressedVowels("", open: open).isEmpty)
+        }
+        #expect(PronunciationVariations.stressedVowels("eo", open: true) == ["i", "ɛ", "A"])
+    }
 }
