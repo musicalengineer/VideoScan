@@ -836,14 +836,21 @@ struct FamilyTreeView: View, Equatable {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Family Tree", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.title2.weight(.semibold))
-                // "Show me some memories…" (2026-10-01; GH #236): a quiet
-                // sparkle beside the title. Inert until clicked; the card
-                // gathers off the main actor (FamilyTreeMemoriesButton).
-                FamilyTreeMemoriesButton(model: model)
-                Spacer()
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Label("Family Tree", systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(.title2.weight(.semibold))
+                    // "Show me some memories…" (2026-10-01; GH #236): the AI
+                    // sparkle beside the title. Inert until clicked; the card
+                    // gathers off the main actor (FamilyTreeMemoriesButton).
+                    FamilyTreeMemoriesButton(model: model)
+                    Spacer()
+                }
+                // Rick 2026-10-30: the export date of each GEDCOM pull the
+                // tree uses, directly under the title, above the photo. Two
+                // quiet caption lines; ingest date and file names in the
+                // tooltip. Computed once per load, never here.
+                FamilyTreePullDatesView(pullDates: model.pullDates)
             }
             // The two people who joined the trees, framed under the title
             // at sidebar width. Per-user; see CouplePortrait.swift.

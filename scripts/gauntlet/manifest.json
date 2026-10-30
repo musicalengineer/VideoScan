@@ -1730,6 +1730,39 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomPullFactsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GedcomPullFactsTests"
+      ],
+      "tests": [
+        "ancestryHeader",
+        "byteCap",
+        "cacheBound",
+        "duplicateNames",
+        "foundInSubdirectory",
+        "getmyancestorsHeader",
+        "grouping",
+        "hashCache",
+        "headScoping",
+        "lineEndings",
+        "liveShape",
+        "malformedDate",
+        "malformedTime",
+        "missingFile",
+        "missingHeadDate",
+        "noDateLine",
+        "noLabel",
+        "poisoned",
+        "scaleHugePull",
+        "validEdges",
+        "videoScanMergeHeader",
+        "whichSources",
+        "wrongHash"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomRefreshPolicyTests.swift",
@@ -14713,6 +14746,19 @@
         "tenGenerationChainRendersToPDFWithTitleAndPageCount",
         "tenGenerationChainRendersToPNGAtTwoX",
         "titleAndFileNameFollowTheChain"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreePullDatesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreePullDatesTests"
+      ],
+      "tests": [
+        "changedFileIsNotDescribed",
+        "loadShowsAndLogs",
+        "noTreeClears"
       ]
     },
     {
@@ -34181,9 +34227,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3066,
+      "expected_floor": 3069,
       "name": "unit",
-      "package_expected_floor": 406,
+      "package_expected_floor": 429,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -34211,6 +34257,7 @@
         "VideoScanCoreTests.CatalogRecordDTORecordTests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
         "VideoScanCoreTests.CatalogChangeDetectorTests",
+        "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
         "VideoScanCoreTests.LaunchPreflightTests",
         "VideoScanCoreTests.PreflightGateTests",
@@ -34389,6 +34436,7 @@
         "VideoScanTests/FamilyTreeNoteCorrectionSensorTests",
         "VideoScanTests/FamilyTreeNoteDraftOwnerTests",
         "VideoScanTests/FamilyTreePersonMetadataTests",
+        "VideoScanTests/FamilyTreePullDatesTests",
         "VideoScanTests/FamilyTreeResearchLinksIrishPlaceTests",
         "VideoScanTests/FamilyTreeResearchLinksTests",
         "VideoScanTests/FamilyTreeVerificationTests",
