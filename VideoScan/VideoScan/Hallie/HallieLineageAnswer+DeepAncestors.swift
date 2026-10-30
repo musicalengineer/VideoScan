@@ -26,10 +26,9 @@ extension HallieLineageAnswer {
     /// with ONE route the tree records — the same shape the ≤ great-great
     /// kinship route answers with, so a wrong link stays visible.
     ///
-    /// C++ readers: `levels[l]` is the set of people at generation l+1
-    /// (insertion order kept for stable prose) and `pred[l][id]` is the
-    /// id of the child they were reached through — a plain BFS
-    /// predecessor map; a route is rebuilt by following it downward.
+    /// Walk (`DeepAncestorWalk.run`), then one of four answers: the tree
+    /// ran out, the budget ran out, nobody of that sex, or the list.
+    /// (Split into those steps 2026-10-29, behaviour unchanged.)
     static func deepAncestors(of person: GedcomFamilyGraph.Person,
                               depth: Int,
                               sex: String?,
@@ -43,24 +42,115 @@ extension HallieLineageAnswer {
                               lens: HallieVitalDates.Lens = .treeOnly) -> Result {
         let sexFilter = (sex?.isEmpty ?? true) ? nil : sex
         let sideWord = side.map { "\($0.rawValue) " } ?? ""
+        // The noun uses the depth as asked; the walk clamps it to ≥ 1.
         let noun = sideWord + GedcomFamilyGraph.generationLabel(generations: depth, sex: sexFilter ?? "")
         let depth = max(1, depth)
-        func hopLabel(_ reached: GedcomFamilyGraph.Person, from previous: GedcomFamilyGraph.Person?) -> String {
-            let word = reached.sex == "M" ? "father" : reached.sex == "F" ? "mother" : "parent"
-            guard let previous else { return word }
-            return (previous.sex == "M" ? "his " : previous.sex == "F" ? "her " : "their ") + word
-        }
+        let walk = DeepAncestorWalk.run(from: person, depth: depth, side: side, graph: graph)
+        let ask = DeepAncestorAsk(
+            person: person, depth: depth, side: side, noun: noun,
+            base: "Basis: imported family tree (GEDCOM); ancestor walk \(depth) generations up"
+                + (side.map { ", first hop through the \($0.rawValue) side" } ?? "") + "."
+                + (basisNote.map { " " + $0 } ?? ""),
+            query: "deep ancestor ×\(depth) \(sexFilter ?? "any"): \(person.name)")
 
-        // ---- Walk: one visit per (person, level); predecessor map.
+        if let stoppedAtLevel = walk.stoppedAtLevel {
+            return treeRanOut(ask, walk: walk, stoppedAtLevel: stoppedAtLevel, graph: graph)
+        }
+        if walk.budgetHit && walk.levels.count < depth {
+            return budgetDecline(ask, walk: walk)
+        }
+        let atDepth = (walk.levels.last ?? []).filter { sexFilter == nil || $0.sex == sexFilter }
+            .sorted { $0.name < $1.name }
+        guard !atDepth.isEmpty else {
+            return nobodyOfThatSex(ask, walk: walk, sexFilter: sexFilter)
+        }
+        return listedAncestors(ask, walk: walk, atDepth: atDepth, graph: graph, lens: lens)
+    }
+
+    /// The per-question words every deep-ancestor answer shares.
+    private struct DeepAncestorAsk {
+        let person: GedcomFamilyGraph.Person
+        let depth: Int
+        let side: ArchivistQueryAST.Graph.Side?
+        let noun: String
+        let base: String
+        let query: String
+
+        var openPerson: [HallieTurnExecutor.OfferedAction] {
+            [.openFamilyTreePerson(personID: person.id, personName: person.name)]
+        }
+    }
+
+    /// The bounded BFS: one visit per (person, level), with a predecessor
+    /// map instead of full paths. C++ readers: `levels[l]` is the set of
+    /// people at generation l+1 (insertion order kept for stable prose) and
+    /// `pred[l][id]` is the id of the child they were reached through — a
+    /// plain BFS predecessor map; a route is rebuilt by following it
+    /// downward. A value type returned by `run`, like a struct returned by
+    /// value; `route` / `routeContains` are const member functions.
+    ///
+    /// Worst-case memory: `deepAncestorMaxExpanded` (50,000) expansions,
+    /// each adding at most its parents once per level — a few hundred
+    /// thousand (String, String) entries and Person copies at most.
+    private struct DeepAncestorWalk {
         var levels: [[GedcomFamilyGraph.Person]] = []
         var pred: [[String: String]] = []
-        var frontier = [person]
         var expanded = 0
         var budgetHit = false
-        var stoppedAtLevel: Int? = nil
-        let started = Date()
-        /// The route from `person` (exclusive) up to `id` at 1-based `level`.
-        func route(to id: String, level: Int) -> [GedcomFamilyGraph.Person] {
+        var stoppedAtLevel: Int?
+
+        static func run(from person: GedcomFamilyGraph.Person,
+                        depth: Int,
+                        side: ArchivistQueryAST.Graph.Side?,
+                        graph: GedcomFamilyGraph) -> DeepAncestorWalk {
+            var walk = DeepAncestorWalk()
+            var frontier = [person]
+            let started = Date()
+            for level in 1...depth {
+                var next: [GedcomFamilyGraph.Person] = []
+                var seenHere: Set<String> = []
+                var predHere: [String: String] = [:]
+                for from in frontier {
+                    if walk.expanded >= deepAncestorMaxExpanded
+                        || Date().timeIntervalSince(started) > deepAncestorTimeBudget {
+                        walk.budgetHit = true
+                        break
+                    }
+                    walk.expanded += 1
+                    let parents: [GedcomFamilyGraph.Person]
+                    if level == 1, let side {
+                        parents = graph.relatives(side == .maternal ? .mother : .father, of: from)
+                    } else {
+                        parents = graph.relatives(.parents, of: from)
+                    }
+                    for parent in parents where !seenHere.contains(parent.id) {
+                        // A malformed GEDCOM can make someone their own
+                        // ancestor; the route check keeps the walk acyclic.
+                        if parent.id == person.id
+                            || walk.routeContains(parent.id, below: from.id, level: level - 1) { continue }
+                        seenHere.insert(parent.id)
+                        predHere[parent.id] = from.id
+                        next.append(parent)
+                    }
+                }
+                if next.isEmpty && !walk.budgetHit {
+                    walk.stoppedAtLevel = level
+                    break
+                }
+                // The budget tripped before this level produced anyone: that
+                // is the budget decline, not "nobody recorded here".
+                if next.isEmpty { break }
+                walk.levels.append(next)
+                walk.pred.append(predHere)
+                frontier = next
+                if walk.budgetHit { break }
+            }
+            return walk
+        }
+
+        /// The route from the walk's start (exclusive) up to `id` at
+        /// 1-based `level`.
+        func route(to id: String, level: Int, graph: GedcomFamilyGraph) -> [GedcomFamilyGraph.Person] {
             var out: [GedcomFamilyGraph.Person] = []
             var cur = id
             for l in stride(from: level, through: 1, by: -1) {
@@ -71,6 +161,7 @@ extension HallieLineageAnswer {
             }
             return out.reversed()
         }
+
         /// True when `id` already sits on the recorded route below `from`
         /// (which is at 1-based `level`). Ids only — no Person is copied.
         /// This runs once per parent of every expanded person, so on a
@@ -88,118 +179,90 @@ extension HallieLineageAnswer {
             }
             return false
         }
-        walk: for level in 1...depth {
-            var next: [GedcomFamilyGraph.Person] = []
-            var seenHere: Set<String> = []
-            var predHere: [String: String] = [:]
-            for from in frontier {
-                if expanded >= deepAncestorMaxExpanded
-                    || Date().timeIntervalSince(started) > deepAncestorTimeBudget {
-                    budgetHit = true
-                    break
-                }
-                expanded += 1
-                let parents: [GedcomFamilyGraph.Person]
-                if level == 1, let side {
-                    parents = graph.relatives(side == .maternal ? .mother : .father, of: from)
-                } else {
-                    parents = graph.relatives(.parents, of: from)
-                }
-                for parent in parents where !seenHere.contains(parent.id) {
-                    // A malformed GEDCOM can make someone their own
-                    // ancestor; the route check keeps the walk acyclic.
-                    if parent.id == person.id
-                        || routeContains(parent.id, below: from.id, level: level - 1) { continue }
-                    seenHere.insert(parent.id)
-                    predHere[parent.id] = from.id
-                    next.append(parent)
-                }
-            }
-            if next.isEmpty && !budgetHit {
-                stoppedAtLevel = level
-                break walk
-            }
-            // The budget tripped before this level produced anyone: that
-            // is the budget decline below, not "nobody recorded here".
-            if next.isEmpty { break walk }
-            levels.append(next)
-            pred.append(predHere)
-            frontier = next
-            if budgetHit { break walk }
-        }
+    }
 
-        let base = "Basis: imported family tree (GEDCOM); ancestor walk \(depth) generations up"
-            + (side.map { ", first hop through the \($0.rawValue) side" } ?? "") + "."
-            + (basisNote.map { " " + $0 } ?? "")
-        let query = "deep ancestor ×\(depth) \(sexFilter ?? "any"): \(person.name)"
-        let openPerson: [HallieTurnExecutor.OfferedAction] =
-            [.openFamilyTreePerson(personID: person.id, personName: person.name)]
+    /// "father" / "his mother" / "their parent" for one hop of a route.
+    private static func deepHopLabel(_ reached: GedcomFamilyGraph.Person,
+                                     from previous: GedcomFamilyGraph.Person?) -> String {
+        let word = reached.sex == "M" ? "father" : reached.sex == "F" ? "mother" : "parent"
+        guard let previous else { return word }
+        return (previous.sex == "M" ? "his " : previous.sex == "F" ? "her " : "their ") + word
+    }
 
-        // ---- The tree ran out before `depth`: say exactly where.
-        if let stoppedAtLevel {
-            let reached = levels.last.flatMap { $0.first }.map { route(to: $0.id, level: stoppedAtLevel - 1) } ?? []
-            let from = reached.last ?? person
-            let reachedText = reached.enumerated().map { i, p in
-                "\(hopLabel(p, from: i == 0 ? nil : reached[i - 1])) (\(p.name))"
-            }.joined(separator: " → ")
-            let missingWord = reached.isEmpty && side != nil
-                ? (side == .maternal ? "a mother" : "a father") : "parents"
-            let prose = reached.isEmpty
-                ? "The family tree doesn’t record \(missingWord) for \(person.name), so I can’t reach a \(noun)."
-                : "The family tree records \(HallieLineageQuestion.possessive(person.name)) \(reachedText), but no parents for \(from.name) — so I can’t reach a \(noun) (\(reached.count) of \(depth) generations recorded)."
-            return Result(route: .graph, outcome: .declined, prose: prose, basisLine: base,
-                          queryDescription: query, citations: [], catalogPersonName: person.name,
-                          offeredActions: openPerson)
-        }
+    /// The tree ran out before `depth`: say exactly where.
+    private static func treeRanOut(_ ask: DeepAncestorAsk, walk: DeepAncestorWalk,
+                                   stoppedAtLevel: Int, graph: GedcomFamilyGraph) -> Result {
+        let person = ask.person
+        let reached = walk.levels.last.flatMap { $0.first }
+            .map { walk.route(to: $0.id, level: stoppedAtLevel - 1, graph: graph) } ?? []
+        let from = reached.last ?? person
+        let reachedText = reached.enumerated().map { i, p in
+            "\(deepHopLabel(p, from: i == 0 ? nil : reached[i - 1])) (\(p.name))"
+        }.joined(separator: " → ")
+        let missingWord = reached.isEmpty && ask.side != nil
+            ? (ask.side == .maternal ? "a mother" : "a father") : "parents"
+        let prose = reached.isEmpty
+            ? "The family tree doesn’t record \(missingWord) for \(person.name), so I can’t reach a \(ask.noun)."
+            : "The family tree records \(HallieLineageQuestion.possessive(person.name)) \(reachedText), but no parents for \(from.name) — so I can’t reach a \(ask.noun) (\(reached.count) of \(ask.depth) generations recorded)."
+        return Result(route: .graph, outcome: .declined, prose: prose, basisLine: ask.base,
+                      queryDescription: ask.query, citations: [], catalogPersonName: person.name,
+                      offeredActions: ask.openPerson)
+    }
 
-        // ---- The budget ran out before the asked-for generation: honest
-        // decline rather than a partial generation presented as the answer.
-        if budgetHit && levels.count < depth {
-            return Result(
-                route: .graph, outcome: .declined,
-                prose: "\(HallieLineageQuestion.possessive(person.name)) ancestry fans out too far for me to reach a \(noun) in one go — I examined \(expanded) people across \(levels.count) generation\(levels.count == 1 ? "" : "s") and stopped. Try one line (paternal or maternal) or a smaller count.",
-                basisLine: base + " Walk stopped at its budget.",
-                queryDescription: query, citations: [], catalogPersonName: person.name,
-                offeredActions: openPerson)
-        }
+    /// The budget ran out before the asked-for generation: honest decline
+    /// rather than a partial generation presented as the answer.
+    private static func budgetDecline(_ ask: DeepAncestorAsk, walk: DeepAncestorWalk) -> Result {
+        let generations = walk.levels.count
+        return Result(
+            route: .graph, outcome: .declined,
+            prose: "\(HallieLineageQuestion.possessive(ask.person.name)) ancestry fans out too far for me to reach a \(ask.noun) in one go — I examined \(walk.expanded) people across \(generations) generation\(generations == 1 ? "" : "s") and stopped. Try one line (paternal or maternal) or a smaller count.",
+            basisLine: ask.base + " Walk stopped at its budget.",
+            queryDescription: ask.query, citations: [], catalogPersonName: ask.person.name,
+            offeredActions: ask.openPerson)
+    }
 
-        // ---- Results at `depth`, one route each.
-        let atDepth = (levels.last ?? []).filter { sexFilter == nil || $0.sex == sexFilter }
-            .sorted { $0.name < $1.name }
-        guard !atDepth.isEmpty else {
-            let word = sexFilter == "M" ? "male" : sexFilter == "F" ? "female" : "at all"
-            let names = (levels.last ?? []).map(\.name)
-            return Result(route: .graph, outcome: .declined,
-                          prose: "The tree reaches \(depth) generations above \(person.name) (\(names.joined(separator: ", "))), but records nobody \(word) there, so I can’t name a \(noun).",
-                          basisLine: base + (budgetHit ? " Walk stopped at its budget; there may be more." : ""),
-                          queryDescription: query, citations: [], catalogPersonName: person.name,
-                          offeredActions: openPerson)
-        }
+    /// The tree reaches `depth` but nobody there has the asked sex.
+    private static func nobodyOfThatSex(_ ask: DeepAncestorAsk, walk: DeepAncestorWalk, sexFilter: String?) -> Result {
+        let word = sexFilter == "M" ? "male" : sexFilter == "F" ? "female" : "at all"
+        let names = (walk.levels.last ?? []).map(\.name)
+        return Result(route: .graph, outcome: .declined,
+                      prose: "The tree reaches \(ask.depth) generations above \(ask.person.name) (\(names.joined(separator: ", "))), but records nobody \(word) there, so I can’t name a \(ask.noun).",
+                      basisLine: ask.base + (walk.budgetHit ? " Walk stopped at its budget; there may be more." : ""),
+                      queryDescription: ask.query, citations: [], catalogPersonName: ask.person.name,
+                      offeredActions: ask.openPerson)
+    }
+
+    /// Results at `depth`, one route each, at most `deepAncestorMaxResults`.
+    private static func listedAncestors(_ ask: DeepAncestorAsk, walk: DeepAncestorWalk,
+                                        atDepth: [GedcomFamilyGraph.Person],
+                                        graph: GedcomFamilyGraph,
+                                        lens: HallieVitalDates.Lens) -> Result {
+        let person = ask.person
         let shown = Array(atDepth.prefix(deepAncestorMaxResults))
-        let paths = shown.map { route(to: $0.id, level: depth) }
+        let paths = shown.map { walk.route(to: $0.id, level: ask.depth, graph: graph) }
         let lines = paths.map { path -> String in
             let relative = path[path.count - 1]
             var text = relative.name
             if let years = lens.yearsText(relative) { text += " (\(years))" }
             let route = ([person.name] + path.enumerated().map { i, p in
-                "\(hopLabel(p, from: i == 0 ? nil : path[i - 1])) \(p.name)"
+                "\(deepHopLabel(p, from: i == 0 ? nil : path[i - 1])) \(p.name)"
             }).joined(separator: " → ")
             return "\(text) (\(route))"
         }
-        let plural = paths.count == 1 ? noun : noun + "s"
+        let plural = paths.count == 1 ? ask.noun : ask.noun + "s"
         var prose = "\(HallieLineageQuestion.possessive(person.name)) \(plural): " + lines.joined(separator: "; ") + "."
         let more = atDepth.count - shown.count
         if more > 0 {
             prose += " There are \(more) more at that generation I haven’t listed (\(atDepth.count) in all)."
         }
-        if budgetHit {
-            prose += " I stopped the walk at its budget (\(expanded) people examined), so there may be others."
+        if walk.budgetHit {
+            prose += " I stopped the walk at its budget (\(walk.expanded) people examined), so there may be others."
         }
         return Result(
             route: .graph, outcome: .answered,
             prose: prose,
-            basisLine: base + (budgetHit ? " Walk stopped at its budget; there may be more." : ""),
-            queryDescription: query,
+            basisLine: ask.base + (walk.budgetHit ? " Walk stopped at its budget; there may be more." : ""),
+            queryDescription: ask.query,
             citations: [], catalogPersonName: person.name,
             offeredActions: paths.prefix(3).map { .openFamilyTreePerson(personID: $0[$0.count - 1].id, personName: $0[$0.count - 1].name) })
     }

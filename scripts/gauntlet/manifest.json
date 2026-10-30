@@ -16485,10 +16485,13 @@
         "HallieDeepAncestorTests"
       ],
       "tests": [
+        "basisNoteFollowsTheWalkDescription",
         "countingGreats",
         "depthFiveListsSeamusWithThePath",
         "depthThreeFourFiveAndOrdinalFormsDetect",
-        "missingHopAndMissingSexAreSaidExactly"
+        "missingHopAndMissingSexAreSaidExactly",
+        "noParentsAtAllIsSaidWithTheSideWord",
+        "walkBudgetIsSaidOnAPartialAnswerAndDeclinesShortOfTheGeneration"
       ]
     },
     {
@@ -35622,7 +35625,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1112,
+      "expected_floor": 1115,
       "modes": [
         {
           "name": "strict",
