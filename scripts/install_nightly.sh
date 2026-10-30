@@ -24,6 +24,16 @@ GUARD="$REPO_ROOT/scripts/nightly_guarded.sh"
 LOG="$HOME/Library/Logs/VideoScan/nightly_launchd.log"
 
 SLOT="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" slot "$HOST")"
+# A test host without the Master Archive (the M4 since the Pegasus moved to
+# the Ultra, 2026-10-27) replays Hallie against a copy of the archive's
+# GEDCOM folder, placed by hand at TEST_HOST_GEDCOM. Present → the nightly
+# passes it (and the row records it); absent → the archive's own tree.
+TEST_HOST_GEDCOM="$HOME/Library/Application Support/VideoScan/test-host/GEDCOM"
+HALLIE_GEDCOM_ENV=""
+if [ -d "$TEST_HOST_GEDCOM" ]; then
+    HALLIE_GEDCOM_ENV="        <key>VIDEOSCAN_HALLIE_REPLAY_GEDCOM</key>
+        <string>$TEST_HOST_GEDCOM</string>"
+fi
 case "$SLOT" in
     on\ *)
         read -r _ HOUR MIN <<<"$SLOT"
@@ -82,6 +92,7 @@ cat > "$PLIST" <<PLIST
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>VIDEOSCAN_NIGHTLY_TEST_TIMEOUT_SECONDS</key>
         <string>2700</string>
+$HALLIE_GEDCOM_ENV
         <key>HOME</key>
         <string>$HOME</string>
     </dict>

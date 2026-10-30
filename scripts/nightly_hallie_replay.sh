@@ -41,7 +41,7 @@ PY=${PY:-$REPO/venv/bin/python}
 LOGDIR=${LOGDIR:-$HOME/Library/Logs/VideoScan/hallie-eval}
 mkdir -p "$LOGDIR"
 
-OUT=""; BIN=""; HOST=""; MODEL=""; BUDGET=${NIGHTLY_HALLIE_BUDGET_SECONDS:-3600}
+OUT=""; BIN=""; HOST=""; MODEL=""; GEDCOM="${VIDEOSCAN_HALLIE_REPLAY_GEDCOM:-}"; BUDGET=${NIGHTLY_HALLIE_BUDGET_SECONDS:-3600}
 LANES="strict advisory"; DRY_RUN=0; LIVE=0; SPEECH=0
 usage() {
     cat <<'USAGE'
@@ -56,6 +56,10 @@ Usage: scripts/nightly_hallie_replay.sh --live [--out summary.json] [options]
   --strict-only         Run only the strict regression questions.
   --advisory-only       Run only the full advisory corpus.
   --bin PATH            VideoScan binary to test.
+  --gedcom PATH         Family tree (.ged or a folder of pulls) for a host without
+                        the Master Archive (the M4 test host since 2026-10-27).
+                        Default: the archive's promoted tree, as in the app.
+                        Env: VIDEOSCAN_HALLIE_REPLAY_GEDCOM.
   --host URL            Ollama host (default: http://127.0.0.1:11434).
   --model TAG           Override the app's selected Hallie model.
   --budget-seconds N    Total replay budget (default: 3600).
@@ -65,7 +69,7 @@ USAGE
 }
 while [ $# -gt 0 ]; do
     case "$1" in
-        --out|--bin|--host|--model|--budget-seconds)
+        --out|--bin|--host|--model|--gedcom|--budget-seconds)
             [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 64; } ;;
     esac
     case "$1" in
@@ -73,6 +77,7 @@ while [ $# -gt 0 ]; do
         --bin) BIN="$2"; shift 2 ;;
         --host) HOST="$2"; shift 2 ;;
         --model) MODEL="$2"; shift 2 ;;
+        --gedcom) GEDCOM="$2"; shift 2 ;;
         --budget-seconds) BUDGET="$2"; shift 2 ;;
         --strict-only) LANES="strict"; shift ;;
         --advisory-only) LANES="advisory"; shift ;;
@@ -145,19 +150,23 @@ if [ -z "$TAGS" ]; then
 elif ! printf '%s\n' "$TAGS" | grep -qx "$MODEL"; then
     PREFLIGHT_REASON="model $MODEL ($MODEL_SOURCE) is not on $HOST (has: $(printf '%s' "$TAGS" | tr '\n' ' '))"
 fi
+if [ -n "$GEDCOM" ] && [ ! -e "$GEDCOM" ]; then
+    echo "--gedcom: no such file or folder: $GEDCOM" >&2; exit 66
+fi
 if [ "$DRY_RUN" = 1 ]; then
-    echo "dry-run: host=$HOST model=$MODEL source=\"$MODEL_SOURCE\" ${PREFLIGHT_REASON:+reason=$PREFLIGHT_REASON}"
+    echo "dry-run: host=$HOST model=$MODEL source=\"$MODEL_SOURCE\" gedcom=${GEDCOM:-archive} ${PREFLIGHT_REASON:+reason=$PREFLIGHT_REASON}"
     [ -z "$PREFLIGHT_REASON" ]; exit $?
 fi
 if [ -n "$PREFLIGHT_REASON" ]; then
     python3 - "$OUT" "$PREFLIGHT_REASON" "$HOST" "$MODEL" "$MODEL_SOURCE" "$(date +%Y%m%dT%H%M%S)" \
-        "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" <<'PYEOF'
+        "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)" "${GEDCOM:-}" <<'PYEOF'
 import json, sys
-out, reason, host, model, source, stamp, sha = sys.argv[1:8]
+out, reason, host, model, source, stamp, sha, gedcom = sys.argv[1:9]
 row = {"hallie_replay_status": "failed", "hallie_replay_reason": reason,
        "hallie_replay_elapsed_s": 0, "hallie_replay_stamp": stamp,
        "hallie_replay_git_sha": sha, "hallie_replay_host": host,
-       "hallie_replay_model": model or None, "hallie_replay_model_source": source}
+       "hallie_replay_model": model or None, "hallie_replay_model_source": source,
+       "hallie_replay_gedcom": gedcom or "archive"}
 for lane in ("strict", "advisory"):
     row.update({f"hallie_{lane}_status": "not-run", f"hallie_{lane}_expected": 0,
                 f"hallie_{lane}_completed": 0, f"hallie_{lane}_pass": 0,
@@ -186,6 +195,7 @@ run_lane() {
     [ -n "$BIN" ]   && args+=(--bin "$BIN")
     [ -n "$HOST" ]  && args+=(--host "$HOST")
     [ -n "$MODEL" ] && args+=(--model "$MODEL")
+    [ -n "$GEDCOM" ] && args+=(--gedcom "$GEDCOM")
     args+=(--build-sha "$SHA")
     [ "$SPEECH" = 1 ] && args+=(--speech)
     local run_log="$LOGDIR/nightly-$STAMP-$lane.run.log"
@@ -267,7 +277,7 @@ PYEOF
 )
 
 python3 - "$OUT" "$STATUS" "$STRICT_JSON" "$ADVISORY_JSON" "$ELAPSED" "$SHA" "$BIN" "$HOST" "$MODEL" "$TREE_GEN" \
-        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" "$LIVE" <<'PYEOF'
+        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" "$LIVE" "${GEDCOM:-}" <<'PYEOF'
 import json, os, sys, time
 out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp, source = sys.argv[1:15]
 def incomplete_count(s):
@@ -298,6 +308,9 @@ row = {"hallie_replay_status": status,
        "hallie_replay_host": host or None,
        "hallie_replay_model": model or None,
        "hallie_replay_model_source": source,
+       # Which family tree answered: "archive" (the promoted tree, as in the
+       # app) or the explicit --gedcom a test host without the archive used.
+       "hallie_replay_gedcom": (sys.argv[16] if len(sys.argv) > 16 and sys.argv[16] else "archive"),
        "hallie_replay_tree_generation": tree,
        "hallie_replay_manifest_sha256": msha,
        "hallie_replay_corpus_sha256": csha}

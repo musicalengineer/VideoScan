@@ -41,7 +41,7 @@ python3 -c 'import plistlib,sys; open(sys.argv[1],"wb").write(plistlib.dumps({"a
 
 # Every case scrubs the env overrides first so a developer's shell cannot
 # leak into the assertions; the case that tests an override sets it inline.
-run() { env -u VIDEOSCAN_HALLIE_REPLAY_HOST -u VIDEOSCAN_HALLIE_REPLAY_MODEL "$@"; }
+run() { env -u VIDEOSCAN_HALLIE_REPLAY_HOST -u VIDEOSCAN_HALLIE_REPLAY_MODEL -u VIDEOSCAN_HALLIE_REPLAY_GEDCOM "$@"; }
 reason_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hallie_replay_reason",""))' "$1" 2>/dev/null; }
 field_of()  { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$1" "$2" 2>/dev/null; }
 
@@ -91,6 +91,21 @@ reason=$(reason_of "$T/r6.json")
 echo "Test 7: --model present on the host passes preflight"
 out=$(run VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS="$UNSET" "$REPO/scripts/nightly_hallie_replay.sh" --out "$T/r7.json" --host "$STUB" --model devstral:24b --dry-run 2>&1); rc=$?
 [ "$rc" = 0 ] && echo "$out" | grep -q "model=devstral:24b" && ok "$out" || fail "rc=$rc $out"
+
+echo "Test 8: a test host without the Master Archive names its tree (2026-10-30): env, then --gedcom outranks it"
+mkdir -p "$T/ged-env" "$T/ged-flag"
+out=$(run VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS="$UNSET" VIDEOSCAN_HALLIE_REPLAY_GEDCOM="$T/ged-env" "$REPO/scripts/nightly_hallie_replay.sh" --out "$T/r8a.json" --host "$STUB" --dry-run 2>&1); rc=$?
+[ "$rc" = 0 ] && echo "$out" | grep -q "gedcom=$T/ged-env" && ok "env: $out" || fail "env: rc=$rc $out"
+out=$(run VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS="$UNSET" VIDEOSCAN_HALLIE_REPLAY_GEDCOM="$T/ged-env" "$REPO/scripts/nightly_hallie_replay.sh" --out "$T/r8b.json" --host "$STUB" --gedcom "$T/ged-flag" --dry-run 2>&1); rc=$?
+[ "$rc" = 0 ] && echo "$out" | grep -q "gedcom=$T/ged-flag" && ok "flag: $out" || fail "flag: rc=$rc $out"
+out=$(run VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS="$UNSET" "$REPO/scripts/nightly_hallie_replay.sh" --out "$T/r8c.json" --host "$STUB" --dry-run 2>&1); rc=$?
+[ "$rc" = 0 ] && echo "$out" | grep -q "gedcom=archive" && ok "default: $out" || fail "default: rc=$rc $out"
+
+echo "Test 9: the row records which tree a run used; a missing --gedcom path is refused, not silently ignored"
+out=$(run VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS="$SET" VIDEOSCAN_HALLIE_REPLAY_GEDCOM="$T/ged-env" "$REPO/scripts/nightly_hallie_replay.sh" --out "$T/r9a.json" --host "http://127.0.0.1:1" 2>&1); rc=$?
+[ "$(field_of "$T/r9a.json" hallie_replay_gedcom)" = "$T/ged-env" ] && ok "recorded" || fail "rc=$rc gedcom=$(field_of "$T/r9a.json" hallie_replay_gedcom)"
+out=$(run VIDEOSCAN_HALLIE_REPLAY_APP_DEFAULTS="$UNSET" "$REPO/scripts/nightly_hallie_replay.sh" --out "$T/r9b.json" --host "$STUB" --gedcom "$T/no-such-ged" --dry-run 2>&1); rc=$?
+[ "$rc" != 0 ] && echo "$out" | grep -q "no-such-ged" && ok "refused: $out" || fail "missing path: rc=$rc $out"
 
 kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
 rm -rf "$T"
