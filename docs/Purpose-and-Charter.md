@@ -183,3 +183,34 @@ Elegant design is an art but we're engineers ... so we do our best and always co
 - Stay Updated. Always look for improvements - technology marches quickly. Weekly checks for new models, better algs, best practices, etc. 
 - Robustness of code and Integrity of Data is paramount, once these are achieved we Optimize and push for the highest Performance.
 
+# Agentic Assistance (LLMs/AI) with the Breen Family Media and Family Tree
+This is a rich topic of research and experimentation we are performing. We have locally hosted LLMs and various strategies to experiment with to solve a few problems.
+
+The goal of the agentic assisted component of the VideoScan App (LLMs, etc) is to help with:
+   1. Provenance Estimation. Many media files were ingested with incomplete or nonexistent provenance info and we believe some provenance info can be synthesized using various techniques.
+   2. Event Recognition such as birthdays, christmas, thanksgiving, vacations, ie, when someone cared enough to use a video camera. (Today everyone has a camera, but in the 80s it was unusual).
+   3. Identifying Duplicates, Similar Footage, Same Events, Derivative Clips, Re-encodes, etc., are all over the place in this media corpus. Finding and handling these is a big challenge.
+   4. People identification. We know it is too difficult, so far, to distinguish specific members of the same family due to facial commonalities, but we can try, based on metadata and heuristics, to estimate someone. For example, we know the birthdates of the primary people, so we can interpolate things like "Thin woman with blonde hair about 35 yrs old changing diaper" is 98.37% likely to be the mother, Donna. Using dates, metadata, previous videos, such inferences should be easy enough for this app to do, using a combination of techniques. 
+
+Originally, we thought we'd "train" an LLM or a Visual LLM on the Breen Family media, feeding it every video, to allow an LLM to recognize individuals in the family, or say, for example, it is a 97% chance this person in the video is Donna" but this has proven elusive. We're still trying to find ways to extrapolate, interpolate, make inferences, and sift through the data so we can identify people, etc. But we decided to try 1, 2, and 3 above first and see if we can eventually try 4 again once we get some successful strategies working. 
+
+Several docs and pdf files have been generated in this research area, such as the following:
+## Video LLMs (last two days)
+   - 10/29  docs/reviews/video_llm_design.md
+      Claude's plain-language review: what to settle first (one engine, background service, Phase 0 baseline)
+   - 10/29  docs/proposed_video_llms_for_breen_media.md
+      The design proposal (cloud session, 30 KB)
+   - 10/29  docs/research/video_llm_for_family_media_2026-10-29.md
+      The research note behind it (its "v13" should read v14)
+   - 10/29  ~/Downloads/video_intelligence_architecture.pdf
+      PDF, 21 KB, downloaded 19:03; not in the repo
+Earlier, still relevant
+- 10/23  docs/research/family_media_ai_training_guide.pdf
+
+Provenance strategy (10/22–10/26)
+- 10/26  docs/design/provenance_retroactive_2026_10_26.md (46 KB)
+- 10/26  docs/guides/provenance_roles.md
+- 10/25  docs/research/provenance_retroactive_fingerprinting_2026-10-25.md
+- 10/23  docs/research/provenance_deep_dive_2026-10-23.md (the Fable deep dive)
+- 10/22  docs/design/provenance_lightweight_2026_10_22.md
+
