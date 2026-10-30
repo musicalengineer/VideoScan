@@ -46,9 +46,22 @@ extension HallieShellCLI {
         attachments: [HallieAttachment] = [],
         composedBy: String? = nil,
         mode: String? = nil,
+        now: ContinuousClock.Instant = .now,
         state: inout Session
     ) -> HallieTranscriptEvent {
         state.transcriptSequence += 1
+        // Per-turn latency: a user event starts the clock; each answer or
+        // error after it records the milliseconds since (monotonic, like
+        // std::chrono::steady_clock — never the wall clock).
+        var latencyMs: Int?
+        switch kind {
+        case .user:
+            state.turnStartedAt = now
+        case .assistant, .error:
+            latencyMs = state.turnStartedAt.map { Self.milliseconds(now - $0) }
+        case .system:
+            break
+        }
         // An assistant event records the session's effective mode (design
         // §3.7) unless the caller supplied one; user / system events carry
         // none.
@@ -81,7 +94,14 @@ extension HallieShellCLI {
             attachmentOutline: attachments.isEmpty
                 ? nil : HallieAttachmentText.lines(attachments),
             composedBy: composedBy,
-            mode: recordedMode)
+            mode: recordedMode,
+            latencyMs: latencyMs)
+    }
+
+    /// Whole milliseconds of a Duration (seconds and attoseconds parts).
+    static func milliseconds(_ duration: Duration) -> Int {
+        let parts = duration.components
+        return Int(parts.seconds) * 1_000 + Int(parts.attoseconds / 1_000_000_000_000_000)
     }
 
     static func transcriptLabel(_ route: HallieTurnExecutor.Route) -> String {

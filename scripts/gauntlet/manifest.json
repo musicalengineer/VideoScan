@@ -16337,10 +16337,13 @@
         "dayFileNamesArePinnedAtUTCBoundaries",
         "dayStringAgreesWithAnIndependentUTCFormatter",
         "evidenceTooLargeEvenWhenTrimmedIsStrippedNotDropped",
+        "latencySurvivesTheLogAndOldLinesDecodeWithoutIt",
         "oversizedEvidenceIsTrimmedRatherThanDroppingTheTurn",
         "refusesSymlinkedLogDirectoryWithoutTouchingDestination",
         "rejectsUnboundedMessageBeforeWritingIt",
         "rotatesByUTCDate",
+        "shellAnswerCarriesMillisecondsSinceItsUserTurn",
+        "shellEventWithoutAUserTurnHasNoLatency",
         "thousandEventBatchStaysBounded"
       ]
     },

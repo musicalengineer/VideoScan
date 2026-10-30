@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 817 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms. Demo-day items (lv261010-NNN, 2026-10-10) are Rick's live turns from the demo for Bonnie; dp261009-NNN are the pre-demo visitor probe's known-bad questions (2026-10-09 night, headless shell). Moved-from-strict items (strict-0NN, 2026-10-28) left the STRICT lane because their pass depended on the model's free choice of AST, source or wording; each keeps its strict id and names the unit test that pins the deterministic logic. strict-0NN-anchor rows are copies of rows that stay strict, so a moved follow-up replays in its recorded chain.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 826 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms. Demo-day items (lv261010-NNN, 2026-10-10) are Rick's live turns from the demo for Bonnie; dp261009-NNN are the pre-demo visitor probe's known-bad questions (2026-10-09 night, headless shell). Moved-from-strict items (strict-0NN, 2026-10-28) left the STRICT lane because their pass depended on the model's free choice of AST, source or wording; each keeps its strict id and names the unit test that pins the deterministic logic. strict-0NN-anchor rows are copies of rows that stay strict, so a moved follow-up replays in its recorded chain.",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -7148,6 +7148,75 @@
         "Dafydd"
       ],
       "notes": "lv260926-003. Set-up turn: 'yes' to the service-story offer keeps Richard Harding Breen Sr as the conversation's person (HallieServiceStory), so strict-059 tests the antecedent after a correction and a follow-up. moved from strict 2026-10-28: model-dependent; logic pinned by HallieServiceStoriesTests.offerYesAndNo. 'sure' tells the story only when strict-057's answer ended with the service offer, which a biography does; the death (10/20) and kinship (10/25) answers to the correction offer nothing, and then 'I couldn't tell how “sure” narrows down my last answer' is right. It is also red whenever strict-057 hits the dad → Dafydd bug (strict-056 class). Follows the strict-056-anchor / strict-057-anchor copies; in the strict lane strict-059 now follows strict-057 directly."
+    },
+    {
+      "id": "lv261029-001",
+      "category": "live",
+      "text": "tell me about Donna Hudson",
+      "expect": "biography",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-27); expectation unconfirmed"
+    },
+    {
+      "id": "lv261029-002",
+      "category": "live",
+      "text": "hi hallie, tell me about yourself",
+      "expect": "social",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-28); expectation unconfirmed"
+    },
+    {
+      "id": "lv261029-003",
+      "category": "live",
+      "text": "Hi Hallie, tell me about yourself.",
+      "expect": "social",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed"
+    },
+    {
+      "id": "lv261029-004",
+      "category": "live",
+      "text": "what is the capitol of massachusetts?",
+      "expect": "catalog",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv261029-005",
+      "category": "live",
+      "text": "tell me about King Edward II of England",
+      "expect": "biography",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv261029-006",
+      "category": "live",
+      "text": "tell me about King Edward III of England",
+      "expect": "biography",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv261029-007",
+      "category": "live",
+      "text": "tell me about John of Gaunt, son of Edward III",
+      "expect": "kinship",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv261029-008",
+      "category": "live",
+      "text": "tell me about caleb parker",
+      "expect": "biography",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed",
+      "followsPrevious": true
+    },
+    {
+      "id": "lv261029-009",
+      "category": "live",
+      "text": "show the docs in his tree",
+      "expect": "kinship",
+      "notes": "harvested 2026-10-29 from the app transcript (2026-10-29); expectation unconfirmed",
+      "followsPrevious": true
     }
   ]
 }

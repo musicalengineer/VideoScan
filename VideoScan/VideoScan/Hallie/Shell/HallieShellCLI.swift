@@ -786,6 +786,9 @@ enum HallieShellCLI {
         var runID: String?
         var transcriptSessionID = UUID()
         var transcriptSequence: UInt64 = 0
+        /// When the current user turn was logged; the next assistant/error
+        /// events carry `latencyMs` from it. Cleared by `:reset`.
+        var turnStartedAt: ContinuousClock.Instant?
         var presenceSnapshots: [ArchivistPresenceRecordSnapshot]?
         var aggregateSnapshots: [ArchivistAggregateRecordSnapshot]?
         var citations: [HallieTurnExecutor.Citation] = []
@@ -1946,6 +1949,7 @@ enum HallieShellCLI {
         clearConversation(&state)
         state.transcriptSessionID = UUID()
         state.transcriptSequence = 0
+        state.turnStartedAt = nil
         return transcriptEvent(
             kind: .system,
             text: ":reset",

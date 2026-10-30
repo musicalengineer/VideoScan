@@ -719,6 +719,17 @@ class PairTurnsTests(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0][1]["text"], "Hi.")
 
+    def test_split_answer_latency_is_the_last_clause_since_the_user_turn(self):
+        # The shell stamps every clause with ms since the ONE user turn, so
+        # the question's latency is the largest (the last clause's).
+        turns = [
+            {"kind": "user", "text": "who was Martha and do we have videos of her"},
+            {"kind": "assistant", "text": "Martha was…", "outcome": "answered", "latencyMs": 900},
+            {"kind": "assistant", "text": "No videos.", "outcome": "answered", "latencyMs": 2100},
+        ]
+        (_, answer), = hallie_eval.pair_turns(turns)
+        self.assertEqual(answer["latencyMs"], 2100)
+
 
 class OrderTurnsTests(unittest.TestCase):
     """The shell writes the transcript asynchronously with whole-second
@@ -1016,6 +1027,34 @@ class NightlyReplayVerdictTests(unittest.TestCase):
         self.assertEqual(report["clean"], 0)
         self.assertEqual(report["defects"], 0)
         self.assertTrue(report["incomplete"])
+
+    # Per-turn latency (BACKLOG Hallie benchmark follow-up 2): the shell's
+    # `latencyMs` reaches the record and the summary reports median / p90.
+    def test_latency_passes_through_build_records(self):
+        questions = [{"id": "q1", "text": "where was Alpha born"}]
+        events = [{"kind": "user", "text": "where was Alpha born"},
+                  {"kind": "assistant", "route": "graph", "outcome": "answered",
+                   "text": "Alpha was born in Ireland.", "latencyMs": 1234}]
+        records, _, _ = hallie_eval.build_records(questions, events)
+        self.assertEqual(records[0]["latencyMs"], 1234)
+
+    def test_summary_reports_latency_median_and_p90(self):
+        records = [{"id": f"q{i}", "answer": "Alpha was born in Ireland.",
+                    "route": "graph", "outcome": "answered", "latencyMs": ms}
+                   for i, ms in enumerate([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000])]
+        records.append({"id": "q10", "answer": "Alpha was born in Ireland.",
+                        "route": "graph", "outcome": "answered"})   # an older log line
+        meta = {"questions": 11, "expectedIDs": [f"q{i}" for i in range(11)],
+                "processReturnCode": 0}
+        _, report = self.grade(records, meta, strict=False)
+        self.assertEqual(report["latency"], {"n": 10, "median_ms": 550, "p90_ms": 900})
+
+    def test_summary_latency_is_empty_not_zero_without_measurements(self):
+        _, report = self.grade([{"id": "q1", "answer": "Alpha was born in Ireland.",
+                                 "route": "graph", "outcome": "answered"}],
+                               {"questions": 1, "expectedIDs": ["q1"], "processReturnCode": 0},
+                               strict=False)
+        self.assertEqual(report["latency"], {"n": 0, "median_ms": None, "p90_ms": None})
 
     # Design §3.7 (two-mode session state): the transcript's `mode` and the
     # corpus's `expectMode` are additive — they never change an existing

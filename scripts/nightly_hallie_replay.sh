@@ -287,7 +287,8 @@ def lane(js, name):
             f"hallie_{name}_incomplete": incomplete_count(s),
             f"hallie_{name}_yellow": (s.get("meta") or {}).get("liveReviewFlags"),
             f"hallie_{name}_run_id": s.get("runID"),
-            f"hallie_{name}_flags": s.get("flags")}
+            f"hallie_{name}_flags": s.get("flags"),
+            f"hallie_{name}_latency": s.get("latency")}
 row = {"hallie_replay_status": status,
        "hallie_replay_elapsed_s": int(elapsed),
        "hallie_replay_stamp": stamp,

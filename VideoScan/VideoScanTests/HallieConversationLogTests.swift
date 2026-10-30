@@ -268,4 +268,69 @@ struct HallieConversationLogTests {
             HallieTranscriptEvent.self, from: Data($0.utf8)) }
         #expect(Set(decoded.map(\.sequence)) == Set((1...32).map(UInt64.init)))
     }
+
+    // PER-TURN LATENCY (BACKLOG "Hallie benchmark 2026-10-28 follow-ups" #2).
+    // Timestamps are whole seconds, so the harness could not report a median
+    // or p90 per question. The shell now stamps each assistant/error event
+    // with the milliseconds since its user turn, from a monotonic clock.
+
+    private func shellSession() -> HallieShellCLI.Session {
+        HallieShellCLI.Session(
+            records: [], profiles: [], graph: nil, cyberBrain: nil,
+            speakers: .init(ownerName: "Rick Breen", archivistName: "Hallie Mae"),
+            model: "fixture-model", runID: "latency-run")
+    }
+
+    @Test func shellAnswerCarriesMillisecondsSinceItsUserTurn() {
+        var state = shellSession()
+        let start = ContinuousClock.now
+        let user = HallieShellCLI.transcriptEvent(
+            kind: .user, text: "how many videos from 1991", now: start, state: &state)
+        let first = HallieShellCLI.transcriptEvent(
+            kind: .assistant, text: "I have 148 videos from 1991.",
+            now: start.advanced(by: .milliseconds(1_234)), state: &state)
+        // A split question logs one assistant event per clause; each carries
+        // the time since the ONE user turn, so the last clause is the turn's.
+        let second = HallieShellCLI.transcriptEvent(
+            kind: .error, text: "Something went wrong.",
+            now: start.advanced(by: .milliseconds(2_500)), state: &state)
+
+        #expect(user.latencyMs == nil)
+        #expect(first.latencyMs == 1_234)
+        #expect(second.latencyMs == 2_500)
+    }
+
+    @Test func shellEventWithoutAUserTurnHasNoLatency() {
+        var state = shellSession()
+        let system = HallieShellCLI.transcriptEvent(
+            kind: .system, text: ":reset", state: &state)
+        let orphan = HallieShellCLI.transcriptEvent(
+            kind: .assistant, text: "Hello, Rick.", state: &state)
+        #expect(system.latencyMs == nil)
+        #expect(orphan.latencyMs == nil)
+    }
+
+    @Test func latencySurvivesTheLogAndOldLinesDecodeWithoutIt() throws {
+        let event = HallieTranscriptEvent(
+            sessionID: UUID(), sequence: 2, client: .shell, kind: .assistant,
+            text: "Answered.", latencyMs: 87)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let line = try #require(String(data: try encoder.encode(event), encoding: .utf8))
+        #expect(line.contains("\"latencyMs\":87"))
+        #expect(event.boundedForLog().latencyMs == 87)
+        #expect(event.strippedForLog().latencyMs == 87)
+
+        // A line written before this field existed still decodes.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var object = try #require(JSONSerialization.jsonObject(
+            with: Data(line.utf8)) as? [String: Any])
+        object.removeValue(forKey: "latencyMs")
+        let old = try decoder.decode(HallieTranscriptEvent.self,
+                                     from: try JSONSerialization.data(withJSONObject: object))
+        #expect(old.latencyMs == nil)
+        #expect(old.text == "Answered.")
+    }
 }
