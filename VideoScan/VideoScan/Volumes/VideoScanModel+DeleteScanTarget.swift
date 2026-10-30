@@ -140,13 +140,22 @@ struct TargetRemovalScope: Sendable {
 
     /// The target's mounted volume UUID, when known (#401).
     let volumeUUID: String?
+    /// `otherRoots[i]`'s mounted volume, when known — an other target on a
+    /// different known volume never covers this target's record.
+    let otherVolumes: [String?]
 
     init(root: String, allTargetRoots: [String], volumeUUID: String? = nil) {
+        self.init(root: root, allTargets: allTargetRoots.map { ($0, nil) }, volumeUUID: volumeUUID)
+    }
+
+    init(root: String, allTargets: [(root: String, volume: String?)], volumeUUID: String?) {
         let r = PathScope.Root(root)
+        let others = allTargets
+            .map { (root: PathScope.Root($0.root), volume: $0.volume) }
+            .filter { $0.root.normalized != r.normalized }
         self.root = r
-        self.otherRoots = allTargetRoots
-            .map { PathScope.Root($0) }
-            .filter { $0.normalized != r.normalized }
+        self.otherRoots = others.map(\.root)
+        self.otherVolumes = others.map(\.volume)
         self.volumeUUID = volumeUUID
     }
 
@@ -161,8 +170,15 @@ struct TargetRemovalScope: Sendable {
     }
 
     /// `claims` for a record — the removal planner's question (#401).
+    /// Another target covers the record only when it may be on the
+    /// record's volume too (codex #184: same rule as the Delete count).
     func claims(_ rec: VideoRecord) -> Bool {
-        VolumeIdentity.mayBeSameVolume(rec.evidencedVolumeUUID, volumeUUID) && claims(rec.fullPath)
+        let volume = rec.evidencedVolumeUUID
+        let p = PathScope.normalize(rec.fullPath)
+        guard VolumeIdentity.mayBeSameVolume(volume, volumeUUID), root.containsNormalized(p) else { return false }
+        return !otherRoots.indices.contains {
+            VolumeIdentity.mayBeSameVolume(volume, otherVolumes[$0]) && otherRoots[$0].containsNormalized(p)
+        }
     }
 
     func claims(_ path: String) -> Bool {
@@ -282,9 +298,12 @@ extension VideoScanModel {
     /// `scanTargets` roots.
     func planTargetRemoval(targetID: UUID = UUID(), root: String) -> TargetRemovalPlan {
         // The same scope the Delete menu counts with (codex #1393).
-        let scope = TargetRemovalScope(root: root,
-                                       allTargetRoots: scanTargets.map(\.searchPath),
-                                       volumeUUID: ScanTargetVolume.uuid(forPath: root))
+        // Every target's volume, so "covered by another target" asks the
+        // same volume question as the Delete count (codex #184).
+        let scope = TargetRemovalScope(
+            root: root,
+            allTargets: scanTargets.map { ($0.searchPath, ScanTargetVolume.uuid(forPath: $0.searchPath)) },
+            volumeUUID: ScanTargetVolume.uuid(forPath: root))
         var doomed = Set<UUID>()
         var kept = 0
         // #401: by record, so a file on another volume at the same path is

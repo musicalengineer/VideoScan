@@ -100,6 +100,29 @@ struct ScanLocationVolumeTests {
                                          targetVolumes: [projects: ultra])[projects]?.liveFiles == 1)
     }
 
+    /// Codex #184 P1: a location nested under a location on ANOTHER drive.
+    /// The other location does not cover this drive's file, so the Delete
+    /// count and the removal plan must both own it (the #1393 contract).
+    @Test func nestedDifferentVolumesMatchRemovalCount() {
+        let parent = UUID(), child = UUID()
+        let root = "/Volumes/Projects"
+        let r = rec(root + "/a.mov", volume: ultra)
+        let facts = ScanTargetRecordFacts.project(
+            [r], targets: [(parent, "/Volumes"), (child, root)],
+            targetVolumes: [parent: m4, child: ultra])
+        let scope = TargetRemovalScope(
+            root: root, allTargets: [("/Volumes", m4), (root, ultra)], volumeUUID: ultra)
+        #expect(facts[child]?.records == 1)
+        #expect([r].filter(scope.claims).count == 1)
+        // Same drive nested: the parent covers it, neither owns it (unchanged).
+        let sameDrive = TargetRemovalScope(
+            root: root, allTargets: [("/Volumes", ultra), (root, ultra)], volumeUUID: ultra)
+        #expect([r].filter(sameDrive.claims).isEmpty)
+        #expect(ScanTargetRecordFacts.project(
+            [r], targets: [(parent, "/Volumes"), (child, root)],
+            targetVolumes: [parent: ultra, child: ultra])[child]?.records == 0)
+    }
+
     /// Scale: the pass runs inside the coalesced recompute on the main
     /// actor; the volume check must not change its cost class.
     @Test func hundredThousandRowsTwentyTargetsWithinBudget() {

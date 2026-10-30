@@ -31544,6 +31544,7 @@
         "filesOnAnotherVolumeAreNotCountedUnderTheSamePath",
         "hundredThousandRowsTwentyTargetsWithinBudget",
         "movedFileWithStaleScanVolumeStaysOnItsNewDrive",
+        "nestedDifferentVolumesMatchRemovalCount",
         "removalScopeNeverClaimsAnotherVolumesFiles",
         "sameVolumeFilesAreUnchanged",
         "unknownVolumeFallsBackToThePath"
@@ -35016,7 +35017,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 333,
+      "expected_floor": 334,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [
