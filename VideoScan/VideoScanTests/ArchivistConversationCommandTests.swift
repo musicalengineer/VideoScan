@@ -356,4 +356,52 @@ struct ArchivistConversationCommandTests {
         }
         #expect(result.route == .capability)
     }
+
+    // MARK: detect — branch walk, characterization (2026-10-29)
+    //
+    // One phrase per branch of `detect`, in the order the branches run,
+    // pinned on the unchanged CCN 32 function before it was split into
+    // named steps. Green before and after.
+    @Test func detectBranchWalkInOrder() {
+        let cases: [(String, Command?)] = [
+            ("", nil),
+            ("   ", nil),
+            ("?", .help()),
+            ("?!.", .help()),
+            ("hey hallie", .smalltalk(.greeting)),
+            ("hallie?", .smalltalk(.greeting)),
+            ("ok", nil),
+            ("please", nil),
+            ("hallie, help", .help()),
+            ("help me please", .help()),
+            ("start over", .reset),
+            ("forget that", .reset),
+            ("help with pronunciation", .help(topic: .names)),
+            ("pronunciation help", .help(topic: .names)),
+            ("how do i teach you names", .help(topic: .names)),
+            ("help with relationships", .help(topic: .relationships)),
+            ("help me find donna", nil),
+            ("good morning", .smalltalk(.greeting)),
+            ("thanks hallie!", .smalltalk(.thanks)),
+            ("Hi Hallie, how are you today?", .smalltalk(.wellbeing)),
+            ("hello Donna", nil),
+            ("How hallie, how are you?", .smalltalk(.wellbeing)),
+            ("Donna, how are you?", nil),
+            ("Hallie, how old is Donna?", nil),
+            ("ok gotta run, talk later", .smalltalk(.farewell)),
+            ("sorry, I meant something else.", .smalltalk(.apology)),
+            ("hold on a sec", .smalltalk(.holdOn)),
+            ("It's pouring rain here in the Berkshires today.", .smalltalk(.weather)),
+            ("how do i", .help()),
+            ("how do i use this", .help()),
+            ("how do i change donna's bio", nil),
+            ("what can you do", .help()),
+            ("what could i ask hallie", .help()),
+            ("what do you know about donna", nil),
+            ("show me rick", nil),
+        ]
+        for (text, want) in cases {
+            #expect(Command.detect(text) == want, Comment(rawValue: text))
+        }
+    }
 }

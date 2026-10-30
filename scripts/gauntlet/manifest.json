@@ -6911,6 +6911,7 @@
         "capabilityQuestionsWinOverHowToHelp",
         "compoundGreetingNeverReachesTheEvidencePipeline",
         "conversationalAcknowledgementsMatchWhatThePersonSaid",
+        "detectBranchWalkInOrder",
         "everydaySocialLinesGetAFriendlyReply",
         "helpAnswersLocallyWithOfferChipsAndRoute",
         "helpCardListsFamilyLanguageExamplesByKind",
@@ -34123,7 +34124,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3064,
+      "expected_floor": 3065,
       "name": "unit",
       "package_expected_floor": 406,
       "package_selectors": [
