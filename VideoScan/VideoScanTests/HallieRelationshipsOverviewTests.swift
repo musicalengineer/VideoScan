@@ -203,4 +203,79 @@ struct HallieRelationshipsOverviewTests {
         #expect(Overview.plural("sister-in-law") == "sisters-in-law")
         #expect(Overview.plural("older brother") == "older brothers")
     }
+
+    // MARK: answer — characterization (2026-10-29, before the split)
+    //
+    // The early answers no test above reaches (unreadable / empty tab, an
+    // owner with no profile or two, a name nobody or two profiles claim,
+    // the owner's own name typed, a tab of one) and the third-person
+    // phrasing, each pinned as the unchanged CCN 32 answer produced it.
+
+    private static let twoTims: [Profile] = [
+        Profile(stableID: "tim1", canonicalName: "Tim", aliases: ["Timothy"], sex: .male),
+        Profile(stableID: "tim2", canonicalName: "Tim", aliases: ["Timmy"], sex: .male),
+    ]
+
+    /// (outcome, prose, basis, queryDescription, offeredActions.count) per case.
+    private static let expectedEarly: [String: (HallieTurnExecutor.Outcome, String, String, String, Int)] = [
+        "unreadable": (.declined, "I couldn't read the People tab just now, so I can't work out who is related to whom.",
+                 "Basis: People profiles were unreadable; no model call.",
+                 "shape=relationships-overview subject=owner", 0),
+        "empty": (.declined, "The People tab is empty so far — add people there, record their relationships, and I'll lay them out.",
+                 "Basis: People profiles (0); no model call.",
+                 "shape=relationships-overview subject=owner", 1),
+        "owner-none": (.declined, "I know you're Zed Quill, but there's no People-tab profile by that name — add one and record your relationships there, and I'll lay them out.",
+                 "Basis: owner “Zed Quill”; People profiles (10) — none claims that name; no model call.",
+                 "shape=relationships-overview subject=owner", 1),
+        "owner-two": (.needsClarification, "Which Tim do you mean — Tim (tim1) or Tim (tim2)?",
+                 "Basis: “Tim” is claimed by 2 People-tab profiles; nothing was looked up.",
+                 "shape=relationships-overview subject=owner", 2),
+        "named-none": (.declined, "I don't have a People-tab profile for “Zed”, so I can't lay out their relationships. Add one there and I'll know the name.",
+                 "Basis: People profiles (10) — none claims “zed”; no model call.",
+                 "shape=relationships-overview subject=zed", 1),
+        "named-two": (.needsClarification, "Which Tim do you mean — Tim (tim1) or Tim (tim2)?",
+                 "Basis: “tim” is claimed by 2 People-tab profiles; nothing was looked up.",
+                 "shape=relationships-overview subject=tim", 2),
+        "owner-typed-full": (.answered, "You're related to 8 of the 9 other people in the People tab. Nearest first: Dad, Ma — your parents · Beth, Dan, Mark, Matt — your children · Donna — your wife · Tim — your brother · Anna — no relationship recorded yet. That's from your entries in the People tab; derived where marked.",
+                 "Basis: People-tab relationships (10 profiles; 8 linked to Rick, 1 unrecorded); no family tree installed (local-only); no model call.",
+                 "shape=relationships-overview subject=rick breen", 7),
+        "owner-typed-surname": (.declined, "I don't have a People-tab profile for “Breen”, so I can't lay out their relationships. Add one there and I'll know the name.",
+                 "Basis: People profiles (10) — none claims “breen”; no model call.",
+                 "shape=relationships-overview subject=breen", 1),
+        "only-one": (.declined, "You're the only person in the People tab so far, so there's nobody to relate you to yet.",
+                 "Basis: People profiles (1); no model call.",
+                 "shape=relationships-overview subject=owner", 1),
+        "third-person": (.answered, "Tim is related to 8 of the 9 other people in the People tab. Nearest first: Dad, Ma — Tim's parents (derived: full siblings share parents) · Rick — Tim's brother · Beth, Dan, Mark, Matt — Tim's nieces and nephews (derived) · Donna — Tim's sister-in-law (derived) · Anna — no relationship recorded yet. That's from the entries in the People tab; derived where marked.",
+                 "Basis: People-tab relationships (10 profiles; 8 linked to Tim, 1 unrecorded; 5 derived; 2 derived: full siblings share parents); no family tree installed (local-only); no model call.",
+                 "shape=relationships-overview subject=tim", 7),
+    ]
+
+    @Test func earlyAnswersAndThirdPersonPhrasing() {
+        let speakers = HallieTurnExecutor.Speakers(ownerName: "Rick Breen", archivistName: "Hallie Mae")
+        let cases: [(String, Overview.Ask, HallieTurnExecutor.Context)] = [
+            ("unreadable", .init(subject: .owner), .init(profiles: nil, speakers: speakers)),
+            ("empty", .init(subject: .owner), .init(profiles: [], speakers: speakers)),
+            ("owner-none", .init(subject: .owner), .init(profiles: Self.profiles, speakers: .init(ownerName: "Zed Quill", archivistName: nil))),
+            ("owner-two", .init(subject: .owner), .init(profiles: Self.twoTims, speakers: .init(ownerName: "Tim", archivistName: nil))),
+            ("named-none", .init(subject: .named("zed")), Self.context()),
+            ("named-two", .init(subject: .named("tim")), .init(profiles: Self.twoTims, speakers: speakers)),
+            ("owner-typed-full", .init(subject: .named("rick breen")), Self.context()),
+            ("owner-typed-surname", .init(subject: .named("breen")), Self.context()),
+            ("only-one", .init(subject: .owner), .init(profiles: [Self.profiles[0]], speakers: speakers)),
+            ("third-person", .init(subject: .named("tim")), Self.context()),
+        ]
+        #expect(cases.count == Self.expectedEarly.count)
+        for (label, ask, context) in cases {
+            let r = Overview.answer(ask, context: context)
+            guard let want = Self.expectedEarly[label] else {
+                Issue.record("no expectation for \(label)"); continue
+            }
+            #expect(r.outcome == want.0, Comment(rawValue: label))
+            #expect(r.prose == want.1, Comment(rawValue: label))
+            #expect(r.basisLine == want.2, Comment(rawValue: label))
+            #expect(r.queryDescription == want.3, Comment(rawValue: label))
+            #expect(r.offeredActions.count == want.4, Comment(rawValue: label))
+            #expect(r.route == .capability, Comment(rawValue: label))
+        }
+    }
 }
