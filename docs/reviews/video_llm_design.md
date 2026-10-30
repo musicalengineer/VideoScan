@@ -1,6 +1,6 @@
 # Video LLM design: review notes for the Fri/Sat deep dive
 
-*Claude, 2026-10-29. Notes on `docs/proposed_video_llms_for_breen_media.md` (the design) and
+*Claude, 2026-10-29. Notes on `docs/design/video_llm_lab_2026_10_30.md` (the design) and
 `docs/research/video_llm_for_family_media_2026-10-29.md` (the research note), both written by Claude Code web
 sessions on 10/29. Overwrite this file as the review moves on; do not add a second one.*
 

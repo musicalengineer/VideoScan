@@ -4,7 +4,7 @@ Rick's charter, eight living files rewritten in place, and reference guides. Eve
 
 | Read it when | File |
 |---|---|
-| First, and whenever direction is in doubt | [`Purpose-and-Charter.md`](Purpose-and-Charter.md) — Rick's purpose, the tabs, INGEST → MANAGE → ARCHIVE, process expectations, in his words (Rick edits this; agents don't) |
+| First, and whenever direction is in doubt | [`Purpose-and-Charter.md`](Purpose-and-Charter.md) — Rick's purpose, the tabs, INGEST → MANAGE → ARCHIVE, process expectations, in his words (Rick edits this; agents add only **Claude Feedback** blocks when he asks) |
 | Starting any session | [`STATUS.md`](STATUS.md) — this week's theme, what is in flight, next steps, open rulings |
 | Before touching code | [`ARCHITECTURE.md`](ARCHITECTURE.md) — INGEST → MANAGE → ARCHIVE, tabs, subsystems, data-risk map |
 | Before changing a module | [`DESIGN.md`](DESIGN.md) — the contracts each module keeps |
