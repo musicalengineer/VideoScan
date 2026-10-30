@@ -208,29 +208,33 @@ struct HallieDeepAncestorTests {
         #expect(r.queryDescription == "deep ancestor ×5 M: Rick Breen")
     }
 
-    /// 17 generations (131,071 people). Generation 16 alone needs 32,768
-    /// expansions on top of 32,767 before it, so the 50,000-expansion cap
-    /// always trips inside generation 16 (the 0.15 s clock may trip first
-    /// in Debug); the counts it prints are machine-dependent and not pinned.
+    /// Both budget branches, reached by COUNT: an 8-generation pedigree
+    /// (255 people) with a 100-expansion cap and an hour on the clock.
+    /// Generations 1–6 take 63 expansions; the cap trips 37 people into
+    /// generation 7. (codex 2026-10-29: the first version used the real
+    /// 0.15 s clock on 131k people, which a loaded host could trip earlier.)
     @Test func walkBudgetIsSaidOnAPartialAnswerAndDeclinesShortOfTheGeneration() throws {
-        let graph = GedcomFamilyGraph(gedcomText: Self.binaryPedigree(generations: 17))
+        let graph = GedcomFamilyGraph(gedcomText: Self.binaryPedigree(generations: 8))
         let root = try #require(graph.people["@I1@"])
+        let budget = HallieLineageAnswer.DeepAncestorBudget(maxExpanded: 100, timeBudget: 3600)
         // Budget trips while filling the asked generation: a partial list, said so.
-        let partial = HallieLineageAnswer.deepAncestors(of: root, depth: 16, sex: nil, side: nil, graph: graph)
+        let partial = HallieLineageAnswer.deepAncestors(of: root, depth: 7, sex: nil, side: nil,
+                                                        graph: graph, budget: budget)
         #expect(partial.outcome == .answered)
-        #expect(partial.prose.hasPrefix("Person N1’s 14th-great-grandparents: Person N65536 ("), Comment(rawValue: String(partial.prose.prefix(120))))
-        #expect(partial.prose.contains(" I stopped the walk at its budget ("))
-        #expect(partial.prose.hasSuffix(" people examined), so there may be others."))
-        #expect(partial.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 16 generations up. Walk stopped at its budget; there may be more.")
+        #expect(partial.prose.hasPrefix("Person N1’s 5th-great-grandparents: Person N128 ("), Comment(rawValue: String(partial.prose.prefix(120))))
+        #expect(partial.prose.hasSuffix(" There are 49 more at that generation I haven’t listed (74 in all). I stopped the walk at its budget (100 people examined), so there may be others."),
+                Comment(rawValue: partial.prose))
+        #expect(partial.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 7 generations up. Walk stopped at its budget; there may be more.")
         #expect(partial.offeredActions.count == 3)
-        // One generation further: the budget trips before generation 17 has anyone.
-        let short = HallieLineageAnswer.deepAncestors(of: root, depth: 17, sex: nil, side: nil, graph: graph)
+        // One generation further: the budget trips before generation 8 has anyone.
+        let short = HallieLineageAnswer.deepAncestors(of: root, depth: 8, sex: nil, side: nil,
+                                                      graph: graph, budget: budget)
         #expect(short.outcome == .declined)
-        #expect(short.prose.hasPrefix("Person N1’s ancestry fans out too far for me to reach a 15th-great-grandparent in one go — I examined "),
-                Comment(rawValue: short.prose))
-        #expect(short.prose.hasSuffix(" people across 16 generations and stopped. Try one line (paternal or maternal) or a smaller count."),
-                Comment(rawValue: short.prose))
-        #expect(short.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 17 generations up. Walk stopped at its budget.")
+        #expect(short.prose == "Person N1’s ancestry fans out too far for me to reach a 6th-great-grandparent in one go — I examined 100 people across 7 generations and stopped. Try one line (paternal or maternal) or a smaller count.")
+        #expect(short.basisLine == "Basis: imported family tree (GEDCOM); ancestor walk 8 generations up. Walk stopped at its budget.")
+        // The production budget is the two static caps, unchanged.
+        #expect(HallieLineageAnswer.DeepAncestorBudget.production.maxExpanded == 50_000)
+        #expect(HallieLineageAnswer.DeepAncestorBudget.production.timeBudget == 0.15)
     }
 
     /// Heap-indexed binary pedigree (person n's parents are 2n and 2n+1).

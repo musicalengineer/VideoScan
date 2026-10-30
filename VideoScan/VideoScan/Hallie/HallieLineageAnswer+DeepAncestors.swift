@@ -21,6 +21,17 @@ extension HallieLineageAnswer {
     static let deepAncestorMaxExpanded = 50_000
     static let deepAncestorTimeBudget: TimeInterval = 0.15
 
+    /// The walk's two limits. Production always uses the caps above; tests
+    /// pass a small expansion cap and a generous clock so a budget branch
+    /// is reached by COUNT, never by machine speed (codex, 2026-10-29: the
+    /// 0.15 s clock alone made a budget test depend on the host's load).
+    struct DeepAncestorBudget: Sendable {
+        var maxExpanded: Int
+        var timeBudget: TimeInterval
+        static let production = DeepAncestorBudget(
+            maxExpanded: deepAncestorMaxExpanded, timeBudget: deepAncestorTimeBudget)
+    }
+
     /// Every ancestor exactly `depth` generations above `person` (first
     /// hop through `side` when given, final hop filtered by `sex`), each
     /// with ONE route the tree records — the same shape the ≤ great-great
@@ -39,13 +50,14 @@ extension HallieLineageAnswer {
                               // tests that ask only about tree shape keep
                               // compiling; `answer` always passes the real
                               // lens (HallieVitalDates migration, 2026-09-06).
-                              lens: HallieVitalDates.Lens = .treeOnly) -> Result {
+                              lens: HallieVitalDates.Lens = .treeOnly,
+                              budget: DeepAncestorBudget = .production) -> Result {
         let sexFilter = (sex?.isEmpty ?? true) ? nil : sex
         let sideWord = side.map { "\($0.rawValue) " } ?? ""
         // The noun uses the depth as asked; the walk clamps it to ≥ 1.
         let noun = sideWord + GedcomFamilyGraph.generationLabel(generations: depth, sex: sexFilter ?? "")
         let depth = max(1, depth)
-        let walk = DeepAncestorWalk.run(from: person, depth: depth, side: side, graph: graph)
+        let walk = DeepAncestorWalk.run(from: person, depth: depth, side: side, graph: graph, budget: budget)
         let ask = DeepAncestorAsk(
             person: person, depth: depth, side: side, noun: noun,
             base: "Basis: imported family tree (GEDCOM); ancestor walk \(depth) generations up"
@@ -89,7 +101,7 @@ extension HallieLineageAnswer {
     /// downward. A value type returned by `run`, like a struct returned by
     /// value; `route` / `routeContains` are const member functions.
     ///
-    /// Worst-case memory: `deepAncestorMaxExpanded` (50,000) expansions,
+    /// Worst-case memory: `budget.maxExpanded` (50,000 in production) expansions,
     /// each adding at most its parents once per level — a few hundred
     /// thousand (String, String) entries and Person copies at most.
     private struct DeepAncestorWalk {
@@ -102,7 +114,8 @@ extension HallieLineageAnswer {
         static func run(from person: GedcomFamilyGraph.Person,
                         depth: Int,
                         side: ArchivistQueryAST.Graph.Side?,
-                        graph: GedcomFamilyGraph) -> DeepAncestorWalk {
+                        graph: GedcomFamilyGraph,
+                        budget: DeepAncestorBudget) -> DeepAncestorWalk {
             var walk = DeepAncestorWalk()
             var frontier = [person]
             let started = Date()
@@ -111,8 +124,8 @@ extension HallieLineageAnswer {
                 var seenHere: Set<String> = []
                 var predHere: [String: String] = [:]
                 for from in frontier {
-                    if walk.expanded >= deepAncestorMaxExpanded
-                        || Date().timeIntervalSince(started) > deepAncestorTimeBudget {
+                    if walk.expanded >= budget.maxExpanded
+                        || Date().timeIntervalSince(started) > budget.timeBudget {
                         walk.budgetHit = true
                         break
                     }
