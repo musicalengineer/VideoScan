@@ -188,5 +188,50 @@ class LiveReplayTests(unittest.TestCase):
         self.assertNotIn("--speech", args)
 
 
+    # GEDCOM pull dates (2026-10-30): the row says which pulls the replayed tree
+    # was built from — export day, short hash, on_disk — and nothing else, because
+    # the row is published. The labelled lines go to the private log dir only.
+    def _gedcom_fixture(self):
+        import hashlib, shutil
+        shutil.copy(RUNNER.parent / "gedcom_pulls.py", self.root / "scripts/gedcom_pulls.py")
+        ged = self.root / "GEDCOM"
+        ged.mkdir()
+        pull = ("0 HEAD\n1 SOUR getmyancestors\n1 DATE 26 Aug 2026\n2 TIME 05:07:30\n"
+                "0 @I1@ INDI\n1 NAME Pat /Testsurname/\n0 TRLR\n")
+        (ged / "test-pull.ged").write_text(pull)
+        sha = hashlib.sha256(pull.encode()).hexdigest()
+        compiled = self.root / "compiled"
+        (compiled / "gen-x").mkdir(parents=True)
+        (compiled / "current.json").write_text(json.dumps({"current": "gen-x"}))
+        (compiled / "gen-x/manifest.json").write_text(json.dumps({
+            "generation": "gen-x", "createdAt": "2026-10-21T21:10:45Z", "logicalSources": [],
+            "sources": [{"fileName": "test-pull.ged", "path": str(ged / "test-pull.ged"), "sha256": sha}]}))
+        self.env["VIDEOSCAN_FAMILY_TREE_COMPILED_ROOT"] = str(compiled)
+        self.env.pop("VIDEOSCAN_HALLIE_REPLAY_GEDCOM", None)
+        return ged, sha
+
+    def test_row_records_the_pulls_without_names(self):
+        ged, sha = self._gedcom_fixture()
+        for extra, name in (((), "archive"), (("--gedcom", str(ged)), "folder")):
+            output = self.root / f"summary-{name}.json"
+            result = self.run_replay("--out", str(output), *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            row = json.loads(output.read_text())
+            self.assertEqual(row["hallie_replay_gedcom_pulls"],
+                             {"status": "ok", "pulls": [{"date": "2026-08-26", "sha": sha[:8], "on_disk": True}]}, name)
+            self.assertNotIn("Testsurname", output.read_text())
+            self.assertNotIn("test-pull", json.dumps(row["hallie_replay_gedcom_pulls"]))
+        logs = list((self.root / "logs").glob("nightly-*-gedcom-pulls.txt"))
+        self.assertTrue(logs)
+        self.assertIn("Testsurname GEDCOM 26 Aug 2026 05:07:30", logs[0].read_text())
+
+    def test_row_says_unreadable_when_the_helper_cannot_run(self):
+        output = self.root / "summary.json"
+        result = self.run_replay("--out", str(output))           # no gedcom_pulls.py in this REPO
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(output.read_text())["hallie_replay_gedcom_pulls"],
+                         {"status": "unreadable", "pulls": []})
+
+
 if __name__ == "__main__":
     unittest.main()

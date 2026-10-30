@@ -184,6 +184,14 @@ SHA=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)
 TREE_GEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["current"])' \
     "$HOME/Library/Application Support/VideoScan/family-tree/compiled/current.json" 2>/dev/null || echo unknown)
 sha256() { shasum -a 256 "$1" 2>/dev/null | cut -c1-16; }
+# Which GEDCOM pulls the replayed tree was built from (scripts/gedcom_pulls.py,
+# read-only; the same rules as the Family Tree tab's "<Surname> GEDCOM <date>"
+# lines). The row is PUBLIC (metrics branch), so it carries only each pull's
+# export day, short hash and on_disk — no surname, no file name (privacy rule
+# 13). The labelled lines go to the private log dir.
+GEDCOM_PULLS=$(python3 "$REPO/scripts/gedcom_pulls.py" --public ${GEDCOM:+--gedcom "$GEDCOM"} 2>/dev/null) \
+    || GEDCOM_PULLS='{"status":"unreadable","pulls":[]}'
+python3 "$REPO/scripts/gedcom_pulls.py" ${GEDCOM:+--gedcom "$GEDCOM"} > "$LOGDIR/nightly-$STAMP-gedcom-pulls.txt" 2>&1 || true
 
 # The lane runner. Writes <lane>.summary.json via the harness and returns the
 # harness's own verdict; a lane that overruns its share of the budget is
@@ -277,7 +285,8 @@ PYEOF
 )
 
 python3 - "$OUT" "$STATUS" "$STRICT_JSON" "$ADVISORY_JSON" "$ELAPSED" "$SHA" "$BIN" "$HOST" "$MODEL" "$TREE_GEN" \
-        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" "$LIVE" "${GEDCOM:-}" <<'PYEOF'
+        "$(sha256 "$STRICT_CORPUS")" "$(sha256 "$ADVISORY_CORPUS")" "$STAMP" "$MODEL_SOURCE" "$LIVE" "${GEDCOM:-}" \
+        "$GEDCOM_PULLS" <<'PYEOF'
 import json, os, sys, time
 out, status, strict, advisory, elapsed, sha, binary, host, model, tree, msha, csha, stamp, source = sys.argv[1:15]
 def incomplete_count(s):
@@ -286,6 +295,17 @@ def incomplete_count(s):
     if isinstance(v, bool):
         return max(0, int(s.get("expected", s.get("total", 0)) or 0) - int(s.get("completed", 0) or 0)) if v else 0
     return int(v or 0)
+
+def pulls_field(js):
+    try:
+        v = json.loads(js)
+        if isinstance(v, dict) and v.get("status") in ("ok", "no-tree") and isinstance(v.get("pulls"), list):
+            return {"status": v["status"],
+                    "pulls": [{"date": p.get("date"), "sha": str(p.get("sha", ""))[:8], "on_disk": bool(p.get("on_disk"))}
+                              for p in v["pulls"] if isinstance(p, dict)]}
+    except ValueError:
+        pass
+    return {"status": "unreadable", "pulls": []}
 
 def lane(js, name):
     s = json.loads(js) if js and js != 'null' else {"status": "not-run"}
@@ -312,6 +332,8 @@ row = {"hallie_replay_status": status,
        # app) or the explicit --gedcom a test host without the archive used.
        "hallie_replay_gedcom": (sys.argv[16] if len(sys.argv) > 16 and sys.argv[16] else "archive"),
        "hallie_replay_tree_generation": tree,
+       # Per pull the tree used: export day, short sha, on_disk. No names (public row).
+       "hallie_replay_gedcom_pulls": pulls_field(sys.argv[17] if len(sys.argv) > 17 else ""),
        "hallie_replay_manifest_sha256": msha,
        "hallie_replay_corpus_sha256": csha}
 row.update(lane(strict, "strict"))

@@ -30274,6 +30274,34 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_gedcom_pulls.py",
+      "stage": "unit",
+      "suites": [
+        "test_gedcom_pulls.py"
+      ],
+      "tests": [
+        "test_ancestry_and_videoscan_merge_headers",
+        "test_cli_public_json_honours_the_compiled_root_override",
+        "test_compiled_tree_live_shape",
+        "test_crlf_bom_and_cr_only_files",
+        "test_found_in_subdir_by_name_and_hash",
+        "test_gedcom_folder_newest_merge_lists_its_pulls",
+        "test_gedcom_single_plain_file_describes_itself",
+        "test_getmyancestors_header_and_print",
+        "test_header_read_on_100mb_pull_is_fast",
+        "test_hidden_folders_and_symlinks_are_ignored",
+        "test_malformed_dates_are_none",
+        "test_malformed_time_keeps_the_day",
+        "test_missing_head_date_is_none_and_sour_date_is_not_taken",
+        "test_no_indi_or_no_slashes_is_no_label",
+        "test_no_tree_is_reported_not_guessed",
+        "test_public_shape_has_no_names",
+        "test_wrong_hash_and_missing_file_are_not_on_disk"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_grade_paired_presence_report.py",
       "stage": "unit",
       "suites": [
@@ -30565,6 +30593,8 @@
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
+        "test_gedcom_line_compares_the_pulls_each_mac_replayed",
+        "test_gedcom_line_never_shows_a_name_or_markup_from_the_row",
         "test_hallie_replay_revision_is_distinct_from_nightly_test_revision",
         "test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly_results",
         "test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes",
@@ -30786,6 +30816,8 @@
         "test_live_without_speech_remains_silent",
         "test_nonlive_keeps_terminal_clean",
         "test_nonlive_requires_output",
+        "test_row_records_the_pulls_without_names",
+        "test_row_says_unreadable_when_the_helper_cannot_run",
         "test_run_failure_is_not_hidden_by_successful_grading",
         "test_speech_implies_live_and_is_forwarded_to_both_lanes",
         "test_unknown_yellow_is_not_reported_as_zero"
@@ -34016,6 +34048,10 @@
         },
         {
           "name": "tests/test_footage_spectrum.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_gedcom_pulls.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

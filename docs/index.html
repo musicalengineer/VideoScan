@@ -1243,6 +1243,38 @@ const SUMMARY = {
   },
 };
 
+// The GEDCOM pulls each Mac's Hallie replay tree was built from
+// (hallie_replay_gedcom_pulls, scripts/gedcom_pulls.py). The row is public, so
+// it carries per pull only the export day, a short hash and on_disk — never a
+// surname or a file name. green = every Mac's tree names the same pulls;
+// watch = they differ; red = a Mac whose replay had no readable tree;
+// grey = a Mac whose last row predates the field.
+const GEDCOM_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function gedcomPullsLine(rows) {
+  const byHost = {};
+  for (const r of rows) byHost[hostLabel(r.host) || "?"] = r;
+  const hosts = Object.keys(byHost);
+  if (!hosts.length) return null;
+  const dayOf = iso => {
+    const m = typeof iso === "string" ? iso.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
+    return m && +m[2] >= 1 && +m[2] <= 12 ? `${+m[3]} ${GEDCOM_MONTHS[+m[2] - 1]} ${m[1]}` : "no date in file";
+  };
+  const shaOf = p => String(p && p.sha || "").replace(/[^0-9a-f]/g, "").slice(0, 8);
+  let red = false, grey = false;
+  const parts = [], trees = [];
+  for (const h of hosts) {
+    const g = byHost[h].hallie_replay_gedcom_pulls, name = esc(hostName(h));
+    if (!g || typeof g !== "object") { parts.push(`${name}: not recorded`); grey = true; continue; }
+    const pulls = Array.isArray(g.pulls) ? g.pulls.filter(p => p && typeof p === "object") : [];
+    const onDisk = pulls.filter(p => p.on_disk === true);
+    if (g.status !== "ok" || !onDisk.length) { parts.push(`${name}: no readable tree`); red = true; continue; }
+    parts.push(`${name}: ${onDisk.map(p => `${dayOf(p.date)} · ${shaOf(p)}`).join(", ")}`);
+    trees.push(pulls.map(shaOf).sort().join(","));
+  }
+  const state = red ? "red" : new Set(trees).size > 1 ? "watch" : grey ? "grey" : "green";
+  return { state, html: `<p class="gedcom-line" id="hallie-gedcom-line" data-state="${state}">${dot(state)} <b>GEDCOM</b>&nbsp; ${parts.join(" | ")}</p>` };
+}
+
 function hallieRows(d) {
   // Pass rate over the cases that COMPLETED. A replay that completed nothing
   // (model missing, timed out) is a gap, never a 0 % pass rate.
@@ -1579,8 +1611,9 @@ const BODIES = {
       cards.push(card("Advisory passed", of(g.hallie_advisory_pass, g.hallie_advisory_completed, g.hallie_advisory_expected), null, null, false, ""));
       cards.push(card("Last completed replay", `${day(g.ts)} · ${hostLabel(g.host) || "?"}`, null, null, false, ""));
     }
+    const gedcom = gedcomPullsLine(h.rows);
     body.innerHTML = moved("Moved here unchanged: the Hallie testbed cards and pass-rate chart. The rate is over the cases that completed; a replay that completed nothing is a gap, never 0 %.") +
-      `<div class="cards">${cards.join("")}</div><div class="charts">` + chartBox("Pass rate per completed replay, % (strict · advisory)", "c-hallie", "wide") + "</div>";
+      (gedcom ? gedcom.html : "") + `<div class="cards">${cards.join("")}</div><div class="charts">` + chartBox("Pass rate per completed replay, % (strict · advisory)", "c-hallie", "wide") + "</div>";
     if (!h.graded.length) { note("c-hallie", "No nightly Hallie replay has completed a case yet."); return; }
     chartOrNote("c-hallie", "line", dateLabels(h.graded), [
       { label: "strict %", data: h.graded.map(h.strictRate), ...lineStyle(C.green) },

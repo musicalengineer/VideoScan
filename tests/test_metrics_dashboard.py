@@ -937,6 +937,60 @@ def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path)
     assert "aaaaaaa" not in out["sections"]["evidence-hallie"]
 
 
+def _gedcom_rows(now, m4_pulls, ultra_pulls):
+    base = {"source": "nightly-local", "branch": "main", "status": "ok", "passed": 10, "failed": 0, "skipped": 0,
+            "total": 10, "hallie_strict_status": "ok", "hallie_strict_pass": 5, "hallie_strict_completed": 5,
+            "hallie_strict_expected": 5, "hallie_replay_status": "ok"}
+    rows = []
+    for host, pulls in (("RicksM4", m4_pulls), ("RicksUltra", ultra_pulls)):
+        row = dict(base, ts=iso(now - timedelta(hours=2)), host=host)
+        if pulls is not None:
+            row["hallie_replay_gedcom_pulls"] = pulls
+        rows.append(row)
+    return rows
+
+
+SAME = {"status": "ok", "pulls": [{"date": "2026-08-26", "sha": "aaaa1111", "on_disk": True},
+                                  {"date": None, "sha": "cccc3333", "on_disk": False},
+                                  {"date": "2026-08-28", "sha": "bbbb2222", "on_disk": True}]}
+
+
+@needs_node
+@pytest.mark.parametrize("m4, ultra, state, words", [
+    (SAME, SAME, "green", ["M5 Ultra: 26 Aug 2026 · aaaa1111, 28 Aug 2026 · bbbb2222", "M4: 26 Aug 2026 · aaaa1111"]),
+    (SAME, {"status": "ok", "pulls": [{"date": "2026-09-30", "sha": "dddd4444", "on_disk": True}]}, "watch",
+     ["M5 Ultra: 30 Sep 2026 · dddd4444"]),
+    (SAME, {"status": "no-tree", "pulls": []}, "red", ["M5 Ultra: no readable tree"]),
+    (SAME, {"status": "ok", "pulls": [{"date": None, "sha": "cccc3333", "on_disk": False}]}, "red",
+     ["M5 Ultra: no readable tree"]),
+    (SAME, None, "grey", ["M5 Ultra: not recorded"]),
+])
+def test_gedcom_line_compares_the_pulls_each_mac_replayed(tmp_path, m4, ultra, state, words):
+    """GEDCOM pull dates (2026-10-30): one line in the Hallie twist, per Mac the export
+    day + short hash of each pull its replay tree used. Same pulls → green, different →
+    watch (yellow), a Mac with no readable tree → red; a row from before the field → grey."""
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    fixtures["testdriver.jsonl"] += jsonl(_gedcom_rows(now, m4, ultra))
+    out = run_page(tmp_path, fixtures)
+    body = out["sections"]["body-hallie"]
+    assert f'data-state="{state}"' in body, body
+    for w in words:
+        assert w in body, (w, body)
+
+
+@needs_node
+def test_gedcom_line_never_shows_a_name_or_markup_from_the_row(tmp_path):
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    poisoned = {"status": "ok", "pulls": [{"date": "<b>SECRET</b>", "sha": "<script>x</script>", "on_disk": True,
+                                           "label": "Secretsurname", "file": "SECRET-FILE.ged"}]}
+    fixtures["testdriver.jsonl"] += jsonl(_gedcom_rows(now, poisoned, poisoned))
+    body = run_page(tmp_path, fixtures)["sections"]["body-hallie"]
+    assert "Secretsurname" not in body and "SECRET" not in body and "<script>" not in body
+    assert "no date in file" in body
+
+
 def test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes():
     page = PAGE.read_text()
     assert not re.search(r"\bon(?:click|change|submit|keydown)\s*=", page)
