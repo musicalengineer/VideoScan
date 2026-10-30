@@ -19,6 +19,8 @@ import Testing
 //   never prefix the invented-year basis note               | inventedYearIsDroppedAndSaidFirst
 //   drop the tree-mode `inMode(.tree)` stamp                | treeModeAgeAnswerIsStampedTree
 //   skip the commonAncestor branch (falls to the graph lane)| commonAncestorNeedsExactlyTwoNames
+//   (after the split) pass rawPayload, not repaired.payload | restoredYearIsTheYearTheAgeIsCountedTo,
+//                                                           | inventedYearIsNotCountedTo
 //
 // Green on the unchanged code, green after the refactor.
 
@@ -55,6 +57,34 @@ struct HallieTurnExecutorDispatchCharacterizationTests {
         let r = try await ask("how old was donna in 1985", age("donna", .currentSelection))
         #expect(r.route == .temporal)
         #expect(r.basisLine == "Basis: the question says 1985; the translator left it out, so I counted to 1985; profile evidence could not be read.")
+    }
+
+    // With a real profile the repaired reference must reach the age lane
+    // (codex cycle #173: the two tests above stop at the profile decline,
+    // so passing the RAW payload on would still pass them).
+    private var donnaBorn1950: Exec.Context {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(secondsFromGMT: 0)!
+        let born = c.date(from: DateComponents(year: 1950, month: 6, day: 15, hour: 12))!
+        return .init(profiles: [.init(stableID: "donna", canonicalName: "Donna", aliases: [], birthdate: born)])
+    }
+
+    @Test func restoredYearIsTheYearTheAgeIsCountedTo() async throws {
+        let r = try await ask("how old was donna in 1985", age("donna", .currentSelection),
+                              context: donnaBorn1950)
+        #expect(r.outcome == .answered)
+        #expect(r.prose == "Donna was 34–35 years old during 1985, depending on the date.")
+        #expect(r.basisLine.hasPrefix("Basis: the question says 1985; the translator left it out, so I counted to 1985; Donna's People profile birthdate 1950-06-15; "),
+                Comment(rawValue: r.basisLine))
+    }
+
+    @Test func inventedYearIsNotCountedTo() async throws {
+        let r = try await ask("how old was donna?", age("donna", .explicitYear(1994)),
+                              context: donnaBorn1950)
+        // The dropped year must not be counted to: no selection → ask for one.
+        #expect(r.outcome == .declined)
+        #expect(r.prose.hasPrefix("I need a dated video to count from"), Comment(rawValue: r.prose))
+        #expect(r.basisLine == "Basis: the translator supplied year 1994, which the question never mentions, so it was ignored; the selected catalog record has no dated evidence.")
     }
 
     @Test func yearTheQuestionStatesIsKeptWithoutANote() async throws {
