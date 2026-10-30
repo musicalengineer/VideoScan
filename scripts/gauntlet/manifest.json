@@ -31531,6 +31531,39 @@
         "test_usage_errors_exit_2",
         "test_zero_tests_is_red"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ScanLocationVolumeTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ScanLocationVolumeTests"
+      ],
+      "tests": [
+        "deleteMenuCountIsZeroForAnotherVolumesFiles",
+        "filesOnAnotherVolumeAreNotCountedUnderTheSamePath",
+        "hundredThousandRowsTwentyTargetsWithinBudget",
+        "movedFileWithStaleScanVolumeStaysOnItsNewDrive",
+        "removalScopeNeverClaimsAnotherVolumesFiles",
+        "sameVolumeFilesAreUnchanged",
+        "unknownVolumeFallsBackToThePath"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/RecordVolumeEvidenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RecordVolumeEvidenceTests"
+      ],
+      "tests": [
+        "auditSightingOutranksEverything",
+        "emptyOrZeroEvidenceFallsThrough",
+        "fixityStampOutranksAStaleScanVolume",
+        "noEvidenceIsUnknown",
+        "sameVolumeRuleRefusesOnlyKnownAndDifferent",
+        "scanContextAloneIsUsedAndNormalized"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -34983,9 +35016,9 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 326,
+      "expected_floor": 333,
       "name": "regression",
-      "package_expected_floor": 280,
+      "package_expected_floor": 286,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -35028,7 +35061,8 @@
         "VideoScanCoreTests.CatalogCornerCases2026_10_25Tests",
         "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests",
         "VideoScanCoreTests.CatalogStoreOpenVerdictTests",
-        "VideoScanCoreTests.SQLiteWALSidecarTests"
+        "VideoScanCoreTests.SQLiteWALSidecarTests",
+        "VideoScanCoreTests.RecordVolumeEvidenceTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -35118,7 +35152,8 @@
         "VideoScanTests/ExternalPlayerAudioRouteSourceSensor",
         "VideoScanTests/CatalogVolumePillLogicTests",
         "VideoScanTests/CatalogVolumePillRegressionTests",
-        "VideoScanTests/CatalogVolumePillSensorTests"
+        "VideoScanTests/CatalogVolumePillSensorTests",
+        "VideoScanTests/ScanLocationVolumeTests"
       ]
     },
     {

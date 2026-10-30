@@ -138,16 +138,31 @@ struct TargetRemovalScope: Sendable {
     /// normalization) is not "other".
     let otherRoots: [PathScope.Root]
 
-    init(root: String, allTargetRoots: [String]) {
+    /// The target's mounted volume UUID, when known (#401).
+    let volumeUUID: String?
+
+    init(root: String, allTargetRoots: [String], volumeUUID: String? = nil) {
         let r = PathScope.Root(root)
         self.root = r
         self.otherRoots = allTargetRoots
             .map { PathScope.Root($0) }
             .filter { $0.normalized != r.normalized }
+        self.volumeUUID = volumeUUID
     }
 
     func isUnderRoot(_ path: String) -> Bool {
         root.contains(path)
+    }
+
+    /// `isUnderRoot` for a record: its current path, and its evidenced
+    /// volume must not be a different known volume (#401).
+    func isUnderRoot(_ rec: VideoRecord) -> Bool {
+        VolumeIdentity.mayBeSameVolume(rec.evidencedVolumeUUID, volumeUUID) && isUnderRoot(rec.fullPath)
+    }
+
+    /// `claims` for a record — the removal planner's question (#401).
+    func claims(_ rec: VideoRecord) -> Bool {
+        VolumeIdentity.mayBeSameVolume(rec.evidencedVolumeUUID, volumeUUID) && claims(rec.fullPath)
     }
 
     func claims(_ path: String) -> Bool {
@@ -160,6 +175,25 @@ struct TargetRemovalScope: Sendable {
     func claimsNormalized(_ p: String) -> Bool {
         guard root.containsNormalized(p) else { return false }
         return !otherRoots.contains { $0.containsNormalized(p) }
+    }
+}
+
+/// The volume a scan target's path is mounted on, by persistent UUID (#401).
+/// nil when the path is not reachable or is a network share (a hung share
+/// would block the caller, #189; a share's path already names it). nil
+/// means "unknown": the path rule decides, as before #401.
+enum ScanTargetVolume {
+    static func uuid(forPath path: String) -> String? {
+        guard !path.isEmpty, VolumeReachability.isReachable(path: path),
+              !VolumeReachability.isNetworkVolume(path: path) else { return nil }
+        return VolumeIdentity.uuid(forPath: path)
+    }
+
+    /// `uuid(forPath:)` for every target that has one, keyed by target id.
+    static func resolve(_ targets: [(id: UUID, searchPath: String)]) -> [UUID: String] {
+        var out: [UUID: String] = [:]
+        for t in targets { out[t.id] = uuid(forPath: t.searchPath) }
+        return out
     }
 }
 
@@ -249,11 +283,14 @@ extension VideoScanModel {
     func planTargetRemoval(targetID: UUID = UUID(), root: String) -> TargetRemovalPlan {
         // The same scope the Delete menu counts with (codex #1393).
         let scope = TargetRemovalScope(root: root,
-                                       allTargetRoots: scanTargets.map(\.searchPath))
+                                       allTargetRoots: scanTargets.map(\.searchPath),
+                                       volumeUUID: ScanTargetVolume.uuid(forPath: root))
         var doomed = Set<UUID>()
         var kept = 0
-        for rec in records where scope.isUnderRoot(rec.fullPath) {
-            if scope.claims(rec.fullPath) {
+        // #401: by record, so a file on another volume at the same path is
+        // neither removed nor reported as "kept, covered by another target".
+        for rec in records where scope.isUnderRoot(rec) {
+            if scope.claims(rec) {
                 doomed.insert(rec.id)
             } else {
                 kept += 1

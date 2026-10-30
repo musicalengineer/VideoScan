@@ -181,9 +181,14 @@ extension CatalogView {
         // The Delete count is the GUARDED removal's own count
         // (TargetRemovalScope, codex #1393), not the raw-prefix `files`
         // figure the Volumes table shows.
+        // #401: each reachable local target's volume, read once per pass
+        // (one getattrlist per target, never per record).
+        let targetVolumes = ScanTargetVolume.resolve(
+            targets.filter(\.isReachable).map { ($0.id, $0.searchPath) })
         scanTargetFacts = ScanTargetRecordFacts.project(
             model.records,
-            targets: targets.map { ($0.id, $0.searchPath) }
+            targets: targets.map { ($0.id, $0.searchPath) },
+            targetVolumes: targetVolumes
         )
         guard !targets.isEmpty else {
             volumeAggregateCache = [:]
@@ -194,7 +199,8 @@ extension CatalogView {
         // 2026-10-11). History (current OR origin path, any state) still
         // feeds errors, ⌘I and the Uncataloged filter.
         let buckets = VolumeMediaTally.compute(
-            model.records, targets: targets.map { ($0.id, $0.searchPath) })
+            model.records, targets: targets.map { ($0.id, $0.searchPath) },
+            targetVolumes: targetVolumes)
         var built: [UUID: VolumeAggregate] = [:]
         built.reserveCapacity(targets.count)
         for target in targets {

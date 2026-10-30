@@ -68,9 +68,12 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
     /// Empty `targets` → empty dictionary; a target with no records
     /// still gets an entry (zeroed), so a body lookup distinguishes
     /// "no records" from "cache not built yet" (`nil`).
+    /// `targetVolumes`: as `VolumeMediaTally.compute` (#401) — a record on
+    /// another known volume is never under a target, for either count.
     nonisolated static func project(
         _ records: [VideoRecord],
-        targets: [Target]
+        targets: [Target],
+        targetVolumes: [UUID: String] = [:]
     ) -> [UUID: ScanTargetRecordFacts] {
         guard !targets.isEmpty else { return [:] }
         let prefixes = targets.map(\.searchPath)
@@ -86,6 +89,7 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
         // Signature plan: `isUnder` normalisation — "/Volumes/X" must not
         // scope "/Volumes/X2"; an empty prefix scopes everything.
         let dirs = prefixes.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+        let targetVolumeList = targets.map { targetVolumes[$0.id] }
         var counts = [Int](repeating: 0, count: targets.count)
         var plans = [VideoScanModel.ContentHashBackfillPlan](
             repeating: .init(), count: targets.count)
@@ -105,23 +109,24 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
             let hasSignature = !rec.contentHash.isEmpty
             // Normalize once per record, not once per target.
             let normPath = PathScope.normalize(path)
+            let volume = rec.evidencedVolumeUUID
 
             containing.removeAll(keepingCapacity: true)
             var firstGroup = -1
             var severalGroups = false
             for i in prefixes.indices {
-                if roots[i].containsNormalized(normPath) {
+                // #401: the CURRENT path counts only on the record's own
+                // volume (unknown either side: the path decides). The
+                // origin path is history and keeps the path rule.
+                let sameVolume = VolumeIdentity.mayBeSameVolume(volume, targetVolumeList[i])
+                if sameVolume && roots[i].containsNormalized(normPath) {
                     containing.append(i)
                     if firstGroup < 0 { firstGroup = group[i] }
                     else if group[i] != firstGroup { severalGroups = true }
                 }
                 guard planEligible else { continue }
-                let p = prefixes[i]
-                let d = dirs[i]
-                let under = p.isEmpty
-                    || path == p || path.hasPrefix(d)
-                    || (origin.map { $0 == p || $0.hasPrefix(d) } ?? false)
-                guard under else { continue }
+                guard inSignatureScope(path: path, origin: origin, prefix: prefixes[i],
+                                       dir: dirs[i], sameVolume: sameVolume) else { continue }
                 if hasSignature { plans[i].alreadyHashed += 1 }
                 else { plans[i].candidates += 1 }
             }
@@ -138,5 +143,18 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
                 records: counts[i], signaturePlan: plans[i])
         }
         return out
+    }
+
+    /// The signature plan's scope — `planContentHashBackfill`'s `isUnder`:
+    /// an empty prefix scopes everything; otherwise the CURRENT path on
+    /// this target's volume (#401), or the ORIGIN path (history, path rule).
+    /// "/Volumes/X" never scopes "/Volumes/X2" (`dir` ends in "/").
+    nonisolated private static func inSignatureScope(
+        path: String, origin: String?, prefix: String, dir: String, sameVolume: Bool
+    ) -> Bool {
+        if prefix.isEmpty { return true }
+        if sameVolume && (path == prefix || path.hasPrefix(dir)) { return true }
+        guard let origin else { return false }
+        return origin == prefix || origin.hasPrefix(dir)
     }
 }
