@@ -17777,6 +17777,27 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieTurnExecutorDispatchCharacterizationTests"
+      ],
+      "tests": [
+        "aggregateWithoutProfilesDeclinesHonestly",
+        "astOnlyEntryHasNoQuestionToJudgeAgainst",
+        "commonAncestorNeedsExactlyTwoNames",
+        "crossMergesSpokenTermsIntoTheKeywordSearch",
+        "inventedYearIsDroppedAndSaidFirst",
+        "mediaAskMisreadAsAgeIsSearchedInstead",
+        "refinedTurnKeepsItsInheritedYear",
+        "statedYearTheTranslatorDroppedIsRestored",
+        "treeModeAgeAnswerIsStampedTree",
+        "treeModeNeverTurnsAnUnresolvedAnchorIntoACatalogSearch",
+        "yearTheQuestionStatesIsKeptWithoutANote"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HalliePresenceRenamedProfileTagsTests.swift",
       "stage": "hallie",
       "suites": [
@@ -34083,7 +34104,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3051,
+      "expected_floor": 3062,
       "name": "unit",
       "package_expected_floor": 406,
       "package_selectors": [
@@ -34311,6 +34332,7 @@
         "VideoScanTests/GeneratedInputAppFindingsTests",
         "VideoScanTests/HallieAncestorRoutingPropertyTests",
         "VideoScanTests/HalliePresenceLikeCharacterizationTests",
+        "VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests",
         "VideoScanTests/HammingTests",
         "VideoScanTests/IdentityNarrowingRegressionSensors",
         "VideoScanTests/IdentityNarrowingTests",
