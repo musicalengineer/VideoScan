@@ -166,8 +166,14 @@ NIGHT_STATES = ("green", "watch", "red", "did_not_run")
 # intact, is WATCH (yellow on the page); red is reserved for a broken run.
 WATCH_MAX_FAILED = 10
 SUMMARY_DAYS = 90
+# One cell per Mac per night. `passed` / `failed` / `total` are the APP lane (the
+# xcodebuild suite); the Core package lane and the Hallie replay ride beside them
+# (2026-10-31: a night whose app lane was all green but whose Core lane failed one
+# test read "12,645 passed · 0 failed — broken" with no lane named). A row from
+# before a lane existed carries null for it, never a zero.
 _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "total": "int",
-          "reason": "code?"}
+          "reason": "code?", "core_passed": "int?", "core_failed": "int?", "core_status": "code?",
+          "hallie_status": "code?"}
 
 # One spec per stream. Every row must have EXACTLY these keys (no extras, none
 # missing). Specs: "int" / "int?" non-negative int (or null); "num" / "num?"
@@ -773,14 +779,24 @@ def classify_nightly_row(row: dict) -> str:
     that merely failed (10/15: the Angel boundary ratchet)."""
     if _int(row.get("total")) == 0:
         return "did_not_run"
-    failed = _int(row.get("failed"))
+    # Every lane's failures count (2026-10-31): one Core failure is a few failed,
+    # exactly like one app failure; the lane is named in the cell, not hidden.
+    failed = _int(row.get("failed")) + _int(row.get("core_failed"))
     reason = row.get("reason")
-    ran_to_the_end = row.get("status") == "ok" or (isinstance(reason, str) and reason.startswith("failed-tests:"))
+    ran_to_the_end = row.get("status") == "ok" or (
+        isinstance(reason, str) and (reason.startswith("failed-tests:") or reason.startswith("core-failed-tests:")))
     if 0 < failed < WATCH_MAX_FAILED and ran_to_the_end:
         return "watch"
     if row.get("status") == "failed" or failed > 0:
         return "red"
     return "green"
+
+
+def _opt_int(value) -> Optional[int]:
+    """A count a row may not carry (a lane that did not exist yet): null, never 0."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return _int(value)
 
 
 def host_label(host) -> Optional[str]:
@@ -853,6 +869,9 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
             "state": classify_nightly_row(row), "passed": _int(row.get("passed")),
             "failed": _int(row.get("failed")), "total": _int(row.get("total")),
             "reason": reason_code(row.get("reason")),
+            "core_passed": _opt_int(row.get("core_passed")), "core_failed": _opt_int(row.get("core_failed")),
+            "core_status": reason_code(row.get("core_status")),
+            "hallie_status": reason_code(row.get("hallie_replay_status")),
         }
     hosts = [h for h in order if h in seen_hosts] + sorted(seen_hosts - set(order))
     return {"days": days, "hosts": hosts, "off_rota": sorted(off),

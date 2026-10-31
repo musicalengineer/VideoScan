@@ -834,11 +834,25 @@ const ranGreen = night => { const ss = nightStates(night).filter(s => s !== "did
 const STATE_WORD = { green: "green", watch: "a few failed", red: "red", did_not_run: "did not run" };
 // A sanitized machine code published with the night ("build-timeout:5400s"); never a row's free text.
 const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["reason"] : "";
+// The lanes beside the app suite (2026-10-31): the Core package lane and the Hallie
+// replay, each with its own numbers or word. A cell from before a lane existed says
+// nothing about it (null), never "0 passed".
+function laneWords(cell) {
+  const parts = [];
+  if (isNum(cell.core_passed) || isNum(cell.core_failed)) parts.push(`Core ${n(cell.core_passed || 0)} passed · ${n(cell.core_failed || 0)} failed`);
+  if (cell.hallie_status && cell.hallie_status !== "ok") parts.push(`Hallie replay ${cell.hallie_status}`);
+  return parts.length ? " · " + parts.join(" · ") : "";
+}
+// Failures across every lane of one Mac's night (the app suite and the Core lane).
+const laneFailed = cell => (cell ? (cell.failed || 0) + (isNum(cell.core_failed) ? cell.core_failed : 0) : 0);
 function cellWords(cell) {
   if (!cell) return "no run";
-  if (cell.state === "green") return `all ${n(cell.passed)} passed`;
-  if (cell.state === "red") return `${n(cell.passed)} passed · ${n(cell.failed)} failed — broken`;
-  if (cell.state === "watch") return `${n(cell.passed)} passed · ${n(cell.failed)} failed (a few)`;
+  // The machine code says WHICH lane broke the night when the app count alone does not ("core-failed-tests:1").
+  const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
+  const app = `${n(cell.passed)} passed · ${n(cell.failed)} failed`;
+  if (cell.state === "green") return `all ${n(cell.passed)} passed${laneWords(cell)}`;
+  if (cell.state === "red") return `${app}${laneWords(cell)} — broken${why}`;
+  if (cell.state === "watch") return `${app}${laneWords(cell)} (a few${why})`;
   return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
 }
 function stability(N) {
@@ -942,7 +956,8 @@ function renderHead(d) {
     const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
     const primary = ran[0];
     // The same failing tests show up on every Mac that ran: the worst Mac's count, never a sum.
-    const failing = Math.max(0, ...ran.map(c => c.failed || 0));
+    // Every lane of that Mac counts (2026-10-31: "0 failing" sat above a red Core lane).
+    const failing = Math.max(0, ...ran.map(laneFailed));
     // Two passing Macs are enough when another is offline; each host keeps its own status.
     // Actual test failures still take precedence over the passing quorum.
     const greenHosts = ran.filter(c => c.state === "green").length;
@@ -950,7 +965,7 @@ function renderHead(d) {
       : greenHosts >= 2 ? "green" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber"
       : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, testState));
+      `<div class="hosts">${hosts}</div>2 AM run of ${day(lastNight.date)}${stale(lastNight.date)}`, testState));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
