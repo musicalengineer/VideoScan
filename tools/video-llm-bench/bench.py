@@ -1632,7 +1632,8 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                   ocr_sampler: str = OCR_SAMPLER_WINDOW_FRAMES,
                   ocr_stills: int = A2_OCR_STILLS,
                   deadline: Optional[float] = None,
-                  clock: Callable[[], float] = time.time) -> Dict[str, Any]:
+                  clock: Callable[[], float] = time.time,
+                  keep_frames: bool = False) -> Dict[str, Any]:
     """A1 loop.  Per clip: plan ≤ 3 windows, rip every window frame once, then
     * ERA-corpus clip → one multi-image generation per (window, family) — a
       ``window_result`` record carrying raw text, `schema_valid`, the decoded value
@@ -1669,6 +1670,11 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
     }
     write_json(progress_path, progress)
     tmp_root = Path(tempfile.mkdtemp(prefix="video-llm-bench-a1-frames-"))
+    # `keep_frames` (the review page, 2026-10-31): the frames the model saw stay under
+    # <out>/frames/<digest16>/ instead of a temp dir and are never deleted; the clip
+    # header says so (`frames_dir`, relative).  Family pixels: the run dir must be
+    # under .scratch/ (the watch command refuses anything else).
+    frames_root = out_dir / "frames"
     try:
         for index, entry in enumerate(unique, 1):
             digest = entry["digest"]
@@ -1683,7 +1689,7 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                 log("deadline reached before clip {}/{}; stopping (resume-safe)".format(index, len(unique)))
                 break
             corpora = corpora_of[digest]
-            clip_tmp = tmp_root / digest[:16]
+            clip_tmp = (frames_root if keep_frames else tmp_root) / digest[:16]
             clip_tmp.mkdir(parents=True, exist_ok=True)
             clip_started = time.perf_counter()
             approach.seed(MLX_SEED)
@@ -1731,6 +1737,8 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                     "run_id": run_record.get("run_id")}
                 if ocr_sampler != OCR_SAMPLER_WINDOW_FRAMES:
                     header.update(ocr_sampler=ocr_sampler, ocr_still_times_s=plan["ocr_still_times_s"])
+                if keep_frames:
+                    header["frames_dir"] = "frames/{}".format(digest[:16])
                 stream.write(json.dumps(header, sort_keys=True) + "\n")
                 frame_index = 0
                 for window in windows:
@@ -1784,8 +1792,9 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                             records_written += 1
                             window_records += 1
                         windows_done += 1
-                    for png in pngs:
-                        png.unlink(missing_ok=True)
+                    if not keep_frames:
+                        for png in pngs:
+                            png.unlink(missing_ok=True)
                 for at_s in plan["ocr_still_times_s"]:
                     png = clip_tmp / "s_f{:03d}.png".format(frame_index)
                     rip_started = time.perf_counter()
@@ -1800,7 +1809,8 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                     else:
                         frames_ok += 1
                         ask_date(png, frame_index, None, at_s, rip_s, stream, OCR_SAMPLER_STILLS)
-                        png.unlink(missing_ok=True)
+                        if not keep_frames:
+                            png.unlink(missing_ok=True)
                     frame_index += 1
                 frames_done += frames_ok
                 clip_elapsed = time.perf_counter() - clip_started
@@ -1809,7 +1819,8 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                     "frames_failed": rip_failures, "results": records_written, "window_results": window_records,
                     "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": _peak_rss_of(approach),
                     "finished_at": utc_now()}, sort_keys=True) + "\n")
-            shutil.rmtree(clip_tmp, ignore_errors=True)
+            if not keep_frames:
+                shutil.rmtree(clip_tmp, ignore_errors=True)
             approach.after_clip()
             if records_written == 0:
                 failed += 1
@@ -2000,7 +2011,7 @@ def run_command(args: argparse.Namespace) -> int:
     try:
         if spec["windows"]:
             progress = run_corpus_a1(entries, out_dir, approach, frames, record, ocr_sampler=spec["ocr_sampler"],
-                                     deadline=deadline)
+                                     deadline=deadline, keep_frames=bool(getattr(args, "keep_frames", False)))
             print("done {} skipped {} failed {} timeouts {} s/frame {} s/window {} state {}".format(
                 progress["done"], progress["skipped_resume"], progress["failed"], progress.get("timeouts", 0),
                 progress["s_per_frame"], progress["s_per_window"], progress["state"]))
@@ -2875,6 +2886,325 @@ def summarize_command(args: argparse.Namespace) -> int:
     return 0
 
 
+# ===========================================================================
+# Review page (Rick, 2026-10-31): "I wanna see it working in front of me, my
+# dates, its dates".  `watch` serves a LOCAL page (127.0.0.1 only) over a run
+# directory: one clip at a time, like the app's "Is Donna in this video?"
+# sheet — the frames the model saw, Rick's confirmed date, the model's range
+# with its rationale and timed cues, and three buttons (model is right / my
+# date is right / unsure) whose verdicts go to <run>/verdicts.jsonl.  The page
+# polls state every 2 s, so it fills in while a run is going.
+#
+# Privacy: the page shows family pixels and file names.  The run directory
+# must sit under a `.scratch` path (ignored by git); anything else is refused.
+# Nothing here is ever written into the repo, and the server never leaves the
+# loopback interface.
+# ===========================================================================
+VERDICTS_FILE = "verdicts.jsonl"
+# Rick, after the first five clips (2026-10-31): the question is AGREEMENT — a wide
+# range that contains his date is still agreement — not whose date is right.
+# "disagree" = the model is off; a wrong confirmed date is fixed in the Catalog.
+# The first five verdicts were written as "model" / "mine"; still readable.
+VERDICT_WORDS = ("agree", "disagree", "unsure", "model", "mine")
+VERDICT_BUTTONS = ("agree", "disagree", "unsure")
+WATCH_DEFAULT_PORT = 8765
+
+
+def assert_scratch_path(path: Path) -> Path:
+    """The one privacy rule of the page: the run dir lives under `.scratch`."""
+    resolved = Path(path).resolve()
+    if ".scratch" not in resolved.parts:
+        raise SystemExit("refusing {}: a review run directory must be under a .scratch/ folder (family pixels and names)"
+                         .format(resolved))
+    return resolved
+
+
+def read_verdicts(run_dir: Path) -> Dict[str, Dict[str, Any]]:
+    """digest → the LAST verdict written for it (a later line supersedes); malformed lines are skipped."""
+    out: Dict[str, Dict[str, Any]] = {}
+    path = Path(run_dir) / VERDICTS_FILE
+    if not path.is_file():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        digest = record.get("digest")
+        if isinstance(digest, str) and record.get("verdict") in VERDICT_WORDS:
+            out[digest] = record
+    return out
+
+
+def write_verdict(run_dir: Path, digest: str, verdict: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if verdict not in VERDICT_WORDS:
+        raise ValueError("verdict must be one of {}".format(VERDICT_WORDS))
+    if not re.fullmatch(r"[0-9a-f]{64}", digest or ""):
+        raise ValueError("digest must be a sha256 hex")
+    record = {"digest": digest, "verdict": verdict, "at": utc_now()}
+    record.update({k: v for k, v in (context or {}).items() if k in ("confirmed_year", "machine_range", "run_id")})
+    with (Path(run_dir) / VERDICTS_FILE).open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, sort_keys=True) + "\n")
+    return record
+
+
+def _nearest_frame_index(frame_times: Sequence[float], at_s: Optional[float]) -> Optional[int]:
+    if at_s is None or not frame_times:
+        return None
+    return min(range(len(frame_times)), key=lambda i: abs(frame_times[i] - at_s))
+
+
+def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, verdict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """One clip as the page shows it: name, truth, frames (relative to the run dir),
+    the model's windows with rationale and cues, the clip range and its error."""
+    header = records.get("header") or {}
+    frames_dir = header.get("frames_dir")
+    windows: List[Dict[str, Any]] = []
+    frame_index = 0
+    for window in header.get("windows") or []:
+        times = list(window.get("frame_times_s") or [])
+        frames = []
+        for t in times:
+            rel = "{}/w{}_f{:03d}.png".format(frames_dir, window.get("index"), frame_index) if frames_dir else None
+            exists = bool(rel) and (Path(run_dir) / rel).is_file()
+            frames.append({"at_s": t, "src": ("frames/" + rel.split("/", 1)[1]) if exists else None})
+            frame_index += 1
+        answers = []
+        for record in records.get("window_results") or []:
+            if record.get("window_index") != window.get("index"):
+                continue
+            family = record.get("family")
+            value, reason = (decode_contract(family, record.get("raw_text") or "") if not record.get("error") else (None, "generation error"))
+            item: Dict[str, Any] = {"family": family, "valid": value is not None, "reason": reason, "elapsed_s": record.get("elapsed_s")}
+            if value and family == "era":
+                item.update(year_range=value["yearRange"], rationale=value["rationale"], confidence=value["selfConfidence"],
+                            cues=[{"kind": c.get("kind"), "text": c.get("text"), "at_s": c.get("atS"),
+                                   "frame": _nearest_frame_index(times, c.get("atS"))} for c in value["cues"]])
+            if value and family == "roomFeatures":
+                item.update(setting=value.get("setting"), location_type=value.get("locationType"), features=value.get("features"))
+            answers.append(item)
+        windows.append({"index": window.get("index"), "start_s": window.get("start_s"), "end_s": window.get("end_s"),
+                        "frames": frames, "answers": answers})
+    truth = entry.get("truth") or {}
+    confirmed_year = truth.get("year")
+    year_range = clip_year_range(records.get("window_results") or [])
+    midpoint = (year_range[0] + year_range[1]) / 2 if year_range else None
+    error = abs(midpoint - confirmed_year) if (midpoint is not None and isinstance(confirmed_year, (int, float))) else None
+    inside = bool(year_range and isinstance(confirmed_year, (int, float)) and year_range[0] <= confirmed_year <= year_range[1])
+    ocr_dates = sorted({d for r in records.get("results") or [] for d in (r.get("parsed") or {}).get("dates", [])})
+    return {
+        "digest": entry["digest"], "name": Path(entry.get("path") or "").name, "stratum": entry.get("stratum"),
+        "duration_s": header.get("duration_s", entry.get("duration_s")), "corpora": header.get("corpora") or [entry.get("corpus")],
+        "confirmed_year": confirmed_year, "confirmed_date": truth.get("date"),
+        "machine_range": list(year_range) if year_range else None, "machine_midpoint": midpoint,
+        "error_years": round(error, 1) if error is not None else None, "inside": inside,
+        "ocr_dates": ocr_dates, "windows": windows,
+        "done": records.get("footer") is not None, "verdict": (verdict or {}).get("verdict"),
+    }
+
+
+def review_state(run_dir: Path, manifest: Dict[str, Any], clips: Optional[Sequence[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Everything the page renders, from the run's own records: the clips that have a
+    file so far (manifest order), each with its truth, frames, model answers and
+    verdict, plus the running tally.  Pure over the files; no model, no catalog."""
+    run_dir = Path(run_dir)
+    verdicts = read_verdicts(run_dir)
+    run_json = run_dir / "run.json"
+    run_record = json.loads(run_json.read_text(encoding="utf-8")) if run_json.is_file() else {}
+    progress_path = run_dir / "progress.json"
+    progress = json.loads(progress_path.read_text(encoding="utf-8")) if progress_path.is_file() else {}
+    seen: set = set()
+    items: List[Dict[str, Any]] = []
+    for entry in (clips if clips is not None else manifest.get("clips", [])):
+        digest = entry["digest"]
+        if digest in seen:
+            continue
+        seen.add(digest)
+        path = clip_file(run_dir, digest)
+        if not path.is_file():
+            continue
+        try:
+            records = read_clip_records(path)
+        except OSError:
+            continue
+        if records.get("header") is None:
+            continue
+        items.append(review_clip(entry, records, run_dir, verdicts.get(digest)))
+    scored = [c for c in items if c["done"] and c["error_years"] is not None]
+    tally = {
+        "clips_seen": len(items), "clips_done": sum(1 for c in items if c["done"]),
+        "with_truth": len(scored),
+        "within_5": sum(1 for c in scored if c["error_years"] <= 5), "within_10": sum(1 for c in scored if c["error_years"] <= 10),
+        "inside_range": sum(1 for c in scored if c["inside"]),
+        "mean_error_years": round(sum(c["error_years"] for c in scored) / len(scored), 1) if scored else None,
+        "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_BUTTONS},
+    }
+    return {"run_id": run_record.get("run_id"), "approach_id": run_record.get("approach_id"), "model": run_record.get("model_id"),
+            "state": progress.get("state"), "total_clips": progress.get("total_clips"), "generated_at": utc_now(),
+            "tally": tally, "clips": items}
+
+
+REVIEW_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Era review</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;--good:#3fb950;--warn:#d29922;--bad:#f85149;--accent:#58a6ff}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px -apple-system,system-ui,sans-serif;display:grid;grid-template-columns:300px 1fr;height:100vh}
+aside{border-right:1px solid var(--border);overflow:auto}
+aside header{padding:14px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)}
+aside header b{font-size:22px}
+.tally{font-size:13px;color:var(--muted);line-height:1.6}
+.row{padding:8px 16px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;gap:8px;align-items:center}
+.row.sel{background:var(--panel)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--border);flex:none}
+.dot.good{background:var(--good)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}.dot.pending{background:var(--accent)}
+.row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.row .v{font-size:12px;color:var(--muted)}
+main{padding:20px 26px;overflow:auto}
+h1{font-size:20px;margin:0 0 4px;overflow-wrap:anywhere}
+.sub{color:var(--muted);margin-bottom:14px}
+.dates{display:flex;gap:26px;margin:10px 0 16px}
+.dates div{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 16px;min-width:180px}
+.dates .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.dates .val{font-size:30px;font-weight:700;margin-top:4px}
+.err{font-size:14px;margin-top:4px}
+.err.good{color:var(--good)}.err.warn{color:var(--warn)}.err.bad{color:var(--bad)}
+.win{margin:14px 0 18px}
+.win h3{font-size:14px;color:var(--muted);margin:0 0 6px;font-weight:600}
+.strip{display:flex;gap:6px;flex-wrap:wrap}
+.strip figure{margin:0;position:relative}
+.strip img{width:168px;height:168px;object-fit:contain;background:#000;border-radius:6px;border:2px solid transparent}
+.strip img.cue{border-color:var(--accent)}
+.strip figcaption{font-size:11px;color:var(--muted);text-align:center}
+.strip .tag{position:absolute;left:4px;top:4px;background:var(--accent);color:#000;font-size:11px;padding:1px 6px;border-radius:4px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ans{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:14px}
+.ans .rng{font-weight:700}
+.ans .cues{color:var(--muted);margin-top:4px}
+.ans.invalid{border-color:var(--bad)}
+.buttons{position:sticky;bottom:0;background:var(--bg);padding:14px 0;border-top:1px solid var(--border);display:flex;gap:12px;align-items:center}
+button{font:inherit;font-weight:600;padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--fg);cursor:pointer}
+button.model{border-color:var(--good)}button.mine{border-color:var(--warn)}button.unsure{border-color:var(--muted)}
+button.on{outline:2px solid var(--accent)}
+kbd{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px}
+.empty{color:var(--muted);padding:40px}
+</style></head><body>
+<aside><header><b id="tally-main">…</b><div class="tally" id="tally"></div></header><div id="list"></div></aside>
+<main id="main"><div class="empty">Waiting for the first clip…</div></main>
+<script>
+const $=s=>document.querySelector(s); let S=null, cur=null;
+const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const mmss=t=>{t=Math.max(0,Math.round(t||0));return Math.floor(t/60)+":"+String(t%60).padStart(2,"0")};
+const grade=c=>c.error_years==null?"pending":c.error_years<=5?"good":c.error_years<=10?"warn":"bad";
+async function poll(){try{const r=await fetch("/state.json",{cache:"no-store"});S=await r.json();render()}catch(e){}}
+function render(){
+  const t=S.tally; $("#tally-main").textContent=`${t.clips_done} of ${S.total_clips??"?"} clips`;
+  $("#tally").innerHTML=`within 5 y <b>${t.within_5}</b> · within 10 y <b>${t.within_10}</b> · inside range <b>${t.inside_range}</b> of ${t.with_truth}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: agree ${t.verdicts.agree} · disagree ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
+  if(cur==null){const first=S.clips.find(c=>c.done&&!c.verdict)||S.clips[0]; cur=first?first.digest:null}
+  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc(c.verdict):""}</span></div>`).join("");
+  document.querySelectorAll(".row").forEach(r=>r.onclick=()=>{cur=r.dataset.d;render()});
+  const c=S.clips.find(x=>x.digest===cur); if(!c){return}
+  const g=grade(c);
+  const mr=c.machine_range?`${c.machine_range[0]}–${c.machine_range[1]}`:"no answer";
+  const wins=c.windows.map(w=>{
+    const era=w.answers.find(a=>a.family==="era"); const room=w.answers.find(a=>a.family==="roomFeatures");
+    const cueAt={}; (era&&era.cues||[]).forEach(q=>{if(q.frame!=null&&!cueAt[q.frame])cueAt[q.frame]=q.text});
+    const strip=w.frames.map((f,i)=>`<figure>${f.src?`<img src="${f.src}" class="${cueAt[i]?"cue":""}" loading="lazy">`:`<div style="width:168px;height:168px;background:#000;border-radius:6px"></div>`}${cueAt[i]?`<span class="tag" title="${esc(cueAt[i])}">${esc(cueAt[i])}</span>`:""}<figcaption>${mmss(f.at_s)}</figcaption></figure>`).join("");
+    const eraBox=era?(era.valid?`<div class="ans"><span class="rng">${era.year_range[0]}–${era.year_range[1]}</span> · confidence ${Math.round(era.confidence*100)}%<br>${esc(era.rationale)}<div class="cues">${(era.cues||[]).map(q=>`${esc(q.kind)}: ${esc(q.text)}${q.at_s!=null?" @ "+mmss(q.at_s):""}`).join(" · ")}</div></div>`:`<div class="ans invalid">era: no valid answer (${esc(era.reason)})</div>`):"";
+    const roomBox=room&&room.valid?`<div class="ans">${esc(room.setting)} · ${esc(room.location_type)} · ${(room.features||[]).map(esc).join(", ")}</div>`:"";
+    return `<section class="win"><h3>Window ${w.index+1} · ${mmss(w.start_s)}–${mmss(w.end_s)}</h3><div class="strip">${strip}</div>${eraBox}${roomBox}</section>`}).join("");
+  $("#main").innerHTML=`<h1>${esc(c.name)}</h1><div class="sub">${esc(c.stratum||"")} · ${mmss(c.duration_s)} · ${c.done?"done":"in progress"}${c.ocr_dates.length?" · burned-in date read: "+c.ocr_dates.map(esc).join(", "):""}</div>
+  <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
+  <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
+  ${wins}
+  <div class="buttons"><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Agree<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Disagree<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
+}
+async function verdict(v){const c=S.clips.find(x=>x.digest===cur); if(!c)return;
+  await fetch("/verdict",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({digest:c.digest,verdict:v})});
+  await poll(); const i=S.clips.findIndex(x=>x.digest===cur); const next=S.clips.slice(i+1).find(x=>x.done&&!x.verdict)||S.clips.find(x=>x.done&&!x.verdict); if(next){cur=next.digest;render()}}
+document.addEventListener("keydown",e=>{if(!S)return; if(e.key==="1")verdict("agree"); if(e.key==="2")verdict("disagree"); if(e.key==="3")verdict("unsure");
+  const i=S.clips.findIndex(x=>x.digest===cur); if(e.key==="ArrowRight"&&i<S.clips.length-1){cur=S.clips[i+1].digest;render()} if(e.key==="ArrowLeft"&&i>0){cur=S.clips[i-1].digest;render()}});
+poll(); setInterval(poll,2000);
+</script></body></html>
+"""
+
+
+def make_review_server(run_dir: Path, manifest: Dict[str, Any], host: str = "127.0.0.1", port: int = WATCH_DEFAULT_PORT) -> Any:
+    """A loopback HTTP server over the run dir: `/` the page, `/state.json`, `/frames/…`
+    (files under <run>/frames only), POST `/verdict`.  Returned unstarted."""
+    import http.server
+    run_dir = assert_scratch_path(run_dir)
+    frames_root = (run_dir / "frames").resolve()
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit("the review page serves the loopback interface only")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args: Any) -> None:   # quiet
+            pass
+
+        def _send(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:   # noqa: N802 — http.server's name
+            path = self.path.split("?", 1)[0]
+            if path == "/":
+                self._send(200, REVIEW_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif path == "/state.json":
+                body = json.dumps(review_state(run_dir, manifest)).encode("utf-8")
+                self._send(200, body, "application/json")
+            elif path.startswith("/frames/"):
+                from urllib.parse import unquote
+                target = (frames_root / unquote(path[len("/frames/"):])).resolve()
+                if frames_root not in target.parents or not target.is_file() or target.suffix.lower() != ".png":
+                    self._send(404, b"not found", "text/plain")
+                    return
+                self._send(200, target.read_bytes(), "image/png")
+            else:
+                self._send(404, b"not found", "text/plain")
+
+        def do_POST(self) -> None:   # noqa: N802
+            if self.path.split("?", 1)[0] != "/verdict":
+                self._send(404, b"not found", "text/plain")
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                digest, verdict = body.get("digest"), body.get("verdict")
+                entry = next((c for c in manifest.get("clips", []) if c.get("digest") == digest), None)
+                if entry is None:
+                    raise ValueError("unknown digest")
+                clip = review_clip(entry, read_clip_records(clip_file(run_dir, digest)), run_dir, None) \
+                    if clip_file(run_dir, digest).is_file() else {}
+                record = write_verdict(run_dir, digest, verdict, {"confirmed_year": clip.get("confirmed_year"),
+                                                                   "machine_range": clip.get("machine_range"),
+                                                                   "run_id": review_state(run_dir, manifest, clips=[]).get("run_id")})
+            except (ValueError, OSError, TypeError) as exc:
+                self._send(400, str(exc).encode("utf-8"), "text/plain")
+                return
+            self._send(200, json.dumps(record).encode("utf-8"), "application/json")
+
+    return http.server.ThreadingHTTPServer((host, port), Handler)
+
+
+def watch_command(args: argparse.Namespace) -> int:
+    manifest = load_manifest(Path(args.manifest))
+    server = make_review_server(Path(args.run), manifest, port=args.port)
+    url = "http://127.0.0.1:{}/".format(server.server_address[1])
+    print("review page: {}  (run dir {})".format(url, Path(args.run).resolve()), flush=True)
+    if getattr(args, "open", False):
+        subprocess.Popen(["open", url])
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
 # ---------------------------------------------------------------------------
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2909,6 +3239,8 @@ def make_parser() -> argparse.ArgumentParser:
                      help="seconds the model load may take in the worker (default {:.0f})".format(DEFAULT_LOAD_TIMEOUT_S))
     run.add_argument("--deadline", default=None,
                      help="HH:MM local; the run stops BETWEEN clips at that time (resume-safe, exit code 3)")
+    run.add_argument("--keep-frames", action="store_true",
+                     help="keep the frames the model saw under <out>/frames/ for `watch` (windowed approaches; run dir must be under .scratch/)")
     run.set_defaults(func=run_command)
 
     worker = commands.add_parser("worker", help="(internal) the watchdog's model process; JSON lines on stdin/stdout")
@@ -2922,6 +3254,13 @@ def make_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--out", help="Markdown file, e.g. docs/reviews/video_llm_benchmarks.md")
     summarize.add_argument("--json-out", help="optional JSON aggregate (keep under .scratch/)")
     summarize.set_defaults(func=summarize_command)
+
+    watch = commands.add_parser("watch", help="serve the LOCAL review page over a run dir (frames, your date, the model's era, verdict buttons)")
+    watch.add_argument("--run", required=True, help="run directory (must be under .scratch/; run it with --keep-frames)")
+    watch.add_argument("--manifest", required=True)
+    watch.add_argument("--port", type=int, default=WATCH_DEFAULT_PORT)
+    watch.add_argument("--open", action="store_true", help="open the page in the default browser")
+    watch.set_defaults(func=watch_command)
     return parser
 
 
