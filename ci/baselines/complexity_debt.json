@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 379,
+ "entry_count": 371,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -462,10 +462,6 @@
    "ccn": 16,
    "nloc": 109
   },
-  "VideoScan/VideoScan/Hallie/ArchivistConversationCommand.swift::ArchivistConversationCommand.detect": {
-   "ccn": 32,
-   "nloc": 65
-  },
   "VideoScan/VideoScan/Hallie/ArchivistConversationCommand.swift::ArchivistConversationCommand.detectSocialLine": {
    "ccn": 18,
    "nloc": 34
@@ -634,10 +630,6 @@
    "ccn": 17,
    "nloc": 59
   },
-  "VideoScan/VideoScan/Hallie/HallieLineageAnswer+DeepAncestors.swift::HallieLineageAnswer.deepAncestors": {
-   "ccn": 32,
-   "nloc": 124
-  },
   "VideoScan/VideoScan/Hallie/HallieLineageAnswer+GedcomAwareness.swift::HallieLineageAnswer.gedcomProvenance": {
    "ccn": 27,
    "nloc": 100
@@ -657,10 +649,6 @@
   "VideoScan/VideoScan/Hallie/HalliePlaceFacet.swift::HalliePlaceFacet.apply": {
    "ccn": 20,
    "nloc": 63
-  },
-  "VideoScan/VideoScan/Hallie/HallieRelationshipsOverview.swift::HallieRelationshipsOverview.answer": {
-   "ccn": 32,
-   "nloc": 219
   },
   "VideoScan/VideoScan/Hallie/HallieRelationshipsOverview.swift::HallieRelationshipsOverview.detect": {
    "ccn": 16,
@@ -689,10 +677,6 @@
   "VideoScan/VideoScan/Hallie/HallieTreeStatisticsQuestion.swift::HallieTreeStatisticsQuestion.detect": {
    "ccn": 19,
    "nloc": 31
-  },
-  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::ConversationMemory.record": {
-   "ccn": 33,
-   "nloc": 97
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::ConversationMemory.recordExchange": {
    "ccn": 16,
@@ -766,10 +750,6 @@
    "ccn": 16,
    "nloc": 35
   },
-  "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.execute _ request : Request , context : Context , dependencies : Dependencies": {
-   "ccn": 41,
-   "nloc": 164
-  },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.executeCyberBrainBiography": {
    "ccn": 21,
    "nloc": 125
@@ -830,10 +810,6 @@
    "ccn": 19,
    "nloc": 154
   },
-  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.handleCommand": {
-   "ccn": 33,
-   "nloc": 109
-  },
   "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.parse": {
    "ccn": 18,
    "nloc": 44
@@ -862,10 +838,6 @@
    "ccn": 24,
    "nloc": 33
   },
-  "VideoScan/VideoScan/Hallie/Voice/HalliePronunciationHint.swift::HalliePronunciationRespelling.respelling": {
-   "ccn": 32,
-   "nloc": 81
-  },
   "VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift::HallieSpeaker.speakNeural": {
    "ccn": 27,
    "nloc": 125
@@ -881,10 +853,6 @@
   "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::PronunciationVariations.respelling fromPhonemes phonemes : String": {
    "ccn": 16,
    "nloc": 55
-  },
-  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::PronunciationVariations.stressedVowels": {
-   "ccn": 32,
-   "nloc": 31
   },
   "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::PronunciationVariations.unstressedVowel": {
    "ccn": 17,
@@ -1255,7 +1223,7 @@
    "nloc": 113
   },
   "VideoScan/VideoScan/Volumes/ScanTargetRecordFacts.swift::ScanTargetRecordFacts.project": {
-   "ccn": 23,
+   "ccn": 20,
    "nloc": 55
   },
   "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift::VideoScanModel.finalizeSingleTargetScan": {
