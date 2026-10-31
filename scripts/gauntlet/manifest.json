@@ -31611,6 +31611,34 @@
       ]
     },
     {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_video_llm_bench.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench.py"
+      ],
+      "tests": [
+        "test_a_failing_generation_is_recorded_and_the_run_continues",
+        "test_allocation_floor_then_proportional",
+        "test_an_unrippable_clip_is_marked_failed_not_fatal",
+        "test_best_year_rule",
+        "test_degenerate_detection",
+        "test_frames_evenly_spaced_matches_the_app",
+        "test_manifest_counts_strata_and_truth",
+        "test_manifest_refuses_a_wrong_file",
+        "test_markdown_carries_no_path_digest_or_model_text",
+        "test_parse_dates",
+        "test_parse_years_and_decades",
+        "test_prompts_are_the_apps_verbatim",
+        "test_resume_skips_completed_clips_and_redoes_partial_ones",
+        "test_run_writes_one_jsonl_per_clip_and_cleans_frames",
+        "test_stratification_is_deterministic_under_the_seed",
+        "test_summarize_math",
+        "test_summarize_tolerates_a_missing_clips_dir_and_run_json"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ScanLocationVolumeTests.swift",
       "stage": "regression",
@@ -34224,6 +34252,10 @@
         },
         {
           "name": "tests/test_no_script_writes_catalog.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
