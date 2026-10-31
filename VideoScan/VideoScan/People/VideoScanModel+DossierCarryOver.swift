@@ -187,10 +187,11 @@ struct DossierCarryOverIndex {
     /// stamp the recipient done and no batch would ever fill the channel.
     static func coversChannels(_ donor: VideoRecord, for rec: VideoRecord) -> Bool {
         let stream = rec.streamType
-        if stream == .videoAndAudio || stream == .videoOnly, donor.sceneCaptions.isEmpty { return false }
+        if stream == .videoAndAudio || stream == .videoOnly,
+           CaptionTextQuality.usable(donor.sceneCaptions).isEmpty { return false }   // GH #402
         guard stream != .videoOnly else { return true }
         guard let transcript = donor.audioTranscript else { return false }
-        return transcript.isEmpty || !VideoScanModel.isDegenerateDossierText(transcript)
+        return transcript.isEmpty || !CaptionTextQuality.verdict(transcript).isDegenerate
     }
 
     /// The donor id in a carried stamp "from <uuid> (…)", or nil.
@@ -248,11 +249,13 @@ extension VideoScanModel {
     /// line, no transcript or caption text (log privacy).
     func carryOverDossierText(from donor: VideoRecord, to recipient: VideoRecord,
                               relation: DossierCarryRelation, now: Date = Date()) {
-        recipient.sceneCaptions = donor.sceneCaptions
+        // GH #402: a carried copy is a fresh write stamped now — it gets the
+        // donor's USABLE captions only, never its stored degenerate output.
+        recipient.sceneCaptions = CaptionTextQuality.usable(donor.sceneCaptions)
         recipient.sceneCaptionModel = donor.sceneCaptionModel
         recipient.sceneCaptionDate = donor.sceneCaptionDate
-        recipient.ocrText = donor.ocrText
-        recipient.ocrDateCandidates = donor.ocrDateCandidates
+        recipient.ocrText = CaptionTextQuality.usable(donor.ocrText)
+        recipient.ocrDateCandidates = donor.usableOCRDates
         if let transcript = donor.audioTranscript {
             recipient.audioTranscript = transcript
             recipient.audioTranscriptModel = donor.audioTranscriptModel

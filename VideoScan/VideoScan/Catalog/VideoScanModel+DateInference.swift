@@ -211,7 +211,9 @@ extension VideoScanModel {
     /// Any stored channel that `pfInferRecordDate` could read a date from.
     @MainActor
     static func hasDateEvidence(_ rec: VideoRecord) -> Bool {
-        !rec.ocrDateCandidates.isEmpty
+        // GH #402: degenerate OCR output is not evidence — it must not
+        // block the folder-year fallback (qualifiesForFolderYearPrior).
+        !rec.usableOCRDates.isEmpty
             || !(rec.audioTranscript ?? "").isEmpty
             || !rec.sceneCaptions.isEmpty
     }
@@ -256,7 +258,7 @@ extension VideoScanModel {
     static func triangulationInput(for rec: VideoRecord, people: [DateTriangulationPerson],
                                    includePathHints: Bool, now: Date = Date()) -> DateTriangulationInput {
         var input = DateTriangulationInput()
-        input.ocrDateCandidates = rec.ocrDateCandidates.map(\.text)
+        input.ocrDateCandidates = rec.usableOCRDates.map(\.text)   // GH #402
         input.audioTranscript = rec.audioTranscript
         input.sceneCaptionTexts = rec.sceneCaptions.map(\.text)
         input.pathYearHints = includePathHints ? pfPathYearHints(in: rec.fullPath) : []
@@ -451,8 +453,9 @@ extension VideoScanModel {
     @MainActor
     static func dateEvidenceFingerprint(_ rec: VideoRecord) -> Int {
         var h = Hasher()
-        h.combine(rec.ocrDateCandidates.count)
-        for c in rec.ocrDateCandidates { h.combine(c.text) }
+        let ocrDates = rec.usableOCRDates   // GH #402: the channel rule 1 reads
+        h.combine(ocrDates.count)
+        for c in ocrDates { h.combine(c.text) }
         h.combine(rec.audioTranscript ?? "")
         h.combine(rec.sceneCaptions.count)
         for c in rec.sceneCaptions { h.combine(c.text) }

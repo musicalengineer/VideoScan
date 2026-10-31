@@ -110,10 +110,12 @@ extension CaptionOrchestrator {
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
             do {
-                let captions = try await runner.caption(
+                // GH #402: degenerate generations never reach the writeback.
+                let generated = try await runner.caption(
                     videoPath: path,
                     atTimestamps: timestamps
                 )
+                let captions = refuseDegenerate(generated, filename: filename, modelID: runner.modelID)
 
                 // Writeback IMMEDIATELY at the file boundary. If the
                 // user cancels the next file, this file's work is
@@ -151,6 +153,8 @@ extension CaptionOrchestrator {
         captionOrchLog.info("CaptionOrchestrator finished: captioned=\(captioned), skipped=\(skipped), failed=\(failed) in \(String(format: "%.1f", elapsed))s")
         appLog.write(String(format: "Caption Videos: done — captioned %d, skipped %d, failed %d in %.1fs",
                             captioned, skipped, failed, elapsed))
+        // GH #402: additive OUTCOME line (the "done" line keeps its format).
+        appLog.write("Caption Videos: quality — degenerate refused · \(liveDegenerateRefused)")
         currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
     }
 

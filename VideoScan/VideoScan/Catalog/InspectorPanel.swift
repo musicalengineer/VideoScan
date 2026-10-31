@@ -224,11 +224,14 @@ struct InspectorPanel: View {
         // (handy for sharing a clip's content with someone else, or for
         // pasting into a notes app). Section is omitted when there's nothing
         // worth showing to keep the output tight for non-dossier'd records.
+        // GH #402: an OCR date the verdict calls degenerate (`!!!!…`, stored
+        // before the write path refused them) is not evidence — never quoted.
+        let shownOCRDates = rec.usableOCRDates
         let hasDossierContent =
             !rec.sceneCaptions.isEmpty
             || !(rec.audioTranscript ?? "").isEmpty
             || !rec.ocrText.isEmpty
-            || !rec.ocrDateCandidates.isEmpty
+            || !shownOCRDates.isEmpty
             || rec.inferredRecordDate != nil
         if hasDossierContent {
             section("Dossier")
@@ -275,10 +278,10 @@ struct InspectorPanel: View {
                     lines.append("    [\(ts)] \(hit.text)")
                 }
             }
-            if !rec.ocrDateCandidates.isEmpty {
+            if !shownOCRDates.isEmpty {
                 lines.append("")
-                lines.append("  OCR Date Candidates (\(rec.ocrDateCandidates.count)):")
-                for hit in rec.ocrDateCandidates {
+                lines.append("  OCR Date Candidates (\(shownOCRDates.count)):")
+                for hit in shownOCRDates {
                     let ts = formatTimestamp(hit.timestamp)
                     lines.append("    [\(ts)] \(hit.text)")
                 }

@@ -499,6 +499,10 @@ final class CaptionOrchestrator: ObservableObject {
     /// archived (read-only) rows not purged / junk-flagged / reformat-
     /// flagged, and In Triage rows missing on disk not auto-purged.
     var liveReadOnlyLeftAsIs = 0
+    /// GH #402: caption texts the model generated but the writeback
+    /// refused as degenerate (`!!!!…`; CaptionTextQuality) — schemaInvalid,
+    /// never stored. Counted per frame per channel, carried into OUTCOME.
+    var liveDegenerateRefused = 0
 
     /// Same-footage carry-over index for the running batch. nil = carry-over
     /// off (an explicit single-file Analyze, or a test driving the loops

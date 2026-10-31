@@ -156,7 +156,7 @@ struct CatalogCoverage: Equatable {
             // non-junk non-purged set so the Total Processed panel
             // doesn't artificially shrink.
             if !r.sceneCaptions.isEmpty { s += 1 }
-            if !r.ocrDateCandidates.isEmpty { o += 1 }
+            if !r.usableOCRDates.isEmpty { o += 1 }   // GH #402: junk is not an OCR date
             if !(r.audioTranscript ?? "").isEmpty { x += 1 }
             if let conf = r.inferredDateConfidence, conf >= 0.85 { sd += 1 }
         }

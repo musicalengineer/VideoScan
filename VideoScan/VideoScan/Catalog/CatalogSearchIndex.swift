@@ -794,7 +794,7 @@ final class CatalogSearchIndex {
         if let p = rec.userPlace { parts.append(p) }
         for cap in rec.sceneCaptions { parts.append(cap.text) }
         if let t = rec.audioTranscript { parts.append(t) }
-        for hit in rec.ocrDateCandidates { parts.append(hit.text) }
+        for hit in rec.usableOCRDates { parts.append(hit.text) }   // GH #402: junk is not searchable text
         for hit in rec.ocrText { parts.append(hit.text) }
         // NFC-normalize: macOS filenames are NFD-decomposed ("é" = e+◌́)
         // while typed queries are NFC. Both sides get NFC so the

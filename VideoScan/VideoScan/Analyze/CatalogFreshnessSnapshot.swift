@@ -401,7 +401,8 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     private func rejudge(now: Date = Date()) {
         guard report.computedAt.timeIntervalSince1970 > 0 else { return }
         let rows = CatalogFreshnessRows.rows(report: report, facts: facts, running: running)
-        let reality = CatalogRealityFactsBuilder.inputs(facts: facts, missing: report.missingCopies)
+        let reality = CatalogRealityFactsBuilder.inputs(facts: facts, missing: report.missingCopies,
+                                                        degenerateOCRDates: report.degenerateOCRDates)
         let new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
         guard new != state else { return }
         publishCount += 1
