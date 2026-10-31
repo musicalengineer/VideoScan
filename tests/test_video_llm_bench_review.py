@@ -230,3 +230,34 @@ def test_review_state_over_two_thousand_clips_is_quick(tmp_path):
     elapsed = time.perf_counter() - started
     assert state["tally"]["clips_done"] == 2000
     assert elapsed < 20, "2,000 clips in {:.1f} s — the page polls this every 2 s".format(elapsed)
+
+
+# ---------------------------------------------------------------------------
+# Fusion step one: a date stamp the model read collapses its range (Rick, 2026-10-31)
+# ---------------------------------------------------------------------------
+def test_a_stamp_the_model_cites_collapses_its_padded_range_to_that_year(tmp_path):
+    """CapeCod June 1997: all three windows cited "JUN 21 '97" and still answered 1995–1997."""
+    from test_video_llm_bench_a2 import era_obj, room_obj
+
+    class StampA2(FakeA2):
+        def answer_window(self, image_paths, family, window):
+            obj = era_obj(yearRange=[1995, 1997], rationale="The on-screen date stamp 'JUN 21 '97' indicates 1997.",
+                          cues=[{"kind": "onScreenText", "text": "JUN 21 '97", "atS": 24.5}]) if family == "era" else room_obj()
+            return json.dumps(obj), {}
+    e = dict(entry(digest_for(31)), truth={"year": 1997})
+    out = scratch_run(tmp_path, [e], approach=StampA2())
+    c = bench.review_state(out, manifest_for([e]))["clips"][0]
+    assert c["model_range"] == [1995, 1997] and c["burned_in_years"] == [1997]
+    assert c["machine_range"] == [1997, 1997] and c["fused"] is True and c["close"] is True and c["error_years"] == 0.0
+
+
+def test_fusion_rules_single_cue_outside_range_and_two_digit_years():
+    assert bench.fuse_range((1995.0, 1997.0), [1997, 1997, 1997]) == (1997.0, 1997.0)
+    assert bench.fuse_range((1995.0, 1997.0), [1997]) == (1997.0, 1997.0), "the only window may carry the stamp"
+    assert bench.fuse_range((1995.0, 1997.0), [1997, 1991]) == (1995.0, 1997.0), "two windows disagree, one cite each: left alone"
+    assert bench.fuse_range((1980.0, 1990.0), [1997, 1997]) == (1980.0, 1990.0), "a stamp outside the model's range is not trusted over it"
+    assert bench.fuse_range(None, [1997, 1997]) == (1997.0, 1997.0), "no model range, a stamp read twice: the stamp"
+    assert bench.fuse_range((1995.0, 1997.0), []) == (1995.0, 1997.0)
+    windows = [{"answers": [{"family": "era", "cues": [{"kind": "onScreenText", "text": "JUN 21 '97"}, {"kind": "technical", "text": "1997 Honda"}]}]},
+               {"answers": [{"family": "era", "cues": [{"kind": "onScreenText", "text": "12/25/1991"}, {"kind": "onScreenText", "text": "REC"}]}]}]
+    assert bench.burned_in_years(windows) == [1997, 1991], "cue kinds other than onScreenText never count; REC is not a year"
