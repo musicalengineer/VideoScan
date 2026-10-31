@@ -36,6 +36,50 @@ Analyze cyclers, the one commit door). Not yet built.*
    grant, one time, is the price of its own name and lifecycle; the single-binary alternative (§2 option B) shares
    grants but is the design Rick does not want.
 
+## 0.5 Statement of responsibility (Rick, 2026-10-30: "good SW design requires clear responsibilities")
+
+**`VideoScan Background` is a persistent container.** It keeps analysis engines running when the VideoScan window is
+not open. It owns no analysis logic of its own.
+
+| It is responsible for | It is not responsible for |
+|---|---|
+| Staying alive across app quit and reboot (launchd), and exiting when idle | Any user interface; it has no windows and draws nothing |
+| Running jobs from the queue, one per lane, in order, with checkpoints | Deciding *what* to analyze (the app or the nightly enqueues; it never scans for work on its own) |
+| Hosting engines from the libraries (`VideoScanCore`, `VideoScanEngine`) and loading at most one resident model | Containing an engine's logic; an engine that needs the service must first live in a library with its own tests |
+| Backing off while Rick works; thermal and memory pressure | Scheduling policy beyond backoff (the nightly rota and the app decide when) |
+| Writing results to sidecar stores and the append-only journal, with START/OUTCOME in `background.log` | **Writing the catalog**, ever; the app's one committer applies the journal |
+| Reading media and the catalog read-only | Moving, renaming, deleting, trashing, re-encoding or promoting media (data-risk verbs stay in the app, with Rick present) |
+| Answering XPC `status/enqueue/pause/resume/stop` from a signed VideoScan client | Trusting any other client; and it never initiates contact with the app |
+| Refusing in words what it cannot do (RAM, missing weights, newer sidecar schema, unsigned caller) | Guessing, repairing, or coercing |
+
+C++ reading: a daemon that owns a thread pool and a work queue and dynamically hosts plug-in libraries behind one
+interface; the plug-ins carry the knowledge, the daemon carries the lifetime.
+
+### The direction this sets: libraries, not folders
+
+Today VideoScan is one app target (~700K lines organised by folder) plus one library (`VideoScanCore`). Folders are
+not modules: the compiler sees one module and anything may call anything; `VideoScanModel` (one object, ~90
+published properties, ~133 extending files) is the hub of the coupling. The target is **the UI/UX app plus a library
+per functional group** — in C++ terms, static libraries with narrow headers:
+
+| Library | Holds | Status |
+|---|---|---|
+| `VideoScanCore` | pure types, catalog store and commit door, fingerprints, date triangulation, GEDCOM graph | exists |
+| `VideoScanEngine` | media reading (ffmpeg/AVFoundation wrappers), captioning, transcription, model-lab approaches, sidecar stores, `LogSink` | new; filled one engine at a time as each moves into the service |
+| `VideoScanBackground` | the container of this design | new |
+| later: `VideoScanEvents`, `VideoScanProvenance`, `VideoScanFamilyTree` | the domain engines behind those tabs, each with its own tests | as #337 splits `VideoScanModel` |
+| `VideoScan` (app) | SwiftUI, feature stores, the one committer, the data-risk verbs | shrinks |
+
+The service is the lever: an engine can only move into the container if it imports no SwiftUI and touches no
+`VideoScanModel`, so every move extracts a library first. Not everything at once ("no way"); every increment in
+this direction, each one compile-proven, test-proven and merged.
+
+**What this does to the grades (honestly).** CCN is per function: extraction alone does not lower it. What
+modularization lowers directly is coupling (the `extension VideoScanModel` count, imports per file, fan-in/out) and
+build time, and it raises testability. CCN falls when the untangling that extraction forces splits long functions —
+a consequence to measure, not assume. The metrics page should carry a coupling figure beside CCN so the refactor
+shows in the number it actually moves (BACKLOG).
+
 ## 1. Purpose, in Rick's terms
 
 Rapid dev means the app is started and stopped all day. Every start kills the captioner, the fingerprint backfill,
