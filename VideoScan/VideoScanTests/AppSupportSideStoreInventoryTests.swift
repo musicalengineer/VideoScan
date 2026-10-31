@@ -72,6 +72,7 @@ struct AppSupportSideStoreInventoryTests {
         "m1.jsonl": .logOrReport, "m4.jsonl": .logOrReport, "m5.jsonl": .logOrReport,   // fleet stats
         // Separate stores by design
         "audio-fingerprints.sqlite": .separateByDesign,       // landmarks (the stamp is in catalog.sqlite)
+        "model-lab.sqlite": .separateByDesign,                // model-lab runs/outputs/segments/vectors (video_llm_lab design §3.4; 2026-10-30)
         "catalog.sqlite": .separateByDesign,                  // THE catalog
         "policy.json": .separateByDesign,                     // archive-angel/: Rick's optional override, never written by the app
         "profile.json": .separateByDesign,                    // POI/
