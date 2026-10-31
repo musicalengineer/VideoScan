@@ -242,20 +242,28 @@ struct JobSupervisorTests {
 
     @Test("resume() before the pause lands restores .running — the row never keeps saying pausing…")
     func resumeBeforePauseLandsRestoresRunning() async throws {
+        // RED 2026-10-31 (nightly, Release, Core lane): the earlier shape slept 100 ms per
+        // unit and read the state after pause(); under load the unit ended first, the
+        // between-units check parked the job (.paused "user") and both reads failed.
+        // Now the lane is held INSIDE unit 1 by a gate the test owns, so no between-units
+        // check can run until the test opens it: both verbs land while the job is running.
         let recorder = UnitRecorder()
-        let supervisor = make(factory: RecordingFactory(recorder: recorder, units: 1_000, sleepPerUnit: .milliseconds(100)))
-        let request = RecordingFactory.request()
+        let gate = UnitGate()
+        let supervisor = make(factory: GatedFactory(recorder: recorder, gate: gate, heldUnit: 1))
+        let request = GatedFactory.request()
         _ = await supervisor.enqueue(request)
-        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 1 })
-        // Both verbs land inside one 100 ms unit, before the next between-units check.
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "unit 1 reached the gate")
+        #expect(recorder.completedUnits == [0])
         #expect(await supervisor.pause(request.id))
         #expect(await supervisor.snapshot(request.id)?.state == .pausing)
         #expect(await supervisor.resume(request.id))
         #expect(await supervisor.snapshot(request.id)?.state == .running)
+        gate.open()
         #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 4 })
-        #expect(await supervisor.snapshot(request.id)?.state == .running)
+        #expect(await supervisor.snapshot(request.id)?.state == .running, "the withdrawn pause never landed")
         _ = await supervisor.stop(request.id)
         await supervisor.drain()
+        #expect(await supervisor.snapshot(request.id)?.state == .stopped)
     }
 
     @Test("a pause requested during a thermal hold is honoured before any unit runs when the Mac cools")
