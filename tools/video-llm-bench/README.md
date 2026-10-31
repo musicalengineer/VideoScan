@@ -205,3 +205,18 @@ through the 02:00 nightly. A wedged Metal kernel cannot be interrupted from a Py
 nice -n 15 venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a2-py --frames 8 \
   --generation-timeout 120 --deadline 01:30 --manifest … --model-dir … --out …/runs/<id>-a2-py
 ```
+
+## Approach `a3-py` — the 32B on the Rick-dated stratum (2026-10-31)
+
+**Qwen3-VL-32B-Instruct-4bit** through exactly A2's paths (windows + contracts for ERA, A0's stills for OCR).
+Meant for `--stratum-prefix rick-dated/` only — the one stratum with era truth (72 clips) — because the 32B costs
+3–4× the 8B per generation. `select_entries` is the pure clip selector behind `--corpus`, `--stratum-prefix`,
+`--smoke` and `--limit`; the run record's `selection` names what was chosen (`stratum-rick-dated`). Memory (worst
+case) ≈ 24 GB: fits the Ultra beside Ollama's 70B, not the M4 beside it.
+
+```sh
+nice -n 15 venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a3-py --frames 8 \
+  --stratum-prefix rick-dated/ --generation-timeout 300 --deadline HH:MM --manifest … \
+  --model-dir <Qwen3-VL-32B snapshot dir> --out …/runs/<id>-a3-py
+```
+The summary prints A3 after A2 with a two-line reading (era MAE on the stratum, cost); its OCR table is empty by design.
