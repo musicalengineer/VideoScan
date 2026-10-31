@@ -25,8 +25,8 @@ extension CaptionOrchestrator {
         let scenes = CaptionTextQuality.partition(extraction.scenes)
         let dates = CaptionTextQuality.partition(extraction.dates)
         let texts = CaptionTextQuality.partition(extraction.texts)
-        let refused: [(kind: String, frames: Int)] = [
-            ("scene", scenes.refused), ("ocrDate", dates.refused), ("ocrText", texts.refused),
+        let refused: [(channel: CaptionChannel, frames: Int)] = [
+            (.scene, scenes.refused), (.ocrDate, dates.refused), (.ocrText, texts.refused),
         ].filter { $0.frames > 0 }
         guard !refused.isEmpty else { return extraction }
         noteRefused(refused, filename: filename, modelID: modelID)
@@ -38,11 +38,11 @@ extension CaptionOrchestrator {
                           filename: String, modelID: String) -> [SceneCaption] {
         let scenes = CaptionTextQuality.partition(captions)
         guard scenes.refused > 0 else { return captions }
-        noteRefused([("scene", scenes.refused)], filename: filename, modelID: modelID)
+        noteRefused([(.scene, scenes.refused)], filename: filename, modelID: modelID)
         return scenes.kept
     }
 
-    private func noteRefused(_ refused: [(kind: String, frames: Int)], filename: String, modelID: String) {
+    private func noteRefused(_ refused: [(channel: CaptionChannel, frames: Int)], filename: String, modelID: String) {
         liveDegenerateRefused += refused.reduce(0) { $0 + $1.frames }
         appLog.write(Self.degenerateRefusalLine(refused, modelID: modelID, filename: filename))
     }
@@ -50,9 +50,9 @@ extension CaptionOrchestrator {
     /// The per-file log line. Counts and kinds only — never the refused text
     /// (log privacy, same rule as the coverage line). `nonisolated static`
     /// so tests can pin it without a batch. (≈ a C++ free function.)
-    nonisolated static func degenerateRefusalLine(_ refused: [(kind: String, frames: Int)],
+    nonisolated static func degenerateRefusalLine(_ refused: [(channel: CaptionChannel, frames: Int)],
                                                   modelID: String, filename: String) -> String {
-        let parts = refused.map { "kind=\($0.kind) frames=\($0.frames)" }.joined(separator: ", ")
+        let parts = refused.map { "kind=\($0.channel.rawValue) frames=\($0.frames)" }.joined(separator: ", ")
         return "[captions] degenerate output refused — \(parts) model=\(modelID) — \(filename)"
     }
 }

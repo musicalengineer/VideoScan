@@ -119,13 +119,17 @@ extension VideoScanModel {
                 rec.sceneCaptionDate = best.date
                 changed = true
             }
+            // GH #402: compared and written as USABLE entries — a member whose
+            // usable entries already match keeps its row untouched (no write
+            // is ever triggered by stored junk alone); a behind member gets
+            // the donor's usable entries, never its degenerate ones.
             if let best = bestOCRText,
-               rec.ocrText != best.entries {
+               CaptionTextQuality.usable(rec.ocrText) != best.entries {
                 rec.ocrText = best.entries
                 changed = true
             }
             if let best = bestOCRDates,
-               rec.ocrDateCandidates != best.entries {
+               rec.usableOCRDates != best.entries {
                 rec.ocrDateCandidates = best.entries
                 changed = true
             }
@@ -149,16 +153,9 @@ extension VideoScanModel {
         rec.streamType == .ffprobeFailed || rec.isLikelyUnanalyzable
     }
 
-    /// A dossier text is "degenerate" when, after trimming whitespace and
-    /// newlines, it's empty OR every remaining character is identical
-    /// (e.g. "!!!!", "----"). These are recognizer failure artifacts, not
-    /// content — never worth propagating. `Set(trimmed).count == 1`
-    /// captures the single-distinct-character case.
-    static func isDegenerateDossierText(_ s: String) -> Bool {
-        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
-        return Set(trimmed).count == 1
-    }
+    // GH #402: the old `isDegenerateDossierText` (empty, or one repeated
+    // character) is retired — every degeneracy question goes to the one
+    // Core verdict, `CaptionTextQuality.verdict(_:)`, a strict superset.
 
     // MARK: - Provenance stamp for direct writebacks (fix 2026-07-01)
 
@@ -397,7 +394,7 @@ extension VideoScanModel {
             // trimming is a Whisper failure artifact, never real speech.
             // Without this guard the smear bug propagated a literal "!!!!"
             // transcript across a whole MD5 group (Rick 2026-06-30).
-            if Self.isDegenerateDossierText(tx) { continue }
+            if CaptionTextQuality.verdict(tx).isDegenerate { continue }
             if best == nil || tx.count > (best?.text.count ?? 0) {
                 best = BestTranscript(
                     text: tx,
@@ -441,30 +438,33 @@ extension VideoScanModel {
         var best: BestOCREntries?
         var bestScore = -1
         for rec in group {
-            guard !rec.ocrText.isEmpty else { continue }
-            let textLen = rec.ocrText.reduce(0) { $0 + $1.text.count }
-            let score = rec.ocrText.count * 1000 + textLen
+            let usable = CaptionTextQuality.usable(rec.ocrText)   // GH #402: junk never scores
+            guard !usable.isEmpty else { continue }
+            let textLen = usable.reduce(0) { $0 + $1.text.count }
+            let score = usable.count * 1000 + textLen
             if score > bestScore {
                 bestScore = score
-                best = BestOCREntries(entries: rec.ocrText)
+                best = BestOCREntries(entries: usable)
             }
         }
         return best
     }
 
-    /// Best OCR date candidates = largest count, tiebreak on total
-    /// text length. Same shape as OCR text. Nil when nobody has
-    /// OCR date candidates.
+    /// Best OCR date candidates = largest count of USABLE dates, tiebreak
+    /// on their total text length. Same shape as OCR text. Nil when nobody
+    /// has a usable OCR date. GH #402: three frames of `!!!!` used to
+    /// outscore one real `JUN 21 1991` and overwrite it.
     @MainActor static func bestOCRDateCandidates(in group: [VideoRecord]) -> BestOCREntries? {
         var best: BestOCREntries?
         var bestScore = -1
         for rec in group {
-            guard !rec.ocrDateCandidates.isEmpty else { continue }
-            let textLen = rec.ocrDateCandidates.reduce(0) { $0 + $1.text.count }
-            let score = rec.ocrDateCandidates.count * 1000 + textLen
+            let usable = rec.usableOCRDates
+            guard !usable.isEmpty else { continue }
+            let textLen = usable.reduce(0) { $0 + $1.text.count }
+            let score = usable.count * 1000 + textLen
             if score > bestScore {
                 bestScore = score
-                best = BestOCREntries(entries: rec.ocrDateCandidates)
+                best = BestOCREntries(entries: usable)
             }
         }
         return best

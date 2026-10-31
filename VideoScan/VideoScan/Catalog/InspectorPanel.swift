@@ -226,7 +226,7 @@ struct InspectorPanel: View {
         // worth showing to keep the output tight for non-dossier'd records.
         // GH #402: an OCR date the verdict calls degenerate (`!!!!…`, stored
         // before the write path refused them) is not evidence — never quoted.
-        let shownOCRDates = CaptionTextQuality.usable(rec.ocrDateCandidates)
+        let shownOCRDates = rec.usableOCRDates
         let hasDossierContent =
             !rec.sceneCaptions.isEmpty
             || !(rec.audioTranscript ?? "").isEmpty

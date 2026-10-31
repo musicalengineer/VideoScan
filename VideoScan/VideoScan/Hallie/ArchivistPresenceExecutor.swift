@@ -440,7 +440,8 @@ struct ArchivistPresenceRecordSnapshot: Sendable, Equatable {
             captionModel: record.sceneCaptionModel,
             transcript: record.audioTranscript,
             transcriptModel: record.audioTranscriptModel,
-            ocrDateCandidates: record.ocrDateCandidates,
+            // GH #402: Hallie never cites a degenerate generation as a basis.
+            ocrDateCandidates: record.usableOCRDates,
             ocrText: record.ocrText,
             resolvedDate: ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)?.date,
             userPlace: record.userPlace,

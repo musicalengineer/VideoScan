@@ -41,7 +41,7 @@ struct CaptionTextQualityTests {
     func digitCarveOut() {
         #expect(!isDegenerate("11-11-11 11:11"))
         #expect(!isDegenerate("11/11/11"))
-        #expect(!isDegenerate("1111111111"))   // 10 digits: within the burn-in shape (documented)
+        #expect(isDegenerate("1111111111"))    // a 1-digit unit ×10: rule (p), not a burn-in
         #expect(isDegenerate(String(repeating: "1", count: 25)))
         #expect(isDegenerate(String(repeating: "0", count: 40)))
     }
@@ -49,7 +49,7 @@ struct CaptionTextQualityTests {
     @Test("a word built from few letters is a word, not a repetition")
     func fewLetterWordIsUsable() {
         #expect(!isDegenerate("MISSISSIPPI"))
-        #expect(!isDegenerate("hahahahahaha"))
+        #expect(!isDegenerate("Mississippi River"))
         #expect(!isDegenerate("═══ 1991 ═══"))
     }
 
@@ -79,13 +79,55 @@ struct CaptionTextQualityTests {
         guard case .degenerate(let reason) = CaptionTextQuality.verdict(s) else {
             Issue.record("expected degenerate: \(s)"); return
         }
-        #expect(reason.contains("repeated"))
+        #expect(reason.contains("repeated"), "rule (p) or (b) named: \(reason)")
     }
 
     @Test("five in a row, or six not in a row, is usable")
     func tokenRunBoundary() {
         #expect(!isDegenerate("the the the the the end"))
         #expect(!isDegenerate("the cat the dog the man the end the hat the"))
+    }
+
+    // MARK: - Rule (p): periodic loops (reviewer round, GH #402)
+
+    @Test("a periodic loop of a short unit is degenerate, whatever its characters",
+          arguments: [String(repeating: "!", count: 100_000) + "ab",
+                      "1991-1991-1991-1991-1991-1991-1991", "19911991199119911991199119911991",
+                      "abababababababababababab", "!a!b!a!b!a!b!a!b!a!b!a!b", "hahahahahaha",
+                      "12341234123412341234", "the the the the the"])
+    func periodicLoopIsDegenerate(_ s: String) {
+        #expect(isDegenerate(s), "usable: \(s.prefix(40))… (\(s.count) chars)")
+    }
+
+    @Test("legitimate OCR / burn-in strings stay usable under every rule",
+          arguments: ["11-11-11 11:11", "12/25/1999", "JUN 21 1991", "'97", "MISSISSIPPI", "REC", "SP",
+                      "AM 10:30", "00:00:00", "00:00:00:00", "1991", "N/A", "none", "no date visible",
+                      "Donaudampfschifffahrtsgesellschaftskapitän", "יום הולדת שמח", "一九九一年六月二十一日",
+                      "12:00:00 AM 1/1/2000", "SP 0:12:34"])
+    func legitIsUsable(_ s: String) {
+        #expect(CaptionTextQuality.verdict(s) == .usable, "refused: \(s)")
+    }
+
+    @Test("the period boundaries: 3 repeats, or a 9-character unit, is not a loop")
+    func periodBoundaries() {
+        #expect(!isDegenerate("abcabcabc"))                                    // 9 chars, unit 3 × 3
+        #expect(isDegenerate("abcabcabcabc"))                                  // unit 3 × 4
+        #expect(!isDegenerate("birthday!birthday!birthday!birthday!"))         // unit 9 > maxPeriod
+    }
+
+    @Test("channel words are the catalog's captions.kind values")
+    func channelWords() {
+        #expect(CaptionChannel.allCases.map(\.rawValue) == ["scene", "ocrDate", "ocrText"])
+    }
+
+    @Test("VideoRecord.usableOCRDates drops the junk and keeps order")
+    func usableOCRDatesAccessor() {
+        let r = VideoRecord()
+        r.ocrDateCandidates = [SceneCaption(timestamp: 1, text: "!!!!!!!!!!!!"),
+                               SceneCaption(timestamp: 2, text: "JUN 21 1991"),
+                               SceneCaption(timestamp: 3, text: "1991-1991-1991-1991-1991")]
+        #expect(r.usableOCRDates.map(\.text) == ["JUN 21 1991"])
+        #expect(VideoRecord().usableOCRDates.isEmpty)
     }
 
     // MARK: - Rule (c): no letter or digit

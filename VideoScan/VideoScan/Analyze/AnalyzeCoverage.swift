@@ -151,7 +151,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   footageScannedAt: r.footage?.scannedAt,
                   dossierStamped: r.dossierProcessedAt != nil,
                   hasCaptions: r.sceneCaptionDate != nil || !r.sceneCaptions.isEmpty,
-                  hasOCRText: !r.ocrText.isEmpty || !r.ocrDateCandidates.isEmpty,
+                  hasOCRText: !r.ocrText.isEmpty || !r.usableOCRDates.isEmpty,   // GH #402
                   hasTranscript: r.audioTranscriptDate != nil || !(r.audioTranscript ?? "").isEmpty,
                   isPaired: r.pairedWith != nil,
                   hasHash: !r.contentHash.isEmpty,
@@ -163,8 +163,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   hasSoundStamp: r.audioFingerprint != nil,
                   soundStampAt: r.audioFingerprint?.computedAt,
                   // O(this row's OCR dates); rows without any skip the verdict.
-                  degenerateOCRDates: r.ocrDateCandidates.isEmpty
-                      ? 0 : CaptionTextQuality.partition(r.ocrDateCandidates).refused)
+                  degenerateOCRDates: r.ocrDateCandidates.count - r.usableOCRDates.count)
     }
 }
 

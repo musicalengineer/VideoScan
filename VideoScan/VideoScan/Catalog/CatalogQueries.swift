@@ -299,7 +299,7 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
         return rec.sceneCaptions.contains { $0.text.lowercased().contains(n) }
     case .ocr:
         if rec.ocrText.contains(where: { $0.text.lowercased().contains(n) }) { return true }
-        if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        if rec.usableOCRDates.contains(where: { $0.text.lowercased().contains(n) }) { return true }   // GH #402
         return false
     case .filename:
         return rec.filename.lowercased().contains(n)
@@ -547,7 +547,7 @@ nonisolated func pfCatalogTokenMatches(_ token: SearchToken, _ rec: VideoRecord)
         // same kind of "what's in the frame" content as captions. Typing
         // "1991" should find a record whose burn-in shows JUN 1991 even
         // when the file mtime says 2024 (transcode date).
-        if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        if rec.usableOCRDates.contains(where: { $0.text.lowercased().contains(n) }) { return true }   // GH #402
         if rec.ocrText.contains(where: { $0.text.lowercased().contains(n) }) { return true }
         // Workflow tags + user notes (2026-07-23) — HUMAN signal, so
         // they join the plain-search field set (unlike machine `notes`,

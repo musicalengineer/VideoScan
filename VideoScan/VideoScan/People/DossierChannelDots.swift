@@ -87,7 +87,8 @@ extension VideoRecord {
     /// True if the dossier pass captured any burn-in date candidates.
     /// Distinct from `inferredRecordDate` — that's the triangulated
     /// answer, this is "did we have OCR evidence".
-    var hasOcrDate: Bool { !ocrDateCandidates.isEmpty }
+    /// GH #402: from the usable dates only — junk is not OCR evidence.
+    var hasOcrDate: Bool { !usableOCRDates.isEmpty }
 
     /// Total number of populated channels (0-4). Used as the sort
     /// key for the catalog table's Dossier column.

@@ -90,12 +90,13 @@ enum CatalogRealityFactsBuilder {
         return out
     }
 
-    /// "2,850 degenerate OCR captions stored before 2026-10-30 — not shown in
-    /// the inspector"; nil at zero. The date is the build that started
-    /// refusing them: any such row on disk was written before it.
+    /// "2,850 degenerate OCR captions stored before this build refused them —
+    /// not shown as evidence"; nil at zero. No date: carry-over and
+    /// propagation used to copy them onto fresh rows, so "before 2026-10-30"
+    /// was not provable (reviewer round, GH #402).
     static func degenerateOCRLine(_ n: Int) -> String? {
         guard n > 0 else { return nil }
-        return "\(n.formatted()) degenerate OCR caption\(n == 1 ? "" : "s") stored before 2026-10-30 — not shown in the inspector"
+        return "\(n.formatted()) degenerate OCR caption\(n == 1 ? "" : "s") stored before this build refused them — not shown as evidence"
     }
 
     /// What the file check's record says about presence (a run from

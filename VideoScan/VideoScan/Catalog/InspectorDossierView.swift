@@ -23,7 +23,7 @@ struct InspectorDossierView: View {
     /// (`!!!!…`, stored before the write path refused them) are not
     /// evidence. O(this record's frames), never O(records).
     private var shownOCRDates: [SceneCaption] {
-        CaptionTextQuality.usable(record.ocrDateCandidates)
+        record.usableOCRDates
     }
 
     var body: some View {

@@ -17,7 +17,8 @@ import Foundation
 /// The rule — `.degenerate` when ANY of these holds on the trimmed text:
 ///   (d) empty or whitespace only.
 ///   (c) longer than 3 characters and no letter or digit at all
-///       (`?!?!`, `！！！！`, `━━━━`).
+///       (`?!?!`, `！！！！`, `━━━━`); or longer than 8 and letters/digits
+///       are under 10 % of the non-space characters (100 KB of `!` + `ab`).
 ///   (a) longer than 8 characters and ≤ 3 distinct non-space characters
 ///       make up ≥ 90 % of the non-space characters, where that dominant
 ///       set holds at most ONE letter/digit (`!!!!…`, `.....`, `-----`,
@@ -25,8 +26,13 @@ import Foundation
 ///       a set with 2+ letters/digits is a word (`MISSISSIPPI`: S, I, P);
 ///       a digit-dominated text of ≤ 24 characters is a date/time burn-in
 ///       (`11-11-11 11:11`). A digit loop longer than 24 is degenerate.
+///   (p) longer than 8 characters and periodic: a unit of ≤ 8 characters
+///       repeated ≥ 4 times covers the whole text, a partial last unit
+///       allowed (`1991-1991-1991-1991`, `19911991…`, `abab…`, `!a!b!a!b…`,
+///       `the the the the`). `00:00:00:00` (unit `00:`, 3.7×) stays usable.
 ///   (b) the same whitespace-separated token (case- and edge-punctuation-
-///       insensitive) repeated ≥ 6 times in a row (`the the the the the the`).
+///       insensitive) repeated ≥ 6 times in a row (`The, the, THE, the…`,
+///       or a token too long for (p)).
 /// Everything else is `.usable` — including the legitimate short answers
 /// "none", "N/A", "unknown", "1991", "JUN 21 1991", "no date visible".
 ///
@@ -56,6 +62,9 @@ public enum CaptionTextQuality {
     public static let dominantShare = 0.90
     /// Rule (a) carve-out: a digit-dominated text this short is a burn-in.
     public static let dateShapeMaxLength = 24
+    /// Rule (p): the longest repeating unit, and the fewest repeats.
+    public static let maxPeriod = 8
+    public static let minPeriodRepeats = 4
 
     /// The verdict on one caption text: the first rule that fires names the
     /// reason. O(n) in the text's characters plus a sort of its distinct
@@ -64,14 +73,42 @@ public enum CaptionTextQuality {
     public static func verdict(_ text: String) -> Verdict {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty { return .degenerate(reason: "empty") }                     // (d)
-        let reason = noLetterOrDigit(s) ?? dominantCharacters(s) ?? repeatedToken(s)
+        let reason = noLetterOrDigit(s) ?? dominantCharacters(s) ?? periodicLoop(s) ?? repeatedToken(s)
         return reason.map { .degenerate(reason: $0) } ?? .usable
     }
 
-    /// Rule (c): longer than 3 characters and no letter or digit at all.
+    /// Rule (c): longer than 3 characters and no letter or digit at all;
+    /// or longer than 8 with letters/digits under 10 % of the non-space ones.
     static func noLetterOrDigit(_ s: String) -> String? {
-        guard s.count > 3, !s.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
-        return "no letter or digit in \(s.count) characters"
+        let count = s.count
+        guard count > 3 else { return nil }
+        var alnum = 0, nonSpace = 0
+        for ch in s where !ch.isWhitespace {
+            nonSpace += 1
+            if ch.isLetter || ch.isNumber { alnum += 1 }
+        }
+        if alnum == 0 { return "no letter or digit in \(count) characters" }
+        guard count > dominantMinLength, Double(alnum) < (1 - dominantShare) * Double(nonSpace) else { return nil }
+        return "\(alnum) letter(s)/digit(s) in \(nonSpace) characters"
+    }
+
+    /// Rule (p): the text's smallest period (KMP prefix function, O(n)) is
+    /// ≤ `maxPeriod` and repeats ≥ `minPeriodRepeats` times. (≈ the C++
+    /// failure-function trick: period = n − π[n−1].)
+    static func periodicLoop(_ s: String) -> String? {
+        let chars = Array(s)
+        let n = chars.count
+        guard n > dominantMinLength else { return nil }
+        var pi = [Int](repeating: 0, count: n)
+        for i in 1..<n {
+            var k = pi[i - 1]
+            while k > 0 && chars[i] != chars[k] { k = pi[k - 1] }
+            if chars[i] == chars[k] { k += 1 }
+            pi[i] = k
+        }
+        let period = n - pi[n - 1]
+        guard period <= maxPeriod, n >= minPeriodRepeats * period else { return nil }
+        return "a \(period)-character unit repeated \(n / period)+ times"
     }
 
     /// Rule (a): a set of <= 3 characters with at most one letter/digit
@@ -123,5 +160,21 @@ public enum CaptionTextQuality {
     /// write-side refusal existed (GH #402).
     public static func usable(_ captions: [SceneCaption]) -> [SceneCaption] {
         partition(captions).kept
+    }
+}
+
+/// The three caption channels the VLM writes (≈ a C++ `enum class`; the
+/// raw value is the catalog's `captions.kind` word).
+public enum CaptionChannel: String, Sendable, CaseIterable {
+    case scene, ocrDate, ocrText
+}
+
+extension VideoRecord {
+    /// THE OCR dates a reader may treat as evidence (GH #402): the stored
+    /// candidates minus the ones the verdict calls degenerate. Every
+    /// "has OCR date", search, triangulation and Hallie basis reads this,
+    /// never `ocrDateCandidates` directly. O(this row's frames).
+    public var usableOCRDates: [SceneCaption] {
+        ocrDateCandidates.isEmpty ? [] : CaptionTextQuality.usable(ocrDateCandidates)
     }
 }

@@ -181,7 +181,7 @@ struct CaptionDegenerateRefusalTests {
     @Test("sensor: the per-file log line names kinds, counts, model and file — never the refused text")
     func refusalLineShape() {
         let line = CaptionOrchestrator.degenerateRefusalLine(
-            [("ocrDate", 3), ("ocrText", 2)], modelID: "qwen2.5-vl-3b-4bit", filename: "test_402.mov")
+            [(.ocrDate, 3), (.ocrText, 2)], modelID: "qwen2.5-vl-3b-4bit", filename: "test_402.mov")
         #expect(line == "[captions] degenerate output refused — kind=ocrDate frames=3, kind=ocrText frames=2 model=qwen2.5-vl-3b-4bit — test_402.mov")
         #expect(!line.contains("!!"))
     }
@@ -265,13 +265,13 @@ struct CatalogStatusDegenerateOCRTests {
         let facts = CatalogFreshnessFacts()
         let without = CatalogRealityFactsBuilder.inputs(facts: facts, missing: MissingCopyCounts())
         let with = CatalogRealityFactsBuilder.inputs(facts: facts, missing: MissingCopyCounts(), degenerateOCRDates: 2_850)
-        #expect(with.information.contains("2,850 degenerate OCR captions stored before 2026-10-30 — not shown in the inspector"))
+        #expect(with.information.contains("2,850 degenerate OCR captions stored before this build refused them — not shown as evidence"))
         #expect(with.facts == without.facts && with.review == without.review)
         let now = Date()
         #expect(CatalogRealityPolicy.judge(with.facts, review: with.review, information: with.information, now: now).colour
                 == CatalogRealityPolicy.judge(without.facts, review: without.review, information: without.information, now: now).colour)
         #expect(without.information.allSatisfy { !$0.contains("degenerate") }, "zero says nothing")
-        #expect(CatalogRealityFactsBuilder.degenerateOCRLine(1) == "1 degenerate OCR caption stored before 2026-10-30 — not shown in the inspector")
+        #expect(CatalogRealityFactsBuilder.degenerateOCRLine(1) == "1 degenerate OCR caption stored before this build refused them — not shown as evidence")
     }
 
     @Test("scale: 100k rows (3,128 with OCR dates, 2,850 of them junk) projected and counted within 10 s")
@@ -293,5 +293,94 @@ struct CatalogStatusDegenerateOCRTests {
         let elapsed = clock.now - start
         #expect(report.degenerateOCRDates == 2_850)
         #expect(elapsed < .seconds(10), "project + compute at 100k took \(elapsed)")
+    }
+}
+
+// MARK: - Reviewer round (GH #402): stored junk read as evidence / re-written by other routes
+//
+// Moved from the reviewer's CaptionDegenerateReviewerTests.swift (RED on
+// 59a04c0a). Their two verdict tests live in Core's CaptionTextQualityTests
+// (periodicLoopIsDegenerate, legitIsUsable).
+
+@MainActor
+private func reviewRecord(_ path: String, md5: String = "", dates: [String]) -> VideoRecord {
+    let r = VideoRecord()
+    r.fullPath = path
+    r.filename = (path as NSString).lastPathComponent
+    r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+    r.durationSeconds = 30
+    r.lifecycleStage = .cataloged
+    r.partialMD5 = md5
+    r.ocrDateCandidates = dates.enumerated().map { SceneCaption(timestamp: Double($0.offset), text: $0.element) }
+    return r
+}
+
+@MainActor
+@Suite("Captions — stored degenerate OCR dates are not evidence on any reader or write route (GH #402)")
+struct CaptionDegenerateReaderRouteTests {
+
+    @Test("truth: the Dossier column dot stays dark for a row whose only OCR dates are junk")
+    func channelDotLiesAboutOCRDate() {
+        let r = reviewRecord("/tmp/rev402-dot.mov", dates: [junk, junk, junk])
+        #expect(r.hasOcrDate == false)
+        #expect(reviewRecord("/tmp/rev402-dot2.mov", dates: [junk, "JUN 21 1991"]).hasOcrDate)
+    }
+
+    @Test("truth: the Dossier dashboard does not count a junk-only row as having OCR dates")
+    func dashboardCountsJunk() {
+        let r = reviewRecord("/tmp/rev402-dash.mov", dates: [junk])
+        #expect(CatalogCoverage(records: [r]).ocrDates == 0)
+    }
+
+    @Test("truth: AnalyzeCoverageInput.hasOCRText is false for a junk-only row")
+    func coverageInputCountsJunk() {
+        let r = reviewRecord("/tmp/rev402-cov.mov", dates: [junk])
+        #expect(AnalyzeCoverageInput(record: r).hasOCRText == false)
+    }
+
+    @Test("carry-over copies only the donor's usable OCR dates")
+    func carryOverBypassesGate() {
+        let model = VideoScanModel()
+        let donor = reviewRecord("/tmp/rev402-donor.mov", md5: "abc", dates: [junk, "JUN 21 1991"])
+        let recipient = reviewRecord("/tmp/rev402-recipient.mov", md5: "abc", dates: [])
+        model.records = [donor, recipient]
+        model.carryOverDossierText(from: donor, to: recipient, relation: .sameBytes)
+        #expect(recipient.ocrDateCandidates.map(\.text) == ["JUN 21 1991"])
+    }
+
+    @Test("propagation never replaces a real OCR date with a sibling's degenerate dates — and fills the junk sibling with the real one")
+    func propagationOverwritesRealReadingWithJunk() {
+        let model = VideoScanModel()
+        let real = reviewRecord("/tmp/rev402-real.mov", md5: "same", dates: ["JUN 21 1991"])
+        let junky = reviewRecord("/tmp/rev402-junk.mov", md5: "same", dates: [junk, junk, junk])
+        model.records = [real, junky]
+        _ = model.propagateBestDossier(in: [real, junky])
+        #expect(real.ocrDateCandidates.map(\.text) == ["JUN 21 1991"])
+        #expect(junky.ocrDateCandidates.map(\.text) == ["JUN 21 1991"])
+    }
+
+    @Test("propagation: a group whose only OCR dates are junk writes nothing")
+    func propagationAllJunkWritesNothing() {
+        let model = VideoScanModel()
+        let a = reviewRecord("/tmp/rev402-a.mov", md5: "j", dates: [junk])
+        let b = reviewRecord("/tmp/rev402-b.mov", md5: "j", dates: [])
+        model.records = [a, b]
+        #expect(model.propagateBestDossier(in: [a, b]) == 0)
+        #expect(b.ocrDateCandidates.isEmpty)
+    }
+
+    @Test("truth: junk-only OCR dates are not date evidence, so the folder-year fallback stays open")
+    func junkDoesNotBlockFolderYear() {
+        let r = reviewRecord("/tmp/rev402-fy.mov", dates: [junk])
+        #expect(VideoScanModel.hasDateEvidence(r) == false)
+        #expect(VideoScanModel.hasDateEvidence(reviewRecord("/tmp/rev402-fy2.mov", dates: ["JUN 21 1991"])))
+    }
+
+    @Test("truth: search and the Hallie snapshot never carry a degenerate OCR date")
+    func searchAndHallieReadUsableOnly() {
+        let r = reviewRecord("/tmp/rev402-search.mov", dates: [junk, "JUN 21 1991"])
+        #expect(r.usableOCRDates.map(\.text) == ["JUN 21 1991"])
+        let snap = ArchivistPresenceRecordSnapshot(record: r)
+        #expect(snap.ocrDateCandidates.map(\.text) == ["JUN 21 1991"])
     }
 }
