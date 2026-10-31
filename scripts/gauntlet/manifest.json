@@ -31983,6 +31983,26 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_video_llm_bench_review.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench_review.py"
+      ],
+      "tests": [
+        "test_an_ocr_only_clip_has_no_era_but_shows_the_dates_it_read",
+        "test_keep_frames_leaves_the_frames_the_model_saw_under_the_run_dir",
+        "test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt",
+        "test_review_state_over_two_thousand_clips_is_quick",
+        "test_review_state_shows_truth_frames_rationale_cues_and_error",
+        "test_server_records_a_verdict_and_refuses_a_bad_one",
+        "test_server_serves_page_state_frames_and_refuses_traversal",
+        "test_the_run_dir_must_be_under_scratch_and_the_server_stays_on_loopback",
+        "test_verdicts_last_wins_malformed_skipped_and_show_in_the_state"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_videoscan_stress.py",
       "stage": "unit",
       "suites": [
@@ -34751,6 +34771,10 @@
         },
         {
           "name": "tests/test_video_llm_bench_a3.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench_review.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
