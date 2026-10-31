@@ -3083,6 +3083,43 @@ def _nearest_frame_index(frame_times: Sequence[float], at_s: Optional[float]) ->
     return min(range(len(frame_times)), key=lambda i: abs(frame_times[i] - at_s))
 
 
+def burned_in_years(windows: Sequence[Dict[str, Any]]) -> List[int]:
+    """Years the model READ off the picture: every `onScreenText` cue whose text parses as a
+    date or a year (A0's parsers; a 2-digit year goes through expand_two_digit_year).  Rick,
+    2026-10-31: "this file is clearly 1997 from the OCR display, why a range?" — the model
+    cited the stamp and still padded to 1995–1997 because the contract asks for a range."""
+    years: List[int] = []
+    for window in windows:
+        for answer in window.get("answers") or []:
+            for cue in answer.get("cues") or []:
+                if cue.get("kind") != "onScreenText":
+                    continue
+                text = str(cue.get("text") or "")
+                found = [int(d[:4]) for d in parse_dates(text)] or parse_years(text)
+                if not found:
+                    m = re.search(r"'(\d{2})\b", text)   # JUN 21 '97
+                    if m:
+                        found = [expand_two_digit_year(int(m.group(1)))]
+                years.extend(y for y in found if CONTRACT_YEAR_MIN <= y <= CONTRACT_YEAR_MAX)
+    return years
+
+
+def fuse_range(year_range: Optional[Tuple[float, float]], burned: Sequence[int]) -> Optional[Tuple[float, float]]:
+    """Deterministic fusion, step one: a year the model read off a date stamp, cited in at
+    least two windows (or the only window) and inside the model's own range, collapses the
+    range to that year.  Outside the range → left alone (the stamp or the range is wrong;
+    the review shows both).  No model is asked anything."""
+    if not burned:
+        return year_range
+    counts = collections.Counter(burned)
+    year, n = counts.most_common(1)[0]
+    if n < 2 and len(burned) != 1:
+        return year_range
+    if year_range and not (year_range[0] <= year <= year_range[1]):
+        return year_range
+    return (float(year), float(year))
+
+
 def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, verdict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """One clip as the page shows it: name, truth, frames (relative to the run dir),
     the model's windows with rationale and cues, the clip range and its error."""
@@ -3116,7 +3153,9 @@ def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, v
                         "frames": frames, "answers": answers})
     truth = entry.get("truth") or {}
     confirmed_year = truth.get("year")
-    year_range = clip_year_range(records.get("window_results") or [])
+    model_range = clip_year_range(records.get("window_results") or [])
+    burned = burned_in_years(windows)
+    year_range = fuse_range(model_range, burned)
     midpoint = (year_range[0] + year_range[1]) / 2 if year_range else None
     error = abs(midpoint - confirmed_year) if (midpoint is not None and isinstance(confirmed_year, (int, float))) else None
     inside = bool(year_range and isinstance(confirmed_year, (int, float)) and year_range[0] <= confirmed_year <= year_range[1])
@@ -3130,6 +3169,8 @@ def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, v
         "duration_s": header.get("duration_s", entry.get("duration_s")), "corpora": header.get("corpora") or [entry.get("corpus")],
         "confirmed_year": confirmed_year, "confirmed_date": truth.get("date"),
         "machine_range": list(year_range) if year_range else None, "machine_midpoint": midpoint,
+        "model_range": list(model_range) if model_range else None,
+        "burned_in_years": sorted(set(burned)), "fused": bool(year_range and model_range and year_range != model_range),
         "error_years": round(error, 1) if error is not None else None, "inside": inside,
         "width_years": width, "close": close,
         "ocr_dates": ocr_dates, "windows": windows,
@@ -3252,7 +3293,7 @@ function render(){
     return `<section class="win"><h3>Window ${w.index+1} · ${mmss(w.start_s)}–${mmss(w.end_s)}</h3><div class="strip">${strip}</div>${eraBox}${roomBox}</section>`}).join("");
   $("#main").innerHTML=`<h1>${esc(c.name)}</h1><div class="sub">${esc(c.stratum||"")} · ${mmss(c.duration_s)} · ${c.done?"done":"in progress"}${c.ocr_dates.length?" · burned-in date read: "+c.ocr_dates.map(esc).join(", "):""}</div>${c.context_line?`<div class="ans" style="margin-bottom:10px">${esc(c.context_line)}</div>`:""}
   <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
-  <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
+  <div><div class="lbl">${c.fused?"Fused era (stamp read by the model)":"Model's era"}</div><div class="val">${mr}</div>${c.fused?`<div class="err">model's own range ${c.model_range[0]}–${c.model_range[1]} · stamp ${c.burned_in_years.join(", ")}</div>`:""}<div class="err ${g}">${c.error_years==null?"":`${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
   ${wins}
   <div class="buttons"><span style="color:var(--muted);margin-right:6px">Is the model's range close enough to your date to be useful?</span><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Close enough<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Not close<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
 }

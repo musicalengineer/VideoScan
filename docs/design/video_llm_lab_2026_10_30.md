@@ -300,3 +300,25 @@ Repo: `docs/design/provenance_retroactive_2026_10_26.md` · `docs/research/prove
 · `Media/CaptionRunner.swift` · `scripts/whisper_worker.py` · `tools/qwen-bench/README.md` · `docs/DECISIONS.md`
 (2026-08-14, 2026-08-16, 2026-09-23, 2026-10-10, 2026-10-26). Outside input (Rick, 2026-10-29): "SW_Video_LLMs_MediaExpert"
 and "Modular Video Intelligence Architecture for Apple Silicon & Cloud"; their useful parts are in §1's last three rows.
+
+## 11. Evidence inventory — what a media file can tell us (Rick's ask, 2026-10-31)
+
+Every layer, what it can tell, whether VideoScan reads it today. Layers 1–3 and 6 are deterministic and cheap and BOUND every
+answer from layer 4 (the fusion the 2026-10-31 A/B argued for: told the codec, the 8B moved a 1965 film in DV to 1975–1985).
+
+| Layer | Facts | Tells | Status |
+|---|---|---|---|
+| 1 Container / metadata | container, duration, size, creation vs modification dates, encoder string, device make/model, GPS, orientation, timecode track, chapters, **DV datecode (per-frame recording date/time on DV transfers)** | digitization date, device chain, sometimes the true recording date; lies after any transfer or edit | most read (ffprobe, embedded dates); DV datecode **not yet — test first** |
+| 2 Video technical | codec, profile, bit depth, chroma subsampling, color primaries/transfer (601/709/2020), frame size, PAR/DAR, frame rate, scan + field order, **3:2 pulldown pattern (film detector)**, GOP, bitrate, grain/noise stats, letterbox geometry, VHS head-switching noise, film gate weave | carrier and its era (interlaced 4:3 SD = analog era; pulldown = film; 59.94/NTSC = country); transfer chain (720p FFV1 of a 4:3 image = upscaled tape) | first group read; pulldown, grain, head-switching, gate weave **not yet** |
+| 3 Audio technical | codec, channels, sample rate, bit depth, loudness, true-stereo vs dual-mono, hum frequency, hiss floor, dropouts | carrier (32 kHz mono = Hi8/early DV; 48 kHz = DV; 44.1 = CD-era capture); **mains hum = ENF, can date to the day against a grid reference** | first group read + audio fingerprint; ENF **not yet — test** |
+| 4 Picture content | scene cuts, shot length, camera motion, exposure/white balance, color cast (purple = faded dye, film transfer), camcorder OSD date/time, on-screen text, faces, people, clothing, objects, cars, signage, room features, weather, season, time of day | era (the 8B today), place (room signature), people (face pipeline), event, season | OCR, captions, faces, era (A2); scene cuts and per-frame signal stats **not yet** |
+| 5 Audio content | transcript, speaker identity, spoken names, music (a song = lower bound on date), ambient sound, language | people, event, date floor, place | Whisper transcripts; speaker similarity in BACKLOG |
+| 6 Identity / provenance | whole-file SHA-256, perceptual video hash, audio fingerprint, **PRNU sensor noise (identifies the physical camera across files)**, edit signatures (encoder strings, GOP breaks) | duplicates, same footage across transfers, same camera, same pipeline | hash + audio fingerprint; perceptual video hash and PRNU **not yet** |
+
+Tools: ffprobe / MediaInfo (1–3), PySceneDetect (cuts), DV datecode readers, ENF toolkits, perceptual-hash libraries, PRNU research code;
+court-oriented suites (Amped, iNPUT-ACE) offer nothing we cannot do with ffmpeg + Python for this purpose. First three tests to run,
+each cheap and each able to date a whole stratum alone: the **DV datecode** on every DV transfer, the **pulldown pattern** as a film
+detector, the **mains hum**.
+
+Fusion step one landed in the review page the same day: a date stamp the model cites as an `onScreenText` cue (JUN 21 '97) collapses
+its padded range (1995–1997) to that year, deterministically; a stamp outside the model's range is shown, not trusted.

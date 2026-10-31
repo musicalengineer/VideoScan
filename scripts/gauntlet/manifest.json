@@ -31989,8 +31989,10 @@
         "test_video_llm_bench_review.py"
       ],
       "tests": [
+        "test_a_stamp_the_model_cites_collapses_its_padded_range_to_that_year",
         "test_a_wide_range_is_not_close_even_when_its_midpoint_lands",
         "test_an_ocr_only_clip_has_no_era_but_shows_the_dates_it_read",
+        "test_fusion_rules_single_cue_outside_range_and_two_digit_years",
         "test_keep_frames_leaves_the_frames_the_model_saw_under_the_run_dir",
         "test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt",
         "test_review_state_over_two_thousand_clips_is_quick",
