@@ -31643,6 +31643,121 @@
         "sameVolumeRuleRefusesOnlyKnownAndDifferent",
         "scanContextAloneIsUsedAndNormalized"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabContractTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ModelLabContractValidTests",
+        "ModelLabContractFailClosedTests",
+        "ModelLabAssertionMappingTests"
+      ],
+      "tests": [
+        "badWindow",
+        "caps",
+        "deterministic",
+        "emptyCuesAndBounds",
+        "enumAndRangeGuards",
+        "era",
+        "eraMapping",
+        "extraKey",
+        "familiesWithoutAContractYet",
+        "familyMismatch",
+        "garbage",
+        "missingKey",
+        "occasionKind",
+        "ocrDate",
+        "ocrText",
+        "otherFamilies",
+        "reversedRange",
+        "roomFeatures",
+        "roomMapping",
+        "scene",
+        "wrongType",
+        "yearOutOfRange"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabRegistryTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ModelLabApproachIDTests",
+        "ModelLabRegistryTests",
+        "ModelLabPayloadGateTests",
+        "ModelLabSensorTests"
+      ],
+      "tests": [
+        "duplicateRefused",
+        "hostLocality",
+        "localHostsPassWhatTheyAccept",
+        "nearMissJSONFailsClosed",
+        "refusalWords",
+        "registerAndLookUp",
+        "remoteRefusalBeforeTransport",
+        "remoteRefusesPixelsAndAudio",
+        "revisionMustBePositive",
+        "spelling"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabSamplerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ModelLabStillsSamplerTests",
+        "ModelLabWindowSamplerTests"
+      ],
+      "tests": [
+        "cutsAreSanitized",
+        "degenerateInputs",
+        "degenerateParameters",
+        "evenFile",
+        "fourHourTape",
+        "matchesAppSpacing",
+        "nearestCutWins",
+        "shortLastWindow",
+        "snapsToSceneCuts",
+        "subTenthSecondFloorMirrored",
+        "zeroAndOneFrame"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "ModelLabScaleTests"
+      ],
+      "tests": [
+        "hundredThousandFilePlans",
+        "sixteenHundredThousandRowsPagedUnderAWriter"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ModelLabStoreLogicTests",
+        "ModelLabStoreIsolationTests"
+      ],
+      "tests": [
+        "appendOnlyTriggers",
+        "corruptRawJSONTolerated",
+        "defaultDirectoryIsSandboxed",
+        "duplicateRun",
+        "newerSchemaRefused",
+        "poisonedFileRefused",
+        "preflightRefusals",
+        "readOnlyDoor",
+        "roundTrip",
+        "runsAreSeparate",
+        "schemaAndReopen",
+        "segmentsAndVectors",
+        "summary"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -34265,7 +34380,7 @@
       ],
       "expected_floor": 3069,
       "name": "unit",
-      "package_expected_floor": 429,
+      "package_expected_floor": 485,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -34299,7 +34414,18 @@
         "VideoScanCoreTests.PreflightGateTests",
         "VideoScanCoreTests.CatalogPreflightReaderTests",
         "VideoScanCoreTests.PreflightCancellationQAR2Tests",
-        "VideoScanCoreTests.CatalogRealityTests"
+        "VideoScanCoreTests.CatalogRealityTests",
+        "VideoScanCoreTests.ModelLabContractValidTests",
+        "VideoScanCoreTests.ModelLabContractFailClosedTests",
+        "VideoScanCoreTests.ModelLabAssertionMappingTests",
+        "VideoScanCoreTests.ModelLabApproachIDTests",
+        "VideoScanCoreTests.ModelLabRegistryTests",
+        "VideoScanCoreTests.ModelLabPayloadGateTests",
+        "VideoScanCoreTests.ModelLabSensorTests",
+        "VideoScanCoreTests.ModelLabStillsSamplerTests",
+        "VideoScanCoreTests.ModelLabWindowSamplerTests",
+        "VideoScanCoreTests.ModelLabStoreLogicTests",
+        "VideoScanCoreTests.ModelLabStoreIsolationTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -35450,13 +35576,14 @@
       },
       "expected_floor": 67,
       "name": "performance",
-      "package_expected_floor": 13,
+      "package_expected_floor": 15,
       "package_selectors": [
         "VideoScanCoreTests.CatalogRepositoryScaleTests",
         "VideoScanCoreTests.CatalogDataSchemaScaleTests",
         "VideoScanCoreTests.CatalogImporterScaleTests",
         "VideoScanCoreTests.CatalogLoadScaleTests",
-        "VideoScanCoreTests.CatalogCommitScaleTests"
+        "VideoScanCoreTests.CatalogCommitScaleTests",
+        "VideoScanCoreTests.ModelLabScaleTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
