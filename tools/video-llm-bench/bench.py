@@ -1160,6 +1160,242 @@ APPROACHES: Dict[str, Dict[str, Any]] = {
 }
 
 
+# ===========================================================================
+# Watchdog (#406).  On 2026-10-30 one mlx-vlm generation wedged (100 % GPU, no
+# output) and held the Ultra's GPU for twelve hours, through the nightly.  A
+# wedged Metal kernel cannot be interrupted from a Python thread, so the only
+# cure is a process boundary: the model lives in a WORKER PROCESS (this same
+# script, `worker` subcommand, JSON lines over its stdin/stdout); the parent
+# waits at most `timeout_s` for each generation and, on silence, SIGKILLs the
+# worker — the GPU is freed with the process — records the generation as a
+# `GenerationTimeout` failure, and respawns (model reload) on the next call.
+# C++ reading: a supervisor that owns a child and a pipe; the child is the
+# only thing that ever touches the GPU.
+#
+# A run-level `--deadline HH:MM` stops BETWEEN clips (resume-safe: the run
+# directory picks up where it stopped) so an unattended run cannot cross the
+# nightly's start even when every generation is healthy.
+# ===========================================================================
+DEFAULT_GENERATION_TIMEOUT_S = 120.0
+DEFAULT_LOAD_TIMEOUT_S = 900.0
+WORKER_EXIT_METHOD = "__exit__"
+
+
+class GenerationTimeout(Exception):
+    """A generation exceeded the watchdog; the worker was killed and the GPU freed."""
+
+
+def factory_ref_for_approach(approach_id: str, model_dir: Optional[str]) -> str:
+    return "approach:{}:{}".format(approach_id, model_dir or "")
+
+
+def build_from_factory_ref(ref: str) -> Any:
+    """``approach:<id>:<model_dir or empty>`` → the registered approach;
+    ``import:<sys_path dir>:<module>:<attribute>`` → ``attribute()`` (tests)."""
+    kind, _, rest = ref.partition(":")
+    if kind == "approach":
+        approach_id, _, model_dir = rest.partition(":")
+        return resolve_approach(approach_id, model_dir or None)
+    if kind == "import":
+        directory, module_name, attribute = rest.rsplit(":", 2)
+        if directory and directory not in sys.path:
+            sys.path.insert(0, directory)
+        import importlib
+        return getattr(importlib.import_module(module_name), attribute)()
+    raise ValueError("unknown factory ref {!r}".format(ref))
+
+
+def worker_command(args: argparse.Namespace) -> int:
+    """The child: one JSON request per stdin line → one JSON reply per stdout line.
+    Everything the model stack prints goes to stderr; the real stdout carries
+    only the protocol."""
+    protocol = os.fdopen(os.dup(1), "w", encoding="utf-8")
+    sys.stdout = sys.stderr
+    approach = build_from_factory_ref(args.factory)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request["method"]
+        if method == WORKER_EXIT_METHOD:
+            break
+        try:
+            result = getattr(approach, method)(*request.get("args", []))
+            reply = {"ok": _jsonable(result)}
+        except Exception as exc:  # noqa: BLE001 — reported to the parent, never swallowed
+            reply = {"error": str(exc), "type": type(exc).__name__}
+        protocol.write(json.dumps(reply) + "\n")
+        protocol.flush()
+    return 0
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+class SubprocessApproach:
+    """The parent half of the watchdog: an `Approach` whose every method runs in
+    the worker process under a wall-clock cap."""
+
+    def __init__(self, factory_ref: str, timeout_s: float = DEFAULT_GENERATION_TIMEOUT_S,
+                 load_timeout_s: float = DEFAULT_LOAD_TIMEOUT_S, approach_id: str = "",
+                 python: Optional[str] = None, script: Optional[Path] = None,
+                 log: Callable[[str], None] = lambda s: print(s, file=sys.stderr, flush=True)):
+        self.factory_ref = factory_ref
+        self.timeout_s = float(timeout_s)
+        self.load_timeout_s = float(load_timeout_s)
+        self.id = approach_id
+        self.python = python or sys.executable
+        self.script = Path(script or __file__).resolve()
+        self.log = log
+        self.timeouts = 0
+        self.respawns = 0
+        self.load_info: Dict[str, Any] = {}
+        self._proc: Optional[subprocess.Popen] = None
+        self._lines: Optional[Any] = None   # queue.Queue of stdout lines
+        self.worker_pid: Optional[int] = None
+
+    # -- process ------------------------------------------------------------
+    def _spawn(self) -> None:
+        import queue
+        import threading
+        self._proc = subprocess.Popen(
+            [self.python, "-I", str(self.script), "worker", "--factory", self.factory_ref],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, text=True, bufsize=1)
+        self.worker_pid = self._proc.pid
+        lines: "queue.Queue[Optional[str]]" = queue.Queue()
+        stdout = self._proc.stdout
+
+        def pump() -> None:
+            try:
+                for line in stdout:   # type: ignore[union-attr]
+                    lines.put(line)
+            finally:
+                lines.put(None)       # EOF: the worker is gone
+
+        threading.Thread(target=pump, name="bench-worker-stdout", daemon=True).start()
+        self._lines = lines
+
+    def _kill(self, why: str) -> None:
+        proc = self._proc
+        self._proc = None
+        self._lines = None
+        if proc is None:
+            return
+        try:
+            proc.kill()
+            proc.wait(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        self.log("watchdog: worker pid {} killed ({})".format(proc.pid, why))
+
+    def _ensure(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        if self._proc is not None:
+            self._kill("worker exited on its own")
+        first = self.worker_pid is None
+        self._spawn()
+        if not first:
+            self.respawns += 1
+            self.log("watchdog: worker respawned (pid {}), reloading the model".format(self.worker_pid))
+        self.load_info = self._call("load", timeout=self.load_timeout_s, spawn=False)
+
+    def _call(self, method: str, *args: Any, timeout: Optional[float] = None, spawn: bool = True) -> Any:
+        if spawn:
+            self._ensure()
+        assert self._proc is not None and self._proc.stdin is not None and self._lines is not None
+        try:
+            self._proc.stdin.write(json.dumps({"method": method, "args": list(args)}) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            self._kill("stdin broken: {}".format(exc))
+            raise RuntimeError("worker unreachable ({})".format(exc))
+        import queue
+        cap = self.timeout_s if timeout is None else timeout
+        try:
+            line = self._lines.get(timeout=cap)
+        except queue.Empty:
+            self.timeouts += 1
+            self._kill("{} exceeded {:.0f} s".format(method, cap))
+            raise GenerationTimeout("{} exceeded {:.0f} s; worker killed, GPU freed".format(method, cap))
+        if line is None:
+            self._kill("worker died during {}".format(method))
+            raise RuntimeError("worker died during {}".format(method))
+        reply = json.loads(line)
+        if "error" in reply:
+            raise RuntimeError("{}: {}".format(reply.get("type", "Error"), reply["error"]))
+        return reply["ok"]
+
+    def close(self) -> None:
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(json.dumps({"method": WORKER_EXIT_METHOD}) + "\n")
+                proc.stdin.flush()
+            proc.wait(timeout=30)
+            self._proc = None
+            self._lines = None
+        except Exception:  # noqa: BLE001
+            self._kill("did not exit when asked")
+
+    # -- Approach surface ----------------------------------------------------
+    def load(self) -> Dict[str, Any]:
+        self._ensure()
+        info = dict(self.load_info)
+        info["watchdog"] = {"generation_timeout_s": self.timeout_s, "load_timeout_s": self.load_timeout_s,
+                            "worker_pid": self.worker_pid}
+        return info
+
+    def seed(self, value: int) -> None:
+        self._call("seed", value)
+
+    def after_clip(self) -> None:
+        self._call("after_clip")
+
+    def answer(self, image_path: Path, prompt_kind: str) -> Tuple[str, Dict[str, Any]]:
+        text, counters = self._call("answer", str(image_path), prompt_kind)
+        return text, counters
+
+    def answer_window(self, image_paths: Sequence[Path], family: str,
+                      window: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        text, counters = self._call("answer_window", [str(p) for p in image_paths], family, window)
+        return text, counters
+
+    def stats(self) -> Dict[str, Any]:
+        return {"timeouts": self.timeouts, "respawns": self.respawns, "worker_pid": self.worker_pid}
+
+
+def parse_deadline(text: str, now: Optional[dt.datetime] = None) -> float:
+    """``HH:MM`` local → epoch seconds of the next such wall-clock time (today if
+    still ahead, else tomorrow)."""
+    now = now or dt.datetime.now()
+    try:
+        hour, minute = (int(part) for part in text.split(":", 1))
+    except ValueError:
+        raise SystemExit("--deadline wants HH:MM, got {!r}".format(text))
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise SystemExit("--deadline wants HH:MM, got {!r}".format(text))
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += dt.timedelta(days=1)
+    return candidate.timestamp()
+
+
+def _generation_error(exc: BaseException) -> Tuple[str, bool]:
+    """(error text for the record, is_timeout)."""
+    return "{}: {}".format(type(exc).__name__, exc), isinstance(exc, GenerationTimeout)
+
+
 def plan_clip_sampling(corpora: Iterable[str], duration_s: float, frames_per_window: int,
                        ocr_sampler: str = OCR_SAMPLER_WINDOW_FRAMES,
                        ocr_stills: int = A2_OCR_STILLS) -> Dict[str, Any]:
@@ -1228,16 +1464,19 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                frames: int, run_record: Dict[str, Any],
                ripper: Callable[[str, float, Path, float], bool] = default_ripper,
                duration_of: Callable[[str, float], float] = lambda p, d: d if d > 0 else probe_duration(p),
-               log: Callable[[str], None] = lambda s: print(s, flush=True)) -> Dict[str, Any]:
+               log: Callable[[str], None] = lambda s: print(s, flush=True),
+               deadline: Optional[float] = None,
+               clock: Callable[[], float] = time.time) -> Dict[str, Any]:
     out_dir = Path(out_dir)
     (out_dir / "clips").mkdir(parents=True, exist_ok=True)
     progress_path = out_dir / "progress.json"
-    done = skipped = failed = frames_done = 0
+    done = skipped = failed = frames_done = timeouts = 0
     gen_seconds = 0.0
     started = time.perf_counter()
+    stopped_by_deadline = False
     progress: Dict[str, Any] = {
         "run_id": run_record.get("run_id"), "total_clips": len(entries), "done": 0,
-        "skipped_resume": 0, "failed": 0, "frames_done": 0, "s_per_frame": None,
+        "skipped_resume": 0, "failed": 0, "frames_done": 0, "s_per_frame": None, "timeouts": 0,
         "started_at": utc_now(), "updated_at": utc_now(), "state": "running",
     }
     write_json(progress_path, progress)
@@ -1251,6 +1490,10 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                 progress.update(skipped_resume=skipped, updated_at=utc_now())
                 write_json(progress_path, progress)
                 continue
+            if deadline is not None and clock() >= deadline:
+                stopped_by_deadline = True
+                log("deadline reached before clip {}/{}; stopping (resume-safe)".format(index, len(entries)))
+                break
             clip_tmp = tmp_root / digest[:16]
             clip_tmp.mkdir(parents=True, exist_ok=True)
             clip_started = time.perf_counter()
@@ -1283,7 +1526,9 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                         try:
                             text, counters = approach.answer(png, kind)
                         except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
-                            text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
+                            error, is_timeout = _generation_error(exc)
+                            text, counters = "", {}
+                            timeouts += int(is_timeout)
                         elapsed = time.perf_counter() - gen_started
                         gen_seconds += elapsed
                         record = {
@@ -1314,7 +1559,7 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                 failed += 1
             done += 1
             progress.update(
-                done=done, failed=failed, frames_done=frames_done, updated_at=utc_now(),
+                done=done, failed=failed, frames_done=frames_done, timeouts=timeouts, updated_at=utc_now(),
                 s_per_frame=round(gen_seconds / frames_done, 3) if frames_done else None,
                 elapsed_s=round(time.perf_counter() - started, 1), last_stratum=entry["stratum"],
                 peak_rss_bytes=peak_rss_bytes())
@@ -1323,7 +1568,8 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                 index, len(entries), digest[:12], len(timestamps) - rip_failures, clip_elapsed, entry["stratum"]))
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
-    progress.update(state="finished", updated_at=utc_now(), finished_at=utc_now())
+    progress.update(state="deadline" if stopped_by_deadline else "finished", updated_at=utc_now(),
+                    finished_at=utc_now())
     write_json(progress_path, progress)
     return progress
 
@@ -1335,7 +1581,9 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                   log: Callable[[str], None] = lambda s: print(s, flush=True),
                   families: Sequence[str] = A1_FAMILY_ORDER,
                   ocr_sampler: str = OCR_SAMPLER_WINDOW_FRAMES,
-                  ocr_stills: int = A2_OCR_STILLS) -> Dict[str, Any]:
+                  ocr_stills: int = A2_OCR_STILLS,
+                  deadline: Optional[float] = None,
+                  clock: Callable[[], float] = time.time) -> Dict[str, Any]:
     """A1 loop.  Per clip: plan ≤ 3 windows, rip every window frame once, then
     * ERA-corpus clip → one multi-image generation per (window, family) — a
       ``window_result`` record carrying raw text, `schema_valid`, the decoded value
@@ -1361,13 +1609,14 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
         if entry["digest"] not in seen:
             seen.add(entry["digest"])
             unique.append(entry)
-    done = skipped = failed = frames_done = windows_done = 0
+    done = skipped = failed = frames_done = windows_done = timeouts = 0
     gen_seconds = 0.0
     started = time.perf_counter()
+    stopped_by_deadline = False
     progress: Dict[str, Any] = {
         "run_id": run_record.get("run_id"), "total_clips": len(unique), "done": 0,
         "skipped_resume": 0, "failed": 0, "frames_done": 0, "windows_done": 0, "s_per_frame": None,
-        "s_per_window": None, "started_at": utc_now(), "updated_at": utc_now(), "state": "running",
+        "s_per_window": None, "timeouts": 0, "started_at": utc_now(), "updated_at": utc_now(), "state": "running",
     }
     write_json(progress_path, progress)
     tmp_root = Path(tempfile.mkdtemp(prefix="video-llm-bench-a1-frames-"))
@@ -1380,6 +1629,10 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                 progress.update(skipped_resume=skipped, updated_at=utc_now())
                 write_json(progress_path, progress)
                 continue
+            if deadline is not None and clock() >= deadline:
+                stopped_by_deadline = True
+                log("deadline reached before clip {}/{}; stopping (resume-safe)".format(index, len(unique)))
+                break
             corpora = corpora_of[digest]
             clip_tmp = tmp_root / digest[:16]
             clip_tmp.mkdir(parents=True, exist_ok=True)
@@ -1394,13 +1647,15 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                          stream: Any, sampler: Optional[str]) -> None:
                 # A0's `date` prompt on one frame; the record is shaped like A0's so
                 # `score_ocr_clip` scores every approach the same way.
-                nonlocal gen_seconds, records_written
+                nonlocal gen_seconds, records_written, timeouts
                 gen_started = time.perf_counter()
                 error = None
                 try:
                     text, counters = approach.answer(png, "date")
                 except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
-                    text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
+                    error, is_timeout = _generation_error(exc)
+                    text, counters = "", {}
+                    timeouts += int(is_timeout)
                 elapsed = time.perf_counter() - gen_started
                 gen_seconds += elapsed
                 record = {
@@ -1454,13 +1709,19 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                         for family in families:
                             gen_started = time.perf_counter()
                             error = None
+                            is_timeout = False
                             try:
                                 text, counters = approach.answer_window(pngs, family, window)
                             except Exception as exc:  # noqa: BLE001
-                                text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
+                                error, is_timeout = _generation_error(exc)
+                                text, counters = "", {}
+                                timeouts += int(is_timeout)
                             elapsed = time.perf_counter() - gen_started
                             gen_seconds += elapsed
-                            value, reason = decode_contract(family, text) if error is None else (None, "generation error")
+                            if error is None:
+                                value, reason = decode_contract(family, text)
+                            else:
+                                value, reason = None, ("timeout" if is_timeout else "generation error")
                             stream.write(json.dumps({
                                 "record_type": "window_result", "digest": digest, "window_index": window["index"],
                                 "window": [window["start_s"], window["end_s"]],
@@ -1505,17 +1766,20 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                 failed += 1
             done += 1
             progress.update(
-                done=done, failed=failed, frames_done=frames_done, windows_done=windows_done, updated_at=utc_now(),
+                done=done, failed=failed, frames_done=frames_done, windows_done=windows_done, timeouts=timeouts,
+                updated_at=utc_now(),
                 s_per_frame=round(gen_seconds / frames_done, 3) if frames_done else None,
                 s_per_window=round(gen_seconds / windows_done, 3) if windows_done else None,
                 elapsed_s=round(time.perf_counter() - started, 1), last_stratum=entry["stratum"],
                 peak_rss_bytes=peak_rss_bytes())
             write_json(progress_path, progress)
-            log("[{}/{}] {} windows={} frames={} {:.1f}s stratum={}".format(
-                index, len(unique), digest[:12], len(windows), frames_ok, clip_elapsed, entry["stratum"]))
+            log("[{}/{}] {} windows={} frames={} {:.1f}s{} stratum={}".format(
+                index, len(unique), digest[:12], len(windows), frames_ok, clip_elapsed,
+                " timeouts={}".format(timeouts) if timeouts else "", entry["stratum"]))
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
-    progress.update(state="finished", updated_at=utc_now(), finished_at=utc_now())
+    progress.update(state="deadline" if stopped_by_deadline else "finished", updated_at=utc_now(),
+                    finished_at=utc_now())
     write_json(progress_path, progress)
     return progress
 
@@ -1642,7 +1906,21 @@ def run_command(args: argparse.Namespace) -> int:
         run_id = previous["run_id"]
     else:
         run_id = "{}-{}".format(dt.datetime.now().strftime("%Y%m%dT%H%M%S"), args.approach)
-    approach = resolve_approach(args.approach, args.model_dir)
+    generation_timeout = float(getattr(args, "generation_timeout", DEFAULT_GENERATION_TIMEOUT_S) or 0.0)
+    deadline = parse_deadline(args.deadline) if getattr(args, "deadline", None) else None
+    if generation_timeout > 0:
+        approach: Any = SubprocessApproach(factory_ref_for_approach(args.approach, args.model_dir),
+                                           timeout_s=generation_timeout,
+                                           load_timeout_s=float(getattr(args, "load_timeout", DEFAULT_LOAD_TIMEOUT_S)),
+                                           approach_id=args.approach)
+        print("watchdog: {:.0f} s per generation (worker process; a wedged generation is killed and the model reloaded)"
+              .format(generation_timeout), flush=True)
+    else:
+        approach = resolve_approach(args.approach, args.model_dir)
+        print("watchdog: OFF (--generation-timeout 0) — a wedged generation holds the GPU until killed by hand", flush=True)
+    if deadline is not None:
+        print("deadline: stops between clips at {}".format(dt.datetime.fromtimestamp(deadline).strftime("%Y-%m-%d %H:%M")),
+              flush=True)
     print("loading {} …".format(spec["model"]), flush=True)
     load_info = approach.load()
     print("loaded in {:.1f}s; weights sha256 {}".format(load_info["load_s"], load_info["weights_sha256"][:12]), flush=True)
@@ -1655,16 +1933,25 @@ def run_command(args: argparse.Namespace) -> int:
         write_json(run_path, previous)
     else:
         write_json(run_path, record)
-    if spec["windows"]:
-        progress = run_corpus_a1(entries, out_dir, approach, frames, record, ocr_sampler=spec["ocr_sampler"])
-        print("done {} skipped {} failed {} s/frame {} s/window {}".format(
-            progress["done"], progress["skipped_resume"], progress["failed"], progress["s_per_frame"],
-            progress["s_per_window"]))
-    else:
-        progress = run_corpus(entries, out_dir, approach, frames, record)
-        print("done {} skipped {} failed {} s/frame {}".format(
-            progress["done"], progress["skipped_resume"], progress["failed"], progress["s_per_frame"]))
-    return 0
+    try:
+        if spec["windows"]:
+            progress = run_corpus_a1(entries, out_dir, approach, frames, record, ocr_sampler=spec["ocr_sampler"],
+                                     deadline=deadline)
+            print("done {} skipped {} failed {} timeouts {} s/frame {} s/window {} state {}".format(
+                progress["done"], progress["skipped_resume"], progress["failed"], progress.get("timeouts", 0),
+                progress["s_per_frame"], progress["s_per_window"], progress["state"]))
+        else:
+            progress = run_corpus(entries, out_dir, approach, frames, record, deadline=deadline)
+            print("done {} skipped {} failed {} timeouts {} s/frame {} state {}".format(
+                progress["done"], progress["skipped_resume"], progress["failed"], progress.get("timeouts", 0),
+                progress["s_per_frame"], progress["state"]))
+    finally:
+        if isinstance(approach, SubprocessApproach):
+            stats = approach.stats()
+            approach.close()
+            if stats["timeouts"] or stats["respawns"]:
+                print("watchdog: {} timeouts, {} respawns".format(stats["timeouts"], stats["respawns"]), flush=True)
+    return 3 if progress["state"] == "deadline" else 0
 
 
 # ---------------------------------------------------------------------------
@@ -2507,7 +2794,18 @@ def make_parser() -> argparse.ArgumentParser:
     run.add_argument("--out", required=True, help="run directory (keep it under .scratch/)")
     run.add_argument("--model-dir", default=None,
                      help="local snapshot directory of the model (offline); default: HF cache via snapshot_download")
+    run.add_argument("--generation-timeout", type=float, default=DEFAULT_GENERATION_TIMEOUT_S,
+                     help="seconds a single generation may take before the worker is killed and the model reloaded "
+                          "(#406; default {:.0f}; 0 = no worker process, no cap)".format(DEFAULT_GENERATION_TIMEOUT_S))
+    run.add_argument("--load-timeout", type=float, default=DEFAULT_LOAD_TIMEOUT_S,
+                     help="seconds the model load may take in the worker (default {:.0f})".format(DEFAULT_LOAD_TIMEOUT_S))
+    run.add_argument("--deadline", default=None,
+                     help="HH:MM local; the run stops BETWEEN clips at that time (resume-safe, exit code 3)")
     run.set_defaults(func=run_command)
+
+    worker = commands.add_parser("worker", help="(internal) the watchdog's model process; JSON lines on stdin/stdout")
+    worker.add_argument("--factory", required=True, help="approach:<id>:<model_dir> or import:<dir>:<module>:<attr>")
+    worker.set_defaults(func=worker_command)
 
     summarize = commands.add_parser("summarize", help="aggregates only → Markdown (+ stdout)")
     summarize.add_argument("--run", required=True, action="append",
