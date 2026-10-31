@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-31 17:30 (Saturday; morning testbed, stability fixes, afternoon rapid dev with Rick). Rick corrects this file; agents read it at session start.*
+*Updated 2026-10-31 evening (Saturday; morning testbed, stability fixes, afternoon and evening rapid dev with Rick on the review page). Rick corrects this file; agents read it at session start.*
 
 ## Where main stands — `697237a2`, pushed, checkout clean
 **Stability call for today: main is green on every lane that measures code.** The only reds of the day were two
@@ -58,6 +58,18 @@ wedged model process (#406, fixed). Tonight's nightly is the first clean reading
   the app — the frames the model saw, his date, the model's era with rationale and timed cues, Agree / Disagree / Unsure to
   `verdicts.jsonl` beside the run. Loopback only; the run dir must be under `.scratch/`. First session: 25 Rick-dated clips through the 8B.
   Tier 2 (after step 1): the in-app "Realtime Content Analyzer" window fed by the helper over XPC.
+- **Review-page findings on 25 Rick-dated clips (8B, same clips, three prompts):** pixels only — 12 close enough (midpoint within 5 y AND
+  range ≤ 10 y wide), 20 midpoints within 5 y, mean error 3.3 y, 11 ranges wider than 10 y · told the codec — 16 close but it ANCHORED on the
+  carrier (a 1965 film in DV moved to 1975–1985; your date left the range on 6 clips) · picture facts only (size/scan/aspect, no codec) —
+  no anchoring, mean error 3.1 y, ranges as wide as pixels only. **Ruling that falls out: the model stays a pixels-only witness; the
+  file's facts enter as deterministic bounds in the fusion layer, never as prompt hints.** Fusion step one landed: a date stamp the model
+  cites collapses its padded range to that year (7 of the 25; the Cape Cod 1997 clip went 1995–2000 → 1997). Rick's verdicts so far:
+  7 close · 8 not close · 1 where his call and the rule differ. One conflict to look at: a file labelled 2000-something whose stamp reads '97.
+- **mlx-vlm 0.5.0 prefill bug found and fixed** (`PREFILL_STEP_SIZE`): any prompt over 2048 tokens was chunked and the tail chunk died in
+  Metal — ten worker crashes behind the "Python quit unexpectedly" dialogs, and last night's N=12 collapse. With it fixed, N=12 runs
+  (2,800-token prompts, 0 crashes) but schema-valid drops to 7/12 vs 17/18 at N=8: **N=8 stays.**
+- **Lab design §11, the evidence inventory** (Rick's ask): six layers of what a file can tell, have / not yet; first three cheap tests
+  that could each date a stratum alone — DV datecode, 3:2 pulldown as a film detector, mains-hum ENF.
 - Rulings taken today (DECISIONS): timing strict only where the lane pins it. **Rulings Rick gave in conversation, to be written up with
   the step 1 brief:** step order = the 8B era/OCR job first, captions second (moving to the 8B, remainder first then backfill);
   schema v14 lands with step 1 (the assertions are catalog data once an expert earns its seat).
@@ -82,6 +94,8 @@ wedged model process (#406, fixed). Tonight's nightly is the first clean reading
 
 ## Next
 1. A3's last 24 clips (declared window, ≈ 19 min) → re-summarize; then the era expert goes into the model-lab as A2's contract (design §5).
+   Prompt r4 (a legible stamp = a single-year range; prefer the narrowest range the evidence supports) tested on clips HELD OUT of the corpus.
+   Evidence-inventory tests: DV datecode, pulldown pattern, ENF (§11).
 2. #408: repoint the five gauntlet UI flows, then turn the runner's UI stage on for the away window.
 3. Background service step 1 (first real job into the helper; §5 order pending ruling 4). #402 supersede pass brief → Codex.
 4. Resource allocation for LLMs and visual LLMs across the fleet (Rick's agenda item, 10/31).
