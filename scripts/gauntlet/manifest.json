@@ -30892,6 +30892,39 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_household_roster.py",
+      "stage": "unit",
+      "suites": [
+        "test_household_roster.py"
+      ],
+      "tests": [
+        "test_a_leap_day_birthday_counts_on_the_first_of_march",
+        "test_age_at_the_birthday_boundary",
+        "test_band_edges",
+        "test_camera_operator_prior_is_empty_when_every_adult_is_tagged",
+        "test_camera_operator_prior_ranks_owner_then_spouse_then_oldest",
+        "test_candidate_counting_two_boys_in_one_band",
+        "test_gedcom_dates_in_the_wild",
+        "test_household_membership_childhood_then_own_home",
+        "test_household_roles_from_tree_and_people_tab",
+        "test_markdown_contains_none_of_the_synthetic_names_digests_or_paths",
+        "test_measure_counts_ties_widening_and_the_prior",
+        "test_negative_age_has_no_band",
+        "test_owner_comes_from_the_cyberbrain_first_person",
+        "test_poisoned_profiles_and_dates_do_not_crash_and_are_counted",
+        "test_roster_after_a_death_marks_not_alive_and_the_death_day_is_alive",
+        "test_roster_before_a_birth_leaves_the_child_out",
+        "test_scale_100k_tagged_files_within_budget",
+        "test_summarize_refuses_to_write_a_leaking_markdown",
+        "test_tag_resolution_alias_folder_ambiguity_and_off_roster",
+        "test_truth_set_rules_and_counts",
+        "test_user_date_and_apple_reference_dates",
+        "test_widening_the_band_only_adds_candidates"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_invariants_coverage.py",
       "stage": "regression",
       "suites": [
@@ -34533,6 +34566,10 @@
         },
         {
           "name": "tests/test_video_llm_bench.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_household_roster.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
