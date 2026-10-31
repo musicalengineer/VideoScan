@@ -114,6 +114,67 @@ build time, and it raises testability. CCN falls when the untangling that extrac
 a consequence to measure, not assume. The metrics page should carry a coupling figure beside CCN so the refactor
 shows in the number it actually moves (BACKLOG).
 
+## 0.6 What goes in, what comes out, and why (Rick, 2026-10-31, after the first review session)
+
+**The goal, in Rick's words:** make the corpus easier to search and organize. Estimate dates over the whole corpus; a date within
+2–3 years is valuable; "find all the videos down the Cape from 1990–1995" answered 90 % right is a win. Then the same for places,
+events, people. The service's job is to produce that intelligence in bulk, file after file, so Rick never dates by hand again.
+
+**On confidence.** A 95 % percentile per file is overkill and would be invented: the model's own confidence number is not calibrated.
+What we need is a **calibrated claim**: a range (or a year ± n) plus the *measured* hit rate of that kind of claim on the confirmed
+set. "Era 1990–1995, kind of claim right 80 % of the time on Rick-dated files" is honest and is enough for a 90 %-right search when
+the search also uses the file's own facts. The Catalog Status line "machine era within 5 y of your confirmed date: N of 73 (p %)" is
+that calibration, read week over week. Today (25 Rick-dated clips, 8B, pixels only): midpoint within 5 y on 20 of 25; the model's
+ranges are padded (15–20 y wide on 9 of the 13 misses) — a prompt/contract problem, not a model problem; midpoint ± 5 is the usable claim.
+
+### Inputs — what the machine can look at
+
+| Layer | Facts | Have / not yet |
+|---|---|---|
+| Container & metadata | container, duration, size, creation vs modification dates (file system, `mvhd` creation time since 1904, EXIF `DateTimeOriginal`), encoder string, device make/model, GPS, orientation, timecode track, chapters, **DV datecode** (per-frame recording date/time on DV) | most read; `exiftool` fields and the DV datecode **not yet** |
+| Video technical | codec, profile, bit depth, chroma, color primaries/transfer, frame size, PAR/DAR, frame rate, scan + field order, **3:2 pulldown (film detector)**, GOP, bitrate, grain/noise, letterbox geometry, VHS head-switching noise, film gate weave | first group read; signal-level ones **not yet** |
+| Audio technical | codec, channels, sample rate, bit depth, loudness, dual-mono vs stereo, **mains hum (ENF)**, hiss floor, dropouts | first group read; ENF **not yet** |
+| Picture content | scene cuts, shot length, camera motion, exposure/white balance, color cast, camcorder OSD date/time, on-screen text, faces, people, clothing, objects, cars, signage, room features, weather, season, time of day | OCR, captions, faces, era (8B); cuts and signal stats **not yet** |
+| Audio content | transcript, speaker identity, spoken names, music (a song = a lower bound on the date), ambient sound, language | transcripts; speaker similarity in BACKLOG |
+| Identity & provenance | whole-file SHA-256, perceptual video hash, audio fingerprint, **PRNU sensor noise (the physical camera)**, edit signatures | hash + audio fingerprint; perceptual hash and PRNU **not yet** |
+| The catalog and Rick | confirmed dates, people tags, places, occasions, archive decisions; earlier machine observations | read; **no circular corroboration** (a derived fact never supports the inference that produced it; a machine fact never outranks a human one) |
+
+### Outputs — machine-generated intelligence, where it lives, what it unlocks
+
+| Output | How it is made | Store | Unlocks |
+|---|---|---|---|
+| **Era / date claim** | 8B vision model, windows + contract (A2); fused with the file's facts as bounds (codec/carrier floor, stamp read, DV datecode, metadata on camera-native files) | journal → `inferred_dates` / `provenance_assertions` (v14) | sort and search by date; "Cape 1990–1995" |
+| Burned-in date (OCR) | 8B `date` prompt on 5 stills | journal → captions (ocrDate) | exact dates on camcorder footage |
+| Scene captions, on-screen text | 8B `scene` / `text` prompts (the captioner moves to the 8B) | journal → `captions` | free-text search |
+| Transcript, spoken names | Whisper; name presence | journal → `transcripts` | search by what was said; people |
+| Room / place signature | `roomFeatures` contract → signature over the corpus | sidecar (vectors) + journal (place label once ruled) | "find the Cape house"; events |
+| People presence | face pipeline + Household Roster filter + Rick's confirmations | `people` stores (separate by design) | "find Donna" |
+| Events / occasions | **rulings over the above** (same date window + same place + same people + same audio print), never a model | `events` | "Thanksgiving 1984" as a folder |
+| Duplicates / same footage | SHA-256, audio fingerprint, perceptual hash | catalog + `audio-fingerprints.sqlite` | let copies go safely; link transfers |
+| Provenance | carrier, device chain (PRNU, encoder strings), transfer chain | `provenance_assertions` | which file is the master; what a date means |
+
+The service produces the per-file rows; **conflation is deterministic**, in the rulings and the triangulator, auditable and tested.
+The model is a witness per file, not the organizer.
+
+### Forensics, read for our scale (Rick's guide, 2026-10-31)
+
+Rick's guide (`audio_video_digital_forensics_guide.pdf`) is court-oriented and single-file. What transfers to hundreds of files:
+- **The checklist is our rule set:** never one timestamp (the triangulator weighs every source); map to UTC (every stored date carries
+  its zone); audit for "timestomping" — for us the benign version, **transfer versus content**: a 2003 file holding 1984 footage is
+  the normal case, not an attack, and the output must say which date is which.
+- **ExifTool** beside ffprobe for `DateTimeOriginal`, `mvhd` creation time (seconds since 1904, a classic off-by-66-years trap),
+  encoder signatures: cheap in bulk, worth a probe pass over the corpus. **DCode-style epoch decoding** matters only for odd containers;
+  ffprobe already normalises the common ones.
+- **Amped / Axon / Magnet / Belkasoft** reconstruct one timeline from one file for a courtroom; nothing in them beats ffmpeg + Python
+  for bulk, and their proprietary-DVR strengths do not apply. **VideoCleaner**'s tamper checks do not apply.
+- **Beyond the guide, three cheap date sources that could each date a whole stratum alone** (lab design §11): the **DV datecode** on every
+  DV transfer; the **3:2 pulldown pattern** as a film detector; the **mains hum (ENF)** matched against a grid reference. Plus **PRNU**
+  to group files by physical camera, which turns one known date into bounds for every file from the same camera.
+
+**Step 1's definition, as agreed in conversation (to be written up with the brief):** the 8B era/OCR job first; captions second, moving
+to the 8B, uncaptioned files first then a backfill; schema v14 lands with step 1 because an assertion that has earned its seat is
+catalog data. §7 ruling 4 answered; 2 and 3 take the defaults unless Rick says otherwise.
+
 ## 1. Purpose, in Rick's terms
 
 Rapid dev means the app is started and stopped all day. Every start kills the captioner, the fingerprint backfill,
