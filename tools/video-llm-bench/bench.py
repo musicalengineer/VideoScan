@@ -1204,6 +1204,7 @@ APPROACHES: Dict[str, Dict[str, Any]] = {
 DEFAULT_GENERATION_TIMEOUT_S = 120.0
 DEFAULT_LOAD_TIMEOUT_S = 900.0
 WORKER_EXIT_METHOD = "__exit__"
+WORKER_PEAK_RSS_METHOD = "__peak_rss__"
 
 
 class GenerationTimeout(Exception):
@@ -1246,7 +1247,10 @@ def worker_command(args: argparse.Namespace) -> int:
         if method == WORKER_EXIT_METHOD:
             break
         try:
-            result = getattr(approach, method)(*request.get("args", []))
+            if method == WORKER_PEAK_RSS_METHOD:
+                result = peak_rss_bytes()          # the weights and activations are in THIS process
+            else:
+                result = getattr(approach, method)(*request.get("args", []))
             reply = {"ok": _jsonable(result)}
         except Exception as exc:  # noqa: BLE001 — reported to the parent, never swallowed
             reply = {"error": str(exc), "type": type(exc).__name__}
@@ -1399,6 +1403,19 @@ class SubprocessApproach:
     def stats(self) -> Dict[str, Any]:
         return {"timeouts": self.timeouts, "respawns": self.respawns, "worker_pid": self.worker_pid}
 
+    _worker_peak_rss = 0
+
+    def peak_rss_bytes(self) -> int:
+        """The run's memory figure: the worker's peak (where the model lives) or
+        the parent's, whichever is larger (2026-10-31: the first A2 record said
+        0.04 GB because only the parent was measured)."""
+        if self._proc is not None and self._proc.poll() is None:
+            try:
+                self._worker_peak_rss = max(self._worker_peak_rss, int(self._call(WORKER_PEAK_RSS_METHOD, spawn=False)))
+            except (GenerationTimeout, RuntimeError, ValueError, TypeError):
+                pass
+        return max(self._worker_peak_rss, peak_rss_bytes())
+
 
 def parse_deadline(text: str, now: Optional[dt.datetime] = None) -> float:
     """``HH:MM`` local → epoch seconds of the next such wall-clock time (today if
@@ -1483,6 +1500,13 @@ def write_json(path: Path, value: Dict[str, Any]) -> None:
 
 def default_ripper(path: str, at_s: float, dest: Path, duration_s: float) -> bool:
     return rip_frame(path, at_s, dest, duration_s)
+
+
+def _peak_rss_of(approach: Any) -> int:
+    """`approach.peak_rss_bytes()` when the approach measures its own process
+    (the watchdog's worker), else this process."""
+    probe = getattr(approach, "peak_rss_bytes", None)
+    return int(probe()) if callable(probe) else peak_rss_bytes()
 
 
 def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Approach,
@@ -1576,7 +1600,7 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                 stream.write(json.dumps({
                     "record_type": "clip_done", "digest": digest, "frames_ok": len(timestamps) - rip_failures,
                     "frames_failed": rip_failures, "results": records_written,
-                    "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": peak_rss_bytes(),
+                    "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": _peak_rss_of(approach),
                     "best_year": None, "finished_at": utc_now()}, sort_keys=True) + "\n")
             shutil.rmtree(clip_tmp, ignore_errors=True)
             approach.after_clip()
@@ -1587,7 +1611,7 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
                 done=done, failed=failed, frames_done=frames_done, timeouts=timeouts, updated_at=utc_now(),
                 s_per_frame=round(gen_seconds / frames_done, 3) if frames_done else None,
                 elapsed_s=round(time.perf_counter() - started, 1), last_stratum=entry["stratum"],
-                peak_rss_bytes=peak_rss_bytes())
+                peak_rss_bytes=_peak_rss_of(approach))
             write_json(progress_path, progress)
             log("[{}/{}] {} frames={} {:.1f}s stratum={}".format(
                 index, len(entries), digest[:12], len(timestamps) - rip_failures, clip_elapsed, entry["stratum"]))
@@ -1783,7 +1807,7 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                 stream.write(json.dumps({
                     "record_type": "clip_done", "digest": digest, "frames_ok": frames_ok,
                     "frames_failed": rip_failures, "results": records_written, "window_results": window_records,
-                    "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": peak_rss_bytes(),
+                    "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": _peak_rss_of(approach),
                     "finished_at": utc_now()}, sort_keys=True) + "\n")
             shutil.rmtree(clip_tmp, ignore_errors=True)
             approach.after_clip()
@@ -1796,7 +1820,7 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                 s_per_frame=round(gen_seconds / frames_done, 3) if frames_done else None,
                 s_per_window=round(gen_seconds / windows_done, 3) if windows_done else None,
                 elapsed_s=round(time.perf_counter() - started, 1), last_stratum=entry["stratum"],
-                peak_rss_bytes=peak_rss_bytes())
+                peak_rss_bytes=_peak_rss_of(approach))
             write_json(progress_path, progress)
             log("[{}/{}] {} windows={} frames={} {:.1f}s{} stratum={}".format(
                 index, len(unique), digest[:12], len(windows), frames_ok, clip_elapsed,

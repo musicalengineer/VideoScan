@@ -148,6 +148,28 @@ def test_close_ends_the_worker(tmp_path):
     assert wait_dead(pid)
 
 
+def test_peak_rss_is_the_workers_not_the_parents(worker, tmp_path):
+    """RED 2026-10-31: the first A2 record said peak RSS 0.04 GB — the parent's figure, while the
+    8B model sat in the worker. The approach now reports the worker's peak, and the run loops ask
+    the approach rather than this process."""
+    worker.load()
+    text, counters = worker.answer(tmp_path / "x.png", "date")
+    assert counters["pid"] == worker.worker_pid
+    figure = worker.peak_rss_bytes()
+    assert figure >= 20 * 1024 * 1024, "a Python worker with the test module loaded is tens of MB, never 0"
+    assert bench._peak_rss_of(worker) == worker.peak_rss_bytes() >= figure
+    # An approach without its own probe falls back to this process.
+    assert bench._peak_rss_of(object()) == bench.peak_rss_bytes()
+    # The run loop writes the approach's figure into clip_done.
+    approach = TimingOutApproach()
+    approach.peak_rss_bytes = lambda: 123_456_789
+    bench.run_corpus_a1([entry(digest_for(9))], tmp_path / "run", approach, 6, {"run_id": "t"}, ripper=fake_ripper,
+                        duration_of=lambda p, d: d, log=lambda s: None, ocr_sampler=bench.OCR_SAMPLER_STILLS)
+    records = bench.read_clip_records(bench.clip_file(tmp_path / "run", digest_for(9)))
+    assert records["footer"]["peak_rss_bytes"] == 123_456_789
+    assert json.loads((tmp_path / "run" / "progress.json").read_text())["peak_rss_bytes"] == 123_456_789
+
+
 def test_factory_ref_round_trip_for_registered_approaches():
     assert bench.factory_ref_for_approach("a2-py", None) == "approach:a2-py:"
     assert bench.factory_ref_for_approach("a1-py", "/m/dir") == "approach:a1-py:/m/dir"
