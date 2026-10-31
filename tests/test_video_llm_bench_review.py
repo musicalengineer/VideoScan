@@ -80,7 +80,7 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert room["valid"] and room["setting"] == "indoor" and "brick fireplace" in room["features"]
     t = state["tally"]
     assert t == {"clips_seen": 1, "clips_done": 1, "with_truth": 1, "within_5": 1, "within_10": 1, "inside_range": 1,
-                 "mean_error_years": 2.0, "verdicts": {"model": 0, "mine": 0, "unsure": 0}}
+                 "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}}
 
 
 def test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt(tmp_path):
@@ -106,14 +106,17 @@ def test_an_ocr_only_clip_has_no_era_but_shows_the_dates_it_read(tmp_path):
 def test_verdicts_last_wins_malformed_skipped_and_show_in_the_state(tmp_path):
     e = entry(digest_for(7))
     out = scratch_run(tmp_path, [e])
-    rec = bench.write_verdict(out, e["digest"], "mine", {"confirmed_year": 1991, "machine_range": [1991, 1995], "run_id": "r"})
-    assert rec["verdict"] == "mine" and rec["confirmed_year"] == 1991 and "at" in rec
-    bench.write_verdict(out, e["digest"], "model")
+    rec = bench.write_verdict(out, e["digest"], "disagree", {"confirmed_year": 1991, "machine_range": [1991, 1995], "run_id": "r"})
+    assert rec["verdict"] == "disagree" and rec["confirmed_year"] == 1991 and "at" in rec
+    bench.write_verdict(out, e["digest"], "agree")
     with (out / bench.VERDICTS_FILE).open("a") as f:
         f.write("garbage\n" + json.dumps({"digest": e["digest"], "verdict": "maybe"}) + "\n")
-    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "model", "the last VALID line wins"
-    assert bench.review_state(out, manifest_for([e]))["clips"][0]["verdict"] == "model"
-    assert bench.review_state(out, manifest_for([e]))["tally"]["verdicts"] == {"model": 1, "mine": 0, "unsure": 0}
+    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree", "the last VALID line wins"
+    assert bench.review_state(out, manifest_for([e]))["clips"][0]["verdict"] == "agree"
+    assert bench.review_state(out, manifest_for([e]))["tally"]["verdicts"] == {"agree": 1, "disagree": 0, "unsure": 0}
+    # The first session's words are still readable (and not counted under the new buttons).
+    bench.write_verdict(out, e["digest"], "model")
+    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "model"
     with pytest.raises(ValueError):
         bench.write_verdict(out, e["digest"], "maybe")
     with pytest.raises(ValueError):
@@ -163,7 +166,7 @@ def test_server_serves_page_state_frames_and_refuses_traversal(served):
     status, ctype, body = get(base + "/")
     assert status == 200 and ctype.startswith("text/html")
     page = body.decode()
-    assert "Era review" in page and "Model is right" in page and "My date is right" in page and "Unsure" in page
+    assert "Era review" in page and ">Agree<" in page and ">Disagree<" in page and ">Unsure<" in page
     assert "/Users/" not in page and "/Volumes/" not in page
     status, ctype, body = get(base + "/state.json")
     assert status == 200 and ctype.startswith("application/json")
@@ -180,14 +183,14 @@ def test_server_serves_page_state_frames_and_refuses_traversal(served):
 
 def test_server_records_a_verdict_and_refuses_a_bad_one(served):
     base, out, e = served
-    req = urllib.request.Request(base + "/verdict", data=json.dumps({"digest": e["digest"], "verdict": "mine"}).encode(),
+    req = urllib.request.Request(base + "/verdict", data=json.dumps({"digest": e["digest"], "verdict": "agree"}).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=5) as r:
         rec = json.loads(r.read())
-    assert rec["verdict"] == "mine" and rec["confirmed_year"] == 1991 and rec["machine_range"] == [1991, 1995]
+    assert rec["verdict"] == "agree" and rec["confirmed_year"] == 1991 and rec["machine_range"] == [1991, 1995]
     assert rec["run_id"] == "r-review"
-    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "mine"
-    assert json.loads(get(base + "/state.json")[2])["clips"][0]["verdict"] == "mine"
+    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree"
+    assert json.loads(get(base + "/state.json")[2])["clips"][0]["verdict"] == "agree"
     for payload in ({"digest": e["digest"], "verdict": "maybe"}, {"digest": "f" * 64, "verdict": "model"}, {}):
         req = urllib.request.Request(base + "/verdict", data=json.dumps(payload).encode(),
                                      headers={"Content-Type": "application/json"}, method="POST")

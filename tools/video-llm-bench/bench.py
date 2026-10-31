@@ -2901,7 +2901,12 @@ def summarize_command(args: argparse.Namespace) -> int:
 # loopback interface.
 # ===========================================================================
 VERDICTS_FILE = "verdicts.jsonl"
-VERDICT_WORDS = ("model", "mine", "unsure")
+# Rick, after the first five clips (2026-10-31): the question is AGREEMENT — a wide
+# range that contains his date is still agreement — not whose date is right.
+# "disagree" = the model is off; a wrong confirmed date is fixed in the Catalog.
+# The first five verdicts were written as "model" / "mine"; still readable.
+VERDICT_WORDS = ("agree", "disagree", "unsure", "model", "mine")
+VERDICT_BUTTONS = ("agree", "disagree", "unsure")
 WATCH_DEFAULT_PORT = 8765
 
 
@@ -3032,7 +3037,7 @@ def review_state(run_dir: Path, manifest: Dict[str, Any], clips: Optional[Sequen
         "within_5": sum(1 for c in scored if c["error_years"] <= 5), "within_10": sum(1 for c in scored if c["error_years"] <= 10),
         "inside_range": sum(1 for c in scored if c["inside"]),
         "mean_error_years": round(sum(c["error_years"] for c in scored) / len(scored), 1) if scored else None,
-        "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_WORDS},
+        "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_BUTTONS},
     }
     return {"run_id": run_record.get("run_id"), "approach_id": run_record.get("approach_id"), "model": run_record.get("model_id"),
             "state": progress.get("state"), "total_clips": progress.get("total_clips"), "generated_at": utc_now(),
@@ -3092,7 +3097,7 @@ const grade=c=>c.error_years==null?"pending":c.error_years<=5?"good":c.error_yea
 async function poll(){try{const r=await fetch("/state.json",{cache:"no-store"});S=await r.json();render()}catch(e){}}
 function render(){
   const t=S.tally; $("#tally-main").textContent=`${t.clips_done} of ${S.total_clips??"?"} clips`;
-  $("#tally").innerHTML=`within 5 y <b>${t.within_5}</b> · within 10 y <b>${t.within_10}</b> · inside range <b>${t.inside_range}</b> of ${t.with_truth}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: model ${t.verdicts.model} · mine ${t.verdicts.mine} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
+  $("#tally").innerHTML=`within 5 y <b>${t.within_5}</b> · within 10 y <b>${t.within_10}</b> · inside range <b>${t.inside_range}</b> of ${t.with_truth}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: agree ${t.verdicts.agree} · disagree ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
   if(cur==null){const first=S.clips.find(c=>c.done&&!c.verdict)||S.clips[0]; cur=first?first.digest:null}
   $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc(c.verdict):""}</span></div>`).join("");
   document.querySelectorAll(".row").forEach(r=>r.onclick=()=>{cur=r.dataset.d;render()});
@@ -3110,12 +3115,12 @@ function render(){
   <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
   <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
   ${wins}
-  <div class="buttons"><button class="model ${c.verdict==="model"?"on":""}" onclick="verdict('model')">Model is right<kbd>1</kbd></button><button class="mine ${c.verdict==="mine"?"on":""}" onclick="verdict('mine')">My date is right<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
+  <div class="buttons"><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Agree<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Disagree<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
 }
 async function verdict(v){const c=S.clips.find(x=>x.digest===cur); if(!c)return;
   await fetch("/verdict",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({digest:c.digest,verdict:v})});
   await poll(); const i=S.clips.findIndex(x=>x.digest===cur); const next=S.clips.slice(i+1).find(x=>x.done&&!x.verdict)||S.clips.find(x=>x.done&&!x.verdict); if(next){cur=next.digest;render()}}
-document.addEventListener("keydown",e=>{if(!S)return; if(e.key==="1")verdict("model"); if(e.key==="2")verdict("mine"); if(e.key==="3")verdict("unsure");
+document.addEventListener("keydown",e=>{if(!S)return; if(e.key==="1")verdict("agree"); if(e.key==="2")verdict("disagree"); if(e.key==="3")verdict("unsure");
   const i=S.clips.findIndex(x=>x.digest===cur); if(e.key==="ArrowRight"&&i<S.clips.length-1){cur=S.clips[i+1].digest;render()} if(e.key==="ArrowLeft"&&i>0){cur=S.clips[i-1].digest;render()}});
 poll(); setInterval(poll,2000);
 </script></body></html>
