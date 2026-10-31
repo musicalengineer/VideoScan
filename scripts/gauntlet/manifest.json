@@ -31917,6 +31917,33 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_video_llm_bench_a2.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench_a2.py"
+      ],
+      "tests": [
+        "test_a1_routing_is_unchanged_date_on_window_frames",
+        "test_a2_digest_in_both_corpora_gets_windows_and_stills_once",
+        "test_a2_is_registered_with_the_8b_model_and_the_stills_ocr_sampler",
+        "test_a2_loop_ocr_clip_gets_five_stills_era_clip_gets_windows_only",
+        "test_a2_markdown_carries_no_path_digest_model_text_or_proper_noun",
+        "test_a2_reading_names_a0_a1_and_a2_numbers",
+        "test_a2_resume_skips_done_and_redoes_partial",
+        "test_a2_run_record_carries_model_digest_and_both_samplers",
+        "test_a2_scale_100k_still_records_score_inside_the_budget",
+        "test_a2_unrippable_still_is_recorded_and_never_asked",
+        "test_nothing_to_look_at_plans_no_frame",
+        "test_ocr_clip_routes_to_a0_stills_and_era_clip_to_windows",
+        "test_summarize_a2_math_and_family_decade_group",
+        "test_summarize_command_puts_a0_a1_a2_in_order",
+        "test_unknown_sampler_is_refused",
+        "test_weights_digest_covers_every_shard_and_moves_when_a_byte_changes"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_videoscan_stress.py",
       "stage": "unit",
       "suites": [
@@ -34673,6 +34700,10 @@
         },
         {
           "name": "tests/test_video_llm_bench_a1.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench_a2.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

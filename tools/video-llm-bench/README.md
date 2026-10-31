@@ -44,7 +44,7 @@ venv-mlx/bin/python3 tools/video-llm-bench/bench.py summarize \
   --out docs/reviews/video_llm_benchmarks.md                   # overwrite; also printed to stdout
 ```
 
-Tests (no model, no media, no catalog): `venv/bin/python3 -m pytest tests/test_video_llm_bench.py tests/test_video_llm_bench_a1.py`.
+Tests (no model, no media, no catalog): `venv/bin/python3 -m pytest tests/test_video_llm_bench.py tests/test_video_llm_bench_a1.py tests/test_video_llm_bench_a2.py`.
 
 ## Corpora (`validate-corpus`)
 
@@ -145,3 +145,39 @@ three-line reading is generated from the numbers when both runs are passed.
 Per window result line: `digest`, `window_index`, `window`, `frame_times_s`, `frames_shown`, `family`,
 `prompt_sha256`, `raw_text`, `elapsed_s`, `rip_s`, `error`, `counters`, `schema_valid`,
 `schema_invalid_reason`, `decoded`.
+
+## Approach `a2-py` — the 8B model through A1's paths (design §5 row A2)
+
+**Qwen3-VL-8B-Instruct-4bit** (`mlx-community`, ≈ 5.8 GB of weights, loads in `venv-mlx`'s mlx-vlm 0.5.0,
+multi-image prompts accepted) — everything else is A1's code: `plan_windows`, the r3 `era` / `roomFeatures`
+prompts verbatim, one multi-image generation per (window, family), `decode_contract`, `summarize_a1_run`.
+One deliberate change, from A1's "one engine, two samplers" finding (A1's OCR fell from 92 % to 86 % when
+the `date` prompt moved onto window frames):
+
+* **Two samplers, one loop** (`plan_clip_sampling`, pure): ERA-corpus clips get A1's windows; OCR-corpus
+  clips get A0's sampler — 5 stills from the middle 90 % (`frames_evenly_spaced`), A0's `date` prompt, one
+  frame per call. A digest in both corpora gets both. Result records from stills carry `sampler: "stills"`
+  and `window_index: null`. `run_corpus_a1(..., ocr_sampler="stills")`; the default (`window-frames`) is A1
+  unchanged.
+* **Registry** (`APPROACHES`): approach id → class, model id, default N, OCR sampler. `run --approach a2-py`
+  resolves through it; the run record adds `ocr_sampler`, `ocr_stills` and `sampler_id_by_corpus`
+  (`{"era": "windows-3xN-max60s-middle90", "ocr": "stills-5-middle90"}`) beside the usual model / weights
+  digest / versions.
+* **Summary**: the A2 section uses A1's tables (same columns) plus a generated three-line reading against
+  A0 and A1 (Rick-dated MAE, camera-dated 2020s MAE, OCR vs A0, cost vs A1). `summarize` takes all three
+  `--run`s and prints A0, A1, A2 in that order.
+
+Choosing N (3-clip smoke, prompt r3 unchanged, 18 window answers each, 2026-10-30): N=4 18/18 · N=6 17/18 · N=8 17/18 (94 %) · N=12 0/5 and pathological (2–4 h per generation, degenerate text; ~2.8k prompt tokens) → N = 8 by the A1 rule. The 3B model fell off the same kind of cliff at N = 8 in A1.
+
+Memory (worst case): weights ≈ 5.8 GB + mlx cache limit 512 MB + one window's generation (≤ N × ~256
+visual tokens + ≤ 400 output tokens; measured peak 7.1 GB at N = 4) + ≤ 3N + 5 PNGs on disk per clip.
+
+```sh
+venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a2-py --smoke 3 --frames N \
+  --manifest <worktree>/.scratch/bench/manifest.json --model-dir <Qwen3-VL-8B snapshot dir> \
+  --out <worktree>/.scratch/bench/runs/smoke-a2-r3-nN                 # pick N as for A1
+nice -n 15 venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a2-py --frames N \
+  --manifest … --model-dir … --out <worktree>/.scratch/bench/runs/<id>-a2-py   # resume-safe
+venv-mlx/bin/python3 tools/video-llm-bench/bench.py summarize --manifest … \
+  --run <a0 run> --run <a1 run> --run <a2 run> --out docs/reviews/video_llm_benchmarks.md
+```
