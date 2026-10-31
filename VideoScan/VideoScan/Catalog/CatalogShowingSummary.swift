@@ -184,6 +184,7 @@ enum CatalogShowingSummary {
         case .archiveCandidates:    return "Archive Angel candidates"
         case .noPlaceYet:           return "No place yet"
         case .onePerFootage:        return "One per footage"
+        case .confirmedDate:        return "Confirmed date"
         }
     }
 

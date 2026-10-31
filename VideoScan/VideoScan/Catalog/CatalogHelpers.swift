@@ -651,34 +651,14 @@ struct CatalogContent: View {
         if !showDisconnectedMedia {
             out = out.filter { VolumeReachability.isReachable(path: $0.fullPath) }
         }
-        // View menu filters (additive — each active filter narrows further)
-        if viewFilters.contains(.videoAndAudioOnly) {
-            out = out.filter { $0.streamType == .videoAndAudio }
-        }
-        if viewFilters.contains(.unpairedOnly) {
-            out = out.filter {
-                ($0.streamType == .videoOnly || $0.streamType == .audioOnly) && $0.pairedWith == nil
-            }
-        }
-        if viewFilters.contains(.ratedOnly) {
-            out = out.filter { $0.starRating > 0 }
-        }
-        if viewFilters.contains(.hasFamily) {
-            out = out.filter(pfRecordHasAnyPerson)
-        }
-        // Workspace chip: keep only records the user has actively imported
-        // into the triage workspace. Orthogonal to lifecycleStage — a
-        // Cataloged record can also be workspace-active.
-        if viewFilters.contains(.workspaceOnly) {
-            out = out.filter { $0.workspaceActive }
-        }
-        if viewFilters.contains(.untaggedOnly) {
-            out = out.filter(pfRecordIsUntagged)
-        }
-        // Repair-lifecycle worklist (GH #132 P3): only repair copies
-        // still waiting for Rick's confirmation.
-        if viewFilters.contains(.awaitingConfirmation) {
-            out = out.filter(pfAwaitingConfirmation)
+        // View menu filters (additive — each active filter narrows further).
+        // Every pure per-record filter is applied here, in declaration order,
+        // from the enum's own predicate table (CatalogViewFilter
+        // .recordPredicate) — one loop instead of one branch per filter
+        // (2026-10-31, the complexity ratchet on this function). The filters
+        // that need the model or a whole-group pass follow by hand.
+        for filter in CatalogViewFilter.allCases where viewFilters.contains(filter) {
+            if let keep = filter.recordPredicate { out = out.filter(keep) }
         }
         // Master Archive worklists (2026-08-15). Event-driven pass; the
         // model's memoized reverse index makes each predicate O(1).
@@ -708,10 +688,6 @@ struct CatalogContent: View {
         if viewFilters.contains(.archiveCandidates) {
             let ids = model.archiveAngel.candidateIDs
             out = out.filter { ids.contains($0.id) }
-        }
-        // "No place yet" (2026-09-12): the place review queue. nil check.
-        if viewFilters.contains(.noPlaceYet) {
-            out = out.filter(pfRecordHasNoPlace)
         }
         // "One per footage" (Find Similar Footage, 2026-09-23): LAST, so it
         // picks the best-ranked member among the rows every other filter
