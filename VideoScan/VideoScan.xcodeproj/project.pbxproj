@@ -14,6 +14,10 @@
 		FACE000000000000000000B1 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A1 /* MLXVLM */; };
 		FACE000000000000000000B2 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A2 /* MLXLMCommon */; };
 		FACE000000000000000000B3 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A3 /* MLX */; };
+		BA0E00000000000000000030 /* VideoScanCore in Frameworks */ = {isa = PBXBuildFile; productRef = BA0E00000000000000000031 /* VideoScanCore */; };
+		BA0E00000000000000000032 /* VideoScan Background.app in Embed Background Helper */ = {isa = PBXBuildFile; fileRef = BA0E00000000000000000001 /* VideoScan Background.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		BA0E00000000000000000033 /* Rick-Breen.VideoScan.Background.plist in Embed Launch Agent plist */ = {isa = PBXBuildFile; fileRef = BA0E00000000000000000002 /* Rick-Breen.VideoScan.Background.plist */; };
+		BA0E00000000000000000034 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BA0E00000000000000000003 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -31,14 +35,59 @@
 			remoteGlobalIDString = 0DC193272F676647006295E7;
 			remoteInfo = VideoScan;
 		};
+		BA0E00000000000000000060 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0DC193202F676647006295E7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BA0E00000000000000000020;
+			remoteInfo = "VideoScan Background";
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		BA0E00000000000000000050 /* Embed Background Helper */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LoginItems;
+			dstSubfolderSpec = 1;
+			files = (
+				BA0E00000000000000000032 /* VideoScan Background.app in Embed Background Helper */,
+			);
+			name = "Embed Background Helper";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BA0E00000000000000000051 /* Embed Launch Agent plist */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchAgents;
+			dstSubfolderSpec = 1;
+			files = (
+				BA0E00000000000000000033 /* Rick-Breen.VideoScan.Background.plist in Embed Launch Agent plist */,
+			);
+			name = "Embed Launch Agent plist";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		0DC193282F676647006295E7 /* VideoScan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VideoScan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0DC193352F676648006295E7 /* VideoScanTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VideoScanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0DC1933F2F676648006295E7 /* VideoScanUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VideoScanUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0DE0000000000000000E010 /* MapKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MapKit.framework; path = System/Library/Frameworks/MapKit.framework; sourceTree = SDKROOT; };
+		BA0E00000000000000000001 /* VideoScan Background.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "VideoScan Background.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BA0E00000000000000000002 /* Rick-Breen.VideoScan.Background.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = "Rick-Breen.VideoScan.Background.plist"; path = "VideoScanBackground/Rick-Breen.VideoScan.Background.plist"; sourceTree = "<group>"; };
+		BA0E00000000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = VideoScan/Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		BA0E00000000000000000011 /* Exceptions for "VideoScanBackground" folder in "VideoScan Background" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Rick-Breen.VideoScan.Background.plist",
+			);
+			target = BA0E00000000000000000020 /* VideoScan Background */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0DC1932A2F676647006295E7 /* VideoScan */ = {
@@ -54,6 +103,14 @@
 		0DC193422F676648006295E7 /* VideoScanUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = VideoScanUITests;
+			sourceTree = "<group>";
+		};
+		BA0E00000000000000000010 /* VideoScanBackground */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				BA0E00000000000000000011 /* Exceptions for "VideoScanBackground" folder in "VideoScan Background" target */,
+			);
+			path = VideoScanBackground;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -87,6 +144,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA0E00000000000000000022 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA0E00000000000000000030 /* VideoScanCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -96,6 +161,8 @@
 				0DC1932A2F676647006295E7 /* VideoScan */,
 				0DC193382F676648006295E7 /* VideoScanTests */,
 				0DC193422F676648006295E7 /* VideoScanUITests */,
+				BA0E00000000000000000010 /* VideoScanBackground */,
+				BA0E00000000000000000002 /* Rick-Breen.VideoScan.Background.plist */,
 				0DC193292F676647006295E7 /* Products */,
 				C0DE0000000000000000E000 /* Frameworks */,
 			);
@@ -107,6 +174,7 @@
 				0DC193282F676647006295E7 /* VideoScan.app */,
 				0DC193352F676648006295E7 /* VideoScanTests.xctest */,
 				0DC1933F2F676648006295E7 /* VideoScanUITests.xctest */,
+				BA0E00000000000000000001 /* VideoScan Background.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -129,11 +197,14 @@
 				0DC193242F676647006295E7 /* Sources */,
 				0DC193252F676647006295E7 /* Frameworks */,
 				0DC193262F676647006295E7 /* Resources */,
+				BA0E00000000000000000050 /* Embed Background Helper */,
+				BA0E00000000000000000051 /* Embed Launch Agent plist */,
 				C0DE0000000000000000C100 /* Embed & sign preview-sweep helper */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				BA0E00000000000000000061 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				0DC1932A2F676647006295E7 /* VideoScan */,
@@ -197,6 +268,29 @@
 			productReference = 0DC1933F2F676648006295E7 /* VideoScanUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		BA0E00000000000000000020 /* VideoScan Background */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BA0E00000000000000000040 /* Build configuration list for PBXNativeTarget "VideoScan Background" */;
+			buildPhases = (
+				BA0E00000000000000000021 /* Sources */,
+				BA0E00000000000000000022 /* Frameworks */,
+				BA0E00000000000000000023 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BA0E00000000000000000010 /* VideoScanBackground */,
+			);
+			name = "VideoScan Background";
+			packageProductDependencies = (
+				BA0E00000000000000000031 /* VideoScanCore */,
+			);
+			productName = "VideoScan Background";
+			productReference = BA0E00000000000000000001 /* VideoScan Background.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -217,6 +311,9 @@
 					0DC1933E2F676648006295E7 = {
 						CreatedOnToolsVersion = 26.3;
 						TestTargetID = 0DC193272F676647006295E7;
+					};
+					BA0E00000000000000000020 = {
+						CreatedOnToolsVersion = 26.3;
 					};
 				};
 			};
@@ -242,6 +339,7 @@
 				0DC193272F676647006295E7 /* VideoScan */,
 				0DC193342F676648006295E7 /* VideoScanTests */,
 				0DC1933E2F676648006295E7 /* VideoScanUITests */,
+				BA0E00000000000000000020 /* VideoScan Background */,
 			);
 		};
 /* End PBXProject section */
@@ -265,6 +363,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BA0E00000000000000000023 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA0E00000000000000000034 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -313,6 +419,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BA0E00000000000000000021 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -325,6 +438,11 @@
 			isa = PBXTargetDependency;
 			target = 0DC193272F676647006295E7 /* VideoScan */;
 			targetProxy = 0DC193402F676648006295E7 /* PBXContainerItemProxy */;
+		};
+		BA0E00000000000000000061 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BA0E00000000000000000020 /* VideoScan Background */;
+			targetProxy = BA0E00000000000000000060 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -606,6 +724,76 @@
 			};
 			name = Release;
 		};
+		BA0E00000000000000000041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "VideoScan Local";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "VideoScan Background";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 5.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "Rick-Breen.VideoScan.Background";
+				PRODUCT_NAME = "VideoScan Background";
+				REGISTER_APP_GROUPS = YES;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		BA0E00000000000000000042 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "VideoScan Local";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "VideoScan Background";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 5.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "Rick-Breen.VideoScan.Background";
+				PRODUCT_NAME = "VideoScan Background";
+				REGISTER_APP_GROUPS = YES;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -641,6 +829,15 @@
 			buildConfigurations = (
 				0DC193502F676648006295E7 /* Debug */,
 				0DC193512F676648006295E7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BA0E00000000000000000040 /* Build configuration list for PBXNativeTarget "VideoScan Background" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BA0E00000000000000000041 /* Debug */,
+				BA0E00000000000000000042 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -685,6 +882,11 @@
 			productName = VideoScanCore;
 		};
 		C0DE0000000000000000A002 /* VideoScanCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */;
+			productName = VideoScanCore;
+		};
+		BA0E00000000000000000031 /* VideoScanCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */;
 			productName = VideoScanCore;

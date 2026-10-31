@@ -63,6 +63,7 @@ struct AppSupportSideStoreInventoryTests {
         "catalog.highwater.log": .logOrReport,                // the high-water's second witness
         "plan.json": .logOrReport,                            // delete-duplicates/<job>/ and Angel Prepare job memory
         "findtagd.log": .logOrReport,
+        "background.log": .logOrReport,                       // ~/Library/Logs/VideoScan: VideoScan Background's own log (step 0, 2026-10-30)
         "previewsweepd.log": .logOrReport,
         "ollama.log": .logOrReport,
         "keys.log": .logOrReport,

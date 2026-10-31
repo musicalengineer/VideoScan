@@ -154,6 +154,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("VideoScan: reaped %d orphaned RAM disk(s) from previous run: %@",
                   detached.count, detached.joined(separator: ", "))
         }
+
+        // VideoScan Background (step 0, 2026-10-30): registers the launchd
+        // agent ONLY when `background.service.enabled` is true in defaults;
+        // a normal launch does nothing here.
+        BackgroundServiceRegistrar.registerIfEnabled { appLog.write($0) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

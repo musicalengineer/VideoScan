@@ -31671,6 +31671,142 @@
         "sameVolumeRuleRefusesOnlyKnownAndDifferent",
         "scanContextAloneIsUsedAndNormalized"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundCatalogAccessTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundCatalogAccessTests"
+      ],
+      "tests": [
+        "flagsAndHandle",
+        "missingFile",
+        "noSchemaRow",
+        "writeRefused"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundPayloadCodecTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundPayloadCodecTests"
+      ],
+      "tests": [
+        "envelopeShape",
+        "garbage",
+        "kindMismatch",
+        "names",
+        "roundTrips",
+        "schemaMismatch"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackoffPolicyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackoffPolicyTests",
+        "IdleExitPolicyTests",
+        "PeerRequirementTests",
+        "PeerTrustPolicyTests"
+      ],
+      "tests": [
+        "adHoc",
+        "adHocOrForeign",
+        "attendedTrickles",
+        "hysteresis",
+        "idleIsFull",
+        "locked",
+        "memory",
+        "night",
+        "precedence",
+        "recentInputTrickles",
+        "refusals",
+        "rule",
+        "sameCertificate",
+        "thermal",
+        "widensIdentifier"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JobSupervisorIsolationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JobSupervisorIsolationTests"
+      ],
+      "tests": [
+        "corruptCheckpoint",
+        "diskFull",
+        "diskFullJobResumesOrStops",
+        "killDuringFirstUnitStillGetsItsOutcome",
+        "killMidUnit"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JobSupervisorScaleTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JobSupervisorScaleTests"
+      ],
+      "tests": [
+        "plan100k",
+        "progressCap"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JobSupervisorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JobSupervisorTests"
+      ],
+      "tests": [
+        "lanes",
+        "noOp",
+        "partialQueueFile",
+        "pauseDuringThermalHoldRunsNoUnit",
+        "pauseResumeStop",
+        "refusals",
+        "resumeBeforePauseLandsRestoresRunning",
+        "resumeFromCheckpoint",
+        "startAndOutcome",
+        "status",
+        "trickleSpacing",
+        "unitThrowingCancellationErrorIsAFailedUnit",
+        "unknownKindQueueFileHasItsOutcomeAndKeepsItsFile"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceSensorTests"
+      ],
+      "tests": [
+        "catalogDoorIsReadOnly",
+        "embeddedShape",
+        "lifecycleLines",
+        "noCommitterSymbolInTheBuiltHelper",
+        "sourcesStayOnTheReadSide"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceRegistrarTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceRegistrarTests"
+      ],
+      "tests": [
+        "disabledMakesNoCall",
+        "enabledRegistersOnce",
+        "names"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -34295,9 +34431,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3069,
+      "expected_floor": 3077,
       "name": "unit",
-      "package_expected_floor": 429,
+      "package_expected_floor": 474,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -34331,7 +34467,16 @@
         "VideoScanCoreTests.PreflightGateTests",
         "VideoScanCoreTests.CatalogPreflightReaderTests",
         "VideoScanCoreTests.PreflightCancellationQAR2Tests",
-        "VideoScanCoreTests.CatalogRealityTests"
+        "VideoScanCoreTests.CatalogRealityTests",
+        "VideoScanCoreTests.BackgroundCatalogAccessTests",
+        "VideoScanCoreTests.BackgroundPayloadCodecTests",
+        "VideoScanCoreTests.BackoffPolicyTests",
+        "VideoScanCoreTests.IdleExitPolicyTests",
+        "VideoScanCoreTests.PeerTrustPolicyTests",
+        "VideoScanCoreTests.JobSupervisorIsolationTests",
+        "VideoScanCoreTests.JobSupervisorScaleTests",
+        "VideoScanCoreTests.JobSupervisorTests",
+        "VideoScanCoreTests.PeerRequirementTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -34819,7 +34964,9 @@
         "VideoScanTests/EditorCacheIgnoreListNameFallbackTests",
         "VideoScanTests/EditorCacheResumeAuditTests",
         "VideoScanTests/MediaRepairDedicatedBalanceTests",
-        "VideoScanTests/MediaRepairMenuSheetAgreementTests"
+        "VideoScanTests/MediaRepairMenuSheetAgreementTests",
+        "VideoScanTests/BackgroundServiceSensorTests",
+        "VideoScanTests/BackgroundServiceRegistrarTests"
       ]
     },
     {
