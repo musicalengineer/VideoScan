@@ -20,8 +20,15 @@ command in that worktree's `models_research/README.md` under its docs folder, no
   (`496e3d7b`, unify later — BACKLOG); `model-lab.sqlite` classified in the App Support inventory sensor (`db16b1e5`).
 - **Running now (Opus workers, off the Ultra by 01:40 for the nightly):** **A1** — same 3B model, chronological windows + the
   strict JSON era/roomFeatures contracts, fail-closed decoding mirroring Swift's `ContractDecoder`; published beside A0.
-  **Household Roster feasibility** — tree + dated, tagged files; how often (sex, age band) alone leaves one candidate, per decade;
-  the honest hard cases (two boys 6–12 in the 1990s). Aggregates only; roles not names.
+  **Household Roster feasibility — DONE, merged `2cb31fa5`** (`docs/reviews/household_roster_feasibility.md`, 36 pytest, roles not
+  names): the roster cuts 10–13 people to 1–3 for any date; sex + age band alone is unambiguous for **42 %** of tags on Rick-dated
+  files (69 % over the whole truth set, inflated by camera-dated clips of the spouse alone; 18 % once the owner's siblings join).
+  Every tie is same-sex, same-generation, 1–3 years apart: the two older boys, the two younger boys, the two grandfathers, the two
+  grandmothers. Verdict: A7 earns a place as a *filter*, not a namer; the model attribute that breaks ties must be identity-bearing
+  (relative height / order in frame, glasses, within-occasion face similarity to Rick's confirmed references) — a better age guess
+  cannot. Co-presence is the cheapest next rung (one identified grandparent settles the couple). Data gaps: truth set is only 41 files
+  (54 of 73 Rick-dated files have no People tag); camera stamps agree with Rick's year 1 time in 4 (one DV stamp is 8 days after the
+  tagged person's death — a transfer date). Guard tests on main fixed/filed: catalog-naming guard green (`b6fe2b2a`), docs-links #404.
 - Worktrees for landed branches (`bg-service-0`, `model-lab-core`, `model-lab-bench`, and the older landed ones) are left in place —
   nothing deleted; prune is Rick's call.
 
