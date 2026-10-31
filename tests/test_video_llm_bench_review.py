@@ -81,7 +81,8 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert room["valid"] and room["setting"] == "indoor" and "brick fireplace" in room["features"]
     t = state["tally"]
     assert t == {"clips_seen": 1, "clips_done": 1, "with_truth": 1, "within_5": 1, "within_10": 1, "inside_range": 1,
-                 "close": 1, "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}, "disagreements": 0}
+                 "close": 1, "mean_error_years": 2.0, "verdicts": {"date-right": 0, "date-wrong": 0, "unsure": 0}, "legacy_verdicts": 0,
+                 "model_missed_on_confirmed": 0, "model_close_on_confirmed": 0, "dates_to_fix": 0}
 
 
 def test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt(tmp_path):
@@ -122,20 +123,22 @@ def test_a_wide_range_is_not_close_even_when_its_midpoint_lands(tmp_path):
 def test_verdicts_last_wins_malformed_skipped_and_show_in_the_state(tmp_path):
     e = entry(digest_for(7))
     out = scratch_run(tmp_path, [e])
-    rec = bench.write_verdict(out, e["digest"], "disagree", {"confirmed_year": 1991, "machine_range": [1991, 1995], "run_id": "r"})
-    assert rec["verdict"] == "disagree" and rec["confirmed_year"] == 1991 and "at" in rec
-    bench.write_verdict(out, e["digest"], "agree")
+    rec = bench.write_verdict(out, e["digest"], "date-wrong", {"confirmed_year": 1991, "machine_range": [1991, 1995], "run_id": "r"})
+    assert rec["verdict"] == "date-wrong" and rec["confirmed_year"] == 1991 and "at" in rec
+    bench.write_verdict(out, e["digest"], "date-right")
     with (out / bench.VERDICTS_FILE).open("a") as f:
         f.write("garbage\n" + json.dumps({"digest": e["digest"], "verdict": "maybe"}) + "\n")
-    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree", "the last VALID line wins"
-    assert bench.review_state(out, manifest_for([e]))["clips"][0]["verdict"] == "agree"
-    assert bench.review_state(out, manifest_for([e]))["tally"]["verdicts"] == {"agree": 1, "disagree": 0, "unsure": 0}
-    assert bench.review_state(out, manifest_for([e]))["tally"]["disagreements"] == 0, "close by the rule and 'close' by Rick"
-    bench.write_verdict(out, e["digest"], "disagree")
-    assert bench.review_state(out, manifest_for([e]))["tally"]["disagreements"] == 1, "close by the rule, 'not close' by Rick: worth a look"
-    # The first session's words are still readable (and not counted under the new buttons).
-    bench.write_verdict(out, e["digest"], "model")
-    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "model"
+    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "date-right", "the last VALID line wins"
+    state = bench.review_state(out, manifest_for([e]))
+    assert state["clips"][0]["verdict"] == "date-right"
+    assert state["tally"]["verdicts"] == {"date-right": 1, "date-wrong": 0, "unsure": 0}
+    assert state["tally"]["model_close_on_confirmed"] == 1 and state["tally"]["model_missed_on_confirmed"] == 0, "his date stands and the model was close"
+    bench.write_verdict(out, e["digest"], "date-wrong")
+    assert bench.review_state(out, manifest_for([e]))["tally"]["dates_to_fix"] == 1
+    # The earlier sessions' words are still readable and counted apart from the new buttons.
+    bench.write_verdict(out, e["digest"], "agree")
+    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree"
+    assert bench.review_state(out, manifest_for([e]))["tally"]["legacy_verdicts"] == 1
     with pytest.raises(ValueError):
         bench.write_verdict(out, e["digest"], "maybe")
     with pytest.raises(ValueError):
@@ -185,8 +188,8 @@ def test_server_serves_page_state_frames_and_refuses_traversal(served):
     status, ctype, body = get(base + "/")
     assert status == 200 and ctype.startswith("text/html")
     page = body.decode()
-    assert "Era review" in page and "Close enough<kbd>1" in page and "Not close<kbd>2" in page and "Unsure<kbd>3" in page
-    assert "Is the model's range close enough to your date to be useful?" in page
+    assert "Era review" in page and "Right<kbd>1" in page and "Wrong<kbd>2" in page and "<kbd>3" not in page, "binary, like Donna / Not Donna"
+    assert "Your date <b>" in page
     assert "/Users/" not in page and "/Volumes/" not in page
     status, ctype, body = get(base + "/state.json")
     assert status == 200 and ctype.startswith("application/json")
@@ -203,14 +206,14 @@ def test_server_serves_page_state_frames_and_refuses_traversal(served):
 
 def test_server_records_a_verdict_and_refuses_a_bad_one(served):
     base, out, e = served
-    req = urllib.request.Request(base + "/verdict", data=json.dumps({"digest": e["digest"], "verdict": "agree"}).encode(),
+    req = urllib.request.Request(base + "/verdict", data=json.dumps({"digest": e["digest"], "verdict": "date-right"}).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=5) as r:
         rec = json.loads(r.read())
-    assert rec["verdict"] == "agree" and rec["confirmed_year"] == 1991 and rec["machine_range"] == [1991, 1995]
+    assert rec["verdict"] == "date-right" and rec["confirmed_year"] == 1991 and rec["machine_range"] == [1991, 1995]
     assert rec["run_id"] == "r-review"
-    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree"
-    assert json.loads(get(base + "/state.json")[2])["clips"][0]["verdict"] == "agree"
+    assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "date-right"
+    assert json.loads(get(base + "/state.json")[2])["clips"][0]["verdict"] == "date-right"
     for payload in ({"digest": e["digest"], "verdict": "maybe"}, {"digest": "f" * 64, "verdict": "model"}, {}):
         req = urllib.request.Request(base + "/verdict", data=json.dumps(payload).encode(),
                                      headers={"Content-Type": "application/json"}, method="POST")
