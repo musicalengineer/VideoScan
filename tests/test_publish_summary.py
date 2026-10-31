@@ -99,7 +99,7 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     # the table entirely, and the summary says so instead of showing a gap.
     assert n["hosts"] == ["M4", "M5"]
     assert n["off_rota"] == ["M1"]
-    assert n["nights"][0]["hosts"] == {"M4": {"state": "green", "passed": 2631, "failed": 0, "total": 2678, "reason": None, "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None}}
+    assert n["nights"][0]["hosts"] == {"M4": {"state": "green", "passed": 2631, "failed": 0, "total": 2678, "reason": None, "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None, "hallie_strict_pass": None, "hallie_strict_expected": None, "hallie_strict_status": None, "hallie_advisory_pass": None, "hallie_advisory_expected": None, "hallie_advisory_status": None, "hallie_voice_status": None}}
     assert n["nights"][-2]["hosts"]["M4"]["state"] == "green"
     last = n["nights"][-1]["hosts"]
     assert set(last) == {"M5"}
@@ -110,7 +110,7 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     back = pm.nightly_summary(rows, "2026-10-12", rota={"on": ["M4", "M5", "M1"], "off": []})
     assert back["hosts"] == ["M4", "M5", "M1"] and back["off_rota"] == []
     assert back["nights"][-1]["hosts"]["M1"] == {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
-                                                 "reason": "build-timeout:5400s", "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None}
+                                                 "reason": "build-timeout:5400s", "core_passed": None, "core_failed": None, "core_status": None, "hallie_status": None, "hallie_strict_pass": None, "hallie_strict_expected": None, "hallie_strict_status": None, "hallie_advisory_pass": None, "hallie_advisory_expected": None, "hallie_advisory_status": None, "hallie_voice_status": None}
 
 
 def test_a_core_lane_failure_colours_the_night_and_the_cell_names_every_lane():
@@ -122,12 +122,17 @@ def test_a_core_lane_failure_colours_the_night_and_the_cell_names_every_lane():
     can say which lane broke."""
     row = night("RicksUltra", "2026-10-31", hour="07", status="failed", reason="core-failed-tests:1",
                 passed=12645, failed=0, total=12708, core_passed=2133, core_failed=1, core_status="failed",
-                hallie_replay_status="failed")
+                hallie_replay_status="failed", hallie_strict_pass=52, hallie_strict_expected=56, hallie_strict_status="failed",
+                hallie_advisory_pass=142, hallie_advisory_expected=826, hallie_advisory_status="incomplete",
+                hallie_voice_status="ok")
     assert pm.classify_nightly_row(row) == "watch", "one Core failure with the suite run to the end is WATCH, like one app failure"
     n = pm.nightly_summary([row], "2026-10-31", rota={"on": ["M4", "Ultra"], "off": []})
     cell = n["nights"][-1]["hosts"]["Ultra"]
     assert cell == {"state": "watch", "passed": 12645, "failed": 0, "total": 12708, "reason": "core-failed-tests:1",
-                    "core_passed": 2133, "core_failed": 1, "core_status": "failed", "hallie_status": "failed"}
+                    "core_passed": 2133, "core_failed": 1, "core_status": "failed", "hallie_status": "failed",
+                    "hallie_strict_pass": 52, "hallie_strict_expected": 56, "hallie_strict_status": "failed",
+                    "hallie_advisory_pass": 142, "hallie_advisory_expected": 826, "hallie_advisory_status": "incomplete",
+                    "hallie_voice_status": "ok"}
     pm._check(pm.SCHEMAS["summary_latest.json"]["nightly"], n, "nightly", None)
     # Ten Core failures is broken, like ten app failures; Core counts add to app counts.
     assert pm.classify_nightly_row(dict(row, core_failed=10)) == "red"
@@ -138,6 +143,7 @@ def test_a_core_lane_failure_colours_the_night_and_the_cell_names_every_lane():
     cell = pm.nightly_summary([old], "2026-10-31", rota={"on": ["M4", "Ultra"], "off": []})["nights"][-1]["hosts"]["M4"]
     assert cell["state"] == "green" and cell["core_passed"] is None and cell["core_failed"] is None
     assert cell["core_status"] is None and cell["hallie_status"] is None
+    assert cell["hallie_strict_pass"] is None and cell["hallie_voice_status"] is None
     # Free text in a lane status never leaves the machine.
     leaky = night("RicksM4", "2026-10-31", status="ok", passed=5, total=5, core_status="exit 65 /Users/rickb", hallie_replay_status="x" * 40)
     cell = pm.nightly_summary([leaky], "2026-10-31", rota={"on": ["M4", "Ultra"], "off": []})["nights"][-1]["hosts"]["M4"]
@@ -461,7 +467,11 @@ def test_publish_writes_summary_latest_beside_the_other_streams(tmp_path):
     s = json.loads(git.remote["summary_latest.json"])
     assert s["nightly"]["nights"][-1]["hosts"] == {"M5": {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0,
                                                           "reason": "build-timeout:5400s", "core_passed": None,
-                                                          "core_failed": None, "core_status": None, "hallie_status": None}}
+                                                          "core_failed": None, "core_status": None, "hallie_status": None,
+                                                          "hallie_strict_pass": None, "hallie_strict_expected": None,
+                                                          "hallie_strict_status": None, "hallie_advisory_pass": None,
+                                                          "hallie_advisory_expected": None, "hallie_advisory_status": None,
+                                                          "hallie_voice_status": None}}
     assert s["github"]["open_bugs"] == 2
     assert "RicksM5" not in git.remote["summary_latest.json"]
     # Same inputs again: the summary is byte-identical (fixed `now`), so nothing is committed.

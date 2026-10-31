@@ -181,10 +181,15 @@ def summary_fixture(now):
         if i >= 60:
             hosts["M1"] = {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0, "reason": "build-timeout:5400s"}
         if i == 89:
+            # An older-shaped row: no Core or Hallie lane fields at all (the ladder shows them grey, never 0).
             hosts["M4"] = {"state": "red", "passed": 11211, "failed": 2, "total": 11275, "reason": "failed-tests:2"}
-            # 2026-10-31: the app lane green, Core 2 failed, Hallie replay failed — the card must name the lanes.
+            # 2026-10-31: the app lane 1 failed, Core 2 failed, Hallie strict 52/56, advisory 142/826 cut short,
+            # voice ok — the card must name the lanes and the ladder must colour each on its own.
             hosts["M5"] = {"state": "red", "passed": 11207, "failed": 1, "total": 11275, "reason": "core-failed-tests:2",
-                           "core_passed": 2133, "core_failed": 2, "core_status": "failed", "hallie_status": "failed"}
+                           "core_passed": 2133, "core_failed": 2, "core_status": "failed", "hallie_status": "failed",
+                           "hallie_strict_pass": 52, "hallie_strict_expected": 56, "hallie_strict_status": "failed",
+                           "hallie_advisory_pass": 142, "hallie_advisory_expected": 826, "hallie_advisory_status": "incomplete",
+                           "hallie_voice_status": "ok"}
         nights.append({"date": date, "hosts": hosts})
     return {
         "schemaVersion": 1, "generated": iso(now),
@@ -480,6 +485,22 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "Core 0 passed" not in head
     # The 2 AM run is named by its own date, not as "the night of" the morning after.
     assert "2 AM run of" in head
+    # RED 2026-10-31 (Rick): one ladder per Mac, one rung per lane of the 2 AM run, each rung coloured by
+    # its own lane's verdict (app and Core by the 0 / under-10 / 10-plus rule; Hallie by its pass fraction
+    # and status; grey where the lane did not run or the row predates it). The gauntlet is not a rung:
+    # it is not part of the nightly, and a scoped run must never change this tile (the test below).
+    ladders = re.findall(r'<svg\b[^>]*class="ladder"[^>]*data-host="([^"]+)"[^>]*>(.*?)</svg>', head, re.S)
+    assert [h for h, _ in ladders] == ["M4", "M5", "M1"], ladders
+    rungs = {h: dict(re.findall(r'data-lane="([^"]+)" data-state="([^"]+)"', body)) for h, body in ladders}
+    assert rungs["M5"] == {"app": "watch", "core": "watch", "hallie-strict": "watch", "hallie-advisory": "red",
+                           "hallie-voice": "green"}, rungs["M5"]
+    assert rungs["M4"] == {"app": "watch", "core": "grey", "hallie-strict": "grey", "hallie-advisory": "grey",
+                           "hallie-voice": "grey"}, rungs["M4"]
+    assert set(rungs["M1"].values()) == {"grey"}, "a Mac whose nightly did not run has an unlit ladder"
+    # Hovering a rung says the lane, its numbers and the reason code; the words under the ladder count the lanes to look at.
+    assert "<title>Core package: 2,133 passed · 2 failed (core-failed-tests:2)</title>" in head
+    assert "<title>Hallie advisory: 142 of 826 · incomplete</title>" in head
+    assert "4 lanes to look at" in head and "all lanes green" not in head
     assert "red 1 night running" in head and "days since a red night" in head
     value, words = bug_tile(head)
     assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value
