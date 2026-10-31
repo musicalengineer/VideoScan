@@ -210,4 +210,9 @@ public final class InMemoryJobQueueStore: JobQueueStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return storage.count
     }
+
+    public var isEmpty: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return storage.isEmpty
+    }
 }

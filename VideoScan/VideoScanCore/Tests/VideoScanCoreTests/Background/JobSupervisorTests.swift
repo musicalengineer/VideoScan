@@ -80,7 +80,7 @@ struct JobSupervisorTests {
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME recording \(request.id) — interrupted at 4 of 10") })
         #expect(log.lines.contains { $0.hasPrefix("START recording \(request.id)") && $0.contains("resuming at unit 4") })
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME recording \(request.id) — finished: 9 run · 1 skipped · 0 failed") })
-        #expect(queue.count == 0, "a finished job leaves the queue")
+        #expect(queue.isEmpty, "a finished job leaves the queue")
         #expect(checkpoints.checkpoint(request.id) == nil)
     }
 
@@ -150,7 +150,7 @@ struct JobSupervisorTests {
         let bad = JobRequest(kind: .noop, parameters: [NoOpJob.unitsKey: "many"], requestedBy: "test")
         guard case .refused(let r2) = await supervisor.enqueue(bad) else { Issue.record("expected a refusal"); return }
         #expect(r2.words.contains("`units` must be a whole number"))
-        #expect(queue.count == 0)
+        #expect(queue.isEmpty)
     }
 
     @Test("NoOpJob reads units and sleepMilliseconds, counts, and resumes from its checkpoint")
