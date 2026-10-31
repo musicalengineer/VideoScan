@@ -144,6 +144,82 @@ struct SelfCancellingFactory: JobFactory {
     }
 }
 
+/// A unit that holds until the test says go. The lane is INSIDE a unit for
+/// as long as the gate is shut, so a verb issued meanwhile cannot be
+/// overtaken by the between-units check (nightly 2026-10-31: the 100 ms
+/// sleep-per-unit version of this lost that race under Release load).
+/// C++: a condition variable the test owns; the job waits on it.
+final class UnitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+    private var waiting = false
+
+    func open() {
+        lock.lock(); defer { lock.unlock() }
+        opened = true
+    }
+
+    /// True once a unit has reached the gate and is held there.
+    var isHeld: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return waiting && !opened
+    }
+
+    /// Synchronous: Swift 6 refuses a raw NSLock inside an async function
+    /// (a suspension while holding it would deadlock), so the async loop
+    /// calls these and never touches the lock itself.
+    private func arrive() {
+        lock.lock(); defer { lock.unlock() }
+        waiting = true
+    }
+
+    private var isOpen: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return opened
+    }
+
+    fileprivate func hold() async throws {
+        arrive()
+        while !isOpen {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+struct GatedJob: BackgroundJob {
+    let title = "Gated job"
+    let unitCount: Int
+    let recorder: UnitRecorder
+    let gate: UnitGate
+    /// The unit that waits at the gate; the others take `sleepPerUnit`
+    /// (so the job is still RUNNING when the test reads its state after the gate).
+    let heldUnit: Int
+    let sleepPerUnit: Duration
+
+    func runUnit(_ index: Int) async throws -> UnitOutcome {
+        recorder.begin()
+        if index == heldUnit { try await gate.hold() } else if sleepPerUnit > .zero { try await Task.sleep(for: sleepPerUnit) }
+        recorder.end(index)
+        return .done
+    }
+}
+
+struct GatedFactory: JobFactory {
+    static let kind = JobKind(rawValue: "gated")
+    let recorder: UnitRecorder
+    let gate: UnitGate
+    var units = 1_000
+    var heldUnit = 0
+    var sleepPerUnit: Duration = .milliseconds(10)
+
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob {
+        GatedJob(unitCount: units, recorder: recorder, gate: gate, heldUnit: heldUnit, sleepPerUnit: sleepPerUnit)
+    }
+
+    static func request() -> JobRequest { JobRequest(kind: kind, requestedBy: "test") }
+}
+
 extension InMemoryBackgroundLog {
     var startCount: Int { lines.filter { $0.hasPrefix("START ") }.count }
     var outcomeCount: Int { lines.filter { $0.hasPrefix("OUTCOME ") }.count }
