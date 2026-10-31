@@ -31944,6 +31944,29 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_video_llm_bench_watchdog.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench_watchdog.py"
+      ],
+      "tests": [
+        "test_a0_loop_honours_the_deadline_too",
+        "test_a0_loop_records_a_timeout_on_one_prompt_and_keeps_the_others",
+        "test_a1_loop_records_each_timeout_and_the_run_goes_on",
+        "test_a_wedged_generation_is_killed_recorded_and_the_next_call_respawns",
+        "test_a_worker_exception_comes_back_as_an_error_not_a_hang",
+        "test_close_ends_the_worker",
+        "test_deadline_stops_between_clips_and_a_resume_finishes_the_rest",
+        "test_factory_ref_round_trip_for_registered_approaches",
+        "test_parse_deadline_is_the_next_such_wall_clock_time",
+        "test_run_defaults_to_a_120_s_cap_and_accepts_a_deadline",
+        "test_run_record_from_a_worker_carries_the_watchdog_block",
+        "test_worker_answers_through_the_pipe_and_load_reports_the_watchdog"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_videoscan_stress.py",
       "stage": "unit",
       "suites": [
@@ -34704,6 +34727,10 @@
         },
         {
           "name": "tests/test_video_llm_bench_a2.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench_watchdog.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

@@ -181,3 +181,27 @@ nice -n 15 venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a2
 venv-mlx/bin/python3 tools/video-llm-bench/bench.py summarize --manifest … \
   --run <a0 run> --run <a1 run> --run <a2 run> --out docs/reviews/video_llm_benchmarks.md
 ```
+
+## Watchdog and deadline (#406, 2026-10-31)
+
+On 2026-10-30 one generation wedged (100 % GPU, no output) and held the Ultra's GPU for twelve hours,
+through the 02:00 nightly. A wedged Metal kernel cannot be interrupted from a Python thread, so:
+
+* **The model runs in a worker process.** `run` starts `bench.py worker` (same script, same venv) and
+  talks to it in JSON lines over its stdin/stdout; the worker's own stdout is sent to stderr so model-stack
+  chatter never corrupts the protocol. `SubprocessApproach` is the parent half; it has the `Approach`
+  surface, so the run loops do not know it is there. C++ reading: a supervisor that owns a child and a pipe.
+* **`--generation-timeout S`** (default 120): a generation past the cap SIGKILLs the worker — the GPU is
+  freed with the process — and is recorded as an error `GenerationTimeout: …` (`schema_invalid_reason:
+  "timeout"` on window records); the run goes on, and the next call respawns the worker and reloads the
+  model. `progress.json` counts `timeouts`; the run record's `watchdog` block carries the caps.
+  `--generation-timeout 0` is the old in-process path, for debugging only.
+* **`--load-timeout S`** (default 900): the model load in the worker.
+* **`--deadline HH:MM`** (local): the run stops *between* clips at that time — never inside one — with
+  `progress.state = "deadline"` and exit code 3; rerunning the same `--out` resumes. Use it so an unattended
+  run cannot cross the nightly's start.
+
+```sh
+nice -n 15 venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a2-py --frames 8 \
+  --generation-timeout 120 --deadline 01:30 --manifest … --model-dir … --out …/runs/<id>-a2-py
+```
