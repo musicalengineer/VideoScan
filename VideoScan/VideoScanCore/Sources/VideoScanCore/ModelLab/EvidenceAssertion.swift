@@ -62,7 +62,9 @@ public enum EvidenceAssertionMapper {
             "promptHash": approach.promptHash,
             "host": approach.host.label,
             "frameTimesS": output.window.frameTimesS,
-            "elapsedS": elapsedS,
+            // A non-finite or negative elapsed is a measurement bug; it is
+            // recorded as null, never allowed to blank the rest (reviewer R5).
+            "elapsedS": elapsedS.isFinite && elapsedS >= 0 ? elapsedS as Any : NSNull(),
             "selfConfidence": output.value.selfConfidence,
             "declaredWindow": [output.value.declaredWindow.startS, output.value.declaredWindow.endS],
             "family": output.family.rawValue,
@@ -112,11 +114,15 @@ public enum EvidenceAssertionMapper {
     }
 
     /// Sorted keys, no whitespace: the same evidence is the same string.
+    /// Every value here is finite by construction (contract-validated numbers,
+    /// sampler frame times, a sanitized elapsed), so an invalid object is a
+    /// programming error and stops the process rather than emitting an
+    /// assertion with its evidence quietly erased.
     static func canonicalJSON(_ object: [String: Any]) -> String {
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]),
+        precondition(JSONSerialization.isValidJSONObject(object), "evidence JSON must hold only finite values")
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]),
               let text = String(bytes: data, encoding: .utf8) else {
-            return "{}"
+            preconditionFailure("JSONSerialization refused an object it called valid")
         }
         return text
     }

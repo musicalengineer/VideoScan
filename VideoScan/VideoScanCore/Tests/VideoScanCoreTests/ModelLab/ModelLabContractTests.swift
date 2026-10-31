@@ -225,6 +225,13 @@ struct ModelLabContractFailClosedTests {
         #expect(invalidReason(decode(.scene, huge)).contains("larger"))
     }
 
+    @Test("R6: a contract decoded outside ContractDecoder (bare JSONDecoder, no expected family) refuses — even a well-formed answer")
+    func bareDecoderIsNotADoor() {
+        let vibes = Data(#"{"family":"vibes","window":[0,60],"yearRange":[1991,1995],"rationale":"r","cues":[],"selfConfidence":0.5}"#.utf8)
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(EraContract.self, from: vibes) }
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(EraContract.self, from: Data(ContractFixture.era.utf8)) }
+    }
+
     @Test("too many features, too many cues, too many lines — bounded, in words")
     func caps() {
         let features = (0..<(ContractDecoder.maxListItems + 1)).map { "\"f\($0)\"" }.joined(separator: ",")
@@ -281,6 +288,17 @@ struct ModelLabAssertionMappingTests {
         #expect(occasion.map(\.field) == ["occasion.kind"] && occasion.first?.value == "christmas")
         let empty = EvidenceAssertionMapper.assertions(from: try output(decode(.ocrText, #"{"family":"ocrText","window":[120,180],"lines":[],"selfConfidence":0.9}"#)), subjectDigest: "sha256:e", approach: approach, elapsedS: 1)
         #expect(empty.isEmpty, "nothing read → nothing asserted")
+    }
+
+    @Test("R5: a non-finite or negative elapsedS is recorded as null and never erases the rest of the evidence")
+    func nonFiniteElapsedDoesNotBlankEvidence() throws {
+        let out = try output(decode(.era, ContractFixture.era))
+        for bad in [Double.infinity, -.infinity, .nan, -1] {
+            let a = EvidenceAssertionMapper.assertions(from: out, subjectDigest: "sha256:x", approach: approach, elapsedS: bad)
+            let json = try #require(a.first?.evidenceJSON)
+            #expect(json.contains("\"promptHash\":\"sha256:feedbeef\"") && json.contains("\"cues\":[{"), "elapsedS=\(bad): \(json)")
+            #expect(json.contains("\"elapsedS\":null"))
+        }
     }
 
     @Test("evidenceJSON is deterministic (sorted keys) so two runs of the same output compare byte-for-byte")

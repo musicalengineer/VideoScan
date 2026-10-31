@@ -292,7 +292,11 @@ private enum Strict {
 
     static func family<K: CodingKey>(_ c: KeyedDecodingContainer<K>, key: K, decoder: Decoder) throws {
         let word = try c.decode(String.self, forKey: key)
-        guard let expected = decoder.userInfo[.expectedFamily] as? FieldFamily else { return }
+        // A bare JSONDecoder is not a door around the contract: without the
+        // family the caller asked for, nothing decodes (reviewer R6).
+        guard let expected = decoder.userInfo[.expectedFamily] as? FieldFamily else {
+            throw ContractViolation("contract decoded outside ContractDecoder (no expected family); use ContractDecoder.decode")
+        }
         guard let found = FieldFamily(rawValue: word) else {
             throw ContractViolation("unknown family '\(word)'")
         }

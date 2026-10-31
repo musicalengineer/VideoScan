@@ -13,7 +13,11 @@ import Testing
 @testable import VideoScanCore
 
 enum ModelLabFixtures {
-    static let eraID = ApproachID(model: "qwen2.5-vl-3b-4bit", promptFamily: "era-v1", sampler: "window-60s")
+    // swiftlint:disable:next force_unwrapping
+    static let eraID = ApproachID(model: "qwen2.5-vl-3b-4bit", promptFamily: "era-v1", sampler: "window-60s")!
+    /// The fleet, as OllamaEndpoints spells it.
+    // swiftlint:disable:next force_unwrapping
+    static let fleet = LocalHost.parse(["RicksM4.local", "http://127.0.0.1:11434"])!
 
     static func descriptor(id: ApproachID = eraID, revision: Int = 1, host: ApproachHost = .mlxSwift,
                            accepts: PayloadClass = [.pixels, .derivedText], emits: Set<FieldFamily> = [.era],
@@ -40,6 +44,39 @@ struct ModelLabApproachIDTests {
         #expect(ApproachID(rawValue: "") == nil)
         #expect(ApproachID(rawValue: " a/b/c") == nil, "no whitespace")
         #expect(id.model == "qwen2.5-vl-3b-4bit" && id.promptFamily == "era-v1" && id.sampler == "window-60s")
+        #expect(ApproachID(model: "", promptFamily: "p", sampler: "s") == nil, "the component init is failable too, never a precondition")
+        #expect(ApproachID(model: "a/b", promptFamily: "p", sampler: "s") == nil)
+    }
+}
+
+@Suite("ModelLab — LocalHost (rule 13 by type)")
+struct ModelLabLocalHostTests {
+
+    @Test("accepted: localhost, loopback, .local names, RFC 1918 and link-local literals, with or without http:// and a port")
+    func acceptedShapes() {
+        for raw in ["localhost", "127.0.0.1", "127.9.9.9:11434", "http://localhost:11434", "RicksM4.local", "ricksm5.local:1234",
+                    "http://RicksM4.local:11434", "10.0.0.7", "172.16.0.1", "172.31.255.254", "192.168.1.20:11434", "169.254.3.4",
+                    "[::1]", "[::1]:11434", "::1", "fe80::1", "[fe80::1%en0]:11434", "  RicksM4.local  "] {
+            #expect(LocalHost(raw) != nil, Comment(rawValue: raw))
+        }
+        let host = LocalHost("http://RicksM4.local:11434")
+        #expect(host?.hostName == "ricksm4.local" && host?.port == 11434 && host?.rawValue == "http://RicksM4.local:11434")
+    }
+
+    @Test("refused: https anywhere, public names and literals, 172 outside /12, paths, userinfo, bad ports, empty")
+    func refusedShapes() {
+        for raw in ["https://ollama.example.com", "https://127.0.0.1", "ollama.example.com", "api.example.com:443", "8.8.8.8",
+                    "172.32.0.1", "172.15.0.1", "192.169.0.1", "RicksM4.local/api", "user@RicksM4.local", "RicksM4.local:0",
+                    "RicksM4.local:70000", "RicksM4.local:abc", ".local", "ricks m4.local", "", "   ", "2001:db8::1", "example.local.com"] {
+            #expect(LocalHost(raw) == nil, Comment(rawValue: raw))
+        }
+    }
+
+    @Test("parse: the worst host decides — one cloud entry or an empty list is nil, never a shortened list")
+    func parseIsAllOrNothing() {
+        #expect(LocalHost.parse(["RicksM4.local", "https://api.example.com"]) == nil)
+        #expect(LocalHost.parse([]) == nil)
+        #expect(LocalHost.parse(["RicksM4.local", "ricksm5.local"])?.count == 2)
     }
 }
 
@@ -80,15 +117,28 @@ struct ModelLabRegistryTests {
         #expect(registry.all.isEmpty)
     }
 
-    @Test("ApproachHost: the three local hosts are local, the remote slot is not; labels are stable words for the run record")
+    @Test("ApproachHost: in-process, child process and a validated ollama fleet are local; an empty ollama list and the remote slot are not; labels are stable words")
     func hostLocality() {
         #expect(ApproachHost.mlxSwift.isLocal)
         #expect(ApproachHost.pythonWorker(venv: "venv-mlx", script: "scripts/vlm_worker.py").isLocal)
-        #expect(ApproachHost.ollama(hosts: ["http://ricksm4.local:11434"]).isLocal)
+        #expect(ApproachHost.ollama(hosts: ModelLabFixtures.fleet).isLocal)
+        #expect(!ApproachHost.ollama(hosts: []).isLocal, "no validated host = not local")
         #expect(!ApproachHost.remoteTextOnly.isLocal)
         #expect(ApproachHost.mlxSwift.label == "mlxSwift")
         #expect(ApproachHost.pythonWorker(venv: "venv-mlx", script: "s.py").label == "pythonWorker(venv-mlx, s.py)")
+        #expect(ApproachHost.ollama(hosts: ModelLabFixtures.fleet).label == "ollama(RicksM4.local,http://127.0.0.1:11434)")
         #expect(ApproachHost.remoteTextOnly.label == "remoteTextOnly")
+    }
+
+    @Test("R1 (registry): an .ollama descriptor with no validated host is refused by register with a typed error; the remote slot still registers")
+    func registerRefusesNonLocalOllama() throws {
+        var registry = ApproachRegistry()
+        let cloud = ModelLabFixtures.descriptor(host: .ollama(hosts: LocalHost.parse(["https://ollama.example.com"]) ?? []))
+        #expect(throws: ApproachRegistryError.hostNotLocal(id: cloud.id, host: "ollama()")) { try registry.register(cloud) }
+        #expect(registry.all.isEmpty)
+        try registry.register(ModelLabFixtures.descriptor(host: .ollama(hosts: ModelLabFixtures.fleet)))
+        try registry.register(ModelLabFixtures.descriptor(revision: 2, host: .remoteTextOnly, accepts: [.derivedText], enabled: false))
+        #expect(registry.count == 2)
     }
 }
 
@@ -120,6 +170,31 @@ struct ModelLabPayloadGateTests {
         }
         let worker = ModelLabFixtures.descriptor(host: .pythonWorker(venv: "venv-mlx", script: "w.py"), accepts: [.pixels, .audio, .derivedText])
         try PayloadGate.check(worker, payload: [.pixels, .audio, .derivedText])
+    }
+
+    @Test("R1 (gate): an .ollama approach whose host list names a cloud URL is refused pixels and audio; a validated fleet passes; a mixed list is judged by its worst host; preflight refuses the same")
+    func ollamaCloudHostIsNotLocal() {
+        let cloud = ModelLabFixtures.descriptor(host: .ollama(hosts: LocalHost.parse(["https://ollama.example.com"]) ?? []), accepts: [.pixels, .audio, .derivedText])
+        #expect(throws: PayloadRefused.hostNotLocal(approach: cloud.id, host: "ollama()", refused: [.pixels])) {
+            try PayloadGate.check(cloud, payload: [.pixels])
+        }
+        let fleet = ModelLabFixtures.descriptor(host: .ollama(hosts: ModelLabFixtures.fleet), accepts: [.pixels, .derivedText])
+        #expect((try? PayloadGate.check(fleet, payload: [.pixels])) != nil)
+        let mixed = ModelLabFixtures.descriptor(host: .ollama(hosts: LocalHost.parse(["RicksM4.local", "https://api.example.com"]) ?? []), accepts: [.pixels])
+        #expect(throws: PayloadRefused.self) { try PayloadGate.check(mixed, payload: [.pixels]) }
+        #expect(ModelLabStore.preflight(cloud, host: .init(availableRAMGB: 64, weightsPresent: true)) == .remoteHostNotEnabled(approach: cloud.id))
+        #expect(ModelLabStore.preflight(fleet, host: .init(availableRAMGB: 64, weightsPresent: true)) == nil)
+    }
+
+    @Test("the gate's per-case switch and ApproachHost.isLocal agree for every host shape")
+    func gateAgreesWithIsLocal() {
+        let hosts: [ApproachHost] = [.mlxSwift, .pythonWorker(venv: "v", script: "s"), .ollama(hosts: ModelLabFixtures.fleet), .ollama(hosts: []), .remoteTextOnly]
+        for host in hosts {
+            let d = ModelLabFixtures.descriptor(host: host, accepts: [.pixels, .audio, .derivedText])
+            let passed = (try? PayloadGate.check(d, payload: [.pixels, .audio])) != nil
+            #expect(passed == host.isLocal, Comment(rawValue: host.label))
+            #expect((try? PayloadGate.check(d, payload: [.derivedText])) != nil, "derived text passes every host: \(host.label)")
+        }
     }
 
     @Test("the refusal's words name the approach, the host and the classes refused")

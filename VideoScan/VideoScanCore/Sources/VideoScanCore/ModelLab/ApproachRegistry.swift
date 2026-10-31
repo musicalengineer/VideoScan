@@ -25,9 +25,9 @@ public struct ApproachID: Hashable, Sendable, Codable, CustomStringConvertible, 
     public let promptFamily: String
     public let sampler: String
 
-    public init(model: String, promptFamily: String, sampler: String) {
-        precondition(Self.isSegment(model) && Self.isSegment(promptFamily) && Self.isSegment(sampler),
-                     "ApproachID segments are non-empty, no '/' and no whitespace")
+    /// nil unless every segment is non-empty with no '/' and no whitespace.
+    public init?(model: String, promptFamily: String, sampler: String) {
+        guard Self.isSegment(model), Self.isSegment(promptFamily), Self.isSegment(sampler) else { return nil }
         self.model = model
         self.promptFamily = promptFamily
         self.sampler = sampler
@@ -35,8 +35,8 @@ public struct ApproachID: Hashable, Sendable, Codable, CustomStringConvertible, 
 
     public init?(rawValue: String) {
         let parts = rawValue.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 3, parts.allSatisfy(Self.isSegment) else { return nil }
-        self.init(model: parts[0], promptFamily: parts[1], sampler: parts[2])
+        guard parts.count == 3, let id = ApproachID(model: parts[0], promptFamily: parts[1], sampler: parts[2]) else { return nil }
+        self = id
     }
 
     public var rawValue: String { "\(model)/\(promptFamily)/\(sampler)" }
@@ -65,19 +65,22 @@ public struct ApproachID: Hashable, Sendable, Codable, CustomStringConvertible, 
 // MARK: - Host, payload, field families, resources
 
 /// Where the model runs. `isLocal` is the rule-13 question: may family
-/// pixels or audio be sent here? The three local hosts run on Rick's
-/// machines (`.ollama` hosts are the fleet's `OllamaEndpoints`, never a
-/// cloud); `.remoteTextOnly` is the registry slot for a cloud model that
-/// may ever see DERIVED TEXT only, and ships disabled.
+/// pixels or audio be sent here? `.mlxSwift` is in-process and
+/// `.pythonWorker` a child process on this machine; `.ollama` carries only
+/// `LocalHost` values (validated at construction — loopback, `.local`,
+/// private-range literals), so an empty list is the only non-local ollama
+/// and it is refused everywhere; `.remoteTextOnly` is the registry slot for
+/// a cloud model that may ever see DERIVED TEXT only, and ships disabled.
 public enum ApproachHost: Hashable, Sendable {
     case mlxSwift
     case pythonWorker(venv: String, script: String)
-    case ollama(hosts: [String])
+    case ollama(hosts: [LocalHost])
     case remoteTextOnly
 
     public var isLocal: Bool {
         switch self {
-        case .mlxSwift, .pythonWorker, .ollama: return true
+        case .mlxSwift, .pythonWorker: return true
+        case .ollama(let hosts): return !hosts.isEmpty
         case .remoteTextOnly: return false
         }
     }
@@ -87,7 +90,7 @@ public enum ApproachHost: Hashable, Sendable {
         switch self {
         case .mlxSwift: return "mlxSwift"
         case .pythonWorker(let venv, let script): return "pythonWorker(\(venv), \(script))"
-        case .ollama(let hosts): return "ollama(\(hosts.joined(separator: ",")))"
+        case .ollama(let hosts): return "ollama(\(hosts.map(\.rawValue).joined(separator: ",")))"
         case .remoteTextOnly: return "remoteTextOnly"
         }
     }
@@ -183,9 +186,14 @@ public struct ApproachDescriptor: Hashable, Sendable {
 public enum ApproachRegistryError: Error, Equatable, Sendable, CustomStringConvertible {
     case duplicate(id: ApproachID, revision: Int)
     case revisionNotPositive(id: ApproachID, revision: Int)
+    /// An `.ollama` host list that is empty (so not local): never registered
+    /// (rule 13). `.remoteTextOnly` is still registrable — it is the slot.
+    case hostNotLocal(id: ApproachID, host: String)
 
     public var description: String {
         switch self {
+        case .hostNotLocal(let id, let host):
+            return "approach \(id) names host \(host), which is not on this machine or the local network; not registered (CLAUDE.md rule 13)"
         case .duplicate(let id, let revision):
             return "approach \(id)@r\(revision) is already registered; bump the revision for a changed prompt or parameter"
         case .revisionNotPositive(let id, let revision):
@@ -204,6 +212,9 @@ public struct ApproachRegistry: Sendable {
     public mutating func register(_ descriptor: ApproachDescriptor) throws(ApproachRegistryError) {
         guard descriptor.revision >= 1 else {
             throw .revisionNotPositive(id: descriptor.id, revision: descriptor.revision)
+        }
+        if case .ollama(let hosts) = descriptor.host, hosts.isEmpty {
+            throw .hostNotLocal(id: descriptor.id, host: descriptor.host.label)
         }
         let key = Key(id: descriptor.id, revision: descriptor.revision)
         guard descriptors[key] == nil else { throw .duplicate(id: descriptor.id, revision: descriptor.revision) }
@@ -251,8 +262,18 @@ public enum PayloadRefused: Error, Equatable, Sendable, CustomStringConvertible 
 public enum PayloadGate {
     public static func check(_ descriptor: ApproachDescriptor, payload: PayloadClass) throws(PayloadRefused) {
         let media = payload.intersection(.familyMedia)
-        if !descriptor.host.isLocal, !media.isEmpty {
-            throw .hostNotLocal(approach: descriptor.id, host: descriptor.host.label, refused: media)
+        // Spelled per case (not `isLocal`) so the architecture sensor can read
+        // every non-local host name on the refusal path; a test pins that
+        // this switch and `isLocal` agree for every case.
+        switch descriptor.host {
+        case .mlxSwift, .pythonWorker:
+            break                                    // this machine
+        case .ollama(let hosts) where !hosts.isEmpty:
+            break                                    // every LocalHost was validated at construction
+        case .ollama, .remoteTextOnly:
+            if !media.isEmpty {
+                throw .hostNotLocal(approach: descriptor.id, host: descriptor.host.label, refused: media)
+            }
         }
         let unaccepted = payload.subtracting(descriptor.accepts)
         if !unaccepted.isEmpty {

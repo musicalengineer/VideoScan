@@ -84,6 +84,9 @@ public struct StillsSampler: EvidenceSampler {
     public var id: String { "stills-\(frames)" }
 
     public func plan(for probe: SamplerProbe) -> SamplePlan {
+        // The app formula guards NaN and ≤ 0 but not +inf (lo = hi = inf,
+        // stride NaN); a probe is never trusted to be finite.
+        guard probe.durationS.isFinite else { return .empty }
         let times = Self.framesEvenlySpaced(framesPerFile: frames, durationSec: probe.durationS)
         guard let last = times.last else { return .empty }
         // The app's 0.1 s floor can place a frame past the end of a
@@ -132,13 +135,24 @@ public struct WindowSampler: EvidenceSampler {
     public let fps: Double
     public let cutAt: CutSnapping
 
-    /// `seconds` and `fps` are clamped to small positive floors (a zero or
-    /// negative value is a caller bug, not a reason to crash a job).
+    /// A window is never shorter than one second (`minimumSeconds`): a
+    /// smaller or non-finite `seconds` is floored, so `start + seconds` always
+    /// advances `start` for any duration up to `maximumDurationS` (doubles
+    /// resolve far below 1 at 6×10⁵) — the plan loop cannot stall. `fps` ≤ 0
+    /// or non-finite becomes 1; at plan time it is also capped at the probe's
+    /// own frame rate, so a window never asks for more frames than the file has.
     public init(seconds: Double, fps: Double, cutAt: CutSnapping = .sceneCuts(withinS: 15)) {
-        self.seconds = seconds.isFinite && seconds > 0 ? seconds : 1
+        self.seconds = seconds.isFinite && seconds >= Self.minimumSeconds ? seconds : Self.minimumSeconds
         self.fps = fps.isFinite && fps > 0 ? fps : 1
         self.cutAt = cutAt
     }
+
+    /// The floor on `seconds`.
+    public static let minimumSeconds = 1.0
+    /// A probe claiming more than a week of footage is a probe error, not a
+    /// file; the plan is empty rather than a million windows. (Longest real
+    /// carrier here: an 8-hour DV/VHS tape.)
+    public static let maximumDurationS = 7 * 24 * 3_600.0
 
     public var id: String {
         let base = "window-\(Self.trimmed(seconds))s-\(Self.trimmed(fps))fps"
@@ -152,9 +166,12 @@ public struct WindowSampler: EvidenceSampler {
 
     public func plan(for probe: SamplerProbe) -> SamplePlan {
         let duration = probe.durationS
-        guard duration.isFinite, duration > 0 else { return .empty }
+        guard duration.isFinite, duration > 0, duration <= Self.maximumDurationS else { return .empty }
         let cuts = sanitizedCuts(probe.sceneCutsS, duration: duration)
-        let interval = 1 / fps
+        // Never more frames per second than the file has (reviewer R3).
+        let sourceFPS: Double? = probe.fps.isFinite && probe.fps > 0 ? probe.fps : nil
+        let rate = sourceFPS.map { min(fps, $0) } ?? fps
+        let interval = 1 / rate
         // Upper bound on windows: ceil(duration / minimum window) — bounded
         // below by `seconds - tolerance`, floored at interval. Reserve once.
         var windows: [SampleWindow] = []
@@ -166,11 +183,17 @@ public struct WindowSampler: EvidenceSampler {
             if nominal < duration, let cut = snappedCut(cuts, nominal: nominal, after: start, before: duration) {
                 end = cut
             }
-            // Frames at start, start + 1/fps, … strictly before end; a window
-            // shorter than one interval still shows its first frame.
+            // Termination: `seconds` ≥ 1 and `end` is either a cut > start,
+            // start + seconds, or the duration (> start), so `end > start`
+            // always holds; the guard is the proof made executable.
+            guard end > start else { break }
+            // Frames at start, start + 1/rate, … strictly before end, and never
+            // more than the source frames the window holds; a window shorter
+            // than one interval still shows its first frame.
+            let cap = sourceFPS.map { max(1, Int(((end - start) * $0).rounded(.up))) } ?? Int.max
             var times: [Double] = [start]
             var t = start + interval
-            while t < end - 1e-9 {
+            while t < end - 1e-9, times.count < cap {
                 times.append(t)
                 t += interval
             }

@@ -47,6 +47,14 @@ struct ModelLabStillsSamplerTests {
         #expect(StillsSampler(8).plan(for: .init(durationS: .nan, fps: 30, hasAudio: false)).windows.isEmpty)
     }
 
+    @Test("R4: an infinite duration gives an empty stills plan, not NaN frame times")
+    func stillsSamplerRefusesInfiniteDuration() {
+        let plan = StillsSampler(8).plan(for: .init(durationS: .infinity, fps: 30, hasAudio: false))
+        #expect(plan.windows.isEmpty)
+        #expect(plan.windows.allSatisfy { $0.frameTimesS.allSatisfy(\.isFinite) && $0.endS.isFinite })
+        #expect(StillsSampler(8).plan(for: .init(durationS: -.infinity, fps: 30, hasAudio: false)).windows.isEmpty)
+    }
+
     @Test("the app's 0.1 s floor is mirrored: a 0.05 s clip asks for frames up to 0.095 s and the window says so")
     func subTenthSecondFloorMirrored() {
         let plan = StillsSampler(3).plan(for: .init(durationS: 0.05, fps: 30, hasAudio: false))
@@ -139,12 +147,40 @@ struct ModelLabWindowSamplerTests {
         checkInvariants(one, duration: 1.0 / 30.0, seconds: 60, fps: 1)
     }
 
-    @Test("a window shorter than one frame interval still shows its first frame; fps ≤ 0 or seconds ≤ 0 are clamped, not a crash")
+    @Test("R3: a plan never asks for more frames than the file has, and never for a window shorter than one source frame")
+    func windowSamplerFloorsAreReal() {
+        let probe = SamplerProbe(durationS: 1, fps: 30, hasAudio: false)
+        let sampler = WindowSampler(seconds: 0.001, fps: 10_000, cutAt: .exactSeconds)
+        #expect(sampler.seconds == WindowSampler.minimumSeconds, "seconds is floored at 1 s")
+        let plan = sampler.plan(for: probe)
+        let sourceFrames = Int((probe.durationS * probe.fps).rounded(.up))
+        #expect(plan.frameCount <= sourceFrames + plan.windows.count, "\(plan.frameCount) frames planned for a \(sourceFrames)-frame file")
+        #expect(plan.windows.count <= sourceFrames)
+        // fps is capped at the probe's rate: 1 fps asked of a 0.5 fps time-lapse yields 0.5 fps.
+        let lapse = WindowSampler(seconds: 60, fps: 1, cutAt: .exactSeconds).plan(for: .init(durationS: 60, fps: 0.5, hasAudio: false))
+        #expect(lapse.windows.first?.frameTimesS.count == 30)
+        // A probe with no usable fps (0 / NaN) leaves the sampler's own rate in force.
+        let unknown = WindowSampler(seconds: 60, fps: 1, cutAt: .exactSeconds).plan(for: .init(durationS: 60, fps: 0, hasAudio: false))
+        #expect(unknown.windows.first?.frameTimesS.count == 60)
+    }
+
+    @Test("termination: a week-long probe plans in bounded time; anything longer is refused as a probe error (empty plan)")
+    func planAlwaysTerminates() {
+        let sampler = WindowSampler(seconds: 1, fps: 0.01, cutAt: .exactSeconds)
+        let long = sampler.plan(for: .init(durationS: 100_000, fps: 30, hasAudio: false))
+        #expect(long.windows.count == 100_000 && long.frameCount == 100_000)
+        #expect(sampler.plan(for: .init(durationS: WindowSampler.maximumDurationS + 1, fps: 30, hasAudio: false)).windows.isEmpty)
+        #expect(sampler.plan(for: .init(durationS: 1e300, fps: 30, hasAudio: false)).windows.isEmpty)
+        #expect(sampler.plan(for: .init(durationS: WindowSampler.maximumDurationS, fps: 30, hasAudio: false)).windows.count == Int(WindowSampler.maximumDurationS))
+    }
+
+    @Test("a window shorter than one frame interval still shows its first frame; fps ≤ 0 or seconds < 1 are clamped, not a crash")
     func degenerateParameters() {
         let tiny = WindowSampler(seconds: 60, fps: 0.1, cutAt: .exactSeconds).plan(for: .init(durationS: 65, fps: 30, hasAudio: false))
         #expect(tiny.windows.map(\.frameTimesS) == [[0, 10, 20, 30, 40, 50], [60]])
         let clamped = WindowSampler(seconds: 0, fps: -1, cutAt: .exactSeconds)
-        #expect(clamped.seconds > 0 && clamped.fps > 0)
+        #expect(clamped.seconds == 1 && clamped.fps == 1)
+        #expect(WindowSampler(seconds: .nan, fps: .infinity, cutAt: .exactSeconds).seconds == 1)
         let plan = clamped.plan(for: .init(durationS: 2.5, fps: 30, hasAudio: false))
         checkInvariants(plan, duration: 2.5, seconds: clamped.seconds, fps: clamped.fps)
     }

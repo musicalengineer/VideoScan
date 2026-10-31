@@ -68,6 +68,9 @@ public final class ModelLabStore: @unchecked Sendable {
         case readOnly(path: String)
         /// START refused by `preflight`; nothing was written.
         case refused(Refusal)
+        /// One raw answer is over `ContractDecoder.maxJSONBytes`; the batch
+        /// was not written (a runaway model never grows the notebook).
+        case outputTooLarge(bytes: Int, cap: Int)
 
         public var description: String {
             switch self {
@@ -75,12 +78,14 @@ public final class ModelLabStore: @unchecked Sendable {
             case .cannotOpen(let path, let reason): return "the model-lab file could not be opened (\(reason)): \(path)"
             case .notADatabase(let path): return "the model-lab file is not a database (damaged or replaced): \(path)"
             case .schemaNewer(let found, let supported):
-                return "the model-lab file was written by a newer VideoScan (schema \(found); this build reads up to \(supported)) — it was not opened"
+                return "the model-lab file was written by a newer VideoScan (schema \(found); this build reads up to \(supported)). It was not opened, and its journal files (-wal, -shm) were left exactly where they were (DECISIONS 2026-10-26). Open it with that newer VideoScan."
             case .sql(let message): return "model-lab store error: \(message)"
             case .readOnlyNeedsWAL(let path):
                 return "the model-lab file can't be read without changing it: its write-ahead log (\((path as NSString).lastPathComponent)-wal) is missing, and this reader never writes. Nothing was read or changed: \(path)"
             case .noLabTables(let path): return "the model-lab file holds no lab tables (never written by a model run): \(path)"
             case .readOnly(let path): return "the model-lab file is open read-only; nothing is written: \(path)"
+            case .outputTooLarge(let bytes, let cap):
+                return "a model answer of \(bytes) bytes is over the \(cap)-byte cap; the batch was not written"
             case .refused(let refusal): return refusal.description
             }
         }
@@ -427,6 +432,9 @@ public final class ModelLabStore: @unchecked Sendable {
     public func putOutputs(_ rows: [OutputRow]) throws {
         guard !rows.isEmpty else { return }
         try requireWritable()
+        if let big = rows.first(where: { $0.rawJSON.count > ContractDecoder.maxJSONBytes }) {
+            throw Failure.outputTooLarge(bytes: big.rawJSON.count, cap: ContractDecoder.maxJSONBytes)
+        }
         try lock.withLock {
             try exec("BEGIN IMMEDIATE")
             do {
@@ -679,8 +687,12 @@ public final class ModelLabStore: @unchecked Sendable {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
+    /// Bound with its byte count, never -1 (strlen): a string with an
+    /// embedded NUL is stored whole (reviewer R2).
     private func bindText(_ stmt: OpaquePointer, _ index: Int32, _ value: String) throws {
-        guard sqlite3_bind_text(stmt, index, value, -1, Self.transient) == SQLITE_OK else { throw Failure.sql(message()) }
+        guard sqlite3_bind_text(stmt, index, value, Int32(value.utf8.count), Self.transient) == SQLITE_OK else {
+            throw Failure.sql(message())
+        }
     }
 
     private func bindBlob(_ stmt: OpaquePointer, _ index: Int32, _ data: Data) throws {
@@ -690,19 +702,26 @@ public final class ModelLabStore: @unchecked Sendable {
         guard rc == SQLITE_OK else { throw Failure.sql(message()) }
     }
 
-    /// raw_json is TEXT when the bytes are UTF-8 (readable in a sqlite3
-    /// shell); bytes that are not valid UTF-8 are kept as a BLOB rather than
-    /// mangled. Either reads back through `bytes(_:_:)`.
+    /// raw_json is TEXT when the bytes are UTF-8 without a NUL (readable in a
+    /// sqlite3 shell); bytes that are not valid UTF-8, or that contain 0x00,
+    /// are kept as a BLOB rather than mangled or cut. Either reads back
+    /// byte-for-byte through `bytes(_:_:)`.
     private func bindBytesAsTextOrBlob(_ stmt: OpaquePointer, _ index: Int32, _ data: Data) throws {
-        if let string = String(data: data, encoding: .utf8) {
+        if !data.contains(0), let string = String(data: data, encoding: .utf8) {
             try bindText(stmt, index, string)
         } else {
             try bindBlob(stmt, index, data)
         }
     }
 
+    /// Read by byte count, never `String(cString:)`, so an embedded NUL does
+    /// not end the text early (reviewer R2).
     private func text(_ stmt: OpaquePointer, _ index: Int32) -> String {
-        sqlite3_column_text(stmt, index).map { String(cString: $0) } ?? ""
+        let count = Int(sqlite3_column_bytes(stmt, index))
+        guard count > 0, let base = sqlite3_column_text(stmt, index) else { return "" }
+        // A TEXT column written by this store is always UTF-8 (non-UTF-8 bytes
+        // are bound as BLOB); anything else reads as empty, never as a crash.
+        return String(bytes: UnsafeRawBufferPointer(start: base, count: count), encoding: .utf8) ?? ""
     }
 
     /// The column's bytes whether stored as TEXT or BLOB; empty for NULL.

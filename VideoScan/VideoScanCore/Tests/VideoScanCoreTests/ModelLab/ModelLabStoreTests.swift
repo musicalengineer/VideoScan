@@ -94,6 +94,38 @@ struct ModelLabStoreLogicTests {
         #expect(try store.outputCount(runID: "a") == 4)
     }
 
+    @Test("R2: raw_json and segment text with an embedded NUL byte read back byte-for-byte")
+    func embeddedNULSurvivesRoundTrip() throws {
+        let dir = try modelLabScratch("nul"); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ModelLabStore(directory: dir)
+        try store.beginRun(ModelLabStoreFixtures.run(), host: ModelLabStoreFixtures.host)
+        var raw = Data(#"{"family":"era","window":[0,60]}"#.utf8)
+        raw.append(0x00)
+        raw.append(contentsOf: Data("<trailing bytes the model emitted>".utf8))
+        try store.putOutputs([.init(runID: "run-1", contentDigest: "sha256:n", sizeBytes: 1, windowStartS: 0, windowEndS: 60,
+                                    family: .era, rawJSON: raw, schemaValid: false, elapsedS: 1)])
+        var back: Data?
+        try store.forEachOutput(runID: "run-1") { _, row in back = row.rawJSON; return false }
+        #expect(back == raw, "bind_text with -1 would truncate at the NUL (\(back?.count ?? -1) of \(raw.count) bytes kept)")
+        try store.putSegments([.init(contentDigest: "sha256:seg", engine: "e", startS: 0, endS: 1, text: "hello\0world")])
+        #expect(try store.segments(for: "sha256:seg").first?.text == "hello\0world")
+        #expect(try store.summarize(runID: "run-1").rows == 1, "the NUL row is counted, not skipped")
+    }
+
+    @Test("a raw answer over ContractDecoder.maxJSONBytes is refused by name and the whole batch is not written")
+    func oversizeOutputRefused() throws {
+        let dir = try modelLabScratch("big"); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ModelLabStore(directory: dir)
+        try store.beginRun(ModelLabStoreFixtures.run(), host: ModelLabStoreFixtures.host)
+        let huge = Data(repeating: UInt8(ascii: "x"), count: ContractDecoder.maxJSONBytes + 1)
+        let row = ModelLabStore.OutputRow(runID: "run-1", contentDigest: "sha256:h", sizeBytes: 1, windowStartS: 0, windowEndS: 60,
+                                          family: .scene, rawJSON: huge, schemaValid: false, elapsedS: 1)
+        #expect(throws: ModelLabStore.Failure.outputTooLarge(bytes: ContractDecoder.maxJSONBytes + 1, cap: ContractDecoder.maxJSONBytes)) {
+            try store.putOutputs([ModelLabStoreFixtures.output("run-1", n: 0), row])
+        }
+        #expect(try store.outputCount(runID: "run-1") == 0)
+    }
+
     @Test("a duplicate run_id is refused; the first record stands")
     func duplicateRun() throws {
         let dir = try modelLabScratch("dup"); defer { try? FileManager.default.removeItem(at: dir) }
@@ -182,6 +214,7 @@ struct ModelLabStoreIsolationTests {
         #expect(throws: expected) { try ModelLabStore(directory: dir) }
         #expect(throws: expected) { try ModelLabStore(readingOnly: dir) }
         #expect(expected.description.contains("newer VideoScan") && expected.description.contains("99"))
+        #expect(expected.description.contains("-wal") && expected.description.contains("left exactly where they were"), "DECISIONS 2026-10-26 (#387) in the words")
     }
 
     @Test("a poisoned file (garbage bytes) is refused by name and left exactly as found")

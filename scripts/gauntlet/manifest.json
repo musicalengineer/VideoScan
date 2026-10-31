@@ -31646,6 +31646,18 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabArchitectureSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ModelLabArchitectureSensorTests"
+      ],
+      "tests": [
+        "everyNonLocalHostCaseIsNamedOnTheGateRefusalPath",
+        "noTransportAndNoURLSchemeOutsideTheLocalHostValidator"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabContractTests.swift",
       "stage": "unit",
       "suites": [
@@ -31655,6 +31667,7 @@
       ],
       "tests": [
         "badWindow",
+        "bareDecoderIsNotADoor",
         "caps",
         "deterministic",
         "emptyCuesAndBounds",
@@ -31666,6 +31679,7 @@
         "familyMismatch",
         "garbage",
         "missingKey",
+        "nonFiniteElapsedDoesNotBlankEvidence",
         "occasionKind",
         "ocrDate",
         "ocrText",
@@ -31684,17 +31698,24 @@
       "stage": "unit",
       "suites": [
         "ModelLabApproachIDTests",
+        "ModelLabLocalHostTests",
         "ModelLabRegistryTests",
         "ModelLabPayloadGateTests",
         "ModelLabSensorTests"
       ],
       "tests": [
+        "acceptedShapes",
         "duplicateRefused",
+        "gateAgreesWithIsLocal",
         "hostLocality",
         "localHostsPassWhatTheyAccept",
         "nearMissJSONFailsClosed",
+        "ollamaCloudHostIsNotLocal",
+        "parseIsAllOrNothing",
         "refusalWords",
+        "refusedShapes",
         "registerAndLookUp",
+        "registerRefusesNonLocalOllama",
         "remoteRefusalBeforeTransport",
         "remoteRefusesPixelsAndAudio",
         "revisionMustBePositive",
@@ -31717,9 +31738,12 @@
         "fourHourTape",
         "matchesAppSpacing",
         "nearestCutWins",
+        "planAlwaysTerminates",
         "shortLastWindow",
         "snapsToSceneCuts",
+        "stillsSamplerRefusesInfiniteDuration",
         "subTenthSecondFloorMirrored",
+        "windowSamplerFloorsAreReal",
         "zeroAndOneFrame"
       ]
     },
@@ -31748,7 +31772,9 @@
         "corruptRawJSONTolerated",
         "defaultDirectoryIsSandboxed",
         "duplicateRun",
+        "embeddedNULSurvivesRoundTrip",
         "newerSchemaRefused",
+        "oversizeOutputRefused",
         "poisonedFileRefused",
         "preflightRefusals",
         "readOnlyDoor",
@@ -34380,7 +34406,7 @@
       ],
       "expected_floor": 3069,
       "name": "unit",
-      "package_expected_floor": 485,
+      "package_expected_floor": 500,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -34415,10 +34441,12 @@
         "VideoScanCoreTests.CatalogPreflightReaderTests",
         "VideoScanCoreTests.PreflightCancellationQAR2Tests",
         "VideoScanCoreTests.CatalogRealityTests",
+        "VideoScanCoreTests.ModelLabArchitectureSensorTests",
         "VideoScanCoreTests.ModelLabContractValidTests",
         "VideoScanCoreTests.ModelLabContractFailClosedTests",
         "VideoScanCoreTests.ModelLabAssertionMappingTests",
         "VideoScanCoreTests.ModelLabApproachIDTests",
+        "VideoScanCoreTests.ModelLabLocalHostTests",
         "VideoScanCoreTests.ModelLabRegistryTests",
         "VideoScanCoreTests.ModelLabPayloadGateTests",
         "VideoScanCoreTests.ModelLabSensorTests",
