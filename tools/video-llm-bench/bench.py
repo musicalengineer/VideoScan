@@ -748,6 +748,15 @@ def weights_digest(model_dir: Path) -> Tuple[str, int]:
     return sha256_json(rows), total
 
 
+# mlx-vlm 0.5.0 splits a prompt longer than its prefill step (2048 tokens) into chunks,
+# and the short tail chunk dies in Metal (2026-10-31: every one of ten worker crashes sat
+# at "Prefill 2048/2051…2077"; 8 frames ≈ 2048 visual tokens + one line of text crossed
+# it). One prefill step bigger than any prompt we send means no chunking.  Worst-case
+# memory for the step: ≤ 8 192 tokens of activations in one pass, well under the KV
+# budget already counted for N=12.
+PREFILL_STEP_SIZE = 8192
+
+
 class A0Python(Approach):
     id = APPROACH_ID
 
@@ -783,6 +792,7 @@ class A0Python(Approach):
             "weights_bytes": size,
             "load_s": round(time.perf_counter() - started, 3),
             "mlx_vlm_version": getattr(mlx_vlm, "__version__", None),
+            "prefill_step_size": PREFILL_STEP_SIZE,
             "mlx_version": _dist_version("mlx"),
             "transformers_version": transformers.__version__,
         }
@@ -807,7 +817,7 @@ class A0Python(Approach):
         params = GEN_PARAMS[prompt_kind]
         result = generate(self.model, self.processor, templated, image=[str(image_path)],
                           max_tokens=params["max_tokens"], temperature=params["temperature"],
-                          top_p=params["top_p"], verbose=False)
+                          top_p=params["top_p"], verbose=False, prefill_step_size=PREFILL_STEP_SIZE)
         text = result if isinstance(result, str) else getattr(result, "text", str(result))
         counters = {}
         for name in ("prompt_tokens", "generation_tokens", "generation_tps", "peak_memory"):
@@ -1191,7 +1201,7 @@ class A1Python(A0Python):
         params = A1_GEN_PARAMS[family]
         result = generate(self.model, self.processor, templated, image=[str(p) for p in image_paths],
                           max_tokens=params["max_tokens"], temperature=params["temperature"],
-                          top_p=params["top_p"], verbose=False)
+                          top_p=params["top_p"], verbose=False, prefill_step_size=PREFILL_STEP_SIZE)
         text = result if isinstance(result, str) else getattr(result, "text", str(result))
         counters = {}
         for name in ("prompt_tokens", "generation_tokens", "generation_tps", "peak_memory"):

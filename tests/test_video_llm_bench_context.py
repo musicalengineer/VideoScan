@@ -8,6 +8,7 @@ never a date — with a transfer codec named as one so a 1988 tape in FFV1 is no
 from __future__ import annotations
 
 import json
+import re
 
 from test_video_llm_bench_a2 import FakeA2, bench, digest_for, entry, fake_ripper
 
@@ -119,3 +120,16 @@ def test_cli_and_run_record_carry_the_context():
     args = bench.make_parser().parse_args(["run", "--manifest", "m", "--out", "o", "--approach", "a2-py", "--context", "technical"])
     assert args.context == "technical"
     assert bench.make_parser().parse_args(["run", "--manifest", "m", "--out", "o"]).context == "none"
+
+
+def test_every_generate_call_uses_one_prefill_step_larger_than_any_prompt():
+    """2026-10-31: mlx-vlm 0.5.0 chunks a prompt longer than 2048 tokens and the short tail
+    chunk dies in Metal (ten worker crashes, all at "Prefill 2048/205x"). Sensor: both generate
+    calls pass PREFILL_STEP_SIZE and it is above the 8-frame prompt (≈ 2,080 tokens) by a wide
+    margin; the run record says which step was used."""
+    import inspect
+    assert bench.PREFILL_STEP_SIZE >= 4096
+    source = inspect.getsource(bench)
+    calls = re.findall(r"generate\(self\.model, self\.processor,.*?verbose=False(?:, [^)]*)?\)", source, re.S)
+    assert len(calls) == 2, "the single-image and the multi-image generate calls"
+    assert all("prefill_step_size=PREFILL_STEP_SIZE" in c for c in calls), calls
