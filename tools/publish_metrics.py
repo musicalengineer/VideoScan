@@ -173,7 +173,12 @@ SUMMARY_DAYS = 90
 # before a lane existed carries null for it, never a zero.
 _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "total": "int",
           "reason": "code?", "core_passed": "int?", "core_failed": "int?", "core_status": "code?",
-          "hallie_status": "code?"}
+          "hallie_status": "code?",
+          # The Hallie lanes as the ladder reads them (Rick 2026-10-31): strict and advisory
+          # pass / expected with the lane's status word, and the voice check's status.
+          "hallie_strict_pass": "int?", "hallie_strict_expected": "int?", "hallie_strict_status": "code?",
+          "hallie_advisory_pass": "int?", "hallie_advisory_expected": "int?", "hallie_advisory_status": "code?",
+          "hallie_voice_status": "code?"}
 
 # One spec per stream. Every row must have EXACTLY these keys (no extras, none
 # missing). Specs: "int" / "int?" non-negative int (or null); "num" / "num?"
@@ -872,6 +877,13 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
             "core_passed": _opt_int(row.get("core_passed")), "core_failed": _opt_int(row.get("core_failed")),
             "core_status": reason_code(row.get("core_status")),
             "hallie_status": reason_code(row.get("hallie_replay_status")),
+            "hallie_strict_pass": _opt_int(row.get("hallie_strict_pass")),
+            "hallie_strict_expected": _opt_int(row.get("hallie_strict_expected")),
+            "hallie_strict_status": reason_code(row.get("hallie_strict_status")),
+            "hallie_advisory_pass": _opt_int(row.get("hallie_advisory_pass")),
+            "hallie_advisory_expected": _opt_int(row.get("hallie_advisory_expected")),
+            "hallie_advisory_status": reason_code(row.get("hallie_advisory_status")),
+            "hallie_voice_status": reason_code(row.get("hallie_voice_status")),
         }
     hosts = [h for h in order if h in seen_hosts] + sorted(seen_hosts - set(order))
     return {"days": days, "hosts": hosts, "off_rota": sorted(off),

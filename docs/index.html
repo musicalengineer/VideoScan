@@ -103,6 +103,18 @@
   .tile .words { font-size: 16px; color: var(--muted); margin-top: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   .tile .words b { color: var(--fg); font-weight: 600; }
   .tile .spark { margin-top: 10px; }
+  /* Lane ladders (Rick 2026-10-31): one per Mac, one rung per lane of the 2 AM run, lit from the bottom. */
+  .ladders { display: flex; gap: 18px; margin: 12px 0 4px; flex-wrap: wrap; align-items: flex-end; }
+  .ladders figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .ladders figcaption { font-size: 14px; color: var(--muted); font-weight: 600; }
+  .ladder { display: block; }
+  .ladder .well { fill: var(--chip-bg); stroke: var(--border); }
+  .ladder .rung { fill: var(--border); }
+  .ladder .rung.green { fill: var(--good); }
+  .ladder .rung.watch { fill: var(--warn); }
+  .ladder .rung.red { fill: var(--bad); }
+  .ladder .rung.grey { fill: var(--border); }
+  .ladder .lane { fill: var(--muted); font-size: 11px; font-family: inherit; }
   .hosts { display: flex; gap: 7px; margin: 8px 0 12px; flex-wrap: wrap; }
   .hosts > span { font-size: 15px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
   .hosts > .red { border-color: var(--bad); }
@@ -845,6 +857,61 @@ function laneWords(cell) {
 }
 // Failures across every lane of one Mac's night (the app suite and the Core lane).
 const laneFailed = cell => (cell ? (cell.failed || 0) + (isNum(cell.core_failed) ? cell.core_failed : 0) : 0);
+// ---------------------------------------------------------------- lane ladders (Rick 2026-10-31)
+// "Tell at a glance which module needs a look": one rung per lane of the 2 AM run,
+// each coloured by ITS OWN verdict, never by the night's. The thresholds are the
+// ones already in force: app and Core by Rick's 2026-10-15 rule (0 green, fewer
+// than 10 yellow, 10 or more red); Hallie strict and advisory by status, then by
+// pass fraction (90 % or better yellow, under that red); voice by status. Grey is
+// "no verdict": the lane did not run, or the row predates the lane. The gauntlet
+// is not a rung — it is not the nightly, and a scoped run never changes this tile.
+const LANES = [["app", "App suite"], ["core", "Core package"], ["hallie-strict", "Hallie strict"],
+               ["hallie-advisory", "Hallie advisory"], ["hallie-voice", "Hallie voice"]];
+const countState = failed => failed === 0 ? "green" : failed < 10 ? "watch" : "red";
+function fractionState(pass, expected, status, goodWords) {
+  if (goodWords.includes(status)) return "green";
+  if (!isNum(pass) || !isNum(expected) || expected <= 0) return status ? "red" : "grey";
+  if (status === "incomplete") return "red";
+  return pass / expected >= 0.9 ? "watch" : "red";
+}
+function laneVerdicts(cell) {
+  if (!cell || cell.state === "did_not_run") return LANES.map(([id, name]) => ({ lane: id, label: name, state: "grey", words: "did not run" }));
+  const why = cellReason(cell) && !/^failed-tests:/.test(cellReason(cell)) ? ` (${cellReason(cell)})` : "";
+  const out = [];
+  out.push({ lane: "app", label: "App suite", state: countState(cell.failed || 0), words: `${n(cell.passed)} passed · ${n(cell.failed)} failed${/^failed-tests:/.test(cellReason(cell)) ? "" : why}` });
+  if (isNum(cell.core_failed) || isNum(cell.core_passed)) {
+    out.push({ lane: "core", label: "Core package", state: countState(cell.core_failed || 0), words: `${n(cell.core_passed || 0)} passed · ${n(cell.core_failed || 0)} failed${why}` });
+  } else out.push({ lane: "core", label: "Core package", state: "grey", words: "no Core lane in this row" });
+  const frac = (id, name, pass, expected, status, goodWords) => {
+    if (!isNum(pass) && !isNum(expected) && !status) return { lane: id, label: name, state: "grey", words: "did not run" };
+    return { lane: id, label: name, state: fractionState(pass, expected, status, goodWords),
+             words: `${isNum(pass) ? n(pass) : "?"} of ${isNum(expected) ? n(expected) : "?"}${status ? " · " + status : ""}` };
+  };
+  out.push(frac("hallie-strict", "Hallie strict", cell.hallie_strict_pass, cell.hallie_strict_expected, cell.hallie_strict_status, ["ok"]));
+  out.push(frac("hallie-advisory", "Hallie advisory", cell.hallie_advisory_pass, cell.hallie_advisory_expected, cell.hallie_advisory_status, ["ok", "advisory"]));
+  const voice = cell.hallie_voice_status;
+  out.push({ lane: "hallie-voice", label: "Hallie voice", state: voice === "ok" ? "green" : voice ? "red" : "grey", words: voice || "did not run" });
+  return out;
+}
+function ladderSVG(host, cell) {
+  const lanes = laneVerdicts(cell);
+  const rungH = 12, gap = 5, w = 46, pad = 5, labelW = 96;
+  const h = pad * 2 + lanes.length * rungH + (lanes.length - 1) * gap;
+  // Lit from the bottom: the first lane (app) is the lowest rung, like a level meter.
+  const rungs = lanes.map((lane, i) => {
+    const y = pad + (lanes.length - 1 - i) * (rungH + gap);
+    return `<rect class="rung ${esc(lane.state)}" data-lane="${esc(lane.lane)}" data-state="${esc(lane.state)}" x="${pad}" y="${y}" width="${w - pad * 2}" height="${rungH}" rx="3"><title>${esc(lane.label)}: ${esc(lane.words)}</title></rect>`
+      + `<text class="lane" x="${w + 6}" y="${y + rungH - 2}">${esc(lane.label)}</text>`;
+  }).join("");
+  const look = lanes.filter(l => l.state === "watch" || l.state === "red").length;
+  const unlit = lanes.filter(l => l.state === "grey").length;
+  const caption = cell && cell.state !== "did_not_run"
+    ? (look ? `${look} lane${look === 1 ? "" : "s"} to look at` : "all lanes green") + (unlit ? ` · ${unlit} not run` : "")
+    : "did not run";
+  return `<figure><svg class="ladder" data-host="${esc(host)}" width="${w + labelW}" height="${h}" viewBox="0 0 ${w + labelW} ${h}" role="img" aria-label="${esc(hostName(host))}: ${esc(caption)}">`
+    + `<rect class="well" x="0.5" y="0.5" width="${w - 1}" height="${h - 1}" rx="6"/>${rungs}</svg>`
+    + `<figcaption><b>${esc(hostName(host))}</b> · ${esc(caption)}</figcaption></figure>`;
+}
 function cellWords(cell) {
   if (!cell) return "no run";
   // The machine code says WHICH lane broke the night when the app count alone does not ("core-failed-tests:1").
@@ -964,8 +1031,9 @@ function renderHead(d) {
     const testState = N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch"
       : greenHosts >= 2 ? "green" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber"
       : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
+    const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellOf(lastNight, h))).join("")}</div>`;
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>2 AM run of ${day(lastNight.date)}${stale(lastNight.date)}`, testState));
+      `<div class="hosts">${hosts}</div>2 AM run of ${day(lastNight.date)}${stale(lastNight.date)}`, testState, ladders));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
