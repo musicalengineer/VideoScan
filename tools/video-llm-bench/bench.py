@@ -50,6 +50,11 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+
+# scripts/catalog_db.py is the one door that names catalog.sqlite; we only need its path constant.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import catalog_db  # noqa: E402
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -565,8 +570,8 @@ def validate_corpus_command(args: argparse.Namespace) -> int:
     catalog = Path(args.catalog)
     if not catalog.is_file():
         raise SystemExit("catalog copy not found: {}".format(catalog))
-    live = Path.home() / "Library" / "Application Support" / "VideoScan" / "catalog.sqlite"
-    if catalog.resolve() == live.resolve():
+    # The live catalog is named in one place only (scripts/catalog_db.py; sensor test_no_script_writes_catalog).
+    if catalog.resolve() == catalog_db.DEFAULT_DATABASE.resolve():
         raise SystemExit("refusing to open the live catalog; pass a .backup copy")
     manifest = build_manifest(catalog, seed=args.seed, camera_target=args.camera_target,
                               ocr_target=args.ocr_target)
@@ -1292,7 +1297,7 @@ def make_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     validate = commands.add_parser("validate-corpus", help="build the frozen ERA/OCR manifest from a catalog .backup copy")
-    validate.add_argument("--catalog", required=True, help="READ-ONLY .backup copy of catalog.sqlite (never the live file)")
+    validate.add_argument("--catalog", required=True, help="READ-ONLY .backup copy of the catalog database (never the live file)")
     validate.add_argument("--out", required=True, help="manifest JSON (keep it under .scratch/)")
     validate.add_argument("--seed", type=int, default=DEFAULT_SEED)
     validate.add_argument("--camera-target", type=int, default=ERA_CAMERA_TARGET)

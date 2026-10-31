@@ -37,6 +37,8 @@ import os
 import re
 import sqlite3
 import subprocess
+
+import catalog_db  # scripts/ is on sys.path when run as a script; the one door that names catalog.sqlite
 import sys
 import time
 from zoneinfo import ZoneInfo
@@ -1193,7 +1195,7 @@ def main():
     args = ap.parse_args()
 
     db = os.path.abspath(args.db)
-    if "Application Support/VideoScan/catalog.sqlite" in db:
+    if db == str(catalog_db.DEFAULT_DATABASE.resolve()):  # the live catalog is named only in scripts/catalog_db.py
         sys.exit("refusing to open the live catalog; pass a backup copy")
     out_dir = args.out_dir or os.path.join(os.path.dirname(db), "prov")
     os.makedirs(out_dir, exist_ok=True)

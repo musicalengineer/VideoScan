@@ -10,7 +10,7 @@
 `videoscan-bg`, Settings ▸ Background) and **model lab Phase 0** (wrap the 3B captioner as `A0`, publish baseline
 numbers) — Phase 0 needs no ruling and can run on the M4 tonight if Rick prefers it first.
 Also waiting on Rick: a Terminal run of Codex's attended review pilot (`VideoScan-wt/attended-model-review`,
-command in that worktree's `docs/models_research/README.md`, not on main); the agent sandbox cannot reach Ollama.
+command in that worktree's `models_research/README.md` under its docs folder, not on main); the agent sandbox cannot reach Ollama.
 
 ## 22:30 snapshot — main `db16b1e5`, pushed, **sensor lane GREEN (596 tests)** on that tree
 - **Merged:** bench harness + A0 numbers (`93fadb8b`) · background service step 0 (`dfafcc98`, after the reviewer's 8 fixes:
@@ -55,7 +55,7 @@ command in that worktree's `docs/models_research/README.md`, not on main); the a
 - **Background service designed:** `docs/design/background_service_2026_10_30.md` — helper app in the bundle as an
   `SMAppService` launchd agent; never writes the catalog (sidecars + journal, app's committer applies); engines move
   not copy; XPC control, files for state; backoff; five sensors; five-step move with the app whole at every step.
-- **Video-LLM design moved** to `docs/design/video_llm_lab_2026_10_30.md` (was `docs/proposed_…`); review and
+- **Video-LLM design moved** to `docs/design/video_llm_lab_2026_10_30.md` (was the top-level `proposed_video_llms_for_breen_media.md`); review and
   BACKLOG repointed.
 - DECISIONS: three dated lines (line 148 struck; background service shape; local review models as tooling).
 
@@ -78,7 +78,7 @@ command in that worktree's `docs/models_research/README.md`, not on main); the a
 ## Waiting on Rick
 - **Rulings (new):** background service §7 (one extra FDA grant · name/icon · exit-when-idle · step order);
   video-LLM §9 (cloud on derived text · 50 place labels · Qwen or Gemma first · v14 timing).
-- **Modes draft**, branch `docs/process-modes` — yes or edits.
+- **Modes draft**, the `process-modes` docs branch — yes or edits.
 - **Rulings (older):** strict-034; #397 help route; gauntlet runner policy; toolchain list (`tools/toolchain.json`).
 - **Allowlist:** read-only ssh/status commands for unattended nights.
 - **Spot tests (Debug):** GEDCOM dates + sparkle; Hallie after the refactor; Provenance ▸ Set Role and Find Master;
