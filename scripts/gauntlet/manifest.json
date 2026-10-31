@@ -31681,10 +31681,12 @@
       "suites": [
         "BackoffPolicyTests",
         "IdleExitPolicyTests",
+        "PeerRequirementTests",
         "PeerTrustPolicyTests"
       ],
       "tests": [
         "adHoc",
+        "adHocOrForeign",
         "attendedTrickles",
         "hysteresis",
         "idleIsFull",
@@ -31696,7 +31698,8 @@
         "refusals",
         "rule",
         "sameCertificate",
-        "thermal"
+        "thermal",
+        "widensIdentifier"
       ]
     },
     {
@@ -31709,6 +31712,8 @@
       "tests": [
         "corruptCheckpoint",
         "diskFull",
+        "diskFullJobResumesOrStops",
+        "killDuringFirstUnitStillGetsItsOutcome",
         "killMidUnit"
       ]
     },
@@ -31735,12 +31740,16 @@
         "lanes",
         "noOp",
         "partialQueueFile",
+        "pauseDuringThermalHoldRunsNoUnit",
         "pauseResumeStop",
         "refusals",
+        "resumeBeforePauseLandsRestoresRunning",
         "resumeFromCheckpoint",
         "startAndOutcome",
         "status",
-        "trickleSpacing"
+        "trickleSpacing",
+        "unitThrowingCancellationErrorIsAFailedUnit",
+        "unknownKindQueueFileHasItsOutcomeAndKeepsItsFile"
       ]
     },
     {
@@ -31756,6 +31765,19 @@
         "lifecycleLines",
         "noCommitterSymbolInTheBuiltHelper",
         "sourcesStayOnTheReadSide"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceRegistrarTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceRegistrarTests"
+      ],
+      "tests": [
+        "disabledMakesNoCall",
+        "enabledRegistersOnce",
+        "names"
       ]
     }
   ],
@@ -34377,9 +34399,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3074,
+      "expected_floor": 3077,
       "name": "unit",
-      "package_expected_floor": 466,
+      "package_expected_floor": 474,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -34421,7 +34443,8 @@
         "VideoScanCoreTests.PeerTrustPolicyTests",
         "VideoScanCoreTests.JobSupervisorIsolationTests",
         "VideoScanCoreTests.JobSupervisorScaleTests",
-        "VideoScanCoreTests.JobSupervisorTests"
+        "VideoScanCoreTests.JobSupervisorTests",
+        "VideoScanCoreTests.PeerRequirementTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -34910,7 +34933,8 @@
         "VideoScanTests/EditorCacheResumeAuditTests",
         "VideoScanTests/MediaRepairDedicatedBalanceTests",
         "VideoScanTests/MediaRepairMenuSheetAgreementTests",
-        "VideoScanTests/BackgroundServiceSensorTests"
+        "VideoScanTests/BackgroundServiceSensorTests",
+        "VideoScanTests/BackgroundServiceRegistrarTests"
       ]
     },
     {

@@ -10,6 +10,8 @@
 //     `register()` makes macOS show "VideoScan added items that can run in
 //     the background" and lists the helper under Login Items; Rick can
 //     switch it off there, and `status` says so instead of assuming.
+//     The service is reached through the `BackgroundAgentService` seam so a
+//     test can prove that a disabled launch makes NO ServiceManagement call.
 //
 //   • `BackgroundServiceClient` — an NSXPCConnection to the Mach service;
 //     `status()` is the one call step 0 needs. The MFO row that draws a
@@ -23,6 +25,16 @@ import Foundation
 import ServiceManagement
 import VideoScanCore
 
+/// What the registrar needs from SMAppService — an interface so a test can
+/// stand in for ServiceManagement.
+protocol BackgroundAgentService {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+}
+
+extension SMAppService: BackgroundAgentService {}
+
 enum BackgroundServiceRegistrar {
     /// `defaults write Rick-Breen.VideoScan background.service.enabled -bool true`
     static let enabledDefaultsKey = "background.service.enabled"
@@ -33,7 +45,7 @@ enum BackgroundServiceRegistrar {
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledDefaultsKey) }
 
-    private static var agent: SMAppService { SMAppService.agent(plistName: plistName) }
+    private static var agent: any BackgroundAgentService { SMAppService.agent(plistName: plistName) }
 
     /// What launchd says — never assumed (design §2 caveat).
     static var status: SMAppService.Status { agent.status }
@@ -48,20 +60,24 @@ enum BackgroundServiceRegistrar {
         }
     }
 
-    /// Called once at launch. Does nothing unless the defaults key is true.
-    static func registerIfEnabled(log: (String) -> Void) {
-        guard isEnabled else { return }
+    /// Called once at launch. Does nothing — not even make the service —
+    /// unless `enabled` (the defaults key) is true.
+    static func registerIfEnabled(enabled: Bool = isEnabled,
+                                  service: () -> any BackgroundAgentService = { agent },
+                                  log: (String) -> Void) {
+        guard enabled else { return }
+        let agent = service()
         do {
             try agent.register()
-            log("background service: registered \(plistName) — \(statusWords(status))")
+            log("background service: registered \(plistName) — \(statusWords(agent.status))")
         } catch {
-            log("background service: register failed — \(error.localizedDescription) (status \(statusWords(status)))")
+            log("background service: register failed — \(error.localizedDescription) (status \(statusWords(agent.status)))")
         }
     }
 
-    static func unregister(log: (String) -> Void) {
+    static func unregister(service: () -> any BackgroundAgentService = { agent }, log: (String) -> Void) {
         do {
-            try agent.unregister()
+            try service().unregister()
             log("background service: unregistered \(plistName)")
         } catch {
             log("background service: unregister failed — \(error.localizedDescription)")

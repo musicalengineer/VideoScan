@@ -120,3 +120,22 @@ struct PeerTrustPolicyTests {
         #expect(note?.contains("ad-hoc") == true)
     }
 }
+
+@Suite("PeerRequirement — the connection requirement from the helper's own designated requirement")
+struct PeerRequirementTests {
+    @Test("the identifier clause is widened to the app or the helper; the certificate clause is kept verbatim")
+    func widensIdentifier() {
+        let helperDR = "identifier \"Rick-Breen.VideoScan.Background\" and certificate leaf = H\"0123abcd\""
+        let req = PeerRequirement.forPeers(helperDesignatedRequirement: helperDR,
+                                           helperIdentifier: "Rick-Breen.VideoScan.Background", appIdentifier: "Rick-Breen.VideoScan")
+        #expect(req == "(identifier \"Rick-Breen.VideoScan\" or identifier \"Rick-Breen.VideoScan.Background\") and certificate leaf = H\"0123abcd\"")
+    }
+
+    @Test("an ad-hoc requirement (cdhash) or one without the helper's identifier yields nil — the caller falls back and says so")
+    func adHocOrForeign() {
+        #expect(PeerRequirement.forPeers(helperDesignatedRequirement: "cdhash H\"ab\"",
+                                         helperIdentifier: "Rick-Breen.VideoScan.Background", appIdentifier: "Rick-Breen.VideoScan") == nil)
+        #expect(PeerRequirement.forPeers(helperDesignatedRequirement: "identifier \"com.example.other\" and certificate leaf = H\"ab\"",
+                                         helperIdentifier: "Rick-Breen.VideoScan.Background", appIdentifier: "Rick-Breen.VideoScan") == nil)
+    }
+}

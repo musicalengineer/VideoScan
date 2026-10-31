@@ -49,6 +49,8 @@ public actor JobSupervisor {
         var finishedAt: Date?
         var pauseRequested = false
         var stopRequested = false
+        /// paused(disk): no lane owns it until `resume` re-queues it.
+        var parked = false
     }
 
     private let queue: any JobQueueStore
@@ -179,6 +181,18 @@ public actor JobSupervisor {
         touch()
         guard var run = runs[id], run.state.isActive else { return false }
         run.pauseRequested = false
+        // Resume before the pause landed: the row must not keep saying "pausing…".
+        if run.state == .pausing { run.state = .running }
+        if run.parked {
+            // A disk-full pause has no lane; queue it again and a lane picks it up
+            // from its checkpoint (review 2026-10-30, fix 1).
+            run.parked = false
+            run.state = .queued
+            runs[id] = run
+            log.write("resume requested for \(run.request.kind) \(id) — re-queued after its disk pause")
+            kickLanes()
+            return true
+        }
         runs[id] = run
         log.write("resume requested for \(run.request.kind) \(id)")
         return true
@@ -191,7 +205,8 @@ public actor JobSupervisor {
         run.stopRequested = true
         runs[id] = run
         log.write("stop requested for \(run.request.kind) \(id)")
-        if run.state == .queued { finish(id, as: .stopped, elapsed: nil) }
+        // Nobody will revisit a queued or parked job: end it here.
+        if run.state == .queued || run.parked { finish(id, as: .stopped, checkpoint: run.checkpoint, elapsed: nil) }
         return true
     }
 
@@ -225,11 +240,22 @@ public actor JobSupervisor {
 
     public var activeJobCount: Int { runs.values.filter { $0.state.isActive }.count }
 
-    /// `IdleExitPolicy` over this supervisor's state (design §3.2).
+    /// Active jobs that hold the service up. A job parked by a full disk does
+    /// not: the next launch finds its checkpoint and resumes it.
+    private var holdingJobCount: Int { runs.values.filter { $0.state.isActive && !$0.parked }.count }
+
+    /// `IdleExitPolicy` over this supervisor's state (design §3.2). The cheap
+    /// checks first; the queue folder is decoded only when they say "maybe".
     public func shouldExitWhenIdle(threshold: Double = IdleExitPolicy.defaultIdleSeconds) -> Bool {
-        let queued = queue.list().requests.count
-        return IdleExitPolicy.shouldExit(idleSeconds: idleSeconds, queueEmpty: queued == 0,
-                                         activeJobs: activeJobCount, threshold: threshold)
+        guard holdingJobCount == 0, idleSeconds >= threshold else { return false }
+        // A queue file whose job this build refused (kept: it is the app's intent)
+        // or parked is not pending work.
+        let pending = queue.list().requests.filter { request in
+            guard let run = runs[request.id] else { return true }
+            return run.state.isActive && !run.parked
+        }
+        return IdleExitPolicy.shouldExit(idleSeconds: idleSeconds, queueEmpty: pending.isEmpty,
+                                         activeJobs: holdingJobCount, threshold: threshold)
     }
 
     private func touch() { lastActivity = clock.now }
@@ -280,11 +306,14 @@ public actor JobSupervisor {
         log.write("START \(request.kind) \(id) — \(cp.totalUnits) units, lane \(request.lane), by \(request.requestedBy)"
                   + (resumed ? ", resuming at unit \(cp.completedUnits)" : ""))
         push(id, force: true)
+        // The checkpoint exists from START, so a kill during unit 0 still lets the
+        // relaunch write this START's OUTCOME (review 2026-10-30, fix 3a).
+        guard persist(cp, id) else { return }
 
         while cp.completedUnits < cp.totalUnits {
             switch await holdBetweenUnits(id, cp) {
             case .killed: return
-            case .stop: return conclude(id, cp, began: began, stopped: true)
+            case .stop: return finish(id, as: .stopped, checkpoint: cp, elapsed: clock.now - began)
             case .proceed(let state):
                 if state == .trickle {
                     try? await Task.sleep(for: backoff.trickleInterval)
@@ -294,7 +323,7 @@ public actor JobSupervisor {
             if await performUnit(job, &cp, id) == .killed { return }
             guard persist(cp, id) else { return }
         }
-        conclude(id, cp, began: began, stopped: runs[id]?.stopRequested == true)
+        finish(id, as: runs[id]?.stopRequested == true ? .stopped : .finished, checkpoint: cp, elapsed: clock.now - began)
     }
 
     /// The factory's job for `id`, or the refusal written as START…refused.
@@ -305,7 +334,7 @@ public actor JobSupervisor {
         } catch {
             let words = (error as? Refusal)?.words ?? String(describing: error)
             log.write("START \(run.request.kind) \(id) — refused: \(words)")
-            finish(id, as: .failed(reason: words), elapsed: nil)
+            finish(id, as: .failed(reason: words), checkpoint: nil, elapsed: nil)
             return nil
         }
     }
@@ -315,8 +344,12 @@ public actor JobSupervisor {
     private func holdBetweenUnits(_ id: JobID, _ cp: JobCheckpoint) async -> HoldOutcome {
         guard let kind = runs[id]?.request.kind.rawValue else { return .killed }
         let place = "at \(cp.completedUnits) of \(cp.totalUnits)"
-        if let early = await holdForUserPause(id, kind: kind, place: place) { return early }
-        return await holdForBackoff(id, kind: kind, place: place)
+        while true {
+            if let early = await holdForUserPause(id, kind: kind, place: place) { return early }
+            let outcome = await holdForBackoff(id, kind: kind, place: place)
+            // A pause asked for during the Mac's hold is honoured before any unit runs.
+            guard case .proceed = outcome, runs[id]?.pauseRequested == true else { return outcome }
+        }
     }
 
     /// Pause/stop from the verbs. nil means "carry on".
@@ -366,7 +399,7 @@ public actor JobSupervisor {
             case .done: cp.unitsRun += 1
             case .skipped: cp.unitsSkipped += 1
             }
-        } catch is CancellationError {
+        } catch is CancellationError where Task.isCancelled {
             return .killed
         } catch {
             cp.unitsFailed += 1
@@ -387,6 +420,7 @@ public actor JobSupervisor {
         } catch {
             let kind = runs[id]?.request.kind.rawValue ?? "?"
             setState(id, .paused(reason: BackoffState.diskReason))
+            runs[id]?.parked = true
             log.write("OUTCOME \(kind) \(id) — paused (disk) at \(cp.completedUnits) of \(cp.totalUnits): checkpoint could not be written (\(error)); \(cp.unitsRun) run · \(cp.unitsSkipped) skipped · \(cp.unitsFailed) failed")
             push(id, force: true)
             return false
@@ -396,32 +430,24 @@ public actor JobSupervisor {
         return true
     }
 
-    /// The OUTCOME line and the terminal transition.
-    private func conclude(_ id: JobID, _ cp: JobCheckpoint, began: ContinuousClock.Instant, stopped: Bool) {
-        let kind = runs[id]?.request.kind.rawValue ?? "?"
-        let elapsed = clock.now - began
-        let counts = "\(cp.unitsRun) run · \(cp.unitsSkipped) skipped · \(cp.unitsFailed) failed in \(Self.seconds(elapsed))"
-        if stopped {
-            log.write("OUTCOME \(kind) \(id) — stopped at \(cp.completedUnits) of \(cp.totalUnits): \(counts)")
-            finish(id, as: .stopped, elapsed: elapsed)
-        } else {
-            log.write("OUTCOME \(kind) \(id) — finished: \(counts)")
-            finish(id, as: .finished, elapsed: elapsed)
-        }
-    }
-
     private func setState(_ id: JobID, _ state: JobRunState) {
         runs[id]?.state = state
     }
 
-    /// Terminal transition: the queue file and checkpoint go (the job is
-    /// over), the run stays in the status list for a while.
-    private func finish(_ id: JobID, as state: JobRunState, elapsed: Duration?) {
+    /// THE terminal transition — the one door every job leaves through, and
+    /// the one place the OUTCOME line is written (≈ the RAII guard's
+    /// destructor: a START cannot end without it). The checkpoint goes; the
+    /// queue file goes too, except for a job this build REFUSED — that file is
+    /// the app's intent and is kept for a build that knows the kind (refuse,
+    /// never erase). The run stays in the status list for a while.
+    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?) {
         guard var run = runs[id] else { return }
         run.state = state
         run.finishedAt = Date()
+        run.parked = false
         runs[id] = run
-        queue.remove(id)
+        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed))
+        if case .failed = state {} else { queue.remove(id) }
         checkpoints.remove(id)
         touch()
         push(id, force: true)
@@ -431,6 +457,23 @@ public actor JobSupervisor {
             runs[old] = nil
             lastPush[old] = nil
             order.removeAll { $0 == old }
+        }
+    }
+
+    /// The OUTCOME line for a terminal state, with the counts when there are any.
+    static func outcomeLine(kind: String, id: JobID, state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?) -> String {
+        let counts = cp.map { "\($0.unitsRun) run · \($0.unitsSkipped) skipped · \($0.unitsFailed) failed" } ?? "0 run · 0 skipped · 0 failed"
+        let time = elapsed.map { " in \(seconds($0))" } ?? ""
+        switch state {
+        case .finished:
+            return "OUTCOME \(kind) \(id) — finished: \(counts)\(time)"
+        case .stopped:
+            let place = cp.map { "at \($0.completedUnits) of \($0.totalUnits)" } ?? "before it started"
+            return "OUTCOME \(kind) \(id) — stopped \(place): \(counts)\(time)"
+        case .failed(let reason):
+            return "OUTCOME \(kind) \(id) — failed: \(reason); \(counts); the queue file is kept"
+        case .queued, .running, .pausing, .paused:
+            return "OUTCOME \(kind) \(id) — \(state.words): \(counts)\(time)"
         }
     }
 

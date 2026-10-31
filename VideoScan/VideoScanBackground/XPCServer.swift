@@ -8,12 +8,15 @@
 // peer must be the app or this helper, signed by the same leaf certificate
 // as this process. A refusal is logged with the pid and the reason.
 //
-// Peer identity: `NSXPCConnection.processIdentifier` → SecCodeCopyGuestWithAttributes
-// (kSecGuestAttributePid). A pid can in principle be reused between the
-// connection and the check; the audit token would close that window but is
-// not public API on NSXPCConnection. Accepted for a user-session agent that
-// only ever grants "run a job" to a process that must ALSO be signed with
-// Rick's local certificate.
+// Peer identity, two tiers (review 2026-10-30, fix 4):
+//   • A certificate-signed helper ("VideoScan Local") puts a code-signing
+//     REQUIREMENT on every connection (`setCodeSigningRequirement`, built by
+//     `PeerRequirement` from the helper's own designated requirement with the
+//     identifier widened to the app or this helper). XPC enforces it on the
+//     peer's audit token for every message — no pid, no race.
+//   • An ad-hoc helper (the sensor lane's build) has no certificate to
+//     require; it falls back to `PeerTrustPolicy` by identifier, read through
+//     SecCodeCopyGuestWithAttributes(pid), and logs that it did.
 //
 // C++ reading: `shouldAcceptNewConnection` is the accept() hook; the
 // exported object is the servant the proxy's calls land on.
@@ -23,6 +26,11 @@ import Foundation
 import Security
 import VideoScanCore
 
+/// `@unchecked Sendable`: every stored property is a `let` holding something
+/// already safe to share (an actor, the listener, immutable strings, and
+/// `ProgressFanOut`, which locks); the compiler cannot check an NSObject
+/// subclass's conformance, so the promise is made here and kept by having no
+/// `var`.
 final class XPCServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let listener: NSXPCListener
     private let supervisor: JobSupervisor
@@ -30,6 +38,8 @@ final class XPCServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let allowedPeers: Set<String>
     private let startedAt: Date
     private let selfLeafSHA1: String?
+    /// The requirement every peer must satisfy, or nil for an ad-hoc build.
+    private let peerRequirement: String?
     private let progress = ProgressFanOut()
 
     init(machServiceName: String, supervisor: JobSupervisor, log: any BackgroundLogSink, allowedPeers: Set<String>, startedAt: Date) {
@@ -39,12 +49,21 @@ final class XPCServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
         self.allowedPeers = allowedPeers
         self.startedAt = startedAt
         self.selfLeafSHA1 = CodeSignatureReader.selfLeafSHA1()
+        let helperID = allowedPeers.first { $0.hasSuffix(BackgroundServiceNames.suffix) } ?? ""
+        let appID = allowedPeers.first { !$0.hasSuffix(BackgroundServiceNames.suffix) } ?? helperID
+        self.peerRequirement = CodeSignatureReader.selfDesignatedRequirement().flatMap {
+            PeerRequirement.forPeers(helperDesignatedRequirement: $0, helperIdentifier: helperID, appIdentifier: appID)
+        }
         super.init()
         listener.delegate = self
     }
 
     func resume() {
-        if selfLeafSHA1 == nil { log.write("XPC: this build is ad-hoc signed — peers are checked by identifier only") }
+        if let peerRequirement {
+            log.write("XPC: peers must satisfy the code-signing requirement \(peerRequirement)")
+        } else {
+            log.write("XPC: ad-hoc build: identifier-only peer check (no certificate to require)")
+        }
         listener.resume()
         let log = self.log
         let progress = self.progress
@@ -56,22 +75,29 @@ final class XPCServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         let pid = connection.processIdentifier
-        let peer = CodeSignatureReader.peer(pid: pid)
-        let decision = PeerTrustPolicy.decide(selfLeafSHA1: selfLeafSHA1, allowedIdentifiers: allowedPeers,
-                                              peerIdentifier: peer.identifier, peerLeafSHA1: peer.leafSHA1, peerPID: pid)
-        switch decision {
-        case .refuse(let words):
-            log.write("XPC refused: \(words)")
-            return false
-        case .accept(let note):
-            if let note { log.write("XPC: \(note)") }
+        if let peerRequirement {
+            // XPC checks the peer's audit token against this on every message;
+            // a peer that fails it never reaches the exported object.
+            connection.setCodeSigningRequirement(peerRequirement)
+            log.write("XPC connection from pid \(pid) accepted under the code-signing requirement")
+        } else {
+            let peer = CodeSignatureReader.peer(pid: pid)
+            let decision = PeerTrustPolicy.decide(selfLeafSHA1: selfLeafSHA1, allowedIdentifiers: allowedPeers,
+                                                  peerIdentifier: peer.identifier, peerLeafSHA1: peer.leafSHA1, peerPID: pid)
+            switch decision {
+            case .refuse(let words):
+                log.write("XPC refused: \(words)")
+                return false
+            case .accept(let note):
+                if let note { log.write("XPC: \(note)") }
+                log.write("XPC connection accepted from \(peer.identifier ?? "?") pid \(pid)")
+            }
         }
         connection.exportedInterface = NSXPCInterface(with: BackgroundServiceXPC.self)
         connection.exportedObject = Servant(supervisor: supervisor, log: log, startedAt: startedAt, progress: progress)
         let log = self.log
         connection.invalidationHandler = { log.write("XPC connection from pid \(pid) closed") }
         connection.resume()
-        log.write("XPC connection accepted from \(peer.identifier ?? "?") pid \(pid)")
         return true
     }
 
@@ -192,6 +218,21 @@ enum CodeSignatureReader {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
         return signingInfo(code).leafSHA1
+    }
+
+    /// This process's designated requirement as text, e.g.
+    /// `identifier "Rick-Breen.VideoScan.Background" and certificate leaf = H"…"`;
+    /// an ad-hoc build reads `cdhash H"…"`.
+    static func selfDesignatedRequirement() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement else { return nil }
+        var text: CFString?
+        guard SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text else { return nil }
+        return text as String
     }
 
     static func peer(pid: Int32) -> Peer {

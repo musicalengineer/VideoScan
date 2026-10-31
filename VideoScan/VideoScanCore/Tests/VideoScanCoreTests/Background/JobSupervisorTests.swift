@@ -174,7 +174,7 @@ struct JobSupervisorTests {
         await supervisor.start()
         await supervisor.drain()
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME noop \(request.id) — finished: 8 run · 0 skipped · 0 failed") }, "\(log.lines)")
-        #expect(checkpoints.saveCount == 1 + 3, "one seed save, then one per remaining unit")
+        #expect(checkpoints.saveCount == 1 + 1 + 3, "one seed save, one at START (so a kill in the first unit still has its OUTCOME), then one per remaining unit")
     }
 
     @Test("the trickle state spaces units by the trickle interval")
@@ -204,5 +204,75 @@ struct JobSupervisorTests {
         #expect(status.idleSeconds < 1)
         #expect(await supervisor.shouldExitWhenIdle(threshold: 0))
         #expect(await supervisor.shouldExitWhenIdle(threshold: 600) == false)
+    }
+    // MARK: - Reviewer reds (2026-10-30), now green
+
+    @Test("a queue file naming a JobKind this build does not know gets START…refused and its OUTCOME, and the file is kept (refuse, never erase)")
+    func unknownKindQueueFileHasItsOutcomeAndKeepsItsFile() async throws {
+        let newer = JobRequest(kind: JobKind(rawValue: "caption"), requestedBy: "app-v2")
+        let queue = InMemoryJobQueueStore([newer])
+        let log = InMemoryBackgroundLog()
+        let supervisor = make(queue: queue, factory: DefaultJobFactory(), log: log)
+        await supervisor.start()
+        await supervisor.drain()
+
+        #expect(log.lines.contains { $0.hasPrefix("START caption \(newer.id) — refused") }, "\(log.lines)")
+        #expect(log.lines.contains { $0.hasPrefix("OUTCOME caption \(newer.id) — failed:") && $0.contains("the queue file is kept") }, "\(log.lines)")
+        #expect(log.startCount == log.outcomeCount, "\(log.lines)")
+        #expect(queue.contains(newer.id), "the request is the app's intent; a build that knows the kind will run it")
+        #expect(await supervisor.snapshot(newer.id)?.state == .failed(reason: "VideoScan Background does not know the job kind `caption` (this build knows: noop)"))
+        #expect(await supervisor.shouldExitWhenIdle(threshold: 0), "a refused file is not pending work")
+    }
+
+    @Test("a unit that throws CancellationError while the task is NOT cancelled is a failed unit; the job finishes with its OUTCOME")
+    func unitThrowingCancellationErrorIsAFailedUnit() async throws {
+        let recorder = UnitRecorder()
+        let log = InMemoryBackgroundLog()
+        let supervisor = make(factory: SelfCancellingFactory(recorder: recorder), log: log)
+        let request = JobRequest(kind: SelfCancellingFactory.kind, requestedBy: "test")
+        _ = await supervisor.enqueue(request)
+        await supervisor.drain()
+
+        #expect(await supervisor.snapshot(request.id)?.state == .finished)
+        #expect(recorder.completedUnits == [0, 2])
+        #expect(log.lines.contains { $0.hasPrefix("OUTCOME selfcancel \(request.id) — finished: 2 run · 0 skipped · 1 failed") }, "\(log.lines)")
+        #expect(log.startCount == log.outcomeCount)
+        #expect(await supervisor.shouldExitWhenIdle(threshold: 0))
+    }
+
+    @Test("resume() before the pause lands restores .running — the row never keeps saying pausing…")
+    func resumeBeforePauseLandsRestoresRunning() async throws {
+        let recorder = UnitRecorder()
+        let supervisor = make(factory: RecordingFactory(recorder: recorder, units: 1_000, sleepPerUnit: .milliseconds(100)))
+        let request = RecordingFactory.request()
+        _ = await supervisor.enqueue(request)
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 1 })
+        // Both verbs land inside one 100 ms unit, before the next between-units check.
+        #expect(await supervisor.pause(request.id))
+        #expect(await supervisor.snapshot(request.id)?.state == .pausing)
+        #expect(await supervisor.resume(request.id))
+        #expect(await supervisor.snapshot(request.id)?.state == .running)
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 4 })
+        #expect(await supervisor.snapshot(request.id)?.state == .running)
+        _ = await supervisor.stop(request.id)
+        await supervisor.drain()
+    }
+
+    @Test("a pause requested during a thermal hold is honoured before any unit runs when the Mac cools")
+    func pauseDuringThermalHoldRunsNoUnit() async throws {
+        let recorder = UnitRecorder()
+        let source = FakeActivitySource(ActivitySample(thermalState: .serious))
+        let backoff = Backoff(source: source, trickleInterval: .milliseconds(1))
+        let supervisor = make(factory: RecordingFactory(recorder: recorder, units: 10), backoff: backoff)
+        let request = RecordingFactory.request()
+        _ = await supervisor.enqueue(request)
+        #expect(await BackgroundFixtures.waitUntil { await supervisor.snapshot(request.id)?.state == .paused(reason: "thermal") })
+        #expect(await supervisor.pause(request.id))
+        source.set(ActivitySample(thermalState: .nominal))
+        #expect(await BackgroundFixtures.waitUntil { await supervisor.snapshot(request.id)?.state == .paused(reason: "user") })
+        #expect(recorder.completedUnits.isEmpty, "paused by the user before the Mac cooled: no unit should run; ran \(recorder.completedUnits)")
+        _ = await supervisor.stop(request.id)
+        await supervisor.drain()
+        #expect(await supervisor.snapshot(request.id)?.state == .stopped)
     }
 }

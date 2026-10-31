@@ -118,8 +118,10 @@ public final class FileJobQueueStore: JobQueueStore, @unchecked Sendable {
         return (requests, ignored)
     }
 
+    /// `.fullFsync`: a request is the app's intent and must survive a forced
+    /// reboot (a checkpoint is regenerable; a lost request is lost work).
     public func put(_ request: JobRequest) throws {
-        try AtomicFilePublish.write(try BackgroundPayloadCodec.encode(request), to: url(request.id))
+        try AtomicFilePublish.write(try BackgroundPayloadCodec.encode(request), to: url(request.id), durability: .fullFsync)
     }
 
     public func remove(_ id: JobID) {

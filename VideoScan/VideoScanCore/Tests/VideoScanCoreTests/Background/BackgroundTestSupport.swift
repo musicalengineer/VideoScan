@@ -121,3 +121,30 @@ enum BackgroundFixtures {
         return await condition()
     }
 }
+
+/// A unit that throws CancellationError on its own (an inner task group
+/// cancelled, say) while the lane task itself is NOT cancelled (review
+/// 2026-10-30): that is a failed unit, not a dead process.
+struct SelfCancellingJob: BackgroundJob {
+    let title = "Self-cancelling job"
+    let unitCount = 3
+    let recorder: UnitRecorder
+    func runUnit(_ index: Int) async throws -> UnitOutcome {
+        if index == 1 { throw CancellationError() }
+        recorder.begin(); recorder.end(index)
+        return .done
+    }
+}
+
+struct SelfCancellingFactory: JobFactory {
+    static let kind = JobKind(rawValue: "selfcancel")
+    let recorder: UnitRecorder
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob {
+        SelfCancellingJob(recorder: recorder)
+    }
+}
+
+extension InMemoryBackgroundLog {
+    var startCount: Int { lines.filter { $0.hasPrefix("START ") }.count }
+    var outcomeCount: Int { lines.filter { $0.hasPrefix("OUTCOME ") }.count }
+}

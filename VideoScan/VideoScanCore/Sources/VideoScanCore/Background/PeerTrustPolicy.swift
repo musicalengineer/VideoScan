@@ -50,3 +50,22 @@ public enum PeerTrustPolicy {
         return .accept(note: nil)
     }
 }
+
+/// The code-signing requirement the helper puts on every XPC connection
+/// (`NSXPCConnection.setCodeSigningRequirement`, audit-token based — no pid),
+/// built from the helper's OWN designated requirement with the identifier
+/// clause widened to "the app or this helper". A "VideoScan Local"-signed
+/// helper thereby accepts only a "VideoScan Local"-signed VideoScan (or
+/// itself in CLI mode). Pure, so the string construction has a test; the
+/// two-process check is Rick's spot test.
+public enum PeerRequirement {
+    /// nil when the helper's requirement is not certificate-based (an ad-hoc
+    /// build's `cdhash H"…"`) or does not name the helper's identifier — the
+    /// caller then falls back to `PeerTrustPolicy` by identifier and says so.
+    public static func forPeers(helperDesignatedRequirement requirement: String,
+                                helperIdentifier: String, appIdentifier: String) -> String? {
+        let clause = "identifier \"\(helperIdentifier)\""
+        guard !requirement.contains("cdhash"), let range = requirement.range(of: clause) else { return nil }
+        return requirement.replacingCharacters(in: range, with: "(identifier \"\(appIdentifier)\" or \(clause))")
+    }
+}

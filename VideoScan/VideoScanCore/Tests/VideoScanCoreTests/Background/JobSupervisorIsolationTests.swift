@@ -96,4 +96,78 @@ struct JobSupervisorIsolationTests {
         #expect(outcome.first?.contains("ENOSPC") == true)
         #expect(recorder.completedUnits.count < 10, "the job did not run on past the failed checkpoint")
     }
+    // MARK: - Reviewer reds (2026-10-30), now green
+
+    @Test("killed during the FIRST unit: the checkpoint written at START lets the relaunch close that START with an OUTCOME")
+    func killDuringFirstUnitStillGetsItsOutcome() async throws {
+        let dir = try BackgroundFixtures.scratch("kill0")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let queue = FileJobQueueStore(directory: dir.appendingPathComponent("queue"))
+        let checkpoints = FileCheckpointStore(directory: dir.appendingPathComponent("checkpoints"))
+        let recorder = UnitRecorder()
+        let log = InMemoryBackgroundLog()
+        let request = RecordingFactory.request()
+
+        let first = JobSupervisor(queue: queue, checkpoints: checkpoints, factory: RecordingFactory(recorder: recorder, units: 4, hangAt: 0),
+                                  backoff: BackgroundFixtures.fullBackoff(), log: log, configuration: BackgroundFixtures.fastConfiguration())
+        _ = await first.enqueue(request)
+        #expect(await BackgroundFixtures.waitUntil { await first.snapshot(request.id)?.state == .running })
+        #expect(log.startCount == 1)
+        await first.abandonForTest()
+        guard case .found(let cp) = checkpoints.load(request.id) else { Issue.record("no checkpoint at START"); return }
+        #expect(cp.completedUnits == 0)
+
+        let second = JobSupervisor(queue: queue, checkpoints: checkpoints, factory: RecordingFactory(recorder: recorder, units: 4),
+                                   backoff: BackgroundFixtures.fullBackoff(), log: log, configuration: BackgroundFixtures.fastConfiguration())
+        await second.start()
+        await second.drain()
+
+        #expect(recorder.completedUnits == [0, 1, 2, 3])
+        #expect(log.lines.contains { $0.hasPrefix("OUTCOME recording \(request.id) — interrupted at 0 of 4") }, "\(log.lines)")
+        #expect(log.startCount == log.outcomeCount, "every START has its OUTCOME — \(log.lines)")
+    }
+
+    @Test("after a disk-full pause the job is parked: resume re-queues it to its OUTCOME, stop ends it, and it never keeps the service resident")
+    func diskFullJobResumesOrStops() async throws {
+        struct DiskFull: Error, CustomStringConvertible { var description: String { "ENOSPC" } }
+        let queue = InMemoryJobQueueStore()
+        let checkpoints = InMemoryCheckpointStore()
+        let recorder = UnitRecorder()
+        let log = InMemoryBackgroundLog()
+        let supervisor = JobSupervisor(queue: queue, checkpoints: checkpoints,
+                                       factory: RecordingFactory(recorder: recorder, units: 10, sleepPerUnit: .milliseconds(5)),
+                                       backoff: BackgroundFixtures.fullBackoff(), log: log, configuration: BackgroundFixtures.fastConfiguration())
+        let request = RecordingFactory.request()
+        _ = await supervisor.enqueue(request)
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 2 })
+        checkpoints.saveError = DiskFull()
+        await supervisor.drain()
+        #expect(await supervisor.snapshot(request.id)?.state == .paused(reason: "disk"))
+        #expect(await supervisor.shouldExitWhenIdle(threshold: 0), "a parked job does not hold the service up; the next launch resumes it from its checkpoint")
+        let parkedAt = recorder.completedUnits.count
+
+        // The disk is back: resume re-queues, a lane runs it to the end.
+        checkpoints.saveError = nil
+        #expect(await supervisor.resume(request.id))
+        await supervisor.drain()
+        #expect(await supervisor.snapshot(request.id)?.state == .finished)
+        #expect(recorder.completedUnits.count >= 10 && recorder.completedUnits.count <= 10 + 1, "resumed from the last checkpoint; at most the lost unit repeats (\(recorder.completedUnits))")
+        #expect(parkedAt < recorder.completedUnits.count)
+        #expect(log.lines.contains { $0.hasPrefix("START recording \(request.id)") && $0.contains("resuming at unit") }, "\(log.lines)")
+        #expect(log.startCount == log.outcomeCount, "\(log.lines)")
+        #expect(await supervisor.shouldExitWhenIdle(threshold: 0))
+
+        // And a parked job can be stopped outright.
+        let other = RecordingFactory.request()
+        _ = await supervisor.enqueue(other)
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 12 })
+        checkpoints.saveError = DiskFull()
+        await supervisor.drain()
+        #expect(await supervisor.snapshot(other.id)?.state == .paused(reason: "disk"))
+        checkpoints.saveError = nil
+        #expect(await supervisor.stop(other.id))
+        #expect(await supervisor.snapshot(other.id)?.state == .stopped)
+        #expect(!queue.contains(other.id))
+        #expect(log.lines.contains { $0.hasPrefix("OUTCOME recording \(other.id) — stopped at") }, "\(log.lines)")
+    }
 }
