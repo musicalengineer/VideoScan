@@ -31814,6 +31814,41 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_video_llm_bench_a1.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench_a1.py"
+      ],
+      "tests": [
+        "test_a1_markdown_carries_no_path_digest_model_text_or_proper_noun",
+        "test_a1_scale_100k_window_records_summarise_inside_the_budget",
+        "test_a_digest_in_both_corpora_is_run_once_with_both_prompt_sets",
+        "test_a_family_without_a_contract_is_refused",
+        "test_aggregate_rates",
+        "test_an_unrippable_clip_runs_nothing_and_is_failed",
+        "test_contract_violations_are_schema_invalid",
+        "test_each_prompt_names_every_contract_key_and_the_window",
+        "test_era_clip_gets_one_generation_per_window_and_family_ocr_clip_gets_date_per_frame",
+        "test_garbage_is_schema_invalid_never_rescued",
+        "test_invalid_output_is_recorded_schema_invalid_with_its_reason",
+        "test_long_clip_gets_three_minute_windows_at_start_middle_and_end",
+        "test_medium_clip_gets_three_contiguous_thirds_without_overlap",
+        "test_midpoint_and_inside_range",
+        "test_missing_key_is_schema_invalid",
+        "test_nothing_to_look_at_plans_no_window",
+        "test_python_contract_keys_match_the_swift_contract",
+        "test_resume_skips_done_clips_and_redoes_partial",
+        "test_scoring_redecodes_and_never_trusts_the_stored_flag",
+        "test_short_clip_gets_one_window",
+        "test_summarize_a1_math",
+        "test_summarize_command_puts_a0_and_a1_side_by_side",
+        "test_tiny_clip_gets_fewer_frames_not_duplicates",
+        "test_valid_era_and_room_decode"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_videoscan_stress.py",
       "stage": "unit",
       "suites": [
@@ -34566,6 +34601,10 @@
         },
         {
           "name": "tests/test_video_llm_bench.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench_a1.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

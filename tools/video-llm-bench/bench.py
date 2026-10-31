@@ -749,6 +749,374 @@ def peak_rss_bytes() -> int:
     return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)  # bytes on macOS
 
 
+# ===========================================================================
+# Approach A1 in Python (design §5 row A1): the same model and weights as A0,
+# but (1) chronological WINDOWS of N frames shown to the model together in one
+# prompt instead of single stills, and (2) a STRICT JSON contract per field
+# family (§3.3 `era`, `roomFeatures`), decoded fail-closed by a Python mirror of
+# the Swift `ContractDecoder` (VideoScanCore/ModelLab/ApproachOutputContracts.swift).
+# The OCR corpus still gets A0's `date` prompt verbatim, one frame per call, on
+# the window frames, so OCR parity is measured on the same sampler.
+#
+# Memory (worst case, A1 run): model ≈ 2.4 GB + mlx cache limit 512 MB + the
+# KV cache of one multi-image generation (MAX_WINDOWS_FRAMES images × 256
+# visual tokens + ≤ 400 output tokens ≈ 2.7k tokens) + ≤ 3 × N letterboxed
+# 448×448 PNGs on disk per clip (N ≤ 8 → 24 × ≈ 0.4 MB), deleted after the clip.
+# ===========================================================================
+A1_APPROACH_ID = "a1-py"
+A1_SAMPLER_TEMPLATE = "windows-{w}x{n}-max{s}s-middle90"
+A1_MAX_WINDOWS = 3
+A1_WINDOW_MAX_S = 60.0       # a window is at most a minute (design §3.2 WindowSampler 60 s)
+A1_MIN_WINDOW_S = 10.0       # a middle-90 % span shorter than 3 × this gets ONE window
+A1_MIN_FRAME_GAP_S = 0.25    # never ask for frames closer than this (a 1 s clip gets ≤ 4)
+A1_DEFAULT_FRAMES = 6
+
+A1_SYSTEM_PROMPT = (
+    "You are a careful video analyst. You answer with exactly one JSON object that matches the "
+    "schema you are given, and nothing else: no prose, no markdown, no code fences."
+)
+# Prompt revision r2 (2026-10-30): r1 phrased the window as "from the window X s
+# to Y s"; on the 3-clip smoke the model echoed that phrase into "window" as a
+# string and put the setting word into "family" (roomFeatures 3/9 valid). r2 states
+# the two fixed values as literals to copy and asks for distinct features.  No
+# decoding rule changed — the decoder is the contract; only the question moved.
+# r3: r2 era answers echoed the placeholder FRAME_TIME as a bare word into "atS"
+# (not JSON → schemaInvalid, 3/9) and one hit the 320-token cap; r3 writes the
+# first frame time as the example atS and raises era max_tokens to 400.
+A1_PROMPT_REVISION = 3
+A1_ERA_PROMPT = (
+    "These {n} images are frames from ONE home video, in chronological order. "
+    "Frame times in seconds: {times}.\n"
+    "Estimate the range of years in which this footage was recorded, from visual evidence only: "
+    "picture quality, camcorder on-screen display, burned-in dates, technology, clothing, hairstyles, "
+    "cars, decor.\n"
+    "Answer with ONLY this JSON object, with exactly these keys:\n"
+    '{{"family": "era", "window": [{start}, {end}], "yearRange": [FROM_YEAR, TO_YEAR], '
+    '"rationale": "ONE SENTENCE", "cues": [{{"kind": "KIND", "text": "WHAT YOU SAW", "atS": {first}}}], '
+    '"selfConfidence": NUMBER}}\n'
+    'Rules: copy "family" and "window" exactly as shown: "family" is the string "era" and "window" is the '
+    "array [{start}, {end}]. FROM_YEAR and TO_YEAR are integers from 1900 to 2100 and FROM_YEAR is not after "
+    "TO_YEAR. KIND is one of technical, cultural, environmental, onScreenText, spoken. Each atS is the number "
+    "of the frame time (from the list above) where you saw the cue. At most 5 cues. NUMBER is from 0.0 to 1.0. Do not add any other key."
+)
+A1_ROOM_PROMPT = (
+    "These {n} images are frames from ONE home video, in chronological order. "
+    "Frame times in seconds: {times}.\n"
+    "Describe the PLACE where this was filmed (not the people).\n"
+    "Answer with ONLY this JSON object, with exactly these keys:\n"
+    '{{"family": "roomFeatures", "window": [{start}, {end}], "setting": "SETTING", '
+    '"locationType": "SHORT PHRASE", "features": ["FEATURE", "FEATURE"], "selfConfidence": NUMBER}}\n'
+    'Rules: copy "family" and "window" exactly as shown: "family" is the string "roomFeatures" and "window" '
+    "is the array [{start}, {end}]. SETTING is one of indoor, outdoor, mixed, unknown. SHORT PHRASE is a "
+    "generic kind of place, for example residential living room or backyard. Each FEATURE is a different "
+    "short generic lowercase phrase for something fixed in the place (flooring, walls, furniture, fixtures, "
+    "landscape), for example green shag carpet or brick fireplace; at most 8 features, no repeats; never a "
+    "name of a person, a business or a town. NUMBER is from 0.0 to 1.0. Do not add any other key."
+)
+A1_PROMPTS: Dict[str, str] = {"era": A1_ERA_PROMPT, "roomFeatures": A1_ROOM_PROMPT}
+A1_FAMILY_ORDER = ("era", "roomFeatures")
+A1_GEN_PARAMS: Dict[str, Dict[str, Any]] = {
+    "era": {"max_tokens": 400, "temperature": 0.0, "top_p": 1.0},
+    "roomFeatures": {"max_tokens": 200, "temperature": 0.0, "top_p": 1.0},
+}
+
+# --- Window planning (pure) -------------------------------------------------
+
+
+def plan_windows(frames_per_window: int, duration_s: float,
+                 max_windows: int = A1_MAX_WINDOWS, window_max_s: float = A1_WINDOW_MAX_S,
+                 min_window_s: float = A1_MIN_WINDOW_S) -> List[Dict[str, Any]]:
+    """Up to ``max_windows`` chronological windows inside the middle 90 % of the
+    file — one at its START, one centred on its MIDDLE, one at its END — each at
+    most ``window_max_s`` long and never overlapping (each is ≤ span / 3).  A span
+    shorter than ``max_windows × min_window_s`` gets ONE window covering it.  Each
+    window holds N frames at the centres of N equal sub-intervals (never on a
+    boundary), fewer when they would be closer than ``A1_MIN_FRAME_GAP_S``.
+
+    Zero / negative / non-finite duration or N ≤ 0 → [] (nothing to look at).
+
+    C++ reading: a pure function returning a std::vector<Window>; no I/O.
+    """
+    if frames_per_window <= 0 or not (duration_s == duration_s) or duration_s <= 0 or duration_s == float("inf"):
+        return []
+    lo, hi = duration_s * 0.05, duration_s * 0.95
+    span = hi - lo
+    if span < max_windows * min_window_s:
+        bounds = [(lo, hi)]
+    else:
+        width = min(window_max_s, span / max_windows)
+        mid = (lo + hi) / 2.0
+        bounds = [(lo, lo + width), (mid - width / 2.0, mid + width / 2.0), (hi - width, hi)]
+    windows: List[Dict[str, Any]] = []
+    for index, (start, end) in enumerate(bounds):
+        length = end - start
+        n = max(1, min(frames_per_window, int(length / A1_MIN_FRAME_GAP_S)))
+        step = length / n
+        times = [round(start + step * (i + 0.5), 3) for i in range(n)]
+        windows.append({"index": index, "start_s": round(start, 3), "end_s": round(end, 3), "frame_times_s": times})
+    return windows
+
+
+def format_a1_prompt(family: str, window: Dict[str, Any]) -> str:
+    times = window["frame_times_s"]
+    return A1_PROMPTS[family].format(
+        n=len(times), start="{:.1f}".format(window["start_s"]), end="{:.1f}".format(window["end_s"]),
+        first="{:.1f}".format(times[0]) if times else "0.0",
+        times=", ".join("{:.1f}".format(t) for t in times))
+
+
+# --- Fail-closed contract decoding (mirror of Swift ContractDecoder) ---------
+CONTRACT_MAX_JSON_BYTES = 64 * 1024
+CONTRACT_MAX_LIST_ITEMS = 64
+CONTRACT_YEAR_MIN, CONTRACT_YEAR_MAX = 1900, 2100
+FIELD_FAMILIES = ("era", "scene", "ocrDate", "ocrText", "occasionKind", "roomFeatures",
+                  "carrierClues", "spokenNamePresence")
+CUE_KINDS = ("technical", "cultural", "environmental", "onScreenText", "spoken")
+ROOM_SETTINGS = ("indoor", "outdoor", "mixed", "unknown")
+_ERA_KEYS = ("family", "window", "yearRange", "rationale", "cues", "selfConfidence")
+_ROOM_KEYS = ("family", "window", "setting", "locationType", "features", "selfConfidence")
+_CUE_KEYS = ("kind", "text", "atS")
+
+
+class ContractViolation(Exception):
+    """A rule of the contract broken; the message is the log reason."""
+
+
+def _reject_constant(name: str) -> Any:
+    # json.loads accepts NaN / Infinity / -Infinity; Foundation's JSONDecoder does not.
+    raise ContractViolation("not valid JSON: {} is not a JSON number".format(name))
+
+
+def _no_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    # Stricter than Foundation (which keeps one silently): a duplicated key is ambiguous.
+    out: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ContractViolation("duplicate key '{}'".format(key))
+        out[key] = value
+    return out
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _as_double(value: Any, where: str) -> float:
+    """Swift `Double` from JSON: any number, never a string, bool or null."""
+    if value is None:
+        raise ContractViolation("null at '{}' where Double was expected".format(where))
+    if not _is_number(value):
+        raise ContractViolation("wrong type at '{}' (expected Double)".format(where))
+    return float(value)
+
+
+def _as_int(value: Any, where: str) -> int:
+    """Swift `Int` from JSON: an integer number (1991 or 1991.0); 1991.5, "1991", true → wrong type."""
+    if value is None:
+        raise ContractViolation("null at '{}' where Int was expected".format(where))
+    if not _is_number(value):
+        raise ContractViolation("wrong type at '{}' (expected Int)".format(where))
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ContractViolation("not valid JSON at '{}': Number {} is not representable as Int".format(where, value))
+        return int(value)
+    return value
+
+
+def _as_string(value: Any, where: str) -> str:
+    if value is None:
+        raise ContractViolation("null at '{}' where String was expected".format(where))
+    if not isinstance(value, str):
+        raise ContractViolation("wrong type at '{}' (expected String)".format(where))
+    return value
+
+
+def _as_list(value: Any, where: str) -> list:
+    if value is None:
+        raise ContractViolation("null at '{}' where Array was expected".format(where))
+    if not isinstance(value, list):
+        raise ContractViolation("wrong type at '{}' (expected Array)".format(where))
+    return value
+
+
+def _require(obj: Dict[str, Any], key: str, parent: str = "") -> Any:
+    if key not in obj:
+        raise ContractViolation("missing key '{}'".format(parent + "." + key if parent else key))
+    return obj[key]
+
+
+def _reject_unknown_keys(obj: Dict[str, Any], allowed: Sequence[str]) -> None:
+    unknown = sorted(k for k in obj if k not in allowed)
+    if unknown:
+        raise ContractViolation("unknown key(s) {} — the contract names every field".format(
+            ", ".join("'{}'".format(k) for k in unknown)))
+
+
+def _non_empty_text(obj: Dict[str, Any], key: str, parent: str = "") -> str:
+    text = _as_string(_require(obj, key, parent), key)
+    if not text.strip():
+        raise ContractViolation("'{}' is empty".format(key))
+    return text
+
+
+def _frame_time(obj: Dict[str, Any], key: str, parent: str = "") -> float:
+    t = _as_double(_require(obj, key, parent), key)
+    if t != t or t in (float("inf"), float("-inf")) or t < 0:
+        raise ContractViolation("'{}' {} is not a frame time at or after 0".format(key, t))
+    return t
+
+
+def _bounded(items: list, name: str) -> list:
+    if len(items) > CONTRACT_MAX_LIST_ITEMS:
+        raise ContractViolation("'{}' has {} items, more than the {} cap".format(name, len(items), CONTRACT_MAX_LIST_ITEMS))
+    return items
+
+
+def _word(obj: Dict[str, Any], key: str, words: Sequence[str], parent: str = "") -> str:
+    raw = _as_string(_require(obj, key, parent), key)
+    if raw not in words:
+        raise ContractViolation("'{}' word '{}' is not one of {}".format(key, raw, ", ".join(words)))
+    return raw
+
+
+def _family(obj: Dict[str, Any], expected: str) -> None:
+    word = _as_string(_require(obj, "family"), "family")
+    if word not in FIELD_FAMILIES:
+        raise ContractViolation("unknown family '{}'".format(word))
+    if word != expected:
+        raise ContractViolation("family '{}' where '{}' was asked for".format(word, expected))
+
+
+def _window(obj: Dict[str, Any]) -> List[float]:
+    pair = [_as_double(v, "window") for v in _as_list(_require(obj, "window"), "window")]
+    if len(pair) != 2:
+        raise ContractViolation("window must be two numbers [start, end], got {}".format(len(pair)))
+    finite = all(v == v and v not in (float("inf"), float("-inf")) for v in pair)
+    if not finite or pair[0] < 0:
+        raise ContractViolation("window must be finite and start at or after 0: {}".format(pair))
+    if pair[1] < pair[0]:
+        raise ContractViolation("window end {} is before its start {}".format(pair[1], pair[0]))
+    return pair
+
+
+def _year_range(obj: Dict[str, Any]) -> List[int]:
+    pair = [_as_int(v, "yearRange") for v in _as_list(_require(obj, "yearRange"), "yearRange")]
+    if len(pair) != 2:
+        raise ContractViolation("yearRange must be two years [from, to], got {}".format(len(pair)))
+    for year in pair:
+        if not (CONTRACT_YEAR_MIN <= year <= CONTRACT_YEAR_MAX):
+            raise ContractViolation("year {} is outside {}…{}".format(year, CONTRACT_YEAR_MIN, CONTRACT_YEAR_MAX))
+    if pair[0] > pair[1]:
+        raise ContractViolation("yearRange {} is reversed".format(pair))
+    return pair
+
+
+def _self_confidence(obj: Dict[str, Any]) -> float:
+    v = _as_double(_require(obj, "selfConfidence"), "selfConfidence")
+    if not (0.0 <= v <= 1.0):
+        raise ContractViolation("selfConfidence {} is outside 0…1".format(v))
+    return v
+
+
+def _cue(value: Any, index: int) -> Dict[str, Any]:
+    where = "cues.{}".format(index)
+    if not isinstance(value, dict):
+        raise ContractViolation("wrong type at '{}' (expected Object)".format(where))
+    _reject_unknown_keys(value, _CUE_KEYS)
+    return {"kind": _word(value, "kind", CUE_KINDS, where), "text": _non_empty_text(value, "text", where),
+            "atS": _frame_time(value, "atS", where)}
+
+
+def _decode_era(obj: Dict[str, Any]) -> Dict[str, Any]:
+    _family(obj, "era")
+    _reject_unknown_keys(obj, _ERA_KEYS)
+    window = _window(obj)
+    year_range = _year_range(obj)
+    rationale = _non_empty_text(obj, "rationale")
+    cues = _bounded([_cue(c, i) for i, c in enumerate(_as_list(_require(obj, "cues"), "cues"))], "cues")
+    return {"family": "era", "window": window, "yearRange": year_range, "rationale": rationale, "cues": cues,
+            "selfConfidence": _self_confidence(obj)}
+
+
+def _decode_room(obj: Dict[str, Any]) -> Dict[str, Any]:
+    _family(obj, "roomFeatures")
+    _reject_unknown_keys(obj, _ROOM_KEYS)
+    window = _window(obj)
+    setting = _word(obj, "setting", ROOM_SETTINGS)
+    location = _non_empty_text(obj, "locationType")
+    features = _bounded([_as_string(f, "features.{}".format(i))
+                         for i, f in enumerate(_as_list(_require(obj, "features"), "features"))], "features")
+    if any(not f.strip() for f in features):
+        raise ContractViolation("'features' holds an empty item")
+    return {"family": "roomFeatures", "window": window, "setting": setting, "locationType": location,
+            "features": features, "selfConfidence": _self_confidence(obj)}
+
+
+_DECODERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {"era": _decode_era, "roomFeatures": _decode_room}
+
+
+def decode_contract(family: str, text: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Fail-closed: (value, None) when ``text`` is EXACTLY one JSON object meeting the
+    family's contract; (None, reason) otherwise — the caller records `schemaInvalid`.
+
+    The raw model text is parsed as-is: no fence stripping, no "find the first {",
+    no regex rescue, no defaulting.  Mirrors Swift `ContractDecoder.decode`: size cap
+    64 KB, unknown keys / wrong types / null / missing keys rejected, `family` must
+    match, years 1900…2100, ranges not reversed, lists ≤ 64, selfConfidence 0…1.
+    Stricter than Foundation in two corners, both fail-closed: NaN/Infinity literals
+    and duplicate keys are rejected.
+
+    C++ reading: a parser returning std::variant<Value, Reason>; it throws
+    internally and the one catch turns every throw into the Reason arm.
+    """
+    if family not in _DECODERS:
+        return None, "no output contract for family '{}' in this harness".format(family)
+    if not isinstance(text, str):
+        return None, "response is not text"
+    raw = text.encode("utf-8")
+    if len(raw) > CONTRACT_MAX_JSON_BYTES:
+        return None, "response is {} bytes, larger than the {}-byte cap".format(len(raw), CONTRACT_MAX_JSON_BYTES)
+    if not raw:
+        return None, "empty response"
+    try:
+        obj = json.loads(text, parse_constant=_reject_constant, object_pairs_hook=_no_duplicate_keys)
+        if not isinstance(obj, dict):
+            raise ContractViolation("wrong type at 'top level' (expected Object)")
+        return _DECODERS[family](obj), None
+    except ContractViolation as violation:
+        return None, str(violation)
+    except (json.JSONDecodeError, RecursionError, ValueError) as error:
+        return None, "not valid JSON: {}".format(error)
+
+
+class A1Python(A0Python):
+    """A0's model and loader; adds one multi-image generation per (window, family).
+    C++ reading: a derived class reusing the base's load()/seed() and adding a method."""
+    id = A1_APPROACH_ID
+
+    def answer_window(self, image_paths: Sequence[Path], family: str,
+                      window: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        from mlx_vlm import generate
+        from mlx_vlm.prompt_utils import apply_chat_template
+
+        messages = [
+            {"role": "system", "content": A1_SYSTEM_PROMPT},
+            {"role": "user", "content": format_a1_prompt(family, window)},
+        ]
+        templated = apply_chat_template(self.processor, self.config, messages, num_images=len(image_paths))
+        params = A1_GEN_PARAMS[family]
+        result = generate(self.model, self.processor, templated, image=[str(p) for p in image_paths],
+                          max_tokens=params["max_tokens"], temperature=params["temperature"],
+                          top_p=params["top_p"], verbose=False)
+        text = result if isinstance(result, str) else getattr(result, "text", str(result))
+        counters = {}
+        for name in ("prompt_tokens", "generation_tokens", "generation_tps", "peak_memory"):
+            value = getattr(result, name, None)
+            if value is not None:
+                counters[name] = value
+        return text.strip(), counters
+
+
 # ---------------------------------------------------------------------------
 # The run loop (testable: approach and ripper are injected)
 # ---------------------------------------------------------------------------
@@ -891,10 +1259,165 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
     return progress
 
 
+def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Any,
+                  frames_per_window: int, run_record: Dict[str, Any],
+                  ripper: Callable[[str, float, Path, float], bool] = default_ripper,
+                  duration_of: Callable[[str, float], float] = lambda p, d: d if d > 0 else probe_duration(p),
+                  log: Callable[[str], None] = lambda s: print(s, flush=True),
+                  families: Sequence[str] = A1_FAMILY_ORDER) -> Dict[str, Any]:
+    """A1 loop.  Per clip: plan ≤ 3 windows, rip every window frame once, then
+    * ERA-corpus clip → one multi-image generation per (window, family) — a
+      ``window_result`` record carrying raw text, `schema_valid`, the decoded value
+      or the `schemaInvalid` reason;
+    * OCR-corpus clip → A0's ``date`` prompt per frame — a ``result`` record shaped
+      exactly like A0's, so `score_ocr_clip` scores both approaches the same way.
+    A digest in both corpora gets both.  Same resume / clip_done / progress rules
+    as `run_corpus`; frames are deleted after the clip."""
+    out_dir = Path(out_dir)
+    (out_dir / "clips").mkdir(parents=True, exist_ok=True)
+    progress_path = out_dir / "progress.json"
+    corpora_of: Dict[str, set] = collections.defaultdict(set)
+    for entry in entries:
+        corpora_of[entry["digest"]].add(entry["corpus"])
+    seen: set = set()
+    unique = []
+    for entry in entries:
+        if entry["digest"] not in seen:
+            seen.add(entry["digest"])
+            unique.append(entry)
+    done = skipped = failed = frames_done = windows_done = 0
+    gen_seconds = 0.0
+    started = time.perf_counter()
+    progress: Dict[str, Any] = {
+        "run_id": run_record.get("run_id"), "total_clips": len(unique), "done": 0,
+        "skipped_resume": 0, "failed": 0, "frames_done": 0, "windows_done": 0, "s_per_frame": None,
+        "s_per_window": None, "started_at": utc_now(), "updated_at": utc_now(), "state": "running",
+    }
+    write_json(progress_path, progress)
+    tmp_root = Path(tempfile.mkdtemp(prefix="video-llm-bench-a1-frames-"))
+    try:
+        for index, entry in enumerate(unique, 1):
+            digest = entry["digest"]
+            target = clip_file(out_dir, digest)
+            if clip_is_done(target):
+                skipped += 1
+                progress.update(skipped_resume=skipped, updated_at=utc_now())
+                write_json(progress_path, progress)
+                continue
+            corpora = corpora_of[digest]
+            clip_tmp = tmp_root / digest[:16]
+            clip_tmp.mkdir(parents=True, exist_ok=True)
+            clip_started = time.perf_counter()
+            approach.seed(MLX_SEED)
+            duration = duration_of(entry["path"], float(entry.get("duration_s") or 0.0))
+            windows = plan_windows(frames_per_window, duration)
+            rip_failures = frames_ok = records_written = window_records = 0
+            with target.open("w", encoding="utf-8") as stream:
+                stream.write(json.dumps({
+                    "record_type": "clip", "digest": digest, "corpus": entry["corpus"],
+                    "corpora": sorted(corpora), "stratum": entry["stratum"], "truth": entry["truth"],
+                    "duration_s": duration, "windows": windows,
+                    "frames_requested": sum(len(w["frame_times_s"]) for w in windows),
+                    "run_id": run_record.get("run_id")}, sort_keys=True) + "\n")
+                frame_index = 0
+                for window in windows:
+                    pngs: List[Path] = []
+                    rip_s_window = 0.0
+                    for at_s in window["frame_times_s"]:
+                        png = clip_tmp / "w{}_f{:03d}.png".format(window["index"], frame_index)
+                        rip_started = time.perf_counter()
+                        ok = ripper(entry["path"], at_s, png, duration)
+                        rip_s = time.perf_counter() - rip_started
+                        rip_s_window += rip_s
+                        if not ok:
+                            rip_failures += 1
+                            stream.write(json.dumps({
+                                "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
+                                "window_index": window["index"], "at_s": at_s, "rip_s": round(rip_s, 3)},
+                                sort_keys=True) + "\n")
+                        else:
+                            frames_ok += 1
+                            pngs.append(png)
+                            if "ocr" in corpora:
+                                gen_started = time.perf_counter()
+                                error = None
+                                try:
+                                    text, counters = approach.answer(png, "date")
+                                except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
+                                    text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
+                                elapsed = time.perf_counter() - gen_started
+                                gen_seconds += elapsed
+                                stream.write(json.dumps({
+                                    "record_type": "result", "digest": digest, "frame_index": frame_index,
+                                    "window_index": window["index"], "at_s": at_s, "prompt_kind": "date",
+                                    "prompt_sha256": sha256_text(PROMPTS["date"]), "raw_text": text,
+                                    "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s, 3), "error": error,
+                                    "counters": counters,
+                                    "parsed": {"dates": parse_dates(text), "years": parse_years(text),
+                                               "decades": parse_decades(text), "degenerate": is_degenerate(text)},
+                                }, sort_keys=True) + "\n")
+                                stream.flush()
+                                records_written += 1
+                        frame_index += 1
+                    if pngs and "era" in corpora:
+                        for family in families:
+                            gen_started = time.perf_counter()
+                            error = None
+                            try:
+                                text, counters = approach.answer_window(pngs, family, window)
+                            except Exception as exc:  # noqa: BLE001
+                                text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
+                            elapsed = time.perf_counter() - gen_started
+                            gen_seconds += elapsed
+                            value, reason = decode_contract(family, text) if error is None else (None, "generation error")
+                            stream.write(json.dumps({
+                                "record_type": "window_result", "digest": digest, "window_index": window["index"],
+                                "window": [window["start_s"], window["end_s"]],
+                                "frame_times_s": window["frame_times_s"], "frames_shown": len(pngs),
+                                "family": family, "prompt_sha256": sha256_text(A1_PROMPTS[family]),
+                                "raw_text": text, "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s_window, 3),
+                                "error": error, "counters": counters, "schema_valid": value is not None,
+                                "schema_invalid_reason": reason, "decoded": value,
+                            }, sort_keys=True) + "\n")
+                            stream.flush()
+                            records_written += 1
+                            window_records += 1
+                        windows_done += 1
+                    for png in pngs:
+                        png.unlink(missing_ok=True)
+                frames_done += frames_ok
+                clip_elapsed = time.perf_counter() - clip_started
+                stream.write(json.dumps({
+                    "record_type": "clip_done", "digest": digest, "frames_ok": frames_ok,
+                    "frames_failed": rip_failures, "results": records_written, "window_results": window_records,
+                    "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": peak_rss_bytes(),
+                    "finished_at": utc_now()}, sort_keys=True) + "\n")
+            shutil.rmtree(clip_tmp, ignore_errors=True)
+            approach.after_clip()
+            if records_written == 0:
+                failed += 1
+            done += 1
+            progress.update(
+                done=done, failed=failed, frames_done=frames_done, windows_done=windows_done, updated_at=utc_now(),
+                s_per_frame=round(gen_seconds / frames_done, 3) if frames_done else None,
+                s_per_window=round(gen_seconds / windows_done, 3) if windows_done else None,
+                elapsed_s=round(time.perf_counter() - started, 1), last_stratum=entry["stratum"],
+                peak_rss_bytes=peak_rss_bytes())
+            write_json(progress_path, progress)
+            log("[{}/{}] {} windows={} frames={} {:.1f}s stratum={}".format(
+                index, len(unique), digest[:12], len(windows), frames_ok, clip_elapsed, entry["stratum"]))
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+    progress.update(state="finished", updated_at=utc_now(), finished_at=utc_now())
+    write_json(progress_path, progress)
+    return progress
+
+
 def build_run_record(manifest: Dict[str, Any], manifest_path: Path, approach: Approach,
                      load_info: Dict[str, Any], frames: int, limit: Optional[int],
-                     corpus_filter: Optional[str], run_id: str) -> Dict[str, Any]:
-    return {
+                     corpus_filter: Optional[str], run_id: str,
+                     selection: Optional[str] = None) -> Dict[str, Any]:
+    record = {
         "record_type": "run",
         "schema_version": RUN_SCHEMA,
         "run_id": run_id,
@@ -915,6 +1438,7 @@ def build_run_record(manifest: Dict[str, Any], manifest_path: Path, approach: Ap
         "ocr_corpus_hash": manifest.get("ocr_corpus_hash"),
         "corpus_filter": corpus_filter,
         "limit": limit,
+        "selection": selection,
         "host": socket.gethostname(),
         "platform": platform.platform(),
         "python": platform.python_version(),
@@ -923,39 +1447,82 @@ def build_run_record(manifest: Dict[str, Any], manifest_path: Path, approach: Ap
         "bench_source_sha256": sha256_file(Path(__file__).resolve()),
         **load_info,
     }
+    if approach.id == A1_APPROACH_ID:
+        record.update({
+            "sampler_id": A1_SAMPLER_TEMPLATE.format(w=A1_MAX_WINDOWS, n=frames, s=int(A1_WINDOW_MAX_S)),
+            "frames_per_clip": None,
+            "frames_per_window": frames,
+            "max_windows": A1_MAX_WINDOWS,
+            "window_max_s": A1_WINDOW_MAX_S,
+            "min_window_s": A1_MIN_WINDOW_S,
+            "prompts_sha256": {"era": sha256_text(A1_ERA_PROMPT), "roomFeatures": sha256_text(A1_ROOM_PROMPT),
+                               "date": sha256_text(PROMPTS["date"])},
+            "system_prompt_sha256": {"era+roomFeatures": sha256_text(A1_SYSTEM_PROMPT),
+                                     "date": sha256_text(SYSTEM_PROMPT)},
+            "gen_params": {**A1_GEN_PARAMS, "date": GEN_PARAMS["date"]},
+            "decoder": "fail-closed mirror of VideoScanCore ContractDecoder; no repair",
+            "prompt_revision": A1_PROMPT_REVISION,
+        })
+    return record
+
+
+def stratified_smoke(entries: Sequence[Dict[str, Any]], k: int) -> List[Dict[str, Any]]:
+    """The first ERA clip (manifest order) of each of ``k`` distinct decades, preferring a
+    clip of at least 60 s so all three windows exist — the N-frames calibration set."""
+    picked: List[Dict[str, Any]] = []
+    decades: set = set()
+    era = [e for e in entries if e["corpus"] == "era" and float(e.get("duration_s") or 0) >= 60.0]
+    for e in era:
+        decade = e["stratum"].split("/")[1] if "/" in e["stratum"] else e["stratum"]
+        if decade in decades:
+            continue
+        decades.add(decade)
+        picked.append(e)
+        if len(picked) >= k:
+            break
+    return picked
 
 
 def run_command(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest)
     manifest = load_manifest(manifest_path)
     entries = list(manifest["clips"])
+    selection = None
     if args.corpus:
         entries = [e for e in entries if e["corpus"] == args.corpus]
+    if getattr(args, "smoke", None):
+        entries = stratified_smoke(entries, args.smoke)
+        selection = "stratified-smoke-{}".format(args.smoke)
     if args.limit is not None:
         entries = entries[:args.limit]
     if not entries:
         raise SystemExit("no clips selected")
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if args.approach != APPROACH_ID:
+    if args.approach not in (APPROACH_ID, A1_APPROACH_ID):
         raise SystemExit("unknown approach {}".format(args.approach))
+    frames = args.frames if args.frames is not None else (
+        A1_DEFAULT_FRAMES if args.approach == A1_APPROACH_ID else 5)
+    frames_key = "frames_per_window" if args.approach == A1_APPROACH_ID else "frames_per_clip"
     run_path = out_dir / "run.json"
     if run_path.is_file():
         previous = json.loads(run_path.read_text(encoding="utf-8"))
         if previous.get("corpus_hash") != manifest.get("corpus_hash"):
             raise SystemExit("run dir belongs to another corpus ({} ≠ {})".format(
                 previous.get("corpus_hash"), manifest.get("corpus_hash")))
-        if previous.get("frames_per_clip") != args.frames:
-            raise SystemExit("run dir was started with --frames {}".format(previous.get("frames_per_clip")))
+        if previous.get("approach_id", APPROACH_ID) != args.approach:
+            raise SystemExit("run dir was started with --approach {}".format(previous.get("approach_id")))
+        if previous.get(frames_key) != frames:
+            raise SystemExit("run dir was started with --frames {}".format(previous.get(frames_key)))
         run_id = previous["run_id"]
     else:
-        run_id = "{}-{}".format(dt.datetime.now().strftime("%Y%m%dT%H%M%S"), APPROACH_ID)
-    approach = A0Python(model_dir=args.model_dir)
+        run_id = "{}-{}".format(dt.datetime.now().strftime("%Y%m%dT%H%M%S"), args.approach)
+    approach = A1Python(model_dir=args.model_dir) if args.approach == A1_APPROACH_ID else A0Python(model_dir=args.model_dir)
     print("loading {} …".format(MODEL_ID), flush=True)
     load_info = approach.load()
     print("loaded in {:.1f}s; weights sha256 {}".format(load_info["load_s"], load_info["weights_sha256"][:12]), flush=True)
-    record = build_run_record(manifest, manifest_path, approach, load_info, args.frames,
-                              args.limit, args.corpus, run_id)
+    record = build_run_record(manifest, manifest_path, approach, load_info, frames,
+                              args.limit, args.corpus, run_id, selection)
     if run_path.is_file():
         # Resume: keep the first run record, append this session's load timing.
         previous = json.loads(run_path.read_text(encoding="utf-8"))
@@ -963,9 +1530,15 @@ def run_command(args: argparse.Namespace) -> int:
         write_json(run_path, previous)
     else:
         write_json(run_path, record)
-    progress = run_corpus(entries, out_dir, approach, args.frames, record)
-    print("done {} skipped {} failed {} s/frame {}".format(
-        progress["done"], progress["skipped_resume"], progress["failed"], progress["s_per_frame"]))
+    if args.approach == A1_APPROACH_ID:
+        progress = run_corpus_a1(entries, out_dir, approach, frames, record)
+        print("done {} skipped {} failed {} s/frame {} s/window {}".format(
+            progress["done"], progress["skipped_resume"], progress["failed"], progress["s_per_frame"],
+            progress["s_per_window"]))
+    else:
+        progress = run_corpus(entries, out_dir, approach, frames, record)
+        print("done {} skipped {} failed {} s/frame {}".format(
+            progress["done"], progress["skipped_resume"], progress["failed"], progress["s_per_frame"]))
     return 0
 
 
@@ -1147,6 +1720,8 @@ def summarize_run(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
             "s_per_frame_all_prompts": _rate(gen_seconds, frame_count) if frame_count else None,
             "s_per_generation": _rate(gen_seconds, result_count) if result_count else None,
             "rip_s_per_frame": _rate(rip_seconds, frame_count) if frame_count else None,
+            "s_per_clip": _rate(gen_seconds + rip_seconds, clips_done - clips_unreadable)
+            if clips_done - clips_unreadable > 0 else None,
             "peak_rss_gb": round(peak_rss / 1e9, 2) if peak_rss else None,
         },
         "era": {
@@ -1277,16 +1852,441 @@ def format_summary_markdown(summary: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# Summarize A1 (aggregates only)
+# ---------------------------------------------------------------------------
+def read_clip_records(path: Path) -> Dict[str, Any]:
+    """header, A0-shaped `result` records, A1 `window_result` records, footer."""
+    out: Dict[str, Any] = {"header": None, "results": [], "window_results": [], "footer": None}
+    with Path(path).open(encoding="utf-8") as stream:
+        for line in stream:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = record.get("record_type")
+            if kind == "clip":
+                out["header"] = record
+            elif kind == "result":
+                out["results"].append(record)
+            elif kind == "window_result":
+                out["window_results"].append(record)
+            elif kind == "clip_done":
+                out["footer"] = record
+    return out
+
+
+def clip_year_range(window_results: Sequence[Dict[str, Any]]) -> Optional[Tuple[float, float]]:
+    """One range per clip from its schema-valid `era` windows: [median of the
+    windows' FROM years, median of their TO years] (median(lo) ≤ median(hi) because
+    every lo ≤ its hi).  No valid window → None (no answer).  Validity is re-checked
+    by decoding the raw text again — the stored flag is never trusted on its own."""
+    los: List[int] = []
+    his: List[int] = []
+    for record in window_results:
+        if record.get("family") != "era" or record.get("error"):
+            continue
+        value, _ = decode_contract("era", record.get("raw_text") or "")
+        if value is None:
+            continue
+        los.append(value["yearRange"][0])
+        his.append(value["yearRange"][1])
+    if not los:
+        return None
+    return float(statistics.median(los)), float(statistics.median(his))
+
+
+def score_a1_era_clip(truth_year: int, window_results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    span = clip_year_range(window_results)
+    if span is None:
+        return {"truth": truth_year, "guess": None, "abs_err": None, "inside": None, "width": None}
+    lo, hi = span
+    mid = (lo + hi) / 2.0
+    return {"truth": truth_year, "guess": mid, "abs_err": abs(mid - truth_year),
+            "inside": lo <= truth_year <= hi, "width": hi - lo, "range": [lo, hi]}
+
+
+def aggregate_a1_era(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    base = aggregate_era(rows)
+    answered = [r for r in rows if r["abs_err"] is not None]
+    inside = sum(1 for r in answered if r["inside"])
+    base.update({
+        "answered_rate": _rate(len(answered), len(rows)),
+        "inside_of_answered": _rate(inside, len(answered)),
+        "inside_of_all": _rate(inside, len(rows)),
+        "median_width_years": statistics.median(r["width"] for r in answered) if answered else None,
+    })
+    return base
+
+
+def _reason_class(reason: Optional[str]) -> str:
+    """A fixed label per schemaInvalid reason, so the Markdown never quotes model text."""
+    text = reason or ""
+    for prefix, label in (("generation error", "generation error"), ("empty response", "empty"),
+                          ("not valid JSON", "not JSON (prose, fence, truncated, trailing text)"),
+                          ("wrong type at 'top level'", "not an object"), ("unknown key", "unknown key"),
+                          ("missing key", "missing key"), ("duplicate key", "duplicate key"),
+                          ("null at", "null value"), ("wrong type", "wrong type"),
+                          ("unknown family", "wrong family"), ("family '", "wrong family"),
+                          ("year ", "year outside 1900…2100"), ("yearRange", "yearRange shape / reversed"),
+                          ("window", "window shape"), ("selfConfidence", "selfConfidence outside 0…1"),
+                          ("'kind' word", "cue kind not in vocabulary"), ("'setting' word", "setting not in vocabulary"),
+                          ("response is", "oversize")):
+        if text.startswith(prefix):
+            return label
+    if "is empty" in text or "empty item" in text:
+        return "empty text"
+    if "frame time" in text:
+        return "bad atS"
+    if "cap" in text:
+        return "list over cap"
+    return "other"
+
+
+_SAFE_FEATURE = re.compile(r"^[a-z][a-z \-]{0,38}[a-z]$")
+
+
+def safe_feature(text: str) -> Optional[str]:
+    """A feature string fit for the repo: lowercase letters, spaces and hyphens only
+    (≤ 40 chars).  Anything with a capital (a possible proper noun), a digit, an
+    apostrophe or punctuation is dropped from the printed list, never rewritten."""
+    candidate = (text or "").strip()
+    return candidate if _SAFE_FEATURE.match(candidate) else None
+
+
+def summarize_a1_run(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    run_dir = Path(run_dir)
+    run_record = json.loads((run_dir / "run.json").read_text(encoding="utf-8")) if (run_dir / "run.json").is_file() else {}
+    progress = json.loads((run_dir / "progress.json").read_text(encoding="utf-8")) if (run_dir / "progress.json").is_file() else {}
+    by_digest: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(list)
+    for clip in manifest["clips"]:
+        by_digest[clip["digest"]].append(clip)
+    era_rows: List[Tuple[str, Dict[str, Any]]] = []
+    ocr_rows: List[Tuple[str, Dict[str, Any]]] = []
+    family_counts: Dict[str, collections.Counter] = {f: collections.Counter() for f in A1_FAMILY_ORDER}
+    invalid_classes: Dict[str, collections.Counter] = {f: collections.Counter() for f in A1_FAMILY_ORDER}
+    features: collections.Counter = collections.Counter()
+    printable_features: collections.Counter = collections.Counter()
+    settings: collections.Counter = collections.Counter()
+    feature_items = dropped_features = 0
+    frames = windows = window_gens = date_gens = errors = 0
+    gen_s = window_gen_s = rip_s = 0.0
+    peak_rss = 0
+    clips_done = clips_partial = clips_unreadable = 0
+    clip_dir = run_dir / "clips"
+    for path in sorted(clip_dir.glob("*.jsonl")) if clip_dir.is_dir() else []:
+        rec = read_clip_records(path)
+        header, footer = rec["header"], rec["footer"]
+        if header is None or not by_digest.get(header["digest"]):
+            continue
+        if footer is None:
+            clips_partial += 1
+        else:
+            clips_done += 1
+            peak_rss = max(peak_rss, int(footer.get("peak_rss_bytes") or 0))
+        if not rec["results"] and not rec["window_results"]:
+            clips_unreadable += 1
+            continue
+        frames += int(footer.get("frames_ok") or 0) if footer else 0
+        # rip seconds: per window record pair once (window rip_s), else per date frame
+        ripped_windows = set()
+        for r in rec["window_results"]:
+            gen_s += float(r.get("elapsed_s") or 0.0)
+            window_gen_s += float(r.get("elapsed_s") or 0.0)
+            window_gens += 1
+            errors += 1 if r.get("error") else 0
+            if r["window_index"] not in ripped_windows:
+                ripped_windows.add(r["window_index"])
+                rip_s += float(r.get("rip_s") or 0.0)
+            family = r.get("family")
+            if family not in family_counts:
+                continue
+            value, reason = (None, "generation error") if r.get("error") else decode_contract(family, r.get("raw_text") or "")
+            family_counts[family]["windows"] += 1
+            if value is None:
+                invalid_classes[family][_reason_class(reason)] += 1
+                continue
+            family_counts[family]["valid"] += 1
+            if family == "roomFeatures":
+                settings[value["setting"]] += 1
+                for item in value["features"]:
+                    feature_items += 1
+                    features[item.strip().lower()] += 1          # vocabulary size: a number only
+                    printable = safe_feature(item)               # judged on the RAW string, before lowercasing
+                    if printable is None:
+                        dropped_features += 1
+                    else:
+                        printable_features[printable] += 1
+        windows += len(ripped_windows)
+        for r in rec["results"]:
+            gen_s += float(r.get("elapsed_s") or 0.0)
+            date_gens += 1
+            errors += 1 if r.get("error") else 0
+            if r.get("window_index") not in ripped_windows:
+                rip_s += float(r.get("rip_s") or 0.0)
+        for entry in by_digest[header["digest"]]:
+            if entry["corpus"] == "era":
+                era_rows.append((entry["stratum"], score_a1_era_clip(int(entry["truth"]["year"]), rec["window_results"])))
+            elif entry["corpus"] == "ocr":
+                ocr_rows.append((entry["stratum"], score_ocr_clip(entry["truth"]["date"], rec["results"])))
+
+    def grouped(rows, key, agg):
+        groups: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(list)
+        for stratum, row in rows:
+            groups[key(stratum)].append(row)
+        return {name: agg(items) for name, items in sorted(groups.items())}
+
+    def decade_of(stratum: str) -> str:
+        parts = stratum.split("/")
+        return parts[1] if len(parts) > 1 else stratum
+
+    scored_clips = clips_done - clips_unreadable
+    # Ties broken alphabetically so the list is stable run to run.
+    safe_top = sorted(printable_features.items(), key=lambda kv: (-kv[1], kv[0]))[:20]
+    return {
+        "record_type": "summary_a1",
+        "generated_at": utc_now(),
+        "approach_id": run_record.get("approach_id", A1_APPROACH_ID),
+        "run_id": run_record.get("run_id"),
+        "model": run_record.get("model"),
+        "weights_sha256": run_record.get("weights_sha256"),
+        "sampler_id": run_record.get("sampler_id"),
+        "frames_per_window": run_record.get("frames_per_window"),
+        "host": run_record.get("host"),
+        "platform": run_record.get("platform"),
+        "mlx_vlm_version": run_record.get("mlx_vlm_version"),
+        "mlx_version": run_record.get("mlx_version"),
+        "git_sha": run_record.get("git_sha"),
+        "corpus_hash": run_record.get("corpus_hash") or manifest.get("corpus_hash"),
+        "prompts_sha256": run_record.get("prompts_sha256"),
+        "selection": run_record.get("selection"),
+        "load_s": run_record.get("load_s"),
+        "run_state": progress.get("state", "unknown"),
+        "clips": {"done": clips_done, "partial": clips_partial, "unreadable": clips_unreadable,
+                  "era_scored": len(era_rows), "ocr_scored": len(ocr_rows),
+                  "era_in_manifest": manifest["counts"]["era"], "ocr_in_manifest": manifest["counts"]["ocr"]},
+        "cost": {
+            "frames": frames, "windows": windows, "window_generations": window_gens, "date_generations": date_gens,
+            "errors": errors,
+            "s_per_clip": _rate(gen_s + rip_s, scored_clips) if scored_clips > 0 else None,
+            "s_per_frame": _rate(gen_s, frames) if frames else None,
+            "s_per_window_generation": _rate(window_gen_s, window_gens) if window_gens else None,
+            "s_per_date_generation": _rate(gen_s - window_gen_s, date_gens) if date_gens else None,
+            "rip_s_per_frame": _rate(rip_s, frames) if frames else None,
+            "peak_rss_gb": round(peak_rss / 1e9, 2) if peak_rss else None,
+        },
+        "schema": {f: {"windows": c["windows"], "valid": c["valid"], "valid_rate": _rate(c["valid"], c["windows"]),
+                       "invalid_by_class": dict(invalid_classes[f].most_common())}
+                   for f, c in family_counts.items()},
+        "era": {
+            "all": aggregate_a1_era([row for _, row in era_rows]),
+            "by_family": grouped(era_rows, lambda s: s.split("/")[0], aggregate_a1_era),
+            "by_decade": grouped(era_rows, decade_of, aggregate_a1_era),
+            "by_stratum": grouped(era_rows, lambda s: s, aggregate_a1_era),
+        },
+        "ocr": {
+            "all": aggregate_ocr([row for _, row in ocr_rows]),
+            "by_stratum": grouped(ocr_rows, lambda s: s, aggregate_ocr),
+        },
+        "room": {
+            "valid": family_counts["roomFeatures"]["valid"],
+            "feature_items": feature_items,
+            "vocabulary": len(features),
+            "dropped_unsafe_items": dropped_features,
+            "settings": dict(settings.most_common()),
+            "top20": safe_top,
+        },
+    }
+
+
+def a1_vs_a0_reading(a1: Dict[str, Any], a0: Optional[Dict[str, Any]]) -> List[str]:
+    """Three generated sentences — numbers only, no judgement words added by hand."""
+    e1 = a1["era"]["all"]
+    o1 = a1["ocr"]["all"]
+    c1 = a1["cost"]
+    if a0 is None:
+        return ["*(no A0 run passed to `summarize`; the A1-vs-A0 reading needs both runs)*"]
+    e0 = a0["era"]["all"]
+    o0 = a0["ocr"]["all"]
+    c0 = a0["cost"]
+    answered0 = _rate(e0["answered"], e0["n"])
+    lines = [
+        "1. **Answered rate:** A0 {} → A1 {} of {} readable ERA clips; MAE {} → {} y where answered; "
+        "±5 y of all clips {} → {}; truth inside A1's range {} of answered (median width {} y).".format(
+            _pct(answered0), _pct(e1.get("answered_rate")), e1["n"], _num(e0["mae_years"]), _num(e1["mae_years"]),
+            _pct(e0["within_5_of_all"]), _pct(e1["within_5_of_all"]), _pct(e1.get("inside_of_answered")),
+            _num(e1.get("median_width_years"))),
+        "2. **OCR (same `date` prompt):** any-frame exact {} → {}, majority exact {} → {}, year match {} → {} "
+        "(A1 reads {} frames per OCR clip vs A0's 5, which favours any-frame; majority is the fairer comparison).".format(
+            _pct(o0["any_frame_exact"]), _pct(o1["any_frame_exact"]), _pct(o0["majority_exact"]),
+            _pct(o1["majority_exact"]), _pct(o0["year_match"]), _pct(o1["year_match"]),
+            _num(_rate(o1["date_frames"], o1["n"]) if o1["n"] else None, "{:.0f}")),
+        "3. **Cost:** {} s/clip (A0) → {} s/clip (A1, era + roomFeatures windows plus OCR date frames); "
+        "{} s per multi-image window generation; peak RSS {} → {} GB.".format(
+            _num(c0.get("s_per_clip")), _num(c1.get("s_per_clip")), _num(c1.get("s_per_window_generation"), "{:.2f}"),
+            _num(c0.get("peak_rss_gb"), "{:.2f}"), _num(c1.get("peak_rss_gb"), "{:.2f}")),
+    ]
+    return lines
+
+
+def format_a1_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = None) -> str:
+    """The A1 section (aggregates only; same privacy rules as A0's)."""
+    lines: List[str] = []
+    lines.append("## Approach `{}` — chronological windows + strict JSON contract (same model and weights)".format(
+        summary["approach_id"]))
+    lines.append("")
+    lines.append("**A1 vs A0**")
+    lines.append("")
+    lines.extend(a1_vs_a0_reading(summary, a0))
+    lines.append("")
+    clips = summary["clips"]
+    cost = summary["cost"]
+    lines.append("| Run | Value |")
+    lines.append("|---|---|")
+    lines.append("| generated | {} |".format(summary["generated_at"]))
+    lines.append("| run id | {} |".format(summary.get("run_id") or "—"))
+    lines.append("| model | `{}` |".format(summary.get("model") or "—"))
+    lines.append("| weights sha256 (first 12) | `{}` |".format(_short(summary.get("weights_sha256"))))
+    lines.append("| sampler | `{}` (≤ {} windows — start / middle / end of the middle 90 %, each ≤ {:.0f} s, "
+                 "{} frames each shown together in one prompt; a middle-90 % span under {:.0f} s gets one window) |".format(
+                     summary.get("sampler_id") or "—", A1_MAX_WINDOWS, A1_WINDOW_MAX_S,
+                     summary.get("frames_per_window") or "—", A1_MAX_WINDOWS * A1_MIN_WINDOW_S))
+    lines.append("| prompts | era / roomFeatures strict JSON (§3.3), OCR `date` verbatim from A0; sha256 first 12: {} |".format(
+        ", ".join("{} `{}`".format(k, _short(v)) for k, v in sorted((summary.get("prompts_sha256") or {}).items())) or "—"))
+    lines.append("| decoding | fail-closed mirror of `ContractDecoder`: raw text must be exactly one JSON object; "
+                 "unknown key, wrong type, null, missing key, wrong family, year outside 1900…2100, reversed range → "
+                 "`schemaInvalid`; never repaired |")
+    lines.append("| host | {} · {} |".format(summary.get("host") or "—", summary.get("platform") or "—"))
+    lines.append("| mlx-vlm / mlx | {} / {} |".format(summary.get("mlx_vlm_version") or "—", summary.get("mlx_version") or "—"))
+    lines.append("| git | `{}` |".format(_short(summary.get("git_sha"))))
+    lines.append("| corpus hash (first 12) | `{}` |".format(_short(summary.get("corpus_hash"))))
+    lines.append("| run state | {}{} |".format(summary.get("run_state", "unknown"),
+                                             " · selection {}".format(summary["selection"]) if summary.get("selection") else ""))
+    lines.append("| clips | {} done · {} partial · {} unreadable · ERA scored {}/{} · OCR scored {}/{} |".format(
+        clips["done"], clips["partial"], clips["unreadable"], clips["era_scored"], clips["era_in_manifest"],
+        clips["ocr_scored"], clips["ocr_in_manifest"]))
+    if clips["era_scored"] + clips["ocr_scored"] + clips["unreadable"] < clips["era_in_manifest"] + clips["ocr_in_manifest"]:
+        lines.append("")
+        lines.append("**Partial run:** the tables below cover only the clips scored so far.")
+    lines.append("")
+    lines.append("### Cost")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---|")
+    lines.append("| model load | {} s |".format(_num(summary.get("load_s"))))
+    lines.append("| s / clip (all generations + ffmpeg) | {} |".format(_num(cost["s_per_clip"], "{:.1f}")))
+    lines.append("| s / frame (all generations ÷ frames ripped) | {} |".format(_num(cost["s_per_frame"], "{:.2f}")))
+    lines.append("| s / window generation (multi-image, era or roomFeatures) | {} |".format(
+        _num(cost["s_per_window_generation"], "{:.2f}")))
+    lines.append("| s / OCR date generation (one frame) | {} |".format(_num(cost["s_per_date_generation"], "{:.2f}")))
+    lines.append("| ffmpeg rip s / frame | {} |".format(_num(cost["rip_s_per_frame"], "{:.2f}")))
+    lines.append("| peak RSS | {} GB |".format(_num(cost["peak_rss_gb"], "{:.2f}")))
+    lines.append("| frames · windows · window gens · date gens · errors | {} · {} · {} · {} · {} |".format(
+        cost["frames"], cost["windows"], cost["window_generations"], cost["date_generations"], cost["errors"]))
+    lines.append("")
+    lines.append("### Schema-valid rate per family (per window)")
+    lines.append("")
+    lines.append("| Family | windows | schema-valid | rate | invalid, by reason |")
+    lines.append("|---|---|---|---|---|")
+    for family, agg in summary["schema"].items():
+        reasons = ", ".join("{} {}".format(name, n) for name, n in agg["invalid_by_class"].items()) or "—"
+        lines.append("| {} | {} | {} | {} | {} |".format(family, agg["windows"], agg["valid"], _pct(agg["valid_rate"]), reasons))
+    lines.append("")
+    lines.append("### ERA — yearRange vs truth")
+    lines.append("")
+    lines.append("Rule: a schema-valid `era` window is an answer. Per clip, range = [median FROM, median TO] over its "
+                 "valid windows; point estimate = the range midpoint (MAE, ±5 y). *inside* = truth year within the "
+                 "range, inclusive. A clip with no valid window is **no answer** (excluded from MAE, counted in the "
+                 "rate). Truth as for A0.")
+    lines.append("")
+    lines.append("| Group | n | answered | no answer | MAE y | median y | ±5 y (answered) | ±5 y (all) | inside range (answered) | inside range (all) | median width y |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+
+    def era_row(name: str, agg: Dict[str, Any]) -> str:
+        return "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            name, agg["n"], agg["answered"], _pct(agg["no_answer_rate"]), _num(agg["mae_years"]),
+            _num(agg["median_err_years"]), _pct(agg["within_5_of_answered"]), _pct(agg["within_5_of_all"]),
+            _pct(agg["inside_of_answered"]), _pct(agg["inside_of_all"]), _num(agg["median_width_years"]))
+
+    era = summary["era"]
+    lines.append(era_row("**all**", era["all"]))
+    for name, agg in era["by_family"].items():
+        lines.append(era_row("family: {}".format(name), agg))
+    for name, agg in era["by_decade"].items():
+        lines.append(era_row("decade: {}".format(name), agg))
+    for name, agg in era["by_stratum"].items():
+        lines.append(era_row("stratum: {}".format(name), agg))
+    lines.append("")
+    lines.append("### OCR — A0's `date` prompt on the A1 window frames")
+    lines.append("")
+    lines.append("Same truth and columns as A0. A1 reads every window frame (up to 3 × N per clip) instead of 5 stills.")
+    lines.append("")
+    lines.append("| Group | n | any-frame exact | majority exact | year match | schema-valid | date frames | frames with a date | degenerate frames |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+
+    def ocr_row(name: str, agg: Dict[str, Any]) -> str:
+        return "| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            name, agg["n"], _pct(agg["any_frame_exact"]), _pct(agg["majority_exact"]), _pct(agg["year_match"]),
+            _pct(agg["schema_valid"]), agg["date_frames"], _pct(agg["frames_with_date_rate"]),
+            _pct(agg["degenerate_frame_rate"]))
+
+    ocr = summary["ocr"]
+    lines.append(ocr_row("**all**", ocr["all"]))
+    for name, agg in ocr["by_stratum"].items():
+        lines.append(ocr_row("stratum: {}".format(name), agg))
+    lines.append("")
+    room = summary["room"]
+    lines.append("### roomFeatures")
+    lines.append("")
+    lines.append("No ground truth yet (design §4: needs Rick's place labels); reported for shape only. Vocabulary = "
+                 "distinct lower-cased feature strings over schema-valid windows. The top-20 list prints only strings "
+                 "of lowercase letters, spaces and hyphens; any string with a capital, digit or punctuation is "
+                 "counted but never printed.")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---|")
+    lines.append("| schema-valid windows | {} of {} ({}) |".format(
+        room["valid"], summary["schema"]["roomFeatures"]["windows"], _pct(summary["schema"]["roomFeatures"]["valid_rate"])))
+    lines.append("| feature items · distinct vocabulary | {} · {} |".format(room["feature_items"], room["vocabulary"]))
+    lines.append("| items not printable (capital / digit / punctuation) | {} |".format(room["dropped_unsafe_items"]))
+    lines.append("| setting | {} |".format(", ".join("{} {}".format(k, v) for k, v in room["settings"].items()) or "—"))
+    lines.append("")
+    lines.append("| # | feature | occurrences (a window may repeat an item) |")
+    lines.append("|---|---|---|")
+    for rank, (name, count) in enumerate(room["top20"], 1):
+        lines.append("| {} | {} | {} |".format(rank, name, count))
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def summarize_command(args: argparse.Namespace) -> int:
     manifest = load_manifest(Path(args.manifest))
-    summary = summarize_run(Path(args.run), manifest)
-    markdown = format_summary_markdown(summary)
+    a0_summary = a1_summary = None
+    for run in args.run:
+        run_json = Path(run) / "run.json"
+        approach = json.loads(run_json.read_text(encoding="utf-8")).get("approach_id") if run_json.is_file() else APPROACH_ID
+        if approach == A1_APPROACH_ID:
+            a1_summary = summarize_a1_run(Path(run), manifest)
+        else:
+            a0_summary = summarize_run(Path(run), manifest)
+    parts: List[str] = []
+    if a0_summary is not None:
+        parts.append(format_summary_markdown(a0_summary))
+    else:
+        parts.append("# Video LLM benchmarks\n\n*Written by `tools/video-llm-bench/bench.py summarize`; aggregates only.*\n\n")
+    if a1_summary is not None:
+        parts.append(format_a1_markdown(a1_summary, a0_summary))
+    markdown = "".join(parts)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(markdown, encoding="utf-8")
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(summary, indent=1, sort_keys=True), encoding="utf-8")
+        Path(args.json_out).write_text(json.dumps({"a0": a0_summary, "a1": a1_summary}, indent=1, sort_keys=True),
+                                       encoding="utf-8")
     print(markdown)
     return 0
 
@@ -1306,8 +2306,11 @@ def make_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="run an approach over a manifest; resume-safe")
     run.add_argument("--manifest", required=True)
-    run.add_argument("--approach", default=APPROACH_ID, choices=[APPROACH_ID])
-    run.add_argument("--frames", type=int, default=5)
+    run.add_argument("--approach", default=APPROACH_ID, choices=[APPROACH_ID, A1_APPROACH_ID])
+    run.add_argument("--frames", type=int, default=None,
+                     help="a0-py: stills per clip (default 5); a1-py: frames per window (default 6)")
+    run.add_argument("--smoke", type=int, default=None,
+                     help="only the first ERA clip (>= 60 s) of each of K distinct decades — the N calibration set")
     run.add_argument("--limit", type=int, default=None, help="first N clips (after --corpus filter)")
     run.add_argument("--corpus", choices=["era", "ocr"], default=None, help="only this corpus")
     run.add_argument("--out", required=True, help="run directory (keep it under .scratch/)")
@@ -1316,7 +2319,8 @@ def make_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=run_command)
 
     summarize = commands.add_parser("summarize", help="aggregates only → Markdown (+ stdout)")
-    summarize.add_argument("--run", required=True)
+    summarize.add_argument("--run", required=True, action="append",
+                           help="run directory; repeat to put A0 and A1 side by side (approach read from run.json)")
     summarize.add_argument("--manifest", required=True)
     summarize.add_argument("--out", help="Markdown file, e.g. docs/reviews/video_llm_benchmarks.md")
     summarize.add_argument("--json-out", help="optional JSON aggregate (keep under .scratch/)")
