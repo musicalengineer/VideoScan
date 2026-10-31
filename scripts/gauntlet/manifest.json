@@ -31967,6 +31967,22 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_video_llm_bench_a3.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench_a3.py"
+      ],
+      "tests": [
+        "test_a3_is_registered_with_the_32b_model_through_a2s_paths",
+        "test_a3_markdown_carries_no_path_digest_model_text_or_proper_noun",
+        "test_a3_reading_against_a2_and_without_it",
+        "test_select_entries_is_pure_and_names_the_selection",
+        "test_summarize_command_puts_a3_last"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_videoscan_stress.py",
       "stage": "unit",
       "suites": [
@@ -34731,6 +34747,10 @@
         },
         {
           "name": "tests/test_video_llm_bench_watchdog.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench_a3.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

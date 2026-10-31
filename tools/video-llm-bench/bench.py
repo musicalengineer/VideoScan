@@ -1148,6 +1148,29 @@ class A2Python(A1Python):
         super().__init__(model_id=model_id, model_dir=model_dir)
 
 
+# ===========================================================================
+# Approach A3 (design §5 row A2's bigger sibling, 2026-10-31): Qwen3-VL-32B-
+# Instruct 4-bit through exactly A2's paths.  Meant for the Rick-dated stratum
+# only (`--stratum-prefix rick-dated/`): the one stratum with era truth, 72
+# clips, so the 32B's 3–4× cost buys a reading where a reading exists.
+#
+# Memory (worst case): weights ≈ 18 GB resident + mlx cache limit + one
+# window's generation (≤ N × ~256 visual tokens + ≤ 400 output tokens, KV for
+# 64 layers ≈ 4× the 8B's) ≈ 24 GB; nothing cached across clips.  Fits the
+# Ultra (96 GB) beside Ollama's 70B (≈ 40 GB); NOT the M4 (64 GB) beside it.
+# ===========================================================================
+A3_APPROACH_ID = "a3-py"
+A3_MODEL_ID = "mlx-community/Qwen3-VL-32B-Instruct-4bit"
+
+
+class A3Python(A1Python):
+    """A2's prompts, generation and decoding on the 32B model."""
+    id = A3_APPROACH_ID
+
+    def __init__(self, model_id: str = A3_MODEL_ID, model_dir: Optional[Path] = None):
+        super().__init__(model_id=model_id, model_dir=model_dir)
+
+
 # id → (class, model id, default frames, OCR sampler).  The one registry `run`
 # and `summarize` consult; A0 is stills-only (its loop is `run_corpus`).
 APPROACHES: Dict[str, Dict[str, Any]] = {
@@ -1156,6 +1179,8 @@ APPROACHES: Dict[str, Dict[str, Any]] = {
     A1_APPROACH_ID: {"cls": A1Python, "model": MODEL_ID, "default_frames": A1_DEFAULT_FRAMES,
                      "ocr_sampler": OCR_SAMPLER_WINDOW_FRAMES, "windows": True},
     A2_APPROACH_ID: {"cls": A2Python, "model": A2_MODEL_ID, "default_frames": A1_DEFAULT_FRAMES,
+                     "ocr_sampler": OCR_SAMPLER_STILLS, "windows": True},
+    A3_APPROACH_ID: {"cls": A3Python, "model": A3_MODEL_ID, "default_frames": A1_DEFAULT_FRAMES,
                      "ocr_sampler": OCR_SAMPLER_STILLS, "windows": True},
 }
 
@@ -1872,18 +1897,33 @@ def stratified_smoke(entries: Sequence[Dict[str, Any]], k: int) -> List[Dict[str
     return picked
 
 
+def select_entries(entries: Sequence[Dict[str, Any]], corpus: Optional[str] = None,
+                   stratum_prefix: Optional[str] = None, smoke: Optional[int] = None,
+                   limit: Optional[int] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """The clips a run covers and the `selection` word for its record: corpus
+    filter, then a stratum prefix (`rick-dated/` = the one stratum with era
+    truth), then the smoke set, then `limit`.  Pure."""
+    chosen = list(entries)
+    words: List[str] = []
+    if corpus:
+        chosen = [e for e in chosen if e["corpus"] == corpus]
+    if stratum_prefix:
+        chosen = [e for e in chosen if str(e.get("stratum", "")).startswith(stratum_prefix)]
+        words.append("stratum-{}".format(stratum_prefix.rstrip("/").replace("/", "-")))
+    if smoke:
+        chosen = stratified_smoke(chosen, smoke)
+        words.append("stratified-smoke-{}".format(smoke))
+    if limit is not None:
+        chosen = chosen[:limit]
+    return chosen, ("+".join(words) or None)
+
+
 def run_command(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest)
     manifest = load_manifest(manifest_path)
-    entries = list(manifest["clips"])
-    selection = None
-    if args.corpus:
-        entries = [e for e in entries if e["corpus"] == args.corpus]
-    if getattr(args, "smoke", None):
-        entries = stratified_smoke(entries, args.smoke)
-        selection = "stratified-smoke-{}".format(args.smoke)
-    if args.limit is not None:
-        entries = entries[:args.limit]
+    entries, selection = select_entries(manifest["clips"], corpus=args.corpus,
+                                        stratum_prefix=getattr(args, "stratum_prefix", None),
+                                        smoke=getattr(args, "smoke", None), limit=args.limit)
     if not entries:
         raise SystemExit("no clips selected")
     out_dir = Path(args.out)
@@ -2736,13 +2776,52 @@ def format_a2_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = N
         ocr_heading=A2_OCR_HEADING, ocr_note=A2_OCR_NOTE)
 
 
+def a3_reading(a3: Dict[str, Any], a2: Optional[Dict[str, Any]]) -> List[str]:
+    """Two generated sentences for the 32B on the Rick-dated stratum against the
+    8B — numbers only; a missing A2 prints as "—"."""
+    e3, c3 = a3["era"]["all"], a3["cost"]
+    c2 = a2["cost"] if a2 else {}
+    return [
+        "1. **Era, 32B vs 8B on the Rick-dated stratum:** MAE A2 {} → A3 {} y; truth inside the range {} → {} of "
+        "answered; median width {} → {} y; answered {} → {}.".format(
+            _num(_era_mae(a2, "by_family", "rick-dated")), _num(e3.get("mae_years")),
+            _pct(_era_field(a2, "by_family", "rick-dated", "inside_of_answered")), _pct(e3.get("inside_of_answered")),
+            _num(_era_field(a2, "by_family", "rick-dated", "median_width_years")), _num(e3.get("median_width_years")),
+            _pct(_era_field(a2, "by_family", "rick-dated", "answered_rate")), _pct(e3.get("answered_rate"))),
+        "2. **Cost, 32B vs 8B:** {} → {} s per multi-image window generation; peak RSS {} → {} GB; model load {} s. "
+        "A3 ran the Rick-dated stratum only ({} clips), so its OCR table is empty by design.".format(
+            _num(c2.get("s_per_window_generation"), "{:.2f}"), _num(c3.get("s_per_window_generation"), "{:.2f}"),
+            _num(c2.get("peak_rss_gb"), "{:.2f}"), _num(c3.get("peak_rss_gb"), "{:.2f}"), _num(a3.get("load_s")),
+            a3.get("clips", {}).get("done", "—")),
+    ]
+
+
+def _era_field(summary: Optional[Dict[str, Any]], group: str, key: str, field: str) -> Optional[float]:
+    if not summary:
+        return None
+    return (summary.get("era", {}).get(group, {}).get(key) or {}).get(field)
+
+
+A3_HEADING = "Qwen3-VL-32B through A2's paths — the Rick-dated stratum only"
+A3_OCR_HEADING = "OCR — not run for A3 (Rick-dated stratum only)"
+A3_OCR_NOTE = "A3 covers the one stratum with era truth; the OCR corpus was not sent to the 32B."
+
+
+def format_a3_markdown(summary: Dict[str, Any], a2: Optional[Dict[str, Any]] = None) -> str:
+    return format_a1_markdown(
+        summary, None, heading=A3_HEADING, reading_title="A3 vs A2", reading=a3_reading(summary, a2),
+        sampler_note="; OCR corpus: not run", ocr_heading=A3_OCR_HEADING, ocr_note=A3_OCR_NOTE)
+
+
 def summarize_command(args: argparse.Namespace) -> int:
     manifest = load_manifest(Path(args.manifest))
-    a0_summary = a1_summary = a2_summary = None
+    a0_summary = a1_summary = a2_summary = a3_summary = None
     for run in args.run:
         run_json = Path(run) / "run.json"
         approach = json.loads(run_json.read_text(encoding="utf-8")).get("approach_id") if run_json.is_file() else APPROACH_ID
-        if approach == A2_APPROACH_ID:
+        if approach == A3_APPROACH_ID:
+            a3_summary = summarize_a1_run(Path(run), manifest)
+        elif approach == A2_APPROACH_ID:
             a2_summary = summarize_a1_run(Path(run), manifest)
         elif approach == A1_APPROACH_ID:
             a1_summary = summarize_a1_run(Path(run), manifest)
@@ -2757,13 +2836,16 @@ def summarize_command(args: argparse.Namespace) -> int:
         parts.append(format_a1_markdown(a1_summary, a0_summary))
     if a2_summary is not None:
         parts.append(format_a2_markdown(a2_summary, a0_summary, a1_summary))
+    if a3_summary is not None:
+        parts.append(format_a3_markdown(a3_summary, a2_summary))
     markdown = "".join(parts)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(markdown, encoding="utf-8")
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps({"a0": a0_summary, "a1": a1_summary, "a2": a2_summary}, indent=1, sort_keys=True),
+        Path(args.json_out).write_text(json.dumps({"a0": a0_summary, "a1": a1_summary, "a2": a2_summary, "a3": a3_summary},
+                                                  indent=1, sort_keys=True),
                                        encoding="utf-8")
     print(markdown)
     return 0
@@ -2791,6 +2873,8 @@ def make_parser() -> argparse.ArgumentParser:
                      help="only the first ERA clip (>= 60 s) of each of K distinct decades — the N calibration set")
     run.add_argument("--limit", type=int, default=None, help="first N clips (after --corpus filter)")
     run.add_argument("--corpus", choices=["era", "ocr"], default=None, help="only this corpus")
+    run.add_argument("--stratum-prefix", default=None,
+                     help="only clips whose stratum starts with this (e.g. rick-dated/ — the one stratum with era truth)")
     run.add_argument("--out", required=True, help="run directory (keep it under .scratch/)")
     run.add_argument("--model-dir", default=None,
                      help="local snapshot directory of the model (offline); default: HF cache via snapshot_download")
