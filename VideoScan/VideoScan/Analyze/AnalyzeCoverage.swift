@@ -83,6 +83,11 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     /// Fingerprint Sound's stamp (fingerprinted or "no sound").
     var hasSoundStamp: Bool
     var soundStampAt: Date?
+    /// GH #402: this row's stored OCR date captions the verdict calls
+    /// degenerate (`!!!!…`, written before the caption path refused them).
+    /// Read-only count for the Catalog Status information line. One Int a
+    /// row: +8 bytes, ≈ 0.8 MB more at 100k, freed with the inputs.
+    var degenerateOCRDates: Int
 
     init(fullPath: String, filename: String = "", streamTypeRaw: String = StreamType.videoAndAudio.rawValue,
          sizeBytes: Int64 = 1, isHidden: Bool = false, lifecycleOK: Bool = true,
@@ -92,8 +97,9 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
          hasTranscript: Bool = false, isPaired: Bool = false, hasHash: Bool = false,
          hasEmbeddedDate: Bool = false, hasInferredDate: Bool = false, hasUserDate: Bool = false,
          hasFullDigest: Bool = false, fullDigestAt: Date? = nil,
-         hasSoundStamp: Bool = false, soundStampAt: Date? = nil) {
+         hasSoundStamp: Bool = false, soundStampAt: Date? = nil, degenerateOCRDates: Int = 0) {
         self.fullPath = fullPath
+        self.degenerateOCRDates = degenerateOCRDates
         self.filename = filename.isEmpty ? (fullPath as NSString).lastPathComponent : filename
         self.streamTypeRaw = streamTypeRaw
         self.sizeBytes = sizeBytes
@@ -155,7 +161,10 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   hasFullDigest: VideoScanModel.storedFullDigest(r) != nil,
                   fullDigestAt: VideoScanModel.storedFullDigest(r) == nil ? nil : r.contentFixity?.computedAt,
                   hasSoundStamp: r.audioFingerprint != nil,
-                  soundStampAt: r.audioFingerprint?.computedAt)
+                  soundStampAt: r.audioFingerprint?.computedAt,
+                  // O(this row's OCR dates); rows without any skip the verdict.
+                  degenerateOCRDates: r.ocrDateCandidates.isEmpty
+                      ? 0 : CaptionTextQuality.partition(r.ocrDateCandidates).refused)
     }
 }
 
@@ -259,6 +268,9 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// Rows marked Missing, split by whether another copy is present (the
     /// Catalog Status band's review items, Rick 2026-10-20).
     var missingCopies = MissingCopyCounts()
+    /// GH #402: degenerate OCR date captions still stored on live rows
+    /// (Catalog Status information line; read-only, nothing supersedes them yet).
+    var degenerateOCRDates = 0
     /// When these counts were computed — a CAPTION ("counts as of …"),
     /// deliberately outside `==` below.
     var computedAt: Date = Date(timeIntervalSince1970: 0)
@@ -275,6 +287,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.correlate == rhs.correlate
             && lhs.activeRecords == rhs.activeRecords
             && lhs.missingCopies == rhs.missingCopies
+            && lhs.degenerateOCRDates == rhs.degenerateOCRDates
     }
 
     /// Cyclers whose per-record stamp does not exist today, so the
@@ -387,6 +400,7 @@ enum AnalyzeCoverageCalculator {
 
         for r in inputs {
             if r.isHidden { continue }
+            report.degenerateOCRDates += r.degenerateOCRDates
             let (root, reachable) = rootAndReachability(r.fullPath)
             let stream = StreamType(rawValue: r.streamTypeRaw) ?? .ffprobeFailed
             let classification = AnalysisScope.classify(streamTypeRaw: r.streamTypeRaw, filename: r.filename)

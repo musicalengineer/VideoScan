@@ -33,9 +33,10 @@ struct CatalogRealityInputs: Sendable, Equatable {
 
 enum CatalogRealityFactsBuilder {
 
-    static func inputs(facts: CatalogFreshnessFacts, missing: MissingCopyCounts) -> CatalogRealityInputs {
+    static func inputs(facts: CatalogFreshnessFacts, missing: MissingCopyCounts,
+                       degenerateOCRDates: Int = 0) -> CatalogRealityInputs {
         CatalogRealityInputs(facts: realityFacts(facts), review: review(facts.integrity, missing: missing),
-                             information: information(facts.integrity))
+                             information: information(facts.integrity, degenerateOCRDates: degenerateOCRDates))
     }
 
     /// The colour's inputs — no review item can reach them.
@@ -78,12 +79,23 @@ enum CatalogRealityFactsBuilder {
         ]
     }
 
-    static func information(_ integrity: IntegrityReportFacts) -> [String] {
+    static func information(_ integrity: IntegrityReportFacts, degenerateOCRDates: Int = 0) -> [String] {
         var out = integrity.reality.information
         if integrity.reality.findingsCapped {
             out.append("the last check kept its first \(IntegrityReport.findingsCap.formatted()) findings — the counts may be low")
         }
+        // GH #402: said, never counted — information lines change neither
+        // the colour nor "N to review".
+        if let line = degenerateOCRLine(degenerateOCRDates) { out.append(line) }
         return out
+    }
+
+    /// "2,850 degenerate OCR captions stored before 2026-10-30 — not shown in
+    /// the inspector"; nil at zero. The date is the build that started
+    /// refusing them: any such row on disk was written before it.
+    static func degenerateOCRLine(_ n: Int) -> String? {
+        guard n > 0 else { return nil }
+        return "\(n.formatted()) degenerate OCR caption\(n == 1 ? "" : "s") stored before 2026-10-30 — not shown in the inspector"
     }
 
     /// What the file check's record says about presence (a run from

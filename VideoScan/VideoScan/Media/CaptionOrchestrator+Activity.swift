@@ -37,6 +37,7 @@ extension CaptionOrchestrator {
         liveCarriedOver = 0
         liveFlaggedNeedsReformat = 0
         liveReadOnlyLeftAsIs = 0
+        liveDegenerateRefused = 0
         // Stale user-skip flags from a prior batch must not leak into
         // a fresh run — a lane ID is per-batch and never reused, but
         // clearing the set keeps `userSkippedLaneIDs.contains(id)`

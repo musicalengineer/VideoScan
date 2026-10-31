@@ -320,6 +320,8 @@ extension CaptionOrchestrator {
             "\(liveFlaggedNeedsReformat) newly flagged needs reformat",
             "\(liveSkipOffline) on offline volumes (skipped, not failed)",
             "\(liveReadOnlyLeftAsIs) archived / in-triage rows left as is (not purged or flagged)",
+            // GH #402: captions refused as degenerate model output (not stored).
+            "degenerate refused · \(liveDegenerateRefused)",
         ]
         if let a = dossierAdmission {
             parts.append("admitted \(a.archived) Archived + \(a.inTriage) In Triage")

@@ -449,6 +449,36 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CaptionTextQualityTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CaptionTextQualityTests"
+      ],
+      "tests": [
+        "digitCarveOut",
+        "emptyIsDegenerate",
+        "fewLetterWordIsUsable",
+        "lengthBoundary",
+        "letterRunIsDegenerate",
+        "longCaptionIsUsable",
+        "noAlnumIsDegenerate",
+        "nonLatinIsUsable",
+        "oneLongWordIsUsable",
+        "partitionKeepsOrder",
+        "poisonedInput",
+        "punctuationRunIsDegenerate",
+        "scale",
+        "shareBoundary",
+        "shortAnswersAreUsable",
+        "shortNoAlnumIsUsable",
+        "tokenRunBoundary",
+        "tokenRunIsDegenerate",
+        "trims",
+        "unicodeRunsAreDegenerate"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogFreshnessTests.swift",
       "stage": "unit",
       "suites": [
@@ -8383,6 +8413,30 @@
       "tests": [
         "mustFail",
         "mustPass"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CaptionDegenerateRefusalTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CaptionDegenerateRefusalTests",
+        "CatalogStatusDegenerateOCRTests"
+      ],
+      "tests": [
+        "informationLineOnly",
+        "inspectorNeverQuotesDegenerateOCRDate",
+        "inspectorOmitsAllDegenerateSection",
+        "pipelinedDossierRefusesDegenerateOCRDate",
+        "projectionCountsByVerdict",
+        "refusalIsCountedInOutcome",
+        "refusalLineShape",
+        "reportSumsLiveRows",
+        "scale",
+        "serialDossierRefusesDegenerateOCRDate",
+        "singlePromptCounts",
+        "singlePromptPassRefusesDegenerateScene",
+        "usableOutputUntouched"
       ]
     },
     {
@@ -34611,7 +34665,7 @@
       ],
       "expected_floor": 3077,
       "name": "unit",
-      "package_expected_floor": 545,
+      "package_expected_floor": 565,
       "package_selectors": [
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
@@ -34667,7 +34721,8 @@
         "VideoScanCoreTests.ModelLabStillsSamplerTests",
         "VideoScanCoreTests.ModelLabWindowSamplerTests",
         "VideoScanCoreTests.ModelLabStoreLogicTests",
-        "VideoScanCoreTests.ModelLabStoreIsolationTests"
+        "VideoScanCoreTests.ModelLabStoreIsolationTests",
+        "VideoScanCoreTests.CaptionTextQualityTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -35471,7 +35526,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 334,
+      "expected_floor": 347,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [
@@ -35608,7 +35663,9 @@
         "VideoScanTests/CatalogVolumePillLogicTests",
         "VideoScanTests/CatalogVolumePillRegressionTests",
         "VideoScanTests/CatalogVolumePillSensorTests",
-        "VideoScanTests/ScanLocationVolumeTests"
+        "VideoScanTests/ScanLocationVolumeTests",
+        "VideoScanTests/CaptionDegenerateRefusalTests",
+        "VideoScanTests/CatalogStatusDegenerateOCRTests"
       ]
     },
     {

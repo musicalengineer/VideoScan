@@ -559,9 +559,11 @@ extension CaptionOrchestrator {
             ? .empty
             : try await runner.dossier(videoPath: plan.path, atTimestamps: plan.timestamps)
         let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+        // The decode signals read the raw extraction (a degenerate caption
+        // still proves the frames decoded); the writeback gets the refused one.
         flagUndecodableIfExtractorBailed(plan, extraction: extraction, vlmSeconds: vlmSec)
         clearStaleNeedsReformat(plan, extraction: extraction)
-        return (extraction, vlmSec)
+        return (refuseDegenerate(extraction, filename: plan.filename, modelID: runner.modelID), vlmSec)
     }
 
     /// "0 scenes in <1 s" is the signature of the AVFoundation frame
@@ -736,11 +738,13 @@ extension CaptionOrchestrator {
             // Stage gating (Rick 2026-06-14): transcript-only skips VLM;
             // the empty extraction propagates "no captions" cleanly.
             let vlmStart = CFAbsoluteTimeGetCurrent()
-            let extraction: DossierExtraction = stages.contains(.captions) && !plan.hasNoVideo
+            let raw: DossierExtraction = stages.contains(.captions) && !plan.hasNoVideo
                 ? try await runner.dossier(videoPath: plan.path, atTimestamps: plan.timestamps)
                 : DossierExtraction.empty
             let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
-            clearStaleNeedsReformat(plan, extraction: extraction)
+            clearStaleNeedsReformat(plan, extraction: raw)
+            // GH #402: degenerate generations never reach applyDossier.
+            let extraction = refuseDegenerate(raw, filename: plan.filename, modelID: runner.modelID)
 
             let hasCaptions = !extraction.scenes.isEmpty
             let userSkipped = userSkippedLaneIDs.contains(laneID)

@@ -19,6 +19,13 @@ struct InspectorDossierView: View {
 
     let record: VideoRecord
 
+    /// GH #402: the OCR dates worth quoting — degenerate generations
+    /// (`!!!!…`, stored before the write path refused them) are not
+    /// evidence. O(this record's frames), never O(records).
+    private var shownOCRDates: [SceneCaption] {
+        CaptionTextQuality.usable(record.ocrDateCandidates)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
 
@@ -122,16 +129,16 @@ struct InspectorDossierView: View {
             }
 
             // MARK: OCR date candidates (VLM burn-in reads)
-            if !record.ocrDateCandidates.isEmpty {
+            if !shownOCRDates.isEmpty {
                 dossierBlock(
                     title: "OCR date candidates",
                     icon: "calendar.badge.clock",
                     color: .purple,
-                    subtitle: "\(record.ocrDateCandidates.count) hit(s) — burn-in timestamps"
+                    subtitle: "\(shownOCRDates.count) hit(s) — burn-in timestamps"
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(record.ocrDateCandidates.indices, id: \.self) { idx in
-                            let entry = record.ocrDateCandidates[idx]
+                        ForEach(shownOCRDates.indices, id: \.self) { idx in
+                            let entry = shownOCRDates[idx]
                             HStack(alignment: .top, spacing: 6) {
                                 Text(formatTimestamp(entry.timestamp))
                                     .font(.system(size: 10, design: .monospaced))
