@@ -182,7 +182,9 @@ def summary_fixture(now):
             hosts["M1"] = {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0, "reason": "build-timeout:5400s"}
         if i == 89:
             hosts["M4"] = {"state": "red", "passed": 11211, "failed": 2, "total": 11275, "reason": "failed-tests:2"}
-            hosts["M5"] = {"state": "red", "passed": 11207, "failed": 1, "total": 11275, "reason": "failed-tests:1"}
+            # 2026-10-31: the app lane green, Core 2 failed, Hallie replay failed — the card must name the lanes.
+            hosts["M5"] = {"state": "red", "passed": 11207, "failed": 1, "total": 11275, "reason": "core-failed-tests:2",
+                           "core_passed": 2133, "core_failed": 2, "core_status": "failed", "hallie_status": "failed"}
         nights.append({"date": date, "hosts": hosts})
     return {
         "schemaVersion": 1, "generated": iso(now),
@@ -467,8 +469,17 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "5.1" in head and "build 1" in head and "b07f9da" in head and "CI on main" in head and "success" in head
     assert "376,166" in head and "app only" in head and "+1,958 since" in head        # app_source_lines, never total_swift_lines
     assert "546,428" not in head
-    assert "11,211" in head and "2 failing on the worst Mac" in head and "3 failing" not in head, "the worst Mac's count, never a sum across Macs"
-    assert "M1" in head and "did not run · build-timeout:5400s" in head and "11,207 passed · 1 failed" in head
+    # The worst Mac counts every lane (M5: 1 app + 2 Core = 3), never a sum across Macs (5).
+    assert "11,211" in head and "3 failing on the worst Mac" in head and "5 failing" not in head, "the worst Mac's count, never a sum across Macs"
+    assert "M1" in head and "did not run · build-timeout:5400s" in head
+    # RED 2026-10-31: every lane named with its own numbers, the lane that broke it said in words.
+    assert "11,207 passed · 1 failed" in head and "Core 2,133 passed · 2 failed" in head and "Hallie replay failed" in head
+    assert "broken (core-failed-tests:2)" in head
+    assert "0 failed — broken" not in head
+    # The M4 row has no Core lane fields (older row): it says nothing about Core rather than inventing zeros.
+    assert "Core 0 passed" not in head
+    # The 2 AM run is named by its own date, not as "the night of" the morning after.
+    assert "2 AM run of" in head
     assert "red 1 night running" in head and "days since a red night" in head
     value, words = bug_tile(head)
     assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value
