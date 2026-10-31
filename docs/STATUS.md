@@ -18,8 +18,17 @@ command in that worktree's `models_research/README.md` under its docs folder, no
   · model-lab Core types (`2a2c3c5f`, after R1–R6: `LocalHost` by type, NUL-safe binds, real sampler floors, bare-decoder door shut).
   Merge fallout fixed on main: the two branches each defined a Core `ResourceProfile` → `JobResourceProfile` for the job queue
   (`496e3d7b`, unify later — BACKLOG); `model-lab.sqlite` classified in the App Support inventory sensor (`db16b1e5`).
-- **Running now (Opus workers, off the Ultra by 01:40 for the nightly):** **A1** — same 3B model, chronological windows + the
-  strict JSON era/roomFeatures contracts, fail-closed decoding mirroring Swift's `ContractDecoder`; published beside A0.
+- **A1 — DONE, merged `fa70aec0`** (`docs/reviews/video_llm_benchmarks.md`, 65 pytest): same 3B model, 3 chronological windows ×
+  6 frames (N=8 collapses the model: 0/18 schema-valid — its ~2k image-token limit), strict JSON era/roomFeatures contracts decoded
+  fail-closed. **Structure raised the ERA answered rate 18 % → 98 %** (era schema-valid 98 %, roomFeatures 81 %) **but not the
+  accuracy where it answers** (MAE 20.2 → 22.8 y overall). On Rick-dated rows: answers every clip, MAE 5.9 y (A0 6.9), truth inside
+  the range 81 %, median width 10 y — 1980s MAE 2.6, 1990s 5.0. On 2020s phone clips it is hopeless (MAE 36 y; it dates modern footage
+  decades early — the codec/carrier floor in `DateTriangulator` must outrank it, as the design ranks it). **Windows cost OCR 4–6
+  points** (92 → 86 % any-frame; h264 79 → 57 %): bunching frames into three stretches loses the burn-in that 5 spread stills caught →
+  one engine, two samplers (stills for OCR, windows for era). Cost +15 % per clip. roomFeatures vocabulary 384 strings, all generic.
+  Caveat: the prompt was tuned r1→r3 on 3 smoke clips that are in the corpus.
+- **Running now (Opus worker, off the Ultra by 01:30):** **#402 part A** — refuse to store degenerate captioner output
+  (`CaptionTextQuality` verdict in Core, filter before `applyCaptions`, OUTCOME count, red-first regression test, lane).
   **Household Roster feasibility — DONE, merged `2cb31fa5`** (`docs/reviews/household_roster_feasibility.md`, 36 pytest, roles not
   names): the roster cuts 10–13 people to 1–3 for any date; sex + age band alone is unambiguous for **42 %** of tags on Rick-dated
   files (69 % over the whole truth set, inflated by camera-dated clips of the spouse alone; 18 % once the owner's siblings join).

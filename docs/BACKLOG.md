@@ -67,6 +67,7 @@
 - (ruling) Event categories beyond the nine; dismiss semantics; Open = QuickTime or in-app seek.
 - (ruling) Cloud use on derived text (captions/transcripts) for later labelling, or local only.
 - Bounded retrieval experiment: rules vs SigLIP 2 vs Qwen3-VL-Embedding-2B on held-out occasions, split by occasion and lineage.
+- Video LLM, after A0/A1 (2026-10-30, `docs/reviews/video_llm_benchmarks.md`): (1) one engine, two samplers — stills for OCR (windows cost 4–6 points), windows for era/room; (2) A2 needs the Qwen3-VL-8B/32B weights on the Ultra (HF unauthenticated ≈ 1 MB/s; fetch with a token or from the M4 cache overnight) — the 3B model's era accuracy does not move with structure; (3) the era claim must sit under the codec/carrier floor (A1 dates 2020s HEVC footage decades early); (4) re-pick the prompt on clips held out of the corpus (A1's r3 was tuned on 3 in-corpus clips); (5) roomFeatures vocabulary (384 generic strings) is ready for the place-signature retrieval test once Rick labels the 50 places.
 - Video LLM: frozen local VLM + structured scene JSON → assertions (era claim, place_signature); era benchmark and 18-event retrieval test first, LoRA only on extraction errors. `docs/design/video_llm_lab_2026_10_30.md` (design), `docs/research/video_llm_for_family_media_2026-10-29.md` (research).
 - "Same / different / uncertain occasion" as a first-class correction exported as versioned examples.
 - Re-run Whisper for segment timestamps on FamilyArchive (~21 machine-hours); retain segment timing.
