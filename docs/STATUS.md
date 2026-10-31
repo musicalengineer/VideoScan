@@ -35,12 +35,17 @@ wedged model process (#406, fixed). Tonight's nightly is the first clean reading
 ## Video-LLM lab — where it stands (`docs/reviews/video_llm_benchmarks.md`, `tools/video-llm-bench/README.md`)
 - **A0 (3B, stills)** and **A1 (3B, windows + contracts)** published. A1 raised ERA answered 18 % → 98 % without improving accuracy
   where it answers (Rick-dated MAE 5.9 y); windows cost OCR 4–6 points → one engine, two samplers.
-- **A2 (Qwen3-VL-8B-4bit)** code on main (`ad682964`); **#406 watchdog on main** (`fc620035`): the model runs in a worker
-  process, `--generation-timeout` (120 s) kills a wedged generation and reloads, `--deadline HH:MM` stops between clips.
-  **The full A2 run is 195 of 327 clips in** (`VideoScan-wt/bench-a2/.scratch/bench/runs/full-a2-py-r3-n8`, resume-safe, 0 timeouts,
-  0.39 s/frame); it was stopped for the testbed. **Resume in the next declared window** (≈ 25 min for the remaining 132):
-  `nice -n 15 venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a2-py --frames 8 --generation-timeout 120 --deadline 01:30 --manifest <bench-a2>/.scratch/bench/manifest.json --model-dir ~/.cache/huggingface/hub/models--mlx-community--Qwen3-VL-8B-Instruct-4bit/snapshots/defcdea7cc7a4b0858fea563cbbce171d328e457 --out <bench-a2>/.scratch/bench/runs/full-a2-py-r3-n8`
-  then `summarize` with the A0 (`20261030T201800-a0-py`) and A1 (`full-a1-py-r3-n6`) runs under `VideoScan-wt/bench-a1/.scratch/bench/runs/`.
+- **A2 (Qwen3-VL-8B-4bit) — DONE, published** (`docs/reviews/video_llm_benchmarks.md`; 327 clips, N=8, 0 timeouts under the #406
+  watchdog, 7.0 s/clip, +17 % over A1). **The 8B is the first model that moves the era reading:** Rick-dated MAE A0 6.9 / A1 5.9 /
+  **A2 3.6 y**, truth inside the range 86 %, within 5 y 74 %; all readable ERA clips MAE 22.8 → 9.7 y; 2020s phone clips 36 → 12.8 y
+  (still the weakest stratum — the codec/carrier floor must outrank it). OCR on A0's stills: any-frame exact 92 → 95 %, majority
+  90 → 92 %. Verdict: **seat the 8B as the era expert; keep the 3B for nothing.**
+- **A3 (Qwen3-VL-32B-4bit) — 48 of 72 Rick-dated clips, deadline-stopped at 15:50, resume-safe** (`.scratch/bench/runs/full-a3-py-r3-n8-rickdated`,
+  ≈ 19 min to finish). On the SAME 48 clips: A1 MAE 6.3 · **A2 3.7** · A3 5.0 y; inside-range 77 / **88** / 56 %; within 5 y 50 / **75** / 60 %;
+  cost 7.2 s per window generation vs 1.5 (≈ 5×), load 14 s. **The 32B does not earn its cost on era** at N=8 with prompt r3 (tuned on
+  the 3B/8B — one caveat; a 32B-tuned prompt is the only thing that could change this). Finish the 24 clips for the record, then park it.
+- Run-record caveat: the peak-RSS figure in both A2 and A3 records is the watchdog parent's (0.04 GB), not the worker's — fixed on main
+  (`994429d6`); the A3 resume writes the real figure.
 - **32B weights are cached** (18 GB, `models--mlx-community--Qwen3-VL-32B-Instruct-4bit`); one run on the 72 Rick-dated clips after A2 reads.
 - **Household Roster (A7) feasibility** published `2cb31fa5`: a filter, not a namer; ties are same-sex same-generation siblings.
 
@@ -63,13 +68,13 @@ wedged model process (#406, fixed). Tonight's nightly is the first clean reading
 - **Allowlist:** read-only ssh/status commands; a `kill <own pid>` shape for an agent's own model process.
 
 ## Next
-1. A2 resume (declared window) → summarize → 32B on the Rick-dated stratum.
+1. A3's last 24 clips (declared window, ≈ 19 min) → re-summarize; then the era expert goes into the model-lab as A2's contract (design §5).
 2. #408: repoint the five gauntlet UI flows, then turn the runner's UI stage on for the away window.
 3. Background service step 1 (first real job into the helper; §5 order pending ruling 4). #402 supersede pass brief → Codex.
 4. Resource allocation for LLMs and visual LLMs across the fleet (Rick's agenda item, 10/31).
 
 ## State of the machines (10/31 afternoon)
-- Ultra: free for rapid dev; no agent jobs. M4: idle after the gauntlet (`RicksM4.local`, main `fc620035` pulled, 259 GB free).
+- Ultra: free for rapid dev; no agent jobs (A2 done, A3 paused at the deadline). M4: idle after the gauntlet (`RicksM4.local`, main `fc620035` pulled, 259 GB free).
 - Worktrees under `VideoScan-wt/`: all landed except `attended-model-review` (Codex pilot, dirty) and `process-modes` (draft).
   `bench-a2` holds the A2 run state under `.scratch/`. Nothing deleted; prune is Rick's call.
 
