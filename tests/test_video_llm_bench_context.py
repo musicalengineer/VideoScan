@@ -133,3 +133,18 @@ def test_every_generate_call_uses_one_prefill_step_larger_than_any_prompt():
     calls = re.findall(r"generate\(self\.model, self\.processor,.*?verbose=False(?:, [^)]*)?\)", source, re.S)
     assert len(calls) == 2, "the single-image and the multi-image generate calls"
     assert all("prefill_step_size=PREFILL_STEP_SIZE" in c for c in calls), calls
+
+
+def test_picture_only_context_says_what_the_picture_is_and_never_names_the_codec():
+    """After the first A/B (2026-10-31): a 1965 film transferred to DV moved from 1960–1975 to
+    1975–1985 once the model was told 'DV camcorder tape (1995 onward)'. The picture variant
+    keeps size / rate / scan / aspect and drops every codec word."""
+    line = bench.technical_context_line(bench.parse_technical(DV_PROBE), picture_only=True)
+    assert line.startswith("Picture facts about this file")
+    assert "720×480 pixels; 29.97 fps; interlaced; aspect 4:3." in line
+    for word in ("dvvideo", "DV camcorder", "codec", "1995"):
+        assert word not in line
+    assert "later transfer of older footage" in line
+    assert bench.technical_context_line({"codec": "dvvideo"}, picture_only=True) == "", "codec alone leaves nothing to say"
+    args = bench.make_parser().parse_args(["run", "--manifest", "m", "--out", "o", "--context", "picture"])
+    assert args.context == "picture"

@@ -668,13 +668,16 @@ def parse_technical(ffprobe_json: str) -> Dict[str, Any]:
     return out
 
 
-def technical_context_line(tech: Dict[str, Any]) -> str:
+def technical_context_line(tech: Dict[str, Any], picture_only: bool = False) -> str:
     """The sentence the model is told.  A transfer codec is named as such; a camera-native
-    codec gets its era words; frame size / rate / scan / aspect as they are."""
+    codec gets its era words; frame size / rate / scan / aspect as they are.
+    `picture_only` (2026-10-31, after the first A/B): the codec anchored the model on the
+    CARRIER's era — a 1965 film transferred to DV moved from 1960–1975 to 1975–1985 — so this
+    variant says only what the picture itself is (size, rate, scan, aspect), never the codec."""
     if not tech:
         return ""
     parts: List[str] = []
-    codec = str(tech.get("codec") or "").lower()
+    codec = "" if picture_only else str(tech.get("codec") or "").lower()
     if codec in TRANSFER_CODECS:
         parts.append("codec {} in {} — a lossless TRANSFER format: the original carrier (tape, film, disc) is unknown, "
                      "so this codec says nothing about when the footage was recorded".format(TRANSFER_CODECS[codec], tech.get("container", "?")))
@@ -688,6 +691,11 @@ def technical_context_line(tech: Dict[str, Any]) -> str:
         parts.append(tech["scan"])
     if tech.get("aspect"):
         parts.append("aspect {}".format(tech["aspect"]))
+    if not parts:
+        return ""
+    if picture_only:
+        return ("Picture facts about this file (from its container, not from the frames; the file may be a later transfer of "
+                "older footage, so these say what the picture is, not when it was recorded): " + "; ".join(parts) + ".")
     return "Technical facts about this file (from its container, not from the pictures): " + "; ".join(parts) + "."
 
 
@@ -1798,12 +1806,12 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
             rip_failures = frames_ok = records_written = window_records = 0
             technical: Dict[str, Any] = {}
             context_line: Optional[str] = None
-            if prompt_context == PROMPT_CONTEXT_TECHNICAL and windows and "era" in corpora:
+            if prompt_context in (PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE) and windows and "era" in corpora:
                 try:
                     technical = technical_of(entry["path"]) or {}
                 except Exception:  # noqa: BLE001 — a probe failure is a missing line, not a dead run
                     technical = {}
-                context_line = technical_context_line(technical) or None
+                context_line = technical_context_line(technical, picture_only=(prompt_context == PROMPT_CONTEXT_PICTURE)) or None
 
             def ask_date(png: Path, frame_index: int, window_index: Optional[int], at_s: float, rip_s: float,
                          stream: Any, sampler: Optional[str]) -> None:
@@ -3018,6 +3026,7 @@ def summarize_command(args: argparse.Namespace) -> int:
 # ===========================================================================
 PROMPT_CONTEXT_NONE = "none"
 PROMPT_CONTEXT_TECHNICAL = "technical"
+PROMPT_CONTEXT_PICTURE = "picture"
 VERDICTS_FILE = "verdicts.jsonl"
 # Rick, after the first five clips (2026-10-31): the question is AGREEMENT — a wide
 # range that contains his date is still agreement — not whose date is right.
@@ -3366,8 +3375,9 @@ def make_parser() -> argparse.ArgumentParser:
                      help="seconds the model load may take in the worker (default {:.0f})".format(DEFAULT_LOAD_TIMEOUT_S))
     run.add_argument("--deadline", default=None,
                      help="HH:MM local; the run stops BETWEEN clips at that time (resume-safe, exit code 3)")
-    run.add_argument("--context", choices=[PROMPT_CONTEXT_NONE, PROMPT_CONTEXT_TECHNICAL], default=PROMPT_CONTEXT_NONE,
-                     help="technical: tell the model the file's codec/container/size/rate/scan/aspect (never its dates) before the frames")
+    run.add_argument("--context", choices=[PROMPT_CONTEXT_NONE, PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE], default=PROMPT_CONTEXT_NONE,
+                     help="technical: codec/container/size/rate/scan/aspect (never dates); picture: size/rate/scan/aspect only, no codec "
+                          "(the codec anchored the model on the carrier's era)")
     run.add_argument("--keep-frames", action="store_true",
                      help="keep the frames the model saw under <out>/frames/ for `watch` (windowed approaches; run dir must be under .scratch/)")
     run.set_defaults(func=run_command)

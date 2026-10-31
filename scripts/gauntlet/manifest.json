@@ -32016,6 +32016,7 @@
         "test_every_generate_call_uses_one_prefill_step_larger_than_any_prompt",
         "test_loop_probes_once_per_clip_tells_the_model_and_records_it",
         "test_parse_technical_reads_the_stream_and_container_and_never_a_date",
+        "test_picture_only_context_says_what_the_picture_is_and_never_names_the_codec",
         "test_the_context_goes_first_and_the_contract_text_is_unchanged",
         "test_without_the_flag_nothing_changes_and_a_three_argument_fake_still_works"
       ]
