@@ -3174,6 +3174,9 @@ def review_state(run_dir: Path, manifest: Dict[str, Any], clips: Optional[Sequen
         "close": sum(1 for c in scored if c["close"]),
         "mean_error_years": round(sum(c["error_years"] for c in scored) / len(scored), 1) if scored else None,
         "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_BUTTONS},
+        # Where Rick's call and the rule differ: the clips worth a look (either the rule or his sense is off).
+        "disagreements": sum(1 for c in items if (c["verdict"] in ("agree", "model") and not c["close"])
+                             or (c["verdict"] in ("disagree", "mine") and c["close"])),
     }
     return {"run_id": run_record.get("run_id"), "approach_id": run_record.get("approach_id"), "model": run_record.get("model_id"),
             "state": progress.get("state"), "total_clips": progress.get("total_clips"), "generated_at": utc_now(),
@@ -3233,9 +3236,9 @@ const grade=c=>c.error_years==null?"pending":c.close?"good":c.error_years<=10?"w
 async function poll(){try{const r=await fetch("/state.json",{cache:"no-store"});S=await r.json();render()}catch(e){}}
 function render(){
   const t=S.tally; $("#tally-main").textContent=`${t.clips_done} of ${S.total_clips??"?"} clips`;
-  $("#tally").innerHTML=`<b>close enough ${t.close}</b> of ${t.with_truth} (within 5 y and ≤ 10 y wide)<br>midpoint within 5 y ${t.within_5} · within 10 y ${t.within_10} · inside range ${t.inside_range}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: agree ${t.verdicts.agree} · disagree ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
+  $("#tally").innerHTML=`<b>close enough ${t.close}</b> of ${t.with_truth} by the rule (within 5 y and ≤ 10 y wide)<br>your call: close ${t.verdicts.agree} · not close ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}${t.disagreements?` · <b>${t.disagreements} where your call and the rule differ</b>`:""}<br>midpoint within 5 y ${t.within_5} · within 10 y ${t.within_10} · inside range ${t.inside_range}<br>mean error <b>${t.mean_error_years??"—"}</b> y · <span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
   if(cur==null){const first=S.clips.find(c=>c.done&&!c.verdict)||S.clips[0]; cur=first?first.digest:null}
-  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc(c.verdict):""}</span></div>`).join("");
+  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc({agree:"close",model:"close",disagree:"not close",mine:"not close",unsure:"unsure"}[c.verdict]||c.verdict):""}</span></div>`).join("");
   document.querySelectorAll(".row").forEach(r=>r.onclick=()=>{cur=r.dataset.d;render()});
   const c=S.clips.find(x=>x.digest===cur); if(!c){return}
   const g=grade(c);
@@ -3251,7 +3254,7 @@ function render(){
   <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
   <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
   ${wins}
-  <div class="buttons"><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Agree<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Disagree<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
+  <div class="buttons"><span style="color:var(--muted);margin-right:6px">Is the model's range close enough to your date to be useful?</span><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Close enough<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Not close<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
 }
 async function verdict(v){const c=S.clips.find(x=>x.digest===cur); if(!c)return;
   await fetch("/verdict",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({digest:c.digest,verdict:v})});

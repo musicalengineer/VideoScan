@@ -81,7 +81,7 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert room["valid"] and room["setting"] == "indoor" and "brick fireplace" in room["features"]
     t = state["tally"]
     assert t == {"clips_seen": 1, "clips_done": 1, "with_truth": 1, "within_5": 1, "within_10": 1, "inside_range": 1,
-                 "close": 1, "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}}
+                 "close": 1, "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}, "disagreements": 0}
 
 
 def test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt(tmp_path):
@@ -130,6 +130,9 @@ def test_verdicts_last_wins_malformed_skipped_and_show_in_the_state(tmp_path):
     assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree", "the last VALID line wins"
     assert bench.review_state(out, manifest_for([e]))["clips"][0]["verdict"] == "agree"
     assert bench.review_state(out, manifest_for([e]))["tally"]["verdicts"] == {"agree": 1, "disagree": 0, "unsure": 0}
+    assert bench.review_state(out, manifest_for([e]))["tally"]["disagreements"] == 0, "close by the rule and 'close' by Rick"
+    bench.write_verdict(out, e["digest"], "disagree")
+    assert bench.review_state(out, manifest_for([e]))["tally"]["disagreements"] == 1, "close by the rule, 'not close' by Rick: worth a look"
     # The first session's words are still readable (and not counted under the new buttons).
     bench.write_verdict(out, e["digest"], "model")
     assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "model"
@@ -182,7 +185,8 @@ def test_server_serves_page_state_frames_and_refuses_traversal(served):
     status, ctype, body = get(base + "/")
     assert status == 200 and ctype.startswith("text/html")
     page = body.decode()
-    assert "Era review" in page and ">Agree<" in page and ">Disagree<" in page and ">Unsure<" in page
+    assert "Era review" in page and "Close enough<kbd>1" in page and "Not close<kbd>2" in page and "Unsure<kbd>3" in page
+    assert "Is the model's range close enough to your date to be useful?" in page
     assert "/Users/" not in page and "/Volumes/" not in page
     status, ctype, body = get(base + "/state.json")
     assert status == 200 and ctype.startswith("application/json")
