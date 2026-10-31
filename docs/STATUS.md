@@ -11,7 +11,10 @@ measurement rules, both fixed on main:
   slower than at 02:00 on the same code, load 2.9 on 30 cores was called "quiet", and one 50 ms budget failed twice at 1.01–1.02×.
 - **The nightly card names every lane.** Last night's card read "12,645 passed · 0 failed — broken" with "0 failing" above it;
   the Core lane (1 failed) and the Hallie replay (failed) were unnamed. The publisher now carries app / Core / Hallie per cell,
-  one Core failure is WATCH like one app failure, and the tile says "2 AM run of <date>". Shows from the next nightly's publish.
+  one Core failure is WATCH like one app failure, and the tile says "2 AM run of <date>". **Lane ladders** (Rick's ask, afternoon):
+  one vertical ladder per Mac on that tile, one rung per lane (App, Core, Hallie strict, Hallie advisory, Hallie voice), each
+  rung by its own lane's rule, grey where the lane did not run; hover gives numbers and the reason code. Both show from the
+  next nightly's publish (the publisher runs with it).
 - **Testbed machine rule (PROCESS §8, Rick 2026-10-31):** the **M4 is the default testbed**; the Ultra during the day is rapid dev
   with Claude, nothing else, unless Rick declares a window. No machine named for a testbed means the M4; "On the M4?" is fine.
 
