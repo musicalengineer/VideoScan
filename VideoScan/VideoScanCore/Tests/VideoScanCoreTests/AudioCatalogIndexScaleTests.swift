@@ -17,10 +17,11 @@
 //   - Everywhere: the build at 4× the documents may cost at most 8× the
 //     thread CPU time of the ¼ build (linear ≈ 4; quadratic 16) — GH #385's
 //     growth check, which host, core type and Debug divide out of.
-//   - Resident growth < 400 MB is a failure when the build was judged on a
-//     quiet machine (`strict`); on a busy one the process's resident size is
-//     not this index's, and a miss is listed as a known issue (the pattern
-//     of AudioFingerprintEngineTests' decode peak).
+//   - Resident growth < 400 MB is a failure only where the lane pins
+//     VIDEOSCAN_TIMING_STRICT=1 (`strict`: the nightly, which runs Core
+//     serially); anywhere else the process's resident size is not this
+//     index's (#407: a parallel `swift test` saw +1.7 GB) and a miss is
+//     listed as a known issue (the pattern of AudioFingerprintEngineTests').
 // Worst-case memory: the index (≈ 255 MB for 25 M landmarks) plus one
 // generated print (5,000 landmarks); the ¼ build runs after the full one is
 // released.

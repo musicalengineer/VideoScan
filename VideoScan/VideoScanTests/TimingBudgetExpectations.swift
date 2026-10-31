@@ -1,8 +1,8 @@
 // TimingBudgetExpectations.swift — the app test target's mapping of a
 // VideoScanCore TimingBudget.Judgement onto Swift Testing (GH #208,
 // Rick 2026-10-02). Same three cases as VideoScanCoreTests' file of the
-// same name; the RULE (strict when quiet, known issue up to 3× when busy,
-// VIDEOSCAN_TIMING_STRICT=1 pins strict) lives only in TimingBudget.judge.
+// same name; the RULE (strict only under VIDEOSCAN_TIMING_STRICT=1, known
+// issue up to 3× everywhere else — Rick 2026-10-31) lives only in TimingBudget.judge.
 //   pass        → nothing
 //   knownIssue  → withKnownIssue: green run, the miss is listed
 //   fail        → Issue.record

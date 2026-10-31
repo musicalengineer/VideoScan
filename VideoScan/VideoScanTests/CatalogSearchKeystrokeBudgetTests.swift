@@ -84,7 +84,7 @@ struct CatalogSearchKeystrokeBudgetTests {
             print(String(format: "[#123-sensor] q='%@' settled_ms=%.1f budget_ms=%.0f badge=%d",
                          query, settled, budget, lastBadge))
             #if !DEBUG
-            // Strict on a quiet machine (the 2 AM nightly); in a busy full
+            // Strict only where the lane pins VIDEOSCAN_TIMING_STRICT=1 (the 2 AM nightly; Rick 2026-10-31); in a busy full
             // battery a miss within 3× is a known issue (GH #208: 85 ms alone
             // vs this 165 ms budget, failed only under battery load).
             expectWithinTimingBudget("100k settled keystroke '\(query)' (median of 5)",

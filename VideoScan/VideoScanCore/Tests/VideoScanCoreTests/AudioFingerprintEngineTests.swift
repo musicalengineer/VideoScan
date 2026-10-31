@@ -584,8 +584,9 @@ struct AudioFingerprintEngineTests {
             // Resident size is the whole test process, and Swift Testing runs suites in
             // parallel: on a busy or GitHub-hosted box (CI 2026-10-16: the decode took 106 s
             // and "grew" 252 MB while other suites ran) the growth is not this decode's.
-            // The judgement's `strict` is the one rule for "quiet, self-hosted": only then
-            // is a miss a failure; otherwise it is listed as a known issue, never hidden.
+            // The judgement's `strict` is the one rule (pinned by the lane, never by load —
+            // Rick 2026-10-31, #407): only then is a miss a failure; otherwise it is listed
+            // as a known issue, never hidden.
             let decodeJudgement = TimingBudget.judgeNow("decode 60-min WAV", budget: .seconds(60),
                                                         measured: decodeElapsed, loadBefore: decodeLoad)
             recordTimingJudgement(decodeJudgement)
