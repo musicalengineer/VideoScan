@@ -68,6 +68,7 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert c["name"] == Path(e["path"]).name and "/" not in c["name"], "the file NAME only, never its path"
     assert c["confirmed_year"] == 1991 and c["machine_range"] == [1991, 1995] and c["machine_midpoint"] == 1993
     assert c["error_years"] == 2.0 and c["inside"] is True and c["done"] is True and c["verdict"] is None
+    assert c["width_years"] == 4 and c["close"] is True, "within 5 y and ≤ 10 y wide is close enough"
     assert len(c["windows"]) == 3
     w = c["windows"][0]
     assert [f["src"] for f in w["frames"]][:2] == ["frames/{}/w0_f000.png".format(e["digest"][:16]),
@@ -80,7 +81,7 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert room["valid"] and room["setting"] == "indoor" and "brick fireplace" in room["features"]
     t = state["tally"]
     assert t == {"clips_seen": 1, "clips_done": 1, "with_truth": 1, "within_5": 1, "within_10": 1, "inside_range": 1,
-                 "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}}
+                 "close": 1, "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}}
 
 
 def test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt(tmp_path):
@@ -98,6 +99,21 @@ def test_an_ocr_only_clip_has_no_era_but_shows_the_dates_it_read(tmp_path):
     c = bench.review_state(out, manifest_for([e]))["clips"][0]
     assert c["machine_range"] is None and c["error_years"] is None and c["confirmed_date"] == "1991-06-21"
     assert c["ocr_dates"] == ["1991-06-21"] and c["windows"] == []
+
+
+def test_a_wide_range_is_not_close_even_when_its_midpoint_lands(tmp_path):
+    """Rick's example: 'definitely 1990' against 'sometime between 1982 and 1995' — midpoint 1988.5,
+    off by 1.5 y, and still not agreement because the range is 13 y wide."""
+    class WideA2(FakeA2):
+        def answer_window(self, image_paths, family, window):
+            from test_video_llm_bench_a2 import era_obj, room_obj
+            return json.dumps(era_obj(yearRange=[1982, 1995]) if family == "era" else room_obj()), {}
+    e = dict(entry(digest_for(12)), truth={"year": 1990})
+    out = scratch_run(tmp_path, [e], approach=WideA2())
+    c = bench.review_state(out, manifest_for([e]))["clips"][0]
+    assert c["machine_range"] == [1982, 1995] and c["error_years"] == 1.5 and c["inside"] is True
+    assert c["width_years"] == 13 and c["close"] is False
+    assert bench.review_state(out, manifest_for([e]))["tally"]["close"] == 0
 
 
 # ---------------------------------------------------------------------------

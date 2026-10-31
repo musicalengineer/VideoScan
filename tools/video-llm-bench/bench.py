@@ -2907,6 +2907,8 @@ VERDICTS_FILE = "verdicts.jsonl"
 # The first five verdicts were written as "model" / "mine"; still readable.
 VERDICT_WORDS = ("agree", "disagree", "unsure", "model", "mine")
 VERDICT_BUTTONS = ("agree", "disagree", "unsure")
+CLOSE_MAX_ERROR_YEARS = 5.0
+CLOSE_MAX_WIDTH_YEARS = 10.0
 WATCH_DEFAULT_PORT = 8765
 
 
@@ -2991,6 +2993,10 @@ def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, v
     midpoint = (year_range[0] + year_range[1]) / 2 if year_range else None
     error = abs(midpoint - confirmed_year) if (midpoint is not None and isinstance(confirmed_year, (int, float))) else None
     inside = bool(year_range and isinstance(confirmed_year, (int, float)) and year_range[0] <= confirmed_year <= year_range[1])
+    width = (year_range[1] - year_range[0]) if year_range else None
+    # "Close enough" (Rick, after the first 25 clips): the midpoint within 5 years of his
+    # date AND a range no wider than 10 years — 1982–1995 against 1990 is not agreement.
+    close = bool(error is not None and error <= CLOSE_MAX_ERROR_YEARS and width is not None and width <= CLOSE_MAX_WIDTH_YEARS)
     ocr_dates = sorted({d for r in records.get("results") or [] for d in (r.get("parsed") or {}).get("dates", [])})
     return {
         "digest": entry["digest"], "name": Path(entry.get("path") or "").name, "stratum": entry.get("stratum"),
@@ -2998,6 +3004,7 @@ def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, v
         "confirmed_year": confirmed_year, "confirmed_date": truth.get("date"),
         "machine_range": list(year_range) if year_range else None, "machine_midpoint": midpoint,
         "error_years": round(error, 1) if error is not None else None, "inside": inside,
+        "width_years": width, "close": close,
         "ocr_dates": ocr_dates, "windows": windows,
         "done": records.get("footer") is not None, "verdict": (verdict or {}).get("verdict"),
     }
@@ -3036,6 +3043,7 @@ def review_state(run_dir: Path, manifest: Dict[str, Any], clips: Optional[Sequen
         "with_truth": len(scored),
         "within_5": sum(1 for c in scored if c["error_years"] <= 5), "within_10": sum(1 for c in scored if c["error_years"] <= 10),
         "inside_range": sum(1 for c in scored if c["inside"]),
+        "close": sum(1 for c in scored if c["close"]),
         "mean_error_years": round(sum(c["error_years"] for c in scored) / len(scored), 1) if scored else None,
         "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_BUTTONS},
     }
@@ -3093,11 +3101,11 @@ kbd{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radi
 const $=s=>document.querySelector(s); let S=null, cur=null;
 const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const mmss=t=>{t=Math.max(0,Math.round(t||0));return Math.floor(t/60)+":"+String(t%60).padStart(2,"0")};
-const grade=c=>c.error_years==null?"pending":c.error_years<=5?"good":c.error_years<=10?"warn":"bad";
+const grade=c=>c.error_years==null?"pending":c.close?"good":c.error_years<=10?"warn":"bad";
 async function poll(){try{const r=await fetch("/state.json",{cache:"no-store"});S=await r.json();render()}catch(e){}}
 function render(){
   const t=S.tally; $("#tally-main").textContent=`${t.clips_done} of ${S.total_clips??"?"} clips`;
-  $("#tally").innerHTML=`within 5 y <b>${t.within_5}</b> · within 10 y <b>${t.within_10}</b> · inside range <b>${t.inside_range}</b> of ${t.with_truth}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: agree ${t.verdicts.agree} · disagree ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
+  $("#tally").innerHTML=`<b>close enough ${t.close}</b> of ${t.with_truth} (within 5 y and ≤ 10 y wide)<br>midpoint within 5 y ${t.within_5} · within 10 y ${t.within_10} · inside range ${t.inside_range}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: agree ${t.verdicts.agree} · disagree ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
   if(cur==null){const first=S.clips.find(c=>c.done&&!c.verdict)||S.clips[0]; cur=first?first.digest:null}
   $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc(c.verdict):""}</span></div>`).join("");
   document.querySelectorAll(".row").forEach(r=>r.onclick=()=>{cur=r.dataset.d;render()});
@@ -3113,7 +3121,7 @@ function render(){
     return `<section class="win"><h3>Window ${w.index+1} · ${mmss(w.start_s)}–${mmss(w.end_s)}</h3><div class="strip">${strip}</div>${eraBox}${roomBox}</section>`}).join("");
   $("#main").innerHTML=`<h1>${esc(c.name)}</h1><div class="sub">${esc(c.stratum||"")} · ${mmss(c.duration_s)} · ${c.done?"done":"in progress"}${c.ocr_dates.length?" · burned-in date read: "+c.ocr_dates.map(esc).join(", "):""}</div>
   <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
-  <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
+  <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
   ${wins}
   <div class="buttons"><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Agree<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Disagree<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
 }
