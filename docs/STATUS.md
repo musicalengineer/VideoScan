@@ -1,6 +1,6 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-31 14:40 (Saturday, after the morning testbed and the stability fixes). Rick corrects this file; agents read it at session start.*
+*Updated 2026-10-31 17:30 (Saturday; morning testbed, stability fixes, afternoon rapid dev with Rick). Rick corrects this file; agents read it at session start.*
 
 ## Where main stands — `697237a2`, pushed, checkout clean
 **Stability call for today: main is green on every lane that measures code.** The only reds of the day were two
@@ -48,6 +48,19 @@ wedged model process (#406, fixed). Tonight's nightly is the first clean reading
   (`994429d6`); the A3 resume writes the real figure.
 - **32B weights are cached** (18 GB, `models--mlx-community--Qwen3-VL-32B-Instruct-4bit`); one run on the 72 Rick-dated clips after A2 reads.
 - **Household Roster (A7) feasibility** published `2cb31fa5`: a filter, not a namer; ties are same-sex same-generation siblings.
+
+## Landed this afternoon (Rick seated; all pushed)
+- **Catalog ▸ Show ▸ "Confirmed Date"** (`feat/confirmed-date-filter`): only rows carrying Rick's OWN date (either confidence), never
+  a machine date; the filter pass split into a per-filter predicate table (CCN 27 → 18). 38 tests on five dimensions, lane GREEN 597.
+  **Spot test (Debug):** Catalog ▸ Show ▸ Confirmed Date → the Showing box reads "… · Confirmed date · …" and every row's inspector says
+  "Saved: … — you're sure / best guess". Open question for Rick: should the chip show its count (needs a debounced model-owned cache)?
+- **The review page** (`tools/video-llm-bench/bench.py watch`, `--keep-frames`): Rick's "Is Donna in this video?" loop for dates, outside
+  the app — the frames the model saw, his date, the model's era with rationale and timed cues, Agree / Disagree / Unsure to
+  `verdicts.jsonl` beside the run. Loopback only; the run dir must be under `.scratch/`. First session: 25 Rick-dated clips through the 8B.
+  Tier 2 (after step 1): the in-app "Realtime Content Analyzer" window fed by the helper over XPC.
+- Rulings taken today (DECISIONS): timing strict only where the lane pins it. **Rulings Rick gave in conversation, to be written up with
+  the step 1 brief:** step order = the 8B era/OCR job first, captions second (moving to the 8B, remainder first then backfill);
+  schema v14 lands with step 1 (the assertions are catalog data once an expert earns its seat).
 
 ## Landed last night (all pushed)
 - Background service step 0 (`dfafcc98` + `5c9686d8`): helper target, SMAppService, XPC with peer trust, supervisor, off by default

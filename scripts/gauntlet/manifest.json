@@ -4222,6 +4222,7 @@
         "budgetIsNotRaised",
         "busyBand",
         "busyThreshold",
+        "daytimeUltraMissIsAKnownIssueUnlessPinned",
         "debugCeilingWidensOnlyUnderASanitizer",
         "eitherSampleMakesItBusy",
         "factorsFollowTheSanitizer",
@@ -4235,7 +4236,7 @@
         "logLine",
         "m4ThresholdUnchanged",
         "onlyTheNightlysStrictPinIsTheReferenceRun",
-        "quietIsStrict",
+        "quietWithoutPinIsTheKnownIssueBand",
         "relativePassesUnderTheLimitAndAZeroReferenceNeverPasses",
         "secondsConversion",
         "singleTierFallsBack",
@@ -4245,7 +4246,7 @@
         "threadCPUTimeIsPerThread",
         "ultraGauntletMissIsKnownIssue",
         "ultraIsJudgedByItsFastTier",
-        "withoutASanitizerAQuietMissStillFails"
+        "withoutASanitizerAPinnedMissStillFails"
       ]
     },
     {
@@ -31532,6 +31533,7 @@
         "test_publish_summary.py"
       ],
       "tests": [
+        "test_a_core_lane_failure_colours_the_night_and_the_cell_names_every_lane",
         "test_an_off_rota_mac_that_still_publishes_never_colours_a_night",
         "test_an_unreadable_rota_drops_nobody",
         "test_app_version_reads_the_app_target",
@@ -31959,6 +31961,7 @@
         "test_deadline_stops_between_clips_and_a_resume_finishes_the_rest",
         "test_factory_ref_round_trip_for_registered_approaches",
         "test_parse_deadline_is_the_next_such_wall_clock_time",
+        "test_peak_rss_is_the_workers_not_the_parents",
         "test_run_defaults_to_a_120_s_cap_and_accepts_a_deadline",
         "test_run_record_from_a_worker_carries_the_watchdog_block",
         "test_worker_answers_through_the_pipe_and_load_reports_the_watchdog"
