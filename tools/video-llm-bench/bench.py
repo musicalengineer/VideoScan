@@ -610,6 +610,95 @@ def probe_duration(path: str) -> float:
         return 0.0
 
 
+# --- Technical context (Rick, 2026-10-31: "a codec can often be a good clue; I want it
+# to have access to as much info as possible").  The facts a file states about itself —
+# codec, container, frame size, frame rate, scan, aspect — never its dates (the truth on
+# one stratum).  A TRANSFER codec (FFV1, ProRes, DNxHD …) says nothing about the
+# recording's age, and the line says so, or the model would read "2010s" off a 1988 tape.
+TRANSFER_CODECS = {"ffv1": "FFV1", "prores": "ProRes", "dnxhd": "DNxHD", "huffyuv": "HuffYUV", "utvideo": "Ut Video",
+                   "v210": "uncompressed 10-bit", "rawvideo": "uncompressed"}
+CAMERA_NATIVE_WORDS = {"dvvideo": "DV camcorder tape (MiniDV / Digital8, 1995 onward)", "hdv": "HDV tape",
+                       "mpeg2video": "MPEG-2 (DVD camcorders, HDV, 1996 onward)", "mpeg4": "MPEG-4 part 2 (early digital cameras, 2000s)",
+                       "h263": "H.263 (early mobile / web video, late 1990s–2000s)", "h264": "H.264/AVC (2004 onward; phones and cameras)",
+                       "hevc": "HEVC/H.265 (2013 onward; phones from 2017)", "mjpeg": "Motion JPEG (early digital still cameras, late 1990s–2000s)",
+                       "wmv2": "Windows Media Video (2000s)", "msmpeg4v3": "DivX-era MPEG-4 (late 1990s–2000s)", "vp8": "VP8 (2010s web)",
+                       "vp9": "VP9 (2010s web)", "av1": "AV1 (2018 onward)"}
+
+
+def probe_technical(path: str) -> Dict[str, Any]:
+    """The first video stream's codec, frame size, frame rate, scan and aspect, plus the
+    container, from ffprobe; {} when it cannot say.  Never a date field."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=codec_name,width,height,r_frame_rate,field_order,display_aspect_ratio:format=format_name",
+         "-of", "json", path], capture_output=True, text=True, timeout=60, check=False)
+    return parse_technical(out.stdout)
+
+
+def parse_technical(ffprobe_json: str) -> Dict[str, Any]:
+    """Pure half of probe_technical."""
+    try:
+        data = json.loads(ffprobe_json or "{}")
+    except json.JSONDecodeError:
+        return {}
+    stream = (data.get("streams") or [{}])[0] if data.get("streams") else {}
+    out: Dict[str, Any] = {}
+    if stream.get("codec_name"):
+        out["codec"] = str(stream["codec_name"])
+    if isinstance(stream.get("width"), int) and isinstance(stream.get("height"), int) and stream["width"] > 0 and stream["height"] > 0:
+        out["width"], out["height"] = stream["width"], stream["height"]
+    rate = str(stream.get("r_frame_rate") or "")
+    if "/" in rate:
+        num, _, den = rate.partition("/")
+        try:
+            fps = float(num) / float(den)
+            if 0 < fps < 1000:
+                out["fps"] = round(fps, 3)
+        except (ValueError, ZeroDivisionError):
+            pass
+    if stream.get("field_order") in ("tt", "bb", "tb", "bt"):
+        out["scan"] = "interlaced"
+    elif stream.get("field_order") == "progressive":
+        out["scan"] = "progressive"
+    if stream.get("display_aspect_ratio") and stream["display_aspect_ratio"] not in ("0:1", "N/A"):
+        out["aspect"] = str(stream["display_aspect_ratio"])
+    fmt = (data.get("format") or {}).get("format_name")
+    if fmt:
+        out["container"] = str(fmt).split(",")[0]
+    return out
+
+
+def technical_context_line(tech: Dict[str, Any], picture_only: bool = False) -> str:
+    """The sentence the model is told.  A transfer codec is named as such; a camera-native
+    codec gets its era words; frame size / rate / scan / aspect as they are.
+    `picture_only` (2026-10-31, after the first A/B): the codec anchored the model on the
+    CARRIER's era — a 1965 film transferred to DV moved from 1960–1975 to 1975–1985 — so this
+    variant says only what the picture itself is (size, rate, scan, aspect), never the codec."""
+    if not tech:
+        return ""
+    parts: List[str] = []
+    codec = "" if picture_only else str(tech.get("codec") or "").lower()
+    if codec in TRANSFER_CODECS:
+        parts.append("codec {} in {} — a lossless TRANSFER format: the original carrier (tape, film, disc) is unknown, "
+                     "so this codec says nothing about when the footage was recorded".format(TRANSFER_CODECS[codec], tech.get("container", "?")))
+    elif codec:
+        parts.append("codec {} in {} — {}".format(codec, tech.get("container", "?"), CAMERA_NATIVE_WORDS.get(codec, "camera-native")))
+    if tech.get("width") and tech.get("height"):
+        parts.append("{}×{} pixels".format(tech["width"], tech["height"]))
+    if tech.get("fps"):
+        parts.append("{:g} fps".format(tech["fps"]))
+    if tech.get("scan"):
+        parts.append(tech["scan"])
+    if tech.get("aspect"):
+        parts.append("aspect {}".format(tech["aspect"]))
+    if not parts:
+        return ""
+    if picture_only:
+        return ("Picture facts about this file (from its container, not from the frames; the file may be a later transfer of "
+                "older footage, so these say what the picture is, not when it was recorded): " + "; ".join(parts) + ".")
+    return "Technical facts about this file (from its container, not from the pictures): " + "; ".join(parts) + "."
+
+
 def rip_frame(path: str, at_s: float, dest: Path, duration_s: float) -> bool:
     """One still, letterboxed into 448×448 (aspect kept, black bars) — the shape the
     app hands the model (`processing.resize = 448×448`).  Input-seek (-ss before -i),
@@ -667,6 +756,15 @@ def weights_digest(model_dir: Path) -> Tuple[str, int]:
     return sha256_json(rows), total
 
 
+# mlx-vlm 0.5.0 splits a prompt longer than its prefill step (2048 tokens) into chunks,
+# and the short tail chunk dies in Metal (2026-10-31: every one of ten worker crashes sat
+# at "Prefill 2048/2051…2077"; 8 frames ≈ 2048 visual tokens + one line of text crossed
+# it). One prefill step bigger than any prompt we send means no chunking.  Worst-case
+# memory for the step: ≤ 8 192 tokens of activations in one pass, well under the KV
+# budget already counted for N=12.
+PREFILL_STEP_SIZE = 8192
+
+
 class A0Python(Approach):
     id = APPROACH_ID
 
@@ -702,6 +800,7 @@ class A0Python(Approach):
             "weights_bytes": size,
             "load_s": round(time.perf_counter() - started, 3),
             "mlx_vlm_version": getattr(mlx_vlm, "__version__", None),
+            "prefill_step_size": PREFILL_STEP_SIZE,
             "mlx_version": _dist_version("mlx"),
             "transformers_version": transformers.__version__,
         }
@@ -726,7 +825,7 @@ class A0Python(Approach):
         params = GEN_PARAMS[prompt_kind]
         result = generate(self.model, self.processor, templated, image=[str(image_path)],
                           max_tokens=params["max_tokens"], temperature=params["temperature"],
-                          top_p=params["top_p"], verbose=False)
+                          top_p=params["top_p"], verbose=False, prefill_step_size=PREFILL_STEP_SIZE)
         text = result if isinstance(result, str) else getattr(result, "text", str(result))
         counters = {}
         for name in ("prompt_tokens", "generation_tokens", "generation_tps", "peak_memory"):
@@ -857,12 +956,15 @@ def plan_windows(frames_per_window: int, duration_s: float,
     return windows
 
 
-def format_a1_prompt(family: str, window: Dict[str, Any]) -> str:
+def format_a1_prompt(family: str, window: Dict[str, Any], context: Optional[str] = None) -> str:
     times = window["frame_times_s"]
-    return A1_PROMPTS[family].format(
+    prompt = A1_PROMPTS[family].format(
         n=len(times), start="{:.1f}".format(window["start_s"]), end="{:.1f}".format(window["end_s"]),
         first="{:.1f}".format(times[0]) if times else "0.0",
         times=", ".join("{:.1f}".format(t) for t in times))
+    # The technical line goes FIRST so the frames are read with it in mind; the
+    # contract text below is unchanged, so the decoder is unchanged.
+    return (context.strip() + "\n" + prompt) if context else prompt
 
 
 # --- Fail-closed contract decoding (mirror of Swift ContractDecoder) ---------
@@ -1095,19 +1197,19 @@ class A1Python(A0Python):
     id = A1_APPROACH_ID
 
     def answer_window(self, image_paths: Sequence[Path], family: str,
-                      window: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+                      window: Dict[str, Any], context: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
         from mlx_vlm import generate
         from mlx_vlm.prompt_utils import apply_chat_template
 
         messages = [
             {"role": "system", "content": A1_SYSTEM_PROMPT},
-            {"role": "user", "content": format_a1_prompt(family, window)},
+            {"role": "user", "content": format_a1_prompt(family, window, context)},
         ]
         templated = apply_chat_template(self.processor, self.config, messages, num_images=len(image_paths))
         params = A1_GEN_PARAMS[family]
         result = generate(self.model, self.processor, templated, image=[str(p) for p in image_paths],
                           max_tokens=params["max_tokens"], temperature=params["temperature"],
-                          top_p=params["top_p"], verbose=False)
+                          top_p=params["top_p"], verbose=False, prefill_step_size=PREFILL_STEP_SIZE)
         text = result if isinstance(result, str) else getattr(result, "text", str(result))
         counters = {}
         for name in ("prompt_tokens", "generation_tokens", "generation_tps", "peak_memory"):
@@ -1396,8 +1498,11 @@ class SubprocessApproach:
         return text, counters
 
     def answer_window(self, image_paths: Sequence[Path], family: str,
-                      window: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-        text, counters = self._call("answer_window", [str(p) for p in image_paths], family, window)
+                      window: Dict[str, Any], context: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+        args: List[Any] = [[str(p) for p in image_paths], family, window]
+        if context:
+            args.append(context)
+        text, counters = self._call("answer_window", *args)
         return text, counters
 
     def stats(self) -> Dict[str, Any]:
@@ -1633,7 +1738,9 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                   ocr_stills: int = A2_OCR_STILLS,
                   deadline: Optional[float] = None,
                   clock: Callable[[], float] = time.time,
-                  keep_frames: bool = False) -> Dict[str, Any]:
+                  keep_frames: bool = False,
+                  prompt_context: Optional[str] = None,
+                  technical_of: Callable[[str], Dict[str, Any]] = probe_technical) -> Dict[str, Any]:
     """A1 loop.  Per clip: plan ≤ 3 windows, rip every window frame once, then
     * ERA-corpus clip → one multi-image generation per (window, family) — a
       ``window_result`` record carrying raw text, `schema_valid`, the decoded value
@@ -1697,6 +1804,14 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
             plan = plan_clip_sampling(corpora, duration, frames_per_window, ocr_sampler, ocr_stills)
             windows = plan["windows"]
             rip_failures = frames_ok = records_written = window_records = 0
+            technical: Dict[str, Any] = {}
+            context_line: Optional[str] = None
+            if prompt_context in (PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE) and windows and "era" in corpora:
+                try:
+                    technical = technical_of(entry["path"]) or {}
+                except Exception:  # noqa: BLE001 — a probe failure is a missing line, not a dead run
+                    technical = {}
+                context_line = technical_context_line(technical, picture_only=(prompt_context == PROMPT_CONTEXT_PICTURE)) or None
 
             def ask_date(png: Path, frame_index: int, window_index: Optional[int], at_s: float, rip_s: float,
                          stream: Any, sampler: Optional[str]) -> None:
@@ -1739,6 +1854,10 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                     header.update(ocr_sampler=ocr_sampler, ocr_still_times_s=plan["ocr_still_times_s"])
                 if keep_frames:
                     header["frames_dir"] = "frames/{}".format(digest[:16])
+                if prompt_context:
+                    header["prompt_context"] = prompt_context
+                    header["technical"] = technical
+                    header["context_line"] = context_line
                 stream.write(json.dumps(header, sort_keys=True) + "\n")
                 frame_index = 0
                 for window in windows:
@@ -1768,7 +1887,8 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                             error = None
                             is_timeout = False
                             try:
-                                text, counters = approach.answer_window(pngs, family, window)
+                                text, counters = (approach.answer_window(pngs, family, window, context_line) if context_line
+                                                  else approach.answer_window(pngs, family, window))
                             except Exception as exc:  # noqa: BLE001
                                 error, is_timeout = _generation_error(exc)
                                 text, counters = "", {}
@@ -1784,6 +1904,7 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                                 "window": [window["start_s"], window["end_s"]],
                                 "frame_times_s": window["frame_times_s"], "frames_shown": len(pngs),
                                 "family": family, "prompt_sha256": sha256_text(A1_PROMPTS[family]),
+                                "context_sha256": sha256_text(context_line) if context_line else None,
                                 "raw_text": text, "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s_window, 3),
                                 "error": error, "counters": counters, "schema_valid": value is not None,
                                 "schema_invalid_reason": reason, "decoded": value,
@@ -2001,6 +2122,8 @@ def run_command(args: argparse.Namespace) -> int:
     print("loaded in {:.1f}s; weights sha256 {}".format(load_info["load_s"], load_info["weights_sha256"][:12]), flush=True)
     record = build_run_record(manifest, manifest_path, approach, load_info, frames,
                               args.limit, args.corpus, run_id, selection)
+    if getattr(args, "context", None) and args.context != PROMPT_CONTEXT_NONE:
+        record["prompt_context"] = args.context
     if run_path.is_file():
         # Resume: keep the first run record, append this session's load timing.
         previous = json.loads(run_path.read_text(encoding="utf-8"))
@@ -2011,7 +2134,8 @@ def run_command(args: argparse.Namespace) -> int:
     try:
         if spec["windows"]:
             progress = run_corpus_a1(entries, out_dir, approach, frames, record, ocr_sampler=spec["ocr_sampler"],
-                                     deadline=deadline, keep_frames=bool(getattr(args, "keep_frames", False)))
+                                     deadline=deadline, keep_frames=bool(getattr(args, "keep_frames", False)),
+                                     prompt_context=(getattr(args, "context", None) or None))
             print("done {} skipped {} failed {} timeouts {} s/frame {} s/window {} state {}".format(
                 progress["done"], progress["skipped_resume"], progress["failed"], progress.get("timeouts", 0),
                 progress["s_per_frame"], progress["s_per_window"], progress["state"]))
@@ -2900,6 +3024,9 @@ def summarize_command(args: argparse.Namespace) -> int:
 # Nothing here is ever written into the repo, and the server never leaves the
 # loopback interface.
 # ===========================================================================
+PROMPT_CONTEXT_NONE = "none"
+PROMPT_CONTEXT_TECHNICAL = "technical"
+PROMPT_CONTEXT_PICTURE = "picture"
 VERDICTS_FILE = "verdicts.jsonl"
 # Rick, after the first five clips (2026-10-31): the question is AGREEMENT — a wide
 # range that contains his date is still agreement — not whose date is right.
@@ -2907,6 +3034,8 @@ VERDICTS_FILE = "verdicts.jsonl"
 # The first five verdicts were written as "model" / "mine"; still readable.
 VERDICT_WORDS = ("agree", "disagree", "unsure", "model", "mine")
 VERDICT_BUTTONS = ("agree", "disagree", "unsure")
+CLOSE_MAX_ERROR_YEARS = 5.0
+CLOSE_MAX_WIDTH_YEARS = 10.0
 WATCH_DEFAULT_PORT = 8765
 
 
@@ -2991,6 +3120,10 @@ def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, v
     midpoint = (year_range[0] + year_range[1]) / 2 if year_range else None
     error = abs(midpoint - confirmed_year) if (midpoint is not None and isinstance(confirmed_year, (int, float))) else None
     inside = bool(year_range and isinstance(confirmed_year, (int, float)) and year_range[0] <= confirmed_year <= year_range[1])
+    width = (year_range[1] - year_range[0]) if year_range else None
+    # "Close enough" (Rick, after the first 25 clips): the midpoint within 5 years of his
+    # date AND a range no wider than 10 years — 1982–1995 against 1990 is not agreement.
+    close = bool(error is not None and error <= CLOSE_MAX_ERROR_YEARS and width is not None and width <= CLOSE_MAX_WIDTH_YEARS)
     ocr_dates = sorted({d for r in records.get("results") or [] for d in (r.get("parsed") or {}).get("dates", [])})
     return {
         "digest": entry["digest"], "name": Path(entry.get("path") or "").name, "stratum": entry.get("stratum"),
@@ -2998,7 +3131,9 @@ def review_clip(entry: Dict[str, Any], records: Dict[str, Any], run_dir: Path, v
         "confirmed_year": confirmed_year, "confirmed_date": truth.get("date"),
         "machine_range": list(year_range) if year_range else None, "machine_midpoint": midpoint,
         "error_years": round(error, 1) if error is not None else None, "inside": inside,
+        "width_years": width, "close": close,
         "ocr_dates": ocr_dates, "windows": windows,
+        "context_line": header.get("context_line"), "technical": header.get("technical") or {},
         "done": records.get("footer") is not None, "verdict": (verdict or {}).get("verdict"),
     }
 
@@ -3036,8 +3171,12 @@ def review_state(run_dir: Path, manifest: Dict[str, Any], clips: Optional[Sequen
         "with_truth": len(scored),
         "within_5": sum(1 for c in scored if c["error_years"] <= 5), "within_10": sum(1 for c in scored if c["error_years"] <= 10),
         "inside_range": sum(1 for c in scored if c["inside"]),
+        "close": sum(1 for c in scored if c["close"]),
         "mean_error_years": round(sum(c["error_years"] for c in scored) / len(scored), 1) if scored else None,
         "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_BUTTONS},
+        # Where Rick's call and the rule differ: the clips worth a look (either the rule or his sense is off).
+        "disagreements": sum(1 for c in items if (c["verdict"] in ("agree", "model") and not c["close"])
+                             or (c["verdict"] in ("disagree", "mine") and c["close"])),
     }
     return {"run_id": run_record.get("run_id"), "approach_id": run_record.get("approach_id"), "model": run_record.get("model_id"),
             "state": progress.get("state"), "total_clips": progress.get("total_clips"), "generated_at": utc_now(),
@@ -3093,13 +3232,13 @@ kbd{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radi
 const $=s=>document.querySelector(s); let S=null, cur=null;
 const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const mmss=t=>{t=Math.max(0,Math.round(t||0));return Math.floor(t/60)+":"+String(t%60).padStart(2,"0")};
-const grade=c=>c.error_years==null?"pending":c.error_years<=5?"good":c.error_years<=10?"warn":"bad";
+const grade=c=>c.error_years==null?"pending":c.close?"good":c.error_years<=10?"warn":"bad";
 async function poll(){try{const r=await fetch("/state.json",{cache:"no-store"});S=await r.json();render()}catch(e){}}
 function render(){
   const t=S.tally; $("#tally-main").textContent=`${t.clips_done} of ${S.total_clips??"?"} clips`;
-  $("#tally").innerHTML=`within 5 y <b>${t.within_5}</b> · within 10 y <b>${t.within_10}</b> · inside range <b>${t.inside_range}</b> of ${t.with_truth}<br>mean error <b>${t.mean_error_years??"—"}</b> y · verdicts: agree ${t.verdicts.agree} · disagree ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}<br><span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
+  $("#tally").innerHTML=`<b>close enough ${t.close}</b> of ${t.with_truth} by the rule (within 5 y and ≤ 10 y wide)<br>your call: close ${t.verdicts.agree} · not close ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}${t.disagreements?` · <b>${t.disagreements} where your call and the rule differ</b>`:""}<br>midpoint within 5 y ${t.within_5} · within 10 y ${t.within_10} · inside range ${t.inside_range}<br>mean error <b>${t.mean_error_years??"—"}</b> y · <span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
   if(cur==null){const first=S.clips.find(c=>c.done&&!c.verdict)||S.clips[0]; cur=first?first.digest:null}
-  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc(c.verdict):""}</span></div>`).join("");
+  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc({agree:"close",model:"close",disagree:"not close",mine:"not close",unsure:"unsure"}[c.verdict]||c.verdict):""}</span></div>`).join("");
   document.querySelectorAll(".row").forEach(r=>r.onclick=()=>{cur=r.dataset.d;render()});
   const c=S.clips.find(x=>x.digest===cur); if(!c){return}
   const g=grade(c);
@@ -3111,11 +3250,11 @@ function render(){
     const eraBox=era?(era.valid?`<div class="ans"><span class="rng">${era.year_range[0]}–${era.year_range[1]}</span> · confidence ${Math.round(era.confidence*100)}%<br>${esc(era.rationale)}<div class="cues">${(era.cues||[]).map(q=>`${esc(q.kind)}: ${esc(q.text)}${q.at_s!=null?" @ "+mmss(q.at_s):""}`).join(" · ")}</div></div>`:`<div class="ans invalid">era: no valid answer (${esc(era.reason)})</div>`):"";
     const roomBox=room&&room.valid?`<div class="ans">${esc(room.setting)} · ${esc(room.location_type)} · ${(room.features||[]).map(esc).join(", ")}</div>`:"";
     return `<section class="win"><h3>Window ${w.index+1} · ${mmss(w.start_s)}–${mmss(w.end_s)}</h3><div class="strip">${strip}</div>${eraBox}${roomBox}</section>`}).join("");
-  $("#main").innerHTML=`<h1>${esc(c.name)}</h1><div class="sub">${esc(c.stratum||"")} · ${mmss(c.duration_s)} · ${c.done?"done":"in progress"}${c.ocr_dates.length?" · burned-in date read: "+c.ocr_dates.map(esc).join(", "):""}</div>
+  $("#main").innerHTML=`<h1>${esc(c.name)}</h1><div class="sub">${esc(c.stratum||"")} · ${mmss(c.duration_s)} · ${c.done?"done":"in progress"}${c.ocr_dates.length?" · burned-in date read: "+c.ocr_dates.map(esc).join(", "):""}</div>${c.context_line?`<div class="ans" style="margin-bottom:10px">${esc(c.context_line)}</div>`:""}
   <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
-  <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
+  <div><div class="lbl">Model's era</div><div class="val">${mr}</div><div class="err ${g}">${c.error_years==null?"":`${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
   ${wins}
-  <div class="buttons"><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Agree<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Disagree<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
+  <div class="buttons"><span style="color:var(--muted);margin-right:6px">Is the model's range close enough to your date to be useful?</span><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Close enough<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Not close<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
 }
 async function verdict(v){const c=S.clips.find(x=>x.digest===cur); if(!c)return;
   await fetch("/verdict",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({digest:c.digest,verdict:v})});
@@ -3239,6 +3378,9 @@ def make_parser() -> argparse.ArgumentParser:
                      help="seconds the model load may take in the worker (default {:.0f})".format(DEFAULT_LOAD_TIMEOUT_S))
     run.add_argument("--deadline", default=None,
                      help="HH:MM local; the run stops BETWEEN clips at that time (resume-safe, exit code 3)")
+    run.add_argument("--context", choices=[PROMPT_CONTEXT_NONE, PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE], default=PROMPT_CONTEXT_NONE,
+                     help="technical: codec/container/size/rate/scan/aspect (never dates); picture: size/rate/scan/aspect only, no codec "
+                          "(the codec anchored the model on the carrier's era)")
     run.add_argument("--keep-frames", action="store_true",
                      help="keep the frames the model saw under <out>/frames/ for `watch` (windowed approaches; run dir must be under .scratch/)")
     run.set_defaults(func=run_command)

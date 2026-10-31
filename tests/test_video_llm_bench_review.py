@@ -68,6 +68,7 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert c["name"] == Path(e["path"]).name and "/" not in c["name"], "the file NAME only, never its path"
     assert c["confirmed_year"] == 1991 and c["machine_range"] == [1991, 1995] and c["machine_midpoint"] == 1993
     assert c["error_years"] == 2.0 and c["inside"] is True and c["done"] is True and c["verdict"] is None
+    assert c["width_years"] == 4 and c["close"] is True, "within 5 y and ≤ 10 y wide is close enough"
     assert len(c["windows"]) == 3
     w = c["windows"][0]
     assert [f["src"] for f in w["frames"]][:2] == ["frames/{}/w0_f000.png".format(e["digest"][:16]),
@@ -80,7 +81,7 @@ def test_review_state_shows_truth_frames_rationale_cues_and_error(tmp_path):
     assert room["valid"] and room["setting"] == "indoor" and "brick fireplace" in room["features"]
     t = state["tally"]
     assert t == {"clips_seen": 1, "clips_done": 1, "with_truth": 1, "within_5": 1, "within_10": 1, "inside_range": 1,
-                 "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}}
+                 "close": 1, "mean_error_years": 2.0, "verdicts": {"agree": 0, "disagree": 0, "unsure": 0}, "disagreements": 0}
 
 
 def test_review_state_lists_clips_in_manifest_order_as_they_appear_and_skips_missing_or_corrupt(tmp_path):
@@ -100,6 +101,21 @@ def test_an_ocr_only_clip_has_no_era_but_shows_the_dates_it_read(tmp_path):
     assert c["ocr_dates"] == ["1991-06-21"] and c["windows"] == []
 
 
+def test_a_wide_range_is_not_close_even_when_its_midpoint_lands(tmp_path):
+    """Rick's example: 'definitely 1990' against 'sometime between 1982 and 1995' — midpoint 1988.5,
+    off by 1.5 y, and still not agreement because the range is 13 y wide."""
+    class WideA2(FakeA2):
+        def answer_window(self, image_paths, family, window):
+            from test_video_llm_bench_a2 import era_obj, room_obj
+            return json.dumps(era_obj(yearRange=[1982, 1995]) if family == "era" else room_obj()), {}
+    e = dict(entry(digest_for(12)), truth={"year": 1990})
+    out = scratch_run(tmp_path, [e], approach=WideA2())
+    c = bench.review_state(out, manifest_for([e]))["clips"][0]
+    assert c["machine_range"] == [1982, 1995] and c["error_years"] == 1.5 and c["inside"] is True
+    assert c["width_years"] == 13 and c["close"] is False
+    assert bench.review_state(out, manifest_for([e]))["tally"]["close"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Verdicts
 # ---------------------------------------------------------------------------
@@ -114,6 +130,9 @@ def test_verdicts_last_wins_malformed_skipped_and_show_in_the_state(tmp_path):
     assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "agree", "the last VALID line wins"
     assert bench.review_state(out, manifest_for([e]))["clips"][0]["verdict"] == "agree"
     assert bench.review_state(out, manifest_for([e]))["tally"]["verdicts"] == {"agree": 1, "disagree": 0, "unsure": 0}
+    assert bench.review_state(out, manifest_for([e]))["tally"]["disagreements"] == 0, "close by the rule and 'close' by Rick"
+    bench.write_verdict(out, e["digest"], "disagree")
+    assert bench.review_state(out, manifest_for([e]))["tally"]["disagreements"] == 1, "close by the rule, 'not close' by Rick: worth a look"
     # The first session's words are still readable (and not counted under the new buttons).
     bench.write_verdict(out, e["digest"], "model")
     assert bench.read_verdicts(out)[e["digest"]]["verdict"] == "model"
@@ -166,7 +185,8 @@ def test_server_serves_page_state_frames_and_refuses_traversal(served):
     status, ctype, body = get(base + "/")
     assert status == 200 and ctype.startswith("text/html")
     page = body.decode()
-    assert "Era review" in page and ">Agree<" in page and ">Disagree<" in page and ">Unsure<" in page
+    assert "Era review" in page and "Close enough<kbd>1" in page and "Not close<kbd>2" in page and "Unsure<kbd>3" in page
+    assert "Is the model's range close enough to your date to be useful?" in page
     assert "/Users/" not in page and "/Volumes/" not in page
     status, ctype, body = get(base + "/state.json")
     assert status == 200 and ctype.startswith("application/json")
