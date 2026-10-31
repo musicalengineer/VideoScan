@@ -21,9 +21,9 @@ import Foundation
 /// A quiet local run is held to the budget exactly.
 ///
 /// GH #208 (2026-10-02): new and migrated budget checks use `judge` /
-/// `judgeNow` below (strict when quiet, known issue up to 3× when busy)
-/// instead of `loadAwareDebugCeiling`; the ceiling functions stay for the
-/// app suites not yet migrated.
+/// `judgeNow` below instead of `loadAwareDebugCeiling`; the ceiling
+/// functions stay for the app suites not yet migrated. Since 2026-10-31
+/// `judge` is strict only where the lane pins it (see the MARK below).
 public enum TimingBudget {
 
     #if DEBUG
@@ -111,28 +111,33 @@ public enum TimingBudget {
         return "\(debugBuild ? "Debug" : "Release"), load \(load) on \(cores)"
     }
 
-    // MARK: Strict on a quiet machine, known issue on a busy one (GH #208)
+    // MARK: Strict only where the lane pins it (GH #208 → Rick, 2026-10-31)
     //
-    // Rick's ruling 2026-10-02. The 2 AM Release nightly on a quiet M4
-    // passed every timing test; the same tests failed only when the host
-    // was busy (parallel agent builds, `swift test --parallel`, a full app
-    // battery, GitHub runners). So a budget is judged in one of two modes:
+    // GH #208 (2026-10-02) judged a budget STRICT whenever the 1-minute load
+    // average looked quiet. 2026-10-31 showed the hole: a daytime Ultra with
+    // Rick's session, Activity Monitor and sysmond on it ran every search
+    // query ~35 % slower than at 02:00, load 2.9 on 30 cores was "quiet",
+    // and one 50 ms budget failed twice at 1.01–1.02× with no code change.
+    // A load average cannot see who else is on the box. So (Rick's ruling
+    // 2026-10-31) a budget is judged in one of two modes, and LOAD NEVER
+    // DECIDES THE MODE:
     //
-    //   STRICT — the 1-minute load average stays below the busy threshold
-    //   (half the logical cores, or `fastTierBusyFraction` of the fast tier
-    //   on a two-tier host when that is lower), sampled before AND after
-    //   the measurement (or
-    //   VIDEOSCAN_TIMING_STRICT=1, which the nightly pins). Any miss fails.
+    //   STRICT — VIDEOSCAN_TIMING_STRICT=1, which only a lane that owns a
+    //   quiet dedicated host sets (the 2 AM nightly on the rota's Mac
+    //   Studio, scripts/nightly_local_tests.sh). Any miss fails.
     //
-    //   BUSY — either sample at or above that threshold, or a GitHub-hosted
-    //   runner. A miss up to `busyMissLimit`× the budget is a KNOWN ISSUE
-    //   (visible, run stays green); a miss beyond that still FAILS — that is
-    //   a hang or a regression no amount of load explains.
+    //   KNOWN-ISSUE BAND — everything else: a developer's `swift test` or
+    //   full battery, a parallel run, a GitHub-hosted runner. A miss up to
+    //   `busyMissLimit`× the budget is a KNOWN ISSUE (visible in the run,
+    //   never hidden); a miss beyond that still FAILS — a hang or a
+    //   regression no host explains. The gauntlet counts a known issue as a
+    //   stage failure by its own rule, so it loses nothing.
     //
-    // No budget number moves: the budget is compared as written, and the
-    // only widening is the busy-mode band, which never passes silently.
-    // The verdict is pure (`judge`), so it is unit-tested with injected
-    // load and cores; test targets map it onto Swift Testing / XCTest.
+    // The load samples stay in the log line (`busy` / `unpinned`) so a
+    // reader can see what the host was doing; they no longer change the
+    // verdict. No budget number moves: the budget is compared as written.
+    // The verdict is pure (`judge`), unit-tested with injected load, cores
+    // and environment; test targets map it onto Swift Testing / XCTest.
 
     /// Forces strict mode regardless of load (the 2 AM nightly sets it).
     public static let strictEnvironmentKey = "VIDEOSCAN_TIMING_STRICT"
@@ -217,9 +222,10 @@ public enum TimingBudget {
         public let measured: Duration
         public let before: LoadSample
         public let after: LoadSample
-        /// True when a miss fails outright (quiet machine or the override).
+        /// True when a miss fails outright: only under VIDEOSCAN_TIMING_STRICT=1.
         public let strict: Bool
-        /// Why this mode: "quiet", "VIDEOSCAN_TIMING_STRICT=1", "busy", "GitHub-hosted runner".
+        /// Why this mode: "VIDEOSCAN_TIMING_STRICT=1", or for the band "busy",
+        /// "GitHub-hosted runner", "unpinned" (a quiet host no lane vouched for).
         public let modeReason: String
         public let verdict: Verdict
 
@@ -233,7 +239,7 @@ public enum TimingBudget {
             let ms = { (d: Duration) in String(format: "%.1f ms", TimingBudget.seconds(d) * 1_000) }
             return "[timing-budget] \(label): budget \(ms(budget)), measured \(ms(measured)) "
                 + "(\(String(format: "%.2f", ratio))×), load \(before.text)→\(after.text) on "
-                + "\(after.coresText), \(strict ? "strict" : "busy") (\(modeReason)) → \(verdict.rawValue)"
+                + "\(after.coresText), \(strict ? "strict" : "known-issue band") (\(modeReason)) → \(verdict.rawValue)"
         }
     }
 
@@ -245,7 +251,8 @@ public enum TimingBudget {
     }
 
     /// The pure rule. `before` is sampled before the measured work starts,
-    /// `after` once it ends; either one busy makes the run busy.
+    /// `after` once it ends; either one busy is said in the log line. Only
+    /// `VIDEOSCAN_TIMING_STRICT=1` makes a miss a failure inside the band.
     public static func judge(
         _ label: String,
         budget: Duration,
@@ -276,7 +283,8 @@ public enum TimingBudget {
         } else if hostedRunnerFactor(environment: environment) > 1 {
             strict = false; reason = "GitHub-hosted runner"
         } else {
-            strict = true; reason = "quiet"
+            // Quiet by load, but no lane vouched for the host (2026-10-31).
+            strict = false; reason = "unpinned"
         }
         let verdict: Verdict
         if measured < budget {

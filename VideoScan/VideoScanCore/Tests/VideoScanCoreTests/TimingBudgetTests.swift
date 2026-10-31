@@ -35,10 +35,15 @@ struct TimingBudgetTests {
         #expect(TimingBudget.loadFactor(debugBuild: true, loadAverage: 20, activeProcessors: 16, loadedHeadroom: 0.5) == 1)
     }
 
-    // MARK: GH #208 — strict when quiet, known issue (≤ 3×) when busy
+    // MARK: GH #208 → 2026-10-31 — strict only where the lane pins it
     //
-    // All injected: load, cores and environment are parameters, so these
-    // never sleep and never depend on what the host is doing.
+    // Rick's ruling 2026-10-31 (after the daytime Ultra failed one 50 ms
+    // budget at 1.01–1.02× twice while a load of 2.9 on 30 cores was called
+    // "quiet"): a load-average guess never makes a budget strict. STRICT is
+    // VIDEOSCAN_TIMING_STRICT=1, which the 2 AM nightly pins; everywhere
+    // else a miss up to 3× is a KNOWN ISSUE (visible, never hidden) and a
+    // miss beyond 3× still fails. All injected: load, cores and environment
+    // are parameters, so these never sleep and never depend on the host.
 
     static let quiet = TimingBudget.LoadSample(load: 7.9, logicalCores: 16)   // < 8 = 50%
     static let busy = TimingBudget.LoadSample(load: 8.0, logicalCores: 16)    // = 50%: busy
@@ -51,14 +56,29 @@ struct TimingBudgetTests {
                            before: before, after: after, environment: env)
     }
 
-    @Test("quiet machine is strict: under budget passes, any miss fails")
-    func quietIsStrict() {
+    @Test("RED 2026-10-31: a quiet host WITHOUT the pin is not strict — a miss ≤ 3× is a known issue, beyond 3× fails")
+    func quietWithoutPinIsTheKnownIssueBand() {
         #expect(Self.judge(99).verdict == .pass)
-        #expect(Self.judge(99).strict)
-        #expect(Self.judge(100).verdict == .fail, "a measurement equal to the budget is a miss (strict <)")
-        #expect(Self.judge(101).verdict == .fail)
-        #expect(Self.judge(250).verdict == .fail, "quiet never gets the busy band")
-        #expect(Self.judge(101).modeReason == "quiet")
+        #expect(!Self.judge(99).strict, "no lane pinned strict: load says nothing about who else is on the box")
+        #expect(Self.judge(100).verdict == .knownIssue, "a measurement equal to the budget is a miss (<), visible as a known issue")
+        #expect(Self.judge(101).verdict == .knownIssue)
+        #expect(Self.judge(250).verdict == .knownIssue)
+        #expect(Self.judge(301).verdict == .fail, "over 3× is a hang or a real regression, pin or no pin")
+        #expect(Self.judge(101).modeReason == "unpinned")
+        #expect(Self.judge(101).logLine.contains("known-issue band (unpinned)"), Comment(rawValue: Self.judge(101).logLine))
+    }
+
+    @Test("RED 2026-10-31: the daytime Ultra — load 2.9 on 30 cores (10 fast), no pin, 50.8 ms against 50 ms — is a known issue; the nightly's pin fails it")
+    func daytimeUltraMissIsAKnownIssueUnlessPinned() {
+        let s = TimingBudget.LoadSample(load: 2.9, logicalCores: 30, fastCores: 10)
+        #expect(!s.isBusy, "the load rule alone would have called this quiet, and did")
+        let unpinned = TimingBudget.judge("100k settled keystroke '1990s' (median of 5)", budget: .milliseconds(50),
+                                          measured: .microseconds(50_800), before: s, after: s, environment: [:])
+        #expect(unpinned.verdict == .knownIssue)
+        #expect(!unpinned.strict && unpinned.modeReason == "unpinned")
+        let pinned = TimingBudget.judge("t", budget: .milliseconds(50), measured: .microseconds(50_800), before: s, after: s,
+                                        environment: [TimingBudget.strictEnvironmentKey: "1"])
+        #expect(pinned.verdict == .fail && pinned.strict)
     }
 
     @Test("the busy threshold is half the logical cores, inclusive")
@@ -147,11 +167,16 @@ struct TimingBudgetTests {
         #expect(!Self.judge(101, before: Self.busy).strict)
     }
 
-    @Test("busy if EITHER sample is busy — before or after the measurement")
+    @Test("busy if EITHER sample is busy — before or after the measurement; the word is for the log, the band is the same")
     func eitherSampleMakesItBusy() {
-        #expect(Self.judge(150, before: Self.busy, after: Self.quiet).verdict == .knownIssue)
-        #expect(Self.judge(150, before: Self.quiet, after: Self.busy).verdict == .knownIssue)
-        #expect(Self.judge(150, before: Self.quiet, after: Self.quiet).verdict == .fail)
+        #expect(Self.judge(150, before: Self.busy, after: Self.quiet).modeReason == "busy")
+        #expect(Self.judge(150, before: Self.quiet, after: Self.busy).modeReason == "busy")
+        #expect(Self.judge(150, before: Self.quiet, after: Self.quiet).modeReason == "unpinned")
+        for j in [Self.judge(150, before: Self.busy, after: Self.quiet), Self.judge(150, before: Self.quiet, after: Self.quiet)] {
+            #expect(j.verdict == .knownIssue && !j.strict)
+        }
+        // Under the pin, load is irrelevant in the other direction too: busy still fails.
+        #expect(Self.judge(150, before: Self.busy, after: Self.busy, env: [TimingBudget.strictEnvironmentKey: "1"]).verdict == .fail)
     }
 
     @Test("VIDEOSCAN_TIMING_STRICT=1 forces strict on a busy machine and on GitHub")
@@ -176,7 +201,8 @@ struct TimingBudgetTests {
         #expect(Self.judge(250, env: gh).verdict == .knownIssue)
         #expect(Self.judge(301, env: gh).verdict == .fail)
         #expect(Self.judge(250, env: gh).modeReason == "GitHub-hosted runner")
-        #expect(Self.judge(250, env: ["CI": "1"]).verdict == .fail, "CI=1 is set locally too; it is not busy")
+        #expect(Self.judge(250, env: ["CI": "1"]).modeReason == "unpinned", "CI=1 is set locally too; it is not GitHub")
+        #expect(Self.judge(250, env: ["CI": "1", TimingBudget.strictEnvironmentKey: "1"]).verdict == .fail)
     }
 
     @Test("the budget is compared as written — the verdict never moves the number")
@@ -198,8 +224,10 @@ struct TimingBudgetTests {
         #expect(line.contains("measured 150.0 ms"))
         #expect(line.contains("1.50×"))
         #expect(line.contains("load 9.2→10.0 on 16 cores") || line.contains("load 9.3→10.0 on 16 cores"))
-        #expect(line.contains("busy (busy) → known-issue"))
-        #expect(Self.judge(150).logLine.contains("strict (quiet) → fail"))
+        #expect(line.contains("known-issue band (busy) → known-issue"))
+        #expect(Self.judge(150).logLine.contains("known-issue band (unpinned) → known-issue"))
+        #expect(Self.judge(150, env: [TimingBudget.strictEnvironmentKey: "1"]).logLine
+                    .contains("strict (VIDEOSCAN_TIMING_STRICT=1) → fail"))
     }
 
     // The Swift Testing mapping (TimingBudgetExpectations.swift). Each case
@@ -211,8 +239,9 @@ struct TimingBudgetTests {
     func swiftTestingMapping() {
         recordTimingJudgement(Self.judge(99))
         recordTimingJudgement(Self.judge(150, before: Self.busy))
+        recordTimingJudgement(Self.judge(150), sourceLocation: #_sourceLocation)   // unpinned: known issue, stays green
         withKnownIssue("a strict miss must record a real issue") {
-            recordTimingJudgement(Self.judge(150))
+            recordTimingJudgement(Self.judge(150, env: [TimingBudget.strictEnvironmentKey: "1"]))
         }
         withKnownIssue("a busy miss over 3× must record a real issue") {
             recordTimingJudgement(Self.judge(400, before: Self.busy))
@@ -301,10 +330,12 @@ struct TimingBudgetSanitizerTests {
         #expect(verdict(5_000) == .fail, "beyond 45× is a hang")
     }
 
-    @Test func withoutASanitizerAQuietMissStillFails() {
+    @Test func withoutASanitizerAPinnedMissStillFails() {
         let j = TimingBudget.judge("x", budget: .milliseconds(100), measured: .milliseconds(150),
-                                   before: quiet, after: quiet, environment: [:])
+                                   before: quiet, after: quiet, environment: [TimingBudget.strictEnvironmentKey: "1"])
         #expect(j.verdict == .fail)
+        #expect(TimingBudget.judge("x", budget: .milliseconds(100), measured: .milliseconds(150),
+                                   before: quiet, after: quiet, environment: [:]).verdict == .knownIssue)
     }
 }
 
