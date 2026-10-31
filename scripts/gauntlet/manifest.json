@@ -32150,6 +32150,38 @@
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ConfirmedDateFilterTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ConfirmedDateFilterTests",
+        "ConfirmedDateFilterTruthTests",
+        "ConfirmedDateFilterSensorTests"
+      ],
+      "tests": [
+        "chipCountEqualsTheStoresCount",
+        "chipExistsInTheFilterRow",
+        "chipIsAFilterCase",
+        "filterKeepsExactlyTheDatedRows",
+        "malformedUserDateNeverCounts",
+        "predicateFollowsTheUserDate",
+        "predicateTableCoversEveryFilter",
+        "removedRowIsNotInTheTable",
+        "showingBoxNamesTheChip"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ConfirmedDateFilterScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "ConfirmedDateFilterScaleTests"
+      ],
+      "tests": [
+        "predicateOver100kStaysInBudget"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35657,7 +35689,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 355,
+      "expected_floor": 364,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [
@@ -35797,7 +35829,10 @@
         "VideoScanTests/ScanLocationVolumeTests",
         "VideoScanTests/CaptionDegenerateRefusalTests",
         "VideoScanTests/CatalogStatusDegenerateOCRTests",
-        "VideoScanTests/CaptionDegenerateReaderRouteTests"
+        "VideoScanTests/CaptionDegenerateReaderRouteTests",
+        "VideoScanTests/ConfirmedDateFilterTests",
+        "VideoScanTests/ConfirmedDateFilterTruthTests",
+        "VideoScanTests/ConfirmedDateFilterSensorTests"
       ]
     },
     {
@@ -36007,7 +36042,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 67,
+      "expected_floor": 68,
       "name": "performance",
       "package_expected_floor": 15,
       "package_selectors": [
@@ -36044,7 +36079,8 @@
         "VideoScanTests/PreviewSweepScaleTests",
         "VideoScanTests/TreeIdentityPinPerformanceTests",
         "VideoScanTests/VerifyAudioScaleSensorTests",
-        "VideoScanTests/CatalogSearchKeystrokeBudgetTests"
+        "VideoScanTests/CatalogSearchKeystrokeBudgetTests",
+        "VideoScanTests/ConfirmedDateFilterScaleTests"
       ]
     },
     {

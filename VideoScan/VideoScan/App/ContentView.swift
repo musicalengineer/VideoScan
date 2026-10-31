@@ -295,6 +295,12 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     /// event-driven computeFiltered pass (FootageOnePerGroup), never in a
     /// view body.
     case onePerFootage = "One Per Footage"
+    /// Confirmed date (Rick 2026-10-31: "so I can quickly scroll through and
+    /// double check the dates are consistent"): records carrying Rick's OWN
+    /// date — `userDate`, the `user_dates` table's value, at either
+    /// confidence — never a machine date. Backed by pfRecordHasConfirmedDate;
+    /// O(1) per record (a nil check + a short parse).
+    case confirmedDate = "Confirmed Date"
 
     var icon: String {
         switch self {
@@ -310,6 +316,39 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .archiveCandidates:    return "sparkles"
         case .noPlaceYet:           return "mappin.slash"
         case .onePerFootage:        return "square.stack.3d.up"
+        case .confirmedDate:        return "calendar.badge.checkmark"
+        }
+    }
+
+    /// The pure per-record test behind this filter — nil for the filters
+    /// that need the model (the archive index, the Angel sidecar) or a
+    /// whole-group pass (one per footage). `computeFiltered` applies every
+    /// non-nil one in declaration order, in ONE place; a new pure filter
+    /// ships here and needs no new branch there. Filters are independent
+    /// per-record predicates, so their order among themselves does not
+    /// change the rows. (≈ a C++ table of function pointers keyed by the
+    /// enum, instead of a chain of ifs.)
+    var recordPredicate: ((VideoRecord) -> Bool)? {
+        switch self {
+        case .videoAndAudioOnly:    return { $0.streamType == .videoAndAudio }
+        case .unpairedOnly:         return { ($0.streamType == .videoOnly || $0.streamType == .audioOnly) && $0.pairedWith == nil }
+        case .ratedOnly:            return { $0.starRating > 0 }
+        case .hasFamily:            return pfRecordHasAnyPerson
+        // Workspace chip: records the user actively imported into the triage
+        // workspace. Orthogonal to lifecycleStage — a Cataloged record can
+        // also be workspace-active.
+        case .workspaceOnly:        return { $0.workspaceActive }
+        case .untaggedOnly:         return pfRecordIsUntagged
+        // Repair-lifecycle worklist (GH #132 P3): repair copies still waiting
+        // for Rick's confirmation.
+        case .awaitingConfirmation: return pfAwaitingConfirmation
+        // "No place yet" (2026-09-12): the place review queue. nil check.
+        case .noPlaceYet:           return pfRecordHasNoPlace
+        // "Confirmed date" (Rick 2026-10-31): the rows carrying Rick's own
+        // date, for one scroll that double-checks them.
+        case .confirmedDate:        return pfRecordHasConfirmedDate
+        case .notYetArchived, .hasMasterCopy, .archiveCandidates, .onePerFootage:
+            return nil
         }
     }
 }

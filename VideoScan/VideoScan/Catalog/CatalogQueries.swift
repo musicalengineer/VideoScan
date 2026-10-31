@@ -340,6 +340,20 @@ nonisolated func pfRecordHasNoPlace(_ rec: VideoRecord) -> Bool {
     rec.userPlaceStatus == .unplaced
 }
 
+/// "Confirmed date" predicate (CatalogViewFilter.confirmedDate, Rick
+/// 2026-10-31): true when the record carries Rick's OWN date — `userDate`,
+/// loaded from the `user_dates` table, at either confidence ("known" or his
+/// best guess: both are his) — and that date is a well-formed reduced-ISO
+/// date. Derived from `userDateStatus` so it can never disagree with the
+/// inspector's status line; a machine date (inferred, container, file stamp)
+/// never counts. A malformed stored value (the loader already refuses one;
+/// an in-memory or imported one could still arrive) is not a confirmed date.
+/// Pure, nonisolated, O(1) — runs inside the Catalog's filter pass.
+nonisolated func pfRecordHasConfirmedDate(_ rec: VideoRecord) -> Bool {
+    guard rec.userDateStatus != .unconfirmed, let date = rec.userDate else { return false }
+    return UserDateEntry.canonicalize(date) != nil
+}
+
 /// `notes:` field match — the union across the userNotes split
 /// (2026-07-23): the human text that used to live in `notes` migrated
 /// to `userNotes`, so note:/notes: matches EITHER field — nothing the
