@@ -44,7 +44,7 @@ venv-mlx/bin/python3 tools/video-llm-bench/bench.py summarize \
   --out docs/reviews/video_llm_benchmarks.md                   # overwrite; also printed to stdout
 ```
 
-Tests (no model, no media, no catalog): `venv/bin/python3 -m pytest tests/test_video_llm_bench.py`.
+Tests (no model, no media, no catalog): `venv/bin/python3 -m pytest tests/test_video_llm_bench.py tests/test_video_llm_bench_a1.py`.
 
 ## Corpora (`validate-corpus`)
 
@@ -99,3 +99,49 @@ safetensors file), `weights_bytes`, `load_s`, `mlx_vlm_version`, `mlx_version`,
 Per result line: `digest`, `frame_index`, `at_s`, `prompt_kind`, `prompt_sha256`, `raw_text`,
 `elapsed_s`, `rip_s`, `error`, `counters{prompt_tokens, generation_tokens, generation_tps,
 peak_memory}`, `parsed{dates, years, decades, degenerate}`.
+
+## Approach `a1-py` — windows + strict JSON contract (design §5 row A1)
+
+Same model, weights, loader and seed as A0. What changes:
+
+* **Sampler** (`plan_windows`): up to 3 chronological windows inside the middle 90 % — one at its start,
+  one centred on its middle, one at its end — each ≤ 60 s and ≤ span / 3, so they never overlap. A
+  middle-90 % span under 30 s gets one window; zero/non-finite duration gets none. N frames per window
+  at the centres of N equal sub-intervals (fewer if closer than 0.25 s). Sampler id
+  `windows-3x<N>-max60s-middle90`.
+* **One multi-image generation per (window, family)**: the N frames go into one prompt
+  (`apply_chat_template(..., num_images=N)`, mlx-vlm 0.5.0 accepts a list for Qwen2.5-VL). Families
+  `era` and `roomFeatures`, schemas from design §3.3 written into the prompt (`A1_PROMPT_REVISION`).
+  ERA-corpus clips only.
+* **Fail-closed decoding** (`decode_contract`): a Python mirror of Swift `ContractDecoder`
+  (`VideoScanCore/ModelLab/ApproachOutputContracts.swift`). The raw text must be exactly one JSON
+  object; unknown keys, wrong types, null, missing keys, wrong `family`, years outside 1900…2100,
+  a reversed range, `selfConfidence` outside 0…1, lists over 64, responses over 64 KB → `schemaInvalid`
+  with a reason. No fence stripping, no "find the first `{`", no regex rescue. Stricter than Foundation
+  in two corners (NaN/Infinity, duplicate keys), both fail-closed. `test_python_contract_keys_match_the_swift_contract`
+  pins the key sets to the Swift file.
+* **OCR**: OCR-corpus clips get A0's `date` prompt verbatim, one frame per call, on every window frame
+  (records shaped like A0's, scored by the same `score_ocr_clip`).
+
+Choosing N: `run --approach a1-py --smoke 3 --frames {4,6,8}` (first ERA clip ≥ 60 s of three distinct
+decades); pick the largest N whose window answers are ≥ 90 % schema-valid.
+
+```sh
+venv-mlx/bin/python3 tools/video-llm-bench/bench.py run --approach a1-py --frames 6 \
+  --manifest <worktree>/.scratch/bench/manifest.json --model-dir <weights dir> \
+  --out <worktree>/.scratch/bench/runs/<id>-a1-py
+venv-mlx/bin/python3 tools/video-llm-bench/bench.py summarize --manifest … \
+  --run <a0 run dir> --run <a1 run dir> --out docs/reviews/video_llm_benchmarks.md
+```
+
+Scoring (`summarize_a1_run`): a schema-valid `era` window is an answer. Per clip the range is
+[median FROM, median TO] over its valid windows, re-decoded from the raw text (the stored flag is never
+trusted); the midpoint is the point estimate for MAE / ±5 y; *inside* = truth within the range;
+median range width is reported. roomFeatures: schema-valid rate, vocabulary size (distinct lower-cased
+strings), top 20 — printed only for strings that are lowercase letters, spaces and hyphens in their
+raw form (anything with a capital, digit or punctuation is counted, never printed). An "A1 vs A0"
+three-line reading is generated from the numbers when both runs are passed.
+
+Per window result line: `digest`, `window_index`, `window`, `frame_times_s`, `frames_shown`, `family`,
+`prompt_sha256`, `raw_text`, `elapsed_s`, `rip_s`, `error`, `counters`, `schema_valid`,
+`schema_invalid_reason`, `decoded`.
