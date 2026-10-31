@@ -3032,8 +3032,13 @@ VERDICTS_FILE = "verdicts.jsonl"
 # range that contains his date is still agreement — not whose date is right.
 # "disagree" = the model is off; a wrong confirmed date is fixed in the Catalog.
 # The first five verdicts were written as "model" / "mine"; still readable.
-VERDICT_WORDS = ("agree", "disagree", "unsure", "model", "mine")
-VERDICT_BUTTONS = ("agree", "disagree", "unsure")
+# Session three (Rick, 2026-10-31 evening): "design the tabs to reflect what you're really
+# trying to ask".  The rule grades the model; the one thing only Rick knows is whether HIS
+# date is right once he sees the frames.  So the question is about his date.  Earlier words
+# ("agree"/"disagree" = close enough, "model"/"mine" = whose date) stay readable.
+VERDICT_WORDS = ("date-right", "date-wrong", "unsure", "agree", "disagree", "model", "mine")
+VERDICT_BUTTONS = ("date-right", "date-wrong", "unsure")
+LEGACY_VERDICTS = ("agree", "disagree", "model", "mine")
 CLOSE_MAX_ERROR_YEARS = 5.0
 CLOSE_MAX_WIDTH_YEARS = 10.0
 WATCH_DEFAULT_PORT = 8765
@@ -3215,9 +3220,11 @@ def review_state(run_dir: Path, manifest: Dict[str, Any], clips: Optional[Sequen
         "close": sum(1 for c in scored if c["close"]),
         "mean_error_years": round(sum(c["error_years"] for c in scored) / len(scored), 1) if scored else None,
         "verdicts": {w: sum(1 for c in items if c["verdict"] == w) for w in VERDICT_BUTTONS},
-        # Where Rick's call and the rule differ: the clips worth a look (either the rule or his sense is off).
-        "disagreements": sum(1 for c in items if (c["verdict"] in ("agree", "model") and not c["close"])
-                             or (c["verdict"] in ("disagree", "mine") and c["close"])),
+        "legacy_verdicts": sum(1 for c in items if c["verdict"] in LEGACY_VERDICTS),
+        # The two scores: the model's (missed where Rick's date stands) and the truth set's (dates to fix).
+        "model_missed_on_confirmed": sum(1 for c in items if c["verdict"] == "date-right" and c["error_years"] is not None and not c["close"]),
+        "model_close_on_confirmed": sum(1 for c in items if c["verdict"] == "date-right" and c["close"]),
+        "dates_to_fix": sum(1 for c in items if c["verdict"] == "date-wrong"),
     }
     return {"run_id": run_record.get("run_id"), "approach_id": run_record.get("approach_id"), "model": run_record.get("model_id"),
             "state": progress.get("state"), "total_clips": progress.get("total_clips"), "generated_at": utc_now(),
@@ -3277,9 +3284,9 @@ const grade=c=>c.error_years==null?"pending":c.close?"good":c.error_years<=10?"w
 async function poll(){try{const r=await fetch("/state.json",{cache:"no-store"});S=await r.json();render()}catch(e){}}
 function render(){
   const t=S.tally; $("#tally-main").textContent=`${t.clips_done} of ${S.total_clips??"?"} clips`;
-  $("#tally").innerHTML=`<b>close enough ${t.close}</b> of ${t.with_truth} by the rule (within 5 y and ≤ 10 y wide)<br>your call: close ${t.verdicts.agree} · not close ${t.verdicts.disagree} · unsure ${t.verdicts.unsure}${t.disagreements?` · <b>${t.disagreements} where your call and the rule differ</b>`:""}<br>midpoint within 5 y ${t.within_5} · within 10 y ${t.within_10} · inside range ${t.inside_range}<br>mean error <b>${t.mean_error_years??"—"}</b> y · <span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
+  $("#tally").innerHTML=`<b>model close enough ${t.close}</b> of ${t.with_truth} (within 5 y and ≤ 10 y wide)<br>your dates checked: right ${t.verdicts["date-right"]} · <b>wrong ${t.verdicts["date-wrong"]}</b>${t.legacy_verdicts?` · ${t.legacy_verdicts} from the first session`:""}<br>on clips where your date stands: model close ${t.model_close_on_confirmed} · missed ${t.model_missed_on_confirmed}<br>midpoint within 5 y ${t.within_5} · within 10 y ${t.within_10} · inside range ${t.inside_range}<br>mean error <b>${t.mean_error_years??"—"}</b> y · <span>${esc(S.approach_id||"")} · ${esc(S.state||"")}</span>`;
   if(cur==null){const first=S.clips.find(c=>c.done&&!c.verdict)||S.clips[0]; cur=first?first.digest:null}
-  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc({agree:"close",model:"close",disagree:"not close",mine:"not close",unsure:"unsure"}[c.verdict]||c.verdict):""}</span></div>`).join("");
+  $("#list").innerHTML=S.clips.map(c=>`<div class="row ${c.digest===cur?"sel":""}" data-d="${c.digest}"><span class="dot ${grade(c)}"></span><span class="nm">${esc(c.name)}</span><span class="v">${c.verdict?esc({"date-right":"date ✓","date-wrong":"date ✗",unsure:"?",agree:"(close)",model:"(close)",disagree:"(not close)",mine:"(not close)"}[c.verdict]||c.verdict):""}</span></div>`).join("");
   document.querySelectorAll(".row").forEach(r=>r.onclick=()=>{cur=r.dataset.d;render()});
   const c=S.clips.find(x=>x.digest===cur); if(!c){return}
   const g=grade(c);
@@ -3293,14 +3300,14 @@ function render(){
     return `<section class="win"><h3>Window ${w.index+1} · ${mmss(w.start_s)}–${mmss(w.end_s)}</h3><div class="strip">${strip}</div>${eraBox}${roomBox}</section>`}).join("");
   $("#main").innerHTML=`<h1>${esc(c.name)}</h1><div class="sub">${esc(c.stratum||"")} · ${mmss(c.duration_s)} · ${c.done?"done":"in progress"}${c.ocr_dates.length?" · burned-in date read: "+c.ocr_dates.map(esc).join(", "):""}</div>${c.context_line?`<div class="ans" style="margin-bottom:10px">${esc(c.context_line)}</div>`:""}
   <div class="dates"><div><div class="lbl">Your confirmed date</div><div class="val">${esc(c.confirmed_date||c.confirmed_year||"—")}</div></div>
-  <div><div class="lbl">${c.fused?"Fused era (stamp read by the model)":"Model's era"}</div><div class="val">${mr}</div>${c.fused?`<div class="err">model's own range ${c.model_range[0]}–${c.model_range[1]} · stamp ${c.burned_in_years.join(", ")}</div>`:""}<div class="err ${g}">${c.error_years==null?"":`${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint} · off by ${c.error_years} y${c.inside?" · inside":" · outside"}`}</div></div></div>
+  <div><div class="lbl">${c.fused?"Fused era (stamp read by the model)":"Model's era"}</div><div class="val">${mr}</div>${c.fused?`<div class="err">model's own range ${c.model_range[0]}–${c.model_range[1]} · stamp ${c.burned_in_years.join(", ")}</div>`:""}<div class="err ${g}">${c.error_years==null?"no era answer":`Model: ${c.close?"close enough":c.width_years>10?"too wide ("+c.width_years+" y)":"off by "+c.error_years+" y"} · midpoint ${c.machine_midpoint}, ${c.error_years} y from your date${c.inside?", inside its range":", outside its range"}`}</div></div></div>
   ${wins}
-  <div class="buttons"><span style="color:var(--muted);margin-right:6px">Is the model's range close enough to your date to be useful?</span><button class="model ${c.verdict==="agree"||c.verdict==="model"?"on":""}" onclick="verdict('agree')">Close enough<kbd>1</kbd></button><button class="mine ${c.verdict==="disagree"||c.verdict==="mine"?"on":""}" onclick="verdict('disagree')">Not close<kbd>2</kbd></button><button class="unsure ${c.verdict==="unsure"?"on":""}" onclick="verdict('unsure')">Unsure<kbd>3</kbd></button><span style="color:var(--muted);margin-left:auto">← → previous / next</span></div>`;
+  <div class="buttons"><span style="color:var(--muted);margin-right:6px">Your date <b>${esc(c.confirmed_date||c.confirmed_year||"—")}</b>:</span><button class="model ${c.verdict==="date-right"?"on":""}" onclick="verdict('date-right')">Right<kbd>1</kbd></button><button class="mine ${c.verdict==="date-wrong"?"on":""}" onclick="verdict('date-wrong')">Wrong<kbd>2</kbd></button><span style="color:var(--muted);margin-left:auto">→ skip · ← back</span></div>`;
 }
 async function verdict(v){const c=S.clips.find(x=>x.digest===cur); if(!c)return;
   await fetch("/verdict",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({digest:c.digest,verdict:v})});
   await poll(); const i=S.clips.findIndex(x=>x.digest===cur); const next=S.clips.slice(i+1).find(x=>x.done&&!x.verdict)||S.clips.find(x=>x.done&&!x.verdict); if(next){cur=next.digest;render()}}
-document.addEventListener("keydown",e=>{if(!S)return; if(e.key==="1")verdict("agree"); if(e.key==="2")verdict("disagree"); if(e.key==="3")verdict("unsure");
+document.addEventListener("keydown",e=>{if(!S)return; if(e.key==="1")verdict("date-right"); if(e.key==="2")verdict("date-wrong");
   const i=S.clips.findIndex(x=>x.digest===cur); if(e.key==="ArrowRight"&&i<S.clips.length-1){cur=S.clips[i+1].digest;render()} if(e.key==="ArrowLeft"&&i>0){cur=S.clips[i-1].digest;render()}});
 poll(); setInterval(poll,2000);
 </script></body></html>
