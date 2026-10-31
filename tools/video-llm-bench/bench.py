@@ -1117,6 +1117,75 @@ class A1Python(A0Python):
         return text.strip(), counters
 
 
+# ===========================================================================
+# Approach A2 in Python (design §5 row A2): a BIGGER model — Qwen3-VL-8B-Instruct
+# 4-bit — through exactly A1's code paths (windows 3×N, the r3 era/roomFeatures
+# contracts, the fail-closed decoder), with one change dictated by the A1 result
+# ("one engine, two samplers"): the OCR corpus goes back to A0's sampler, N spread
+# stills from the middle 90 % with A0's unchanged `date` prompt, one frame per call.
+# The ERA corpus keeps the windows.  The loop is `run_corpus_a1`; only the
+# sampling plan differs (`plan_clip_sampling`).
+#
+# Memory (worst case, A2 run): weights ≈ 5.8 GB resident + mlx cache limit 512 MB +
+# one multi-image generation's activations / KV (one window at a time, ≤ N frames,
+# N ≤ 12 → ≤ 12 × ~256 visual tokens + ≤ 400 output tokens ≈ 3.5k tokens; measured
+# peak 7.1 GB at N = 4) + ≤ N + 5 letterboxed 448×448 PNGs on disk per clip,
+# deleted after the clip.  Nothing is cached across clips (`mx.clear_cache()`).
+# ===========================================================================
+A2_APPROACH_ID = "a2-py"
+A2_MODEL_ID = "mlx-community/Qwen3-VL-8B-Instruct-4bit"
+A2_OCR_STILLS = 5                      # A0's sampler: `stills-5-middle90`
+OCR_SAMPLER_WINDOW_FRAMES = "window-frames"   # A1: date prompt on every window frame
+OCR_SAMPLER_STILLS = "stills"                 # A0 / A2: date prompt on N spread stills
+
+
+class A2Python(A1Python):
+    """A1's prompts, generation and decoding on the 8B model.
+    C++ reading: a derived class that only changes the constructor default."""
+    id = A2_APPROACH_ID
+
+    def __init__(self, model_id: str = A2_MODEL_ID, model_dir: Optional[Path] = None):
+        super().__init__(model_id=model_id, model_dir=model_dir)
+
+
+# id → (class, model id, default frames, OCR sampler).  The one registry `run`
+# and `summarize` consult; A0 is stills-only (its loop is `run_corpus`).
+APPROACHES: Dict[str, Dict[str, Any]] = {
+    APPROACH_ID: {"cls": A0Python, "model": MODEL_ID, "default_frames": 5, "ocr_sampler": OCR_SAMPLER_STILLS,
+                  "windows": False},
+    A1_APPROACH_ID: {"cls": A1Python, "model": MODEL_ID, "default_frames": A1_DEFAULT_FRAMES,
+                     "ocr_sampler": OCR_SAMPLER_WINDOW_FRAMES, "windows": True},
+    A2_APPROACH_ID: {"cls": A2Python, "model": A2_MODEL_ID, "default_frames": A1_DEFAULT_FRAMES,
+                     "ocr_sampler": OCR_SAMPLER_STILLS, "windows": True},
+}
+
+
+def plan_clip_sampling(corpora: Iterable[str], duration_s: float, frames_per_window: int,
+                       ocr_sampler: str = OCR_SAMPLER_WINDOW_FRAMES,
+                       ocr_stills: int = A2_OCR_STILLS) -> Dict[str, Any]:
+    """Which frames a windowed approach rips for one clip, and which prompt each gets.
+
+    * ``window-frames`` (A1): windows are always planned; an OCR clip's `date`
+      prompt runs on every window frame; no separate stills.
+    * ``stills`` (A2): windows only when the clip is in the ERA corpus; an OCR clip
+      gets ``ocr_stills`` A0 stills (`frames_evenly_spaced`) for the `date` prompt.
+
+    Returns {"windows": [...], "date_on_window_frames": bool, "ocr_still_times_s": [...]}.
+    Pure. C++ reading: a function returning a small struct; no I/O.
+    """
+    corpora = set(corpora)
+    if ocr_sampler == OCR_SAMPLER_WINDOW_FRAMES:
+        return {"windows": plan_windows(frames_per_window, duration_s),
+                "date_on_window_frames": "ocr" in corpora, "ocr_still_times_s": []}
+    if ocr_sampler != OCR_SAMPLER_STILLS:
+        raise ValueError("unknown OCR sampler {}".format(ocr_sampler))
+    finite = duration_s == duration_s and duration_s not in (float("inf"), float("-inf"))
+    stills = frames_evenly_spaced(ocr_stills, duration_s) if ("ocr" in corpora and finite) else []
+    return {"windows": plan_windows(frames_per_window, duration_s) if "era" in corpora else [],
+            "date_on_window_frames": False,
+            "ocr_still_times_s": [round(t, 3) for t in stills]}
+
+
 # ---------------------------------------------------------------------------
 # The run loop (testable: approach and ripper are injected)
 # ---------------------------------------------------------------------------
@@ -1264,7 +1333,9 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                   ripper: Callable[[str, float, Path, float], bool] = default_ripper,
                   duration_of: Callable[[str, float], float] = lambda p, d: d if d > 0 else probe_duration(p),
                   log: Callable[[str], None] = lambda s: print(s, flush=True),
-                  families: Sequence[str] = A1_FAMILY_ORDER) -> Dict[str, Any]:
+                  families: Sequence[str] = A1_FAMILY_ORDER,
+                  ocr_sampler: str = OCR_SAMPLER_WINDOW_FRAMES,
+                  ocr_stills: int = A2_OCR_STILLS) -> Dict[str, Any]:
     """A1 loop.  Per clip: plan ≤ 3 windows, rip every window frame once, then
     * ERA-corpus clip → one multi-image generation per (window, family) — a
       ``window_result`` record carrying raw text, `schema_valid`, the decoded value
@@ -1272,7 +1343,12 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
     * OCR-corpus clip → A0's ``date`` prompt per frame — a ``result`` record shaped
       exactly like A0's, so `score_ocr_clip` scores both approaches the same way.
     A digest in both corpora gets both.  Same resume / clip_done / progress rules
-    as `run_corpus`; frames are deleted after the clip."""
+    as `run_corpus`; frames are deleted after the clip.
+
+    ``ocr_sampler="stills"`` (A2) moves the OCR `date` prompt off the window frames
+    onto ``ocr_stills`` A0 stills (records carry ``sampler: "stills"`` and
+    ``window_index: None``) and plans windows only for ERA clips — see
+    `plan_clip_sampling`.  The default reproduces A1 exactly."""
     out_dir = Path(out_dir)
     (out_dir / "clips").mkdir(parents=True, exist_ok=True)
     progress_path = out_dir / "progress.json"
@@ -1310,15 +1386,48 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
             clip_started = time.perf_counter()
             approach.seed(MLX_SEED)
             duration = duration_of(entry["path"], float(entry.get("duration_s") or 0.0))
-            windows = plan_windows(frames_per_window, duration)
+            plan = plan_clip_sampling(corpora, duration, frames_per_window, ocr_sampler, ocr_stills)
+            windows = plan["windows"]
             rip_failures = frames_ok = records_written = window_records = 0
+
+            def ask_date(png: Path, frame_index: int, window_index: Optional[int], at_s: float, rip_s: float,
+                         stream: Any, sampler: Optional[str]) -> None:
+                # A0's `date` prompt on one frame; the record is shaped like A0's so
+                # `score_ocr_clip` scores every approach the same way.
+                nonlocal gen_seconds, records_written
+                gen_started = time.perf_counter()
+                error = None
+                try:
+                    text, counters = approach.answer(png, "date")
+                except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
+                    text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
+                elapsed = time.perf_counter() - gen_started
+                gen_seconds += elapsed
+                record = {
+                    "record_type": "result", "digest": digest, "frame_index": frame_index,
+                    "window_index": window_index, "at_s": at_s, "prompt_kind": "date",
+                    "prompt_sha256": sha256_text(PROMPTS["date"]), "raw_text": text,
+                    "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s, 3), "error": error,
+                    "counters": counters,
+                    "parsed": {"dates": parse_dates(text), "years": parse_years(text),
+                               "decades": parse_decades(text), "degenerate": is_degenerate(text)},
+                }
+                if sampler is not None:
+                    record["sampler"] = sampler
+                stream.write(json.dumps(record, sort_keys=True) + "\n")
+                stream.flush()
+                records_written += 1
+
             with target.open("w", encoding="utf-8") as stream:
-                stream.write(json.dumps({
+                header = {
                     "record_type": "clip", "digest": digest, "corpus": entry["corpus"],
                     "corpora": sorted(corpora), "stratum": entry["stratum"], "truth": entry["truth"],
                     "duration_s": duration, "windows": windows,
-                    "frames_requested": sum(len(w["frame_times_s"]) for w in windows),
-                    "run_id": run_record.get("run_id")}, sort_keys=True) + "\n")
+                    "frames_requested": sum(len(w["frame_times_s"]) for w in windows) + len(plan["ocr_still_times_s"]),
+                    "run_id": run_record.get("run_id")}
+                if ocr_sampler != OCR_SAMPLER_WINDOW_FRAMES:
+                    header.update(ocr_sampler=ocr_sampler, ocr_still_times_s=plan["ocr_still_times_s"])
+                stream.write(json.dumps(header, sort_keys=True) + "\n")
                 frame_index = 0
                 for window in windows:
                     pngs: List[Path] = []
@@ -1338,26 +1447,8 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                         else:
                             frames_ok += 1
                             pngs.append(png)
-                            if "ocr" in corpora:
-                                gen_started = time.perf_counter()
-                                error = None
-                                try:
-                                    text, counters = approach.answer(png, "date")
-                                except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
-                                    text, counters, error = "", {}, "{}: {}".format(type(exc).__name__, exc)
-                                elapsed = time.perf_counter() - gen_started
-                                gen_seconds += elapsed
-                                stream.write(json.dumps({
-                                    "record_type": "result", "digest": digest, "frame_index": frame_index,
-                                    "window_index": window["index"], "at_s": at_s, "prompt_kind": "date",
-                                    "prompt_sha256": sha256_text(PROMPTS["date"]), "raw_text": text,
-                                    "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s, 3), "error": error,
-                                    "counters": counters,
-                                    "parsed": {"dates": parse_dates(text), "years": parse_years(text),
-                                               "decades": parse_decades(text), "degenerate": is_degenerate(text)},
-                                }, sort_keys=True) + "\n")
-                                stream.flush()
-                                records_written += 1
+                            if plan["date_on_window_frames"]:
+                                ask_date(png, frame_index, window["index"], at_s, rip_s, stream, None)
                         frame_index += 1
                     if pngs and "era" in corpora:
                         for family in families:
@@ -1385,6 +1476,22 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                         windows_done += 1
                     for png in pngs:
                         png.unlink(missing_ok=True)
+                for at_s in plan["ocr_still_times_s"]:
+                    png = clip_tmp / "s_f{:03d}.png".format(frame_index)
+                    rip_started = time.perf_counter()
+                    ok = ripper(entry["path"], at_s, png, duration)
+                    rip_s = time.perf_counter() - rip_started
+                    if not ok:
+                        rip_failures += 1
+                        stream.write(json.dumps({
+                            "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
+                            "window_index": None, "sampler": OCR_SAMPLER_STILLS, "at_s": at_s,
+                            "rip_s": round(rip_s, 3)}, sort_keys=True) + "\n")
+                    else:
+                        frames_ok += 1
+                        ask_date(png, frame_index, None, at_s, rip_s, stream, OCR_SAMPLER_STILLS)
+                        png.unlink(missing_ok=True)
+                    frame_index += 1
                 frames_done += frames_ok
                 clip_elapsed = time.perf_counter() - clip_started
                 stream.write(json.dumps({
@@ -1447,7 +1554,7 @@ def build_run_record(manifest: Dict[str, Any], manifest_path: Path, approach: Ap
         "bench_source_sha256": sha256_file(Path(__file__).resolve()),
         **load_info,
     }
-    if approach.id == A1_APPROACH_ID:
+    if APPROACHES.get(approach.id, {}).get("windows"):
         record.update({
             "sampler_id": A1_SAMPLER_TEMPLATE.format(w=A1_MAX_WINDOWS, n=frames, s=int(A1_WINDOW_MAX_S)),
             "frames_per_clip": None,
@@ -1463,7 +1570,25 @@ def build_run_record(manifest: Dict[str, Any], manifest_path: Path, approach: Ap
             "decoder": "fail-closed mirror of VideoScanCore ContractDecoder; no repair",
             "prompt_revision": A1_PROMPT_REVISION,
         })
+    if approach.id == A2_APPROACH_ID:
+        # Two samplers, one engine: windows for ERA, A0's stills for OCR.
+        record.update({
+            "ocr_sampler": OCR_SAMPLER_STILLS,
+            "ocr_stills": A2_OCR_STILLS,
+            "sampler_id_by_corpus": {
+                "era": record["sampler_id"],
+                "ocr": SAMPLER_ID_TEMPLATE.format(n=A2_OCR_STILLS),
+            },
+        })
     return record
+
+
+def resolve_approach(approach_id: str, model_dir: Optional[str]) -> Approach:
+    """The registered approach object for ``approach_id`` (SystemExit when unknown)."""
+    spec = APPROACHES.get(approach_id)
+    if spec is None:
+        raise SystemExit("unknown approach {}".format(approach_id))
+    return spec["cls"](model_id=spec["model"], model_dir=model_dir)
 
 
 def stratified_smoke(entries: Sequence[Dict[str, Any]], k: int) -> List[Dict[str, Any]]:
@@ -1499,11 +1624,11 @@ def run_command(args: argparse.Namespace) -> int:
         raise SystemExit("no clips selected")
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if args.approach not in (APPROACH_ID, A1_APPROACH_ID):
+    spec = APPROACHES.get(args.approach)
+    if spec is None:
         raise SystemExit("unknown approach {}".format(args.approach))
-    frames = args.frames if args.frames is not None else (
-        A1_DEFAULT_FRAMES if args.approach == A1_APPROACH_ID else 5)
-    frames_key = "frames_per_window" if args.approach == A1_APPROACH_ID else "frames_per_clip"
+    frames = args.frames if args.frames is not None else spec["default_frames"]
+    frames_key = "frames_per_window" if spec["windows"] else "frames_per_clip"
     run_path = out_dir / "run.json"
     if run_path.is_file():
         previous = json.loads(run_path.read_text(encoding="utf-8"))
@@ -1517,8 +1642,8 @@ def run_command(args: argparse.Namespace) -> int:
         run_id = previous["run_id"]
     else:
         run_id = "{}-{}".format(dt.datetime.now().strftime("%Y%m%dT%H%M%S"), args.approach)
-    approach = A1Python(model_dir=args.model_dir) if args.approach == A1_APPROACH_ID else A0Python(model_dir=args.model_dir)
-    print("loading {} …".format(MODEL_ID), flush=True)
+    approach = resolve_approach(args.approach, args.model_dir)
+    print("loading {} …".format(spec["model"]), flush=True)
     load_info = approach.load()
     print("loaded in {:.1f}s; weights sha256 {}".format(load_info["load_s"], load_info["weights_sha256"][:12]), flush=True)
     record = build_run_record(manifest, manifest_path, approach, load_info, frames,
@@ -1530,8 +1655,8 @@ def run_command(args: argparse.Namespace) -> int:
         write_json(run_path, previous)
     else:
         write_json(run_path, record)
-    if args.approach == A1_APPROACH_ID:
-        progress = run_corpus_a1(entries, out_dir, approach, frames, record)
+    if spec["windows"]:
+        progress = run_corpus_a1(entries, out_dir, approach, frames, record, ocr_sampler=spec["ocr_sampler"])
         print("done {} skipped {} failed {} s/frame {} s/window {}".format(
             progress["done"], progress["skipped_resume"], progress["failed"], progress["s_per_frame"],
             progress["s_per_window"]))
@@ -2086,11 +2211,14 @@ def summarize_a1_run(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
             "by_family": grouped(era_rows, lambda s: s.split("/")[0], aggregate_a1_era),
             "by_decade": grouped(era_rows, decade_of, aggregate_a1_era),
             "by_stratum": grouped(era_rows, lambda s: s, aggregate_a1_era),
+            # family × decade ("camera/2020s"): used by the A2 reading, not printed as a table
+            "by_family_decade": grouped(era_rows, lambda s: "/".join(s.split("/")[:2]), aggregate_a1_era),
         },
         "ocr": {
             "all": aggregate_ocr([row for _, row in ocr_rows]),
             "by_stratum": grouped(ocr_rows, lambda s: s, aggregate_ocr),
         },
+        "ocr_sampler": run_record.get("ocr_sampler", OCR_SAMPLER_WINDOW_FRAMES),
         "room": {
             "valid": family_counts["roomFeatures"]["valid"],
             "feature_items": feature_items,
@@ -2132,15 +2260,23 @@ def a1_vs_a0_reading(a1: Dict[str, Any], a0: Optional[Dict[str, Any]]) -> List[s
     return lines
 
 
-def format_a1_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = None) -> str:
-    """The A1 section (aggregates only; same privacy rules as A0's)."""
+A1_HEADING = "chronological windows + strict JSON contract (same model and weights)"
+A1_OCR_HEADING = "OCR — A0's `date` prompt on the A1 window frames"
+A1_OCR_NOTE = "Same truth and columns as A0. A1 reads every window frame (up to 3 × N per clip) instead of 5 stills."
+
+
+def format_a1_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = None, *,
+                       heading: str = A1_HEADING, reading_title: str = "A1 vs A0",
+                       reading: Optional[List[str]] = None, sampler_note: str = "",
+                       ocr_heading: str = A1_OCR_HEADING, ocr_note: str = A1_OCR_NOTE) -> str:
+    """A windowed approach's section (A1, and A2 with its own labels; aggregates
+    only; same privacy rules as A0's).  Defaults reproduce the A1 section."""
     lines: List[str] = []
-    lines.append("## Approach `{}` — chronological windows + strict JSON contract (same model and weights)".format(
-        summary["approach_id"]))
+    lines.append("## Approach `{}` — {}".format(summary["approach_id"], heading))
     lines.append("")
-    lines.append("**A1 vs A0**")
+    lines.append("**{}**".format(reading_title))
     lines.append("")
-    lines.extend(a1_vs_a0_reading(summary, a0))
+    lines.extend(reading if reading is not None else a1_vs_a0_reading(summary, a0))
     lines.append("")
     clips = summary["clips"]
     cost = summary["cost"]
@@ -2151,9 +2287,9 @@ def format_a1_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = N
     lines.append("| model | `{}` |".format(summary.get("model") or "—"))
     lines.append("| weights sha256 (first 12) | `{}` |".format(_short(summary.get("weights_sha256"))))
     lines.append("| sampler | `{}` (≤ {} windows — start / middle / end of the middle 90 %, each ≤ {:.0f} s, "
-                 "{} frames each shown together in one prompt; a middle-90 % span under {:.0f} s gets one window) |".format(
+                 "{} frames each shown together in one prompt; a middle-90 % span under {:.0f} s gets one window){} |".format(
                      summary.get("sampler_id") or "—", A1_MAX_WINDOWS, A1_WINDOW_MAX_S,
-                     summary.get("frames_per_window") or "—", A1_MAX_WINDOWS * A1_MIN_WINDOW_S))
+                     summary.get("frames_per_window") or "—", A1_MAX_WINDOWS * A1_MIN_WINDOW_S, sampler_note))
     lines.append("| prompts | era / roomFeatures strict JSON (§3.3), OCR `date` verbatim from A0; sha256 first 12: {} |".format(
         ", ".join("{} `{}`".format(k, _short(v)) for k, v in sorted((summary.get("prompts_sha256") or {}).items())) or "—"))
     lines.append("| decoding | fail-closed mirror of `ContractDecoder`: raw text must be exactly one JSON object; "
@@ -2220,9 +2356,9 @@ def format_a1_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = N
     for name, agg in era["by_stratum"].items():
         lines.append(era_row("stratum: {}".format(name), agg))
     lines.append("")
-    lines.append("### OCR — A0's `date` prompt on the A1 window frames")
+    lines.append("### " + ocr_heading)
     lines.append("")
-    lines.append("Same truth and columns as A0. A1 reads every window frame (up to 3 × N per clip) instead of 5 stills.")
+    lines.append(ocr_note)
     lines.append("")
     lines.append("| Group | n | any-frame exact | majority exact | year match | schema-valid | date frames | frames with a date | degenerate frames |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
@@ -2262,13 +2398,66 @@ def format_a1_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = N
     return "\n".join(lines) + "\n"
 
 
+def _era_mae(summary: Optional[Dict[str, Any]], group: str, name: str) -> Optional[float]:
+    if summary is None:
+        return None
+    agg = (summary.get("era") or {}).get(group, {}).get(name)
+    return agg.get("mae_years") if agg else None
+
+
+def a2_reading(a2: Dict[str, Any], a0: Optional[Dict[str, Any]], a1: Optional[Dict[str, Any]]) -> List[str]:
+    """Three generated sentences for A2 against A0 and A1 — numbers only.
+    Missing baselines print as "—" rather than being invented."""
+    e2, o2, c2 = a2["era"]["all"], a2["ocr"]["all"], a2["cost"]
+    o0 = a0["ocr"]["all"] if a0 else {}
+    c1 = a1["cost"] if a1 else {}
+    e1 = a1["era"]["all"] if a1 else {}
+    return [
+        "1. **Era (bigger model):** MAE on Rick-dated clips A0 {} / A1 {} / A2 {} y; on camera-dated 2020s "
+        "A1 {} → A2 {} y; all readable ERA clips A1 {} → A2 {} y, truth inside the range {} → {} of answered "
+        "(median width {} → {} y), answered {} → {}.".format(
+            _num(_era_mae(a0, "by_family", "rick-dated")), _num(_era_mae(a1, "by_family", "rick-dated")),
+            _num(_era_mae(a2, "by_family", "rick-dated")), _num(_era_mae(a1, "by_family_decade", "camera/2020s")),
+            _num(_era_mae(a2, "by_family_decade", "camera/2020s")), _num(e1.get("mae_years")),
+            _num(e2.get("mae_years")), _pct(e1.get("inside_of_answered")), _pct(e2.get("inside_of_answered")),
+            _num(e1.get("median_width_years")), _num(e2.get("median_width_years")),
+            _pct(e1.get("answered_rate")), _pct(e2.get("answered_rate"))),
+        "2. **OCR (A0's 5 stills and `date` prompt, 8B model):** any-frame exact A0 {} → A2 {}, majority exact "
+        "{} → {}, year match {} → {} (same sampler and prompt as A0; only the model differs).".format(
+            _pct(o0.get("any_frame_exact")), _pct(o2.get("any_frame_exact")), _pct(o0.get("majority_exact")),
+            _pct(o2.get("majority_exact")), _pct(o0.get("year_match")), _pct(o2.get("year_match"))),
+        "3. **Cost vs A1:** {} → {} s/clip; {} → {} s per multi-image window generation; {} → {} s per OCR date "
+        "generation; peak RSS {} → {} GB; model load {} s.".format(
+            _num(c1.get("s_per_clip")), _num(c2.get("s_per_clip")),
+            _num(c1.get("s_per_window_generation"), "{:.2f}"), _num(c2.get("s_per_window_generation"), "{:.2f}"),
+            _num(c1.get("s_per_date_generation"), "{:.2f}"), _num(c2.get("s_per_date_generation"), "{:.2f}"),
+            _num(c1.get("peak_rss_gb"), "{:.2f}"), _num(c2.get("peak_rss_gb"), "{:.2f}"), _num(a2.get("load_s"))),
+    ]
+
+
+A2_HEADING = "Qwen3-VL-8B through A1's windows and contracts; OCR on A0's stills"
+A2_OCR_HEADING = "OCR — A0's sampler (5 stills, middle 90 %) and `date` prompt on the 8B model"
+A2_OCR_NOTE = ("Same truth and columns as A0. A2 routes the OCR corpus to A0's sampler (5 spread stills, one frame "
+               "per call) — the \"one engine, two samplers\" finding from A1 — so only the model differs from A0.")
+
+
+def format_a2_markdown(summary: Dict[str, Any], a0: Optional[Dict[str, Any]] = None,
+                       a1: Optional[Dict[str, Any]] = None) -> str:
+    return format_a1_markdown(
+        summary, a0, heading=A2_HEADING, reading_title="A2 vs A0 and A1", reading=a2_reading(summary, a0, a1),
+        sampler_note="; OCR corpus: `{}`".format(SAMPLER_ID_TEMPLATE.format(n=A2_OCR_STILLS)),
+        ocr_heading=A2_OCR_HEADING, ocr_note=A2_OCR_NOTE)
+
+
 def summarize_command(args: argparse.Namespace) -> int:
     manifest = load_manifest(Path(args.manifest))
-    a0_summary = a1_summary = None
+    a0_summary = a1_summary = a2_summary = None
     for run in args.run:
         run_json = Path(run) / "run.json"
         approach = json.loads(run_json.read_text(encoding="utf-8")).get("approach_id") if run_json.is_file() else APPROACH_ID
-        if approach == A1_APPROACH_ID:
+        if approach == A2_APPROACH_ID:
+            a2_summary = summarize_a1_run(Path(run), manifest)
+        elif approach == A1_APPROACH_ID:
             a1_summary = summarize_a1_run(Path(run), manifest)
         else:
             a0_summary = summarize_run(Path(run), manifest)
@@ -2279,13 +2468,15 @@ def summarize_command(args: argparse.Namespace) -> int:
         parts.append("# Video LLM benchmarks\n\n*Written by `tools/video-llm-bench/bench.py summarize`; aggregates only.*\n\n")
     if a1_summary is not None:
         parts.append(format_a1_markdown(a1_summary, a0_summary))
+    if a2_summary is not None:
+        parts.append(format_a2_markdown(a2_summary, a0_summary, a1_summary))
     markdown = "".join(parts)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(markdown, encoding="utf-8")
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps({"a0": a0_summary, "a1": a1_summary}, indent=1, sort_keys=True),
+        Path(args.json_out).write_text(json.dumps({"a0": a0_summary, "a1": a1_summary, "a2": a2_summary}, indent=1, sort_keys=True),
                                        encoding="utf-8")
     print(markdown)
     return 0
@@ -2306,9 +2497,9 @@ def make_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="run an approach over a manifest; resume-safe")
     run.add_argument("--manifest", required=True)
-    run.add_argument("--approach", default=APPROACH_ID, choices=[APPROACH_ID, A1_APPROACH_ID])
+    run.add_argument("--approach", default=APPROACH_ID, choices=list(APPROACHES))
     run.add_argument("--frames", type=int, default=None,
-                     help="a0-py: stills per clip (default 5); a1-py: frames per window (default 6)")
+                     help="a0-py: stills per clip (default 5); a1-py / a2-py: frames per window (default 6)")
     run.add_argument("--smoke", type=int, default=None,
                      help="only the first ERA clip (>= 60 s) of each of K distinct decades — the N calibration set")
     run.add_argument("--limit", type=int, default=None, help="first N clips (after --corpus filter)")
