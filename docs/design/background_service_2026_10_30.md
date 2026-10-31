@@ -9,6 +9,40 @@ Analyze cyclers, the one commit door). Not yet built.*
 
 ## 0. In one page
 
+## Responsibilities of the Background Service (Rick, 2026-10-30)
+The VS BG Service is responsible for continuous Content Analysis of the media. The service is constantly analyzing the media, 
+metadata, dates, times, and gleaning as much as it can from the media, the metadata, and the catalog so it can
+populate "observations" or "derived machine-generated" information into the app to help the user so when the user searches for
+something, the app has this information. It is like a family archivist working 24x7 to understand patterns, connections, and what is where.
+
+INPUTS: all media files + catalog database + all metadata + any new machine generated observations (provisionally within reason)
+OUTPUTS: machine generated intelligence all about the media
+GOAL: Anything in the content analysis window, audio transcripts, Sound fingerprints, Date Inference, Provenance Estimation, Scene Captions, etc.
+
+Question for Claude: clarify where the observations and machine generated intelligence is stored, since you said the catalog is open read-only, 
+how does machine generated intelligence get into the app and persist and be searchable?
+
+**Claude's answer (2026-10-30).** Two stores, one road into the catalog:
+- **Bulk observations** — sound prints, picture prints, every raw model output, embeddings, timed transcript segments — live in
+  **sidecar SQLite files the service owns** (`model-lab.sqlite`, `audio-fingerprints.sqlite`, `picture-prints.sqlite`), exactly as
+  the audio fingerprints do today. The app reads them directly (Find Master, Related, the model lab); they never pass through the catalog.
+- **Catalog-bound facts** — a scene caption, a transcript, an inferred date, an era claim, a provenance assertion — are written by the
+  service to an **append-only journal** (`background/journal/*.jsonl`, one line per fact, keyed by content digest). The app's one
+  committer **applies** the journal into the real catalog tables (`captions`, `transcripts`, `inferred_dates`, `provenance_assertions`)
+  at launch and every few minutes while open, through the same commit door as every other write. From then on they are ordinary rows:
+  search, Hallie, Catalog Status and the Provenance sheet all see them, with `by = background:<job>@<version>` and their evidence.
+- **Lag and visibility.** A fact the service produced while the app was closed is searchable the next time the app opens; Catalog
+  Status shows "N journal lines waiting / M refused" so nothing is invisible. Refused lines (an archived row's name or date — rule 3;
+  a value Rick already rejected — the veto trigger) are kept with the reason, never dropped. Rejected: the service writing the catalog
+  itself when the app is closed — two writers on one catalog is the bug class that cost us twice (`fix/committer-lost-writes`); the
+  journal keeps one committer. Revisit only if the lag is felt.
+- **Observations as inputs.** Yes: once applied, an era claim feeds `DateTriangulator`, a confirmed event feeds example memory, a
+  place signature feeds retrieval — with one standing rule: **no circular corroboration** — a derived fact never supports the inference
+  that produced it (`events_design.md` §1 rule 6), and a machine fact never outranks a human one.
+- **"Constantly analyzing."** The Analyze cyclers — the staleness rule that decides which file needs captions, transcript, prints or a
+  date pass next — move into the service (§4 step 4) and run continuously under backoff; the service keeps itself busy without being
+  told, and the app or the nightly may still enqueue specific jobs. §0.5 below is amended to say so.
+
 1. **One helper app inside the app bundle, registered as a launchd agent** through Apple's `SMAppService`:
    `VideoScan.app/Contents/Library/LoginItems/VideoScan Background.app`. Its own name and badged icon in Activity
    Monitor and in System Settings ▸ Login Items; launchd starts it, restarts it if it dies, keeps it alive after the
@@ -44,7 +78,7 @@ not open. It owns no analysis logic of its own.
 | It is responsible for | It is not responsible for |
 |---|---|
 | Staying alive across app quit and reboot (launchd), and exiting when idle | Any user interface; it has no windows and draws nothing |
-| Running jobs from the queue, one per lane, in order, with checkpoints | Deciding *what* to analyze (the app or the nightly enqueues; it never scans for work on its own) |
+| Running jobs from the queue, one per lane, in order, with checkpoints; and, once the Analyze cyclers have moved (§4 step 4), running them continuously so the media is always being analyzed (Rick's statement above) | Owning the *rule* that decides what is stale (that is the cyclers' policy, in the engine library); the app and the nightly may enqueue specific jobs at any time |
 | Hosting engines from the libraries (`VideoScanCore`, `VideoScanEngine`) and loading at most one resident model | Containing an engine's logic; an engine that needs the service must first live in a library with its own tests |
 | Backing off while Rick works; thermal and memory pressure | Scheduling policy beyond backoff (the nightly rota and the app decide when) |
 | Writing results to sidecar stores and the append-only journal, with START/OUTCOME in `background.log` | **Writing the catalog**, ever; the app's one committer applies the journal |
@@ -265,7 +299,7 @@ app is whole; a job that has not moved runs as it does today.
 ## 7. Rulings wanted from Rick (one at a time)
 
 1. **One extra permission grant** for the helper bundle (Full Disk Access + removable volumes, once, sticky under
-   "VideoScan Local") — acceptable? It is the price of its own name and lifecycle. Default: yes.
+   "VideoScan Local") — acceptable? It is the price of its own name and lifecycle. Default: yes. Rick Agrees.
 2. **Name and icon:** "VideoScan Background" with the app icon badged (gear-in-arrows or clock, BACKLOG 10/28)?
 3. **Exit-when-idle (default) or always resident?** Default: exit after 10 idle minutes; a Settings toggle pins it.
 4. **Step order:** model lab first (new, no risk, proves the service), captions second? Or captions first because

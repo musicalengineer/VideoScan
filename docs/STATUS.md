@@ -66,6 +66,7 @@ command in that worktree's `docs/models_research/README.md`, not on main); the a
 - 2026-11-01: off-site copy plan due.
 - 2026-11-05: cloud session credits expire.
 - Mid-November: Rick's target of grade A in every module.
+- 2026-12 (Christmas) soft / 2027-01 target: Public view link for family (BACKLOG; Charter §5 Web Interface).
 
 ## Open rulings wanted from Rick (older, still open)
 1. Schema v14 (provenance assertions + veto trigger, Phase C) and Phase B picture timeline numbering.
