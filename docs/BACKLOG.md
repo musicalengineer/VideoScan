@@ -175,3 +175,15 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
 - M4 catalog fault-injection testbed (Rick 10/26): the M4 keeps (1) a continuously synced backup of catalog.sqlite (315 MB today; the viewer's sealed copy may already be it) and (2) a nightly fresh `.backup` copy that a fault suite attacks at production scale — torn/truncated pages, flipped bytes, missing or stale -wal/-shm, FK violations, newer schema, full disk, read-only folder, kill -9 mid-commit — asserting every case is refused in words or recovered, never silent loss. Never in git; stays on the M4.
 - Human-vs-machine date convergence (Rick, 2026-10-31; ruled "go"): (1) Catalog filter chip "Confirmed date" — in progress (`feat/confirmed-date-filter`); (2) inspector date block gets one line "Machine era: 1991–1995 (8B, <date>)" under "Confirmed" — lands with background step 1 (the 8B era job writes assertions first); (3) Catalog Status line "Machine era agrees with your confirmed date within 5 y: N of 73 (p %)" — the convergence number, read week over week; a dashboard sparkline later at most. Not building: a machine-date filter, a comparison table, a side-by-side mode.
 - Background step 1 candidate (2026-10-31): the 8B era/OCR expert as the helper's first real job — A2's windows + contracts over the whole catalog, assertions into model-lab.sqlite with model + prompt hashes, sidecars + journal to the app's committer; needs §7 ruling 4 (step order).
+- Analyzer order (Rick, 2026-10-31): oldest first — 1960–2010 is the valuable span; one video of the grandmother outweighs a thousand of the
+  granddaughter; phone footage last (its metadata dates it). People-tab facts (birthdays, sex, descriptions) as constraints: constraint
+  propagation from a birthdate to a date window; Household Roster as the filter.
+- Overnight code review with local big models (Rick, 2026-10-31; Codex's `attended_review.py` pilot is the seed): rules such as "review the
+  module with the worst CCN grade" and "review the week's changes with their test coverage"; graded against held answers before trusting.
+- Family Tree crawling (Rick, 2026-10-31): a model-driven job that gathers public records for people in the tree; could live in the background
+  service; needs a privacy ruling (what leaves the machine) before any design.
+- MFO verb repeats (Rick, 2026-10-31): Rick has seen verbs redo work on unchanged files; audit each verb's skip rule against the digest-keyed
+  observation rule (design §0.7) and name the offender.
+- Rick's architecture note (`video_intelligence_architecture.pdf`, read 2026-10-31): adopt keyframes by scene-change detection for the
+  sampler, perceptual video hash and SigLIP embeddings as dedup tiers 2–3, constraint propagation from birthdates; events stay rulings
+  (not DBSCAN); cloud offload stays a §9 ruling and never carries family pixels (rule 13).

@@ -189,6 +189,36 @@ Rick's guide (`audio_video_digital_forensics_guide.pdf`) is court-oriented and s
 to the 8B, uncaptioned files first then a backfill; schema v14 lands with step 1 because an assertion that has earned its seat is
 catalog data. §7 ruling 4 answered; 2 and 3 take the defaults unless Rick says otherwise.
 
+## 0.7 Where the machine intelligence lives, and what to call it (Rick, 2026-10-31 evening)
+
+**Name: observations.** Rick's own word in §0 ("populate observations or derived machine-generated information"). A fact Rick set is a
+**decision**; a fact a machine produced is an **observation**. Not "meta-metadata" (it describes the footage, not the metadata) and
+not "machine intel" (it sounds like it reasons; it records). Every observation carries who made it (`by = engine@version`, the model
+and prompt hash for a model), when, and its evidence; a decision always outranks an observation; an observation never supports the
+inference that produced it.
+
+**Where (three homes, see `docs/design/data_organization_2026_10_31.md` — the full table-by-table map, also rendered as a PDF for Rick):**
+1. **`catalog.sqlite`** — observations that have earned a seat, as ordinary rows beside Rick's decisions: `captions` / `caption_runs`,
+   `transcripts`, `inferred_dates` (range, confidence, source, reason), `dossiers`, `sound_prints` / `perceptual_prints` stamps,
+   `footage_likeness` / `footage_membership`, `duplicate_*`, `media_checks`, and (v14) `provenance_assertions`. They get there only
+   through the app's one committer, from the helper's journal. Searchable, backed up, fixity-checked, never deleted.
+2. **Sidecar stores** the engines own, regenerable bulk the app reads directly: `audio-fingerprints.sqlite` (landmarks),
+   `model-lab.sqlite` (every raw model output with run, model and prompt hash; segments; vectors; append-only by trigger),
+   `metadata_cache.sqlite` (the ffprobe cache, keyed by path + size + mtime).
+3. **The helper's files** (`background/queue`, `checkpoints`, `journal/*.jsonl`): work in transit, atomic publish, append-only journal.
+`.scratch/` is the lab bench: per-clip bench records, frames, Rick's review verdicts; thrown away, never in git.
+
+**Rick's priorities that shape the analyzer (2026-10-31):** the valuable years are **1960–2010, before the phone**; the older the file, the
+more valuable, so the analyzer walks **oldest first** (by the best date bound it has) and modern phone footage last — its own
+metadata dates it anyway. The People tab's **birthdays, sex and descriptions** are constraints the machine must use: a baby walking for
+the first time and a birthdate in the roster bound a file to a window (constraint propagation — also in Rick's architecture note);
+a known hair colour or build narrows a face match. The Household Roster (A7) is that filter.
+
+**On caching, since Rick asked:** observations keyed by content digest are never recomputed for an unchanged file — the captioner
+skips a digest with a `caption_runs` row for the same model, transcripts and prints likewise. The ffprobe cache is keyed by path +
+size + mtime, so a move or a touch re-probes (cheap, by design). Verify and fixity verbs re-hash on purpose: that is their job. If an
+MFO verb visibly repeats work on unchanged files, that is a bug against this rule and should be named (BACKLOG, "MFO verb repeats").
+
 ## 1. Purpose, in Rick's terms
 
 Rapid dev means the app is started and stopped all day. Every start kills the captioner, the fingerprint backfill,
