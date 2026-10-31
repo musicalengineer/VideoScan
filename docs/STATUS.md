@@ -12,6 +12,29 @@ numbers) — Phase 0 needs no ruling and can run on the M4 tonight if Rick prefe
 Also waiting on Rick: a Terminal run of Codex's attended review pilot (`VideoScan-wt/attended-model-review`,
 command in that worktree's `docs/models_research/README.md`, not on main); the agent sandbox cannot reach Ollama.
 
+## Built tonight (10/30 evening, three workers in worktrees; Rick's checkout untouched)
+- **Video-LLM baseline harness — MERGED `93fadb8b`.** `tools/video-llm-bench/` (validate-corpus · run · summarize; qwen-bench
+  run-record discipline; 45 pytest). **A0 numbers published** in `docs/reviews/video_llm_benchmarks.md` from a real run on the
+  Ultra (Qwen2.5-VL-3B-4bit via mlx-vlm 0.5.0, the app's exact three prompts, 5 stills/clip, 1,506 frames, 0.91 s/frame, 3.7 GB):
+  **OCR** (63 clips with a usable truth) any-frame exact 92 %, majority 90 %, year 97 %. **ERA** (248 clips): the free text names a
+  year for only 18 % of clips; where it does on 1990s footage it is reading the burn-in (MAE 0.9 y); Rick-dated rows MAE 6.9 y on the
+  36 % answered. That is the bar A1/A2 must beat. Corpus truths: 73 `user_dates` confirmed; **no VHS/1990s camera-dated stratum
+  exists in the catalog** (the design's strata assumption was wrong — 80s/90s era truth is Rick's 54 dated rows only).
+- **Two findings filed from the run:** #402 — 2,850 of 3,128 `ocrDate` caption rows are degenerate `!!!!…` output stored as captions;
+  #403 — 24 iMovie QuickTime reference movies whose media is on an unmounted "InternalRaid" read as ordinary videos.
+- **Model-lab Core types** (`feat/model-lab-core-types`, `4aeb28f5`, 58 tests): samplers, approach registry, fail-closed contracts,
+  `EvidenceAssertion`, `PayloadGate`, `model-lab.sqlite` store. Reviewer: *merge after fixes* — R1 blocker: `.ollama` hosts were
+  "local" by label (OllamaEndpoints admits https cloud hosts) → fixed by a validated `LocalHost` type; R2 NUL-truncating binds; R3–R6
+  floors/inf/canonicalJSON/bare-decoder door. Worker applying; then I run the lane on the merged tree and merge.
+- **Background service step 0** (`feat/background-service-step0`, `c7b7089d`, 37 Core tests, sensor lane GREEN 594): helper target
+  `VideoScan Background` embedded as an `SMAppService` login item, launchd plist, XPC server + same-binary CLI, `JobSupervisor`,
+  `Backoff`, `NoOpJob`, registrar off by default behind `background.service.enabled`. Reviewer: *merge after fixes 1–3* (parked
+  disk-full job unresumable; CancellationError without cancellation strands a job; two START-without-OUTCOME paths) + peer trust via
+  `setCodeSigningRequirement`. Worker applying; lane rerun; then merge. **Rick's spot test** (after merge, Debug build):
+  `defaults write Rick-Breen.VideoScan background.service.enabled -bool true`, launch once, `launchctl print gui/$(id -u)/Rick-Breen.VideoScan.Background`,
+  then `…/VideoScan.app/Contents/Library/LoginItems/VideoScan Background.app/Contents/MacOS/VideoScan Background --status` /
+  `--enqueue noop 120 1000`, `tail -f ~/Library/Logs/VideoScan/background.log`, quit the app and watch it keep counting.
+
 ## Landed 10/30 (late, on main)
 - **Charter reorganized** into seven sections; duplicates folded; line 148 (4 MB hash) gone (Rick ruled);
   reading lists replaced by pointers; Claude Feedback blocks: MoE-vs-rulings, duplicates need no model,
