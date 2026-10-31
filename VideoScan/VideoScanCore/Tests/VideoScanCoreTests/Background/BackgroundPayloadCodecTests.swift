@@ -13,7 +13,7 @@ struct BackgroundPayloadCodecTests {
     @Test("JobRequest, ServiceStatus and JobProgressSnapshot round-trip through the envelope")
     func roundTrips() throws {
         let request = JobRequest(kind: .noop, lane: "models", parameters: ["units": "7"],
-                                 resources: ResourceProfile(peakMemoryBytes: 1 << 30, needsResidentModel: true, secondsPerUnitEstimate: 2.5),
+                                 resources: JobResourceProfile(peakMemoryBytes: 1 << 30, needsResidentModel: true, secondsPerUnitEstimate: 2.5),
                                  requestedAt: Date(timeIntervalSince1970: 1_800_000_000), requestedBy: "cli")
         let back = try BackgroundPayloadCodec.decode(JobRequest.self, from: try BackgroundPayloadCodec.encode(request))
         #expect(back == request)

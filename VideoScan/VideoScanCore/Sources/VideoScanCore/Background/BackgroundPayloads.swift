@@ -33,7 +33,7 @@ public struct JobKind: Codable, Hashable, Sendable, CustomStringConvertible {
 
 /// What a job declares about itself before START (design §3.2 "one resident
 /// model"): the service refuses a job the Mac cannot hold.
-public struct ResourceProfile: Codable, Equatable, Sendable {
+public struct JobResourceProfile: Codable, Equatable, Sendable {
     public var peakMemoryBytes: Int64
     public var needsResidentModel: Bool
     public var secondsPerUnitEstimate: Double
@@ -54,13 +54,13 @@ public struct JobRequest: Codable, Equatable, Sendable {
     public var lane: String
     /// Kind-specific arguments (a NoOp job reads `units` and `sleepMilliseconds`).
     public var parameters: [String: String]
-    public var resources: ResourceProfile
+    public var resources: JobResourceProfile
     public var requestedAt: Date
     /// Who asked: "app", "cli", "nightly".
     public var requestedBy: String
 
     public init(id: JobID = JobID(), kind: JobKind, lane: String = "default",
-                parameters: [String: String] = [:], resources: ResourceProfile = ResourceProfile(),
+                parameters: [String: String] = [:], resources: JobResourceProfile = JobResourceProfile(),
                 requestedAt: Date = Date(), requestedBy: String = "app") {
         self.id = id
         self.kind = kind
