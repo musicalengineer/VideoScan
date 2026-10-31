@@ -95,7 +95,8 @@ wedged model process (#406, fixed). Tonight's nightly is the first clean reading
 ## Next
 1. A3's last 24 clips (declared window, ≈ 19 min) → re-summarize; then the era expert goes into the model-lab as A2's contract (design §5).
    Prompt r4 (a legible stamp = a single-year range; prefer the narrowest range the evidence supports) tested on clips HELD OUT of the corpus.
-   Evidence-inventory tests: DV datecode, pulldown pattern, ENF (§11).
+   Evidence-inventory tests (design §0.6, checked 10/31 evening): ExifTool date tabulation first (hours); DV datecode via `dvrescue` (needs a
+   Brewfile entry — Rick's install); pulldown detector. ENF dropped (no US reference for 1985–2010); PRNU grouping-only, later.
 2. #408: repoint the five gauntlet UI flows, then turn the runner's UI stage on for the away window.
 3. Background service step 1 (first real job into the helper; §5 order pending ruling 4). #402 supersede pass brief → Codex.
 4. Resource allocation for LLMs and visual LLMs across the fleet (Rick's agenda item, 10/31).

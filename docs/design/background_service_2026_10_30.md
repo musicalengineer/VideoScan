@@ -167,9 +167,23 @@ Rick's guide (`audio_video_digital_forensics_guide.pdf`) is court-oriented and s
   ffprobe already normalises the common ones.
 - **Amped / Axon / Magnet / Belkasoft** reconstruct one timeline from one file for a courtroom; nothing in them beats ffmpeg + Python
   for bulk, and their proprietary-DVR strengths do not apply. **VideoCleaner**'s tamper checks do not apply.
-- **Beyond the guide, three cheap date sources that could each date a whole stratum alone** (lab design §11): the **DV datecode** on every
-  DV transfer; the **3:2 pulldown pattern** as a film detector; the **mains hum (ENF)** matched against a grid reference. Plus **PRNU**
-  to group files by physical camera, which turns one known date into bounds for every file from the same camera.
+- **Beyond the guide, the cheap date sources, checked the same evening** (lab design §11; research pass + a probe over the corpus):
+  - **ExifTool / container dates — first, hours.** `QuickTime:CreateDate` / `MediaCreateDate` / `TrackCreateDate`, iPhone's
+    `Keys:CreationDate` (local time with offset, the best phone field), `Matroska:DateUTC`; always `-api QuickTimeUTC=1`; a 1904 or
+    zero value is unset; a date equal to the file's mtime is the transfer, not the recording. One-day test: tabulate every date field
+    against mtime over the corpus and count the files with real evidence.
+  - **DV datecode — yes, a day.** It lives in the DV frames (VAUX/SSYB), survives a stream copy into .mov/.mkv, and is lost by any
+    re-encode (FFV1, ProRes, H.264). ffprobe does not read it (a raw .dv shows only the timecode). **Probe tonight:** MediaInfo finds a
+    `Recorded_Date` on 5 of the 51 DV clips, all 2000s camcorder captures wrapped in QuickTime, and the year matches the file's own
+    date 4 of 5 (one Dec 21 vs a Jan label — the boundary case); the ten raw `.dv` captures from the 1990s show a subcode timecode
+    but no date in the frames MediaInfo reads — either the camcorder clock was unset or the date appears later in the tape. Next:
+    `dvrescue` (MediaArea; needs a Brewfile entry and Rick's install) reads the datecode per frame and would settle it.
+  - **Mains hum (ENF) — dropped.** No public US 60 Hz reference exists for 1985–2010 (FNET/GridEye starts ~2004 and is not open in
+    bulk); battery camcorders with AGC, music and speech rarely carry a usable hum; tape transfers add wow and flutter.
+  - **PRNU camera fingerprint — grouping only, later.** Compression, stabilization and scaling weaken it; interlaced SD DV is marginal;
+    analog transfers carry the capture card's pattern, not the camera's. It yields a cluster, never a date; worth a try only for
+    grouping uncropped phone clips from one phone.
+  - **3:2 pulldown as a film detector — untested**, still worth a day.
 
 **Step 1's definition, as agreed in conversation (to be written up with the brief):** the 8B era/OCR job first; captions second, moving
 to the 8B, uncaptioned files first then a backfill; schema v14 lands with step 1 because an assertion that has earned its seat is
