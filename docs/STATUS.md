@@ -12,6 +12,19 @@ numbers) — Phase 0 needs no ruling and can run on the M4 tonight if Rick prefe
 Also waiting on Rick: a Terminal run of Codex's attended review pilot (`VideoScan-wt/attended-model-review`,
 command in that worktree's `docs/models_research/README.md`, not on main); the agent sandbox cannot reach Ollama.
 
+## 22:30 snapshot — main `db16b1e5`, pushed, **sensor lane GREEN (596 tests)** on that tree
+- **Merged:** bench harness + A0 numbers (`93fadb8b`) · background service step 0 (`dfafcc98`, after the reviewer's 8 fixes:
+  parked disk-full job resumable, CancellationError handling, OUTCOME through one door, `setCodeSigningRequirement` peer trust)
+  · model-lab Core types (`2a2c3c5f`, after R1–R6: `LocalHost` by type, NUL-safe binds, real sampler floors, bare-decoder door shut).
+  Merge fallout fixed on main: the two branches each defined a Core `ResourceProfile` → `JobResourceProfile` for the job queue
+  (`496e3d7b`, unify later — BACKLOG); `model-lab.sqlite` classified in the App Support inventory sensor (`db16b1e5`).
+- **Running now (Opus workers, off the Ultra by 01:40 for the nightly):** **A1** — same 3B model, chronological windows + the
+  strict JSON era/roomFeatures contracts, fail-closed decoding mirroring Swift's `ContractDecoder`; published beside A0.
+  **Household Roster feasibility** — tree + dated, tagged files; how often (sex, age band) alone leaves one candidate, per decade;
+  the honest hard cases (two boys 6–12 in the 1990s). Aggregates only; roles not names.
+- Worktrees for landed branches (`bg-service-0`, `model-lab-core`, `model-lab-bench`, and the older landed ones) are left in place —
+  nothing deleted; prune is Rick's call.
+
 ## Built tonight (10/30 evening, three workers in worktrees; Rick's checkout untouched)
 - **Video-LLM baseline harness — MERGED `93fadb8b`.** `tools/video-llm-bench/` (validate-corpus · run · summarize; qwen-bench
   run-record discipline; 45 pytest). **A0 numbers published** in `docs/reviews/video_llm_benchmarks.md` from a real run on the
