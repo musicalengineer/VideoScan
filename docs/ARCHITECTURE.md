@@ -109,7 +109,7 @@ Size (non-test Swift, 2026-10-18): app 348K + Core 65K = 413K; Hallie 74K, Share
 ### 10.0 Safety rules that hold everywhere
 - Prove the surviving copy at the moment of deletion (full byte compare; fixity-verified archive copy for prune), never a stored hash alone. A sampled (`v1:`) hash never says "copy".
 - Refuse when the keeper is offline, unverified or changed; name what was held back.
-- Trash, never unlink, where the volume allows; say "permanently" when not. Rows are never deleted: one removal marker, three states (In the Trash / Removed from catalog / Missing).
+- **Trash only, never permanent** (DECISIONS 2026-10-09; CLAUDE.md rule 2): every removal is a move to the drive's Trash; Rick empties the Trash; a volume that refuses the Trash holds the file at its path, never a fallback to unlink. Rows are never deleted: one removal marker, three states (In the Trash / Removed from catalog / Missing).
 - A purge of a catalog row meets the same bar as a delete of a file: its replacement must be stored first (P0, 10/22).
 - Archived records: background writers skip name and date; an archived record donates its date, never receives one.
 - Every fact-bearing surface reads verified evidence or says "unknown" (`FileFact { value, evidence, asOf }`).

@@ -42,7 +42,7 @@ All transcripts are under [`../archive/reviews/codex/`](../archive/reviews/codex
 - `<path>`
 
 **Invariants to attack** (one line each; cite `docs/ARCHITECTURE.md` §10 "Contracts"):
-1. <e.g. "Prove the surviving copy exists and matches by full SHA-256 at the moment of unlink; show me a path where it doesn't.">
+1. <e.g. "Prove the surviving copy exists and matches by full SHA-256 at the moment of the move to the Trash; show me a path where it doesn't.">
 2.
 3.
 

@@ -355,9 +355,9 @@ Old cleanup plans proposed two or three copies on two physical stores and blocki
 The newer prune planner uses importance thresholds; neither historical proposal licenses an executor
 without fresh byte verification, reachability/identity checks, and explicit reviewed approval.
 
-Prefer macOS Trash plus soft-delete metadata, journal, and Undo for reviewed cleanup.
-Do not silently fall back to permanent deletion when Trash is unavailable on a network volume.
-A permanent path needs separate explicit confirmation and the same verification protections.
+**Trash only, never permanent** (DECISIONS 2026-10-09; CLAUDE.md rule 2): every removal is a move
+to the drive's Trash, with the removal marker, journal and Put Back; Rick empties the Trash. When a
+volume (a network share) refuses the Trash, the file is held at its path; there is no permanent path.
 Catalog removal alone must not be misrepresented as freeing disk space or deleting media.
 Keep the audit memory that a file existed and what happened to it.
 
