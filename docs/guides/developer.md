@@ -104,32 +104,10 @@ Archive Angel, by stage), **FootageGroups/**, **ModelsUI/**.
 
 ### Data-risk code (for the codex review policy)
 
-A miss in these folders can lose or corrupt family media, the archive, or
-the family record. They are the paths the codex spend policy reserves
-adversarial passes for:
-
-- **Archive/** — all of it: promote, the `00_Index` writers and lock,
-  archive update (refile), file locking, fixity, the media ledger, and
-  `ArchiveVolumeProtection`.
-- **MediaOps/** — the delete / prune / relocate parts: `DeleteDuplicates*`,
-  `SignatureVerification`, `VideoScanModel+JunkDelete`, `+TrashSelection`,
-  `+SoftDelete`, `+PruneApply`, `+PruneVerification`, `PruneApplyJob`, the
-  `*Purge` files, `Relocate*` and `VideoScanModel+Relocate*`,
-  `VideoScanModel+RepairLifecycle`, `RescueFileCopier`, `PartialFileNaming`
-  and the output publishers (`DerivativeOutputPublish`,
-  `CombineOutputPublish`) that must never clobber.
-- **FamilyTree/** — CyberBrain writes (`FamilyTreeNotes`,
-  `FamilyTreeLiveModel`, `ResearchAttestation`, `ResearchPersonSheet`) and
-  FamilySearch pull/refresh, which replace the tree on disk. Hallie's telling
-  and pronunciation modes also write CyberBrain through `CyberBrainWriter`.
-- **ArchiveAngel/Promote/** — the Angel's hand-off into promote.
-- **Volumes/** — `VideoScanModel+RetireVolume` and `+DeleteScanTarget`
-  (remove catalog records for a whole volume).
-- **Catalog/** — `ShowAgain*` (clears the false "deleted" label; label only,
-  but it puts rows back in the Delete Duplicates / Excess / Prune pools).
-
-Everything else (UI, Hallie answers, analysis, search) is covered by the
-in-house `qa` agent and Rick's spot test.
+The one map of the paths where a Codex pass is mandatory — `Archive/`, the delete / prune / relocate parts of
+`MediaOps/`, the catalog commit path, the `FamilyTree/` writers, `ArchiveAngel/Promote/`, volume retire, `ShowAgain*` —
+is `docs/ARCHITECTURE.md` §6; it is not repeated here (a copy here had already lost the catalog commit path).
+Everything else (UI, Hallie answers, analysis, search) is covered by the in-house `qa` agent and Rick's spot test.
 
 ## 2. Swift 6 language mode (done 2026-10-25)
 

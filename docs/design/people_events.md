@@ -99,7 +99,7 @@ are settled.
 > identity is the **whole-file SHA-256** (`content.digest`), and a sampled `v1:` hash never says "same" (§10.2); the
 > `FootageKey` should name the reference content by digest; (3) Rick's knowledge attaches to **content**, so a segment
 > is keyed to a digest plus an alignment, never to a record UUID or a path. The segment model, alignment and marking
-> workflow (§§3.1, 3.4–5) are unaffected. §8's decisions stay open.
+> workflow (§3.1, §3.4, §§4–5) are unaffected. §8's decisions stay open.
 
 
 *Design, 2026-10-10. Status: PROPOSED, no code changed. Author: Claude (design agent, worktree branch `design/segments-content-coverage-2026-10-10`). Trigger: the family demo miss — "the Hudsons at Thanksgiving 1984" is inside a 94-minute VHS capture and nothing in the catalog could say so, let alone where. Related: `docs/design/hallie_proposer_with_tools_design.md` §R6 (item 5 names this document), `docs/design/scene_captions_plan.md`, `docs/design/catalog.md`, `docs/ARCHITECTURE.md` (goals 2 and 4).*
