@@ -55,7 +55,7 @@ Records kept for the rulings and tests that cite them, now in [`archive/reviews/
 
 ## Research
 
-Research notes live in `.scratch/` while they are being written (CLAUDE.md) and are archived when a design has taken what is still true. All of `docs/research/` moved to [`archive/research/`](archive/research/) on 2026-11-01: the Record Finder sources (FamilySearch API notes and its production-key blocker, the Irish records design, the UK and Scotland survey) are summarised in [`design/people_events.md`](design/people_events.md); the two provenance studies in [`design/provenance.md`](design/provenance.md); the model and LLM studies in [`design/machine_intelligence.md`](design/machine_intelligence.md) (since 10/31).
+Research notes live in `.scratch/` while they are being written (CLAUDE.md) and are archived when a design has taken what is still true. The whole former top-level research folder moved to [`archive/research/`](archive/research/) on 2026-11-01: the Record Finder sources (FamilySearch API notes and its production-key blocker, the Irish records design, the UK and Scotland survey) are summarised in [`design/people_events.md`](design/people_events.md); the two provenance studies in [`design/provenance.md`](design/provenance.md); the model and LLM studies in [`design/machine_intelligence.md`](design/machine_intelligence.md) (since 10/31).
 
 ## Also in this folder
 
