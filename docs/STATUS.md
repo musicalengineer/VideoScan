@@ -32,9 +32,15 @@
 - **Household Roster (A7)** feasibility published; **evidence tests checked**: ExifTool dates first; DV datecode real (MediaInfo finds a date on 5 of 51 DV clips; the 1990s raw `.dv` captures need `dvrescue`, **Brewfile entry = Rick's install**); ENF dropped; PRNU grouping-only.
 - Issues: #406 (fixed), #407 (fixed), #408 gauntlet UI flows (5 of 17 stale against today's UI), #403, #404.
 
-## Next (when Rick says go)
-1. **Step 1 brief**: the 8B era/OCR job as the helper's first real job, assertions → journal → committer, v14 migration; Catalog Status convergence line; inspector "Machine era" line.
-2. `dvrescue` in the Brewfile → DV datecode per frame over the ten raw `.dv` captures; ExifTool date tabulation over the corpus; pulldown detector.
+## In flight — Background step 1 (Rick said go, 2026-11-01 morning)
+- Brief: `.scratch/briefs/background-step1-2026-11-01.md`; worker on `feat/bg-step1-era` (worktree `VideoScan-wt/bg-step1`). Delivers: schema **v14** (`provenance_assertions` + veto only), the observation journal, `JournalApplier` through the commit door (writer quartet + Codex), the Python `ClipService` on the A2 code path, `PythonClipWorker` (watchdog in Swift), `EraJob` (oldest first, cached digests skipped, one `era.fused` line per file), `--enqueue era`. The UI (inspector "Machine era" line, Catalog Status convergence line) is a second worker after the migration lands. By ruling (DECISIONS 2026-11-01) a machine era is never shown as a date and never enters `inferred_dates` or a filter in step 1.
+- **Rick approves the DDL before merge** (CLAUDE.md rule 6). It is the C2 table from `provenance_retroactive_2026_10_26.md` §v14, unchanged:
+  `provenance_assertions(seq PK, subject_kind IN (content,carrier,captureEvent,captureSetup,excerpt), subject_id, field, value, state IN (inferred,confirmed,corrected,rejected), by ('rick' | 'machine:*'), at, confidence (required when inferred), evidence_json (json_valid))` STRICT; index `(subject_kind, subject_id, field, value, seq)`; trigger **veto** (`RAISE(IGNORE)` on an inferred value whose latest human decision is `rejected`); triggers no-update / no-delete. Only the machine infers; only Rick decides.
+- Live model runs: none on the Ultra by day beyond one 2-minute smoke on a `.backup` copy; the corpus run goes to the M4 when the branch is up (the worker reports the command).
+
+## Next
+1. UI worker for step 1 item 8 (after the v14 migration is on the branch); merge after Rick's DDL word and the Codex pass; M4 corpus run; first convergence reading.
+2. `dvrescue` (Rick installing 11/01; Brewfile entry in) → DV datecode per frame over the ten raw `.dv` captures; ExifTool date tabulation over the corpus; pulldown detector.
 3. Prompt r4 (a legible stamp = one year; narrowest range the evidence supports) on clips HELD OUT of the corpus.
 4. #408: repoint the five gauntlet UI flows; turn the runner's UI stage on for the away window.
 5. Cleanup execution after Rick's ruling on the proposal; the "Rick to rule" docs list (BACKLOG).
