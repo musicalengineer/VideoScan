@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import re
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -87,8 +86,7 @@ def read_schema(db_path: Path) -> tuple[int, dict[str, list[str]], dict[str, int
 
 def read_schema_detail(db_path: Path):
     """(schema version, {table: [(column, type, is_pk)]}, {table: rows}, [(child, child_col, parent, parent_col)])."""
-    uri = "file:{}?mode=ro&immutable=1".format(db_path)
-    con = sqlite3.connect(uri, uri=True)
+    con = catalog_db.connect(db_path)          # READ-ONLY (mode=ro + query_only): the one door scripts use
     try:
         version = con.execute("select schema_version from catalog_state").fetchone()[0]
         names = [r[0] for r in con.execute("select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")]

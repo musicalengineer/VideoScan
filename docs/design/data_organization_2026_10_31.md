@@ -88,7 +88,7 @@
 |---|---|---|
 | `catalog_state` | 1 | singleton, schema_version, master_archive, imported_from |
 | `generations` | 1 | id, generation, saved_at, saved_from_host, adopted_at, adopted_from |
-| `generation_history` | 1,179 | generation, committed_at, host, writer, files_live, files_total, export_sha256, kind, from_generation |
+| `generation_history` | 1,180 | generation, committed_at, host, writer, files_live, files_total, export_sha256, kind, from_generation |
 | `grdb_migrations` | 8 | identifier |
 | `ledger` | 2,289 | seq, at, generation, kind, actor, record_id, content_key, digest, path, payload, imported, import_run, source_ordinal |
 | `import_runs` | 1 | run_id, started_at, finished_at, source_sha256, source_generation, integrity_run_id, audit_run_started_at, audit_run_finished_at, audit_generation, integrity_started_at, integrity_generation, rows_before, rows_main, rows_quarantine, digests_seen, knowledge_rows, comparator_ok |

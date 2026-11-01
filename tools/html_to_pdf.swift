@@ -8,7 +8,7 @@ import WebKit
 
 let args = CommandLine.arguments
 guard args.count >= 3 else {
-    FileHandle.standardError.write("usage: swift html_to_pdf.swift <in.html> <out-prefix> [width]\n".data(using: .utf8)!)
+    FileHandle.standardError.write(Data("usage: swift html_to_pdf.swift <in.html> <out-prefix> [width]\n".utf8))
     exit(2)
 }
 let input = URL(fileURLWithPath: args[1])
@@ -50,7 +50,7 @@ final class Driver: NSObject, WKNavigationDelegate {
                         try? data.write(to: url)
                         print("wrote \(url.path) (\(Int(height)) px)")
                     case .failure(let error):
-                        FileHandle.standardError.write("pdf failed: \(error)\n".data(using: .utf8)!)
+                        FileHandle.standardError.write(Data("pdf failed: \(error)\n".utf8))
                     }
                     self.index += 1
                     self.next()
@@ -60,7 +60,7 @@ final class Driver: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        FileHandle.standardError.write("load failed: \(error)\n".data(using: .utf8)!)
+        FileHandle.standardError.write(Data("load failed: \(error)\n".utf8))
         exit(1)
     }
 }
@@ -74,7 +74,7 @@ let window = NSWindow(contentRect: webView.frame, styleMask: [.borderless], back
 window.contentView = webView
 webView.loadFileURL(input, allowingReadAccessTo: input.deletingLastPathComponent())
 DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
-    FileHandle.standardError.write("timed out\n".data(using: .utf8)!)
+    FileHandle.standardError.write(Data("timed out\n".utf8))
     exit(3)
 }
 app.run()
