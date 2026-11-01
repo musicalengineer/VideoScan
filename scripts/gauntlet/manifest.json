@@ -30368,6 +30368,42 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_dv_datecode.py",
+      "stage": "integration",
+      "suites": [
+        "test_dv_datecode.py"
+      ],
+      "tests": [
+        "test_a_capture_lead_in_is_read_past_by_the_extended_head",
+        "test_a_crashing_dvrescue_is_an_error_not_a_timeout",
+        "test_a_datecode_only_in_the_middle_is_found_by_the_middle_window",
+        "test_a_stalled_dvrescue_is_a_timeout_not_a_hang",
+        "test_a_wrapped_file_that_is_not_dv_is_not_dv_not_an_error",
+        "test_alignment_and_dif_magic",
+        "test_an_unreadable_file_is_an_error_without_its_path",
+        "test_copy_window_on_a_synthetic_byte_file",
+        "test_load_results_skips_a_torn_line",
+        "test_main_end_to_end_on_a_synthetic_catalog",
+        "test_main_resumes_and_an_interrupt_keeps_what_was_written",
+        "test_media_matrix_wrapped_dv_keeps_the_datecode",
+        "test_no_datecode_and_a_1970_datecode_are_never_a_date",
+        "test_parse_rdt_implausible_dates_are_counted_never_reported",
+        "test_parse_rdt_several_days_and_segments",
+        "test_parse_rdt_torn_and_empty",
+        "test_parse_rdt_with_a_datecode",
+        "test_parse_rdt_without_a_datecode",
+        "test_plan_windows",
+        "test_reads_the_catalog_only_through_catalog_db",
+        "test_scale_100k_rows",
+        "test_select_dv_rules",
+        "test_summary_arithmetic",
+        "test_summary_of_nothing_is_zeros",
+        "test_truth_the_reported_date_is_the_one_in_the_frames"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_escape_hatch_census.py",
       "stage": "unit",
       "suites": [
@@ -36014,6 +36050,10 @@
         },
         {
           "name": "tests/test_av_sync.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_dv_datecode.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

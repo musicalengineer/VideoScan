@@ -49,6 +49,7 @@
 - Carrier inspection step, once per cassette (60 s), before capture.
 - Phase 3: "New captures" nudge; H.264 viewing proxy made at ingest so FFV1 masters skim and seek in-app.
 - dvrescue per-frame recording dates for the 30 DV masters (biggest free dating win).
+- DV rdt as a deterministic date bound: Phase D of provenance_retroactive_2026_10_26.md (reader → `inferred_dates` source `dv-datecode`); needs a ruling on how it ranks against the embedded date.
 - (ruling) The four open questions: Provenance.csv vs manifest v4 (deep dive says CSV); role vocabulary (ours vs PBCore generations); hard vs soft gate the first month; the July device-chain line.
 - (ruling) Re-digitize the kept tapes natively (10-bit 4:2:2) as a second capture event; does a confirmed better re-capture supersede the July FFV1 masters?
 - Later: PBCore XML export; QCTools/MediaConch post-capture QC.

@@ -320,5 +320,16 @@ court-oriented suites (Amped, iNPUT-ACE) offer nothing we cannot do with ffmpeg 
 each cheap and each able to date a whole stratum alone: the **DV datecode** on every DV transfer, the **pulldown pattern** as a film
 detector, the **mains hum**.
 
+**DV datecode — measured 2026-11-01** (`scripts/dv_datecode.py`, dvrescue 24.07, head-only reads, the Ultra; 707 distinct
+DV contents on disk, 720 GB, 159 s wall). Raw DV: 348 files, **262 carry a recording date (75 %)**, 86 carry none (timecode
+only — consistent with analog tape passed through a DV bridge). Wrapped (mov/mxf the catalog labels DV): 359, of which 215
+hold no DV frames at all (190 with no frames to read — QuickTime reference movies and essence-less MXF; 25 MPEG-2 the
+catalog calls "DV 25"), 35 carry a date, 108 none, 1 only an implausible one. Of the 297 dated files, 296 are 2000s and 1
+is 2010s; the rdt year equals the file mtime year on 66 and is **earlier on 231** (by 1–25 years; 137 by 14 or more — the
+mtime is the transfer, the rdt the recording), later on none; 6 span more than one day inside the windows read.
+Head-only verdict: 289 dates were in the first 12 MB, 8 more only in the 120 MB extended head (a capture lead-in before
+the first camcorder frame), none needed the middle window; a full read of a 40-file sample (20 raw without, 10 raw with,
+10 wrapped without; 29.5 GB in 101 s) agreed on every file — no date missed, the same first rdt.
+
 Fusion step one landed in the review page the same day: a date stamp the model cites as an `onScreenText` cue (JUN 21 '97) collapses
 its padded range (1995–1997) to that year, deterministically; a stamp outside the model's range is shown, not trusted.
