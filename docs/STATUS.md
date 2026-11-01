@@ -5,7 +5,7 @@
 ## Read first (five minutes)
 1. **Nothing was deleted overnight.** The cleanup proposal is `docs/design/cleanup_proposal_2026_10_31.md` (≈ 118 GB reclaimable if every DELETE is accepted; you rule, then `.trash/` first).
 2. **Docs were reorganized**: `docs/README.md` is now the one entry point; `docs/design/models.md` is THE list of models (what, where, why, status); seven model/LLM research and review docs moved to `docs/archive/` with one-line stubs; `docs/design/data_organization_2026_10_31.md` is your file-locations map, filled in (your text kept, generated tables between markers), with the two-page diagram at `docs/design/data_organization_2026_10_31.html` and the PDF in `~/Downloads`. "Rick to rule" docs are listed in BACKLOG.
-3. **The background service is NOT running and cannot analyze videos yet** (step 0 only: helper, launchd, XPC, no-op job; off behind `defaults write Rick-Breen.VideoScan background.service.enabled -bool true`, no Settings toggle yet). Step 1 (the 8B era/OCR job) is the next brief — say go.
+3. **The background service runs its first real job.** Step 1 (the 8B era/OCR job, schema v14, the journal and the applier, the inspector and Status lines, era words in search) merged 11/01 (`0656aee6`); 320 files analyzed in Rick's lunch window; first convergence reading 51 % close enough, 88 % inside the range. The helper is still started by hand (`--run era` / `--enqueue era`); no Settings toggle or Analyze-tab button yet (BACKLOG).
 4. **Verdicts from the day:** seat the 8B as the era/OCR expert; the 32B is parked (worse on all 72 Rick-dated clips at 4.7× the cost); the model stays a pixels-only witness and the file's facts enter as deterministic bounds (telling it the codec moved a 1965 film to 1975–1985); "close enough" = midpoint within 5 y AND range ≤ 10 y wide; your 25 dates all stood in the review.
 
 ## Testbeds overnight (all against main unless said)
@@ -48,9 +48,10 @@
 5. Cleanup execution after Rick's ruling on the proposal; the "Rick to rule" docs list (BACKLOG).
 
 ## Waiting on Rick
-- **Rulings**: background service §7 items 2 (icon badge) and 3 (exit-when-idle default) — defaults proposed; video-LLM §9 items 1 (cloud on derived text), 2 (the 50 place labels), 4 (v14 timing — proposed: with step 1). Gauntlet runner policy (known issues as failures). CatalogSync master hostname (still `RicksM4.local`).
+- **Catalog menu**: the proposed regrouping and the rename "Update Catalog…" → "Relink Moved Files…" (proposed 11/01 afternoon; the Catalog Database Info sheet is being built either way).
+- **Rulings still open**: background service §7 items 2 (icon badge) and 3 (exit-when-idle default) — defaults proposed; video-LLM §9 items 1 (cloud on derived text) and 2 (the 50 place labels). Gauntlet runner policy (known issues as failures). CatalogSync `defaultMasterHostname` still `RicksM4.local` in code while the Ultra is the master by ruling (DECISIONS 2026-10-27) — fix the default.
+- **Codex docs review 11/01** (`docs/reviews/codex/codex-review-docs-new-engineer-2026-11-01.md`): verdict fix, 23 findings; a worker applies the docs-only ones; two touch Rick's files — PROCESS "Escalate before" (F22: "non-additive schema changes" contradicts CLAUDE rule 6) and the Charter's "Claude Feedback" sections (F15: replace repeated explanation with links) — proposed as diffs for Rick.
 - **Terminal run** of Codex's attended review pilot (`VideoScan-wt/attended-model-review`).
-- **Allowlist**: read-only ssh/status commands; a `kill <own pid>` shape for an agent's own model process.
 
 ## State of the machines (11/01 morning)
 - Ultra: free; the two review pages may still be serving on 8765/8766 (harmless `watch` processes). M4: idle after two gauntlets (`RicksM4.local`, main pulled).
