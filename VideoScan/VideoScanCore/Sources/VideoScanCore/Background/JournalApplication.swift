@@ -13,10 +13,12 @@
 //   unknownTable      — `table` is not provenance_assertions (step 1)
 //   notAnObservation  — state ≠ inferred or by ≠ machine:* — the helper may
 //                       never write a decision (only Rick decides)
+//   unsupportedSubject — subject_kind is not one of the DDL's five
 //   notADigest        — subject_id is not a whole-file SHA-256
 //   unknownDigest     — the digest is not a `content` row
 //   archivedNameOrDate — a name or date field on an archived content (rule 3)
 //   vetoed            — Rick's latest decision on this value is "rejected"
+//   storeRefused      — a CHECK the admission did not foresee (this row only)
 //
 // The batch is applied in digest order ("batched by digest", §3.4) so one
 // content's lines sit together in the transaction.
@@ -36,6 +38,8 @@ public enum JournalRefusalReason: String, Sendable, CaseIterable {
     case unknownDigest
     case archivedNameOrDate
     case vetoed
+    case unsupportedSubject
+    case storeRefused
 }
 
 public struct JournalRefusal: Error, Sendable {
@@ -66,6 +70,9 @@ public enum JournalApplication {
         guard line.table == ObservationLine.assertionsTable else { return refuse(.unknownTable, "table \(line.table)") }
         guard line.state == "inferred", line.by.hasPrefix("machine:") else {
             return refuse(.notAnObservation, "state \(line.state) by \(line.by) — the helper writes observations only")
+        }
+        guard ProvenanceAssertionSubject.kinds.contains(line.subjectKind) else {
+            return refuse(.unsupportedSubject, "subject kind \(line.subjectKind) is not one the catalog holds")
         }
         var subject = line.subjectID
         if line.subjectKind == ProvenanceAssertionSubject.content {
@@ -100,6 +107,8 @@ public enum JournalApplication {
                 outcome.refused.append(JournalRefusal(line: line, reason: .vetoed, detail: "Rick rejected \(draft.field) = \(draft.value) for this content"))
             case .contentMissing:
                 outcome.refused.append(JournalRefusal(line: line, reason: .unknownDigest, detail: "content \(draft.subjectID.prefix(12))… is not in the catalog"))
+            case .storeRefused(let words):
+                outcome.refused.append(JournalRefusal(line: line, reason: .storeRefused, detail: words))
             case .archivedNameOrDate:
                 outcome.refused.append(JournalRefusal(line: line, reason: .archivedNameOrDate,
                                                       detail: "\(draft.field) is a name or date and the content is archived — only Rick changes it (rule 3)"))

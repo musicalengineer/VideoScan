@@ -105,6 +105,18 @@ struct JournalApplicationTests {
         }
     }
 
+    @Test("F7: an unsupported subject kind is refused at admission; its neighbours land")
+    func codex187F7UnsupportedSubjectIsRefused() async throws {
+        let (fixture, repository) = try await Self.scene(contents: 1)
+        defer { fixture.remove() }
+        let odd = try ObservationLine(subjectID: Self.hex(1), field: "era.yearRange", value: "1991-1995", by: Self.by, at: 5,
+                                      confidence: 0.5, evidence: [:], job: "J", unit: 1, subjectKind: "file")
+        let outcome = try Self.apply(repository, [Self.readLine(odd), Self.readLine(try ObservationJournalTests.line(1), offset: 1)])
+        #expect(outcome.applied == 1)
+        #expect(outcome.refused.map(\.reason) == [.unsupportedSubject])
+        await repository.close()
+    }
+
     @Test(.timeLimit(.minutes(5)))
     func oneHundredThousandLinesInBatchesOf256WithinTheMainActorBudget() async throws {
         let (fixture, repository) = try await Self.scene(contents: 10_000)

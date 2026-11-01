@@ -196,6 +196,61 @@ struct JournalApplierTruthTests {
     }
 }
 
+@Suite("JournalApplier — Codex #187 (red first)", .serialized)
+@MainActor
+struct JournalApplierCodex187Tests {
+
+    @Test("F1: a refusal that cannot be written stops the pass before the cursor — the line is neither lost nor applied; it is refused once writable")
+    func unwritableRefusalsKeepTheCursor() async throws {
+        let scene = try CutoverScene.make("journal_f1"); defer { scene.cleanup() }
+        _ = try await launch(scene)
+        let j = journal(scene)
+        try j.append([try observation(String(format: "%064x", 0xbeef))])
+        let refused = journalFolder(scene).appendingPathComponent(ObservationJournal.refusedFileName)
+        try Data().write(to: refused)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: refused.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: refused.path) }
+        let blocked = await scene.model.journalApplier.applyPending()
+        #expect(blocked.waitingBecause?.contains("refused") == true, "\(blocked.waitingBecause ?? "nil")")
+        #expect(j.appliedOffset(try #require(j.dayFiles().first)) == 0, "the cursor did not move")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: refused.path)
+        let next = await scene.model.journalApplier.applyPending()
+        #expect(next.refused == 1)
+        #expect(j.refusedRecords().map { $0["reason"] as? String } == ["unknownDigest"])
+        await close(scene.model)
+    }
+
+    @Test("F9: an earlier day's file whose torn tail is older than 10 minutes is abandoned — the fragment is refused 'torn' and the cursor passes it")
+    func anAbandonedTornTailIsRefused() async throws {
+        let scene = try CutoverScene.make("journal_f9"); defer { scene.cleanup() }
+        _ = try await launch(scene)
+        let d = try digest(scene, .healthy)
+        let folder = journalFolder(scene)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("2025-11-01.jsonl")
+        try ((try observation(d)).encoded + (try observation(d, value: "1970-1975")).encoded.prefix(25)).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)], ofItemAtPath: url.path)
+        let pass = await scene.model.journalApplier.applyPending()
+        #expect(pass.applied == 1)
+        #expect(pass.refused == 1)
+        #expect(journal(scene).refusedRecords().first?["reason"] as? String == "torn")
+        #expect(journal(scene).appliedOffset("2025-11-01.jsonl") == journal(scene).size(of: "2025-11-01.jsonl"), "the cursor passed the fragment")
+        #expect(scene.model.journalApplier.counts?.waiting == 0)
+        await close(scene.model)
+    }
+
+    @Test("F10: a batch of 256 refused lines is ONE durable write, not 256")
+    func refusalsAreOneWritePerBatch() async throws {
+        let scene = try CutoverScene.make("journal_f10"); defer { scene.cleanup() }
+        _ = try await launch(scene)
+        try journal(scene).append((1...256).map { try observation(String(format: "%064x", 0xf000 + $0)) })
+        let pass = await scene.model.journalApplier.applyPending()
+        #expect(pass.refused == 256)
+        #expect(scene.model.journalApplier.journal?.refusedWrites == 1)
+        await close(scene.model)
+    }
+}
+
 @Suite("JournalApplier — the writer quartet on catalog.sqlite", .serialized)
 @MainActor
 struct JournalApplierWriterTests {

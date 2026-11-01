@@ -165,6 +165,63 @@ struct CatalogProvenanceAssertionsTests {
         }
     }
 
+    // MARK: - Codex #187 (red first)
+
+    @Test("F4: the same (subject, field, value, by, at) with different evidence is a distinct observation; the identical payload is a duplicate")
+    func codex187F4DistinctEvidenceIsNotADuplicate() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        try seedContent(fixture, count: 1)
+        let repository = try await open(fixture)
+        var other = Self.draft(1)
+        other.evidenceJSON = #"{"window":[60,120]}"#
+        let landed = try await append(repository, [Self.draft(1), other, Self.draft(1)])
+        #expect(landed.count == 3)
+        if landed.count == 3 {
+            #expect(landed[1] != .duplicate, "different evidence lands")
+            #expect(landed[2] == .duplicate, "the identical payload is a duplicate")
+        }
+        await repository.close()
+    }
+
+    @Test("F6: a file under the designated Master Archive root counts as archived even with Cataloged / None flags")
+    func codex187F6ArchiveRootCounts() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        try seedContent(fixture, count: 1)
+        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
+            try db.execute(sql: "INSERT OR IGNORE INTO volumes (volume_uuid) VALUES ('')")
+            try db.execute(sql: """
+                INSERT INTO files (id, content_digest, volume_uuid, full_path, path_fold, filename, ext, directory, size_bytes,
+                                   digest_computed_at, digest_source, stream_type, lifecycle, archive_stage, volume_case_sensitive)
+                VALUES ('00000000-0000-0000-0000-000000000001', ?, '', '/Volumes/Arch/Breen_Family_Archive/1990s/a.mov',
+                        '/volumes/arch/breen_family_archive/1990s/a.mov', 'a.mov', 'mov', '/Volumes/Arch/Breen_Family_Archive/1990s',
+                        100, 1, 'archiveFixity', 'Video+Audio', 'Cataloged', 'None', 0)
+                """, arguments: [Self.hex(1)])
+            try db.execute(sql: #"UPDATE catalog_state SET master_archive = '{"rootPath":"/Volumes/Arch/Breen_Family_Archive","targetPath":"/Volumes/Arch","designatedAt":"2026-01-01T00:00:00Z"}' WHERE singleton = 1"#)
+        }
+        let repository = try await open(fixture)
+        #expect(try await append(repository, [Self.draft(1, field: "date", value: "1991-06-21")]) == [.archivedNameOrDate])
+        let observation = try await append(repository, [Self.draft(1)])
+        #expect(observation.count == 1 && observation != [.archivedNameOrDate], "observations still land")
+        await repository.close()
+    }
+
+    @Test("F7: a draft the CHECKs refuse is a per-line .storeRefused, not a thrown batch")
+    func codex187F7StoreRefusalIsPerLine() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        try seedContent(fixture, count: 1)
+        let repository = try await open(fixture)
+        var bad = Self.draft(1)
+        bad.subjectKind = "file"
+        let landed = try await append(repository, [bad, Self.draft(1)])
+        #expect(landed.count == 2)
+        if case .storeRefused(let words)? = landed.first { #expect(words.contains("CHECK")) } else { Issue.record("\(landed)") }
+        #expect(try await count(repository) == 1, "the neighbour landed")
+        await repository.close()
+    }
+
     // MARK: - Guards
 
     @Test func theTableIsAppendOnlyAndItsChecksHold() async throws {

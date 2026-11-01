@@ -23,6 +23,8 @@ import Foundation
 /// Subject ids, normalised once.
 public enum ProvenanceAssertionSubject {
     public static let content = "content"
+    /// The DDL's CHECK list, verbatim.
+    public static let kinds: Set<String> = ["content", "carrier", "captureEvent", "captureSetup", "excerpt"]
 
     /// `content.digest`'s spelling of `digest` — 64 lowercase hex, with any
     /// "sha256:" prefix (EvidenceAssertion.subjectDigest's form) removed —
@@ -113,8 +115,8 @@ extension CatalogRow {
     /// What `appendProvenanceAssertion` did. Only `.recorded` wrote a row.
     public enum ProvenanceAssertionLanding: Sendable, Equatable {
         case recorded(seq: Int64)
-        /// A row with the same (subject, field, value, by, at) is stored —
-        /// applying a journal line twice is applying it once.
+        /// A row with the same whole payload is stored — applying a journal
+        /// line twice is applying it once.
         case duplicate
         /// The veto trigger ignored it: Rick's latest decision on this value is "rejected".
         case vetoed
@@ -122,6 +124,8 @@ extension CatalogRow {
         case contentMissing
         /// A name or date field on an archived content (rule 3).
         case archivedNameOrDate
+        /// The store's CHECKs refused the row (the engine's words); nothing written.
+        case storeRefused(String)
     }
 }
 

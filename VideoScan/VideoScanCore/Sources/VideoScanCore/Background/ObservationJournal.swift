@@ -173,7 +173,13 @@ enum CanonicalJSON {
                 if CFGetTypeID(n) == CFBooleanGetTypeID() { self = .bool(n.boolValue); return }
                 let d = n.doubleValue
                 guard d.isFinite else { throw JournalLineProblem("a number is not finite") }
-                if CFNumberIsFloatType(n) { self = d == d.rounded() && abs(d) < 9e15 ? .int(Int64(d)) : .double(d) } else { self = .int(n.int64Value) }
+                if CFNumberIsFloatType(n) {
+                    self = d == d.rounded() && abs(d) < 9e15 ? .int(Int64(d)) : .double(d)
+                } else {
+                    // Codex #187 F5: an integer outside Int64 (UInt64.max reads back as -1) is refused, never aliased.
+                    guard String(n.int64Value) == n.stringValue else { throw JournalLineProblem("the integer \(n.stringValue) is outside Int64") }
+                    self = .int(n.int64Value)
+                }
             case let a as [Any]: self = .array(try a.map(Value.init))
             case let o as [String: Any]: self = .object(try o.mapValues(Value.init))
             default: throw JournalLineProblem("\(type(of: any)) is not a JSON value")
@@ -221,6 +227,10 @@ public final class ObservationJournal: @unchecked Sendable {
     public let directory: URL
     private let now: @Sendable () -> Date
     private let lock = NSLock()
+    /// Codex #187 F9: earlier days' torn tails are sealed once per process,
+    /// at its first append (only today's file is ever appended to, so an
+    /// earlier day's tail with no newline is a crash's, never a write in flight).
+    private var earlierDaysSealed = false
 
     /// ~/Library/Application Support/VideoScan/background/journal
     public static var productionDirectory: URL {
@@ -259,6 +269,10 @@ public final class ObservationJournal: @unchecked Sendable {
         let name = Self.fileName(for: now())
         guard !lines.isEmpty else { return AppendReport(file: name, lines: 0, bytes: 0, sealedTornTail: false) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !earlierDaysSealed {
+            for earlier in dayFiles() where earlier < name { try Self.sealTornTail(directory.appendingPathComponent(earlier)) }
+            earlierDaysSealed = true
+        }
         let url = directory.appendingPathComponent(name)
         // Read-write (O_APPEND still sends every write to the end): the torn-tail check preads the last byte.
         let fd = Darwin.open(url.path, O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
@@ -269,8 +283,23 @@ public final class ObservationJournal: @unchecked Sendable {
         if sealed { buffer.append(0x0A) }
         for line in lines { buffer.append(line.encoded) }
         try Self.writeAll(fd: fd, buffer, path: url.path)
-        if fcntl(fd, F_FULLFSYNC) != 0, fsync(fd) != 0 { throw JournalIOError("fsync \(url.path)", errno) }
+        try Self.fullSync(fd, path: url.path)
         return AppendReport(file: name, lines: lines.count, bytes: buffer.count, sealedTornTail: sealed)
+    }
+
+    /// Append "\n" to a file whose last byte is not one (a crash's torn tail).
+    private static func sealTornTail(_ url: URL) throws {
+        let fd = Darwin.open(url.path, O_RDWR | O_APPEND | O_CLOEXEC)
+        guard fd >= 0 else { return }
+        defer { Darwin.close(fd) }
+        guard try endsTorn(fd: fd) else { return }
+        try writeAll(fd: fd, Data([0x0A]), path: url.path)
+        try fullSync(fd, path: url.path)
+    }
+
+    /// F_FULLFSYNC, or fsync when the volume refuses it; a failure throws.
+    static func fullSync(_ fd: Int32, path: String) throws {
+        if fcntl(fd, F_FULLFSYNC) != 0, fsync(fd) != 0 { throw JournalIOError("fsync \(path)", errno) }
     }
 
     /// True when the file is non-empty and its last byte is not "\n".
@@ -319,7 +348,9 @@ public final class ObservationJournal: @unchecked Sendable {
         public var atEnd: Bool
     }
 
-    /// Up to `maxLines` complete lines of `file` from byte `offset`.
+    /// Up to `maxLines` complete lines of `file` from byte `offset`. A line
+    /// over `maxLineBytes` is streamed past (never held) and returned as ONE
+    /// invalid line carrying a bounded prefix (Codex #187 F8).
     public func read(file: String, from offset: Int, maxLines: Int = 256) throws -> ReadResult {
         let url = directory.appendingPathComponent(file)
         let handle = try FileHandle(forReadingFrom: url)
@@ -329,20 +360,47 @@ public final class ObservationJournal: @unchecked Sendable {
         var pending = Data()
         var cursor = 0                      // first unread byte of `pending`
         var pendingStart = offset           // file offset of pending[cursor]
+        var oversized: (start: Int, prefix: Data, length: Int)?   // skipping a runaway line
         while result.lines.count < maxLines {
             if cursor > 0 { pending.removeSubrange(0..<cursor); cursor = 0 }   // once per chunk, not per line
             let chunk = try handle.read(upToCount: Self.readChunkBytes) ?? Data()
             if chunk.isEmpty {
-                if !pending.isEmpty { result.tornAt = pendingStart }
+                if let o = oversized { result.tornAt = o.start } else if !pending.isEmpty { result.tornAt = pendingStart }
                 result.atEnd = true
                 return result
             }
             pending.append(chunk)
-            while result.lines.count < maxLines,
-                  let nl = pending[(pending.startIndex + cursor)...].firstIndex(of: 0x0A) {
+            while result.lines.count < maxLines {
+                if var o = oversized {
+                    guard let nl = pending[(pending.startIndex + cursor)...].firstIndex(of: 0x0A) else {
+                        o.length += pending.count - cursor
+                        cursor = pending.count
+                        oversized = o
+                        break
+                    }
+                    let consumed = nl - (pending.startIndex + cursor) + 1
+                    o.length += consumed
+                    cursor += consumed
+                    let end = o.start + o.length
+                    result.lines.append(ReadLine(offset: o.start, end: end, raw: o.prefix,
+                                                 result: .failure(JournalLineProblem("line of \(o.length - 1) bytes is over the \(Self.maxLineBytes)-byte cap"))))
+                    pendingStart = end
+                    result.nextOffset = end
+                    oversized = nil
+                    continue
+                }
+                guard let nl = pending[(pending.startIndex + cursor)...].firstIndex(of: 0x0A) else {
+                    if pending.count - cursor > Self.maxLineBytes {
+                        let from = pending.startIndex + cursor
+                        oversized = (start: pendingStart, prefix: Data(pending[from..<(from + 1024)]), length: pending.count - cursor)
+                        cursor = pending.count
+                    }
+                    break
+                }
                 let raw = Data(pending[(pending.startIndex + cursor)..<nl])
                 let lineLength = raw.count + 1
-                let line = ReadLine(offset: pendingStart, end: pendingStart + lineLength, raw: raw,
+                let line = ReadLine(offset: pendingStart, end: pendingStart + lineLength,
+                                    raw: raw.count > Self.maxLineBytes ? Data(raw.prefix(1024)) : raw,
                                     result: raw.count > Self.maxLineBytes ? .failure(JournalLineProblem("line of \(raw.count) bytes is over the \(Self.maxLineBytes)-byte cap"))
                                         : ObservationLine.decode(raw))
                 result.lines.append(line)
@@ -350,13 +408,31 @@ public final class ObservationJournal: @unchecked Sendable {
                 result.nextOffset = pendingStart
                 cursor += lineLength
             }
-            if pending.count - cursor > Self.maxLineBytes * 4 {
-                // A runaway line with no newline yet: stop here, the caller sees no progress past it.
-                return result
-            }
         }
         // Stopped on the line budget: the caller reads again from `nextOffset`.
         return result
+    }
+
+    /// Codex #187 F9: an EARLIER day's file (never appended to again — the
+    /// helper appends only to today's) whose torn tail is older than
+    /// `quietSeconds` is a crash's leftover: seal it with "\n" and return the
+    /// fragment's first bytes (≤ 1 KB) so the caller can refuse it as "torn".
+    /// nil = not abandoned (today's file, recently written, or not torn).
+    public func sealAbandonedTail(_ file: String, tornAt: Int, quietSeconds: TimeInterval = 600) throws -> Data? {
+        guard file < Self.fileName(for: now()) else { return nil }
+        let url = directory.appendingPathComponent(file)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let modified = attributes[.modificationDate] as? Date, now().timeIntervalSince(modified) >= quietSeconds else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        let fd = Darwin.open(url.path, O_RDWR | O_APPEND | O_CLOEXEC)
+        guard fd >= 0 else { throw JournalIOError("open \(url.path)", errno) }
+        defer { Darwin.close(fd) }
+        guard try Self.endsTorn(fd: fd) else { return nil }
+        var prefix = [UInt8](repeating: 0, count: 1024)
+        let n = pread(fd, &prefix, prefix.count, off_t(tornAt))
+        try Self.writeAll(fd: fd, Data([0x0A]), path: url.path)
+        try Self.fullSync(fd, path: url.path)
+        return Data(prefix.prefix(max(0, n)))
     }
 
     /// The journal's day files, oldest first (never refused.jsonl or a sidecar).
@@ -372,17 +448,53 @@ public final class ObservationJournal: @unchecked Sendable {
 
     // MARK: The applied cursor (written by the app)
 
-    /// The offset `.applied` holds for `file`; 0 when absent or unreadable
-    /// (re-reading is safe: applying a line twice is applying it once).
+    /// The offset `.applied` holds for `file` — or 0 (replay from the start;
+    /// re-applying is a no-op) when it is absent, unreadable, or no longer
+    /// describes this file (Codex #187 F3): another inode, a file shorter
+    /// than the cursor, a byte before the cursor that is not a newline, or
+    /// a hash of the 4 KB before the cursor that differs.
     public func appliedOffset(_ file: String) -> Int {
-        let url = directory.appendingPathComponent(file + Self.appliedSuffix)
-        guard let text = try? String(contentsOf: url, encoding: .utf8),
-              let n = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)), n >= 0 else { return 0 }
-        return n
+        let sidecar = directory.appendingPathComponent(file + Self.appliedSuffix)
+        guard let data = try? Data(contentsOf: sidecar),
+              let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let offset = o["offset"] as? Int, offset > 0,
+              let identity = Self.identity(directory.appendingPathComponent(file)),
+              o["device"] as? Int == identity.device, o["inode"] as? Int == identity.inode,
+              identity.size >= offset,
+              let tail = Self.tailHash(directory.appendingPathComponent(file), before: offset),
+              o["tail_sha256"] as? String == tail else { return 0 }
+        return offset
     }
 
+    /// The app's cursor for `file`: the offset, bound to the file's identity
+    /// and the hash of the bytes just before it. Atomic (write-then-rename).
     public func markApplied(_ file: String, offset: Int) throws {
-        try AtomicFilePublish.write(Data("\(offset)\n".utf8), to: directory.appendingPathComponent(file + Self.appliedSuffix))
+        let url = directory.appendingPathComponent(file)
+        guard let identity = Self.identity(url), let tail = Self.tailHash(url, before: offset) else {
+            throw JournalIOError("stat \(url.path)", errno)
+        }
+        let record: [String: Any] = ["offset": offset, "device": identity.device, "inode": identity.inode, "tail_sha256": tail]
+        var data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+        data.append(0x0A)
+        try AtomicFilePublish.write(data, to: directory.appendingPathComponent(file + Self.appliedSuffix))
+    }
+
+    private static func identity(_ url: URL) -> (device: Int, inode: Int, size: Int)? {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return nil }
+        return (Int(st.st_dev), Int(st.st_ino), Int(st.st_size))
+    }
+
+    /// SHA-256 of the (≤ 4 KB) bytes ending at `offset`; nil when they cannot
+    /// be read or the byte before `offset` is not a newline.
+    private static func tailHash(_ url: URL, before offset: Int) -> String? {
+        guard offset > 0, let handle = try? FileHandle(forReadingFrom: url) else { return offset == 0 ? "" : nil }
+        defer { try? handle.close() }
+        let start = max(0, offset - 4096)
+        guard (try? handle.seek(toOffset: UInt64(start))) != nil,
+              let bytes = try? handle.read(upToCount: offset - start), bytes.count == offset - start,
+              bytes.last == 0x0A else { return nil }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Bytes not applied yet, over every day file (the Catalog Status line
@@ -393,21 +505,50 @@ public final class ObservationJournal: @unchecked Sendable {
 
     // MARK: Refused lines (written by the app)
 
-    /// One refused line with the rule that refused it, appended whole.
-    public func appendRefused(raw: Data, file: String, offset: Int, reason: String, detail: String) throws {
+    public struct RefusedRecord: Sendable {
+        public var raw: Data
+        public var file: String
+        public var offset: Int
+        public var reason: String
+        public var detail: String
+        public init(raw: Data, file: String, offset: Int, reason: String, detail: String) {
+            self.raw = raw; self.file = file; self.offset = offset; self.reason = reason; self.detail = detail
+        }
+    }
+
+    /// A batch of refused lines: ONE write(2) and ONE full fsync (Codex #187
+    /// F10), after sealing a torn tail an earlier crash left (F2). Throws when
+    /// any of it cannot be made durable (F1) — the caller must then not move
+    /// its cursor, so nothing is lost.
+    public func appendRefused(_ records: [RefusedRecord]) throws {
+        guard !records.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let record: [String: Any] = ["reason": reason, "detail": detail, "file": file, "offset": offset,
-                                     "line": String(decoding: raw, as: UTF8.self),
-                                     "refused_at": Int64(now().timeIntervalSince1970)]
-        var data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes])
-        data.append(0x0A)
+        let at = Int64(now().timeIntervalSince1970)
+        var buffer = Data()
+        for r in records {
+            let record: [String: Any] = ["reason": r.reason, "detail": r.detail, "file": r.file, "offset": r.offset,
+                                         "line": String(decoding: r.raw, as: UTF8.self), "refused_at": at]
+            buffer.append(try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes]))
+            buffer.append(0x0A)
+        }
         let url = directory.appendingPathComponent(Self.refusedFileName)
-        let fd = Darwin.open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
+        let fd = Darwin.open(url.path, O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw JournalIOError("open \(url.path)", errno) }
         defer { Darwin.close(fd) }
-        try Self.writeAll(fd: fd, data, path: url.path)
-        _ = fsync(fd)
+        if try Self.endsTorn(fd: fd) { buffer.insert(0x0A, at: 0) }
+        try Self.writeAll(fd: fd, buffer, path: url.path)
+        try Self.fullSync(fd, path: url.path)
+        refusedWrites += 1
+    }
+
+    /// How many refused batches this instance wrote (the one-write-per-batch sensor).
+    public private(set) var refusedWrites = 0
+
+
+    /// One refused line with the rule that refused it.
+    public func appendRefused(raw: Data, file: String, offset: Int, reason: String, detail: String) throws {
+        try appendRefused([RefusedRecord(raw: raw, file: file, offset: offset, reason: reason, detail: detail)])
     }
 
     /// The refused records, as written (each a JSON object).
@@ -417,11 +558,9 @@ public final class ObservationJournal: @unchecked Sendable {
         return data.split(separator: 0x0A).compactMap { (try? JSONSerialization.jsonObject(with: Data($0))) as? [String: Any] }
     }
 
-    /// How many lines refused.jsonl holds (newline count).
-    public func refusedCount() -> Int {
-        guard let data = try? Data(contentsOf: directory.appendingPathComponent(Self.refusedFileName)) else { return 0 }
-        return data.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
-    }
+    /// How many refusals refused.jsonl holds (readable records; a sealed
+    /// fragment of a crashed write is not one).
+    public func refusedCount() -> Int { refusedRecords().count }
 
     // MARK: The helper's cache check (§0.7)
 

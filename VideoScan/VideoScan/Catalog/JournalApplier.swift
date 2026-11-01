@@ -22,9 +22,15 @@
 //   * the cursor moves only after its batch committed; a crash between the
 //     commit and the cursor re-reads the batch, and the store's duplicate
 //     check makes that a no-op (apply twice = once);
-//   * a refused line goes to journal/refused.jsonl with its rule (after the
-//     commit, before the cursor — a crash there may write a refused record
-//     twice; it never loses one);
+//   * a refused line goes to journal/refused.jsonl with its rule — one
+//     durable write per batch, off the main actor, after the commit and
+//     BEFORE the cursor; if it cannot be written the cursor stays (Codex #187
+//     F1, F10). A crash between the two may write a refused record twice; it
+//     never loses one;
+//   * the cursor is bound to the file (inode + the hash of the bytes before
+//     it): a replaced or truncated file is replayed from 0 (duplicates are
+//     no-ops) instead of being skipped (F3); an earlier day's torn tail that
+//     has been quiet for 10 minutes is sealed and refused "torn" (F9);
 //   * rule 3 (archived means fixed): step 1's fields — era.yearRange,
 //     era.fused, ocr.date — are OBSERVATIONS, metadata, not the file's name
 //     or date (DECISIONS 2026-11-01), so they are applied on archived
@@ -167,51 +173,99 @@ final class JournalApplier: ObservableObject {
         var pass = PassOutcome()
         pass.rowsBefore = await rowCount(backing)
         pass.rowsAfter = pass.rowsBefore
-        files: for file in await Self.offMain({ journal.dayFiles() }) {
-            var offset = journal.appliedOffset(file)
-            var touched = false
-            while true {
-                if let why = backing.writeRefusal() {
-                    pass.waitingBecause = why
-                    break files
-                }
-                let start = offset
-                guard let read = try? await Self.offMain({ try journal.read(file: file, from: start, maxLines: Self.batchLines) }),
-                      !read.lines.isEmpty else { break }
-                touched = true
-                pass.linesRead += read.lines.count
-                var batch = JournalBatchOutcome()
-                var failure: Error?
-                let refused = backing.write("\(read.lines.count) journal line(s) of \(file)") { tx in
-                    do { batch = try JournalApplication.apply(read.lines, in: tx) } catch { failure = error; throw error }
-                }
-                if let refused {
-                    // The batch rolled back; nothing moves.
-                    pass.linesRead -= read.lines.count
-                    pass.waitingBecause = failure.map { "a line the store refused (\($0))" } ?? refused
-                    break files
-                }
-                pass.applied += batch.applied
-                pass.duplicates += batch.duplicates
-                pass.refused += batch.refused.count
-                for r in batch.refused {
-                    try? journal.appendRefused(raw: r.line.raw, file: file, offset: r.line.offset, reason: r.reason.rawValue, detail: r.detail)
-                }
-                do {
-                    try journal.markApplied(file, offset: read.nextOffset)
-                } catch {
-                    pass.waitingBecause = "the cursor for \(file) could not be written (\(error)) — the batch re-applies as duplicates"
-                    break files
-                }
-                offset = read.nextOffset
-                if read.atEnd { break }
-            }
-            if touched { pass.files += 1 }
+        for file in await Self.offMain({ journal.dayFiles() }) {
+            let replay = await replay(file, journal: journal, backing: backing, into: &pass)
+            if replay.touched { pass.files += 1 }
+            if replay.stopped { break }
         }
         if pass.linesRead > 0 { pass.rowsAfter = await rowCount(backing) }
         report(pass)
         await recount()
         return pass
+    }
+
+    /// One day file from its cursor to its end: batch → commit → refusals →
+    /// cursor. `stopped` = the door or the disk said no; the pass ends there
+    /// and the rest waits.
+    private func replay(_ file: String, journal: ObservationJournal, backing: JournalApplierBacking,
+                        into pass: inout PassOutcome) async -> (touched: Bool, stopped: Bool) {
+        var offset = journal.appliedOffset(file)
+        var touched = false
+        while true {
+            if let why = backing.writeRefusal() {
+                pass.waitingBecause = why
+                return (touched, true)
+            }
+            let start = offset
+            guard let read = try? await Self.offMain({ try journal.read(file: file, from: start, maxLines: Self.batchLines) }) else {
+                return (touched, false)
+            }
+            if read.lines.isEmpty {
+                // Codex #187 F9: an earlier day's abandoned torn tail is refused "torn", never left forever.
+                if let tornAt = read.tornAt, await recoverAbandonedTail(journal, file: file, tornAt: tornAt, into: &pass) { touched = true }
+                return (touched, false)
+            }
+            touched = true
+            if let why = await commitBatch(read, file: file, journal: journal, backing: backing, into: &pass) {
+                pass.waitingBecause = why
+                return (touched, true)
+            }
+            offset = read.nextOffset
+            if read.atEnd {
+                if let tornAt = read.tornAt { _ = await recoverAbandonedTail(journal, file: file, tornAt: tornAt, into: &pass) }
+                return (touched, false)
+            }
+        }
+    }
+
+    /// One batch through the door, then its refusals and its cursor —
+    /// Codex #187 F1 / F10: the refused lines are made durable in ONE write
+    /// off the main actor BEFORE the cursor moves; if that fails the cursor
+    /// stays and the batch re-applies (its rows as duplicates), so no line is
+    /// ever neither applied nor refused. nil = done; else why it stopped.
+    private func commitBatch(_ read: ObservationJournal.ReadResult, file: String, journal: ObservationJournal,
+                             backing: JournalApplierBacking, into pass: inout PassOutcome) async -> String? {
+        var batch = JournalBatchOutcome()
+        var failure: Error?
+        if let refused = backing.write("\(read.lines.count) journal line(s) of \(file)", { tx in
+            do { batch = try JournalApplication.apply(read.lines, in: tx) } catch { failure = error; throw error }
+        }) {
+            return failure.map { "a line the store refused (\($0))" } ?? refused    // rolled back; nothing moves
+        }
+        pass.linesRead += read.lines.count
+        pass.applied += batch.applied
+        pass.duplicates += batch.duplicates
+        pass.refused += batch.refused.count
+        let records = batch.refused.map {
+            ObservationJournal.RefusedRecord(raw: $0.line.raw, file: file, offset: $0.line.offset, reason: $0.reason.rawValue, detail: $0.detail)
+        }
+        let next = read.nextOffset
+        do {
+            try await Self.offMain { try journal.appendRefused(records) }
+        } catch {
+            return "the refused lines of \(file) could not be written (\(error)) — the cursor stays; the batch re-applies as duplicates"
+        }
+        do {
+            try await Self.offMain { try journal.markApplied(file, offset: next) }
+        } catch {
+            return "the cursor for \(file) could not be written (\(error)) — the batch re-applies as duplicates"
+        }
+        return nil
+    }
+
+    /// Seal and refuse an earlier day's abandoned torn tail; true when it did.
+    private func recoverAbandonedTail(_ journal: ObservationJournal, file: String, tornAt: Int, into pass: inout PassOutcome) async -> Bool {
+        do {
+            guard let fragment = try await Self.offMain({ try journal.sealAbandonedTail(file, tornAt: tornAt) }) else { return false }
+            let record = ObservationJournal.RefusedRecord(raw: fragment, file: file, offset: tornAt, reason: "torn",
+                                                          detail: "an earlier day's last line was cut by a crash and never finished")
+            try await Self.offMain { try journal.appendRefused([record]); try journal.markApplied(file, offset: journal.size(of: file)) }
+            pass.refused += 1
+            return true
+        } catch {
+            pass.waitingBecause = "the torn tail of \(file) could not be recovered (\(error))"
+            return false
+        }
     }
 
     private func report(_ pass: PassOutcome) {

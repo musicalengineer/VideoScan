@@ -9,9 +9,10 @@
 //      (PRIMARY KEY probe), else `.contentMissing`;
 //   2. a name or date field on an archived content → `.archivedNameOrDate`
 //      (files_by_digest, then archive_copies' primary key);
-//   3. the same (subject, field, value, by, at) already stored → `.duplicate`
-//      (provenance_assertions_by_subject's prefix, then a filter on by/at);
-//   4. INSERT; `changes() == 0` means the veto trigger ignored it → `.vetoed`.
+//   3. the same WHOLE payload already stored → `.duplicate`
+//      (provenance_assertions_by_subject's prefix, then a filter on the rest);
+//   4. INSERT; a CHECK failure → `.storeRefused` (this row only);
+//      `changes() == 0` means the veto trigger ignored it → `.vetoed`.
 //
 // Memory: one row per call; `provenanceAssertions(subjectKind:subjectID:)`
 // returns one subject's rows (tens).
@@ -48,27 +49,49 @@ extension GRDBTransaction: CatalogProvenanceAssertionWriting {
         if draft.subjectKind == ProvenanceAssertionSubject.content {
             let present = try Int.fetchOne(db, sql: "SELECT count(*) FROM content WHERE digest = ?", arguments: [draft.subjectID]) ?? 0
             guard present == 1 else { return .contentMissing }
-            if ProvenanceAssertionFieldPolicy.isNameOrDate(draft.field) {
-                let archived = try Bool.fetchOne(db, sql: """
-                    SELECT EXISTS (SELECT 1 FROM files f
-                                    WHERE f.content_digest = ?
-                                      AND (f.lifecycle = 'Archived' OR f.archive_stage = 'Archived'
-                                           OR EXISTS (SELECT 1 FROM archive_copies a WHERE a.file_id = f.id)))
-                    """, arguments: [draft.subjectID]) ?? false
-                if archived { return .archivedNameOrDate }
-            }
+            if ProvenanceAssertionFieldPolicy.isNameOrDate(draft.field), try isArchived(draft.subjectID) { return .archivedNameOrDate }
         }
+        // Codex #187 F4: a duplicate is the WHOLE payload again (the journal
+        // line's id covers all of it) — the same (subject, field, value, by,
+        // at) with other evidence or confidence is another observation.
         let duplicate = try Bool.fetchOne(db, sql: """
             SELECT EXISTS (SELECT 1 FROM provenance_assertions
-                            WHERE subject_kind = ? AND subject_id = ? AND field = ? AND value = ? AND by = ? AND at = ?)
-            """, arguments: [draft.subjectKind, draft.subjectID, draft.field, draft.value, draft.by, draft.at]) ?? false
-        if duplicate { return .duplicate }
-        try db.execute(sql: """
-            INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            WHERE subject_kind = ? AND subject_id = ? AND field = ? AND value = ? AND state = ? AND by = ? AND at = ?
+                              AND confidence IS ? AND evidence_json = ?)
             """, arguments: [draft.subjectKind, draft.subjectID, draft.field, draft.value, draft.state, draft.by, draft.at,
-                             draft.confidence, draft.evidenceJSON])
+                             draft.confidence, draft.evidenceJSON]) ?? false
+        if duplicate { return .duplicate }
+        do {
+            try db.execute(sql: """
+                INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [draft.subjectKind, draft.subjectID, draft.field, draft.value, draft.state, draft.by, draft.at,
+                                 draft.confidence, draft.evidenceJSON])
+        } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
+            // Codex #187 F7: a CHECK failure is this row's refusal, not the
+            // batch's — SQLite rolled back only this statement.
+            return .storeRefused(error.message ?? "\(error)")
+        }
         guard db.changesCount == 1 else { return .vetoed }
         return .recorded(seq: db.lastInsertedRowID)
+    }
+
+    /// Archived = any file of the content promoted (lifecycle / stage
+    /// Archived, an archive copy) OR at or under the designated Master
+    /// Archive root (Codex #187 F6: a file scanned inside the archive with
+    /// Cataloged / None flags is still the archive's).
+    private func isArchived(_ digest: String) throws -> Bool {
+        try Bool.fetchOne(db, sql: """
+            SELECT EXISTS (SELECT 1 FROM files f
+                            WHERE f.content_digest = ?1
+                              AND (f.lifecycle = 'Archived' OR f.archive_stage = 'Archived'
+                                   OR EXISTS (SELECT 1 FROM archive_copies a WHERE a.file_id = f.id)
+                                   OR EXISTS (SELECT 1 FROM catalog_state s
+                                               WHERE s.singleton = 1 AND json_valid(s.master_archive)
+                                                 AND length(json_extract(s.master_archive, '$.rootPath')) > 1
+                                                 AND (f.full_path = json_extract(s.master_archive, '$.rootPath')
+                                                      OR (f.full_path >= json_extract(s.master_archive, '$.rootPath') || '/'
+                                                          AND f.full_path < json_extract(s.master_archive, '$.rootPath') || '0')))))
+            """, arguments: [digest]) ?? false
     }
 }

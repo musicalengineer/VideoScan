@@ -395,6 +395,7 @@
       ],
       "tests": [
         "anUnknownTableIsRefused",
+        "codex187F7UnsupportedSubjectIsRefused",
         "everyLineLandsInExactlyOneBucketWithItsRule",
         "oneHundredThousandLinesInBatchesOf256WithinTheMainActorBudget"
       ]
@@ -409,6 +410,12 @@
       "tests": [
         "aTornLastLineIsIgnoredReportedAndSealedByTheNextAppend",
         "anEditedLineIsCaughtByItsId",
+        "codex187F1UnwritableRefusalThrows",
+        "codex187F2TornRefusalTailIsSealed",
+        "codex187F3CursorBoundToTheFile",
+        "codex187F5UnsignedMaxIsRefused",
+        "codex187F8HugeLineIsPassed",
+        "codex187F9EarlierDayTornTailIsSealed",
         "confidenceIsClampedAndBadEvidenceIsRefused",
         "garbageAndOversizedLinesAreInvalidAndTheReaderMovesPast",
         "oneHundredThousandLinesWriteAndPageInsideABudget",
@@ -3998,6 +4005,9 @@
         "aSchemaThirteenDatabaseOpensAsFourteenWithEveryContentRowIntact",
         "anObservationLandsAndTheSameLineTwiceIsOneRow",
         "anObservationLandsOnAnArchivedContentButANameOrDateDoesNot",
+        "codex187F4DistinctEvidenceIsNotADuplicate",
+        "codex187F6ArchiveRootCounts",
+        "codex187F7StoreRefusalIsPerLine",
         "rickRejectingAValueVetoesItsReProposalAndAConfirmLiftsIt",
         "theFieldPolicyNamesObservationsAndNamesOrDates",
         "theTableIsAppendOnlyAndItsChecksHold"
@@ -24957,19 +24967,23 @@
       "stage": "unit",
       "suites": [
         "JournalApplierTruthTests",
+        "JournalApplierCodex187Tests",
         "JournalApplierWriterTests",
         "JournalApplierSensorTests"
       ],
       "tests": [
         "acrossAViewerMasterFlip",
+        "anAbandonedTornTailIsRefused",
         "applyTwiceIsOnce",
         "duringAWriteHold",
         "garbageAndTornTail",
         "insideTheDebounceWindow",
         "launchPassAppliesAndSays",
         "onlyTheDoor",
+        "refusalsAreOneWritePerBatch",
         "refusedLinesLandWithTheirRule",
-        "relaunchAppliesWhatWaited"
+        "relaunchAppliesWhatWaited",
+        "unwritableRefusalsKeepTheCursor"
       ]
     },
     {
@@ -35051,9 +35065,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3086,
+      "expected_floor": 3089,
       "name": "unit",
-      "package_expected_floor": 584,
+      "package_expected_floor": 591,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35388,6 +35402,7 @@
         "VideoScanTests/InspectorPanelRulesTests",
         "VideoScanTests/InspectorPanelSectionOrderTests",
         "VideoScanTests/JobLifecycleUncoveredPathsTests",
+        "VideoScanTests/JournalApplierCodex187Tests",
         "VideoScanTests/JournalApplierSensorTests",
         "VideoScanTests/JournalApplierTruthTests",
         "VideoScanTests/JournalApplierWriterTests",
