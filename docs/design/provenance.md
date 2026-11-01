@@ -1,10 +1,10 @@
 # Provenance — what each file is and where it came from
 
-Status: in flight — 2026-11-01. Built: Provenance ▸ Set Role (schema v13 `provenance_roles`, its one writer; Codex merge 10/26) and Phase A, Find Master by sound (`VideoScan/Provenance/`). Landed with background step 1: schema v14 `provenance_assertions` with the veto trigger, exactly the C2 table of Part I §v14 (approved 2026-11-01). Not built: the carrier / capture-setup / capture-event tables (their own migration, later), Phase B picture timeline, Phases C–E; Phase F is cut. Open rulings: STATUS "Open rulings wanted" items 1–2.
+Status: in flight — 2026-11-01. Built: Provenance ▸ Set Role (schema v13 `provenance_roles`, its one writer; Codex merge 10/26) and Phase A, Find Master by sound (`VideoScan/Provenance/`). Landed with background step 1: schema v14 `provenance_assertions` with the veto trigger, exactly the C2 table and nothing else (approved 2026-11-01; Part I "Data model ▸ Shipped"). Not built: the carrier / capture-setup / capture-event tables (their own migration, later), Phase B picture timeline, Phases C–E; Phase F is cut. Open rulings: STATUS "Open rulings wanted" items 1–2.
 
 Every master in the archive should know its story — which tape it came from, when and how it was digitized, what kind of copy it is — captured once, by Rick, not reconstructed later (Part II, 10/22). Part I (10/26) is the design built on that: retroactive provenance for the files already catalogued, from the engines that already exist (sound and picture prints, the DV datecode, the 8B era witness), every value carrying its state (`inferred · confirmed · corrected · rejected`) and a trigger that refuses to re-propose a rejected value. What each role means, in Rick's words, is `docs/guides/provenance_roles.md`.
 
-**Contents:** Part I — Provenance, retroactive (design, 2026-10-26) · Part II — Provenance, lightweight (the 10/22 draft: records, workflow, logging; superseded where Part I §"Where this supersedes the 10/22 lightweight design" says) · Part III — The research it rests on (summaries; originals archived).
+**Contents:** Part I — Provenance, retroactive (design, 2026-10-26) · Part II — a pointer to the archived 10/22 lightweight draft · Part III — The research it rests on (summaries; originals archived).
 
 # Part I — Provenance, retroactive (design, 2026-10-26)
 
@@ -62,7 +62,7 @@ confirmation").
 | Manifest v4 columns | `Provenance.csv` beside the v3 manifest | ruled 2026-10-23 |
 | `file_provenance` carries a carrier column and an inferred/confirmed bit | carrier links are `carrier_spans` (ranges, several tapes per file, several files per tape); machine drafts live in `provenance_assertions` with a state per field | 10/23 deep dive; one bit cannot hold who said so, the correction, or the veto |
 | "FFV1 · 720×480 · 29.97 → VHS" | folder + encoder (`Lavf61.7.100`, 1280×720p30) + birth date | the old rule matches zero July files |
-| Schema "v13" for all provenance tables | v13 = `picture_prints` (Phase B), v14 = provenance tables (Phase C) | B ships before C; each migration gets its own approval and its own rollback-free proof |
+| Schema "v13" for all provenance tables | shipped: v13 = `provenance_roles`, v14 = `provenance_assertions` only; `picture_prints` (B), `content_excerpts` (C1) and the carrier tables (C2) each wait for their own migration | each migration gets its own approval and its own rollback-free proof |
 | "SHA-256 match to an existing Master inherits provenance" | kept for byte-identical copies; a **proven excerpt** (sound/picture) is only *evidence* shown on the sheet, never inheritance | similarity never creates lineage (2026-09-23) |
 
 Everything else in 10/22 (Ingest → Identify → Confirm → Archive, logging, born-digital has no tape, confirm per tape)
@@ -110,184 +110,39 @@ Open/close/WAL rules (the audio store's, plus the 10/26 rulings), for every side
 
 ## Data model — schema changes (all additive; **each needs Rick's approval**, rule 6)
 
-Phase A: **none.** Phase B: v13. Phase C: v14. Ledger kinds (`captured`, `carrierInspected`, `provenanceConfirmed`,
-`transferSuperseded`, `excerptConfirmed`) are values in `ledger.kind` (plain TEXT), appended at the end of
-`MediaLedgerEvent.Kind` — no migration.
+Ledger kinds (`captured`, `carrierInspected`, `provenanceConfirmed`, `transferSuperseded`, `excerptConfirmed`) are
+values in `ledger.kind` (plain TEXT), appended at the end of `MediaLedgerEvent.Kind` — no migration.
 
-### v13 `v8_picture_prints` (Phase B) — needs Rick's approval
+### Shipped
 
-```sql
--- The catalog's stamp for a v2 picture timeline; the hashes stay in picture-prints.sqlite.
--- Mirrors sound_prints. The 4 v1 rows in perceptual_prints are left as they are.
-CREATE TABLE picture_prints (
-  digest          TEXT PRIMARY KEY NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
-  engine_version  INTEGER NOT NULL CHECK (engine_version >= 2),
-  outcome         TEXT    NOT NULL CHECK (outcome IN ('fingerprinted','noPicture')),
-  seconds         INTEGER NOT NULL CHECK (seconds >= 0),          -- timeline length
-  usable_seconds  INTEGER NOT NULL CHECK (usable_seconds BETWEEN 0 AND seconds),  -- quality >= 50
-  complete        INTEGER NOT NULL CHECK (complete IN (0,1)),
-  crop            TEXT,                                           -- 'w:h:x:y' applied; NULL = none
-  computed_at     INTEGER NOT NULL,
-  sidecar_key     TEXT NOT NULL GENERATED ALWAYS AS ('sha256:' || digest) VIRTUAL,
-  CHECK (outcome = 'fingerprinted' OR (seconds = 0 AND usable_seconds = 0))
-) STRICT;
-```
+| Schema | Migration | What | Approved | DDL (the source of truth) |
+|---|---|---|---|---|
+| v13 | `v8_provenance_roles` | `provenance_roles`: digest → role, decided_at, source_missing, note; append-only; newest row per digest is the role; no row = Unknown. Written only by Provenance ▸ Set Role through the commit door. | Rick 2026-10-26 | `docs/design/catalog_sqlite_schema_v1.sql` §17 |
+| v14 | `v9_provenance_assertions` | `provenance_assertions` with the veto trigger and the two append-only triggers — the C2 table, nothing else (DECISIONS 2026-11-01). Background step 1 writes machine observations into it (`era.yearRange`, `era.fused`, `ocr.date`, state `inferred`, by `machine:<approach id>@r<revision>`) through the app's `JournalApplier`. | Rick 2026-11-01 | `docs/design/catalog_sqlite_schema_v1.sql` §18 (`CatalogDataSchemaTests` diffs it against `CatalogProvenanceAssertionsSchema.swift`) |
 
-A failed decode is **not** stamped (listed on the job, retried next run), as for sound.
+**v14, the assertions table, in one paragraph.** One row per (subject, field, value) claim, append-only: the machine
+*infers* (with a required confidence, kept for calibration, never shown); only the catalog's owning user (the literal
+`'rick'`, DECISIONS 2026-11-01) *confirms, corrects or rejects*. The veto trigger silently ignores (`RAISE(IGNORE)`, so a
+batch survives) an inferred value whose latest human decision on that same (subject, field, value) is `rejected`; the
+writer reads `changes() == 0` and logs "vetoed". UPDATE and DELETE are refused: the history is the table. The pattern is
+the one the catalog uses for dates (`user_dates` beside `inferred_dates`): typed tables will hold what Rick confirmed,
+`provenance_assertions` holds every machine draft, every human decision and every veto; display = the typed value if
+Rick set it, else the best inferred assertion no rejection vetoes (`ProvenanceResolver`, pure, Phase C2). Until those
+typed tables exist, an assertion is shown only as its own labelled line, never as the fact (DECISIONS 2026-11-01).
 
-Sidecar `picture-prints.sqlite` (not a catalog migration; versioned by its own `schema` table):
+### Designed, not built (each its own migration, number and approval)
 
-```sql
-CREATE TABLE schema (version INTEGER NOT NULL);           -- 1
-CREATE TABLE prints (
-  content_digest TEXT    NOT NULL,                        -- 'sha256:<hex>' only
-  size_bytes     INTEGER NOT NULL,
-  engine_version INTEGER NOT NULL,
-  recipe_id      INTEGER NOT NULL,                        -- FNV-1a over every knob, as audio
-  computed_at    INTEGER NOT NULL,
-  source_path    TEXT    NOT NULL,
-  seconds        INTEGER NOT NULL,
-  complete       INTEGER NOT NULL,
-  crop           TEXT,
-  blob           BLOB    NOT NULL,                        -- "VSPT" v1: header, then per second: hash 32 B + quality u8
-  PRIMARY KEY (content_digest, size_bytes, engine_version)
-) WITHOUT ROWID;
-```
+| Table | Phase | What |
+|---|---|---|
+| `picture_prints` | B | The catalog stamp for a v2 picture timeline (mirrors `sound_prints`); the hashes live in the sidecar `picture-prints.sqlite`. |
+| `content_excerpts` | C1 | Append-only machine evidence that one content lies inside / equals / overlaps another; no direction (2026-09-23). |
+| `capture_setups`, `carriers`, `capture_events`, `carrier_spans`, `file_provenance` | C2 | The confirmed records, 10/23 deep-dive shape; rows never deleted; a correction updates the typed row and appends `rejected`(old) + `corrected`(new) assertions in one commit. |
 
-### v14 `v9_provenance` (Phase C) — needs Rick's approval
-
-The pattern is the one the catalog already uses for dates (`user_dates` beside `inferred_dates`): **typed tables hold
-what Rick confirmed; `provenance_assertions` holds every machine draft, every human decision and every veto, append-only.**
-Confirming writes both in one commit. Display = the typed value if Rick set it, else the best inferred assertion that
-no rejection vetoes (`ProvenanceResolver`, pure).
-
-```sql
--- C1: machine evidence that one content's picture/sound lies inside (or equals, or overlaps) another's.
--- No direction: 'inner'/'outer' are geometry, not generation (ruling 2026-09-23).
-CREATE TABLE content_excerpts (
-  seq            INTEGER PRIMARY KEY,
-  inner_digest   TEXT NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
-  outer_digest   TEXT NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
-  verdict        TEXT NOT NULL CHECK (verdict IN ('same','contained','overlap')),
-  proof          TEXT NOT NULL CHECK (proof IN ('sound','picture','both')),
-  inner_start_s  REAL NOT NULL, inner_end_s REAL NOT NULL,
-  outer_start_s  REAL NOT NULL, outer_end_s REAL NOT NULL,
-  offset_s       REAL NOT NULL,                 -- inner's t=0 in outer's timeline
-  coverage       REAL NOT NULL CHECK (coverage BETWEEN 0 AND 1),
-  matched        INTEGER NOT NULL CHECK (matched >= 0),   -- landmarks or seconds
-  sound_recipe   INTEGER,                        -- AudioFingerprint recipeID
-  picture_engine INTEGER,                        -- picture_prints.engine_version
-  found_at       INTEGER NOT NULL,
-  CHECK (inner_digest <> outer_digest),
-  CHECK (inner_start_s < inner_end_s AND outer_start_s < outer_end_s),
-  CHECK (verdict = 'contained' OR inner_digest < outer_digest),        -- one canonical row for symmetric verdicts
-  CHECK ((proof = 'picture') = (sound_recipe IS NULL)),
-  CHECK ((proof = 'sound') = (picture_engine IS NULL)),
-  UNIQUE (inner_digest, outer_digest, proof, sound_recipe, picture_engine)
-) STRICT;
-CREATE INDEX content_excerpts_by_outer ON content_excerpts(outer_digest);
-CREATE TRIGGER content_excerpts_no_update BEFORE UPDATE ON content_excerpts
-BEGIN SELECT RAISE(ABORT, 'content_excerpts is append-only evidence'); END;
-CREATE TRIGGER content_excerpts_no_delete BEFORE DELETE ON content_excerpts
-BEGIN SELECT RAISE(ABORT, 'content_excerpts is append-only evidence'); END;
-
--- C2: every value the machine proposes or Rick decides, per field, append-only.
-CREATE TABLE provenance_assertions (
-  seq           INTEGER PRIMARY KEY,
-  subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('content','carrier','captureEvent','captureSetup','excerpt')),
-  subject_id    TEXT NOT NULL,                  -- digest hex, or the entity's UUID
-  field         TEXT NOT NULL,                  -- 'role','carrier','tapeYear','format','digitizedOn','excerptOf',…
-  value         TEXT NOT NULL,
-  state         TEXT NOT NULL CHECK (state IN ('inferred','confirmed','corrected','rejected')),
-  by            TEXT NOT NULL CHECK (by = 'rick' OR by GLOB 'machine:*'),  -- 'machine:<engine>:<version>'
-  at            INTEGER NOT NULL,
-  confidence    REAL CHECK (confidence BETWEEN 0 AND 1),
-  evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
-  CHECK ((state = 'inferred') = (by GLOB 'machine:*')),            -- only the machine infers; only Rick decides
-  CHECK (state <> 'inferred' OR confidence IS NOT NULL)
-) STRICT;
-CREATE INDEX provenance_assertions_by_subject
-  ON provenance_assertions(subject_kind, subject_id, field, value, seq);
--- The veto: a value whose latest human decision is 'rejected' can never be re-proposed.
--- IGNORE (not ABORT) so a batch of drafts survives; the writer reads changes() and logs "vetoed".
-CREATE TRIGGER provenance_assertions_veto BEFORE INSERT ON provenance_assertions
-WHEN NEW.state = 'inferred' AND (
-  SELECT state FROM provenance_assertions
-   WHERE subject_kind = NEW.subject_kind AND subject_id = NEW.subject_id
-     AND field = NEW.field AND value = NEW.value AND state <> 'inferred'
-   ORDER BY seq DESC LIMIT 1) = 'rejected'
-BEGIN SELECT RAISE(IGNORE); END;
-CREATE TRIGGER provenance_assertions_no_update BEFORE UPDATE ON provenance_assertions
-BEGIN SELECT RAISE(ABORT, 'provenance_assertions is append-only'); END;
-CREATE TRIGGER provenance_assertions_no_delete BEFORE DELETE ON provenance_assertions
-BEGIN SELECT RAISE(ABORT, 'provenance_assertions is append-only'); END;
-
--- C2: the confirmed records (10/23 deep dive shape). Rows are never deleted; a correction updates the
--- typed row AND appends 'rejected'(old) + 'corrected'(new) assertions in the same commit.
-CREATE TABLE capture_setups (
-  setup_id        TEXT PRIMARY KEY NOT NULL,
-  name            TEXT NOT NULL,
-  coding_history  TEXT NOT NULL,                -- EBU R98 lines, one per stage
-  software        TEXT, operator TEXT,
-  active_from     INTEGER, active_to INTEGER,
-  created_at      INTEGER NOT NULL
-) STRICT, WITHOUT ROWID;
-CREATE TABLE carriers (
-  carrier_id      TEXT PRIMARY KEY NOT NULL,
-  shelf_number    TEXT UNIQUE,                  -- Rick's label on the cassette; the human key
-  format          TEXT NOT NULL CHECK (format IN ('VHS','VHS-C','S-VHS','Hi8','Video8','Digital8','MiniDV','DV',
-                    'Betamax','DVD','8mm film','Super 8mm film','Audio cassette','other','unknown')),
-  format_detail   TEXT,
-  generation      TEXT NOT NULL DEFAULT 'Original' CHECK (generation IN ('Original','Dub','Duplicate','unknown')),
-  label_text      TEXT,
-  label_photo_digest TEXT REFERENCES content(digest) ON DELETE RESTRICT,
-  tape_year       INTEGER CHECK (tape_year BETWEEN 1900 AND 2100),
-  year_label      TEXT,
-  videographer    TEXT,
-  kept            INTEGER CHECK (kept IN (0,1)),
-  condition       TEXT CHECK (condition IN ('good','fair','poor','damaged','unknown')),
-  condition_notes TEXT,
-  inspected_at    INTEGER,
-  created_at      INTEGER NOT NULL
-) STRICT, WITHOUT ROWID;
-CREATE TABLE capture_events (
-  event_id        TEXT PRIMARY KEY NOT NULL,
-  carrier_id      TEXT NOT NULL REFERENCES carriers(carrier_id) ON DELETE RESTRICT,
-  setup_id        TEXT REFERENCES capture_setups(setup_id) ON DELETE RESTRICT,
-  captured_at     INTEGER, captured_until INTEGER,
-  take            INTEGER NOT NULL DEFAULT 1 CHECK (take >= 1),
-  signal_notes    TEXT,
-  created_at      INTEGER NOT NULL,
-  CHECK (captured_until IS NULL OR captured_at <= captured_until)
-) STRICT, WITHOUT ROWID;
-CREATE INDEX capture_events_by_carrier ON capture_events(carrier_id);
-CREATE TABLE carrier_spans (
-  digest           TEXT NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
-  carrier_id       TEXT NOT NULL REFERENCES carriers(carrier_id) ON DELETE RESTRICT,
-  capture_event_id TEXT REFERENCES capture_events(event_id) ON DELETE RESTRICT,
-  file_start_s     REAL NOT NULL, file_end_s REAL NOT NULL,
-  confirmed_at     INTEGER NOT NULL,
-  CHECK (file_start_s >= 0 AND file_start_s < file_end_s),
-  PRIMARY KEY (digest, carrier_id, file_start_s)
-) STRICT, WITHOUT ROWID;
-CREATE INDEX carrier_spans_by_carrier ON carrier_spans(carrier_id);
-CREATE TABLE file_provenance (
-  digest               TEXT PRIMARY KEY NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
-  role                 TEXT NOT NULL CHECK (role IN ('preservation','access','edit','test','bornDigital','unknown')),
-  digitized_on         INTEGER,
-  superseded_by_digest TEXT REFERENCES content(digest) ON DELETE RESTRICT,
-  superseded_reason    TEXT,
-  confirmed_at         INTEGER NOT NULL,
-  CHECK (superseded_by_digest IS NULL OR superseded_by_digest <> digest),
-  CHECK ((superseded_by_digest IS NULL) = (superseded_reason IS NULL))
-) STRICT, WITHOUT ROWID;
-CREATE TRIGGER carriers_no_delete BEFORE DELETE ON carriers
-BEGIN SELECT RAISE(ABORT, 'carriers rows are never deleted'); END;
--- (same no_delete trigger on capture_setups, capture_events, carrier_spans, file_provenance)
-```
-
-Role codes are ours; `Provenance.csv` writes the PBCore word beside each (`preservation` → `Preservation`, `access` →
-`Copy: Access`, `edit` → `Master: production`, `test` → `Work tapes`, `bornDigital` → `Original`).
+The draft DDL for all of them, as written on 10/26 (when it was numbered v13 / v14), is archived verbatim at
+`docs/archive/design/provenance_schema_draft_2026_10_26.md`; treat it as a starting point for each migration's
+approval, not as approved text. Role codes are ours; `Provenance.csv` writes the PBCore word beside each
+(`preservation` → `Preservation`, `access` → `Copy: Access`, `edit` → `Master: production`, `test` → `Work tapes`,
+`bornDigital` → `Original`).
 
 ## Phase A — Provenance ▸ Find Master, by sound (implementation-ready)
 
@@ -498,7 +353,7 @@ checkpoints, sidecar first then the `picture_prints` stamp; order FamilyArchive 
 the rest. Find Master gains picture: the finder runs both and reports proof `sound`, `picture` or `both` (offsets
 agree within 1 s). Disagreeing offsets → "inconclusive: sound and picture disagree", never a pick.
 
-**Schema.** v13 `picture_prints` (above) — needs approval.
+**Schema.** `picture_prints` ("Data model ▸ Designed, not built") — its own migration, needs approval.
 
 **Cost (derived; B0 measures three files per codec family before promising).** Decode dominates; the hash is
 microseconds per frame. At 30 fps an hour is 108k decoded frames:
@@ -527,7 +382,7 @@ Truth: a `noPicture` stamp only from a measured decode; quality-≤ 49 seconds n
 
 Three shippable slices; C2 and C3 are the 10/22 design's phases 1 and 2.
 
-**C1. Excerpt evidence (schema v14, the `content_excerpts` part).** Job: **"Find Masters for All…"** (Catalog menu) —
+**C1. Excerpt evidence (`content_excerpts`, its own migration).** Job: **"Find Masters for All…"** (Catalog menu) —
 runs the A/B finder for every sounded or pictured content, archived first, and appends one `content_excerpts` row per
 non-`different` verdict through `CatalogCommitter` (checkpoint every 100 contents; Stop finishes the current one).
 Re-runs insert-or-ignore on the unique key, so they are idempotent. Cost: the A index once (5 s) + ≤ 1 s per
@@ -536,7 +391,7 @@ insert inside the debounce window, during a write hold, across a role flip, then
 once; the no-update/no-delete triggers seen to refuse; 100k-content plan; the Clip 03 worked example (10/23 §4) as a
 truth test: it must find only its byte copies, nothing else.
 
-**C2. Assertions, drafts and the Provenance sheet (rest of v14).** `ProvenanceStore` (feature store, #337),
+**C2. Assertions, drafts and the Provenance sheet (`provenance_assertions` shipped in v14; the carrier tables in a later migration).** `ProvenanceStore` (feature store, #337),
 `ProvenanceResolver` (pure display rule), `ProvenanceDraftJob` (MFO: writes `inferred` assertions from the 10/23 §4
 rules — July folder + encoder + birth date, born-digital make/model, `YYYY-MM-DD_HH-MM-SS` names, excerpts from C1 as
 `excerptOf` with the excerpt's numbers as evidence). The sheet, Triage ▸ **Needs provenance** filter, grouped by
@@ -619,108 +474,12 @@ Cloud models of any kind for family media (rule 13). Writing tags into archived 
 | FFV1 decode slower than estimated | B0 measurement before the overnight; one lane per drive regardless |
 | Static-scene false positives in picture | Coincidence bound, quality filter, sound tie-break, explicit negative fixtures |
 | Charter §2.2 wants a provenance gate at **ingest**; 10/22 put it at **Promote** | Open Charter question on STATUS; C2/C3 use one `ProvenanceGate.isComplete` so either place calls the same check |
-| Schema v13/v14 rejected or reshaped | A ships without them; B and C each wait on their own approval |
+| A later provenance migration rejected or reshaped | A ships without one; B and C each wait on their own approval |
 | Sidecars not in backups | Check the backup job in B; issue if missing |
 
-# Part II — Provenance, lightweight (draft for Rick's markup, 2026-10-22)
+# Part II — Provenance, lightweight (2026-10-22): archived
 
-*From `design/provenance_lightweight_2026_10_22.md`, whole; archived at `docs/archive/design/`. Where Part I disagrees, Part I (10/26) and DECISIONS win.*
-
-
-**In one sentence (Rick's words):** every master in the archive knows its story —
-which tape it came from, when and how it was digitized, and what kind of copy it is —
-and the app walks me through Ingest → Identify → Confirm → Archive so that story is
-captured once, by me, not reconstructed later.
-
-Borrowed, not adopted: the *shape* of PBCore (one tape, many files, each with a role)
-and PREMIS (a dated event log with who/what did it). We implement neither standard in full.
-
-### What exists today (so we don't duplicate it)
-
-- **Event log = the media ledger** (`MediaLedger.swift`, mirrored to `00_Index/media-ledger.jsonl`
-  on every Promote). It already records `archived`, `dateSet`, `placeSet`… This is our PREMIS half.
-- **Per-content user metadata** is already keyed by SHA-256 (`user_dates`, `user_notes`,
-  `workflow_tags`, `people_tags` … in `CatalogDataSchema+Knowledge.swift`). Provenance follows the same rule.
-- **Promote** asks for a name and a date only; the manifest (`Archive_Inventory_Manifest.csv`, v3)
-  has no source/carrier/role columns.
-- **Missing entirely:** tape (carrier), capture event, file role. `tapeName` in `probe_extra` is the Avid
-  tape *name*, not a physical-tape record.
-
-### The records (schema v13, additive only)
-
-| Table | Keyed by | Fields | Borrowed from |
-|---|---|---|---|
-| `carriers` — the physical tape/film/disc | UUID | format (VHS, VHS-C, S-VHS, Hi8, Video8, MiniDV, Betamax, 8mm film, Super 8, audio cassette, other), label text (as written on it), shelf number (what you write on the cassette), condition, notes | PBCore physical instantiation |
-| `capture_events` — one digitizing session | UUID → carrier | captured on (date, or range), device chain (one line: "JVC HR-S9911U → TBC → Blackmagic UltraStudio → vrecord FFV1/MKV"), who, notes ("dropouts at 12:40") | PREMIS event + BWF coding history |
-| `file_provenance` — one row per content | SHA-256 | role (preservation master · viewing copy · edit · test · born digital · unknown), carrier, capture event, **inferred / confirmed**, evidence (why the app guessed it) | PBCore generation |
-
-Cut on purpose: a separate "asset/work" level. For home video one tape ≈ one asset; the events on it
-are already covered by dates, places, people and notes.
-
-**Born-digital files** (iPhone, digital camcorder files) have no tape: role = born digital, and the
-"device chain" is the camera make/model already in `probe_extra`.
-
-### The workflow
-
-| Step | Where | What happens |
-|---|---|---|
-| **Ingest** | scan / import — unchanged, no gate | technical facts + SHA-256, as today |
-| **Identify** | Triage ▸ new filter **Needs provenance** (derived, like *Cleaned*) | video files with no confirmed provenance, newest captures first. The app drafts carrier, capture date, role, with the evidence shown |
-| **Confirm** | a **Provenance sheet**, grouped by proposed tape | filmstrip for each file (just merged), the drafts, editable; *Confirm tape* marks all its files confirmed. Ledger events `captured`, `provenanceConfirmed` |
-| **Archive** | Promote | refuses a file whose role/carrier isn't confirmed — with an **"Archive with provenance unknown"** override that requires a reason and is logged (same pattern as "Promote undated"). Manifest v4 adds `role, carrier_id, carrier_label, carrier_format, captured_on, device_chain`; `00_Index/Carriers.csv` lists the tapes |
-
-### Backfill (the July VHS batch, and the 198 existing Masters)
-
-Same Identify → Confirm path; the drafts just lean on more evidence:
-
-- **carrier**: one per capture folder (`Cape-1993`, `Christmas1994`, `Montana`…), label = folder name until you edit it
-- **captured on**: file birth time (Jul 2–17, 2026)
-- **format**: FFV1 · 720×480 · 29.97 → "VHS (NTSC)", marked inferred
-- **role**: biggest FFV1/MKV in the folder = preservation master; `P216_*`, `_prob4` = test; `.vs.edit` = edit
-- **link to the archive**: SHA-256 match to an existing Master → that Master inherits the confirmed provenance
-
-Adding provenance to an **already-archived** Master is adding metadata, not changing its name, date
-or bytes — allowed by the archived-is-read-only rule. 🔴 But it means **rewriting manifest rows
-in `00_Index`** for those Masters (v3 → v4). That needs your OK; the alternative is a separate
-`00_Index/Provenance.csv` keyed by SHA-256 that leaves the v3 manifest untouched.
-
-### Logging (Rick, 10/22: "a good log is always part of the best practices")
-
-The catalog is the truth and `Provenance.csv` the archive's copy, but every provenance change is also
-logged plainly, through the one sink (console, catalog.log, videoscan.log), plus a ledger event:
-
-- **At ingest of new media:** `START provenance draft — 3 new captures in Converted_VHS_Tapes_2027/Cape-1996`,
-  then one line per file: what the machine inferred, from what evidence, with what confidence.
-- **Every assertion change:** field, old → new, state (inferred → confirmed / corrected / rejected),
-  who (Rick / machine rule + version), and the evidence. A rejection is logged with the value it forbids.
-- **Promote:** the provenance that went into the archive, and whether it was confirmed or archived-unknown (with the reason).
-- **OUTCOME** line per batch: N confirmed · N corrected · N rejected · N still inferred.
-
-### Phases
-
-1. Schema v13 + Needs-provenance filter + Provenance sheet + July backfill drafts. *(Rick confirms ~15 tapes.)*
-2. Promote gate + manifest v4 (or Provenance.csv) + `Carriers.csv`. Codex pass — this writes the archive index.
-3. Capture-time help: "New captures" nudge, a viewing proxy (H.264) made at ingest so big FFV1 files are
-   easy to skim and click-to-time playback works in-app.
-
-### References to read before building (Rick found the index, 10/22)
-
-[amiaopensource/open-workflows](https://github.com/amiaopensource/open-workflows) — AMIA's curated list
-of A/V archiving workflows (CC0). The entries that matter to us:
-
-- **Living Will for Home Movies** — provenance, ownership and stewardship for exactly our kind of collection.
-- **vrecord** — AMIA's open-source analog capture tool (FFV1/MKV + capture log + QCTools report): the model for phase 3.
-- **analog-inspection** (sibling repo) — tape inspection templates: what to record about a carrier before capture.
-- **Capturing and Archiving MiniDV Tapes on macOS**, **The Video Guide** — device-chain and format vocabulary.
-- **NYPL media-ingest / WGBH ingest** — how real archives stage Ingest → Archive.
-- **QCTools, MediaConch** — post-capture QC; a later phase, not this one.
-
-### Questions for Rick
-
-1. Manifest: rewrite to v4, or add a separate `Provenance.csv`? *(I lean Provenance.csv: never rewrite the archive's main index for an additive feature.)*
-2. Is the role list right? (preservation master · viewing copy · edit · test · born digital · unknown)
-3. Should the Promote gate be hard (refuse, override with reason) or soft (warn only) for the first month?
-4. Device chain for July: what deck, TBC and capture card/software did you use? One line is enough; it applies to the whole batch.
+The 10/22 draft (records, workflow, backfill, logging, its questions) is archived whole at `docs/archive/design/provenance_lightweight_2026_10_22.md`. Part I §"Where this supersedes the 10/22 lightweight design" lists what changed; everything else in it (Ingest → Identify → Confirm → Archive, the logging lines, born-digital has no tape, confirm per tape) stands and is Phase C.
 
 # Part III — The research it rests on
 

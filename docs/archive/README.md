@@ -95,7 +95,7 @@ Three kinds of retirement live here. Nothing is ever deleted; git has every revi
 | `design/m4_staging_gate_2026_10_28.md` | `docs/design/m4_staging_gate_2026_10_28.md` | The M4 deep-test host design (2026-10-28; built as `scripts/m4_run.sh`). | Whole text in `docs/guides/operations.md` §"The M4 deep-test host". |
 | `guides/archive_angel_policy.md` | `docs/guides/archive_angel_policy.md` | The Archive Angel recommendation policy (schema 2): the JSON rule set and its worked examples. | Whole text in `docs/guides/media-archive.md` §"Archive Angel recommendation policy". |
 | `design/models.md` | `docs/design/models.md` | The one list of models (2026-10-31). | Whole text in `docs/design/machine_intelligence.md` Part II "Models — the one list". |
-| `design/provenance_lightweight_2026_10_22.md` | `docs/design/provenance_lightweight_2026_10_22.md` | Provenance, lightweight — the 10/22 records and workflow draft. | Whole text in `docs/design/provenance.md` Part II. |
+| `design/provenance_lightweight_2026_10_22.md` | `docs/design/provenance_lightweight_2026_10_22.md` | Provenance, lightweight — the 10/22 records and workflow draft. | Its whole text was `docs/design/provenance.md` Part II until 2026-11-01, when the Codex docs review (F02) cut that copy; this file is now the only one, and Part II is a pointer here. |
 | `design/audit_archive_2026_10_15.md` | `docs/design/audit_archive_2026_10_15.md` | Audit Archive — an overnight health check of the Master Archive (proposed 2026-10-15). | Whole text in `docs/design/cleanup_and_operations.md` Part II. |
 | `design/vsm_split_plan_2026_10_19.md` | `docs/design/vsm_split_plan_2026_10_19.md` | Splitting `VideoScanModel` (#337): scope, slices, estimate; waiting on Rick's go. | Whole text in `docs/design/cleanup_and_operations.md` Part III. |
 | `design/analyze_knowledge_and_storage_actions_2026-10-02.md` | `docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md` | Analyze, Knowledge and Storage Actions — the workflow redesign (proposed 2026-10-02; parts built). | Whole text in `docs/design/catalog.md` Part II. |
@@ -135,3 +135,12 @@ Three kinds of retirement live here. Nothing is ever deleted; git has every revi
 - `docs/design/provenance_retroactive_2026_10_26.md` → `docs/design/provenance.md` — Renamed to `docs/design/provenance.md`; the 10/22 lightweight design appended as Part II.
 - `docs/design/cleanup_proposal_2026_10_31.md` → `docs/design/cleanup_and_operations.md` — Renamed to `docs/design/cleanup_and_operations.md`, Part I; the other operations proposals follow it.
 - `docs/guides/hallie.md` → `docs/design/hallie.md` — Moved to `docs/design/hallie.md` (Hallie's one subsystem doc); her purpose and the benchmarks joined it.
+
+## Cut from live docs, 2026-11-01 (Codex docs review, `docs/reviews/codex/codex-review-docs-new-engineer-2026-11-01.md`)
+
+Sections of live documents that were superseded or were negotiation rather than contract. Each was cut verbatim into the file named here; the live document keeps the effective contract and a pointer. `MOVED.txt` lists each as `<live doc>#<section> -> <archive file>`.
+
+| Now at | Cut from | What it was | What stayed live |
+|---|---|---|---|
+| `design/provenance_schema_draft_2026_10_26.md` | `docs/design/provenance.md` "Data model — schema changes" | The 10/26 draft DDL, numbered v13 (`picture_prints`) and v14 (`content_excerpts`, `provenance_assertions`, the carrier and capture tables) before the numbers were taken by what shipped. (F02) | provenance.md "Data model": Shipped (v13 `provenance_roles`, v14 `provenance_assertions` only, DDL in the schema file §17–§18) and Designed, not built (one line per table). |
+
