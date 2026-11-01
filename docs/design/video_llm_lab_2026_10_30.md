@@ -331,5 +331,7 @@ Head-only verdict: 289 dates were in the first 12 MB, 8 more only in the 120 MB 
 the first camcorder frame), none needed the middle window; a full read of a 40-file sample (20 raw without, 10 raw with,
 10 wrapped without; 29.5 GB in 101 s) agreed on every file — no date missed, the same first rdt.
 
+**Rick's review of 25 DV-dated clips (2026-11-01, `tools/date-review/date_review.py`):** 20 right, 2 wrong, 3 unsure. Both wrongs are re-recordings through a DV camcorder in 2001 (a 1965 film; a 1984 tape), so the clock stamped the transfer: the datecode is always an upper bound on the content and the recording date only when no witness says the content is older (DECISIONS 2026-11-01). One unsure clip carries an on-screen 2001 against a 2003 clock — the burned-in date outranks the clock, as the stamp-fusion rule already says. Of the 23 clips without a date from Rick: 18 right, 1 wrong, 3 unsure.
+
 Fusion step one landed in the review page the same day: a date stamp the model cites as an `onScreenText` cue (JUN 21 '97) collapses
 its padded range (1995–1997) to that year, deterministically; a stamp outside the model's range is shown, not trusted.
