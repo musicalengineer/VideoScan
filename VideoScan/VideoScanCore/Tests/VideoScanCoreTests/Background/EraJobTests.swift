@@ -27,10 +27,24 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-/// A factory over a fixed Setup (the job id comes from the request).
-struct EraTestFactory: JobFactory {
+/// A factory over a fixed Setup (the job id comes from the request). It
+/// keeps every job it made so a test can close the worker of a job whose
+/// process "died" (abandonForTest never calls end()).
+final class EraTestFactory: JobFactory, @unchecked Sendable {
     let make: @Sendable (JobID) -> EraJob.Setup
-    func makeJob(for request: JobRequest) throws -> any BackgroundJob { try EraJob(make(request.id)) }
+    private let lock = NSLock()
+    private var made: [EraJob] = []
+    init(make: @escaping @Sendable (JobID) -> EraJob.Setup) { self.make = make }
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob {
+        let job = try EraJob(make(request.id))
+        lock.lock(); made.append(job); lock.unlock()
+        return job
+    }
+    /// Close every worker this factory's jobs spawned (the OS reaping a dead process's child).
+    func closeWorkers() async {
+        for job in jobs { await job.worker.close() }
+    }
+    private var jobs: [EraJob] { lock.lock(); defer { lock.unlock() }; return made }
 }
 
 final class LogLines: BackgroundLogSink, @unchecked Sendable {
@@ -204,10 +218,10 @@ struct EraJobRunTests {
         let queue = InMemoryJobQueueStore()
         let checkpoints = InMemoryCheckpointStore()
         let killer = SupervisorBox()
-        let first = JobSupervisor(queue: queue, checkpoints: checkpoints,
-                                  factory: EraTestFactory { EraFixture.setup(fixture, root: root, jobID: $0, afterAppend: { index in
-                                      if index == 1 { await killer.supervisor?.abandonForTest() }
-                                  }) },
+        let firstFactory = EraTestFactory { EraFixture.setup(fixture, root: root, jobID: $0, afterAppend: { index in
+            if index == 1 { await killer.supervisor?.abandonForTest() }
+        }) }
+        let first = JobSupervisor(queue: queue, checkpoints: checkpoints, factory: firstFactory,
                                   backoff: BackgroundFixtures.fullBackoff(), log: LogLines(), configuration: BackgroundFixtures.fastConfiguration())
         killer.supervisor = first
         let request = JobRequest(kind: .era, requestedBy: "test")
@@ -218,7 +232,7 @@ struct EraJobRunTests {
         #expect(checkpoints.checkpoint(request.id)?.completedUnits == 1)
         let before = try EraFixture.lines(root)
         // Its worker is an orphan of the "dead" process; reap it the way the OS would.
-        if let stale = try? EraJob(EraFixture.setup(fixture, root: root, jobID: request.id)) { await stale.worker.close() }
+        await firstFactory.closeWorkers()
         let log = LogLines()
         let second = JobSupervisor(queue: queue, checkpoints: checkpoints, factory: EraTestFactory { EraFixture.setup(fixture, root: root, jobID: $0) },
                                    backoff: BackgroundFixtures.fullBackoff(), log: log, configuration: BackgroundFixtures.fastConfiguration())
@@ -309,6 +323,7 @@ struct EraJobRunTests {
                          userYear: i % 7 == 0 ? 1990 : nil, embeddedYear: i % 11 == 0 ? 2004 : nil)
         }
         let clock = ContinuousClock()
+        let loadBefore = TimingBudget.sampleLoad()
         var ordered: [EraCandidate] = []
         let took = clock.measure {
             let withPath = candidates.map { c -> EraCandidate in var c = c; c.pathYear = EraJob.pathYear(c.path); return c }
@@ -318,7 +333,7 @@ struct EraJobRunTests {
         let years = ordered.map { $0.bound?.year ?? Int.max }
         #expect(zip(years, years.dropFirst()).allSatisfy { $0 <= $1 }, "oldest first, unknown last")
         print("EraJob scale: pathYear + order over 100k in \(took)")
-        #expect(took < .seconds(20), "\(took) (budget 20 s, Debug)")
+        expectWithinTimingBudget("pathYear + order over 100k candidates", measured: took, budget: .seconds(20), loadBefore: loadBefore)
     }
 }
 

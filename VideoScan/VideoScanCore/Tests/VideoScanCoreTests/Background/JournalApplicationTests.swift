@@ -121,6 +121,7 @@ struct JournalApplicationTests {
             lines.append(Self.readLine(line, offset: i))
         }
         let clock = ContinuousClock()
+        let loadBefore = TimingBudget.sampleLoad()
         var worst = Duration.zero
         var total = Duration.zero
         var applied = 0
@@ -137,7 +138,8 @@ struct JournalApplicationTests {
         #expect(applied == 100_000)
         #expect(try await repository.read { try $0.provenanceAssertionCount() } == 100_000)
         print("JournalApplication scale: 100k lines, \(lines.count / 256 + 1) batches, total \(total), worst batch \(worst)")
-        #expect(worst <= .milliseconds(100), "worst 256-line batch \(worst) (budget 0.1 s, design §6)")
+        // Design §6: the main-actor commit ≤ 0.1 s per 256-line batch (load-aware; strict where the lane pins it).
+        expectWithinTimingBudget("worst 256-line journal batch", measured: worst, budget: .milliseconds(100), loadBefore: loadBefore)
         await repository.close()
     }
 }

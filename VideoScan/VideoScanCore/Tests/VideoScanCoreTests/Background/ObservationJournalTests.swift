@@ -291,16 +291,18 @@ struct ObservationJournalTests {
         let (journal, dir) = try Self.journal()
         defer { try? FileManager.default.removeItem(at: dir) }
         let clock = ContinuousClock()
+        let loadBeforeWrite = TimingBudget.sampleLoad()
         let write = try clock.measure {
             for u in 0..<100 { try journal.append((0..<1000).map { try Self.line(u * 1000 + $0 + 1, unit: u) }) }
         }
         let file = journal.dayFiles()[0]
         var count = 0
+        let loadBeforeRead = TimingBudget.sampleLoad()
         let read = try clock.measure { count = try Self.readAll(journal, file).count }
         #expect(count == 100_000)
-        // Budgets (Debug, load-aware): write 30 s, read 30 s. Measured on the Ultra: see the commit.
-        #expect(write < .seconds(30), "write \(write)")
-        #expect(read < .seconds(30), "read \(read)")
+        // Budgets (Debug; load-aware, strict only where the lane pins it): write 30 s, read 30 s.
+        expectWithinTimingBudget("100k journal lines written in 1,000-line units", measured: write, budget: .seconds(30), loadBefore: loadBeforeWrite)
+        expectWithinTimingBudget("100k journal lines read in 256-line pages", measured: read, budget: .seconds(30), loadBefore: loadBeforeRead)
         print("ObservationJournal scale: write \(write), read \(read)")
     }
 }
