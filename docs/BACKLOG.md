@@ -210,3 +210,5 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
 
 ## Done (moved here 2026-11-01; kept for the record)
 - Background step 1 candidate (2026-10-31): the 8B era/OCR expert as the helper's first real job — A2's windows + contracts over the whole catalog, assertions into model-lab.sqlite with model + prompt hashes, sidecars + journal to the app's committer; needs §7 ruling 4 (step order).
+- Validate Catalog… tier 5 should run the full `PRAGMA integrity_check` (today only `quick_check` at open); report it as its own stamp; nightly too (Rick's SQLite operations matrix, 2026-11-01).
+- Proposed rename (Rick to rule): Catalog ▸ "Update Catalog…" → "Relink Moved Files…" — the verb rescans and relinks after files moved outside the app; "Update" reads as a schema migration, which is automatic at open and never a menu verb (2026-11-01).
