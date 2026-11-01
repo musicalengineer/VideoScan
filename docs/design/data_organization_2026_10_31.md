@@ -4,223 +4,318 @@
 
 ## Where every file of this app lives on the system
 
-*Rick (2026-10-31): "we must write down WHERE all files related to this app live in the system." Inventory taken on `RicksUltra` on 2026-10-31 with `ls -la`, `defaults read`, `launchctl list` and `rg` over the source; sizes are that day's `du`. Every row says who writes the file and, where the reviewed inventory has a word for it, its class — `decisionNotInCatalog` / `journalIngested` / `frozenAfterImport` / `derived` / `logOrReport` / `separateByDesign` / `notAppSupport` — from `VideoScan/VideoScanTests/AppSupportSideStoreInventoryTests.swift` (the `inventory` table; a new file name under App Support fails that test until it is classified). "not found" means the code names the path but nothing is on disk yet. Paths and file names only — no family data appears here; the repo is public.*
+*Rick (2026-10-31): "we must write down WHERE all files related to this app live in the system." Inventory taken on `RicksUltra` on 2026-10-31. One file per line; sizes are that day's. Paths and file names only — no family data; the repo is public. Which Swift file writes each one is in the first edition of this doc (commit `e11fa248`) if it is ever needed. A new file name under App Support fails `AppSupportSideStoreInventoryTests` until it is classified there.*
+
+**Short names used in the Where column**
+
+| Short | Full path |
+|---|---|
+| `AppSupport/` | `~/Library/Application Support/VideoScan/` |
+| `Logs/` | `~/Library/Logs/VideoScan/` |
+| `Caches/` | `~/Library/Caches/` |
+| `repo/` | `~/dev/VideoScan/` (same path on every Mac) |
+| `defaults` | domain `Rick-Breen.VideoScan` = `~/Library/Preferences/Rick-Breen.VideoScan.plist` |
+
+**Who writes** — `app` = VideoScan.app (its committer is the only catalog writer); `helper` = VideoScan Background; `findtagd` / `previewsweepd` = the two daemons; `script` = a repo script or tool; `Rick` = by hand; `frozen` = imported, never written again.
 
 ## Application Support Files
 
-`~/Library/Application Support/VideoScan/` — 162 entries, 10 GB on 2026-10-31. One committer (the app) writes the catalog; the two daemons (`findtagd`, `previewsweepd`) and the scripts write only their own files.
+`AppSupport/` — 162 entries, 10 GB on 2026-10-31.
 
 # database related (SQLite)
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `catalog.sqlite` (+ `-wal`, `-shm`) | `~/Library/Application Support/VideoScan/catalog.sqlite` | THE catalog (315 MB; schema 13, 63 tables, below). Written only by the app's committer through the one commit door; read by the app, `scripts/catalog_db.py` (read-only, copies only via sqlite `.backup`). `separateByDesign` |
-| `catalog.cutover` | same folder | the latch that says "this Mac has cut over from catalog.json to catalog.sqlite" (`Load/SQLiteCatalogReader.swift`, `scripts/catalog_db.py`). App |
-| `catalog.highwater`, `catalog.highwater.log` | same folder | the catalog generation high-water mark and its second witness; a lower generation than this is refused at launch (`Store/CatalogHighWater.swift`, `Catalog/CatalogBackupSeal.swift`). App. `logOrReport` (the .log) |
-| `catalog.generation.max`, `catalog.lock`, `catalog-write-errors.jsonl` | same folder | generation sidecar (`CatalogGenerationSidecar.swift`), the writer lock (`CatalogLock.swift`), refused writes with their reason (`CatalogWriteError.swift`). App. `logOrReport` (the .jsonl) |
-| `catalog.search-index.v1.plist` | same folder | the search index, rebuilt from the catalog (`Catalog/CatalogSearchIndex.swift`; 36 MB). App. `derived` |
-| `metadata_cache.sqlite` | `~/Library/Application Support/VideoScan/metadata_cache.sqlite` | metadata cache — the ffprobe cache keyed by path + size + mtime (`Media/MetadataCache.swift`; 88 MB). App. `derived` |
-| `audio-fingerprints.sqlite` | same folder | audio landmarks per content digest; the stamp is in the catalog's `sound_prints` (`AudioFingerprintStore.swift`; 297 MB). App and `videoscan-audio-match`. `separateByDesign` |
-| `personfinder_cache.sqlite` | same folder | face-pipeline cache for the People tab (`People/PersonFinderCache.swift`; 13 MB). App. `derived` |
-| `model-lab.sqlite` | same folder | model-lab runs / outputs / segments / vectors (`ModelLab/ModelLabStore.swift`). **not found** on the Ultra yet (created by the first model-lab run). `separateByDesign` |
-| `catalog.json`, `catalog.json.prev` | same folder | the pre-cutover JSON catalog (80 MB), imported 2026-10-18 and never written again (`Import/CatalogImporter.swift`). `frozenAfterImport` |
-| `events-decisions.json` (+ `.prev`, two `manual-backup-*`), `ignored-content.json` | same folder | the events and ignored-content JSON stores, imported into the catalog's `events*` / `ignored_content` tables (`Import/CatalogDDL.swift`). `frozenAfterImport` |
-| catalog backups and snapshots | `catalog.pre-*.json`, `catalog.pre-dup-split.*.sqlite`, `catalog.manual-*.json`, `catalog.recovery-*.json`, `catalog.snapshot_*.json`, `catalog.preserved-*.json`; `backups/pre-p0-restore-2026-10-23/` (sqlite + highwater); `catalog-sqlite-rehearsal-20261018-*/`; `one_time_cleanup_2026_10_11/` (a catalog copy + CSVs); `*.pre-migrate-20261027-163522` beside the sidecars | catalog backups and snapshots, May–Oct 2026, ~4.5 GB measured (the brief said ~3 GB). Each was written by the app before a destructive verb (relocate, purge, merge, dedup, target removal) or by hand. Cleanup proposal: `cleanup_proposal_2026_10_31.md`, in flight beside this file (worktree `~/dev/VideoScan-wt/cleanup-proposal`). Backup |
-| `viewer-catalog/catalog.sqlite`, `viewer-catalog/catalog.cutover` | `~/Library/Application Support/VideoScan/viewer-catalog/` | the sealed `VACUUM INTO` copy a viewer Mac rsyncs (`Catalog/CatalogViewerSnapshot.swift`; 274 MB). App (master role). `derived` |
-| `manifest.sha256`, `sync-sources.json`, `last_sync.txt`, `.sync-previous/` | same folder | CatalogSync (master → viewer, one direction, mode by hostname; `Catalog/CatalogSync.swift`): the manifest a viewer verifies, the source list, the last sync stamp, and the previous live tree kept one generation for rollback. App. `derived` |
-| `scan_checkpoints/*.json`, `scan_jobs/*.json` | same folder | scan resume checkpoints (`Volumes/ScanCheckpoint.swift`) and scan job records (`Volumes/ScanJobsStorage.swift`). App. `logOrReport` (job memory) |
-| `date-inference/unwound-*.json` | same folder | sidecars the date-inference engine writes when it unwinds an inferred date (`Catalog/VideoScanModel+DateInference.swift`; 76 files). App. `derived` |
-| `integrity-<date>.json`, `integrity-latest.json`, `catalog-audit.json` | same folder | Verify Catalog reports (`Integrity/IntegrityReport.swift`) and Audit Catalog's marker (`Analyze/CatalogFreshnessFacts.swift`; results also land in `audit_results`). App. `logOrReport` |
-| `fullhash-backfill.json`, `dossier-merger-offsets.json`, `notes-repair.v1.done`, `import-dryrun.json` | same folder | resume state of Fill In Full Hashes (`MediaOps/FullHashBackfillResume.swift`), the dossier merger's offsets, the one-shot notes-repair marker (`VideoScanModel+NotesRepair.swift`), an import dry-run receipt. App. `derived` / `logOrReport` |
-| `fragment-purge-report.*.txt`, `nostream-purge-report.*.txt`, `label-repairs/show-again-*.json`, `delete-duplicates/done/<job>/plan.json`, `diagnostics/*.csv,*.json`, `relocate-audit/`, `people-audit/people-audit.jsonl` | same folder | receipts of past verbs: purge reports, Show Again repairs (`Catalog/ShowAgain.swift`), Delete Duplicates job memory (`MediaOps/DeleteDuplicatesPlan.swift`), a 2026-10-11 manual-deletion diagnosis, a May relocate audit, the People audit log. App / scripts. `logOrReport` |
-| `events_latest.json` | same folder | the event-recognition prototype's metrics object, read by `tools/publish_metrics.py`. `derived` |
-| `preview-cache/<digest>-best.jpg`, `<digest>-strip-N-of-16-*.jpg` | `~/Library/Application Support/VideoScan/preview-cache/` | poster frames and filmstrips keyed by content digest (`PreviewDiskCache.swift`; 9,568 files, 434 MB). Written by `previewsweepd` (the preview-sweep daemon, `videoscan-preview-sweep`) and the app. `derived` |
-| `.findtagd.lock`, `.previewsweepd.lock` | same folder | the two daemons' single-instance locks (`FindTagJournal.swift`, `PreviewSweepCLIOptions.swift`). Daemons |
-| `findtag-journal/findtag-<stamp>-<id>.jsonl`, `findtag-journal/.ingest-state.json` | `~/Library/Application Support/VideoScan/findtag-journal/` | the FindTag daemon's journal of people sightings (422 files, 572 MB); the app ingests it into `people_tags` and advances the cursor only after a durable save (`FindTagJournal.swift`, `FindTagIngestEngine.swift`). `findtagd` writes, app reads. `journalIngested` |
-| `background/queue/<job-id>.json`, `background/checkpoints/<job-id>.json`, `background/journal/*.jsonl` | `~/Library/Application Support/VideoScan/background/` | the VideoScan Background helper's queue, checkpoints and observation journal (`VideoScanCore/Background/JobStores.swift`; design `docs/design/background_service_2026_10_30.md`). **not found** yet — created by the helper's first job. Helper writes, app's committer applies. `journalIngested` |
-| `ledger/media-ledger.jsonl` | `~/Library/Application Support/VideoScan/ledger/` | the history of Rick's acts on media (`Archive/MediaLedger.swift`; JSONL only since the cutover; mirrored beside the archive). App. `decisionNotInCatalog` |
-| `archive-angel/evidence.json`, `archive-angel/policy.json` | `~/Library/Application Support/VideoScan/archive-angel/` | the Archive Angel's scores (`ArchiveAngel/Recommend/ArchiveAngelEvidenceStore.swift`; 2 MB, `derived`) and Rick's optional policy override, never written by the app (`AngelRecommendationPolicy.swift`; **not found** — none set). `separateByDesign` |
-| `review-cycles/review-cycles.json`, `review-cycles/review-cycles/<n>.stdout,.stderr` | same folder | Codex review cycles — `tools/codex_review.py` keeps its state and every pass's transcript here. Script. `logOrReport` |
-| `gh-codex/config.yml`, `hosts.yml` | same folder | the `gh` CLI config Codex runs with (the GH_CONFIG_DIR for `tools/codex_review.py`). Not app data |
-| `validation_labels.json` | same folder | People validation labels (`People/ValidationLabelStore.swift`). App. `separateByDesign` |
-| `test-host/` | same folder | the data copy a test host (the M4) runs against (`VideoScanCore/TestHostDetection.swift`). **not found** on the Ultra — it lives on the M4 |
-| `_retired/`, `_POI_quarantine/`, `POI-backup-*/`, `hallie-e1/snapshots/`, `events-prototype/index.html`, `demo/`, `private-docs/*.md` | same folder | retired stores (the channel watcher and team channel, 2026-10-02), a quarantined POI profile and two POI backups (2026-09), a Hallie E1 snapshot, the events prototype page, a demo run sheet, Rick's private research notes. Hand-made or one-off; candidates for the cleanup proposal |
+| File | Where | What it is | Who writes |
+|---|---|---|---|
+| `catalog.sqlite` (+ `-wal`, `-shm`) | `AppSupport/` | THE catalog — schema 13, 63 tables, 315 MB | app |
+| `catalog.cutover` | `AppSupport/` | latch: this Mac moved from catalog.json to SQLite | app |
+| `catalog.highwater`, `catalog.highwater.log` | `AppSupport/` | generation high-water mark and its witness | app |
+| `catalog.generation.max` | `AppSupport/` | generation sidecar | app |
+| `catalog.lock` | `AppSupport/` | the writer lock | app |
+| `catalog-write-errors.jsonl` | `AppSupport/` | refused writes, with the reason | app |
+| `catalog.search-index.v1.plist` | `AppSupport/` | search index, rebuilt from the catalog (36 MB) | app |
+| `metadata_cache.sqlite` | `AppSupport/` | ffprobe cache keyed by path + size + mtime (88 MB) | app |
+| `audio-fingerprints.sqlite` | `AppSupport/` | audio landmarks per content digest (297 MB) | app, `videoscan-audio-match` |
+| `personfinder_cache.sqlite` | `AppSupport/` | face-pipeline cache for the People tab (13 MB) | app |
+| `model-lab.sqlite` | `AppSupport/` | model-lab runs, outputs, vectors (not on disk yet) | app / helper |
+| `catalog.json`, `catalog.json.prev` | `AppSupport/` | the pre-cutover JSON catalog (80 MB), kept as the cutover source | frozen |
+| `events-decisions.json` (+ `.prev`, `manual-backup-*`) | `AppSupport/` | events store, imported into the catalog | frozen |
+| `ignored-content.json` | `AppSupport/` | ignored-content store, imported into the catalog | frozen |
+| `catalog.pre-*.json` | `AppSupport/` | JSON backups taken before destructive verbs | app |
+| `catalog.manual-*.json`, `catalog.recovery-*.json` | `AppSupport/` | backups taken by hand or by a recovery | Rick / app |
+| `catalog.snapshot_*.json`, `catalog.preserved-*.json` | `AppSupport/` | older snapshots (all backups together ≈ 4.5 GB) | app |
+| `catalog.pre-dup-split.*.sqlite` | `AppSupport/` | SQLite backup before the duplicate split | app |
+| `backups/pre-p0-restore-2026-10-23/` | `AppSupport/backups/` | sqlite + highwater before the P0 restore | Rick |
+| `catalog-sqlite-rehearsal-20261018-*/` | `AppSupport/` | cutover rehearsal copies | script |
+| `one_time_cleanup_2026_10_11/` | `AppSupport/` | catalog copy + CSVs from the one-time cleanup | script |
+| `*.pre-migrate-20261027-163522` | `AppSupport/` | sidecar copies before the 10/27 migration | app |
+| `viewer-catalog/catalog.sqlite`, `catalog.cutover` | `AppSupport/viewer-catalog/` | sealed copy a viewer Mac rsyncs (274 MB) | app (master) |
+| `manifest.sha256`, `sync-sources.json`, `last_sync.txt` | `AppSupport/viewer-catalog/` | CatalogSync manifest, source list, last sync stamp | app |
+| `.sync-previous/` | `AppSupport/viewer-catalog/` | previous live tree, kept one generation for rollback | app |
+| `scan_checkpoints/*.json` | `AppSupport/scan_checkpoints/` | scan resume checkpoints | app |
+| `scan_jobs/*.json` | `AppSupport/scan_jobs/` | scan job records | app |
+| `date-inference/unwound-*.json` | `AppSupport/date-inference/` | sidecars written when an inferred date is unwound (76) | app |
+| `integrity-<date>.json`, `integrity-latest.json` | `AppSupport/` | Verify Catalog reports | app |
+| `catalog-audit.json` | `AppSupport/` | Audit Catalog marker | app |
+| `fullhash-backfill.json` | `AppSupport/` | resume state of Fill In Full Hashes | app |
+| `dossier-merger-offsets.json` | `AppSupport/` | dossier merger offsets | app |
+| `notes-repair.v1.done` | `AppSupport/` | one-shot notes-repair marker | app |
+| `import-dryrun.json` | `AppSupport/` | import dry-run receipt | app |
+| `fragment-purge-report.*.txt`, `nostream-purge-report.*.txt` | `AppSupport/` | purge receipts | app |
+| `label-repairs/show-again-*.json` | `AppSupport/label-repairs/` | Show Again repair receipts | app |
+| `delete-duplicates/done/<job>/plan.json` | `AppSupport/delete-duplicates/` | Delete Duplicates job memory | app |
+| `diagnostics/*.csv`, `*.json` | `AppSupport/diagnostics/` | the 2026-10-11 manual-deletion diagnosis | script |
+| `relocate-audit/` | `AppSupport/relocate-audit/` | the May relocate audit | app |
+| `people-audit/people-audit.jsonl` | `AppSupport/people-audit/` | People audit log | app |
+| `events_latest.json` | `AppSupport/` | event-recognition prototype metrics, read by the dashboard | script |
+| `preview-cache/<digest>-best.jpg` | `AppSupport/preview-cache/` | poster frame per content digest | `previewsweepd`, app |
+| `preview-cache/<digest>-strip-N-of-16-*.jpg` | `AppSupport/preview-cache/` | filmstrips (9,568 files, 434 MB with the posters) | `previewsweepd`, app |
+| `.findtagd.lock`, `.previewsweepd.lock` | `AppSupport/` | the daemons' single-instance locks | daemons |
+| `findtag-journal/findtag-<stamp>-<id>.jsonl` | `AppSupport/findtag-journal/` | people sightings, ingested into `people_tags` (422 files, 572 MB) | `findtagd` |
+| `findtag-journal/.ingest-state.json` | `AppSupport/findtag-journal/` | ingest cursor, advanced only after a durable save | app |
+| `background/queue/<job-id>.json` | `AppSupport/background/` | helper job requests (none yet) | helper |
+| `background/checkpoints/<job-id>.json` | `AppSupport/background/` | last completed unit per helper job | helper |
+| `background/journal/*.jsonl` | `AppSupport/background/` | helper observations, applied by the app's committer | helper |
+| `ledger/media-ledger.jsonl` | `AppSupport/ledger/` | history of Rick's acts on media; mirrored beside the archive | app |
+| `archive-angel/evidence.json` | `AppSupport/archive-angel/` | Archive Angel scores (2 MB) | app |
+| `archive-angel/policy.json` | `AppSupport/archive-angel/` | optional policy override (none set) | Rick |
+| `review-cycles/review-cycles.json` | `AppSupport/review-cycles/` | Codex review-cycle state | script |
+| `review-cycles/review-cycles/<n>.stdout`, `.stderr` | `AppSupport/review-cycles/` | every Codex pass's transcript | script |
+| `gh-codex/config.yml`, `hosts.yml` | `AppSupport/gh-codex/` | the `gh` config Codex runs with | script |
+| `validation_labels.json` | `AppSupport/` | People validation labels | app |
+| `test-host/` | `AppSupport/` (M4 only) | the data copy a test host runs against | script |
+| `_retired/` | `AppSupport/` | retired stores: channel watcher, team channel (2026-10-02) | — |
+| `_POI_quarantine/`, `POI-backup-*/` | `AppSupport/` | a quarantined POI profile; two POI backups (2026-09) | app / Rick |
+| `hallie-e1/snapshots/<date>-gen<N>/` | `AppSupport/hallie-e1/` | a frozen catalog generation the E1 eval replays | script |
+| `events-prototype/index.html` | `AppSupport/events-prototype/` | the events prototype page | Rick |
+| `demo/` | `AppSupport/demo/` | a demo run sheet | Rick |
+| `private-docs/*.md` | `AppSupport/private-docs/` | Rick's private research notes | Rick |
 
 # POI (The People Tab)
 
-The People tab's stores are `separateByDesign`: the catalog keeps only `people_tags` (digest, name, kind, provenance); who the people ARE lives here.
+The catalog keeps only `people_tags` (digest, name, kind, provenance); who the people ARE lives here.
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `POI/<profile-UUID>/profile.json` | `~/Library/Application Support/VideoScan/POI/` | one folder per person of interest, keyed by UUID; `profile.json` is the identity record (name, aliases, display name, reference photos list). Written by `People/POIProfileFileStore.swift` (atomic rename through `.poi-rename-<uuid>`). 13 profiles, 207 MB. `separateByDesign` |
-| `POI/<profile-UUID>/*.jpeg,*.jpg,*.png` | same | the reference face crops and chosen photos for that person (the big folders hold hundreds). App |
-| `POI/<profile-UUID>/profile.json.pre-*` | same | pre-repair copies the app leaves before rewriting a profile. Backup |
-| `POI/.uuid-migration.json` | `~/Library/Application Support/VideoScan/POI/.uuid-migration.json` | the name → UUID migration record (`separateByDesign`). App |
-| `POI/Families/<family-UUID>.json` | `~/Library/Application Support/VideoScan/POI/Families/` | family groupings of profiles (`People/FamilyGroup.swift`, `FeaturedVideos.swift`); the About-menu People list reads these. App |
-| `POI/poi-m1.txt` | `~/Library/Application Support/VideoScan/POI/` | a hand-written note from the M1 sync (2026-09). Hand-made |
-| `personfinder_cache.sqlite` | `~/Library/Application Support/VideoScan/` | the face-recognition cache (`People/PersonFinderCache.swift`). `derived` |
-| `validation_labels.json`, `cluster_names.json`, `cluster_promotions.json` | `~/Library/Application Support/VideoScan/` and a run's output folder | validation labels and the cluster naming / promotion decisions of the face clustering (`People/ValidationLabelStore.swift`, `PersonFinderView+People.swift`). `separateByDesign` |
-| `findtag-journal/`, `.findtagd.lock` | `~/Library/Application Support/VideoScan/` | the FindTag daemon's journal (above). `findtagd` is the app binary relaunched detached as `VideoScan.app/Contents/MacOS/VideoScan --find-tag --person <name>` (`App/main.swift`, `People/FindTagCLI.swift`, spawned by `People/VideoScanModel+FindTagHelper.swift`); its log is `~/Library/Logs/VideoScan/findtagd.log` |
-| `media-person-links.json` | a directory the caller supplies (`Media/MediaPersonLinks.swift` is pure: `fileURL(in:)`); **not found** under App Support on the Ultra, and no caller outside its own file on 2026-10-31 | "this record is about this person" (FamilySearch id ↔ record). `decisionNotInCatalog` |
-| `~/dev/VideoScan/poi_profiles/`, `~/dev/VideoScan/output/cluster_faces/`, `~/dev/VideoScan/models/`, `~/dev/VideoScan/photos/` | the repo checkout, all git-ignored | the Python face pipeline's working folders (`scripts/cluster_faces.py`, `pf_pythonPath` / `pf_recognitionScript` defaults) and the downloaded face models. Script |
-| User defaults | domain `Rick-Breen.VideoScan` | `pf_*` (recognition engine, thresholds, frame step, concurrency, output dir, reference path, python path, script), `people.selectedFamilyUUID`, `people.videos.showMaybes`, `people.videos.showTagged`, `peopleSubTab`, `peopleGalleryHeight`, `peoplePaneCollapsed`, `peopleHighlightedPOIName`, `PersonFinder.recentSearchPaths`, `findTag.backgroundEnabled` (run the FindTag daemon) |
-| Logs | `~/Library/Logs/VideoScan/` | `findtagd.log` (daemon START/OUTCOME, one line per file), `videoscan.log` (the tab's MFO jobs), `~/Library/Application Support/VideoScan/people-audit/people-audit.jsonl` |
-| Model | — | the face pipeline runs in `venv/` (dlib / ArcFace / AdaFace per `pf_recognitionEngine`); no cloud model; nothing of living family leaves the Mac (hard rule 13) |
+| File | Where | What it is | Who writes |
+|---|---|---|---|
+| `POI/<profile-UUID>/profile.json` | `AppSupport/POI/` | one person of interest: name, aliases, reference list (13 profiles, 207 MB) | app |
+| `POI/<profile-UUID>/*.jpeg`, `*.jpg`, `*.png` | `AppSupport/POI/` | that person's reference face crops and chosen photos | app |
+| `POI/<profile-UUID>/profile.json.pre-*` | `AppSupport/POI/` | pre-repair copies of a profile | app |
+| `POI/.uuid-migration.json` | `AppSupport/POI/` | the name → UUID migration record | app |
+| `POI/Families/<family-UUID>.json` | `AppSupport/POI/Families/` | family groupings of profiles; the About People list reads these | app |
+| `POI/poi-m1.txt` | `AppSupport/POI/` | a note from the M1 sync (2026-09) | Rick |
+| `personfinder_cache.sqlite` | `AppSupport/` | the face-recognition cache | app |
+| `validation_labels.json` | `AppSupport/` | validation labels | app |
+| `cluster_names.json`, `cluster_promotions.json` | a clustering run's output folder | cluster naming and promotion decisions | app |
+| `findtag-journal/`, `.findtagd.lock` | `AppSupport/` | the FindTag daemon's journal and lock (above) | `findtagd` |
+| `media-person-links.json` | caller-supplied folder; none on disk | "this record is about this person" links; no caller today | app |
+| `poi_profiles/`, `output/cluster_faces/`, `models/`, `photos/` | `repo/` (git-ignored) | the Python face pipeline's working folders and face models | script |
+| `findtagd.log` | `Logs/` | the daemon's START/OUTCOME, one line per file | `findtagd` |
+| `pf_*` (≈ 30 keys), `people.*`, `peopleMenu.*`, `PersonFinder.recentSearchPaths`, `findTag.backgroundEnabled` | `defaults` | face-pipeline settings; People tab view state; run the daemon | app |
+
+The daemon is the app binary relaunched detached (`VideoScan --find-tag --person <name>`). The face pipeline runs in `venv/` (dlib / ArcFace / AdaFace); no cloud model (hard rule 13).
 
 # About Menu with People
 
-VideoScan ▸ About VideoScan (`App/VideoScanApp.swift`, `AboutView`, window id `about`) shows the family collage and the credits; the People entries beside it (Organize ▸ People / Families in the row context menu) remember recent names.
+VideoScan ▸ About VideoScan shows the family collage and the credits; the People entries beside it remember recent names.
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `about_collage.png` | `~/dev/VideoScan/assets/app_photos/about_collage.png` | the real family filmstrip (restored 2026-08-04); when absent the bundled `AboutCollage` asset (a synthetic placeholder) is shown. Hand-made; the real one is NOT in git |
-| `AboutCollage`, app icon | `VideoScan/VideoScan/Assets.xcassets` | the placeholder collage and icon in the bundle. Git |
-| `Resources/FamilyMap/ATTRIBUTION.txt` | `VideoScan/VideoScan/Resources/FamilyMap/` | the Family Map border-data credits the About panel quotes. Git |
-| `POI/Families/<uuid>.json` | `~/Library/Application Support/VideoScan/POI/Families/` | the families the People menu lists (above) |
-| `portrait/portrait-<UUID>.jpg` | `~/Library/Application Support/VideoScan/portrait/` | the couple portrait shown on the Family Tree (`FamilyTree/CouplePortrait.swift`); defaults `portrait.fileName` and `portrait.caption` point at the current one. App |
-| User defaults | domain `Rick-Breen.VideoScan` | `peopleMenu.families`, `peopleMenu.otherPeople` (recent tag names, `CatalogRowContextMenu+Organize.swift` `TagNameMemory`), `portrait.fileName`, `portrait.caption` |
+| File | Where | What it is | Who writes |
+|---|---|---|---|
+| `about_collage.png` | `repo/assets/app_photos/` (git-ignored) | the real family filmstrip; absent → the bundled placeholder | Rick |
+| `AboutCollage`, the app icon | `VideoScan/VideoScan/Assets.xcassets` | the placeholder collage and the icon | git |
+| `Resources/FamilyMap/ATTRIBUTION.txt` | `VideoScan/VideoScan/Resources/FamilyMap/` | Family Map border-data credits | git |
+| `POI/Families/<uuid>.json` | `AppSupport/POI/Families/` | the families the People menu lists | app |
+| `portrait/portrait-<UUID>.jpg` | `AppSupport/portrait/` | the couple portrait on the Family Tree | app |
+| `peopleMenu.families`, `peopleMenu.otherPeople` | `defaults` | recent tag names | app |
+| `portrait.fileName`, `portrait.caption` | `defaults` | which portrait is current | app |
 
 # Hallie (Archivist)
 
-Hallie is the Family Archivist window (id `archivist`, `VideoScan/VideoScan/Hallie/`, ~200 files: `Archivist*` = the deterministic graph/record executors, `Hallie*` = the turn coordinator, `LLM/` = Ollama, `Voice/` = speech, `Web/` = the family web access, `Shell/` = the CLI). The LLM translates a question into a query; every fact in an answer comes from the catalog, the family tree or the cyberbrain, never from the model.
+Hallie is the Family Archivist window (`VideoScan/VideoScan/Hallie/`, ~200 files). The LLM turns a question into a query; every fact in an answer comes from the catalog, the family tree or the cyberbrain, never from the model.
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `Hallie/kind-words.json` | `~/Library/Application Support/VideoScan/Hallie/` | the kind words Rick taught her (`Hallie/HallieKindWords.swift`). App. `separateByDesign` |
-| `Hallie/pronunciations.json` (+ dated `before-*` copies) | same | the pronunciation lexicon (`Hallie/Voice/HalliePronunciationLexicon.swift`); the app keeps a copy before each fix. App. `separateByDesign` |
-| `Hallie/pronunciation-drill.json`, `pronunciation-drill-manifest.json` | same | the drill she runs and its manifest (`HallieAppTurnCoordinator+Drill.swift`). App. `separateByDesign` / `derived` |
-| `cyberbrain/cyberbrain.json`, `cyberbrain/backups/`, `cyberbrain/cyberbrain-<stamp>-before-*.json`, `cyberbrain/sources/biographies/` | `~/Library/Application Support/VideoScan/cyberbrain/` | the family knowledge file she answers from (`VideoScanCore/CyberBrain*.swift`, design `docs/design/cyberbrain_design.md`); dated copies before each write; the biography sources. App. `separateByDesign` |
-| `family-tree/originals/*.ged`, `family-tree/compiled/current.json` + `gen-<stamp>/`, `family-tree/compiled/merge-report.json`, `family-tree/decorations.json`, `family-tree/assets/People/`, `family-tree/person-refresh/overlay.json` + `person-refresh-journal.jsonl`, `family-tree/reports/`, `family-tree/staging/` | `~/Library/Application Support/VideoScan/family-tree/` | the GEDCOM originals (Rick's), the compiled graph and its pointer (`FamilyGraphCompiledStore.swift`, `videoscan-tree-ingest`; `derived`), tree-walk decorations (`TreeWalkStore.swift`; 8 MB), per-person assets, the person-refresh overlay and journal (`PersonFactOverlay.swift`). App; `get-family-tree.command` is Rick's helper script. `separateByDesign` |
-| `family-tree/…/person-of-the-day.json`, `chosen-photo.json`, `documents.json`, `dossier.json`, `family-identity-decisions.json`, `family-tree-bookmarks.json`, `holdout-review-clears.json` | under `family-tree/` and the Family Tree's asset folders | person-of-the-day history (`PersonOfTheDayHistory.swift`), chosen photo and documents sidecars (`FamilyTree/FamilyAssetStore*.swift`), research dossiers (`ResearchStore.swift`), identity rulings and bookmarks. App. `separateByDesign` |
-| `archivist/*.jpeg,*.png,*.mp4` | `~/Library/Application Support/VideoScan/archivist/` | her portrait, the reconstructed angles and the idle / listening / thinking loops the living portrait plays (`Hallie/ArchivistLivingPortrait.swift`, `ArchivistVideoPortrait.swift`; 22 MB). Hand-made (Rick) |
-| `HallieKokoro/kokoro-tts`, `kokoro-v1_0.safetensors`, `voices.npz`, `mlx.metallib`, `*.bundle`, `worker-protocol-v1` | `~/Library/Application Support/VideoScan/HallieKokoro/` | the neural voice: the Kokoro TTS worker and its weights (`Hallie/Voice/HallieNeuralSpeech.swift`; 369 MB), installed by `scripts/install_hallie_kokoro.sh` (git-lfs). Script |
-| `web-proxies/<UUID>.mp4`, `web-proxies/posters/` | `~/Library/Application Support/VideoScan/web-proxies/` | H.264 proxies and posters for the family web view (`Hallie/Web/HallieWebProxy.swift`; ~290 MB). App. `derived` |
-| `hallie-e1/snapshots/<date>-gen<N>/` | `~/Library/Application Support/VideoScan/hallie-e1/` | a frozen catalog generation the E1 eval replays against (`scripts/hallie_e1/`). Script |
-| `~/.ollama/models/` | `blobs/`, `manifests/registry.ollama.ai/library/<model>/<tag>` | Ollama's model store, 57 GB: `qwen3.8:27b-mlx` (her default, `OllamaQueryTranslator.swift` `HallieBrain.defaultModel`) and `llama3.3:70b`. Ollama; the app starts `ollama serve` on demand (`LLM/OllamaLocalServerBootstrap.swift`) |
-| `ollama.log` | `~/Library/Logs/VideoScan/ollama.log` | stdout/stderr of the `ollama serve` the app launched (`OllamaLocalServerBootstrap.swift`; 9 MB). `logOrReport` |
-| `Hallie/hallie-conversation-<date>.jsonl` | `~/Library/Logs/VideoScan/Hallie/` | every turn, one file per day (`Hallie/HallieConversationLog.swift`; mode 0600). App. Log |
-| `hallie-eval/`, `hallie-voice/latest.json`, `nightly-hallie-voice.state.json` | `~/Library/Logs/VideoScan/` | the nightly Hallie replay and grading (`scripts/hallie_eval.py`, `nightly_hallie_replay.sh`, `hallie_e1/`), the voice alert the nightly writes when the neural voice fell back (`scripts/nightly_hallie_voice.py`). Scripts |
-| User defaults | domain `Rick-Breen.VideoScan` | `archivist.ollamaModel` (model name; `defaults write Rick-Breen.VideoScan archivist.ollamaModel <name>`), `archivist.ollamaHosts` (host list; a bare host becomes `http://<host>:11434/api/chat`, `LLM/OllamaEndpoints.swift`), `archivist.name`, `archivist.avatar`, `archivist.photoPath`, `archivist.ownerPersonName`, `hallie.ownerFamilySearchID` (who "I" is), `archivist.speakVoice`, `archivist.speakSpeed`, `archivist.webEnabled`, `archivist.webPassphrase` (family web access, `Web/HallieWebAccess.swift`) |
-| Tests and corpora | `tests/hallie_*.json`, `tests/archivist_golden_answers.json`, `scripts/hallie_demo/` | the acceptance, holdout, eval and strict-regression corpora the nightly grades against; the demo baseline. Git |
+| File | Where | What it is | Who writes |
+|---|---|---|---|
+| `Hallie/kind-words.json` | `AppSupport/Hallie/` | the kind words Rick taught her | app |
+| `Hallie/pronunciations.json` (+ `before-*` copies) | `AppSupport/Hallie/` | the pronunciation lexicon; a copy before each fix | app |
+| `Hallie/pronunciation-drill.json`, `-manifest.json` | `AppSupport/Hallie/` | the drill she runs and its manifest | app |
+| `cyberbrain/cyberbrain.json` | `AppSupport/cyberbrain/` | the family knowledge file she answers from | app |
+| `cyberbrain/backups/`, `cyberbrain-<stamp>-before-*.json` | `AppSupport/cyberbrain/` | dated copies before each write | app |
+| `cyberbrain/sources/biographies/` | `AppSupport/cyberbrain/` | the biography sources | Rick |
+| `family-tree/originals/*.ged` | `AppSupport/family-tree/` | the GEDCOM originals | Rick |
+| `family-tree/compiled/current.json`, `gen-<stamp>/` | `AppSupport/family-tree/` | the compiled graph and its pointer | `videoscan-tree-ingest` |
+| `family-tree/compiled/merge-report.json` | `AppSupport/family-tree/` | the last compile's merge report | `videoscan-tree-ingest` |
+| `family-tree/decorations.json` | `AppSupport/family-tree/` | tree-walk decorations (8 MB) | app |
+| `family-tree/assets/People/` | `AppSupport/family-tree/` | per-person assets | app |
+| `family-tree/person-refresh/overlay.json`, `person-refresh-journal.jsonl` | `AppSupport/family-tree/` | person-fact overlay and its journal | app |
+| `family-tree/reports/`, `family-tree/staging/` | `AppSupport/family-tree/` | compile reports; staging for the next pull | app |
+| `person-of-the-day.json` | under `family-tree/` | person-of-the-day history | app |
+| `chosen-photo.json`, `documents.json`, `dossier.json` | the Family Tree asset folders | chosen photo, documents, research dossier per person | app |
+| `family-identity-decisions.json`, `family-tree-bookmarks.json`, `holdout-review-clears.json` | under `family-tree/` | identity rulings, bookmarks, holdout clears | app |
+| `get-family-tree.command` | `AppSupport/family-tree/` | Rick's pull script | Rick |
+| `archivist/*.jpeg`, `*.png`, `*.mp4` | `AppSupport/archivist/` | her portrait, angles and the living-portrait loops (22 MB) | Rick |
+| `HallieKokoro/kokoro-tts`, `kokoro-v1_0.safetensors`, `voices.npz`, `mlx.metallib`, `*.bundle` | `AppSupport/HallieKokoro/` | the neural voice worker and weights (369 MB) | `scripts/install_hallie_kokoro.sh` |
+| `web-proxies/<UUID>.mp4`, `web-proxies/posters/` | `AppSupport/web-proxies/` | H.264 proxies and posters for the family web view (~290 MB) | app |
+| `hallie-e1/snapshots/<date>-gen<N>/` | `AppSupport/hallie-e1/` | a frozen catalog generation for the E1 eval | script |
+| `~/.ollama/models/` | home | Ollama's store: `qwen3.8:27b-mlx` (her default), `llama3.3:70b` (57 GB) | Ollama |
+| `ollama.log` | `Logs/` | the `ollama serve` the app launched (9 MB) | app |
+| `Hallie/hallie-conversation-<date>.jsonl` | `Logs/Hallie/` | every turn, one file per day (mode 0600) | app |
+| `hallie-eval/` | `Logs/` | the nightly replay and grading | script |
+| `hallie-voice/latest.json`, `nightly-hallie-voice.state.json` | `Logs/` | the nightly voice check and its alert state | script |
+| `archivist.ollamaModel`, `archivist.ollamaHosts` | `defaults` | her model and the Ollama host list | app / Rick |
+| `archivist.name`, `.avatar`, `.photoPath`, `.ownerPersonName`, `hallie.ownerFamilySearchID` | `defaults` | her name and face; who "I" is | app |
+| `archivist.speakVoice`, `archivist.speakSpeed` | `defaults` | her voice | app |
+| `archivist.webEnabled`, `archivist.webPassphrase` | `defaults` | family web access | app |
+| `tests/hallie_*.json`, `tests/archivist_golden_answers.json`, `scripts/hallie_demo/` | `repo/` | the corpora the nightly grades against; the demo baseline | git |
 
 # Logs and Logging
 
-`~/Library/Logs/VideoScan/` — the one log sink (`Shared/LogSink.swift`, `Shared/PersistentLog.swift`: `PersistentLog(name:)` → `<name>.log`, rotated to `<name>-<date>.log`). Every long job writes START / OUTCOME here; nothing runs silently (hard rule 5).
+`Logs/` is the one log sink: `<name>.log`, rotated to `<name>-<date>.log`. Every long job writes START / OUTCOME here; nothing runs silently (hard rule 5).
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `videoscan.log` | `~/Library/Logs/VideoScan/videoscan.log` | the app's log: every MFO job's START/OUTCOME, warnings, `[hallie-voice]` fallbacks (`App/VideoScanApp.swift`, `Shared/LogSink.swift`; 4 MB). App |
-| `catalog.log` | `~/Library/Logs/VideoScan/catalog.log` | logs the activity in the catalog — every commit, generation, hold, refusal (`PersistentLog(name: "catalog")`). App (the committer) |
-| `background.log` | `~/Library/Logs/VideoScan/background.log` | VideoScan Background's own log: START/OUTCOME per job, one line per file analyzed (`VideoScanCore/Background/BackgroundLogSink.swift`). **not found** yet — the helper has not run here. Helper. `logOrReport` |
-| `findtagd.log` | `~/Library/Logs/VideoScan/findtagd.log` | the FindTag daemon (`FindTagJournal.swift`; 2 MB). `findtagd`. `logOrReport` |
-| `previewsweepd.log` | `~/Library/Logs/VideoScan/previewsweepd.log` | the preview-sweep daemon (`PreviewHelperSupervisor.swift`). `previewsweepd`. `logOrReport` |
-| `ollama.log` | `~/Library/Logs/VideoScan/ollama.log` | the `ollama serve` the app launched (above). `logOrReport` |
-| `keys.log` | `~/Library/Logs/VideoScan/keys.log` | gauntlet fixture keys (`Shared/GauntletFixtureCatalog.swift`). **not found** on the Ultra (gauntlet hosts only). `logOrReport` |
-| `Hallie/hallie-conversation-<date>.jsonl` | `~/Library/Logs/VideoScan/Hallie/` | Hallie's conversation log (above). App |
-| `deletions/<stamp>_<kind>.csv` | `~/Library/Logs/VideoScan/deletions/` | one CSV receipt per Trash run — what moved, where, with the surviving copy's hash (`MediaOps/DeletionAudit.swift`). **not found** — no run on this Mac yet. App. `notAppSupport` (in the inventory because a doc example names it) |
-| `scan-audit-<ISO stamp>.json` | `~/Library/Logs/VideoScan/` | per-scan discovery audit: counts and per-path lists of what was skipped and why (`Volumes/DiscoveryAudit.swift`). App |
-| `nightly_test_<date>_<time>.log` (+ `.hallie-replay`, `.hallie-voice`, `.core-hang-sample.txt`), `nightly_launchd.log`, `nightly_guard.log`, `nightly-pending.jsonl` | `~/Library/Logs/VideoScan/` | the 02:00 nightly (`scripts/nightly_local_tests.sh`, 46 MB each), launchd's stdout, the guard's decisions (`nightly_guarded.sh`), metrics rows not yet published. Scripts |
-| `gauntlet/<run-id>/`, `gauntlet/history.jsonl`, `gauntlet/pending-metrics.jsonl`; `gauntlet-ultra/` | `~/Library/Logs/VideoScan/gauntlet/` | one folder per gauntlet run (`scripts/gauntlet/Runner.swift`; run id = `<ISO stamp>-<hex>`), the history and the rows awaiting `tools/publish_metrics.py`; `gauntlet-ultra/` is the Ultra's own set. Script |
-| `hallie-eval/nightly-<stamp>-advisory.{json,graded.jsonl,grade.log,run.log}`, `hallie-eval/e1-<stamp>/`, `hallie-voice/latest.json`, `nightly-hallie-voice.state.json` | `~/Library/Logs/VideoScan/` | Hallie's nightly grading (above). Scripts |
-| `toolchain_update.log`, `toolchain_update_latest.json`, `toolchain_update_launchd.log` | `~/Library/Logs/VideoScan/` | the 01:00 Homebrew/Xcode update (`scripts/update_toolchain.sh`). Script |
-| `disk_check.log`, `complexity_baseline_commit.json`, `dossier_smear_quarantine_<stamp>.json` | `~/Library/Logs/VideoScan/` | the disk check (`scripts/disk_check.py`), the complexity baseline's last commit (`scripts/complexity_baseline_nightly.py`, read by `morning_metrics.sh`), a one-off quarantine receipt. Scripts |
-| `install/{kokoro,ollama,pip-venv,pip-venv-mlx,pip-venv-genealogy}.log` | `~/Library/Logs/VideoScan/install/` | the dev bring-up's install logs (`scripts/install_dev_tools.sh`, `install_videoscan_dev_dependencies/`). Script |
-| `/tmp/nightly-*.log`, `/tmp/nightly-results.xcresult`, `/tmp/nightly-hallie-voice.json` | `/tmp/` | the nightly's scratch: build output, core test output, the xcresult it reads coverage from (gone at reboot). Script |
+| File | Where | What it is | Who writes |
+|---|---|---|---|
+| `videoscan.log` | `Logs/` | the app's log: every MFO job's START/OUTCOME, warnings (4 MB) | app |
+| `catalog.log` | `Logs/` | every catalog commit, generation, hold, refusal | app |
+| `background.log` | `Logs/` | the helper's START/OUTCOME per job (not yet on disk) | helper |
+| `findtagd.log` | `Logs/` | the FindTag daemon (2 MB) | `findtagd` |
+| `previewsweepd.log` | `Logs/` | the preview-sweep daemon | `previewsweepd` |
+| `ollama.log` | `Logs/` | the `ollama serve` the app launched | app |
+| `keys.log` | `Logs/` (gauntlet hosts only) | gauntlet fixture keys | script |
+| `Hallie/hallie-conversation-<date>.jsonl` | `Logs/Hallie/` | Hallie's conversation log | app |
+| `deletions/<stamp>_<kind>.csv` | `Logs/deletions/` | one receipt per Trash run, with the surviving copy's hash | app |
+| `scan-audit-<stamp>.json` | `Logs/` | per-scan discovery audit: what was skipped and why | app |
+| `nightly_test_<date>_<time>.log` (+ `.hallie-replay`, `.hallie-voice`, `.core-hang-sample.txt`) | `Logs/` | the 02:00 nightly (46 MB each) | script |
+| `nightly_launchd.log`, `nightly_guard.log`, `nightly-pending.jsonl` | `Logs/` | launchd's stdout; the guard's decisions; rows not yet published | script |
+| `gauntlet/<run-id>/` | `Logs/gauntlet/` | one folder per gauntlet run | script |
+| `gauntlet/history.jsonl`, `gauntlet/pending-metrics.jsonl` | `Logs/gauntlet/` | gauntlet history; rows awaiting publish | script |
+| `gauntlet-ultra/` | `Logs/` | the Ultra's own gauntlet set | script |
+| `hallie-eval/nightly-<stamp>-{strict,advisory}.*` | `Logs/hallie-eval/` | the nightly Hallie grading, per run | script |
+| `hallie-eval/e1-<stamp>/` | `Logs/hallie-eval/` | an E1 eval run | script |
+| `toolchain_update.log`, `toolchain_update_latest.json`, `toolchain_update_launchd.log` | `Logs/` | the 01:00 Homebrew / Xcode update | script |
+| `disk_check.log` | `Logs/` | the disk check | script |
+| `complexity_baseline_commit.json` | `Logs/` | the complexity baseline's last commit | script |
+| `dossier_smear_quarantine_<stamp>.json` | `Logs/` | a one-off quarantine receipt | script |
+| `install/{kokoro,ollama,pip-venv,pip-venv-mlx,pip-venv-genealogy}.log` | `Logs/install/` | the dev bring-up's install logs | script |
+| `/tmp/nightly-*.log`, `/tmp/nightly-results.xcresult`, `/tmp/nightly-hallie-voice.json` | `/tmp/` | the nightly's scratch (gone at reboot) | script |
 
 # Caches
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `videoscan-nightly-dd/` | `~/Library/Caches/videoscan-nightly-dd/` | the nightly's DerivedData (Release build, `Build/Products/Release/`, three `.xctestrun`, `TestResults/`, `Logs/`; 5.2 GB). `scripts/nightly_local_tests.sh` |
-| `videoscan-nightly-core-build/` | `~/Library/Caches/videoscan-nightly-core-build/` | the nightly's `swift build` folder for VideoScanCore (1.3 GB). Script |
-| `videoscan-ultra-ui-dd/` | `~/Library/Caches/videoscan-ultra-ui-dd/` | DerivedData for `scripts/m4_run.sh ui --host ultra` (5.4 GB). Script |
-| `VideoScan/complexity-baseline-wt/`, `VideoScan/metrics-publish-wt/` | `~/Library/Caches/VideoScan/` | git worktrees the nightly scripts keep: the complexity baseline (detached) and the publisher's `metrics` branch checkout (`tools/publish_metrics.py`; the latter was at `/private/tmp/nightly-metrics-wt` on 2026-10-31). Scripts |
-| `Rick-Breen.VideoScan/Cache.db`, `fsCachedData/`, `com.apple.e5rt.e5bundlecache/` | `~/Library/Caches/Rick-Breen.VideoScan/` | the system's URL cache and Core ML (E5) bundle cache for the app's bundle id (87 MB). macOS |
-| `models--mlx-community--Qwen3-VL-8B-Instruct-4bit/`, `…Qwen3-VL-32B-Instruct-4bit/`, `…Qwen2.5-VL-3B-Instruct-4bit/` | `~/.cache/huggingface/hub/` | the three Qwen vision-language snapshots the model lab and the captioner run through `venv-mlx/` (mlx-vlm); 27 GB. `huggingface_hub` downloads (`~/dev/VideoScan-dd/hf-download*.log`) |
-| `blobs/`, `manifests/registry.ollama.ai/library/{qwen3.8/27b-mlx, llama3.3/70b}` | `~/.ollama/models/` | Hallie's models (57 GB). Ollama |
-| `.dd/` or `~/dev/VideoScan-dd/<task>/` | an agent worktree | an agent's own DerivedData, never Rick's (hard rule 11) |
+| File | Where | What it is | Who writes |
+|---|---|---|---|
+| `videoscan-nightly-dd/` | `Caches/` | the nightly's DerivedData, Release (5.2 GB) | script |
+| `videoscan-nightly-core-build/` | `Caches/` | the nightly's `swift build` folder for Core (1.3 GB) | script |
+| `videoscan-ultra-ui-dd/` | `Caches/` | DerivedData for the Ultra UI runs (5.4 GB) | script |
+| `VideoScan/complexity-baseline-wt/` | `Caches/` | the complexity baseline's git worktree | script |
+| `VideoScan/metrics-publish-wt/` | `Caches/` (or `/private/tmp/nightly-metrics-wt`) | the metrics publisher's `metrics` branch checkout | script |
+| `Rick-Breen.VideoScan/Cache.db`, `fsCachedData/`, `com.apple.e5rt.e5bundlecache/` | `Caches/` | the system's URL cache and Core ML bundle cache (87 MB) | macOS |
+| `models--mlx-community--Qwen3-VL-8B-Instruct-4bit/` | `~/.cache/huggingface/hub/` | the 8B vision model (seated) | `huggingface_hub` |
+| `models--mlx-community--Qwen3-VL-32B-Instruct-4bit/` | `~/.cache/huggingface/hub/` | the 32B (parked; 18 GB) | `huggingface_hub` |
+| `models--mlx-community--Qwen2.5-VL-3B-Instruct-4bit/` | `~/.cache/huggingface/hub/` | the 3B captioner (to retire) | `huggingface_hub` |
+| `blobs/`, `manifests/registry.ollama.ai/library/` | `~/.ollama/models/` | Hallie's models (57 GB) | Ollama |
+| `~/dev/VideoScan-dd/<task>/` | home | an agent's own DerivedData, never Rick's | agents |
 
 # Preferences (user defaults)
 
-Domain `Rick-Breen.VideoScan` → `~/Library/Preferences/Rick-Breen.VideoScan.plist` (read with `defaults read Rick-Breen.VideoScan`; 152 keys on 2026-10-31). The code reads keys through `UserDefaults.standard` and `@AppStorage` (41 `@AppStorage` keys in the app). The important ones:
+`defaults` — 152 keys on 2026-10-31 (`defaults read Rick-Breen.VideoScan`). The important ones, by area:
 
-| Key | Read by | Meaning |
+| Key(s) | Area | What it is |
 |---|---|---|
-| `background.service.enabled` | `App/BackgroundServiceRegistrar.swift`, the helper | register / unregister the VideoScan Background login item (SMAppService). Absent until the helper is first enabled |
-| `archivist.ollamaModel`, `archivist.ollamaHosts` | `Hallie/LLM/ArchivistEndpointSettings.swift`, `OllamaEndpoints.swift` | Hallie's model and Ollama host list (default `qwen3.8:27b-mlx`, local :11434) |
-| `archivist.webEnabled`, `archivist.webPassphrase`, `archivist.name`, `archivist.avatar`, `archivist.photoPath`, `archivist.ownerPersonName`, `archivist.speakVoice`, `archivist.speakSpeed`, `hallie.ownerFamilySearchID` | `Hallie/` | the family web view, her name and face, her voice, who "I" is |
-| `catalog.viewFilters`, `catalog.viewFilters.seeded`, `catalog.foldersOnly`, `catalog.footageFolders`, `catalog.showDisconnectedMedia`, `catalog.volumeShow`, `catalog.volumePaneHeight`, `catalogKindFacet`, `catalogShowRemoved`, `catalogShowSetAside`, `catalogShowUnscannedTargets` | `Catalog/` views | the Catalog tab's filters and panes |
-| `CatalogSyncMasterHostname` | `Catalog/CatalogSync.swift` | which Mac is the sync master (default `RicksM4.local`; a Mac whose hostname differs runs as a viewer) |
-| `findTag.backgroundEnabled` | `People/VideoScanModel+FindTagHelper.swift` | run the FindTag daemon in the background. (`previewSweepEnabled` is still in the plist but no code reads it on 2026-10-31 — stale) |
-| `scanopts_*` (15 keys), `VideoScan.scanTarget*` (14 keys), `VideoScan.lastBackupAt`, `VideoScan.lastBackupPath` | `Volumes/`, `Catalog/` | scan options; the scan targets (paths, roles, trust, capacities, retire records); the last catalog backup |
-| `archive.viewMode`, `archive.sidebar.showRetired`, `archiveAngel.count`, `archiveAngel.makeLossless`, `archiveAngel.footageLastAutoRunAt` | `Archive/`, `ArchiveAngel/Facade/ArchiveAngelSettings.swift` | the Archive tab and the Angel's settings |
-| `dupKeep_volumePrecedence`, `dupKeep_lastElectionDescriptor`, `dupKeep_alsoCleanUpWorkingCopies`, `relocate.preserveSourceLayout`, `relocateDestFolder`, `relocateSourceVolume`, `transcode.lastDestinationDirectory`, `combineOutputFolder`, `comp_*` | `MediaOps/` | duplicate-keeper policy, relocate and transcode destinations |
-| `pf_*` (≈30 keys), `people.*`, `peopleMenu.*`, `PersonFinder.recentSearchPaths` | `People/` | the face pipeline and the People tab (above) |
-| `familyTree.*`, `ft*`, `portrait.*`, `steward.pane.*`, `storage.*`, `mediaDistribution.*`, `analyze.schedule.*`, `perf_*`, `curatorMode`, `selectedTab`, `tabFontSize`, `*Collapsed` | the tabs | view state and schedules |
-| `Dossier*`, `VideoScan.dossierSmearCleanup.v1.dryRunDone` | `People/DossierDashboardView.swift` | dossier job queue and a one-shot marker |
+| `background.service.enabled` | helper | register / unregister the login item (absent until first enabled) |
+| `archivist.ollamaModel`, `archivist.ollamaHosts` | Hallie | her model (default `qwen3.8:27b-mlx`) and host list |
+| `archivist.*`, `hallie.ownerFamilySearchID` | Hallie | name, face, voice, web access, who "I" is |
+| `catalog.viewFilters`, `catalog.viewFilters.seeded` | Catalog | the Show chips |
+| `catalog.foldersOnly`, `catalog.footageFolders`, `catalog.showDisconnectedMedia` | Catalog | view switches |
+| `catalog.volumeShow`, `catalog.volumePaneHeight`, `catalogKindFacet` | Catalog | panes and facets |
+| `catalogShowRemoved`, `catalogShowSetAside`, `catalogShowUnscannedTargets` | Catalog | more view switches |
+| `CatalogSyncMasterHostname` | sync | which Mac is master (default `RicksM4.local`) |
+| `findTag.backgroundEnabled` | People | run the FindTag daemon |
+| `previewSweepEnabled` | — | stale: still in the plist, no code reads it |
+| `scanopts_*` (15 keys) | Volumes | scan options |
+| `VideoScan.scanTarget*` (14 keys) | Volumes | scan targets: paths, roles, trust, capacities, retire records |
+| `VideoScan.lastBackupAt`, `VideoScan.lastBackupPath` | Catalog | the last catalog backup |
+| `archive.viewMode`, `archive.sidebar.showRetired` | Archive | view state |
+| `archiveAngel.count`, `archiveAngel.makeLossless`, `archiveAngel.footageLastAutoRunAt` | Archive Angel | its settings |
+| `dupKeep_*` | MediaOps | duplicate-keeper policy |
+| `relocate.preserveSourceLayout`, `relocateDestFolder`, `relocateSourceVolume` | MediaOps | relocate destination |
+| `transcode.lastDestinationDirectory`, `combineOutputFolder`, `comp_*` | MediaOps | transcode and combine destinations |
+| `pf_*` (≈ 30 keys) | People | the face pipeline |
+| `people.*`, `peopleMenu.*`, `PersonFinder.recentSearchPaths` | People | the People tab |
+| `familyTree.*`, `ft*`, `portrait.*` | Family Tree | view state and the portrait |
+| `steward.pane.*`, `storage.*`, `mediaDistribution.*` | Steward | view state |
+| `analyze.schedule.*` | Analyze | schedules |
+| `perf_*`, `curatorMode`, `selectedTab`, `tabFontSize`, `*Collapsed` | app | window and tab state |
+| `Dossier*`, `VideoScan.dossierSmearCleanup.v1.dryRunDone` | People | dossier job queue; a one-shot marker |
 
 # launchd
 
-| Filename | Location | Purpose |
-|---|---|---|
-| `Rick-Breen.VideoScan.Background.plist` | source `VideoScan/VideoScanBackground/Rick-Breen.VideoScan.Background.plist`; in the bundle at `VideoScan.app/Contents/Library/LaunchAgents/`; program `Contents/Library/LoginItems/VideoScan Background.app` | the helper's launchd agent, registered through `SMAppService.agent(plistName:)` (`App/BackgroundServiceRegistrar.swift`), MachService of the same name, KeepAlive-on-failure, Background process type, low-priority I/O (design `docs/design/background_service_2026_10_30.md` §3.2). Inspect: `launchctl print gui/$(id -u)/Rick-Breen.VideoScan.Background`. **Not registered** on the Ultra on 2026-10-31 ("Could not find service") — `background.service.enabled` is unset |
-| `com.videoscan.nightly-tests.plist` | `~/Library/LaunchAgents/com.videoscan.nightly-tests.plist` | the 02:00 nightly: `/bin/bash ~/dev/VideoScan/scripts/nightly_guarded.sh`, stdout → `nightly_launchd.log`, Nice 10, Standard process type. Installed by `scripts/install_nightly.sh` from `scripts/nightly_rota.json` (on: M4 02:00, Ultra 02:00; off: the laptops) |
-| `com.videoscan.toolchain-update.plist` | `~/Library/LaunchAgents/` | 01:00 `scripts/update_toolchain.sh` (installer `scripts/install_toolchain_update.sh`) |
-| `com.videoscan.adversarial-review.plist`, `com.videoscan.adversarial-confirm.plist` | source `scripts/adversarial/`; installed to `~/Library/LaunchAgents/` by `scripts/adversarial/install.sh` | the nightly adversarial review and its 05:30 red-test confirm. **Not installed** on the Ultra (M4 only) |
-| analysis lane, weekly sanitizer, disk check | `scripts/install_analysis_lane.sh`, `scripts/install_sanitizer_weekly.sh`, `scripts/install_disk_check.sh` | each writes its own `~/Library/LaunchAgents/com.videoscan.*.plist`. **Not installed** on the Ultra on 2026-10-31 (`disk_check.log` exists from an earlier run) |
-| `findtagd`, `previewsweepd` | no plist | not launchd jobs: the app spawns them detached (`VideoScan --find-tag …` when `findTag.backgroundEnabled` is on; `videoscan-preview-sweep` through `PreviewHelperSupervisor.spawnDetached`, `Media/PreviewSweepService.swift`); single instance by the `.lock` files in App Support |
+| File | Where | What it is | Installed by |
+|---|---|---|---|
+| `Rick-Breen.VideoScan.Background.plist` | `VideoScan.app/Contents/Library/LaunchAgents/` (source `VideoScan/VideoScanBackground/`) | the helper's agent: MachService, KeepAlive on failure, Background, low-priority I/O | the app, via `SMAppService` |
+| `VideoScan Background.app` | `VideoScan.app/Contents/Library/LoginItems/` | the helper program the plist points at | the build |
+| `com.videoscan.nightly-tests.plist` | `~/Library/LaunchAgents/` | the 02:00 nightly (M4 and Ultra; off on the laptops) | `scripts/install_nightly.sh` |
+| `com.videoscan.toolchain-update.plist` | `~/Library/LaunchAgents/` | the 01:00 Homebrew / Xcode update | `scripts/install_toolchain_update.sh` |
+| `com.videoscan.adversarial-review.plist`, `com.videoscan.adversarial-confirm.plist` | `~/Library/LaunchAgents/` (M4 only) | the nightly adversarial review and its 05:30 confirm | `scripts/adversarial/install.sh` |
+| `com.videoscan.*` (analysis lane, weekly sanitizer, disk check) | `~/Library/LaunchAgents/` (not on the Ultra) | one plist each | `scripts/install_analysis_lane.sh`, `install_sanitizer_weekly.sh`, `install_disk_check.sh` |
+| `findtagd`, `previewsweepd` | no plist | spawned detached by the app, single instance by lock file | the app |
+
+Inspect the helper with `launchctl print gui/$(id -u)/Rick-Breen.VideoScan.Background`. Not registered on the Ultra on 2026-10-31 (`background.service.enabled` unset).
 
 # Source Code and Executable File layout
 This is standard Swift Application targeted to Apple Silcon (ARM) and not IOS (yet) so the standard executable layout bundle is followed per Apple.
 Since the app is not yet deployed we build and run direct from ~rickb/dev/VideoScan/...
 
-| Filename | Location | Purpose |
+| File | Where | What it is |
 |---|---|---|
-| the repo | `~/dev/VideoScan/` (same path on every Mac) | Rick's checkout on `main`; agents never switch its branch, dirty it or build into its DerivedData (hard rule 11). Origin: GitHub, public |
-| `VideoScan/VideoScan.xcodeproj` | `~/dev/VideoScan/VideoScan/` | the project; schemes `VideoScan` (Debug) and `VideoScan-Release`; test plans `VideoScan-CI`, `VideoScan-Gauntlet`, `VideoScan-UI` (`.xctestplan` beside it) |
-| targets | — | `VideoScan` (the app, bundle id `Rick-Breen.VideoScan`, source `VideoScan/VideoScan/` — `Analyze Archive ArchiveAngel Catalog Events FamilyTree FootageGroups Hallie Integrity Media MediaOps Model ModelsUI People Provenance Shared Steward Volumes App`), `VideoScan Background` (the helper, `Rick-Breen.VideoScan.Background`, source `VideoScan/VideoScanBackground/`), `VideoScanTests` (`VideoScan/VideoScanTests/`), `VideoScanUITests` (`VideoScan/VideoScanUITests/`) |
-| `VideoScan/VideoScanCore/` | `Package.swift`, `Sources/VideoScanCore/` + the CLIs `videoscan-audio-match`, `videoscan-preview-sweep`, `videoscan-tree-ingest`, `catalog-crash-helper`, `CSQLiteCloseGuard`; `Tests/VideoScanCoreTests/` | the Core package (`swift test --package-path <abs>`): engines, the commit door, the import, the background job stores, the family graph |
-| `scripts/` (120 files), `tools/` (24), `tests/` (Python), `TestDriver/` | the repo | the nightly / gauntlet / install shell and Python; `tools/codex_review.py`, `publish_metrics.py`, `data_organization.py`, `html_to_pdf.swift`; the Python test and corpus folder (`tests/test_docs_links.py`, `tests/fixtures/`, the Hallie corpora); the Swift TestDriver package (Release) |
-| `docs/` | the repo | `Purpose-and-Charter.md`, `ARCHITECTURE.md`, `STATUS.md`, `PROCESS.md`, `DECISIONS.md`, `BACKLOG.md`, `design/`, `reviews/`, `archive/`, `index.html` (the metrics dashboard) |
-| `venv/`, `venv-mlx/`, `venv-genealogy/` | the repo, git-ignored | Python 3.14 for scripts and the face pipeline; Python 3.12 for mlx-vlm / mlx-whisper (the Qwen models); 3.14 for the genealogy tools. Built by `scripts/install_dev_tools.sh` / `install_videoscan_dev_dependencies/` with `uv` |
-| `Brewfile` | the repo | Homebrew: `ffmpeg` (ffprobe), `python@3.14`, `python@3.12`, `uv`, `ollama`, `smartmontools`, `rsync`, `media-info`, `cmake`, `libpng`, `jpeg-turbo`, `git-lfs`, `gh`, `mas`, `node`, `swiftlint`, `periphery`, `pre-commit`, `jq` — each entry names its caller |
-| `.scratch/` | `~/dev/VideoScan/.scratch/`, git-ignored | the lab bench: briefs, bench runs, review transcripts, Rick's review verdicts before they are kept in `docs/reviews/` |
-| `output/`, `poi_profiles/`, `photos/`, `models/`, `assets/app_photos/about_collage.png`, `*.csv` | the repo, git-ignored | the face pipeline's working folders, downloaded face models, the real About collage, exports. Private: never committed |
-| `~/dev/VideoScan-wt/<task>/` | 20 worktrees on 2026-10-31 | one `git worktree` per agent task, branch named for the task; removed when merged (`.trash/`, never deleted) |
-| `~/dev/VideoScan-dd/<task>/`, `~/dev/VideoScan-dd/*.log`, `*.xcresult` | `~/dev/VideoScan-dd/` | the agents' DerivedData and their build / test logs and result bundles |
-| `~/.local/bin/claude`, `~/.local/bin/codex` | — | the two agent CLIs (installed by their own installers; `install_videoscan_dev_dependencies/` checks, never installs) |
+| the repo | `repo/` | Rick's checkout on `main`; agents never switch, dirty or build into it (hard rule 11); origin GitHub, public |
+| `VideoScan/VideoScan.xcodeproj` | `repo/VideoScan/` | the project; schemes `VideoScan` (Debug), `VideoScan-Release`; test plans `VideoScan-CI`, `-Gauntlet`, `-UI` |
+| `VideoScan/VideoScan/` | `repo/` | the app target (`Rick-Breen.VideoScan`): one folder per tab or engine |
+| `VideoScan/VideoScanBackground/` | `repo/` | the helper target (`Rick-Breen.VideoScan.Background`) |
+| `VideoScan/VideoScanTests/`, `VideoScan/VideoScanUITests/` | `repo/` | the app's test targets |
+| `VideoScan/VideoScanCore/` | `repo/` | the Core package: engines, commit door, import, background job stores, family graph |
+| `VideoScanCore/Sources/{videoscan-audio-match,videoscan-preview-sweep,videoscan-tree-ingest,catalog-crash-helper}` | `repo/VideoScan/` | the Core CLIs |
+| `scripts/` (120 files) | `repo/` | nightly, gauntlet, install shell and Python |
+| `tools/` (24 files) | `repo/` | `codex_review.py`, `publish_metrics.py`, `data_organization.py`, `html_to_pdf.swift`, the video-LLM bench |
+| `tests/` | `repo/` | Python tests, fixtures, the Hallie corpora |
+| `TestDriver/` | `repo/` | the Swift TestDriver package (Release) |
+| `docs/` | `repo/` | Charter, ARCHITECTURE, STATUS, PROCESS, DECISIONS, BACKLOG, `design/`, `reviews/`, `archive/`, `index.html` |
+| `venv/`, `venv-mlx/`, `venv-genealogy/` | `repo/` (git-ignored) | Python 3.14 (scripts, faces); 3.12 (mlx-vlm, whisper); 3.14 (genealogy) |
+| `Brewfile` | `repo/` | Homebrew formulae, each entry naming its caller |
+| `.scratch/` | `repo/` (git-ignored) | the lab bench: briefs, bench runs, review transcripts, Rick's verdicts |
+| `output/`, `poi_profiles/`, `photos/`, `models/`, `*.csv` | `repo/` (git-ignored) | face-pipeline folders, face models, exports — private, never committed |
+| `~/dev/VideoScan-wt/<task>/` | home | one git worktree per agent task; moved to `.trash/` when merged |
+| `~/dev/VideoScan-dd/<task>/`, `*.log`, `*.xcresult` | home | the agents' DerivedData, build logs and result bundles |
+| `~/.local/bin/claude`, `~/.local/bin/codex` | home | the two agent CLIs |
 
 # Built products
 
-| Filename | Location | Purpose |
+| File | Where | What it is |
 |---|---|---|
-| `VideoScan.app` (Debug) | `~/Library/Developer/Xcode/DerivedData/VideoScan-<hash>/Build/Products/Debug/VideoScan.app` | Rick's Debug build from Xcode (two `VideoScan-*` folders on the Ultra on 2026-10-31). Standard bundle: `Contents/MacOS/VideoScan`, `Contents/Resources/`, `Contents/Info.plist` |
-| `VideoScan Background.app` | inside the app at `Contents/Library/LoginItems/VideoScan Background.app`; also loose beside it in `Build/Products/Debug/` | the helper, embedded as a login item so SMAppService can register it; `Contents/Library/LaunchAgents/Rick-Breen.VideoScan.Background.plist` beside it |
-| Release products | `~/Library/Caches/videoscan-nightly-dd/Build/Products/Release/` (nightly), `~/Library/Developer/Xcode/DerivedData/VideoScan-<hash>/Build/Products/Release/` (Rick's `VideoScan-Release` scheme) | Release is for the gauntlet, TestDriver, perf, demos and the nightly; Debug for iteration |
-| `.xctestrun` | beside the products | `VideoScan_VideoScan-{CI,Gauntlet,UI}_macosx27.0-arm64.xctestrun` — the three test plans built for testing (`xcodebuild build-for-testing`, run without rebuilding by `test-without-building`) |
-| Core products | `<derivedData>/Build/Products/<config>/` or `.build/` under `VideoScanCore` (`swift build`) | the Core CLIs `videoscan-audio-match`, `videoscan-preview-sweep`, `videoscan-tree-ingest`, `catalog-crash-helper` |
+| `VideoScan.app` (Debug) | `~/Library/Developer/Xcode/DerivedData/VideoScan-<hash>/Build/Products/Debug/` | Rick's Debug build from Xcode |
+| `VideoScan Background.app` | inside the app at `Contents/Library/LoginItems/`; also loose beside it | the helper, embedded as a login item |
+| `VideoScan.app` (Release) | `Caches/videoscan-nightly-dd/Build/Products/Release/` | the nightly's Release build (gauntlet, TestDriver, perf, demos) |
+| `VideoScan.app` (Release) | `~/Library/Developer/Xcode/DerivedData/VideoScan-<hash>/Build/Products/Release/` | Rick's `VideoScan-Release` scheme |
+| `VideoScan_VideoScan-{CI,Gauntlet,UI}_macosx27.0-arm64.xctestrun` | beside the products | the three test plans built for `test-without-building` |
+| `videoscan-audio-match`, `videoscan-preview-sweep`, `videoscan-tree-ingest`, `catalog-crash-helper` | `<DerivedData>/Build/Products/<config>/` or `VideoScanCore/.build/` | the Core CLIs |
 
 # Test and metrics artefacts
 
-| Filename | Location | Purpose |
+| File | Where | What it is |
 |---|---|---|
-| the `metrics` branch | GitHub `origin/metrics`; local checkout in the publisher's worktree (`~/Library/Caches/VideoScan/metrics-publish-wt`, or `/private/tmp/nightly-metrics-wt` as on 2026-10-31) | `metrics/coverage.jsonl`, `adversarial.jsonl`, `codex_reviews.jsonl`, `github_daily.jsonl`, `modules.jsonl`, `testdriver.jsonl`, `summary_latest.json`, `events_latest.json` — sanitized rows `tools/publish_metrics.py` pushes (`HEAD:refs/heads/metrics`, never force) |
-| `docs/index.html` | the repo, served by GitHub Pages | the dashboard that reads the `metrics` branch |
-| `~/Library/Logs/VideoScan/gauntlet/<run-id>/` | per run | the gauntlet's per-stage logs and verdicts; `history.jsonl` and `pending-metrics.jsonl` beside them (above) |
-| `/tmp/nightly-*.log`, `/tmp/nightly-results.xcresult` | `/tmp/` | the nightly's scratch (above) |
-| `.xcresult` bundles | `~/Library/Caches/videoscan-nightly-dd/TestResults/`, `~/dev/VideoScan-dd/*.xcresult`, `~/Library/Developer/Xcode/DerivedData/VideoScan-*/Logs/Test/` | Xcode result bundles (`xcrun xcresulttool`, `xccov`) |
-| `scripts/gauntlet/manifest.json`, `tests/docs_links_allowlist.json` | the repo | the gauntlet's test manifest (drift-checked) and the docs-link exceptions |
-| `scripts/complexity_metrics.py` | the repo | the one source of truth for the complexity counters; its baseline worktree is under `~/Library/Caches/VideoScan/` |
+| the `metrics` branch | GitHub `origin/metrics`; local checkout in the publisher's worktree | `coverage.jsonl`, `adversarial.jsonl`, `codex_reviews.jsonl`, `github_daily.jsonl`, `modules.jsonl`, `testdriver.jsonl`, `summary_latest.json`, `events_latest.json` — sanitized rows, never force-pushed |
+| `docs/index.html` | `repo/`, served by GitHub Pages | the dashboard that reads the `metrics` branch |
+| `gauntlet/<run-id>/`, `history.jsonl`, `pending-metrics.jsonl` | `Logs/gauntlet/` | per-run logs and verdicts; history; rows awaiting publish |
+| `/tmp/nightly-*.log`, `/tmp/nightly-results.xcresult` | `/tmp/` | the nightly's scratch |
+| `*.xcresult` | `Caches/videoscan-nightly-dd/TestResults/`, `~/dev/VideoScan-dd/`, `~/Library/Developer/Xcode/DerivedData/VideoScan-*/Logs/Test/` | Xcode result bundles |
+| `scripts/gauntlet/manifest.json` | `repo/` | the gauntlet's test manifest (drift-checked) |
+| `tests/docs_links_allowlist.json` | `repo/` | the docs-link exceptions |
+| `scripts/complexity_metrics.py` | `repo/` | the one source of truth for the complexity counters |
 
 # The M4 and the other Macs
 
-Every Mac has the repo at the same path, `~/dev/VideoScan`, and the same App Support / Logs layout under its own `~`. Roles (`docs/PROCESS.md` §8):
+Every Mac has the repo at `repo/` and the same App Support / Logs layout under its own home. Roles (`docs/PROCESS.md` §8):
 
-| Machine | Hostname | Role and what lives there |
+| Machine | Hostname | Role |
 |---|---|---|
-| M5 Ultra Mac Studio | `RicksUltra` (`RicksUltra.local`) | Rick's dev machine from 2026-10-27; the live catalog and all of the above; also on the nightly rotation at 02:00 (`gauntlet-ultra/`, `videoscan-ultra-ui-dd`) |
-| M4 Max Mac Studio | `RicksM4` (`RicksM4.local`) | the default testbed: nightly at 02:00 plus the 04:30 analysis lane and the adversarial review; `scripts/m4_run.sh` pushes a commit to `ricksm4.local:dev/VideoScan` and runs the UI plans / deep gauntlet there; holds the `test-host/` data copy (`TestHostDetection.swift`), the nightly DerivedData at `~/Library/Caches/videoscan-nightly-dd`, and is the CatalogSync master by default (`RicksM4.local`) |
-| M5 Pro MacBook Pro | `ricksm5.local` (scripts label it `M5`) | the laptop: overflow compute, a CatalogSync viewer; off the nightly (a closed lid sleeps it) |
+| M5 Ultra Mac Studio | `RicksUltra.local` | Rick's dev machine from 2026-10-27; the live catalog; on the 02:00 nightly |
+| M4 Max Mac Studio | `RicksM4.local` | the default testbed: nightly 02:00, analysis lane 04:30, adversarial review; `test-host/` data copy; CatalogSync master by default |
+| M5 Pro MacBook Pro | `ricksm5.local` (scripts say `M5`) | the laptop: overflow compute; a CatalogSync viewer; off the nightly |
 | M1 Max MacBook Pro | `RicksM1` | travel laptop, often on battery; overflow; off the nightly |
 
 # Manifest
@@ -229,7 +324,7 @@ and might never be deployed in a traditional way, however a simple clone from Gi
 would result, in theory, in a build. Another user would populate their family videos, photos, GEDCOM family tree, etc., and be off and running. 
 This is not a priority at this time.
 
-What exists today toward that: `Brewfile` (`brew bundle`), `scripts/install_dev_tools.sh` and `install_videoscan_dev_dependencies/` (the venvs, Ollama, Kokoro, checked against what the M4 runs), `INSTALL.md`, `setup.sh`, `requirements.txt`; the app's own first-run creates `~/Library/Application Support/VideoScan/` and `~/Library/Logs/VideoScan/` empty.
+What exists today toward that: `Brewfile` (`brew bundle`), `scripts/install_dev_tools.sh` and `install_videoscan_dev_dependencies/` (the venvs, Ollama, Kokoro), `INSTALL.md`, `setup.sh`, `requirements.txt`; the app's own first run creates `AppSupport/` and `Logs/` empty.
 
 # Portal TBD
 Eventually we will have more files here to allow family access to the public facing side of the app. Only media marked Public (future feature)

@@ -43,3 +43,9 @@ brew "jq"            # JSON in shell scripts
 # - Xcode comes from the Mac App Store.
 # - `timeout` (coreutils) is deliberately absent: the shell scripts that need a
 #   deadline carry their own watchdogs, and the M4 runs without it.
+
+# DV datecode per frame (VAUX/SSYB), which ffprobe and MediaInfo do not read from
+# raw .dv captures: the DV recording-date test (docs/design/video_llm_lab_2026_10_30.md
+# §11; lab design "DV datecode — yes, a day"). Rick installed it on the M4 and the
+# Ultra on 2026-11-01; scripts/dv_datecode.py (to come) is the caller.
+brew "dvrescue"
