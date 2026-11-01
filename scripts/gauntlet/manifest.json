@@ -30308,6 +30308,37 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_date_review.py",
+      "stage": "integration",
+      "suites": [
+        "test_date_review.py"
+      ],
+      "tests": [
+        "test_a_one_frame_clip_still_gets_a_poster",
+        "test_build_media_matrix_posters_and_strips",
+        "test_candidates_join_live_copy_on_disk_only",
+        "test_container_sentinel_dates_are_dashes_with_the_reason",
+        "test_date_rows_missing_values_are_dashes",
+        "test_date_rows_with_every_source",
+        "test_filename_dates",
+        "test_inferred_source_is_a_kind_never_the_folder_name",
+        "test_isolation_a_garbage_file_still_shows_with_no_picture",
+        "test_reads_the_catalog_only_through_catalog_db",
+        "test_scale_100k_candidates",
+        "test_selection_covers_the_variety",
+        "test_selection_is_deterministic_and_puts_your_dated_clips_first",
+        "test_selection_of_fewer_candidates_than_n_takes_them_all",
+        "test_served_page_has_no_path_but_the_filename_and_verdicts_round_trip",
+        "test_server_refuses_a_non_loopback_bind",
+        "test_server_refuses_a_run_dir_outside_scratch",
+        "test_the_preview_cache_is_used_in_strip_order",
+        "test_truth_container_line_is_the_file_not_the_catalog",
+        "test_verdict_append_and_reread"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_disk_check.py",
       "stage": "unit",
       "suites": [
@@ -36050,6 +36081,10 @@
         },
         {
           "name": "tests/test_av_sync.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_date_review.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
