@@ -38,8 +38,11 @@
   `provenance_assertions(seq PK, subject_kind IN (content,carrier,captureEvent,captureSetup,excerpt), subject_id, field, value, state IN (inferred,confirmed,corrected,rejected), by ('rick' | 'machine:*'), at, confidence (required when inferred), evidence_json (json_valid))` STRICT; index `(subject_kind, subject_id, field, value, seq)`; trigger **veto** (`RAISE(IGNORE)` on an inferred value whose latest human decision is `rejected`); triggers no-update / no-delete. Only the machine infers; only Rick decides.
 - Live model runs: none on the Ultra by day beyond one 2-minute smoke on a `.backup` copy; the corpus run goes to the M4 when the branch is up (the worker reports the command).
 
+## Plan for 11/01 (Rick): v14 + step 1 → docs cleanup (lunch / end of day) → Rick spot-tests observations in the inspector, the Catalog search box ("1990s") and Hallie
+- Observations reach Rick's live catalog by running the era job on the M4 against a `.backup` copy and copying `background/journal/*.jsonl` to the Ultra for the applier (digest-keyed, so it applies); no model run on the Ultra by day. The spot test most likely lands 11/02 morning.
+
 ## Next
-1. UI worker for step 1 item 8 (after the v14 migration is on the branch); merge after Rick's DDL word and the Codex pass; M4 corpus run; first convergence reading.
+1. UI worker for step 1 item 8 (also: era words into the search index — DECISIONS 2026-11-01 "human words") (after the v14 migration is on the branch); merge after Rick's DDL word and the Codex pass; M4 corpus run; first convergence reading.
 2. `dvrescue` (Rick installing 11/01; Brewfile entry in) → DV datecode per frame over the ten raw `.dv` captures; ExifTool date tabulation over the corpus; pulldown detector.
 3. Prompt r4 (a legible stamp = one year; narrowest range the evidence supports) on clips HELD OUT of the corpus.
 4. #408: repoint the five gauntlet UI flows; turn the runner's UI stage on for the away window.
