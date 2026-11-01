@@ -187,3 +187,12 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
 - Rick's architecture note (`video_intelligence_architecture.pdf`, read 2026-10-31): adopt keyframes by scene-change detection for the
   sampler, perceptual video hash and SigLIP embeddings as dedup tiers 2–3, constraint propagation from birthdates; events stay rulings
   (not DBSCAN); cloud offload stays a §9 ruling and never carries family pixels (rule 13).
+- Found while mapping files (2026-10-31 night, docs workers): `previewSweepEnabled` sits in the prefs plist but no code reads it (stale key);
+  `Media/MediaPersonLinks.swift` has no caller outside its own file (dead?); `CatalogSync.defaultMasterHostname` is still `RicksM4.local`
+  while the live catalog is on the Ultra (ruling); `findtag-journal/` (572 MB, 425 entries) has no bound in `FindTagJournal.swift`;
+  `tests/test_docs_links.py` counts the git-ignored `docs/archive/retired-2026-10-reset.zip` as a miss in any fresh worktree (allowlist it);
+  the gauntlet runner leaves ~6 GB of DerivedData per run under `~/Library/Logs/VideoScan/gauntlet*/` (strip build dirs, keep xcresults).
+- Docs still for Rick to rule after the 10/31 consolidation (`docs/design/models.md` report): fold `docs/reviews/codex/` per area once #404's
+  headers are fixed; archive `m4_staging_gate` and `nightly_adversarial_review_design` once the scripts' comments point elsewhere; the cloud
+  briefs retire after 2026-11-05; the two provenance research docs archive when v14 lands; `cyberbrain_design` / `kinship_inference_design`
+  headers say PROPOSED for things that appear built; `October_Design_Retrospective` keep or fold.
