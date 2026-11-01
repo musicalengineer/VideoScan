@@ -1,9 +1,10 @@
 # Media archive: preservation, preparation, promotion, and cleanup
 
-Consolidated 2026-09-16 from the sources listed in §15.
-Baseline: `59ca9468c01e0068501206c63698286c10f4e8b7`.
-This is a durable workflow and contract reference, not authorization to move or delete media.
-Historical counts, dates, branch plans, and estimates are evidence of past work, not current inventory.
+Consolidated 2026-09-16 from the sources listed in §15 (baseline `59ca9468`); §1's status rewritten for 2026-11-01
+(Codex docs review F13). This is a durable workflow and contract reference, not authorization to move or delete media.
+The contracts are `docs/ARCHITECTURE.md` §10.3–§10.4 and §10.6; where this guide's older sections disagree with them
+or with `docs/DECISIONS.md`, those win. Historical counts, dates and branch plans below are evidence of past work, not
+current inventory.
 
 ## 1. Purpose and status
 
@@ -13,24 +14,21 @@ Catalog, People, triage, and Archive are views of one catalog, not separate data
 Advancing a workflow state does not itself move a file or establish redundancy.
 The long-term goal is a portable archive that Rick's family can understand without VideoScan.
 
-Status below distinguishes documented implementation from future intent.
-Source presence was checked during consolidation; no builds, tests, or live-data operations ran.
-
-| Capability | Status at consolidation |
+| Capability | Status, 2026-11-01 |
 |---|---|
-| Master Archive designation, scaffold, verified Promote, manifest/journal | Implemented; hardened recovery contracts in §5 |
-| Volume role simplification and retirement separation | Implemented; §3 |
-| Copy-family assessment and original/derivative distinction | Implemented core; richer role/manifest work remains separate |
-| Archive timeline and Files presentation | Implemented baseline; event clustering remains proposed |
-| Archive Angel preparation, durable plans, review, promotion | Implemented alpha, with subsequent scoring/rename refinements |
-| Continuous Archive Angel Assessment, grades, evidence sidecar | Implemented; latest cadence supersedes nightly-only design |
-| Backup attestations, protection thresholds, prune planning | Implemented through stage 2: dry run; Apply is disabled |
-| Media Ledger model, store, and hooks | Implemented components; complete event coverage/portable mirroring not established here |
-| Refile, final approval badges, time-budget stop | Deferred in the alpha; no completion evidence established here |
-| Four-dot `ArchiveCandidacy` indicator | Proposed; existing readiness/nudge/AAA are distinct features |
-| Mono-as-problem readiness correction | Still open in checked `ArchiveReadiness.assess` |
-| Perceptual uniqueness ranking; original-footage classifier | Proposed; no claim of implementation |
-| Automatic post-promotion deletion | Not authorized by this document and not implemented by the dry-run sheet |
+| Master Archive designation, verified Promote (copy, hash before and after, `00_Index` v3 manifest under the lock, ledger line, catalog row) | Built; one engine with buttons in Catalog, Triage and Archive (§5; ARCHITECTURE §10.4) |
+| Archived means fixed: **Update…** (name/date only, same-volume no-clobber rename, index rewrite, verified rollback) | Built; it replaced the deferred Refile (`ArchiveRefile.swift` is its predecessor; deleting it is a BACKLOG ruling) |
+| Archive tab labels | The stage stored as `Master` displays as "Archived"; "Master" is reserved for the provenance role (DECISIONS 2026-10-26) |
+| `ArchiveVolumeProtection` — the one choke point every delete verb passes | Built (path + volume UUID); no bulk delete on FamilyArchive, ever |
+| Media Ledger, append-only, mirrored to `00_Index/media-ledger.jsonl` on every Promote | Built |
+| Fixity: Verify Archive Copies; Validate Catalog tiers 0–1 (presence, whole-file SHA-256) | Built; tiers 2–4 (rolling re-read, decode-to-end) are BACKLOG |
+| Removal: Trash only, one removal marker, Cleanup (Triage) as the one bulk door | Built (DECISIONS 2026-10-09 to 10-12; ARCHITECTURE §10.3) |
+| Prune planning after Promote (`ArchivedWhatNextSheet`, `PrunePlan`) | Rebuilt simple 2026-10-22 (byte-identical copies only); Apply runs as `PruneApplyJob`, Trash only; folding it into Cleanup is ruling Q4 |
+| Backup attestations (cloud, off-site, named storage) | Built; human answers, not app-verified fixity. The verifiable off-site copy is open (#249) |
+| Provenance: Set Role (v13), Find Master by sound; assertions (v14) | Built; carriers, capture events and the Promote gate are designed (`docs/design/provenance.md`) |
+| Archive Angel (assessment, grades, durable plans, review, promotion) | Built alpha; frozen pending ruling Q8 (keep, shrink to badges, or cut) |
+| Four-dot `ArchiveCandidacy`; perceptual uniqueness; original-footage classifier | Proposed; not built |
+| Automatic post-promotion deletion | Never: no auto-delete (CLAUDE.md rule 2) |
 
 ### Superseded assumptions
 
