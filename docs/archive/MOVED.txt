@@ -115,3 +115,5 @@ docs/guides/testing.md#4-gauntlet-tcc-and-exit-masking -> docs/archive/guides/op
 docs/guides/testing.md#5-setting-up-a-test-mac -> docs/archive/guides/ops/test_mac_setup_automation_mode.md
 docs/guides/testing.md#6-the-m1-macbook-pro-as-a-test-runner -> docs/archive/guides/ops/mbp_test_runner.md
 docs/guides/testing.md#7-the-nightly-adversarial-review -> docs/archive/design/nightly_adversarial_review_design_2026-10-01.md
+docs/guides/operations.md#1-the-m4-deep-test-host -> docs/archive/design/m4_staging_gate_2026_10_28.md
+docs/guides/operations.md#2-storage-layout -> docs/archive/guides/ops/storage_layout_2026_08_13.md
