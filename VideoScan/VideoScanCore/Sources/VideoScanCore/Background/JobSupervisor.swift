@@ -35,6 +35,8 @@ public actor JobSupervisor {
         /// Progress pushes per job are no closer than this (design §3.3: 4/s).
         public var progressMinInterval: Duration = .milliseconds(250)
         public var finishedHistoryLimit = 50
+        /// How long a `.deferred` unit waits before it is asked again.
+        public var deferRetryInterval: Duration = .seconds(30)
         public init() {}
     }
 
@@ -303,27 +305,61 @@ public actor JobSupervisor {
         run.checkpoint = cp
         runs[id] = run
         let began = clock.now
+        let detail = job.startDetail
         log.write("START \(request.kind) \(id) — \(cp.totalUnits) units, lane \(request.lane), by \(request.requestedBy)"
-                  + (resumed ? ", resuming at unit \(cp.completedUnits)" : ""))
+                  + (resumed ? ", resuming at unit \(cp.completedUnits)" : "") + (detail.isEmpty ? "" : "; \(detail)"))
         push(id, force: true)
         // The checkpoint exists from START, so a kill during unit 0 still lets the
         // relaunch write this START's OUTCOME (review 2026-10-30, fix 3a).
         guard persist(cp, id) else { return }
 
+        var deferredSaid: String?
         while cp.completedUnits < cp.totalUnits {
-            switch await holdBetweenUnits(id, cp) {
+            switch await step(job, &cp, id, deferredSaid: &deferredSaid) {
             case .killed: return
-            case .stop: return finish(id, as: .stopped, checkpoint: cp, elapsed: clock.now - began)
-            case .proceed(let state):
-                if state == .trickle {
-                    try? await Task.sleep(for: backoff.trickleInterval)
-                    if Task.isCancelled { return }
-                }
+            case .stop: return await end(job, id, as: .stopped, cp, began)
+            case .next: continue
             }
-            if await performUnit(job, &cp, id) == .killed { return }
-            guard persist(cp, id) else { return }
         }
-        finish(id, as: runs[id]?.stopRequested == true ? .stopped : .finished, checkpoint: cp, elapsed: clock.now - began)
+        await end(job, id, as: runs[id]?.stopRequested == true ? .stopped : .finished, cp, began)
+    }
+
+    private enum Step { case next, stop, killed }
+
+    /// One unit's turn: the hold between units (pause / stop / Backoff and
+    /// the trickle cadence), the unit, then its checkpoint — or, for a
+    /// `.deferred` unit, a wait and no checkpoint (said once per reason).
+    private func step(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, deferredSaid: inout String?) async -> Step {
+        switch await holdBetweenUnits(id, cp) {
+        case .killed: return .killed
+        case .stop: return .stop
+        case .proceed(let state):
+            if state == .trickle {
+                try? await Task.sleep(for: backoff.trickleInterval)
+                if Task.isCancelled { return .killed }
+            }
+        }
+        switch await performUnit(job, &cp, id) {
+        case .killed: return .killed
+        case .deferred(let reason):
+            if deferredSaid != reason {
+                let kind = runs[id]?.request.kind.rawValue ?? "?"
+                log.write("\(kind) \(id) waits at \(cp.completedUnits) of \(cp.totalUnits): \(reason)")
+                deferredSaid = reason
+            }
+            try? await Task.sleep(for: configuration.deferRetryInterval)
+            return Task.isCancelled ? .killed : .next
+        case .recorded:
+            deferredSaid = nil
+        }
+        return persist(cp, id) ? .next : .killed
+    }
+
+    /// The job's own release and words, then the one terminal door.
+    private func end(_ job: any BackgroundJob, _ id: JobID, as state: JobRunState, _ cp: JobCheckpoint, _ began: ContinuousClock.Instant) async {
+        await job.end()
+        let detail = await job.outcomeDetail()
+        finish(id, as: state, checkpoint: cp, elapsed: clock.now - began, detail: detail)
     }
 
     /// The factory's job for `id`, or the refusal written as START…refused.
@@ -388,7 +424,7 @@ public actor JobSupervisor {
         return .proceed(state)
     }
 
-    private enum UnitEnd { case recorded, killed }
+    private enum UnitEnd { case recorded, killed, deferred(String) }
 
     /// Run unit `cp.completedUnits` and count it (done / skipped / failed).
     /// A cancellation (the process "dying") records nothing.
@@ -398,6 +434,7 @@ public actor JobSupervisor {
             switch try await job.runUnit(index) {
             case .done: cp.unitsRun += 1
             case .skipped: cp.unitsSkipped += 1
+            case .deferred(let reason): return Task.isCancelled ? .killed : .deferred(reason)
             }
         } catch is CancellationError where Task.isCancelled {
             return .killed
@@ -440,13 +477,14 @@ public actor JobSupervisor {
     /// queue file goes too, except for a job this build REFUSED — that file is
     /// the app's intent and is kept for a build that knows the kind (refuse,
     /// never erase). The run stays in the status list for a while.
-    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?) {
+    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?, detail: String = "") {
         guard var run = runs[id] else { return }
         run.state = state
         run.finishedAt = Date()
         run.parked = false
         runs[id] = run
-        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed))
+        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed)
+                  + (detail.isEmpty ? "" : "; \(detail)"))
         if case .failed = state {} else { queue.remove(id) }
         checkpoints.remove(id)
         touch()

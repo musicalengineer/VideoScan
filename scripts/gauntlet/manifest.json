@@ -388,6 +388,32 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/EraJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EraJobLogicTests",
+        "EraJobRunTests",
+        "EraJobCLITests"
+      ],
+      "tests": [
+        "aCorruptCheckpointRestartsFromZeroSaysSoAndWritesNoDuplicate",
+        "aDuplicateLineWereOneWrittenAppliesOnce",
+        "aNewerCatalogSchemaIsRefusedAtPlan",
+        "aWorkerDeathAndAClipPastItsCapFailThatUnitAndTheJobGoesOn",
+        "killMidUnitThenRelaunchSkipsTheUnitAndWritesNoSecondSet",
+        "noModelLoadWhileRickIsAtTheKeyboardThenItRuns",
+        "orderAndPathYearOverOneHundredThousandInsideABudget",
+        "orderIsOldestFirstByTheBestBoundUnknownLast",
+        "pathYearIsAFourDigitRunClosestToTheFile",
+        "theCLIWordsParseAndRefuseInWords",
+        "theFactoryRefusesAMissingRepoMissingWeightsAndAnUnknownKindInWords",
+        "theJobRunsSignsEveryLineFromTheWorkerAndSaysItAtStartAndOutcome",
+        "theMapperWritesWindowsStampsAndOneFusedLine",
+        "thePlanKeepsLiveReadableVideoOrdersItExcludesTheCachedAndIsFrozen"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JournalApplicationTests.swift",
       "stage": "unit",
       "suites": [
@@ -32133,6 +32159,7 @@
         "test_analyze_clip_is_one_bench_record_and_its_frames_are_gone",
         "test_it_is_the_benchmarks_code_path",
         "test_load_reply_names_the_approach_revision_and_model",
+        "test_media_matrix_every_container_yields_frames_through_the_service",
         "test_no_valid_window_means_no_fused_range",
         "test_the_factory_ref_builds_a_clip_service_on_the_seated_a2",
         "test_the_worker_protocol_end_to_end"
@@ -35085,7 +35112,7 @@
       ],
       "expected_floor": 3089,
       "name": "unit",
-      "package_expected_floor": 599,
+      "package_expected_floor": 613,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35106,6 +35133,9 @@
         "VideoScanCoreTests.CatalogRecordDTOScaleTests",
         "VideoScanCoreTests.CatalogRepositoryContractTests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
+        "VideoScanCoreTests.EraJobCLITests",
+        "VideoScanCoreTests.EraJobLogicTests",
+        "VideoScanCoreTests.EraJobRunTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.IdleExitPolicyTests",

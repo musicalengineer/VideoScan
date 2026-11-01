@@ -41,7 +41,7 @@ final class BackgroundService: @unchecked Sendable {
         backoff = Backoff(source: activity)
         supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                    checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
-                                   factory: DefaultJobFactory(), backoff: backoff, log: log)
+                                   factory: DefaultJobFactory(stateRoot: root, backoff: backoff), backoff: backoff, log: log)
         server = XPCServer(machServiceName: Self.machServiceName, supervisor: supervisor, log: log,
                            allowedPeers: [Self.appBundleIdentifier, Self.bundleIdentifier], startedAt: startedAt)
     }

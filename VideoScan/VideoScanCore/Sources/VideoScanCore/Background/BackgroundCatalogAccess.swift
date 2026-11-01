@@ -102,6 +102,31 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
         return out
     }
 
+    /// Every row of `sql`, each as its columns' text (NULL → nil), streamed
+    /// to `visit` one row at a time — the caller bounds what it keeps (the
+    /// EraJob plan keeps one small struct per video file).
+    public func forEachRow(_ sql: String, _ visit: ([String?]) throws -> Void) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard let db else { throw Refusal("the catalog handle is closed") }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw Self.refusal(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        let columns = sqlite3_column_count(statement)
+        while true {
+            let rc = sqlite3_step(statement)
+            if rc == SQLITE_DONE { break }
+            guard rc == SQLITE_ROW else { throw Self.refusal(db) }
+            var row: [String?] = []
+            row.reserveCapacity(Int(columns))
+            for c in 0..<columns {
+                row.append(sqlite3_column_text(statement, c).map { String(cString: $0) })
+            }
+            try visit(row)
+        }
+    }
+
     private static func refusal(_ db: OpaquePointer) -> Refusal {
         let code = sqlite3_extended_errcode(db) & 0xFF
         let message = String(cString: sqlite3_errmsg(db))

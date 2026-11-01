@@ -220,7 +220,7 @@ struct JobSupervisorTests {
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME caption \(newer.id) — failed:") && $0.contains("the queue file is kept") }, "\(log.lines)")
         #expect(log.startCount == log.outcomeCount, "\(log.lines)")
         #expect(queue.contains(newer.id), "the request is the app's intent; a build that knows the kind will run it")
-        #expect(await supervisor.snapshot(newer.id)?.state == .failed(reason: "VideoScan Background does not know the job kind `caption` (this build knows: noop)"))
+        #expect(await supervisor.snapshot(newer.id)?.state == .failed(reason: "VideoScan Background does not know the job kind `caption` (this build knows: noop, era)"))
         #expect(await supervisor.shouldExitWhenIdle(threshold: 0), "a refused file is not pending work")
     }
 

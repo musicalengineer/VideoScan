@@ -167,6 +167,9 @@ public actor PythonClipWorker {
 
     public var workerPID: Int32? { child?.pid }
 
+    /// A live worker with its model loaded (EraJob defers while trickling and this is false).
+    public var isLoaded: Bool { child?.isRunning == true && loadInfo != nil }
+
     /// Ask the worker to exit; kill it if it does not within 5 s.
     public func close() async {
         guard let child else { return }

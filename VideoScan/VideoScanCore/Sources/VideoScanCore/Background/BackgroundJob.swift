@@ -18,6 +18,12 @@ import Foundation
 public enum UnitOutcome: Sendable, Equatable {
     case done
     case skipped
+    /// Not now, and not counted: the unit is asked again after the
+    /// supervisor's `deferRetryInterval`, through the same between-units
+    /// hold (pause / stop / Backoff honoured). EraJob defers while Backoff
+    /// says `.trickle` and its model is not loaded — no model load while
+    /// Rick is at the keyboard (design §3.5).
+    case deferred(reason: String)
 }
 
 public protocol BackgroundJob: Sendable {
@@ -25,6 +31,19 @@ public protocol BackgroundJob: Sendable {
     var title: String { get }
     var unitCount: Int { get }
     func runUnit(_ index: Int) async throws -> UnitOutcome
+    /// Words appended to the START line (approach, model, order rule…).
+    var startDetail: String { get }
+    /// Words appended to the OUTCOME line (assertions written, s/unit, RSS…).
+    func outcomeDetail() async -> String
+    /// The job ends (finished or stopped): release what it holds (a worker
+    /// process, a plan file). Not called when the process dies.
+    func end() async
+}
+
+extension BackgroundJob {
+    public var startDetail: String { "" }
+    public func outcomeDetail() async -> String { "" }
+    public func end() async {}
 }
 
 public struct NoOpJob: BackgroundJob {
@@ -76,13 +95,78 @@ public protocol JobFactory: Sendable {
     func makeJob(for request: JobRequest) throws -> any BackgroundJob
 }
 
-/// Step 0's registry: `noop` only.
+/// The registry: `noop` (step 0) and `era` (step 1). `stateRoot` is the
+/// service's background/ folder (the journal and the frozen plans live
+/// under it); `catalogURL` the catalog it plans from (read-only).
 public struct DefaultJobFactory: JobFactory {
-    public init() {}
+    public let stateRoot: URL?
+    public let catalogURL: URL
+    public let backoff: Backoff?
+
+    public static var productionCatalogURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/VideoScan/catalog.sqlite")
+    }
+
+    public init(stateRoot: URL? = nil, catalogURL: URL = DefaultJobFactory.productionCatalogURL, backoff: Backoff? = nil) {
+        self.stateRoot = stateRoot
+        self.catalogURL = catalogURL
+        self.backoff = backoff
+    }
+
     public func makeJob(for request: JobRequest) throws -> any BackgroundJob {
         switch request.kind {
         case .noop: return try NoOpJob(request: request)
-        default: throw Refusal("VideoScan Background does not know the job kind `\(request.kind)` (this build knows: noop)")
+        case .era:
+            guard let stateRoot else { throw Refusal("era: this service has no state folder for its journal") }
+            return try EraJob(try EraJob.setup(for: request, stateRoot: stateRoot, catalogURL: catalogURL, backoff: backoff))
+        default: throw Refusal("VideoScan Background does not know the job kind `\(request.kind)` (this build knows: noop, era)")
         }
+    }
+}
+
+extension EraJob {
+    /// A request's parameters → a Setup, refused in words before anything
+    /// runs: `repoPath` (required, must hold tools/video-llm-bench/bench.py),
+    /// `python` (default <repo>/venv-mlx/bin/python3), `modelDir` (default:
+    /// the Hugging Face snapshot of the 8B, which must be present),
+    /// `catalogPath` (default the factory's), `limit` (files; default all).
+    public static func setup(for request: JobRequest, stateRoot: URL, catalogURL: URL, backoff: Backoff?) throws -> Setup {
+        let p = request.parameters
+        guard let repo = p[repoPathKey], !repo.isEmpty else {
+            throw Refusal("era: `\(repoPathKey)` is required — the VideoScan checkout that holds tools/video-llm-bench/bench.py and venv-mlx")
+        }
+        var limit: Int?
+        if let text = p[limitKey] {
+            guard let n = Int(text), n >= 0 else { throw Refusal("era: `\(limitKey)` must be a whole number, got \(text)") }
+            limit = n
+        }
+        let modelDir = p[modelDirKey] ?? defaultModelSnapshot()
+        guard let modelDir, FileManager.default.fileExists(atPath: modelDir + "/config.json") else {
+            throw Refusal("era: the 8B weights are not on this Mac (\(p[modelDirKey] ?? "no snapshot of mlx-community/Qwen3-VL-8B-Instruct-4bit in ~/.cache/huggingface")) — refused at START, not after 400 files")
+        }
+        let worker = try PythonClipWorker.Configuration.repo(URL(fileURLWithPath: repo), factory: "clip-service:a2-py:\(modelDir)",
+                                                              python: p[pythonKey].map { URL(fileURLWithPath: $0) })
+        let catalog = p[catalogPathKey].map { URL(fileURLWithPath: $0) } ?? catalogURL
+        return Setup(jobID: request.id, catalogURL: catalog, stateRoot: stateRoot, worker: worker, limit: limit, backoff: backoff)
+    }
+
+    /// The newest snapshot folder of the 8B in the Hugging Face cache, or nil.
+    static func defaultModelSnapshot() -> String? {
+        let snapshots = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub/models--mlx-community--Qwen3-VL-8B-Instruct-4bit/snapshots")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: snapshots.path)) ?? []
+        return names.sorted().last.map { snapshots.appendingPathComponent($0).path }
+    }
+
+    /// A request for the CLI's `--enqueue era`.
+    public static func request(limit: Int?, repoPath: String, python: String? = nil, catalogPath: String? = nil,
+                               lane: String = "model", requestedBy: String) -> JobRequest {
+        var parameters = [repoPathKey: repoPath]
+        if let limit { parameters[limitKey] = String(limit) }
+        if let python { parameters[pythonKey] = python }
+        if let catalogPath { parameters[catalogPathKey] = catalogPath }
+        return JobRequest(kind: .era, lane: lane, parameters: parameters,
+                          resources: JobResourceProfile(peakMemoryBytes: 8_000_000_000, needsResidentModel: true, secondsPerUnitEstimate: 7),
+                          requestedBy: requestedBy)
     }
 }
