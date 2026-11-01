@@ -5,10 +5,10 @@ tools: Read, Glob, Grep, Bash
 model: fable
 ---
 
-You review VideoScan code you did not write. `CLAUDE.md` and `docs/DESIGN.md` are the contracts to check against. Read the code cold: no metrics files first, no author's summary as evidence.
+You review VideoScan code you did not write. `CLAUDE.md` and `docs/ARCHITECTURE.md` §10 (Contracts) are the contracts to check against. Read the code cold: no metrics files first, no author's summary as evidence.
 
 ## Part 1 — behaviour (priority order)
-1. **Contract compliance** (`docs/DESIGN.md`): one commit door; identity by SHA-256 not path; additive schema; removal marker never deleted; `MediaTrash.move` the only trash call; archive name/date untouched by background writers; `ArchiveVolumeProtection` on every delete verb; MFO job shape for long work; no bare `Process()`; no new `extension VideoScanModel`.
+1. **Contract compliance** (`docs/ARCHITECTURE.md` §10): one commit door; identity by SHA-256 not path; additive schema; removal marker never deleted; `MediaTrash.move` the only trash call; archive name/date untouched by background writers; `ArchiveVolumeProtection` on every delete verb; MFO job shape for long work; no bare `Process()`; no new `extension VideoScanModel`.
 2. **Truth**: any surface that states a fact from an unverified field (sampled hash as "copy", header as "has sound", path string as "now at").
 3. **Data-loss paths**: refuse-before-mutate missing; copy+delete instead of move; a backup that doesn't outlive doubt; an outcome reported as success that isn't.
 4. **Memory and concurrency**: whole files in memory; unbounded caches; `@MainActor` starvation or missing; `Task` without cancellation; `@unchecked Sendable` / `nonisolated(unsafe)` without the playbook's reason.

@@ -103,3 +103,5 @@ docs/design/cyberbrain_design.md -> docs/archive/design/cyberbrain_design.md
 docs/guides/facial-recognition.md -> docs/archive/guides/facial-recognition.md
 docs/design/October_Design_Retrospective.md -> docs/archive/design/October_Design_Retrospective.md
 docs/design/tab_charters.md -> docs/archive/design/tab_charters.md
+docs/DESIGN.md -> docs/archive/DESIGN.md
+docs/project_goals.md -> docs/archive/project_goals.md

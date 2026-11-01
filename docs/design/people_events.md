@@ -91,7 +91,7 @@ are settled.
 *From `design/segments_and_content_coverage_2026_10_10.md`, whole; archived at `docs/archive/design/`. Still a proposal: no segment model is in the source on 2026-11-01. Its §8 decisions are open.*
 
 
-*Design, 2026-10-10. Status: PROPOSED, no code changed. Author: Claude (design agent, worktree branch `design/segments-content-coverage-2026-10-10`). Trigger: the family demo miss — "the Hudsons at Thanksgiving 1984" is inside a 94-minute VHS capture and nothing in the catalog could say so, let alone where. Related: `docs/design/hallie_proposer_with_tools_design.md` §R6 (item 5 names this document), `docs/design/scene_captions_plan.md`, `docs/design/catalog.md`, `docs/project_goals.md` (goals 2 and 4).*
+*Design, 2026-10-10. Status: PROPOSED, no code changed. Author: Claude (design agent, worktree branch `design/segments-content-coverage-2026-10-10`). Trigger: the family demo miss — "the Hudsons at Thanksgiving 1984" is inside a 94-minute VHS capture and nothing in the catalog could say so, let alone where. Related: `docs/design/hallie_proposer_with_tools_design.md` §R6 (item 5 names this document), `docs/design/scene_captions_plan.md`, `docs/design/catalog.md`, `docs/ARCHITECTURE.md` (goals 2 and 4).*
 
 ### 0. Summary
 

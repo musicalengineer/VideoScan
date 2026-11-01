@@ -66,7 +66,7 @@ The goal of the agentic assisted component of the VideoScan App (LLMs, etc) is t
 
 Originally we thought we'd "train" an LLM or a Visual LLM on the Breen Family media, feeding it every video, to allow an LLM to recognize individuals in the family, or say "it is a 97% chance this person in the video is Donna", but this has proven elusive. The idea from months ago was a collection of models under a master controller, like a Mixture of Experts, specifically trained on the Breen Family Media and the Breen Family Tree — a much more constrained problem than the general one, but with plenty of challenges. We decided to try 1, 2 and 3 first and see if we can eventually try 4 again once we get some successful strategies working.
 
-**Where the design lives:** `docs/design/video_llm_lab_2026_10_30.md` (the design: samplers, approaches, the judge, the approach ladder A0–A6), `docs/archive/reviews/video_llm_design.md` (the running review verdict), `docs/archive/research/video_llm_for_family_media_2026-10-29.md` (the research behind it). Provenance: `docs/design/provenance_retroactive_2026_10_26.md` and `docs/guides/provenance_roles.md`. Earlier research is in `docs/archive/research`.
+**Where the design lives:** `docs/design/machine_intelligence.md` (the design: samplers, approaches, the judge, the approach ladder A0–A6), `docs/archive/reviews/video_llm_design.md` (the running review verdict), `docs/archive/research/video_llm_for_family_media_2026-10-29.md` (the research behind it). Provenance: `docs/design/provenance.md` and `docs/guides/provenance_roles.md`. Earlier research is in `docs/archive/research`.
 
 ## Claude Feedback — the Mixture-of-Experts idea against what the designs settled (2026-10-30)
 **The architecture is right; the word "trained" is the only disagreement.** A master controller routing work to specialist engines and judging their output is exactly what the model-lab design describes (`ApproachRegistry` + the MFO job + the `Judge`), and the experts already exist or are designed:
@@ -127,7 +127,7 @@ A starting point for the top-level shape:
 ## Claude Feedback — the background analyzer service (2026-10-30)
 Rick, 2026-10-30: "The app is essentially the UI/UX… peel off services into a BG process that can keep running,
 persist after we quit the app… I don't like the idea of having an option to launch the app in the BG… we can't lose
-the app for 2 weeks." Designed in `docs/design/background_service_2026_10_30.md`; the shape in four lines:
+the app for 2 weeks." Designed in `docs/design/background_service.md`; the shape in four lines:
 - **`VideoScan Background.app`**, a helper inside the app bundle registered as a launchd agent through Apple's `SMAppService`: its own name and badged icon in Activity Monitor and Login Items; launchd keeps it alive after the app quits and across reboots; it exits when idle and relaunches on the next request. Not a copy of the app in the background.
 - **It never writes the catalog.** Read-only catalog, results into sidecar SQLite files and an append-only journal that the app's one committer applies. The one-committer rule stands.
 - **Engines move, never copy** (one engine per action): model lab first (born there), then Scene Captions, fingerprints, the rest of Content Analysis, Event Analysis. The app is whole at every step.

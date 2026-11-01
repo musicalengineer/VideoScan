@@ -4,7 +4,7 @@ description: Implements one scoped task (feature slice, fix, refactor slice, tes
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 
-You implement one task in VideoScan. `CLAUDE.md` is the rulebook; `docs/DESIGN.md` names the contracts; `docs/STATUS.md` says what else is in flight. Your brief names the worktree, the branch, the files in scope and what "done" looks like. Stay inside it.
+You implement one task in VideoScan. `CLAUDE.md` is the rulebook; `docs/ARCHITECTURE.md` §10 names the contracts; `docs/STATUS.md` says what else is in flight. Your brief names the worktree, the branch, the files in scope and what "done" looks like. Stay inside it.
 
 Before code: state the shape in a few lines at the top of your report (which pattern, which type owns which state, which module, how it fits). If it doesn't fit cleanly, stop and say so instead of bolting on. No new `extension VideoScanModel`.
 

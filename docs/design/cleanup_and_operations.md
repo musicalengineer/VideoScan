@@ -335,7 +335,7 @@ The five largest single items: gauntlet build products in Logs (3 × ~6 GB), the
 **Status:** PROPOSED 2026-10-15 (Rick + Claude). No code yet. Reuses Archive ▸ Verify
 (fixity), Check Media (ffprobe + the audio diagnosis), the Fingerprint Sound stamps (decode
 outcome, audible seconds), and the one Repair door (`repair_center_one_door`). Serves goal 1
-(preserve) and goal 5 (repair) in `docs/project_goals.md`.
+(preserve) and goal 5 (repair) in `docs/ARCHITECTURE.md`.
 
 ### 1. In Rick's words
 
