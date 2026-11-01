@@ -52,6 +52,11 @@ func expectWithinReferenceTimingBudget(
                                           loadBefore: loadBefore)
     if TimingBudget.isReferenceRun() {
         recordTimingJudgement(judgement, sourceLocation: sourceLocation)
+    } else if judgement.verdict == .fail {
+        // Off the reference run the number is logged, not asserted (GH #385) — except a
+        // HANG: beyond 3× the budget `judge` fails in every mode, and a hang must never be
+        // swallowed by a wrapper (Codex P2, 2026-10-31).
+        recordTimingJudgement(judgement, sourceLocation: sourceLocation)
     } else {
         print("[timing-budget] (not the reference run: logged, not asserted — GH #385)")
     }
