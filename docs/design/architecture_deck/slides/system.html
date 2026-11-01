@@ -31,6 +31,6 @@
 <div style="display:flex;flex-direction:column;gap:4px;background:#E7EAF0;border-radius:16px;padding:20px 32px">
 <p style="font-size:26px;font-weight:600">macOS 15+ on Apple silicon — unified memory, launchd, SQLite, Finder Trash, the file system, GPU and Neural Engine</p>
 </div>
-<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6A7179">Rule: media is only ever read; every file operation runs ffmpeg through one streaming runner, never a bare Process. The helper never links the committer (a sensor proves it).</p>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6A7179">Rule: analysis and the service only read media; Promote copies, Repair writes a new file, Trash moves (never unlink); every file operation runs ffmpeg through one streaming runner, never a bare Process. The helper never links the committer (a sensor proves it).</p>
 <aside>Top to bottom is dependency order. The two apps share Core; nothing in Core imports SwiftUI. Models never live in the app bundle: they sit in ~/.cache/huggingface and ~/.ollama.</aside>
 </section>
