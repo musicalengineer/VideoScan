@@ -12,7 +12,6 @@
 // Synthetic digests only.
 
 import Foundation
-import GRDB
 import Testing
 @testable import VideoScanCore
 
@@ -24,15 +23,7 @@ struct JournalApplicationTests {
 
     static func scene(contents: Int) async throws -> (StoreFixture, GRDBCatalogRepository) {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
-        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
-            try db.inTransaction {
-                for n in 1...contents {
-                    try db.execute(sql: "INSERT INTO content (digest, byte_count, first_seen_at, first_seen_how) VALUES (?, 100, 1700000000, 'rescan')",
-                                   arguments: [hex(n)])
-                }
-                return .commit
-            }
-        }
+        try EraFixture.seedContents(fixture, count: contents)
         let repository = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
         try #require(await repository.open(at: fixture.url) == .readWrite)
         return (fixture, repository)

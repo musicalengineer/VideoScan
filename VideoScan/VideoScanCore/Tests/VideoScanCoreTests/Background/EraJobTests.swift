@@ -24,83 +24,8 @@
 // Synthetic digests and paths only.
 
 import Foundation
-import GRDB
 import Testing
 @testable import VideoScanCore
-
-enum EraFixture {
-    static func hex(_ n: Int) -> String { String(format: "%064x", n) }
-
-    struct File {
-        var n: Int
-        var path: String
-        var duration: Double = 120
-        var stream = "Video+Audio"
-        var removed = false
-        var userYear: String?
-        var embedded: Int64?
-        var inferred: Int64?
-    }
-
-    /// A catalog.sqlite at schema 14 holding `files` (one content each).
-    static func catalog(_ files: [File]) async throws -> StoreFixture {
-        let fixture = try await StoreFixture.make(.grdb, generation: 0)
-        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
-            try db.inTransaction {
-                try db.execute(sql: "INSERT OR IGNORE INTO volumes (volume_uuid) VALUES ('')")
-                for f in files {
-                    try db.execute(sql: "INSERT OR IGNORE INTO content (digest, byte_count, first_seen_at, first_seen_how) VALUES (?, 100, 1700000000, 'rescan')",
-                                   arguments: [hex(f.n)])
-                    let dir = (f.path as NSString).deletingLastPathComponent
-                    try db.execute(sql: """
-                        INSERT INTO files (id, content_digest, volume_uuid, full_path, path_fold, filename, ext, directory, size_bytes,
-                                           digest_computed_at, digest_source, stream_type, duration_s, lifecycle, archive_stage,
-                                           volume_case_sensitive, embedded_created_at, embedded_created_source,
-                                           removal_state, removal_since, removal_reason)
-                        VALUES (?, ?, '', ?, ?, ?, 'mov', ?, 100, 1, 'archiveFixity', ?, ?, 'Cataloged', 'None', 0, ?, ?, ?, ?, ?)
-                        """, arguments: [String(format: "00000000-0000-0000-0000-%012X", f.n), hex(f.n), f.path, f.path.lowercased(),
-                                         (f.path as NSString).lastPathComponent, dir, f.stream, f.duration,
-                                         f.embedded, f.embedded.map { _ in "creation_time" },
-                                         f.removed ? "removedFromCatalog" : nil, f.removed ? 1 : nil, f.removed ? "test" : nil])
-                    if let y = f.userYear {
-                        try db.execute(sql: "INSERT INTO user_dates (digest, value, confidence) VALUES (?, ?, 'known')", arguments: [hex(f.n), y])
-                    }
-                    if let i = f.inferred {
-                        try db.execute(sql: "INSERT INTO inferred_dates (digest, date_at, confidence, source) VALUES (?, ?, 0.5, 'folder-year')",
-                                       arguments: [hex(f.n), i])
-                    }
-                }
-                return .commit
-            }
-        }
-        return fixture
-    }
-
-    static func stateRoot() throws -> URL { try BackgroundFixtures.scratch("era") }
-
-    static func setup(_ fixture: StoreFixture, root: URL, jobID: JobID = JobID(), limit: Int? = nil, clipTimeout: Duration = .seconds(20),
-                      log: URL? = nil, backoff: Backoff? = nil, readable: @escaping @Sendable (String) -> Bool = { _ in true },
-                      afterAppend: (@Sendable (Int) async -> Void)? = nil) -> EraJob.Setup {
-        EraJob.Setup(jobID: jobID, catalogURL: fixture.url, stateRoot: root,
-                     worker: ClipWorkerFixture.configuration(clipTimeout: clipTimeout, log: log),
-                     limit: limit, backoff: backoff, isReadable: readable, afterJournalAppend: afterAppend)
-    }
-
-    static func lines(_ root: URL) throws -> [ObservationLine] {
-        let journal = ObservationJournal(directory: root.appendingPathComponent("journal", isDirectory: true))
-        var out: [ObservationLine] = []
-        for file in journal.dayFiles() {
-            var offset = 0
-            while true {
-                let r = try journal.read(file: file, from: offset, maxLines: 4096)
-                out += r.lines.compactMap { try? $0.result.get() }
-                if r.lines.isEmpty { break }
-                offset = r.nextOffset
-            }
-        }
-        return out
-    }
-}
 
 /// A factory over a fixed Setup (the job id comes from the request).
 struct EraTestFactory: JobFactory {
@@ -190,12 +115,10 @@ struct EraJobRunTests {
         defer { fixture.remove() }
         let root = try EraFixture.stateRoot()
         // Content 6 already has a catalog row by the signer; content 1 a journal line.
-        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
-            try db.execute(sql: """
-                INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
-                VALUES ('content', ?, 'era.fused', '1990-1995', 'inferred', ?, 1, 0.5, '{}')
-                """, arguments: [EraFixture.hex(6), SeatedApproach.eraA2.signer])
-        }
+        try EraFixture.execute(fixture, """
+            INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
+            VALUES ('content', ?, 'era.fused', '1990-1995', 'inferred', ?, 1, 0.5, '{}')
+            """, [EraFixture.hex(6), SeatedApproach.eraA2.signer])
         try ObservationJournal(directory: root.appendingPathComponent("journal")).append([
             try ObservationLine(subjectID: EraFixture.hex(1), field: "era.fused", value: "2000-2005", by: SeatedApproach.eraA2.signer,
                                 at: 1, confidence: 0.5, evidence: [:], job: "old", unit: 0)])
@@ -207,9 +130,7 @@ struct EraJobRunTests {
         #expect(job.plan.videoContents == 5)
         #expect(job.startDetail.contains(EraJob.orderRule))
         // Frozen: the catalog changes, the same job id plans nothing new.
-        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
-            try db.execute(sql: "INSERT INTO user_dates (digest, value, confidence) VALUES (?, '1950', 'known')", arguments: [EraFixture.hex(6)])
-        }
+        try EraFixture.execute(fixture, "INSERT INTO user_dates (digest, value, confidence) VALUES (?, '1950', 'known')", [EraFixture.hex(6)])
         #expect(try EraJob(EraFixture.setup(fixture, root: root, jobID: id)).plan == job.plan)
         #expect(try EraJob(EraFixture.setup(fixture, root: root, jobID: id, limit: 1)).plan.units.count == 2, "a resume never re-plans")
         #expect(try EraJob(EraFixture.setup(fixture, root: root, limit: 1)).plan.units.count == 1, "a new job honours limit")
@@ -220,9 +141,7 @@ struct EraJobRunTests {
     @Test func aNewerCatalogSchemaIsRefusedAtPlan() async throws {
         let fixture = try await EraFixture.catalog([])
         defer { fixture.remove() }
-        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
-            try db.execute(sql: "UPDATE catalog_state SET schema_version = 99 WHERE singleton = 1")
-        }
+        try EraFixture.execute(fixture, "UPDATE catalog_state SET schema_version = 99 WHERE singleton = 1", [])
         #expect(throws: Refusal.self) { _ = try EraJob(EraFixture.setup(fixture, root: try EraFixture.stateRoot())) }
     }
 

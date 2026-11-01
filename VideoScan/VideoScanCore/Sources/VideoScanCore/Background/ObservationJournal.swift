@@ -243,7 +243,7 @@ public final class ObservationJournal: @unchecked Sendable {
         self.now = now
     }
 
-    /// "2026-11-01.jsonl" for the UTC day of `date`.
+    /// `<yyyy-mm-dd>.jsonl` for the UTC day of `date`.
     public static func fileName(for date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -452,14 +452,16 @@ public final class ObservationJournal: @unchecked Sendable {
     /// re-applying is a no-op) when it is absent, unreadable, or no longer
     /// describes this file (Codex #187 F3): another inode, a file shorter
     /// than the cursor, a byte before the cursor that is not a newline, or
-    /// a hash of the 4 KB before the cursor that differs.
+    /// a hash of the 4 KB before the cursor that differs. (No stored st_dev:
+    /// a device number is not stable across a remount or a reboot —
+    /// FixityStampVolumeIdentityTests; the inode and the bytes suffice.)
     public func appliedOffset(_ file: String) -> Int {
         let sidecar = directory.appendingPathComponent(file + Self.appliedSuffix)
         guard let data = try? Data(contentsOf: sidecar),
               let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let offset = o["offset"] as? Int, offset > 0,
               let identity = Self.identity(directory.appendingPathComponent(file)),
-              o["device"] as? Int == identity.device, o["inode"] as? Int == identity.inode,
+              o["inode"] as? Int == identity.inode,
               identity.size >= offset,
               let tail = Self.tailHash(directory.appendingPathComponent(file), before: offset),
               o["tail_sha256"] as? String == tail else { return 0 }
@@ -473,16 +475,16 @@ public final class ObservationJournal: @unchecked Sendable {
         guard let identity = Self.identity(url), let tail = Self.tailHash(url, before: offset) else {
             throw JournalIOError("stat \(url.path)", errno)
         }
-        let record: [String: Any] = ["offset": offset, "device": identity.device, "inode": identity.inode, "tail_sha256": tail]
+        let record: [String: Any] = ["offset": offset, "inode": identity.inode, "tail_sha256": tail]
         var data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
         data.append(0x0A)
         try AtomicFilePublish.write(data, to: directory.appendingPathComponent(file + Self.appliedSuffix))
     }
 
-    private static func identity(_ url: URL) -> (device: Int, inode: Int, size: Int)? {
+    private static func identity(_ url: URL) -> (inode: Int, size: Int)? {
         var st = stat()
         guard stat(url.path, &st) == 0 else { return nil }
-        return (Int(st.st_dev), Int(st.st_ino), Int(st.st_size))
+        return (Int(st.st_ino), Int(st.st_size))
     }
 
     /// SHA-256 of the (≤ 4 KB) bytes ending at `offset`; nil when they cannot
