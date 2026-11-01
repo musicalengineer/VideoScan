@@ -270,10 +270,10 @@ struct DeleteDuplicatesPhysicalDriveTests {
         #expect(try SourceTree.appCode(named: "DeleteDuplicatesJob.swift").contains("DuplicateDrives.resetVolumeCache()"))
         #expect(try SourceTree.appCode(named: "VideoScanModel+ArchiveVolumeSnapshot.swift").contains("DuplicateDrives.resetVolumeCache()"))
         var repo = try #require(SourceTree.appSourceURL(named: "DeleteDuplicatesPlan.swift"))
-        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md").path) {
+        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants.md").path) {
             repo = repo.deletingLastPathComponent()
         }
-        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
+        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants.md"), encoding: .utf8)
         #expect(invariants.contains("A \"drive\" is a PHYSICAL DEVICE") && invariants.contains("are ONE drive"))
         #expect(invariants.contains("a hardware RAID presents as ONE device and counts as one drive")
                 && invariants.contains("redundancy is NOT a second drive"))

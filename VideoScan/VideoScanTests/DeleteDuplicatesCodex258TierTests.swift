@@ -509,10 +509,10 @@ struct DeleteDuplicatesCodex258DrivesTests {
         let drives = try SourceTree.appSource(named: "DeleteDuplicatesDrives.swift")
         #expect(drives.contains("var addsADrive: Bool { self == .physical || self == .network }"))
         var repo = try #require(SourceTree.appSourceURL(named: "DeleteDuplicatesPlan.swift"))
-        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md").path) {
+        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants.md").path) {
             repo = repo.deletingLastPathComponent()
         }
-        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
+        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants.md"), encoding: .utf8)
         #expect(invariants.contains("a mounted disk image") && invariants.contains("a network volume (one drive per server + share)")
                 && invariants.contains("APFS volumes in one container"))
     }

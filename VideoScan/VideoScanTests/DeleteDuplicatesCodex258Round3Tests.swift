@@ -330,10 +330,10 @@ struct DeleteDuplicatesCodex258Round3Tests {
         #expect(!lookup.contains("shared") && !lookup.contains("cache"), "the fresh lookup reads or writes the cache")
         #expect(drives.contains("? DuplicateDrives.liveIdentityFresh(forPath: path, device: device)\n                : DuplicateDrives.liveIdentityCached("))
         var repo = try #require(SourceTree.appSourceURL(named: "DeleteDuplicatesPlan.swift"))
-        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md").path) {
+        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants.md").path) {
             repo = repo.deletingLastPathComponent()
         }
-        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
+        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants.md"), encoding: .utf8)
         #expect(invariants.contains("AT THE FINAL VERDICT IMMEDIATELY BEFORE A REMOVAL, NOTHING COMES FROM A CACHE"))
         #expect(invariants.contains("the Master Archive rule (the current designation, turned into a protection there and then")
                 && invariants.contains("that makes six, all fresh"))

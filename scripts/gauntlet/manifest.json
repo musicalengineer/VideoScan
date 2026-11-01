@@ -30018,6 +30018,7 @@
         "test_name_status_filter_drops_renames_tests_docs_nonswift",
         "test_nothing_in_scope_is_one_line_and_advances",
         "test_parse_claude_json_and_findings",
+        "test_prior_reviews_are_found_in_the_archive_too",
         "test_run_happy_path_writes_ledger_latest_doc_and_advances",
         "test_scope_on_a_real_range",
         "test_shadow_mode_is_on",
@@ -30522,8 +30523,11 @@
         "test_docs_links.py"
       ],
       "tests": [
+        "test_a_moved_entry_whose_destination_is_missing_still_fails",
         "test_allowlist_is_specific_to_source_and_citation",
+        "test_archived_relative_links_resolve_against_where_they_were_written",
         "test_missing_paths_in_all_required_source_types_are_reported",
+        "test_moved_paths_resolve_only_in_sources_that_may_not_be_edited",
         "test_relative_links_images_and_reference_links_are_checked",
         "test_templates_still_require_the_current_output_directory",
         "test_tracked_docs_references_exist"
@@ -31201,6 +31205,7 @@
         "test_invariants_coverage.py"
       ],
       "tests": [
+        "test_an_area_marker_without_front_matter_is_loud",
         "test_data_risk_writers_land_in_the_data_risk_bucket",
         "test_every_data_risk_writer_is_covered",
         "test_every_glob_matches_something",
@@ -31208,7 +31213,9 @@
         "test_files_are_well_formed",
         "test_front_matter_errors_are_loud",
         "test_glob_match",
-        "test_the_230_gap_files_are_covered"
+        "test_one_file_parses_exactly_like_one_file_per_area",
+        "test_the_230_gap_files_are_covered",
+        "test_the_repo_keeps_its_invariants_in_one_file"
       ]
     },
     {

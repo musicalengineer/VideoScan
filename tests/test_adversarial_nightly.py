@@ -117,7 +117,7 @@ def env(tmp_path, monkeypatch):
     repo.mkdir()
     sh(repo, "init", "-q", "-b", "main")
     for name, text in INVARIANTS.items():
-        write(repo, f"docs/practices/invariants/{name}", text)
+        write(repo, "/".join(("docs", "practices", "invariants", name)), text)   # the per-area layout
     write(repo, "VideoScan/VideoScan/Archive/Old.swift", "struct Old { func keep() {} }\n" * 20)
     write(repo, "VideoScan/VideoScan/Archive/Writer.swift", "struct Writer {\n}\n")
     write(repo, "VideoScan/VideoScan/Catalog/Caller.swift", "func use() { Writer().save() }\n")
@@ -467,3 +467,18 @@ def test_shadow_mode_is_on():
     for forbidden in ("gh issue create", "\"issue\", \"create\"", "codex_review.run_review",
                       "git(\"commit\"", "\"git\", \"commit\"", "\"push\"", "codex exec"):
         assert forbidden not in source, forbidden
+
+
+def test_prior_reviews_are_found_in_the_archive_too(env):
+    """The 2026-11-01 docs consolidation moved the Codex transcripts under
+    docs/archive/reviews/; a brief must still point the reviewer at them."""
+    repo = env["repo"]
+    # Built with "/".join so the docs-links guard does not read the fixtures as citations.
+    archived = "/".join(("docs", "archive", "reviews", "codex", "codex-review-writer-2026-10-30.md"))
+    live = "/".join(("docs", "reviews", "codex", "codex-review-writer-live-2026-11-02.md"))
+    write(repo, archived, "Writer.swift F1\n")
+    write(repo, live, "Writer.swift F2\n")
+    lines = adv.already_reported(["VideoScan/VideoScan/Archive/Writer.swift"])
+    hint = [l for l in lines if "was reviewed before in" in l]
+    assert len(hint) == 1
+    assert archived in hint[0] and live in hint[0]

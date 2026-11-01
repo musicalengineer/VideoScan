@@ -5,7 +5,7 @@ Status: **PROPOSED** — awaiting Rick's approval. Author: Claude (Manager) via 
 ## Summary
 1. A launchd job on the M4 (not GitHub) reviews each day's merges to local `main` — GH never sees unpushed work, and the claude/codex logins live there.
 2. Scope = data-risk + truthfulness files touched since the last successful run, pure renames/tests/docs dropped; nothing in scope → one line, exit 0.
-3. Per-folder invariants live in `docs/practices/invariants/<Folder>.md` (not in source folders — synced-group/resource clash risk).
+3. Per-folder invariants live in `docs/archive/practices/invariants/<Folder>.md` (not in source folders — synced-group/resource clash risk).
 4. `tools/adversarial_nightly.py` auto-builds the brief in the #230 brief's shape and output contract; reuses `codex_review.py`'s parser and cycle records.
 5. Tier A nightly: headless `claude -p`, Opus 5.5, effort high (xhigh for data-risk), read-only tools, dollar cap.
 6. Tier B: codex only for P0/P1 in data-risk folders (≤1/night, ≤4/week) + one bundled Sunday sweep.
@@ -20,13 +20,13 @@ Status: **PROPOSED** — awaiting Rick's approval. Author: Claude (Manager) via 
   - `com.videoscan.adversarial-confirm` 05:30 — red tests → Tier B → filing (after `nightly_guarded.sh` ~02:00–03:30 and `nightly_review.sh` 04:30).
   - No M1/M5 failover (they may be asleep/away).
 - **Range:** `state/last_sha..main`, baseline advanced only on success (copied from `nightly_review.sh`), so a failed night carries its SHAs forward.
-- **Files:** `git diff --name-status -M90% <range>` → drop pure renames (R100; the 09-29 layout move would otherwise flood scope), `*Tests*`, `docs/`, non-Swift → intersect with `paths:` globs in `docs/practices/invariants/*.md`.
+- **Files:** `git diff --name-status -M90% <range>` → drop pure renames (R100; the 09-29 layout move would otherwise flood scope), `*Tests*`, `docs/`, non-Swift → intersect with `paths:` globs in `docs/archive/practices/invariants/*.md`.
 - **Buckets:** data-risk (docs/guides/source_layout.md §Data-risk + `CyberBrainWriter.swift`); truth (Hallie answer/executor, date resolution, Core genealogy incl. `Gedcom*`, `*Kinship*`, `LineageTrail`, `LifeAndTimes/`).
 - **Load (14-day sample):** 0–5 data-risk and 0–15 truth files/day; about half of nights have something in scope.
 - **Gap found:** source_layout did not list `RecordFinderFiling.swift` / `ResearchStore.swift` — where codex found the #230 P1s. Add a pytest sensor `tests/test_invariants_coverage.py`: any Swift file in a data-risk folder that writes via `FileManager` / `write(to:)` / `CyberBrainWriter` must match a glob.
 
 ## 2. Auto-generated brief (`tools/adversarial_nightly.py brief`)
-- **Invariants files:** `docs/practices/invariants/{Archive,MediaOps,FamilyTree,ArchiveAngelPromote,Volumes,Hallie,Dates,Genealogy}.md` — YAML front matter (`tier`, `paths`), numbered invariants (ARCH-1…), and "Known and accepted (do not report)". Seed from existing briefs (#230's 7 → FT-1..7).
+- **Invariants files:** `docs/archive/practices/invariants/{Archive,MediaOps,FamilyTree,ArchiveAngelPromote,Volumes,Hallie,Dates,Genealogy}.md` — YAML front matter (`tier`, `paths`), numbered invariants (ARCH-1…), and "Known and accepted (do not report)". Seed from existing briefs (#230's 7 → FT-1..7).
 - **Brief sections (order of the #230 brief):** (a) range + merge subjects; (b) files in scope with changed `func` names + "do not explore outside"; (c) callers via `git grep -n -w`, ≤8/symbol, read-only; (d) invariants + known-accepted; (e) already-reported fingerprints (open issues, prior review docs touching the same files); (f) tests already run (latest metrics testdriver row for main + "green" clauses of merge subjects); (g) coverage/logging directive; (h) privacy line; (i) output contract.
 - **Output contract:** existing `Credits spent: … | Finding count: N` first line and `Verdict:` line (so `codex_review.parse_output()` / `validate_brief()` work unchanged), plus per finding `### F<n> — P<0-3> — <title>`, `- File:`, `- Invariant:`, `- Key: <path>#<symbol>#<ID>`, and a ```swift red test tagged `// target:` and `// test: Suite/testName`; "read, no findings" per clean file.
 - **Size cap:** ≤12 files per brief; split into ≤3 briefs by folder; overflow listed as "NOT REVIEWED" (visible, never dropped).

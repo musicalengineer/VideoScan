@@ -397,10 +397,10 @@ struct DeleteDuplicatesCodex258Round2Tests {
         #expect(drives.contains("guard stat(path, &info) == 0 else { return nil }") && !drives.contains("deletingLastPathComponent"),
                 "the forecast's drive question stats the folder again")
         var repo = try #require(SourceTree.appSourceURL(named: "DeleteDuplicatesPlan.swift"))
-        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md").path) {
+        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants.md").path) {
             repo = repo.deletingLastPathComponent()
         }
-        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
+        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants.md"), encoding: .utf8)
         #expect(invariants.contains("two network shares backed by one server disk count as two") && invariants.contains("Fusion Drive"))
     }
 

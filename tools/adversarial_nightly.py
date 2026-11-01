@@ -18,7 +18,7 @@ Range: `<state>/last_sha..main`, the baseline advanced ONLY when every brief
 ran and parsed (copied from tools/model-fitness/nightly_review.sh), so a failed
 night carries its SHAs forward. Scope: `git diff --name-status -M90%`, pure
 renames (R100), tests, docs/ and non-Swift dropped, then intersected with the
-`paths:` globs in docs/practices/invariants/*.md. Briefs: ≤12 files each, ≤3
+`paths:` globs in docs/practices/invariants.md. Briefs: ≤12 files each, ≤3
 per night, grouped by invariants file; overflow is listed as NOT REVIEWED.
 
 Tier A: headless `claude -p` (Opus 5.5, effort xhigh for data-risk, high for
@@ -136,7 +136,9 @@ def brief_timeout() -> float:
 
 
 def invariants_dir() -> Path:
-    return repo() / "docs" / "practices" / "invariants"
+    """The invariants: one file since 2026-11-01; a folder of per-area files before."""
+    one = repo() / "docs" / "practices" / "invariants.md"
+    return one if one.is_file() else repo() / "docs" / "practices" / "invariants"
 
 
 def declined_path() -> Path:
@@ -539,10 +541,12 @@ def already_reported(paths: list[str]) -> list[str]:
         if rec.get("path") in paths and fp not in known:
             lines.append(f"- {fp[:8]} `{rec.get('key')}` — declined: {rec.get('reason')}")
     # Prior review docs that name these files (codex + adversarial), newest first.
-    reviews = repo() / "docs" / "reviews"
+    # Live review folders, and the same folders under docs/archive/ (where the
+    # 2026-11-01 docs consolidation moved the transcripts).
+    review_roots = (repo() / "docs" / "reviews", repo() / "docs" / "archive" / "reviews")
     docs = sorted(list((repo() / "docs").glob("codex-review-*.md"))      # pre-reorg layout
-                  + [p for sub in ("codex", "adversarial", "qa") for p in (reviews / sub).glob("*.md")
-                     if p.name.lower() != "readme.md"],
+                  + [p for reviews in review_roots for sub in ("codex", "adversarial", "qa")
+                     for p in (reviews / sub).glob("*.md") if p.name.lower() != "readme.md"],
                   key=lambda p: p.name, reverse=True)
     for path in paths:
         base = Path(path).name

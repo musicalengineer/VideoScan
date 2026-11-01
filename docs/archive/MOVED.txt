@@ -1,0 +1,7 @@
+# Moved 2026-11-01 (docs consolidation, DECISIONS 2026-11-01). One line per move:
+# `old path -> where the file is now`. The docs-links guard follows these only for
+# text that may not be edited (DECISIONS, STATUS, and archived documents);
+# every other citation names the new path. Index with reasons: README.md here.
+docs/practices/invariants -> docs/archive/practices/invariants
+# moved 2026-10-31 (the earlier pass; listed so archived text that names the old folder resolves)
+docs/ops -> docs/archive/ops

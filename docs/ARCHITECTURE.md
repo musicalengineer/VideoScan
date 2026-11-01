@@ -77,7 +77,7 @@ A miss here can lose or corrupt family media, the archive, or the family record:
 - **`FamilyTree/`** — CyberBrain writes (`FamilyTreeNotes`, `FamilyTreeLiveModel`, `ResearchAttestation`, `ResearchPersonSheet`), FamilySearch pull/refresh; Hallie's `CyberBrainWriter` path.
 - **`ArchiveAngel/Promote/`**, **`Volumes/`** (`+RetireVolume`, `+DeleteScanTarget`), **`Catalog/ShowAgain*`**.
 
-Invariant files the nightly adversarial review attacks: `docs/practices/invariants/`.
+Invariant files the nightly adversarial review attacks: `docs/practices/invariants.md`.
 
 ## 7. Source layout
 

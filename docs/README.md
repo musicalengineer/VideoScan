@@ -53,7 +53,7 @@ Correct, read on demand; a guide exists where a reader would otherwise have to r
 
 ## Practices (`practices/`)
 
-[`swift_playbook.md`](practices/swift_playbook.md) (patterns and in-repo exemplars for the jobs we do again and again) · [`testing_retrospective_2026_07_05.md`](practices/testing_retrospective_2026_07_05.md) (the five dimensions) · [`invariants/`](practices/invariants/) (what the nightly adversarial review attacks, one file per area) · [`nightly-metrics-setup.md`](practices/nightly-metrics-setup.md) (what feeds the metrics page, `index.html`).
+[`swift_playbook.md`](practices/swift_playbook.md) (patterns and in-repo exemplars for the jobs we do again and again) · [`testing_retrospective_2026_07_05.md`](practices/testing_retrospective_2026_07_05.md) (the five dimensions) · [`invariants.md`](practices/invariants.md) (what the nightly adversarial review attacks, one section per area) · [`nightly-metrics-setup.md`](practices/nightly-metrics-setup.md) (what feeds the metrics page, `index.html`).
 
 ## Reviews and evidence (`reviews/`)
 

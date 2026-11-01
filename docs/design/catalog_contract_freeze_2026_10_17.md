@@ -285,7 +285,7 @@ and `derivedStampsMatchContent` is tier 4. All 15 map: <!-- F5 -->
 | 13 | duplicateGroupDigestsAgree | narrowed rule (`CatalogConstraints.swift:515–524`): a candidate group may hold different digests; a group formed on a `hash` reason with differing digests is a finding — view `duplicate_hash_groups_disagree`, read by the job. v1's one-digest trigger is removed <!-- D:530 --> | job (view) |
 | 14 | derivedStampsMatchContent (tier 4) | structural: every stamp table's key IS the digest it was made from; a changed file is a new row with a new digest | retired by the key |
 
-**MOPS** (`docs/practices/invariants/MediaOps.md`). Need I/O → **stay jobs**: MOPS-1/2 (surviving copy proven at
+**MOPS** (`docs/practices/invariants.md`). Need I/O → **stay jobs**: MOPS-1/2 (surviving copy proven at
 delete time), 4/5, 7 (one transaction per item), 8, 10, 11, 12 (receipt CSV stays a file). Engine support: rows never deleted (tombstones); MOPS-3 → `archive_copy_never_trashed`; MOPS-6 (the record
 follows only a verified copy) → `files_digest_immutable` + the size trigger, so a moved path must carry the same
 content; MOPS-9 → the sink + `ledger`; MOPS-13 → `job_markers`; MOPS-14 → removal triggers (every marker field, tombstone required, F11) + audit-stamp CHECK and

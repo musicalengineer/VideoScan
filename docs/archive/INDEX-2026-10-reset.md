@@ -1,6 +1,6 @@
 # Retired on 2026-10-23 (context reset)
 
-Every file below was removed from the tree in commit `chore/context-reset`. The archive of record is git: `git show pre-reset-2026-10-23:<path>` prints any of them, `git log --follow -- <path>` their history. A convenience copy of all of them sits in `docs/archive/retired-2026-10-reset.zip` (gitignored; also under `.trash/retired-2026-10-reset/`). The same list, machine-readable, is `docs/archive/RETIRED.txt`; the docs link checker accepts citations of these paths so code comments keep their references.
+Every file below was removed from the tree in commit `chore/context-reset`. The archive of record is git: `git show pre-reset-2026-10-23:<path>` prints any of them, `git log --follow -- <path>` their history. A convenience copy of all of them sits in `retired-2026-10-reset.zip` beside this file (gitignored, so it exists only in Rick's checkout; also under `.trash/retired-2026-10-reset/`). The same list, machine-readable, is `docs/archive/RETIRED.txt`; the docs link checker accepts citations of these paths so code comments keep their references.
 
 A file comes back only if its topic becomes live again AND the eight living docs cannot hold it. Rulings from these documents are in `docs/DECISIONS.md`; live ideas in `docs/BACKLOG.md`.
 

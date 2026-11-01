@@ -48,7 +48,7 @@
 // A copy on a volume that is not a drive still counts as a COPY, exactly as
 // before; it just cannot be the "second drive".
 //
-// WHAT CANNOT BE SEEN (docs/practices/invariants/MediaOps.md, MOPS-2): a
+// WHAT CANNOT BE SEEN (docs/practices/invariants.md, MOPS-2): a
 // hardware RAID presents as ONE device and counts as one drive — its
 // internal redundancy is not a second drive; two disks in one enclosure that
 // present as two devices count as two.

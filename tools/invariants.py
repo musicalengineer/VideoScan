@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read docs/practices/invariants/*.md (2026-10-01).
+"""Read docs/practices/invariants.md (2026-10-01; one file since 2026-11-01).
 
 Shared by tools/adversarial_nightly.py (scope + brief) and the pytest sensor
 tests/test_invariants_coverage.py, so "which invariants file covers this
@@ -14,6 +14,13 @@ Stdlib only. The front matter is a deliberately tiny YAML subset:
       - VideoScan/VideoScanCore/Sources/VideoScanCore/ArchiveFixity.swift
     ---
 
+Since the docs consolidation (2026-11-01) every area lives in ONE file,
+`docs/practices/invariants.md`: each area starts with a marker line
+`<!-- area: Archive -->` followed by exactly the front matter and body a
+per-area file used to hold, so an area parses the same either way. A folder
+of per-area `*.md` files (the layout before 2026-11-01) is still
+read when a folder is passed — the adversarial-nightly tests build one.
+
 Globs are repo-relative: `*` and `?` stay inside one path component, `**`
 crosses components (`a/**` matches everything under a/, `a/**/b.swift` matches
 a/b.swift and a/x/y/b.swift).
@@ -27,7 +34,9 @@ from functools import lru_cache
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-INVARIANTS_DIR = REPO / "docs" / "practices" / "invariants"
+INVARIANTS_FILE = REPO / "docs" / "practices" / "invariants.md"
+INVARIANTS_DIR = REPO / "docs" / "practices" / "invariants"   # the pre-2026-11-01 layout
+AREA_RE = re.compile(r"^<!--\s*area:\s*(?P<name>[A-Za-z][\w-]*)\s*-->\s*$", re.MULTILINE)
 TIERS = ("data-risk", "truth")
 INVARIANT_RE = re.compile(r"^\s*\d+\.\s+\*\*(?P<id>[A-Z]+-\d+)\*\*\s*(?P<text>.+)$")
 
@@ -105,14 +114,21 @@ def parse_front_matter(text: str) -> tuple[dict, str]:
 
 
 def parse_file(path: Path) -> InvariantsFile:
-    meta, body = parse_front_matter(path.read_text(encoding="utf-8"))
+    return parse_area(path.stem, path, path.read_text(encoding="utf-8"))
+
+
+def parse_area(name: str, path: Path, text: str) -> InvariantsFile:
+    try:
+        meta, body = parse_front_matter(text.lstrip("\n"))
+    except ValueError as error:
+        raise ValueError(f"{name}: {error}") from None
     tier = meta.get("tier")
     if tier not in TIERS:
-        raise ValueError(f"{path.name}: tier must be one of {TIERS}, got {tier!r}")
+        raise ValueError(f"{name}: tier must be one of {TIERS}, got {tier!r}")
     paths = meta.get("paths")
     if not isinstance(paths, list) or not paths:
-        raise ValueError(f"{path.name}: paths must be a non-empty list")
-    result = InvariantsFile(name=path.stem, path=path, tier=tier, paths=paths)
+        raise ValueError(f"{name}: paths must be a non-empty list")
+    result = InvariantsFile(name=name, path=path, tier=tier, paths=paths)
     section = None
     for line in body.splitlines():
         heading = re.match(r"^##\s+(.*)$", line)
@@ -130,10 +146,24 @@ def parse_file(path: Path) -> InvariantsFile:
     return result
 
 
-def load_all(directory: Path | None = None) -> list[InvariantsFile]:
-    directory = directory or INVARIANTS_DIR
+def parse_areas(path: Path) -> list[InvariantsFile]:
+    """One file, many areas: each `<!-- area: Name -->` marker opens an area that
+    runs to the next marker. Text before the first marker is the preamble."""
+    text = path.read_text(encoding="utf-8")
+    markers = list(AREA_RE.finditer(text))
+    if not markers:
+        raise ValueError(f"{path.name}: no `<!-- area: Name -->` markers")
+    ends = [m.start() for m in markers[1:]] + [len(text)]
+    return [parse_area(m.group("name"), path, text[m.end():end]) for m, end in zip(markers, ends)]
+
+
+def load_all(source: Path | None = None) -> list[InvariantsFile]:
+    """The areas from one invariants file (default) or from a folder of per-area files."""
+    source = source or INVARIANTS_FILE
+    if source.is_file():
+        return parse_areas(source)
     files = []
-    for path in sorted(directory.glob("*.md")):
+    for path in sorted(source.glob("*.md")):
         if path.name.lower() == "readme.md":
             continue
         files.append(parse_file(path))

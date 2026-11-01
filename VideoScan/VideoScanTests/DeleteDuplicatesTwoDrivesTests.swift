@@ -164,10 +164,10 @@ struct DeleteDuplicatesTwoDrivesTests {
         let forecast = try SourceTree.appCode(named: "DeleteDuplicatesForecast.swift")
         #expect(!forecast.contains("case permanent"), "the forecast promises an outright delete")
         var repo = try #require(SourceTree.appSourceURL(named: "DeleteDuplicatesPlan.swift"))
-        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md").path) {
+        while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants.md").path) {
             repo = repo.deletingLastPathComponent()
         }
-        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
+        let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants.md"), encoding: .utf8)
         #expect(invariants.contains("TRASH ONLY") && invariants.contains("KEEP ONE")
                 && invariants.contains("APFS volumes in one container") && invariants.contains("PHYSICAL DEVICE"))
     }

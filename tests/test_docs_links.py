@@ -29,8 +29,11 @@ def tracked_files(root: Path) -> list[str]:
     ).rstrip("\0").split("\0")
 
 
-def references(source: str, text: str) -> list[tuple[int, str, str]]:
-    """Return (line, citation, root-relative target), including docs Markdown links."""
+def references(source: str, text: str, written_at: str | None = None) -> list[tuple[int, str, str]]:
+    """Return (line, citation, root-relative target), including docs Markdown links.
+
+    `written_at` is the path a moved document was written at: its relative links are
+    resolved from there, because archived text is kept as written."""
     # Remote URLs (including pinned historical GitHub URLs) are not local paths.
     local = URL.sub(lambda m: " " * len(m.group()), text)
     result = []
@@ -49,9 +52,35 @@ def references(source: str, text: str) -> list[tuple[int, str, str]]:
             parsed = urlsplit(citation)
             if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
                 continue
-            target = os.path.normpath(str(Path(source).parent / unquote(parsed.path)))
+            target = os.path.normpath(str(Path(written_at or source).parent / unquote(parsed.path)))
             result.append((text.count("\n", 0, match.start()) + 1, citation, target))
     return result
+
+
+# Sources whose text may not be edited to follow a move: DECISIONS is append-only, STATUS
+# belongs to the main session, and archived documents are kept as written (2026-11-01).
+UNEDITABLE = ("docs/DECISIONS.md", "docs/STATUS.md")
+
+
+def moved_paths(root: Path) -> dict[str, str]:
+    """docs/archive/MOVED.txt: `old path -> where it is now`, one per line (2026-11-01)."""
+    moved_file = root / "docs/archive/MOVED.txt"
+    if not moved_file.exists():
+        return {}
+    pairs = (l.split(" -> ", 1) for l in moved_file.read_text().splitlines()
+             if " -> " in l and not l.startswith("#"))
+    return {old.strip().rstrip("/"): new.strip().rstrip("/") for old, new in pairs}
+
+
+def follow_move(target: str, moved: dict[str, str]) -> str | None:
+    """The current path of a moved file, or of a file inside a moved folder."""
+    target = target.rstrip("/")
+    if target in moved:
+        return moved[target]
+    for old, new in moved.items():
+        if target.startswith(old + "/"):
+            return new + target[len(old):]
+    return None
 
 
 def missing_references(root: Path, files: list[str], exceptions: dict) -> list[str]:
@@ -59,6 +88,8 @@ def missing_references(root: Path, files: list[str], exceptions: dict) -> list[s
     retired_file = root / "docs/archive/RETIRED.txt"
     retired = set(l.strip() for l in retired_file.read_text().splitlines()
                   if l.strip() and not l.startswith("#")) if retired_file.exists() else set()
+    moved = moved_paths(root)
+    written_at = {new: old for old, new in moved.items()}
     for source in files:
         if Path(source).suffix not in SUFFIXES and source != "CLAUDE.md":
             continue
@@ -66,11 +97,16 @@ def missing_references(root: Path, files: list[str], exceptions: dict) -> list[s
         if not path.exists():
             missing.append(f"{source}: tracked file is missing")
             continue
-        for line, citation, target in references(source, path.read_text()):
+        kept_as_written = source in UNEDITABLE or source.startswith("docs/archive/")
+        origin = written_at.get(source) if kept_as_written else None
+        for line, citation, target in references(source, path.read_text(), origin):
             if (root / target).exists():
                 continue
             if target in retired:
                 continue  # retired 2026-10-23: in git history (tag pre-reset-2026-10-23); code comments keep old paths
+            now_at = follow_move(target, moved) if kept_as_written else None
+            if now_at and (root / now_at).exists():
+                continue  # moved 2026-11-01; the index is docs/archive/README.md
             if exceptions.get(source, {}).get(citation):
                 continue
             missing.append(f"{source}:{line}: {citation} -> {target}")
@@ -123,3 +159,48 @@ def test_templates_still_require_the_current_output_directory(tmp_path):
     )
     missing = missing_references(tmp_path, ["example.py"], {})
     assert len(missing) == 1 and "old-reviews" in missing[0]
+
+
+# ---- docs moved by the 2026-11-01 consolidation (the MOVED.txt in docs' archive) ----
+# Fixture paths are built from D so this file's own text cites nothing.
+D = "docs"
+
+
+def _moved_tree(tmp_path):
+    (tmp_path / D / "archive/design").mkdir(parents=True)
+    (tmp_path / D / "design").mkdir(parents=True)
+    (tmp_path / D / "archive/design/old.md").write_text("[sibling](live.md) [gone](nowhere.md)\n")
+    (tmp_path / D / "design/live.md").write_text("live\n")
+    (tmp_path / D / "archive/MOVED.txt").write_text(
+        "# old path -> where it is now\n"
+        f"{D}/design/old.md -> {D}/archive/design/old.md\n"
+        f"{D}/practices/invariants -> {D}/archive/practices/invariants\n")
+    (tmp_path / D / "archive/practices/invariants").mkdir(parents=True)
+    (tmp_path / D / "archive/practices/invariants/Archive.md").write_text("x\n")
+
+
+def test_moved_paths_resolve_only_in_sources_that_may_not_be_edited(tmp_path):
+    """DECISIONS (append-only), STATUS (the main session's) and archived text keep the
+    paths they were written with; every other source must cite the new path."""
+    _moved_tree(tmp_path)
+    sources = [f"{D}/DECISIONS.md", f"{D}/STATUS.md", f"{D}/README.md", "tool.py"]
+    for source in sources:
+        (tmp_path / source).write_text(
+            f"{D}/design/old.md {D}/practices/invariants {D}/practices/invariants/Archive.md\n")
+    missing = missing_references(tmp_path, sources, {})
+    assert {m.split(":")[0] for m in missing} == {f"{D}/README.md", "tool.py"}
+    assert len(missing) == 6
+
+
+def test_archived_relative_links_resolve_against_where_they_were_written(tmp_path):
+    _moved_tree(tmp_path)
+    missing = missing_references(tmp_path, [f"{D}/archive/design/old.md"], {})
+    assert len(missing) == 1 and "nowhere.md" in missing[0]
+
+
+def test_a_moved_entry_whose_destination_is_missing_still_fails(tmp_path):
+    _moved_tree(tmp_path)
+    (tmp_path / D / "archive/MOVED.txt").write_text(
+        f"{D}/design/old.md -> {D}/archive/design/absent.md\n")
+    (tmp_path / D / "DECISIONS.md").write_text(f"{D}/design/old.md\n")
+    assert len(missing_references(tmp_path, [f"{D}/DECISIONS.md"], {})) == 1

@@ -3,11 +3,11 @@ an invariants file (2026-10-01, nightly adversarial review design §1).
 
 Why: codex found the #230 P1s in RecordFinderFiling.swift / ResearchStore.swift,
 which the source layout guide's data-risk list did not name. The nightly review
-only reads files whose path matches a glob in docs/practices/invariants/*.md,
+only reads files whose path matches a glob in docs/practices/invariants.md,
 so an uncovered writer is a writer nobody attacks.
 
 Fix a failure by adding a glob (and an invariant, if the file writes
-something new) to the right invariants file. Do not narrow WRITE_RE or
+something new) to the right area of the invariants file. Do not narrow WRITE_RE or
 DATA_RISK_FOLDERS to make it pass.
 """
 
@@ -88,7 +88,7 @@ def test_every_data_risk_writer_is_covered(files):
     assert len(writers) >= 30, f"only {len(writers)} writers found — has the layout moved?"
     uncovered = [rel for rel in writers if not invariants.covering(rel, files)]
     assert not uncovered, (
-        "data-risk files that write but no docs/practices/invariants/*.md glob covers:\n  "
+        "data-risk files that write but no docs/practices/invariants.md glob covers:\n  "
         + "\n  ".join(uncovered))
 
 
@@ -156,3 +156,48 @@ def test_front_matter_errors_are_loud(tmp_path):
     unclosed.write_text("---\ntier: truth\npaths:\n  - a/**\n")
     with pytest.raises(ValueError):
         invariants.parse_file(unclosed)
+
+
+# ---- one file, many areas (docs consolidation 2026-11-01) ----
+
+_AREA_A = ("---\ntier: data-risk\npaths:\n  - a/**\n---\n# A\n\n## Invariants\n"
+           "1. **A-1** first.\n\n## Known and accepted (do not report)\n- one.\n")
+_AREA_B = ("---\ntier: truth\npaths: [b/*.swift]\n---\n# B\n\n## Invariants\n"
+           "1. **B-1** second.\n2. **B-2** third.\n\n## Known and accepted\n- two.\n")
+
+
+def _shape(files):
+    return [(f.name, f.tier, f.paths, f.invariants, f.known_accepted) for f in files]
+
+
+def test_one_file_parses_exactly_like_one_file_per_area(tmp_path):
+    folder = tmp_path / "invariants"
+    folder.mkdir()
+    (folder / "Alpha.md").write_text(_AREA_A)
+    (folder / "Beta.md").write_text(_AREA_B)
+    (folder / "README.md").write_text("# not an area\n")
+    one = tmp_path / "invariants.md"
+    one.write_text("# Invariants\n\nPreamble, with a `---` rule below.\n\n---\n\n"
+                   "<!-- area: Alpha -->\n" + _AREA_A + "\n<!-- area: Beta -->\n" + _AREA_B)
+    assert _shape(invariants.load_all(one)) == _shape(invariants.load_all(folder))
+    assert [f.name for f in invariants.load_all(one)] == ["Alpha", "Beta"]
+
+
+def test_an_area_marker_without_front_matter_is_loud(tmp_path):
+    one = tmp_path / "invariants.md"
+    one.write_text("<!-- area: Alpha -->\n# A\n\n## Invariants\n1. **A-1** x\n")
+    with pytest.raises(ValueError):
+        invariants.load_all(one)
+    empty = tmp_path / "empty.md"
+    empty.write_text("# Invariants\n\nno areas\n")
+    with pytest.raises(ValueError):
+        invariants.load_all(empty)
+
+
+def test_the_repo_keeps_its_invariants_in_one_file():
+    assert invariants.INVARIANTS_FILE == ROOT / "docs/practices/invariants.md"
+    assert invariants.INVARIANTS_FILE.is_file()
+    assert not (ROOT / "docs" / "practices" / "invariants").exists()   # the old folder
+    assert {f.name for f in invariants.load_all()} == {
+        "Archive", "ArchiveAngelPromote", "Dates", "FamilyTree", "Genealogy",
+        "Hallie", "MediaOps", "Volumes"}
