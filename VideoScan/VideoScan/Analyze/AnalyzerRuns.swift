@@ -14,7 +14,9 @@
 //   * `AnalyzerRunFollowUp` — told by the MFO center exactly once per job at
 //     its terminal transition (`MediaFileOperationsCenter.onJobTerminal`):
 //     records the pace of a Full Hashes / Sound Fingerprints run, and when a
-//     whole-catalog Full Hashes run reaches 100 % (every planned file hashed)
+//     whole-catalog Full Hashes run reaches 100 % (every file it set out to
+//     hash was hashed — an offline lane, a missing or unreadable file means
+//     no split, and the log says why; Codex #189)
 //     runs Split Duplicate Groups by Full Hash — the SAME call the retired
 //     menu item made (`splitDuplicateGroupsKeepingSameFootage`), which
 //     writes its own START / OUTCOME lines; this file adds one line saying
@@ -133,19 +135,39 @@ final class AnalyzerRunFollowUp {
         var hashed: Int
         var resolved: Int
         var seconds: Double
+        /// Files the job set out to hash that it did not: result words → count.
+        var unresolved: [String: Int] = [:]
     }
 
-    /// The one rule: a whole-catalog Full Hashes run that finished with every planned file hashed.
+    /// Why a finished whole-catalog Full Hashes run that hashed something
+    /// did NOT split (Codex #189 P2-1: an offline lane's files are not in
+    /// `planned`, so "planned == hashed" alone said 100 %). nil = it splits,
+    /// or it is not a run that could.
+    nonisolated static func noSplitReason(_ e: Ending) -> String? {
+        guard e.kind == .fullHashes, e.succeeded, !e.scoped, e.hashed > 0 else { return nil }
+        let left = e.unresolved.values.reduce(0, +) + max(0, e.planned - e.hashed)
+        guard left > 0 else { return nil }
+        let parts = e.unresolved.filter { $0.value > 0 }.sorted { $0.key < $1.key }.map { "\($0.value.formatted()) \($0.key)" }
+        return "no automatic split: \(left.formatted()) file(s) not hashed (\(parts.joined(separator: " · "))) — "
+            + "it runs when a Full Hashes run hashes every file it set out to"
+    }
+
+    /// The one rule: a whole-catalog Full Hashes run that finished with
+    /// EVERY file it set out to hash hashed — none offline, missing,
+    /// unreadable, changed or skipped (Codex #189 P2-1).
     nonisolated static func reachesOneHundredPercent(_ e: Ending) -> Bool {
         e.kind == .fullHashes && e.succeeded && !e.scoped && e.planned > 0 && e.hashed == e.planned
+            && e.unresolved.values.allSatisfy { $0 == 0 }
     }
 
     static func ending(of job: any MediaFileOperationJob) -> Ending {
         let succeeded: Bool = { if case .finished = job.state { return true }; return false }()
         let seconds = (job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)
         if let full = job as? FullHashBackfillJob {
+            var unresolved: [String: Int] = [:]
+            for r in FullHashBackfillResult.allCases where r != .hashed && full.totals[r] > 0 { unresolved[r.words] = full.totals[r] }
             return Ending(kind: .fullHashes, succeeded: succeeded, scoped: full.scope != nil, planned: full.totals.planned,
-                          hashed: full.totals[.hashed], resolved: full.totals.done, seconds: seconds)
+                          hashed: full.totals[.hashed], resolved: full.totals.done, seconds: seconds, unresolved: unresolved)
         }
         if let sound = job as? AudioFingerprintBackfillJob {
             return Ending(kind: .soundPrints, succeeded: succeeded, scoped: false, planned: sound.totals.planned,
@@ -154,6 +176,8 @@ final class AnalyzerRunFollowUp {
         return Ending(kind: .other, succeeded: succeeded, scoped: false, planned: 0, hashed: 0, resolved: 0, seconds: seconds)
     }
 
+    /// The last "no automatic split" words (tests; the log carries them).
+    private(set) var lastNoSplitReason: String?
     private weak var model: VideoScanModel?
     private weak var center: MediaFileOperationsCenter?
     /// The split (injected for tests; production = the retired menu item's call).
@@ -180,6 +204,11 @@ final class AnalyzerRunFollowUp {
         case .fullHashes: AnalyzerRunRates.record(.fullHashes, files: e.resolved, seconds: e.seconds, defaults: defaults)
         case .soundPrints: AnalyzerRunRates.record(.soundPrints, files: e.resolved, seconds: e.seconds, defaults: defaults)
         case .other: return
+        }
+        if let why = Self.noSplitReason(e) {
+            lastNoSplitReason = why
+            model?.fullHashBackfillNote(why)
+            return
         }
         guard Self.reachesOneHundredPercent(e), let model, let center else { return }
         model.fullHashBackfillNote("every planned file now has a full hash (\(e.hashed.formatted()) of \(e.planned.formatted())) — "

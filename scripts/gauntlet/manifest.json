@@ -32571,6 +32571,7 @@
       "suites": [
         "AnalyzerRunsLogicTests",
         "AnalyzerRunsFollowUpTests",
+        "AnalyzerRunsSplitOutcomeTests",
         "AnalyzerRunsSensorTests"
       ],
       "tests": [
@@ -32578,6 +32579,8 @@
         "howLongWords",
         "oneHundredPercentRule",
         "oneHundredPercentSplitsOnce",
+        "oneLaneOfflineNeverSplits",
+        "outcomeCarriesRowAccounting",
         "poisonedAndEmptyRates",
         "rowWordsOnlyForTheThreeAndOnlyWhenIdle",
         "theRowsAndTheEngines",
@@ -32635,6 +32638,7 @@
       "tests": [
         "countsMatchTheEngines",
         "groupsToSplitRule",
+        "menuCountsOnlyRowsWithARun",
         "runsCallTheEngines",
         "scale",
         "theReportCarriesTheCounts",
@@ -35328,7 +35332,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3153,
+      "expected_floor": 3156,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35406,6 +35410,7 @@
         "VideoScanTests/AnalyzerRunsFollowUpTests",
         "VideoScanTests/AnalyzerRunsLogicTests",
         "VideoScanTests/AnalyzerRunsSensorTests",
+        "VideoScanTests/AnalyzerRunsSplitOutcomeTests",
         "VideoScanTests/AppSupportSideStoreInventoryTests",
         "VideoScanTests/ArcFaceAlignmentTests",
         "VideoScanTests/ArchiveAngelAudioOutcomeTests",

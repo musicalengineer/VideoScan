@@ -233,7 +233,14 @@ extension VideoScanModel {
         let split = plan.splitGroups, held = plan.heldGroups
         for (i, g) in split.enumerated() { duplicateDigestSplitNote("\(i + 1) of \(split.count) — \(g.words)") }
         for (i, g) in held.enumerated() { duplicateDigestSplitNote("held \(i + 1) of \(held.count) — \(g.words)") }
+        // ARCHITECTURE §10.1 (Codex #189 P2-2): the OUTCOME carries rows
+        // before · after · where the difference went — the store's own row
+        // count around the save, and the commit's result.
+        let rowsBefore = duplicateDigestSplitStoreRows()
         let saved = saveCatalogNow()
+        let rowsAfter = duplicateDigestSplitStoreRows()
+        let accounting = DuplicateDigestSplitAccounting.words(before: rowsBefore, after: rowsAfter, changed: plan.changes.count,
+                                                             commit: catalogCutover.committer?.lastOutcome)
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
         let tally = "\(split.count.formatted()) group(s) split · \(plan.newGroupCount.formatted()) new group(s) of copies · "
             + "\(plan.recordsLeaving.formatted()) file(s) left their group (unique bytes) · "
@@ -243,13 +250,21 @@ extension VideoScanModel {
             + (likeness.map { " · likeness kept in catalog.sqlite: \($0.recorded.formatted()) new pair(s), \($0.alreadyRecorded.formatted()) already there" } ?? "")
             + (held.isEmpty ? "" : " ·" + heldClause(held))
         if saved {
-            duplicateDigestSplitNote("OUTCOME — \(tally) · saved to the catalog")
+            duplicateDigestSplitNote("OUTCOME — \(tally) · saved to the catalog · \(accounting)")
         } else {
             duplicateDigestSplitNote("OUTCOME — \(tally) · NOT SAVED YET — the catalog store would not take the change now; "
-                                     + "it stays in memory and the catalog store's own line says why")
+                                     + "it stays in memory and the catalog store's own line says why · \(accounting)")
         }
         return .split(groups: split.count, newGroups: plan.newGroupCount, left: plan.recordsLeaving,
                       saved: saved, safetyCopy: copy)
+    }
+
+    /// catalog.sqlite's own `files` row count, read now through Core's one
+    /// read-only open (CatalogDatabaseInfoReader: a b-tree count, ≈ 9 ms at
+    /// 100k rows). Unknown when the session has no catalog.sqlite.
+    private func duplicateDigestSplitStoreRows() -> CatalogDatabaseReading<Int> {
+        guard let url = catalogCutover.databaseURL else { return .unknown("no catalog.sqlite in this session") }
+        return CatalogDatabaseInfoReader.read(at: url).records
     }
 
     /// The plan onto the records: group fields only.
@@ -285,5 +300,55 @@ extension MediaFileOperationsCenter {
         let outcome = model.splitDuplicateGroupsByFullDigest()
         if case .split = outcome { startFindSimilarFootage(scope: .catalog, model: model) }
         return outcome
+    }
+}
+
+// MARK: - The OUTCOME's row accounting (pure)
+
+/// "rows before 14,000 · rows after 14,000 · difference 0 — the split changes
+/// only duplicate-group fields of 3 row(s); the commit wrote 3 row(s)".
+enum DuplicateDigestSplitAccounting {
+    static func words(before: CatalogDatabaseReading<Int>, after: CatalogDatabaseReading<Int>, changed: Int,
+                      commit: CatalogCommit.Outcome?) -> String {
+        rows(before: before, after: after, changed: changed) + "; " + landed(commit)
+    }
+
+    /// The store's own row count around the save.
+    static func rows(before: CatalogDatabaseReading<Int>, after: CatalogDatabaseReading<Int>, changed: Int) -> String {
+        guard case .known(let b) = before, case .known(let a) = after else {
+            if case .unknown(let why) = before { return "rows before / after unknown — \(why)" }
+            if case .unknown(let why) = after { return "rows before / after unknown — \(why)" }
+            return "rows before / after unknown"
+        }
+        return "rows before \(b.formatted()) · rows after \(a.formatted()) · difference \((a - b).formatted())"
+            + (a == b ? " — the split changes only duplicate-group fields of \(changed.formatted()) row(s); no row is added or removed"
+                      : " — NOT the split's: it adds and removes no row (another writer committed meanwhile?)")
+    }
+
+    /// Where the changed rows went, from the commit's own result.
+    static func landed(_ commit: CatalogCommit.Outcome?) -> String {
+        switch commit {
+        case .committed(_, let rows)?:
+            let written = rows.filter(\.landing.isWrite).count
+            let unchanged = rows.filter { $0.landing == .unchanged }.count
+            let other = rows.count - written - unchanged
+            return "the commit wrote \(written.formatted()) row(s)"
+                + (unchanged > 0 ? ", \(unchanged.formatted()) already as stored" : "")
+                + (other > 0 ? ", \(other.formatted()) not stored yet (the store's line says why)" : "")
+        case .nothingWritten?: return "the commit wrote nothing"
+        case .refused(let why, _)?: return "the commit was refused: \(why)"
+        case .generationMismatch(let expected, let found)?: return "the commit was refused: generation \(found), expected \(expected)"
+        case nil: return "no commit result (catalog.json)"
+        }
+    }
+}
+
+private extension CatalogCommit.Landing {
+    /// Written, in full or in part.
+    var isWrite: Bool {
+        switch self {
+        case .written, .partial: return true
+        default: return false
+        }
     }
 }

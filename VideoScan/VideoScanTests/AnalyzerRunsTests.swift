@@ -27,7 +27,7 @@ struct AnalyzerRunsLogicTests {
 
     static func ending(_ kind: E.Kind = .fullHashes, ok: Bool = true, scoped: Bool = false,
                        planned: Int = 10, hashed: Int = 10) -> E {
-        E(kind: kind, succeeded: ok, scoped: scoped, planned: planned, hashed: hashed, resolved: planned, seconds: 5)
+        E(kind: kind, succeeded: ok, scoped: scoped, planned: planned, hashed: hashed, resolved: planned, seconds: 5, unresolved: [:])
     }
 
     @Test("LOGIC: only a whole-catalog Full Hashes run that finished with every planned file hashed is 100 %")
@@ -38,6 +38,11 @@ struct AnalyzerRunsLogicTests {
         #expect(!AnalyzerRunFollowUp.reachesOneHundredPercent(Self.ending(planned: 0, hashed: 0)), "nothing to hash this run")
         #expect(!AnalyzerRunFollowUp.reachesOneHundredPercent(Self.ending(hashed: 9)), "one file unreadable or its drive away")
         #expect(!AnalyzerRunFollowUp.reachesOneHundredPercent(Self.ending(.soundPrints)))
+        var offline = Self.ending()
+        offline.unresolved = ["drive not connected": 1]
+        #expect(!AnalyzerRunFollowUp.reachesOneHundredPercent(offline), "Codex #189: an offline lane is not 100 %")
+        #expect(AnalyzerRunFollowUp.noSplitReason(offline) == "no automatic split: 1 file(s) not hashed (1 drive not connected) — it runs when a Full Hashes run hashes every file it set out to")
+        #expect(AnalyzerRunFollowUp.noSplitReason(Self.ending()) == nil)
     }
 
     @Test("LOGIC: how long — nothing left · not run yet · minutes · hours · days, at the last run's pace")
@@ -61,8 +66,8 @@ struct AnalyzerRunsLogicTests {
     @Test("LOGIC: the row's estimate stays quiet while the analyzer runs (its MFO line says it) and on other rows")
     func rowWordsOnlyForTheThreeAndOnlyWhenIdle() {
         let rate = AnalyzerRunRate(files: 10, seconds: 10, finishedAt: Date())
-        #expect(AnalyzePanelView.howLongWords(.fullHashes, remaining: 5, rate: rate, isRunning: true) == "")
-        #expect(AnalyzePanelView.howLongWords(.duplicates, remaining: 5, rate: rate, isRunning: false) == "")
+        #expect(AnalyzePanelView.howLongWords(.fullHashes, remaining: 5, rate: rate, isRunning: true).isEmpty)
+        #expect(AnalyzePanelView.howLongWords(.duplicates, remaining: 5, rate: rate, isRunning: false).isEmpty)
         #expect(AnalyzePanelView.howLongWords(.embeddedDates, remaining: 5, rate: nil, isRunning: false) == "How long: not run yet — 5 files left")
     }
 
@@ -147,12 +152,66 @@ struct AnalyzerRunsFollowUpTests {
         #expect(heard.n == 2)
     }
 
+    @Test("RED Codex #189 P2-1: one lane online and hashed, one lane offline — the planned files all hashed, yet the run never splits, and the log says why")
+    func oneLaneOfflineNeverSplits() async throws {
+        let s = try setUp("fhb_followup_mixed"); defer { s.sb.cleanup(); s.defaults.removePersistentDomain(forName: s.suite) }
+        let offlineRoot = "/Volumes/FHBFollowUpOffline_\(UUID().uuidString.prefix(8))"
+        let away = VideoRecord()
+        away.fullPath = offlineRoot + "/away.mov"; away.filename = "away.mov"; away.sizeBytes = 3_000
+        away.directory = offlineRoot
+        s.sb.model.records.append(away)
+        let job = await run(s.center, s.sb.model, online: { !$0.hasPrefix(offlineRoot) })
+        #expect(job.totals[.driveNotConnected] == 1 && job.totals[.hashed] == 2 && job.totals.planned == 2,
+                Comment(rawValue: job.totals.line))
+        #expect(s.splits.n == 0, "a file the job set out to hash is still unhashed — no split")
+        let why = try #require(s.followUp.lastNoSplitReason)
+        #expect(why.contains("1 file(s) not hashed") && why.contains("drive not connected"), Comment(rawValue: why))
+    }
+
     @Test("ISOLATION: a run with a drive away never reaches 100 % and never splits")
     func driveAwayNeverSplits() async throws {
         let s = try setUp("fhb_followup_away"); defer { s.sb.cleanup(); s.defaults.removePersistentDomain(forName: s.suite) }
         let job = await run(s.center, s.sb.model, online: { _ in false })
         #expect(job.totals[.hashed] == 0)
         #expect(s.splits.n == 0)
+    }
+}
+
+@Suite("Content Analysis analyzers — the automatic split's OUTCOME on catalog.sqlite", .serialized)
+@MainActor
+struct AnalyzerRunsSplitOutcomeTests {
+
+    @Test("RED Codex #189 P2-2: the split's OUTCOME says rows before · rows after · where the difference went, from the store and the commit's result")
+    func outcomeCarriesRowAccounting() async throws {
+        let scene = try CutoverScene.make("ar_split_outcome", healthyRows: 5); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let model = scene.model
+        let g = UUID()
+        let members = try (0..<3).map { try scene.bulk($0) }
+        for (i, r) in members.enumerated() {
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            r.durationSeconds = 600
+            r.timecode = "00:00:00:00"
+            r.resolution = "720x480"
+            r.videoCodec = ["ffv1", "h264", "dvvideo"][i]
+            r.duplicateGroupID = g
+            r.duplicateConfidence = .high
+            r.duplicateDisposition = i == 0 ? .keep : .extraCopy
+            r.duplicateReasons = "timecode+duration+resolution"
+            r.duplicateGroupCount = 3
+            r.dupAnalyzedAt = Date(timeIntervalSince1970: 1_760_850_000)
+        }
+        #expect(model.saveCatalogNow())
+        let url = try #require(model.catalogCutover.databaseURL)
+        guard case .known(let rows) = CatalogDatabaseInfoReader.read(at: url).records else {
+            Issue.record("the store's row count is unreadable"); return
+        }
+        // The production split closure — the one the follow-up runs at 100 %.
+        AnalyzerRunFollowUp().split(MediaFileOperationsCenter(), model)
+        let outcome = try #require(scene.sandbox.catalogLogText().split(separator: "\n")
+            .last { $0.contains("Split duplicate groups: OUTCOME") }.map(String.init))
+        #expect(outcome.contains("rows before \(rows.formatted()) · rows after \(rows.formatted()) · difference 0"), Comment(rawValue: outcome))
+        #expect(outcome.contains("the commit wrote 3 row(s)"), Comment(rawValue: outcome))
     }
 }
 
