@@ -1144,7 +1144,7 @@ final class MainWindowHelper {
     private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime",
                                    "Media File Operations", "Volumes", "Family Archivist",
                                    "Settings", "Compare Volumes", "Catalog Info", "Analyze", "Content Analysis",
-                                   "Footage Spectrum"]
+                                   "Catalog Status", "Footage Spectrum"]
 
     func openMainWindow() {
         // First try to find and unhide an existing main window
