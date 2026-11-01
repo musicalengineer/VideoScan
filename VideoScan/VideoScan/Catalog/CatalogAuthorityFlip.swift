@@ -331,6 +331,16 @@ extension VideoScanModel {
             appLog.write("[background-journal] " + line)
         }
         journalApplier.onCounts = { [weak self] counts in self?.catalogFreshness.setBackgroundJournal(counts) }
+        // What the inspector, Catalog Status and search read of those
+        // observations: one streamed read now and after each commit.
+        machineEras.note = { [weak self] line in
+            self?.log("Machine era: " + line)
+            appLog.write("[machine-era] " + line)
+        }
+        machineEras.onConvergence = { [weak self] c in self?.catalogFreshness.setMachineEraConvergence(c) }
+        machineEras.onSearchTerms = { [weak self] terms in self?.searchIndex.setObservations(terms) }
+        machineEras.attach(repository: committer.repository, records: { [weak self] in self?.records ?? [] })
+        journalApplier.onApplied = { [weak self] in self?.machineEras.scheduleRefresh() }
         let journalFolder = URL(fileURLWithPath: catalogStore.fileLocation).deletingLastPathComponent()
             .appendingPathComponent("background/journal", isDirectory: true)
         journalApplier.attach(JournalApplierBacking(committer: committer), journal: ObservationJournal(directory: journalFolder))

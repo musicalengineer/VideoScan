@@ -106,6 +106,10 @@ struct InspectorDateView: View {
 
             statusLine
 
+            // Background step 1 (DECISIONS 2026-11-01): the era job's
+            // observation, its own line under Rick's — never a date.
+            InspectorMachineEraLine(record: record, userDate: record.userDate, store: model.machineEras)
+
             // The machine's guesstimate (GH #201): what it thinks, how
             // sure, and why — for Rick to confirm above or overrule.
             inferredLine
@@ -275,5 +279,37 @@ struct InspectorDateView: View {
         // Media Ledger (stage 2): "You set the date to … on …" — one
         // line, off-main, after the catalog path above.
         model.noteUserDateEdited(record)
+    }
+}
+
+// MARK: - InspectorMachineEraLine
+//
+// "Machine era: 1991–1995 · 8B, unconfirmed" (— "disagrees with your date"
+// when Rick's date is not close enough), the windows, frames and `by` in its
+// help; absent when the content has no fused era. An O(1) lookup in the
+// model-owned MachineEraStore — nothing is counted or read here.
+// (`@ObservedObject` ≈ a subscription: the line redraws when the store
+// publishes a refresh; `userDate` is passed as a value so Rick's own edit
+// redraws it too.)
+struct InspectorMachineEraLine: View {
+    let record: VideoRecord
+    let userDate: String?
+    @ObservedObject var store: MachineEraStore
+
+    var body: some View {
+        if let shown = store.shown(for: record) {
+            HStack(alignment: .top, spacing: 4) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: 9))
+                    .padding(.top, 1)
+                Text(shown.text)
+                    .font(.system(size: 10))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundColor(.secondary)
+            .help(shown.help)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("inspector.date.machineEra")
+        }
     }
 }

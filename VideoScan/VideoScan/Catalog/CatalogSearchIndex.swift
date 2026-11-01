@@ -119,8 +119,91 @@ final class CatalogSearchIndex {
     /// single-record update/remove can cleanly retract old entries.
     private var personsByPath: [String: Set<String>] = [:]
 
+    // MARK: - Observation layer (background step 1; DECISIONS 2026-11-01)
+    //
+    // "Observations serve two uses, and both are in human words": a machine
+    // era reaches search as the decade words a person types ("1990s", "90s",
+    // "early 90s") and its years (so "1990s" / "year:1993" find it), never
+    // as "1991-1995", "era.fused", the signer or the digest. The words do
+    // not live on VideoRecord, so this layer sits BESIDE the haystacks:
+    // MachineEraStore hands it per record path after every refresh;
+    // `rebuild`/`update` leave it alone (it is not a record field), `remove`
+    // drops the path, `clear` drops it all, and it is never persisted (the
+    // store re-feeds it at launch from catalog.sqlite).
+    //
+    // Contract: a substring token matches when the haystack OR the path's
+    // observation text contains it; a year token when the year set OR the
+    // observation's years overlap it (`observationMatches`, the reference
+    // the agreement test pins next to pfCatalogTokenMatches). The word
+    // buckets join the fast path (union with wordIndex) and the infix gate
+    // scans both key sets.
+    //
+    // Memory: ~100 B text + a 3–4 word Set per record path with an era.
+
+    /// One record path's observation words (lowercased + NFC, "\n"-joined so
+    /// a quoted phrase never spans two words' lines) and years.
+    struct ObservationTerms: Equatable, Sendable {
+        let text: String
+        let words: Set<String>
+        let years: ClosedRange<Int>?
+
+        init(words: [String], years: ClosedRange<Int>?) {
+            text = words.joined(separator: "\n").lowercased().precomposedStringWithCanonicalMapping
+            self.words = CatalogSearchIndex.extractWords(from: text)
+            self.years = years
+        }
+
+        /// The reference semantics of the layer (pure).
+        func matches(_ token: SearchToken) -> Bool {
+            switch token {
+            case .substring(let needle):
+                return CatalogSearchIndex.literalContains(haystack: text, needle: needle.lowercased().precomposedStringWithCanonicalMapping)
+            case .yearRange(let range):
+                return years?.overlaps(range) ?? false
+            case .field:
+                return false
+            }
+        }
+    }
+
+    /// fullPath → its observation terms (MachineEraStore).
+    private var observations: [String: ObservationTerms] = [:]
+    /// word → fullPaths whose observation text holds it.
+    private var observationWordIndex: [String: Set<String>] = [:]
+
+    /// The whole layer, built off the main actor (`ObservationLayer.init`
+    /// is pure) and swapped in by `setObservations` in O(1).
+    struct ObservationLayer: Sendable {
+        let byPath: [String: ObservationTerms]
+        let wordIndex: [String: Set<String>]
+
+        init(_ byPath: [String: ObservationTerms]) {
+            self.byPath = byPath
+            var index: [String: Set<String>] = [:]
+            for (path, terms) in byPath {
+                for word in terms.words { index[word, default: []].insert(path) }
+            }
+            wordIndex = index
+        }
+    }
+
+    /// Replace the whole layer (one call per MachineEraStore refresh).
+    func setObservations(_ layer: ObservationLayer) {
+        observations = layer.byPath
+        observationWordIndex = layer.wordIndex
+        fastPathEligibility.removeAll(keepingCapacity: false)
+    }
+
+    /// Convenience for a small layer (tests): builds on the calling actor.
+    func setObservations(_ byPath: [String: ObservationTerms]) { setObservations(ObservationLayer(byPath)) }
+
+    /// The path's observation terms (tests; the "what does the index hold" truth).
+    func observationTerms(forPath path: String) -> ObservationTerms? { observations[path] }
+
     /// Discard the entire cache. Called on catalog reset / full reload.
     func clear() {
+        observations.removeAll(keepingCapacity: false)
+        observationWordIndex.removeAll(keepingCapacity: false)
         haystacks.removeAll(keepingCapacity: false)
         yearSets.removeAll(keepingCapacity: false)
         wordIndex.removeAll(keepingCapacity: false)
@@ -215,28 +298,24 @@ final class CatalogSearchIndex {
     /// Cheap — a stale haystack returns no hits, but the caller's record
     /// list will already have dropped the record so it never reaches us.
     func remove(fullPath: String) {
-        if let h = haystacks[fullPath] {
-            for word in Self.extractWords(from: h) {
-                wordIndex[word]?.remove(fullPath)
-                if wordIndex[word]?.isEmpty == true {
-                    wordIndex.removeValue(forKey: word)
-                }
-            }
-        }
+        if let h = haystacks[fullPath] { Self.retract(fullPath, keys: Self.extractWords(from: h), from: &wordIndex) }
         haystacks.removeValue(forKey: fullPath)
         yearSets.removeValue(forKey: fullPath)
-        if let people = personsByPath.removeValue(forKey: fullPath) {
-            for name in people {
-                personIndex[name]?.remove(fullPath)
-                if personIndex[name]?.isEmpty == true {
-                    personIndex.removeValue(forKey: name)
-                }
-            }
-        }
+        if let terms = observations.removeValue(forKey: fullPath) { Self.retract(fullPath, keys: terms.words, from: &observationWordIndex) }
+        if let people = personsByPath.removeValue(forKey: fullPath) { Self.retract(fullPath, keys: people, from: &personIndex) }
         // Removing the last reference to a word drops it from the key set,
         // which could make a previously-ineligible needle eligible. Drop the
         // memo so the next query recomputes against the current word set.
         fastPathEligibility.removeAll(keepingCapacity: false)
+    }
+
+    /// Take `path` out of each key's bucket in an inverted index; a bucket
+    /// left empty drops its key (so the key set stays the live vocabulary).
+    private static func retract(_ path: String, keys: Set<String>, from index: inout [String: Set<String>]) {
+        for key in keys {
+            index[key]?.remove(path)
+            if index[key]?.isEmpty == true { index.removeValue(forKey: key) }
+        }
     }
 
     /// True if the index has a haystack for this record. Used by tests
@@ -355,7 +434,7 @@ final class CatalogSearchIndex {
                 // needles go to the residual linear check instead of
                 // (as before) sinking the whole query.
                 if !needle.isEmpty, !needle.contains(" "),
-                   let bucket = wordIndex[needle], isFastPathEligible(needle) {
+                   let bucket = wordBucket(needle), isFastPathEligible(needle) {
                     narrow(with: bucket)
                 } else {
                     plan.residual.append(token)
@@ -368,6 +447,17 @@ final class CatalogSearchIndex {
             }
         }
         return plan
+    }
+
+    /// The whole-word bucket across the haystack words AND the observation
+    /// words; nil when neither holds the word.
+    private func wordBucket(_ needle: String) -> Set<String>? {
+        switch (wordIndex[needle], observationWordIndex[needle]) {
+        case (nil, nil): return nil
+        case (let a?, nil): return a
+        case (nil, let b?): return b
+        case (let a?, let b?): return a.union(b)
+        }
     }
 
     /// Union the buckets of every indexed person name CONTAINING the
@@ -422,13 +512,16 @@ final class CatalogSearchIndex {
     private func isFastPathEligible(_ needle: String) -> Bool {
         if let cached = fastPathEligibility[needle] { return cached }
         var eligible = true
-        for other in wordIndex.keys {
-            // A word longer than `needle` is the only kind that can strictly
-            // contain it; skip the equal key and anything too short cheaply.
-            if other.utf8.count <= needle.utf8.count { continue }
-            if Self.literalContains(haystack: other, needle: needle) {
-                eligible = false
-                break
+        // Both key sets: an observation word ("1990s") can hold the needle ("90s") too.
+        for keys in [AnyCollection(wordIndex.keys), AnyCollection(observationWordIndex.keys)] where eligible {
+            for other in keys {
+                // A word longer than `needle` is the only kind that can strictly
+                // contain it; skip the equal key and anything too short cheaply.
+                if other.utf8.count <= needle.utf8.count { continue }
+                if Self.literalContains(haystack: other, needle: needle) {
+                    eligible = false
+                    break
+                }
             }
         }
         fastPathEligibility[needle] = eligible
@@ -726,7 +819,8 @@ final class CatalogSearchIndex {
                 // Byte-literal search, NOT Foundation's contains: canonical
                 // Unicode comparison on multi-KB transcript haystacks was
                 // 87% of main-thread time in the 2026-06-10 beachball.
-                if !Self.literalContains(haystack: haystack(), needle: needle) {
+                if !Self.literalContains(haystack: haystack(), needle: needle),
+                   !(observations[rec.fullPath].map { Self.literalContains(haystack: $0.text, needle: needle) } ?? false) {
                     return false
                 }
             case .yearRange(let range):
@@ -735,7 +829,8 @@ final class CatalogSearchIndex {
                 // Agreement with the canonical pfCatalogTokenMatches is
                 // pinned by CatalogSearchBudgetSensorTests.
                 let years = yearSets[rec.fullPath] ?? Self.buildYearSet(rec)
-                if !years.contains(where: { range.contains($0) }) {
+                if !years.contains(where: { range.contains($0) }),
+                   !(observations[rec.fullPath]?.years?.overlaps(range) ?? false) {
                     return false
                 }
             case .field:

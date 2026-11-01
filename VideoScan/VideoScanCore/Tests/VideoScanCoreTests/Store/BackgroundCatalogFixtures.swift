@@ -76,6 +76,34 @@ enum EraFixture {
         }
     }
 
+    /// For contents hex(1)…hex(count): one `era.fused` row each (and
+    /// `windowsPerEra` `era.yearRange` rows of the same run), raw INSERTs in
+    /// one transaction — the MachineEraResolver scale seed. The rows are
+    /// what EraJob writes (the no-update / no-delete triggers stay armed).
+    static func seedFusedEras(_ fixture: StoreFixture, count: Int, windowsPerEra: Int = 0,
+                              by: String = "machine:qwen3-vl-8b-4bit/era-v1/window-60s@r3") throws {
+        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
+            try db.inTransaction {
+                let sql = """
+                    INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
+                    VALUES ('content', ?, ?, ?, 'inferred', ?, 1762000000, 0.6, ?)
+                    """
+                for n in 1...count {
+                    let lo = 1960 + n % 45
+                    for w in 0..<windowsPerEra {
+                        let start = Double(w * 60)
+                        let frames = (0..<8).map { start + Double($0) * 7.5 }
+                        try db.execute(sql: sql, arguments: [hex(n), "era.yearRange", "\(lo)-\(lo + 4)", by,
+                                                             #"{"frameTimesS":\#(frames),"window":[\#(start),\#(start + 60)]}"#])
+                    }
+                    try db.execute(sql: sql, arguments: [hex(n), "era.fused", "\(lo)-\(lo + 4)", by,
+                                                         #"{"validEraWindows":\#(windowsPerEra),"windows":[]}"#])
+                }
+                return .commit
+            }
+        }
+    }
+
     static func stateRoot() throws -> URL { try BackgroundFixtures.scratch("era") }
 
     static func setup(_ fixture: StoreFixture, root: URL, jobID: JobID = JobID(), limit: Int? = nil, clipTimeout: Duration = .seconds(20),

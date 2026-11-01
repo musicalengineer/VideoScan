@@ -272,8 +272,18 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     /// The background journal's counts (JournalApplier, after each pass);
     /// nil until the first pass — then one information line.
     private var backgroundJournal: JournalApplier.Counts?
+    /// The machine-era convergence count (MachineEraStore, after each
+    /// refresh); nil = no content has both Rick's date and an era — no line.
+    private var machineEra: MachineEraConvergence?
 
     init() {}
+
+    /// From MachineEraStore after a refresh (equality-gated here too).
+    func setMachineEraConvergence(_ c: MachineEraConvergence?) {
+        guard c != machineEra else { return }
+        machineEra = c
+        rejudge()
+    }
 
     /// From JournalApplier after a pass (equality-gated by the applier).
     func setBackgroundJournal(_ counts: JournalApplier.Counts) {
@@ -413,7 +423,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         let rows = CatalogFreshnessRows.rows(report: report, facts: facts, running: running)
         let reality = CatalogRealityFactsBuilder.inputs(facts: facts, missing: report.missingCopies,
                                                         degenerateOCRDates: report.degenerateOCRDates,
-                                                        backgroundJournal: backgroundJournal)
+                                                        backgroundJournal: backgroundJournal, machineEra: machineEra)
         let new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
         guard new != state else { return }
         publishCount += 1

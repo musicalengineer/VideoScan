@@ -1794,6 +1794,12 @@ final class VideoScanModel: ObservableObject {
     /// the sandbox under a test host).
     let journalApplier = JournalApplier()
 
+    /// The era job's observations as the app shows them (MachineEraStore.swift;
+    /// rule 12): the inspector's "Machine era" line, the Catalog Status
+    /// convergence count, the era words in search. Attached with the
+    /// journal applier; refreshed after each of its commits.
+    let machineEras = MachineEraStore()
+
     /// Alert driver: "You need to designate a volume as the master
     /// archive." Carries the ids the user tried to promote so the fix-it
     /// button can re-offer the promotion after Initialize.

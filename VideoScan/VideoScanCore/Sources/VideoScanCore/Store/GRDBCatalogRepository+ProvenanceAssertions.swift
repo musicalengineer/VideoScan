@@ -15,7 +15,8 @@
 //      `changes() == 0` means the veto trigger ignored it → `.vetoed`.
 //
 // Memory: one row per call; `provenanceAssertions(subjectKind:subjectID:)`
-// returns one subject's rows (tens).
+// returns one subject's rows (tens); `forEachProvenanceAssertionSubject`
+// holds one subject's rows at a time (a cursor, not the table).
 
 import Foundation
 import GRDB
@@ -38,6 +39,37 @@ extension GRDBRecordHandle {
             CatalogRow.ProvenanceAssertionReading(seq: row[0], subjectKind: row[1], subjectID: row[2], field: row[3], value: row[4],
                                                   state: row[5], by: row[6], at: row[7], confidence: row[8], evidenceJSON: row[9])
         }
+    }
+
+    /// One statement, a cursor (never the whole result in memory): the
+    /// subject-ordered scan rides `provenance_assertions_by_subject`'s
+    /// (subject_kind, subject_id) prefix; rows are grouped as the cursor
+    /// moves and each group is sorted by seq (tens of rows).
+    func forEachProvenanceAssertionSubject(subjectKind: String, fields: [String],
+                                           _ body: (_ subjectID: String, _ rows: [CatalogRow.ProvenanceAssertionReading]) throws -> Void) throws {
+        guard !fields.isEmpty else { return }
+        let marks = Array(repeating: "?", count: fields.count).joined(separator: ", ")
+        let cursor = try Row.fetchCursor(db, sql: """
+            SELECT \(Self.assertionColumns) FROM provenance_assertions
+             WHERE subject_kind = ? AND field IN (\(marks)) ORDER BY subject_id
+            """, arguments: StatementArguments([subjectKind] + fields))
+        var current: String?
+        var group: [CatalogRow.ProvenanceAssertionReading] = []
+        func flush() throws {
+            if let current, !group.isEmpty { try body(current, group.sorted { $0.seq < $1.seq }) }
+            group.removeAll(keepingCapacity: true)
+        }
+        while let row = try cursor.next() {
+            let reading = CatalogRow.ProvenanceAssertionReading(seq: row[0], subjectKind: row[1], subjectID: row[2], field: row[3],
+                                                                value: row[4], state: row[5], by: row[6], at: row[7],
+                                                                confidence: row[8], evidenceJSON: row[9])
+            if reading.subjectID != current {
+                try flush()
+                current = reading.subjectID
+            }
+            group.append(reading)
+        }
+        try flush()
     }
 }
 

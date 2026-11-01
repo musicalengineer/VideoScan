@@ -135,6 +135,13 @@ public protocol CatalogProvenanceAssertionReading {
     func provenanceAssertionCount() throws -> Int
     /// Every row of one subject, oldest first.
     func provenanceAssertions(subjectKind: String, subjectID: String) throws -> [CatalogRow.ProvenanceAssertionReading]
+    /// Every row of `subjectKind` whose field is one of `fields`, streamed
+    /// ONE SUBJECT AT A TIME (subject_id order, each subject's rows oldest
+    /// first) — the bulk read a model-owned cache fills from in one query
+    /// (MachineEraResolver.eras(in:)). Memory: one subject's rows (tens) in
+    /// flight, never the table.
+    func forEachProvenanceAssertionSubject(subjectKind: String, fields: [String],
+                                           _ body: (_ subjectID: String, _ rows: [CatalogRow.ProvenanceAssertionReading]) throws -> Void) throws
 }
 
 /// The one door, inside one `write` / `writeBlocking`.

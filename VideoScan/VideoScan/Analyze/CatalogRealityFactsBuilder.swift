@@ -34,10 +34,11 @@ struct CatalogRealityInputs: Sendable, Equatable {
 enum CatalogRealityFactsBuilder {
 
     static func inputs(facts: CatalogFreshnessFacts, missing: MissingCopyCounts,
-                       degenerateOCRDates: Int = 0, backgroundJournal: JournalApplier.Counts? = nil) -> CatalogRealityInputs {
+                       degenerateOCRDates: Int = 0, backgroundJournal: JournalApplier.Counts? = nil,
+                       machineEra: MachineEraConvergence? = nil) -> CatalogRealityInputs {
         CatalogRealityInputs(facts: realityFacts(facts), review: review(facts.integrity, missing: missing),
                              information: information(facts.integrity, degenerateOCRDates: degenerateOCRDates,
-                                                      backgroundJournal: backgroundJournal))
+                                                      backgroundJournal: backgroundJournal, machineEra: machineEra))
     }
 
     /// The colour's inputs — no review item can reach them.
@@ -81,7 +82,7 @@ enum CatalogRealityFactsBuilder {
     }
 
     static func information(_ integrity: IntegrityReportFacts, degenerateOCRDates: Int = 0,
-                            backgroundJournal: JournalApplier.Counts? = nil) -> [String] {
+                            backgroundJournal: JournalApplier.Counts? = nil, machineEra: MachineEraConvergence? = nil) -> [String] {
         var out = integrity.reality.information
         if integrity.reality.findingsCapped {
             out.append("the last check kept its first \(IntegrityReport.findingsCap.formatted()) findings — the counts may be low")
@@ -92,6 +93,9 @@ enum CatalogRealityFactsBuilder {
         // Background step 1: the helper's journal, said once the applier has
         // counted it (information — never the colour, never "to review").
         if let backgroundJournal { out.append(JournalApplierWords.statusLine(backgroundJournal)) }
+        // Beside it, the convergence count (MachineEraStore): absent at M = 0,
+        // never "0 of 0"; information only — a disagreement is not a fault.
+        if let machineEra, machineEra.total > 0 { out.append(MachineEraResolver.statusLine(machineEra)) }
         return out
     }
 

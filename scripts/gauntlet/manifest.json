@@ -32450,6 +32450,56 @@
       "tests": [
         "predicateOver100kStaysInBudget"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/MachineEraResolverTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MachineEraResolverTests"
+      ],
+      "tests": [
+        "closeEnoughBoundaries",
+        "closeEnoughHalfYearEdges",
+        "convergenceCountsContentsWithBothAndIsAbsentAtZero",
+        "frameTimesAreCappedAndTheRestCounted",
+        "frameTimesComeFromTheSameRunsWindowRowsAndTheWindowsFromTheFusedRow",
+        "malformedRowsNeverBecomeAnEra",
+        "oneHundredThousandErasInOneStreamedQueryWithinBudget",
+        "onlyInferredMachineRowsCountAndRicksRejectionHidesTheValue",
+        "ricksYearComesFromHisSavedDateAtAnyPrecision",
+        "searchWordsAreTheDecadeWordsAPersonTypes",
+        "searchWordsNeverCarryTheTechnicalForm",
+        "theBulkReadReturnsWhatTheDoorStoredKeyedByDigest",
+        "theInspectorLineSaysUnconfirmedAndDisagreementInWords",
+        "theModelShortNameIsTheParameterCount",
+        "theNewestFusedRowPerByWinsBySeqNotByAt",
+        "theThirdEdges"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MachineEraStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MachineEraStoreTruthTests",
+        "MachineEraStoreLogicTests"
+      ],
+      "tests": [
+        "aBestGuessDateCountsAndABadOneDoesNot",
+        "aFailedReadKeepsTheOldCacheAndSaysSoOnce",
+        "aStaleRefreshNeverOverwritesANewerOne",
+        "isolationTermsForAMissingPathAreInertAndRemoveRebuildClearBehave",
+        "noRowNoLine",
+        "oneHundredThousandRecordsJoinIndexAndQueryWithinBudget",
+        "sensorTheStoreHoldsNoSQLNeverWritesAndExtendsNoModel",
+        "theApplierCommitRefreshesTheStore",
+        "theCommittedEraIsTheInspectorLine",
+        "theEraIsSearchableInHumanWordsOnly",
+        "theLayerAgreesWithTheReferenceOnBothPaths",
+        "theStatusLineSitsBesideTheJournalLineAndIsAbsentAtZero",
+        "theStoreCountsOnlyContentsWithBothAndPublishesToStatusAndSearch"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35110,9 +35160,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3089,
+      "expected_floor": 3102,
       "name": "unit",
-      "package_expected_floor": 613,
+      "package_expected_floor": 629,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35154,6 +35204,7 @@
         "VideoScanCoreTests.JobSupervisorTests",
         "VideoScanCoreTests.JournalApplicationTests",
         "VideoScanCoreTests.LaunchPreflightTests",
+        "VideoScanCoreTests.MachineEraResolverTests",
         "VideoScanCoreTests.ModelLabApproachIDTests",
         "VideoScanCoreTests.ModelLabArchitectureSensorTests",
         "VideoScanCoreTests.ModelLabAssertionMappingTests",
@@ -35470,6 +35521,8 @@
         "VideoScanTests/LoggingHardeningTests",
         "VideoScanTests/MFOVanishOnCancelTests",
         "VideoScanTests/MKVDossierPipelineTests",
+        "VideoScanTests/MachineEraStoreLogicTests",
+        "VideoScanTests/MachineEraStoreTruthTests",
         "VideoScanTests/MachineNoteAuthorTests",
         "VideoScanTests/MachineNoteWriterTests",
         "VideoScanTests/MapKitLinkSensorTests",

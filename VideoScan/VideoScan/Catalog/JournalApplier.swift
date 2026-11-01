@@ -129,6 +129,10 @@ final class JournalApplier: ObservableObject {
     var note: (String) -> Void = { _ in }
     /// Catalog Status hears every new count.
     var onCounts: (Counts) -> Void = { _ in }
+    /// After a pass that committed at least one new row (the readers'
+    /// refresh hook: MachineEraStore re-reads the eras — background step 1,
+    /// item 8). Not called for a pass of duplicates or refusals only.
+    var onApplied: () -> Void = {}
     /// The pass at attach (launch); tests await it.
     private(set) var launchPass: Task<PassOutcome, Never>?
     private var timer: Task<Void, Never>?
@@ -180,6 +184,7 @@ final class JournalApplier: ObservableObject {
         }
         if pass.linesRead > 0 { pass.rowsAfter = await rowCount(backing) }
         report(pass)
+        if pass.applied > 0 { onApplied() }
         await recount()
         return pass
     }
