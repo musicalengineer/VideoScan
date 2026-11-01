@@ -75,6 +75,15 @@ These come from CLAUDE.md and `docs/practices/software_dev_policy.md`. The secti
     `std::async(std::launch::async, …)`. `Sendable` is "safe to hand to another thread without a mutex".
 - **Data-risk paths** (delete/move/rewrite media, the ledger, resume/recovery, the archive, fixity, curated user
   data) get `/safety-critical` before design and a codex pass after the batch.
+- **No new `extension VideoScanModel`** (CLAUDE.md rule 12; `docs/ARCHITECTURE.md` §10.7, #337). New state lives in
+  a feature store — a `@MainActor final class … : ObservableObject` injected through the environment, with one
+  activity enum instead of parallel Bools — that reads the catalog through what it is handed at attach time (a repository,
+  a `() -> [VideoRecord]` closure, a notification), never by extending the model. The newest house example is
+  `MachineEraStore` (`attach(repository:records:)`, background step 1). The skeletons below are written that way. Many Best/Worst examples are
+  `VideoScanModel+…` files: they predate the rule (added here 2026-11-01) and are cited for their shape, not their
+  placement.
+  - C++: instead of adding member functions to a god class, write a separate class and hand it a
+    `std::function` that returns what it needs.
 
 ---
 
@@ -129,7 +138,9 @@ final class FrobnicateJob: @MainActor MediaFileOperationJob {
         }
         finish()                                              // stamps finishedAt, one OUTCOME line
     }
-    private func note(_ s: String) { model?.frobnicateNote("Frobnicate: " + s) } // ONE sink
+    private let sink: @MainActor (String) -> Void          // ONE sink, injected (the LogSink line writer)
+    init(sink: @escaping @MainActor (String) -> Void) { self.sink = sink }
+    private func note(_ s: String) { sink("Frobnicate: " + s) }
 }
 ```
 
@@ -198,7 +209,15 @@ per run, including cancel.
 **Skeleton.**
 
 ```swift
-extension VideoScanModel {
+@MainActor
+final class ThingStore: ObservableObject {                 // injected with .environmentObject (rule 12: no model extension)
+    @Published private(set) var thingSnapshot = ThingSnapshot()
+    private var records: () -> [VideoRecord] = { [] }      // the seam, handed over at attach (MachineEraStore's shape)
+    private var thingTask: Task<Void, Never>?, thingGeneration = 0, thingRefreshScheduled = false
+    private var thingLastProjectionNanos: UInt64 = 0
+    var thingViewers = 0, thingQuery = ThingQuery()
+    func attach(records: @escaping () -> [VideoRecord]) { self.records = records; noteThingCatalogChanged() }
+
     func noteThingCatalogChanged() {                       // called from every mutation funnel
         guard thingViewers > 0, !thingRefreshScheduled else { return }
         thingRefreshScheduled = true
@@ -213,14 +232,14 @@ extension VideoScanModel {
         thingTask?.cancel(); thingGeneration &+= 1
         let gen = thingGeneration, query = thingQuery
         let t0 = DispatchTime.now().uptimeNanoseconds
-        let projection = ThingBuilder.project(records)    // the ONE O(records) pass on main
+        let projection = ThingBuilder.project(records())  // the ONE O(records) pass on main
         thingLastProjectionNanos = DispatchTime.now().uptimeNanoseconds &- t0
         thingTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let rows = ThingBuilder.build(projection, query: query,
                                                 isCancelled: { Task.isCancelled }) else { return }
             await MainActor.run {
                 guard let self, self.thingGeneration == gen, self.thingViewers > 0 else { return }
-                self.thingSnapshot.publish(rows)          // the view observes thingSnapshot only
+                self.thingSnapshot = ThingSnapshot(rows)  // the view observes thingSnapshot only
             }
         }
     }

@@ -21,7 +21,7 @@ The long-term goal is a portable archive that Rick's family can understand witho
 | Archive tab labels | The stage stored as `Master` displays as "Archived"; "Master" is reserved for the provenance role (DECISIONS 2026-10-26) |
 | `ArchiveVolumeProtection` — the one choke point every delete verb passes | Built (path + volume UUID); no bulk delete on FamilyArchive, ever |
 | Media Ledger, append-only, mirrored to `00_Index/media-ledger.jsonl` on every Promote | Built |
-| Fixity: Verify Archive Copies; Validate Catalog tiers 0–1 (presence, whole-file SHA-256) | Built; tiers 2–4 (rolling re-read, decode-to-end) are BACKLOG |
+| Fixity: Verify Archive Copies; Validate Catalog tier 0 (presence), tier 1 (whole-file SHA-256) and tier 5 (the catalog against itself) | Built; tiers 2–4 (rolling re-read, decode-to-end, derived stamps) are BACKLOG |
 | Removal: Trash only, one removal marker, Cleanup (Triage) as the one bulk door | Built (DECISIONS 2026-10-09 to 10-12; ARCHITECTURE §10.3) |
 | Prune planning after Promote (`ArchivedWhatNextSheet`, `PrunePlan`) | Rebuilt simple 2026-10-22 (byte-identical copies only); Apply runs as `PruneApplyJob`, Trash only; folding it into Cleanup is ruling Q4 |
 | Backup attestations (cloud, off-site, named storage) | Built; human answers, not app-verified fixity. The verifiable off-site copy is open (#249) |
