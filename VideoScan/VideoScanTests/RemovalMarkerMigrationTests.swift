@@ -1,5 +1,5 @@
 // RemovalMarkerMigrationTests.swift
-// GH #143 step 3 (docs/design/one_removal_marker_and_trash_engine.md §2):
+// GH #143 step 3 (docs/archive/design/one_removal_marker_and_trash_engine.md §2):
 // the one removal marker and the load-time migration of every older
 // "gone" encoding onto it.
 //

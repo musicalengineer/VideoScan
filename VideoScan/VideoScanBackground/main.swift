@@ -1,7 +1,7 @@
 // main.swift — VideoScan Background
 //
 // The launchd agent inside VideoScan.app (Contents/Library/LoginItems/,
-// registered by the app through SMAppService; docs/design/background_service_2026_10_30.md).
+// registered by the app through SMAppService; docs/design/background_service.md).
 // Two modes in ONE binary:
 //
 //   • no arguments → the SERVICE. The same headless-Aqua arrangement as the

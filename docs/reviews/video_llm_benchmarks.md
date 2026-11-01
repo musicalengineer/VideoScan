@@ -1,6 +1,6 @@
 # Video LLM benchmarks
 
-*Written by `tools/video-llm-bench/bench.py summarize`; overwritten on every run, never appended (CLAUDE.md). Aggregates only — per-clip results stay in `.scratch/` (DECISIONS 2026-10-26). Design: `docs/design/video_llm_lab_2026_10_30.md` §4.*
+*Written by `tools/video-llm-bench/bench.py summarize`; overwritten on every run, never appended (CLAUDE.md). Aggregates only — per-clip results stay in `.scratch/` (DECISIONS 2026-10-26). Design: `docs/design/machine_intelligence.md` §4.*
 
 ## Approach `a0-py` — baseline (today's 3B captioner, stills, the three app prompts)
 

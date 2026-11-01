@@ -1,7 +1,7 @@
 // FootageFolderTableRow.swift
 // The row type of the Footage folders Table, the sort mapping between
 // that Table and the linear one, the remembered Show option, and the
-// "reveal the selected row" helper (docs/design/footage_folders_2026_10_16.md).
+// "reveal the selected row" helper (docs/archive/design/footage_folders_2026_10_16.md).
 //
 // WHY A SECOND ROW TYPE. SwiftUI's `Table` draws ONE row type; the linear
 // table's is `VideoRecord` and its sort order is `[KeyPathComparator<VideoRecord>]`,

@@ -18,7 +18,7 @@ import Foundation
 //   12 frames with tiny packets between, mpdecimate keeps 1 of 300.
 //   HandBrake 1.9.2. The quick tier must call it a problem in seconds.
 //
-// Design: docs/design/check_media_and_menu_cleanup_2026_10_07.md
+// Design: docs/archive/design/check_media_and_menu_cleanup_2026_10_07.md
 
 enum CheckMediaRules {
 

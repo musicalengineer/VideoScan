@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- launchd agent for VideoScan Background (docs/design/background_service_2026_10_30.md §3.2).
+	<!-- launchd agent for VideoScan Background (docs/design/background_service.md §3.2).
 	     Copied by the app target into VideoScan.app/Contents/Library/LaunchAgents/ and registered
 	     with SMAppService.agent(plistName:). BundleProgram is relative to the app bundle. -->
 	<key>Label</key>

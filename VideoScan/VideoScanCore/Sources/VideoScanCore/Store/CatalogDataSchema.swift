@@ -3,7 +3,7 @@
 // docs/design/catalog_sqlite_schema_v1.sql §2 onward (every table, index,
 // trigger and view after the bookkeeping of §1, which is
 // CatalogBookkeepingSchema.swift). Step C′ part 2a of
-// docs/design/catalog_sqlite_migration_2026_10_16.md §10a.
+// docs/archive/design/catalog_sqlite_migration_2026_10_16.md §10a.
 //
 // THE RULE (Rick, 2026-10-17): every integrity-critical statement is raw
 // SQL, never the query builder, so this file reads like the DDL it came

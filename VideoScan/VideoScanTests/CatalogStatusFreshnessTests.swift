@@ -1,6 +1,6 @@
 // CatalogStatusFreshnessTests.swift
 // Catalog Status, phase 3 (Rick 2026-10-16,
-// docs/design/catalog_status_freshness_2026_10_16.md §2–§4): the three
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §2–§4): the three
 // integrity rows, the freshness rows built from the coverage pass, the
 // summary → chip / menu words, the one-button door rule, the update
 // queue, and the source sensors that keep every surface on ONE snapshot.

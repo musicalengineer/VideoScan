@@ -1,6 +1,6 @@
 // VideoScanModel+CatalogAudit.swift
 // The model half of "Audit Catalog…" tier 0: the ONE place the audit
-// touches a catalog row (docs/design/catalog_status_freshness_2026_10_16.md
+// touches a catalog row (docs/archive/design/catalog_status_freshness_2026_10_16.md
 // §6). CatalogAuditSensorTests pins that `stampRemoval` / `clearRemoval`
 // appear in no other audit source.
 //

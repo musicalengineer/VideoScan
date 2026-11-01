@@ -1,5 +1,5 @@
 // PruneSensorTests.swift
-// SENSOR for the one prune plan (docs/design/pruneplan_simple_2026-10-21.md),
+// SENSOR for the one prune plan (docs/archive/design/pruneplan_simple_2026-10-21.md),
 // read at the source, at production scale (the whole app tree):
 //   * ONE DOOR, TRASH ONLY (I3): no prune file moves, renames or removes a
 //     file itself; the only removal is `deleteConfirmedJunk(… mode: mode …)`

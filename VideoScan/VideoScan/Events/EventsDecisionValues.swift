@@ -2,7 +2,7 @@
 // Rick's event decisions as VALUES — what EventsDecisionStore holds, what it
 // writes (to catalog.sqlite once that is the authority; to
 // events-decisions.json before), and the folded snapshot the planner and
-// the Catalog's folders read (docs/design/events_design.md §3.F; split out
+// the Catalog's folders read (docs/archive/design/events_design.md §3.F; split out
 // of EventsDecisionStore.swift 2026-10-19 when folders moved into
 // catalog.sqlite — the store file keeps the store).
 //

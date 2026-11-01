@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """dv_datecode.py — tabulate the DV recording datecode over the catalog's DV files.
 
-A one-day evidence test (docs/design/video_llm_lab_2026_10_30.md §11;
-docs/design/background_service_2026_10_30.md §0.6 "DV datecode — yes, a day").
+A one-day evidence test (docs/design/machine_intelligence.md §11;
+docs/design/background_service.md §0.6 "DV datecode — yes, a day").
 A DV camcorder writes the recording date/time into every frame (VAUX/SSYB
 packs); a stream copy keeps it, a re-encode loses it, and analog tape passed
 through a DV bridge never had one. `dvrescue` (MediaArea, Brewfile) reports it

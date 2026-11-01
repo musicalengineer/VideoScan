@@ -1,5 +1,5 @@
 // BackgroundServiceRegistrar.swift — the app's side of VideoScan Background
-// (docs/design/background_service_2026_10_30.md §3.2, §3.3; step 0).
+// (docs/design/background_service.md §3.2, §3.3; step 0).
 //
 // Two small things, both OFF by default so Rick's normal launch changes
 // nothing (the user-defaults key `background.service.enabled`, false until

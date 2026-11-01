@@ -1,6 +1,6 @@
 // CatalogRecordDTO+Record.swift
 // `CatalogRecordDTO.init(record: VideoRecord)` — the DTO of a LIVE record
-// (cutover B1, docs/design/catalog_cutover_f_prime_2026_10_17.md §2/§3):
+// (cutover B1, docs/archive/design/catalog_cutover_f_prime_2026_10_17.md §2/§3):
 // the same table-shaped values the importer builds from that record's
 // catalog.json row, with no JSON text in between.
 //

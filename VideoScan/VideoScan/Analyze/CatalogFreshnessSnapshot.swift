@@ -1,6 +1,6 @@
 // CatalogFreshnessSnapshot.swift
 // ONE equality-gated snapshot behind every Catalog Status surface (Rick
-// 2026-10-16, docs/design/catalog_status_freshness_2026_10_16.md §4): the
+// 2026-10-16, docs/archive/design/catalog_status_freshness_2026_10_16.md §4): the
 // chip on the totals strip, the dot on the Content Analysis button, the
 // Analyze menu's first row, the Catalog ▸ Catalog Status… title, the band
 // at the top of the Analyze panel and the freshness column on every row.

@@ -2,7 +2,7 @@
 // The model-owned coverage cache behind the Analyze panel and the Catalog
 // toolbar's Analyze menu (Phase A trial, 2026-10-02) — and, since
 // 2026-10-16, the Catalog Status freshness snapshot that rides the same
-// pass (docs/design/catalog_status_freshness_2026_10_16.md §4).
+// pass (docs/archive/design/catalog_status_freshness_2026_10_16.md §4).
 //
 // Pattern = VolumeDashboard / UserPlaceRoster: ONE main-actor projection
 // pass over `records` (Sendable rows), the arithmetic in a detached task,

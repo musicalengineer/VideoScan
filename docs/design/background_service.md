@@ -1,10 +1,17 @@
-# VideoScan Background — the analyzer service (design, 2026-10-30)
+# VideoScan Background — the analyzer service
+
+Status: in flight — 2026-11-01. Step 0 is built (the helper, its launchd job, XPC control, a no-op job; off unless `background.service.enabled` is set, no Settings toggle yet). Step 1 merged on 2026-11-01 (`0656aee6`): the seated 8B era/OCR job, the observation journal, `JournalApplier` through the commit door, schema v14 `provenance_assertions` (DECISIONS 2026-10-31, 2026-11-01). The corpus run waits for Rick's window on the Ultra (STATUS).
+
+VideoScan Background is the helper process that keeps analysing after the app quits: a login-item launchd job the app registers, controlled over XPC, with its durable state in files under `App Support/VideoScan/background/`, backing off when Rick is working, and taking one engine at a time out of the app so the app is never down for a rewrite. What it may run is listed in §3.6; it never touches media. §0.6 (Rick, 10/31) says what goes in and what comes out; §0.7 names the outputs **observations**, says where they live (the three homes) and in what order they are produced (1960–2010, oldest first). An observation reaches the catalog only through the app's one commit door, and is never shown as a date (DECISIONS 2026-11-01). The first job it hosts is the video-model work in `docs/design/machine_intelligence.md`.
+
+*The design as written on 2026-10-30, with §0.5–§0.7 added 10/30–10/31 (Rick said "design it"); the italic note below is its original preface.*
+
 
 *Rick said "design it" on 2026-10-30: "The app is essentially the UI/UX… peel off services into a BG process that
 can keep running, persist after we quit the app… We need a persistent service or process that survives app reboots.
 I don't like the idea of having an option to launch the app in the BG but I am open to these trade-offs… we can't
 lose the app for 2 weeks while we completely refactor it into a front-end backend." This is the VideoScan answer.
-It builds on `docs/design/video_llm_lab_2026_10_30.md` (the first job the service hosts) and ARCHITECTURE §4 (MFO,
+It builds on `docs/design/machine_intelligence.md` (the first job the service hosts) and ARCHITECTURE §4 (MFO,
 Analyze cyclers, the one commit door). Not yet built.*
 
 ## 0. In one page
@@ -416,5 +423,5 @@ Apple: `SMAppService` (ServiceManagement, macOS 13+), "Updating helper executabl
 `NSXPCConnection`/`NSXPCListener`, launchd.plist(5) (`KeepAlive`, `MachServices`, `ProcessType`, `LowPriorityIO`),
 `ProcessInfo.thermalState`, `DispatchSource.makeMemoryPressureSource`, `CGEventSource.secondsSinceLastEventType`.
 Repo: `App/main.swift` (`--find-tag`, the headless-Aqua arrangement this keeps), ARCHITECTURE §4 (MFO, the commit
-door, LogSink), `docs/design/video_llm_lab_2026_10_30.md` §3.5 (the first job), BACKLOG "Background helper looks
+door, LogSink), `docs/design/machine_intelligence.md` §3.5 (the first job), BACKLOG "Background helper looks
 like the app" (Rick 2026-10-28), DECISIONS 2026-10-28 (signing identity), #395 (Find Tag daemon off).

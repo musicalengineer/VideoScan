@@ -1,6 +1,6 @@
 // RemovalMarker.swift
 // The ONE "gone" shape (GH #143, Rick's ruling 2026-10-11; design:
-// docs/design/one_removal_marker_and_trash_engine.md). A catalog row is
+// docs/archive/design/one_removal_marker_and_trash_engine.md). A catalog row is
 // never deleted when its file leaves; it carries one of three states:
 //
 //   - inTrash            — the app moved the file to the Finder Trash. The

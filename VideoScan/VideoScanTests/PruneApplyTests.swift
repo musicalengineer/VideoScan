@@ -1,6 +1,6 @@
 // PruneApplyTests.swift
 // The one prune plan, end to end on a sandbox promote
-// (docs/design/pruneplan_simple_2026-10-21.md). A real Promote makes the
+// (docs/archive/design/pruneplan_simple_2026-10-21.md). A real Promote makes the
 // fixity-verified archive file; the source keeps the promote's whole-file
 // digest; a byte-identical copy in `Sources/copies` is given its own digest.
 // The file operation is the tests' `removeFile` seam — a sandbox "Trash" —

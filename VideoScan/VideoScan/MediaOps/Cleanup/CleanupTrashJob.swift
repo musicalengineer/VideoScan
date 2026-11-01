@@ -1,6 +1,6 @@
 // CleanupTrashJob.swift
 // Triage ▸ Cleanup v1 — the MOVE, as one Media File Operation
-// (docs/design/cleanup_kiss_2026_10_12.md; FullHashBackfillJob's shape).
+// (docs/archive/design/cleanup_kiss_2026_10_12.md; FullHashBackfillJob's shape).
 //
 // Shape:
 //   • ONE FROZEN SELECTION (`CleanupSelection`), made when Rick confirms:

@@ -6,7 +6,7 @@ import Foundation
 // offers the fixes its rows earn. Pure: no SwiftUI, no model, no disk —
 // the menu, the sheet and the tests all ask these functions.
 //
-// Design: docs/design/check_media_and_menu_cleanup_2026_10_07.md §9.
+// Design: docs/archive/design/check_media_and_menu_cleanup_2026_10_07.md §9.
 
 /// The fixes Repair… can run. Raw values are the `derivationKind` the
 /// new record carries — never rename one. (A Swift enum with String raw

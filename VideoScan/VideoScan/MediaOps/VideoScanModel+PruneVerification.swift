@@ -1,6 +1,6 @@
 // VideoScanModel+PruneVerification.swift
 // The evidence a copy needs before it may go to the Trash, and the proof it
-// carries to the moment the file moves (docs/design/pruneplan_simple_2026-10-21.md).
+// carries to the moment the file moves (docs/archive/design/pruneplan_simple_2026-10-21.md).
 //
 // I1 — BOTH FILES, READ IN FULL, IN THIS BATCH. The archive file is read end
 // to end once per archive file per batch (`pruneArchiveReading`); its SHA-256

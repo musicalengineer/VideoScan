@@ -6,7 +6,7 @@
 // existing engines into this shape; nothing underneath is refactored.
 //
 // CATALOG STATUS (Rick 2026-10-16,
-// docs/design/catalog_status_freshness_2026_10_16.md §2): the summary band sits at the TOP (CatalogStatusBand
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §2): the summary band sits at the TOP (CatalogStatusBand
 // — one colour, one headline, one button per item, "Update everything
 // stale"); the three integrity rows (File Presence, Full Hashes, Sound
 // Prints) come first; every row carries a FRESHNESS column (colour dot +

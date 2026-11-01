@@ -1,6 +1,6 @@
 // EventRecommendation.swift
 // The eight recommendations of the Event Analyzer — the verdict plus what the
-// archive holds (docs/design/event_analyzer_compare_media_2026_10_15.md §4).
+// archive holds (docs/archive/design/event_analyzer_compare_media_2026_10_15.md §4).
 //
 //   R1  identical copy; the other is archived      Master is archived. Remove this copy.
 //   R2  clip of an archived master                 Master is archived. Remove the clip; cut a fresh one later.

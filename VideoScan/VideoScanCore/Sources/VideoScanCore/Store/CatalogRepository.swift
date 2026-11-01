@@ -1,6 +1,6 @@
 // CatalogRepository.swift (VideoScanCore/Store)
 // The SEAM between the catalog's domain and whatever stores it. Step C′
-// part 1 of docs/design/catalog_sqlite_migration_2026_10_16.md §10a; part
+// part 1 of docs/archive/design/catalog_sqlite_migration_2026_10_16.md §10a; part
 // 2b adds the record doors the importer writes through and the readings
 // the comparator checks.
 //

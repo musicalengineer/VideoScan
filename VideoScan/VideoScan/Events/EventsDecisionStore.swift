@@ -1,6 +1,6 @@
 // EventsDecisionStore.swift
 // Triage ▸ Events v1 — Rick's decisions, kept apart from everything the
-// planner derives (docs/design/events_design.md §3.F; plan §3) — and,
+// planner derives (docs/archive/design/events_design.md §3.F; plan §3) — and,
 // since 2026-10-19, the Catalog's FOLDERS (a folder is a confirmed event:
 // "Finder's handling, Photos albums' meaning" — a label, never a place on
 // disk). The values live in EventsDecisionValues.swift.

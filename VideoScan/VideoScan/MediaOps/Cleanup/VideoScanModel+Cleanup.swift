@@ -1,6 +1,6 @@
 // VideoScanModel+Cleanup.swift
 // Triage ▸ Cleanup v1 — the catalog half of the PLAN
-// (docs/design/cleanup_kiss_2026_10_12.md).
+// (docs/archive/design/cleanup_kiss_2026_10_12.md).
 //
 // Two steps, the Triage-snapshot shape (swift_playbook §2):
 //   1. `cleanupInputs()` — ONE O(records) pass on the main actor that copies

@@ -1,13 +1,22 @@
-# Video LLMs for the Breen media — a pluggable approach lab (design, 2026-10-30)
+# Machine intelligence — the video-model lab, the evidence inventory, the one list of models
+
+Status: in flight — 2026-11-01. Lab phases 0–2 built (samplers, approaches A0–A3 measured, the Judge, the review page); the 8B (`qwen3-vl-8b-4bit`, approach A2) is seated as the era/OCR expert and runs as background step 1; the 32B is parked (DECISIONS 2026-10-31); captions on the 8B come second. §9 rulings 1, 2 and 4 are open (STATUS).
+
+How a machine-learned model becomes one more evidence engine in INGEST → MANAGE → ARCHIVE: a pluggable lab (sampler · approach · contract, a registry, a Judge that is the red/green for a model) that measures each approach against Rick's own dated clips before it earns a seat; what its output may say (structured assertions with evidence, pixels-only, never a family fact or a name); and where the output lives (observations, `docs/design/background_service.md` §0.7). §11 is the evidence inventory: what a media file can tell us without a model, which the deterministic engines answer first. Part II is the one list of every model VideoScan runs, has run or has measured, with its status and the document that proves its row; the numbers are in `docs/reviews/video_llm_benchmarks.md`.
+
+**Contents:** Part I — the video-LLM lab (design, 2026-10-30; §11 added 2026-10-31) · Part II — Models, the one list (from `design/models.md`, 2026-10-31, merged here 2026-11-01).
+
+# Part I — Video LLMs for the Breen media: a pluggable approach lab (design, 2026-10-30)
+
 
 *Rick said "design it" on 2026-10-30, after reading two outside architecture documents (an FMIS/RAG sketch and a
 "Modular Video Intelligence Architecture" PDF). This is the VideoScan answer: how a video model becomes one more
 evidence engine in the INGEST → MANAGE → ARCHIVE spine, how we plug in one approach after another and measure which
 earns its place, and what "an expert on the Breen media" means under the rulings. It builds on
-`docs/design/provenance_retroactive_2026_10_26.md` (Phases A–E, the assertion table),
+`docs/design/provenance.md` (Phases A–E, the assertion table),
 `docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md` (what exists, what the outside specs got wrong),
 `docs/archive/research/family_event_learning_review_2026-10-16.md` (what "training on our media" may mean) and
-`docs/design/events_design.md` §1 (the ten evidence rules). It repeats none of them where a pointer will do.
+`docs/archive/design/events_design.md` §1 (the ten evidence rules). It repeats none of them where a pointer will do.
 Claude Code and Rick read this as the starting point; it is not yet built.*
 
 ## 0. In one page
@@ -295,8 +304,8 @@ and the Phase A spot tests finish, and it touches no catalog table.
 
 ## 10. Sources
 
-Repo: `docs/design/provenance_retroactive_2026_10_26.md` · `docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md`
-· `docs/archive/research/family_event_learning_review_2026-10-16.md` · `docs/design/events_design.md` · `docs/design/cyberbrain_design.md`
+Repo: `docs/design/provenance.md` · `docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md`
+· `docs/archive/research/family_event_learning_review_2026-10-16.md` · `docs/archive/design/events_design.md` · `docs/archive/design/cyberbrain_design.md`
 · `Media/CaptionRunner.swift` · `scripts/whisper_worker.py` · `tools/qwen-bench/README.md` · `docs/DECISIONS.md`
 (2026-08-14, 2026-08-16, 2026-09-23, 2026-10-10, 2026-10-26). Outside input (Rick, 2026-10-29): "SW_Video_LLMs_MediaExpert"
 and "Modular Video Intelligence Architecture for Apple Silicon & Cloud"; their useful parts are in §1's last three rows.
@@ -335,3 +344,61 @@ the first camcorder frame), none needed the middle window; a full read of a 40-f
 
 Fusion step one landed in the review page the same day: a date stamp the model cites as an `onScreenText` cue (JUN 21 '97) collapses
 its padded range (1995–1997) to that year, deterministically; a stamp outside the model's range is shown, not trusted.
+
+# Part II — Models, the one list
+
+*From `design/models.md` (consolidated 2026-10-31), whole; archived at `docs/archive/design/models.md`. "Rewritten in place, never appended" now applies to this Part.*
+
+
+*Rewritten in place, never appended. Every machine-learned model VideoScan runs, has run, or has measured; what it is for; where it runs; and the document that proves its row. Consolidated 2026-10-31 from `docs/archive/research` and `docs/reviews/` (the originals are under `docs/archive/`, listed in `docs/archive/README.md`). Facts come from source and from the benchmark files named in the last column, not from memory.*
+
+Not models, and not listed here: whole-file SHA-256 (identity), the 32×32 DCT picture prints, the audio landmark fingerprints, ffprobe facts, the `DateTriangulator`, the related-score ladder. Those are deterministic engines; they outrank every row below (DECISIONS 2026-10-14: confidence comes from an evaluated rule, never from a model's self-assessment). Their tables are mapped in `docs/design/data_organization_2026_10_31.md`.
+
+### The table
+
+| Model | Size / quant | Runs where | Used for | Status | Evidence |
+|---|---|---|---|---|---|
+| `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | 3B, 4-bit; peak RSS 3.7 GB in the bench | In-app, MLX-Swift (`MLXVLMCaptionRunner`, `VLMRegistry`), Ultra or M4; mirrored in `venv-mlx` for the bench | **Today's captioner**: scene / date / on-screen-text prompts, one 448² still per call; 4,518 contents captioned, 1,448 OCR date candidates | **In production; to be retired for the 8B.** A0 and A1 benchmarked: Rick-dated era MAE 6.9 y (A0) / 5.9 y (A1); OCR any-frame exact 92 % | `docs/reviews/video_llm_benchmarks.md` §A0, §A1; `VideoScan/VideoScan/Media/CaptionRunner.swift` |
+| `mlx-community/Qwen3-VL-8B-Instruct-4bit` | 8B, 4-bit | Python worker in `venv-mlx` (`mlx-vlm` 0.5.0, pinned), Ultra; in-app job pending (background service step 1) | **The era / OCR expert**: chronological windows (3 × 8 frames) + strict JSON contract for `era` and `roomFeatures`; A0's stills for the OCR date | **Seated 2026-10-31** (Rick: "seat the 8B as the era expert; keep the 3B for nothing"). Rick-dated era MAE 3.6 y, truth inside the range 86 %, OCR any-frame exact 95 %; 7.0 s/clip | `docs/reviews/video_llm_benchmarks.md` §A2; `docs/STATUS.md` |
+| `mlx-community/Qwen3-VL-32B-Instruct-4bit` | 32B, 4-bit; 18 GB cached | `venv-mlx`, Ultra only (load 14 s) | Era, same windows and contract as the 8B (bench approach `a3-py`) | **Benchmarked 2026-10-31 and parked.** On the same 48 Rick-dated clips MAE 5.0 y vs the 8B's 3.7 y, inside-range 56 % vs 88 %, at ≈ 5× the cost per window (7.2 s vs 1.5 s). One caveat: the prompt was tuned on the 3B/8B | `docs/reviews/video_llm_benchmarks.md` §A3; `docs/STATUS.md` |
+| `qwen3.8:27b-mlx` (Ollama tag) | 27B, MLX nvfp4; 18.2 GB on disk, 22.7 GB resident at the 32K context | Ollama on the Ultra (`http://127.0.0.1:11434`), failover hosts in Settings | **Hallie, the archivist**: the one model that emits a fixed read-only tool plan and phrases the answer; the catalog and the tree answer, the model never asserts a family fact | **Built, the code default** (`HallieBrain.defaultModel`, chosen 2026-09-01 on measured evidence); Hallie paused 2026-10-16. 2026-10-29 replay: strict 56/56, advisory 671/826 clean, median 0.54 s | `docs/design/hallie.md`; `VideoScan/VideoScan/Hallie/LLM/OllamaQueryTranslator.swift`; `docs/design/hallie.md` |
+| `llama3.3:70b` (Ollama tag) | 70B, GGUF Q4_K_M | Ollama on the Ultra | Hallie, the comparison model in the nightly replay | **Benchmarked, not the default.** 2026-10-29: strict 55/56 (one model-phrased row), advisory 633/826, ≈ 3× slower (median 1.5 s, p90 7.1 s) | `docs/design/hallie.md` |
+| `mlx-community/whisper-medium-mlx-q4` | Whisper medium, 4-bit, ≈ 244 MB on disk | Long-lived Python worker in `venv-mlx` (`scripts/whisper_worker.py`, JSONL over stdin/stdout), loaded once per batch; Ultra or M4 | **Transcripts** (`transcripts` table); segment timing is still discarded (BACKLOG) | **In production** | `VideoScan/VideoScan/Media/WhisperWorkerTranscriber.swift`; `docs/design/machine_intelligence.md` §2 |
+| Apple Vision (face detection and face feature print; ships with macOS) | — | In-app, Vision framework | **People**: face detection for every engine; the default recognition engine for Person Finder / Find & Tag | **Built; recognition frozen 2026-10-23** (POI face search is no longer the strategy) | `docs/archive/guides/facial-recognition.md`; DECISIONS 2026-07-27, 2026-10-23 |
+| ArcFace `w600k_r50` (InsightFace) | Core ML, fp16, 512-d embedding | In-app Core ML (`ArcFaceEngine`); the package lives in `~/dev/VideoScan/models`, not in git | Face identity embeddings; the Donna recipe experiments (`tools/poi-c04`, `tools/donna-recipe`) | **Built; frozen 2026-10-23** | `docs/archive/guides/facial-recognition.md`; `VideoScan/VideoScan/People/ArcFaceEngine.swift` |
+| AdaFace IR-50 (WebFace4M) | Core ML, fp16, 512-d; same I/O contract as ArcFace | In-app Core ML (`AdaFaceEngine`); converted by `tools/adaface/convert_adaface_coreml.py`; weights research-use only, never redistributed | Face identity embeddings; replaced dlib 2026-07-27 (GH #144); the Hybrid engine's fallback | **Built; frozen 2026-10-23** | DECISIONS 2026-07-27; `VideoScan/VideoScan/People/AdaFaceEngine.swift` |
+| Kokoro (neural TTS, MLX) | pinned model + voices by SHA-256 in the installer | Optional helper app under `~/Library/Application Support/VideoScan/HallieKokoro` (`scripts/install_hallie_kokoro.sh`) | Hallie's spoken voice | **Built, optional; paused with Hallie** | `docs/design/hallie.md` |
+| MobileCLIP2-S2 (Apple) | 512-d, Core ML on the ANE | In-app Core ML (not written) | Room / occasion embeddings — "same room across decades" as *context*, retrieval by example for the Related ladder (a suggestion with a distance, never lineage or a date) | **Untried; gated** on precision@k ≥ 0.8 against the 18 confirmed events and Rick's 50 place labels (lab approach A4) | `docs/design/machine_intelligence.md` §5; `docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md` §4 |
+| SigLIP 2; `Qwen3-VL-Embedding-2B` (+ reranker); DINOv2/v3 | — | Core ML or MLX | Alternatives for the same A4 embedding seat (DINOv3 for details captions omit; note DINOv3's custom licence, SSCD's CC-BY-NC) | **Untried** — named in research only | `docs/design/machine_intelligence.md` §5; `docs/archive/research/family_event_learning_review_2026-10-16.md` |
+| Gemma 4 31B | 65–75 GB at long context | `venv-mlx`, Ultra only (with a memory warning) | A second VLM family for the era contract, to see if it reads VHS-era footage better than Qwen | **Untried.** Lab design §9 ruling 3 pending ("Qwen first, Gemma next" is the default) | `docs/design/machine_intelligence.md` §5, §9 |
+| Cloud models (Claude, Gemini, GPT-class) | — | Cloud sessions only | Design, review, tests on synthetic fixtures | **None in use on media.** Rule 13 forbids living-family pixels, audio or frames; whether *derived text* (captions, transcripts) may go out is lab design §9 ruling 1, pending | `CLAUDE.md` rule 13; `docs/design/machine_intelligence.md` §9 |
+
+History, one line each (so nobody re-runs them): `qwen3:30b-a3b` and `qwen3.6 35B-A3B NVFP4` were Hallie auditions in August 2026 (13/15 strict on the NL audition; the later 0/16 two-turn pilot was invalid), superseded by `qwen3.8:27b-mlx` on 2026-09-01 (`docs/design/hallie.md` §Model configuration). dlib was the first face engine, replaced by AdaFace 2026-07-27. The outside documents of October 2026 proposed Qwen2.5-VL 7B/72B, Llama-3.2-Vision 11B and LLaVA-NeXT through Ollama/vLLM; all are a generation behind Qwen3-VL and were not run.
+
+Weights live in `~/.cache/huggingface` and `~/.ollama`, never in git. Python: `venv-mlx/` holds `mlx-vlm` and `mlx-whisper` (Python 3.12), separate from `venv/` (`docs/guides/developer.md`).
+
+### How a model earns a seat
+
+A model is a **witness, never the judge**. It earns a seat by beating the current holder on the lab corpus against truth we already hold: Rick's confirmed dates (`user_dates`, 72–73 clips), camera-native dates (`files.embedded_created_at` on camera codecs only), the catalog's on-screen-date verdicts (63 OCR clips), and the 18 confirmed events. The harness is `tools/video-llm-bench/` (`validate-corpus` → `run` → `summarize`); it pins model tag and weights digest, prompt hashes, sampler id, git SHA, corpus hash, host and library versions, and writes aggregates only to `docs/reviews/video_llm_benchmarks.md` — per-clip results stay in `.scratch/` (DECISIONS 2026-10-26).
+
+The ladder so far (`docs/design/machine_intelligence.md` §5; results in `docs/reviews/video_llm_benchmarks.md`):
+
+| Rung | What changed | What it proved |
+|---|---|---|
+| A0 | the 3B captioner as is: stills, free text | the baseline; it answers an era for 18 % of clips |
+| A1 | same model; chronological windows + strict JSON contract | structure makes it answer (98 %) without making it right (MAE unchanged); windows cost OCR 4–6 points → **one engine, two samplers** |
+| A2 | the 8B through A1's windows; A0's stills for OCR | the first model that moves the reading (MAE 5.9 → 3.6 y) → **seated** |
+| A3 | the 32B, same paths | worse than the 8B at ≈ 5× the cost → parked |
+| A4 … A6 | embeddings (retrieval), example memory, LoRA on extraction only | not run; each gated on a number |
+
+Rules that fall out of the runs, and now bind every future model: a pixels-only witness (telling the model the codec made it anchor on the carrier; file facts enter as deterministic bounds in the fusion layer, never as prompt hints); N = 8 frames per window (N = 12 drops schema-valid to 7/12); a schema-invalid answer is **no answer**, never repaired; a rejected value is never re-proposed; promotion is one DECISIONS line naming `model/prompt/sampler@revision`.
+
+Training (fine-tuning) is earned only by error analysis. The ladder from the 2026-10-16 review stands: learning by examples (no weights change) → a small classifier on frozen features → contrastive adaptation → LoRA on **extraction** (OSDs, carrier clues) → never from scratch. Identity, dates and relations are never training targets (DECISIONS 2026-08-16: family knowledge lives in inspectable data; a model's weights never hold a family fact). Hallie's models are measured the same way: the 882-turn replay (`scripts/nightly_hallie_replay.sh`), strict and advisory lanes, aggregates in `docs/design/hallie.md`.
+
+### What a model may never see
+
+Rule 13: nothing of living immediate family — pixels, audio, frames, face embeddings — goes to a cloud model. Every model that sees a frame runs on the Ultra or the M4. Cloud sessions design, review and write tests on synthetic fixtures; they never see a keyframe, read the catalog, or train anything. Whether derived text may leave the house is an open ruling (lab design §9, 1). Machine signals never assign a name (DECISIONS 2026-10-10): a face match, a spoken name at a timestamp, or a household-roster filter (`docs/reviews/household_roster_feasibility.md`: a filter that turns 10–13 people into 1–3 with a written reason, never a namer) is a proposal to Rick at most.
+
+### Where model outputs live
+
+Rick's word is **observations**: a fact Rick set is a decision, a fact a machine produced is an observation, and a decision always outranks an observation. Every observation carries `by = engine@version` (model and prompt hash for a model), when, and its evidence. Observations that have earned a seat are ordinary rows in `catalog.sqlite` beside Rick's decisions (`captions` / `caption_runs`, `transcripts`, `inferred_dates`, `dossiers`, and schema v14's `provenance_assertions`), written only through the app's one committer from the helper's journal; raw model output, segments and vectors stay in the engines' sidecar `model-lab.sqlite` (append-only by trigger); work in transit is the helper's queue, checkpoints and journal; `.scratch/` is the lab bench and is never committed. The full statement is `docs/design/background_service.md` §0.7; the table-by-table map is `docs/design/data_organization_2026_10_31.md`.

@@ -1,5 +1,5 @@
 // VideoScanModelSplitGuardTests.swift
-// GH #337 — splitting VideoScanModel (docs/design/vsm_split_plan_2026_10_19.md).
+// GH #337 — splitting VideoScanModel (docs/design/cleanup_and_operations.md).
 //
 // Two suites:
 //

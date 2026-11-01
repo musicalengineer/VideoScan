@@ -1,7 +1,7 @@
 // EvidenceAssertion.swift (VideoScanCore/ModelLab)
 // ONE SENTENCE: the typed, timestamped, machine-signed claim a model makes
 // about a range of a file — and the PURE map from one `ApproachOutput` to
-// the assertions it carries (docs/design/video_llm_lab_2026_10_30.md §3.3,
+// the assertions it carries (docs/design/machine_intelligence.md §3.3,
 // "ApproachOutput → EvidenceAssertion").
 //
 // For Rick (C++): `EvidenceAssertionMapper.assertions` is a free function

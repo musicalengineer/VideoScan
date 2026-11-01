@@ -9,7 +9,7 @@ import VideoScanCore
 // Triage media. It is read-only analysis that writes catalog metadata only.
 // Root cause of the gap: `pfCatalogWideMetadataCandidates` admitted only
 // {Cataloged, Workbench}, so no FamilyArchive master ever entered the loop
-// (docs/design/segments_and_content_coverage_2026_10_10.md §2).
+// (docs/design/people_events.md §2).
 //
 // HARD INVARIANTS pinned here (red before the fix):
 //   1. An archived row receives ONLY the dossier fields (captions, OCR,

@@ -2,7 +2,7 @@
 // ONE SENTENCE: one strict `Decodable` per field family — the fixed JSON
 // schema a model is told, decoded fail-closed: a response that does not
 // decode is `.schemaInvalid(reason)`, never repaired, never coerced, never
-// a partial value (docs/design/video_llm_lab_2026_10_30.md §3.3; the Hallie
+// a partial value (docs/design/machine_intelligence.md §3.3; the Hallie
 // translator's fail-closed rule).
 //
 // For Rick (C++): each contract is a strict parser that THROWS rather than

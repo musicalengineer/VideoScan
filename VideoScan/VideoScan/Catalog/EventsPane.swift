@@ -1,5 +1,5 @@
 // EventsPane.swift
-// Triage ▸ Events — the page (docs/design/events_design.md §5;
+// Triage ▸ Events — the page (docs/archive/design/events_design.md §5;
 // docs/design/events_v1_plan_2026_10_14.md §5). One question: "Which
 // recordings belong to the same family memory?"
 //

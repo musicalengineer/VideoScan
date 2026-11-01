@@ -1,6 +1,6 @@
 // VideoScanModel+PruneApply.swift
 // "Move N copies to the Trash" — the one apply path for the one prune plan
-// (docs/design/pruneplan_simple_2026-10-21.md). "Archived — what next?" and
+// (docs/archive/design/pruneplan_simple_2026-10-21.md). "Archived — what next?" and
 // Triage ▸ Clean up ▸ Excess copies both start a PruneApplyJob, which runs
 // these three steps; `applyPrune` runs them back to back (tests).
 //

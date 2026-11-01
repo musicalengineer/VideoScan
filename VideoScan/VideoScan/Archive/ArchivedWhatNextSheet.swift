@@ -1,6 +1,6 @@
 // ArchivedWhatNextSheet.swift
 // "Archived — what next?" (promote-and-prune, Rick 2026-09-12; simplified
-// 2026-10-21, docs/design/pruneplan_simple_2026-10-21.md).
+// 2026-10-21, docs/archive/design/pruneplan_simple_2026-10-21.md).
 //
 // Appears once per Promote batch, only when every copy landed verified, and
 // from Tidy → "Copies of archived media" for the backlog. Shows the summary

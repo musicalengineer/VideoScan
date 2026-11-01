@@ -1,6 +1,6 @@
 # Catalog contract freeze — step B (2026-10-17)
 
-Status: DESIGN, read-only. Brief: `docs/briefs/cloud/CONTRACT_FREEZE.md`. Plan: `catalog_sqlite_migration_2026_10_16.md`
+Status: built — the frozen contract of 2026-10-17 (cutover 2026-10-18); read as DATA by the Core import tests (`ImportTestSupport.contractURL`), so it stays here, unchanged but for this line. DESIGN, read-only. Brief: `docs/briefs/cloud/CONTRACT_FREEZE.md`. Plan: `catalog_sqlite_migration_2026_10_16.md`
 §10 (v3: verify once → import the verified rows → rescan by digest → cutover); `integrity_first_2026_10_16.md`
 §2–§3a. Schema: `catalog_sqlite_schema_v1.sql`. GH #328. Read from source (no Swift toolchain); every writer is a
 grep-and-read citation.

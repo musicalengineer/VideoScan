@@ -1,6 +1,6 @@
 // EventsFolderDrop.swift
 // Catalog ▸ files into a folder (Rick 2026-10-19, "Finder's handling,
-// Photos albums' meaning" — docs/design/October_Design_Retrospective.md
+// Photos albums' meaning" — docs/archive/design/October_Design_Retrospective.md
 // §3.2): a drag onto a folder, or the row menu's "Add to Folder ▸" /
 // "Move to Folder ▸". The files join the folder's confirmed event, their
 // members built exactly as Make Folder builds them (`EventsFolderMembers`:

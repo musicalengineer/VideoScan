@@ -1,6 +1,6 @@
 // CatalogContent+FolderDrop.swift
 // Drag files onto a folder, like Finder (Rick 2026-10-19;
-// docs/design/October_Design_Retrospective.md §3.2 — "Finder's handling,
+// docs/archive/design/October_Design_Retrospective.md §3.2 — "Finder's handling,
 // Photos albums' meaning": a folder is a confirmed event, a label, never a
 // place on disk).
 //

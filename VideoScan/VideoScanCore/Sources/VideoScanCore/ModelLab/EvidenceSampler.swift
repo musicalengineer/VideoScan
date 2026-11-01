@@ -1,7 +1,7 @@
 // EvidenceSampler.swift (VideoScanCore/ModelLab)
 // ONE SENTENCE: how a media file becomes model input — a PURE plan of
 // windows and frame times from probe facts; the job decodes later through
-// the existing extractors (docs/design/video_llm_lab_2026_10_30.md §3.2).
+// the existing extractors (docs/design/machine_intelligence.md §3.2).
 //
 // For Rick (C++): `EvidenceSampler` is an abstract base class with one
 // virtual, `plan(for:)`; the two samplers here are concrete subclasses that

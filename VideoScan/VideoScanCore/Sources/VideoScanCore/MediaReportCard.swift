@@ -9,7 +9,7 @@
 // mutable state), Codable for the catalog JSON, Sendable so the card can
 // cross from the background probe to the main actor.
 //
-// Design: docs/design/check_media_and_menu_cleanup_2026_10_07.md
+// Design: docs/archive/design/check_media_and_menu_cleanup_2026_10_07.md
 
 import Foundation
 

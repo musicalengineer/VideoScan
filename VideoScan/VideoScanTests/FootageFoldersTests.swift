@@ -1,6 +1,6 @@
 // FootageFoldersTests.swift
 // Footage folders — the Catalog shows events and copies the way the
-// Finder shows folders (docs/design/footage_folders_2026_10_16.md §6).
+// Finder shows folders (docs/archive/design/footage_folders_2026_10_16.md §6).
 //
 // Five-dimension coverage (CLAUDE.md checklist):
 //   Logic     — grouping by event / copies / lineage / loose; the keeper

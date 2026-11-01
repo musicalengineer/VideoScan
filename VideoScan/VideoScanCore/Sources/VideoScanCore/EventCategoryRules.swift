@@ -1,6 +1,6 @@
 // EventCategoryRules.swift
 // Events v1 — stage C: WHICH KIND of event a recording's own words suggest
-// (docs/design/events_design.md §3.C; docs/design/events_v1_plan_2026_10_14.md §2).
+// (docs/archive/design/events_design.md §3.C; docs/design/events_v1_plan_2026_10_14.md §2).
 //
 // A pure rule table. Each of the nine categories is a `static let`
 // instance of `EventCategory` carrying the phrases that count as SEEN (a

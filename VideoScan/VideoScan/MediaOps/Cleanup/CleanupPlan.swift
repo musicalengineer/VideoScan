@@ -1,6 +1,6 @@
 // CleanupPlan.swift
 // Triage ▸ Cleanup v1 — the PLAN: "which files are extra, and can go to the
-// Trash?" (docs/design/cleanup_kiss_2026_10_12.md, codex-signed v1 rules).
+// Trash?" (docs/archive/design/cleanup_kiss_2026_10_12.md, codex-signed v1 rules).
 //
 // This file is values plus ONE pure function (`CleanupPlanner.plan`). It
 // never touches the catalog (main actor) and never touches the disk itself:

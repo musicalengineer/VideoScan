@@ -1,5 +1,5 @@
 // VideoScanModel+PrunePlan.swift
-// The app half of the ONE prune plan (docs/design/pruneplan_simple_2026-10-21.md):
+// The app half of the ONE prune plan (docs/archive/design/pruneplan_simple_2026-10-21.md):
 // the main-actor snapshot of the records that can matter, R2–R5 captured as
 // a `hold`, and the off-main build + disk check. "Archived — what next?"
 // (a Promote batch, or Tidy's backlog) and Triage ▸ Clean up ▸ Excess copies

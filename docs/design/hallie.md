@@ -1,10 +1,52 @@
-# Hallie — family archivist architecture and operations
+# Hallie Mae — the family archivist
+
+Status: parked — Hallie was paused on 2026-10-16 (ARCHITECTURE §3); her code is compiled and her nightly replay still runs (benchmarks below, 2026-10-29). The contracts hold while she is paused (ARCHITECTURE §10.8).
+
+Hallie answers plain questions about the family media and the family tree with the right footage or fact and where it came from. A local language model reads the question into a fixed, validated tool plan (failing closed to substring search) and phrases the answer; deterministic executors over the catalog, the tree, the People tab and CyberBrain decide what is true. She reads everything and changes nothing except CyberBrain and her conversation memory; she never touches media, and nothing of the living immediate family goes to a cloud model. Her model (`qwen3.8:27b-mlx` on Ollama) is listed in `docs/design/machine_intelligence.md` Part II; CyberBrain, the knowledge she cites, is in `docs/design/people_events.md`.
+
+**Contents:** 1. Purpose (Rick's words, from `project_goals.md`) · 2. Architecture and operations (the 2026-09-16 synthesis, formerly `guides/hallie.md`) · 3. Benchmarks (overwritten in place; formerly `reviews/hallie_benchmarks.md`).
+
+*Merged 2026-11-01 (DECISIONS 2026-11-01). Sections 1 and 3 are carried whole; section 2 is the former guide, its links re-pointed.*
+
+## 1. Purpose — Hallie Mae, the family archivist (Rick, 2026-10-07)
+
+Hallie is the archive's librarian. You ask her in plain words. She brings you
+the right footage, photo or fact, and shows you where it came from. She's named
+for Rick's great-great-grandmother, Hallie Mae (1876–1908). She's for the whole
+family: Rick today, and later an 80-year-old cousin or a grandchild who has
+never seen the catalog.
+
+**What she does**
+- **Finds things.** "The boys down the Cape in the 90s" changes the catalog to
+  show exactly that. She shows how she read the question, and you can edit it.
+- **Answers questions about the family from sourced data.** Who is related to
+  whom and how, who was born when, who served where. Every answer says where the
+  fact came from.
+- **Learns what the family knows.** A correction or a story Rick tells her
+  becomes inspectable data (CyberBrain), not something a model "remembers".
+- **Keeps you focused, one thing at a time,** like a good reference librarian,
+  and asks a refining question when that helps ("down the Cape, or in the 90s?").
+
+**What she never does**
+- **Invent a family fact, an identity or a date.** A language model may read the
+  question and phrase the answer, but the data is the authority. When she
+  doesn't know, she says so, and the gap becomes an open question to research.
+- **Act on media by herself.** No deleting, moving or writing without Rick.
+- **Look broken or overwhelm.** She uses family words and a warm tone. She leaves
+  out era-bound negatives that future generations needn't inherit.
+
+**She succeeds when** someone with no technical knowledge asks a question and,
+within a turn or two, gets the right memory along with where it came from.
+
+## 2. Architecture and operations
+
+*From `guides/hallie.md` ("Consolidated September 16, 2026"; paused 2026-10-16), whole.*
 
 Consolidated September 16, 2026 from the sources listed below, inspected at
 `59ca9468c01e0068501206c63698286c10f4e8b7`. This is a documentation synthesis;
 it does not certify a new build, live replay, migration, or deployment. Dates and test counts quoted below describe their original runs.
 
-## Purpose and reading map
+### Purpose and reading map
 
 Hallie is the conversational interface to the family archive: finding media,
 answering sourced questions about people, explaining evidence, and helping
@@ -18,19 +60,19 @@ Use this document for the common contracts, operating boundaries, and roadmap. K
 
 | Focused document | Why it remains separate |
 |---|---|
-| [CyberBrain design](../design/cyberbrain_design.md) | Persisted schema, privacy, retrieval, correction and preservation contracts; historical proposal sections remain labeled. |
-| [Proposer/tool contract](../design/hallie_proposer_with_tools_design.md) | Typed claims, verification table, tool schemas, budgets, cache and cutover requirements. Read the benchmark correction below before its rev-5 rationale. |
-| [Two-mode specification](../design/hallie_two_mode_design.md) | Detailed routing transitions, cross-client wiring and acceptance sequences. Historical line numbers are navigation clues, not current anchors. |
-| [Live failure ledger](hallie_live_failures.md) | Exact questions, corpus IDs, fix evidence and unresolved statuses must remain auditable. |
+| [CyberBrain design](../archive/design/cyberbrain_design.md) | Persisted schema, privacy, retrieval, correction and preservation contracts; historical proposal sections remain labeled. |
+| [Proposer/tool contract](hallie_proposer_with_tools_design.md) | Typed claims, verification table, tool schemas, budgets, cache and cutover requirements. Read the benchmark correction below before its rev-5 rationale. |
+| [Two-mode specification](hallie_two_mode_design.md) | Detailed routing transitions, cross-client wiring and acceptance sequences. Historical line numbers are navigation clues, not current anchors. |
+| [Live failure ledger](../guides/hallie_live_failures.md) | Exact questions, corpus IDs, fix evidence and unresolved statuses must remain auditable. |
 | [Pronunciation research](../research/pronunciation_training_research.md) | Phoneme mappings, prototype evidence, candidate methods and cited research. |
-| [Local neural voice](hallie-local-neural-voice.md) | Installation, pinned revisions/checksums, fallback and license provenance. |
+| [Local neural voice](../guides/hallie-local-neural-voice.md) | Installation, pinned revisions/checksums, fallback and license provenance. |
 | [Qwen measurements](../archive/2026-Q3/qwen_metrics_2026_08_27.md) | Reproducible benchmark identity, artifact hashes, uncertainty and invalidated-pilot correction. |
 
-Detailed tree ingest/cache and web contracts remain separate: [GEDCOM](gedcom.md), [offline tree cache](../design/offline_family_tree_cache.md),
-[FamilySearch API notes](../archive/research/familysearch_api_notes.md), and [web interface](../design/web_interface.md). This document does not redefine their
+Detailed tree ingest/cache and web contracts remain separate: [GEDCOM](people_events.md), [offline tree cache](offline_family_tree_cache.md),
+[FamilySearch API notes](../archive/research/familysearch_api_notes.md), and [web interface](web_interface.md). This document does not redefine their
 storage, authentication, export, or serving protocols. September 12–15 code-review and refactoring reports remain independent records.
 
-## Status: decisions, implementation evidence, and proposals
+### Status: decisions, implementation evidence, and proposals
 
 The early August documents described a translator-only read-only slice.
 The August 17 grounded-composition document explicitly records implementation;
@@ -56,7 +98,7 @@ Latest review handoff: team message **1514** reports three September 15 findings
 fixed. That is peer-reported status, not independent validation here; **directory durability remains NOT fixed**. Keep its review finding open.
 A design requirement for durable writes must not be reported as implemented merely because a writer uses an atomic rename.
 
-## Question-to-answer contract
+### Question-to-answer contract
 
 The original catalog path remains the simplest expression of the boundary:
 
@@ -97,7 +139,7 @@ Core seams include `NLQuery`, `ArchivistQueryAST`, `PersonResolver`, `HallieTurn
 `HallieAnswerPlan`, `HallieGroundedComposer` and `HallieCompositionVerifier`.
 The app, shell and web should share semantic decisions through these seams.
 
-## Identity, continuity, and mode
+### Identity, continuity, and mode
 
 Keep canonical identity separate from search text and display names. An exact People-profile name can outrank another person's alias; ambiguous
 aliases must not widen a media query onto the wrong profile. A resolved
@@ -152,7 +194,7 @@ choice. Preserve the person identity in the offer and reject stale identity.
 Chaining “their parents” through the relatives just returned, explanations of
 photo offers, and titled-ancestor answers were explicit later phases in the two-mode plan, not guaranteed by the mode enum itself.
 
-## Grounded composition and its limits
+### Grounded composition and its limits
 
 The August 17 implementation adds an optional rendering step **after** Swift
 has produced the factual result. The model sees a bounded approved plan and at most three recent turns, never the entire archive. Translation and
@@ -188,13 +230,13 @@ over-budget or wholly rejected phrasing shows the template.
 Token/name checks are bounded validation, not a general proof of semantic
 entailment; preserve the behavioral and human-reading tests.
 
-## Knowledge and authoring boundaries
+### Knowledge and authoring boundaries
 
 CyberBrain holds attributed family passages, events, anecdotes and sources,
 with stable IDs, privacy, confidence, status and supersession. Catalog dossiers
 hold evidence about media. GEDCOM holds imported assertions. Reviewed world
 facts belong in versioned knowledge data, not arbitrary routing constants.
-The [detailed CyberBrain specification](../design/cyberbrain_design.md) remains the
+The [detailed CyberBrain specification](../archive/design/cyberbrain_design.md) remains the
 schema/preservation reference; its original August implementation inventory
 and proposed migration state are historical.
 
@@ -219,7 +261,7 @@ bounded citations, daily UTC rotation, private permissions, symlink rejection
 and serialized app/shell writers. It excludes archive/source-document dumps.
 Do not change paths or formats as part of documentation cleanup.
 
-## Rich media and person galleries
+### Rich media and person galleries
 
 Attachments are presentation objects, not extra factual authority supplied to
 the translator. Lineage/tree cards carry source person IDs; photo/document
@@ -261,7 +303,7 @@ composition; the offer must not alter the factual plan.
 neutral acknowledgement; another question drops it. The documented web flow
 uses chip selection. Declined biographies and empty impossible-photo cases must not manufacture offers.
 
-## Shell, voice, and pronunciation
+### Shell, voice, and pronunciation
 
 `scripts/hallie` enters the built executable's shell path before SwiftUI,
 using read-only catalog loading. The original single-turn exit contract is
@@ -276,7 +318,7 @@ variants. Piped input retains ordinary line reading; terminal settings are
 restored before an answer. This is usability history, not a new smoke result.
 
 Optional local Kokoro speech runs in a separate helper process and falls back
-to an installed Apple voice. The retained [voice guide](hallie-local-neural-voice.md)
+to an installed Apple voice. The retained [voice guide](../guides/hallie-local-neural-voice.md)
 contains `scripts/install_hallie_kokoro.sh`, prerequisites, install location,
 pinned artifacts and checksums. Normal speech is local and independent of
 Ollama; the original helper renders a whole answer before playback.
@@ -298,7 +340,7 @@ round-trips normalize names and are weak pronunciation truth tests.
 The retained research has mappings, waveform observations, phased schema
 proposal and external references; no model/dependency installation is implied.
 
-## Model configuration and measurements
+### Model configuration and measurements
 
 Separate Hallie selection from developer-review selection. Choosing a common
 artifact deliberately is different from inheriting another role's setting.
@@ -353,9 +395,9 @@ Preserved official references: [Ollama tags](https://docs.ollama.com/api/tags),
 and [Qwen3-Coder-Next card](https://huggingface.co/Qwen/Qwen3-Coder-Next).
 These were source-document references, not newly checked product claims.
 
-## Unfinished design directions
+### Unfinished design directions
 
-### Partial intent recognition and planner/proposer
+#### Partial intent recognition and planner/proposer
 
 The agreed-in-principle recognizer has three outcomes: recognized, abstain,
 conflict. It claims a sentence only when it accounts for the **full supported
@@ -388,7 +430,7 @@ Inference visibility, optional-key loader policy, heuristic registry, WorldFact
 resource placement and remote-private-context policy remain explicit design
 choices; the old dated week-by-week schedule is not a completion ledger.
 
-### Tree discovery, titles, aggregates, and research
+#### Tree discovery, titles, aggregates, and research
 
 Literal tree-text discovery can reuse `sidebarRows(containing:)` over primary/
 alternate names, surnames and IDs. Bound/page matches and preserve selected
@@ -427,7 +469,7 @@ Wikipedia/Wikidata and bounded cached web search; availability/terms are not
 newly verified. Fixture tests, cancellation, verdict isolation and privacy
 guards precede deployment; authenticated hints/images and batch research follow.
 
-### Ancestor-line statistics, “our”, and relationship names (built 2026-10-01)
+#### Ancestor-line statistics, “our”, and relationship names (built 2026-10-01)
 
 GH #214, #200, #218, approved by Rick 2026-10-01. Deterministic: the question
 is recognized in Swift, the figures come from VideoScanCore, the prose only
@@ -488,7 +530,7 @@ says them; no model asserts a fact.
   recognizers saw it, so “how many … were born before 1900” counted everyone
   and read as complete. A statistics sentence now keeps its year as a filter.
 
-### Two questions in one turn (GH #210, decided 2026-10-01)
+#### Two questions in one turn (GH #210, decided 2026-10-01)
 
 `joinedTwoQuestionAnswer` builds one Result from two. Merge rules: the LATER
 clause wins for `superlative` and `refinableQuery` (like `mode`), so a scope
@@ -500,7 +542,7 @@ tense is never attached to the other clause’s person; a’s
 the last question asked). A deferred second question keeps every field of the
 one answer given. Pinned by `HallieTwoQuestionMergeTests`.
 
-### Separate product and family publication
+#### Separate product and family publication
 
 HallieKit/Hallie.app remains a proposal: a versioned read-model/snapshot seam,
 host-owned play/reveal/tree actions, independent process/settings/transcript,
@@ -512,9 +554,9 @@ it requires enforcement at serving **and** tool retrieval, not only the prompt.
 Family opening was gated on privacy tests, publication support and sufficiently
 broad repeated zero-unverified-fact evaluation, not merely two quiet weeks.
 
-## Regression evidence and source provenance
+### Regression evidence and source provenance
 
-Keep live examples with corpus IDs in the [failure ledger](hallie_live_failures.md)
+Keep live examples with corpus IDs in the [failure ledger](../guides/hallie_live_failures.md)
 and machine-consumed corpora (`hallie_testbed.jsonl`, evaluation/interaction/
 strict JSON/JSONL datasets). Documentation retirement never removes datasets.
 A ledger row is closed only with regression evidence; mixed dated OPEN/FIXED
@@ -561,3 +603,82 @@ source pointers are preserved here as provenance rather than active task orders:
 | `hallie_tree_aggregate_queries.md` (Sept 7) | Denominators, scope, place uncertainty, chain distance and open UI choices. |
 | `hallie_person_gallery.md` (Sept 10) | Read/write attribution, formats, bounded presentation and offers. |
 | `codex-handoff-2026-09-06.md` (Sept 6) | Settled per-field contemporary People-vitals authority; historical review states are not current findings. |
+
+## 3. Benchmarks
+
+*From `reviews/hallie_benchmarks.md`, whole; archived at `docs/archive/reviews/`. Overwrite this section in place after each replay; per-question answers (family content) stay in the run worktree's `.scratch/`, never in git.*
+
+### Hallie benchmarks
+
+*Overwritten each time; aggregates only. Per-question answers (family content) stay in the run worktree's `.scratch/bench-logs/`, never in git.*
+
+**How to read this.** Each row is one replay of the 882-turn question set through the headless Hallie shell (Release build, read-only, the real catalog and family tree) against one model. **Strict** (56) holds only model-independent regressions: anything below 56/56 is a bug or a row that belongs in advisory. **Advisory** (826) holds every harvested question with an unreviewed expectation: "clean" means no grader flag, not "verified right". Read it as a before/after signal, not a truth score. Latency is milliseconds from the question to the last answer clause, measured inside the shell on a monotonic clock (new tonight). Median and p90 are nearest-rank.
+
+#### Baseline 2026-10-29 (night), Ultra only
+
+Common to every row: Mac **M5 Ultra** (`RicksUltra`, macOS 27.2, Xcode 27.1), Ollama **0.40.12** (not changed by this run; the Ultra was already on 0.40.12 by 14:00 10/29, see Delta), git **1c43dd3f** (branch `bench/hallie-baselines-2026-10-29`), Release binary built from that SHA, live Ultra catalog (schema 13), family tree generation `gen-20261021T211042-60a0`, strict set SHA-256 `373dab9171610850…`, advisory set SHA-256 `1ce2f99c98b2bb07…` (826 = 817 from main + 9 harvested tonight). Models run one at a time; each was unloaded before the next.
+
+##### Strict lane (56)
+
+| Run | Model (digest) | Pass / total | Median ms | p90 ms | Failures |
+|---|---|---|---|---|---|
+| ultra-qwen-r1 | qwen3.8:27b-mlx (`5642e97495e1`, MLX nvfp4) | **56/56** | 86 | 2,514 | none |
+| ultra-qwen-r2 | qwen3.8:27b-mlx (`5642e97495e1`) | **56/56** | 86 | 2,560 | none |
+| ultra-llama-r1 | llama3.3:70b (`a6eb4748fd29`, GGUF Q4_K_M) | **55/56** | 94 | 6,203 | strict-034: `missing_required_match` (model-phrased presence answer) |
+
+##### Advisory lane (826)
+
+| Run | Model | Clean / total | Same 817 as 10/28 | Median ms | p90 ms | Wall s |
+|---|---|---|---|---|---|---|
+| ultra-qwen-r1 | qwen3.8:27b-mlx | **671/826** | 663/817 | 538 | 1,927 | 712 |
+| ultra-qwen-r2 | qwen3.8:27b-mlx | **670/826** | 662/817 | 535 | 1,915 | 693 |
+| ultra-llama-r1 | llama3.3:70b | **633/826** | 625/817 | 1,538 | 7,100 | 2,363 |
+
+Flagged turns by category (advisory):
+
+| Category | qwen r1 | qwen r2 | llama r1 |
+|---|---|---|---|
+| live | 82 | 83 | 98 |
+| real_family | 20 | 20 | 21 |
+| age_variations | 11 | 11 | 19 |
+| family_tree | 10 | 10 | 14 |
+| catalog_search | 6 | 6 | 7 |
+| typos | 6 | 6 | 7 |
+| temporal | 5 | 5 | 1 |
+| record_scope | 5 | 5 | 5 |
+| biography | 4 | 4 | 5 |
+| smalltalk | 2 | 2 | 4 |
+| catalog_count | 0 | 0 | 4 |
+| identity_capability / edge_cases / grandparent_style / conjunction | 1 / 1 / 1 / 1 | 1 / 1 / 1 / 1 | 3 / 3 / 1 / 1 |
+| **total flagged** | **155** | **156** | **193** |
+
+Top flags: `declined_expected_answer` (qwen 96, llama 130), `forbidden_text` (21 / 17), `missing_required_match` (17–18 / 20), `answered_unknowable` (17 / 19), `dead_end_decline` (13 / 16). The 9 new questions: 8/9 clean on every run; all three decline the same one (a public-history biography), and its expectation is still unconfirmed.
+
+##### M4: not run tonight
+SSH from the Ultra to `ricksm4.local` now refuses the Ultra's key (`Permission denied (publickey…)`). On 10/28 the same command opened the tunnel. So there was no M4 catalog refresh, no M4 harvest and no M4 run. A schema-13 `.backup` of the Ultra catalog was taken at 21:14 (integrity `ok`, `user_version` 13, SHA-256 `a790a9fd…`) and is staged outside git, ready to copy.
+
+#### Delta vs 2026-10-28
+
+| | 10/28 | Tonight | Why |
+|---|---|---|---|
+| Ultra qwen advisory | 654/803 (df65a5bd) | 663/817 · 671/826 | The 803→817 set grew when 14 model-dependent rows moved from strict to advisory (4462e112). Hallie fixes landed too (service attribution e3c764ff, "dad" ≠ Dafydd a1ca573f). Against the last 10/28 run on the 817 set (662/817, a723184a), tonight is +1/0: the same as run-to-run noise (r1 vs r2 differ by 1). |
+| Ultra qwen strict | 57–58/67 (old 67-row set) | 56/56 ×2 | The strict set was rebuilt 10/28 (model-independent rows only), and the two real reds (052, 056/057/059) were fixed on main. |
+| llama3.3:70b advisory | 604/803 (Ultra and via M4) | 625/817 · 633/826 | Same set change and fixes. llama still trails qwen by ~38 clean turns and is ~3× slower (median 1.5 s vs 0.54 s, p90 7.1 s vs 1.9 s). Its extra flags are mostly declines (130 vs 96). |
+| llama strict | 57–58/67 | 55/56 | strict-034's pass depends on the model's own wording of a presence answer, so it fails the strict admission rule. Move it to advisory, or have the composer template that answer (Rick's call, like strict-042/045). |
+| "M4" 619/626 | M4's model over an ssh tunnel, Ultra catalog | not run | Tunnel refused tonight. The MLX-numerics-by-chip hypothesis (follow-up 4) is still untested. |
+| Ollama | Ultra 0.40.11, M4 0.40.12 | Ultra 0.40.12 (Homebrew symlink dated 10/29 14:00) | The Ultra is now on the M4's version, so follow-up 3 may already hold. M4 not verified tonight. |
+
+#### Reproduce
+
+The Release build at the SHA above is in the worktree's `.dd-release`. One run (both lanes) on the Ultra; `REPO` points the harness at the worktree's corpora:
+
+```sh
+REPO=/Users/rickb/dev/VideoScan-wt/hallie-baselines-1029 \
+LOGDIR=/Users/rickb/dev/VideoScan-wt/hallie-baselines-1029/.scratch/bench-logs \
+  bash /Users/rickb/dev/VideoScan-wt/hallie-baselines-1029/scripts/nightly_hallie_replay.sh \
+  --bin /Users/rickb/dev/VideoScan-wt/hallie-baselines-1029/.dd-release/Build/Products/Release/VideoScan.app/Contents/MacOS/VideoScan \
+  --host http://127.0.0.1:11434 --model qwen3.8:27b-mlx --budget-seconds 9000 \
+  --out /Users/rickb/dev/VideoScan-wt/hallie-baselines-1029/.scratch/bench-logs/ultra-qwen-r1.row.json
+```
+
+The row JSON carries pass/total, `hallie_<lane>_latency` {n, median_ms, p90_ms}, the SHAs and the tree generation. `scripts/hallie_eval.py grade --run <lane>.json` prints category and flag counts. For llama, swap the `--model` value. Before switching models, unload the old one (`/api/generate` with `keep_alive: 0`).

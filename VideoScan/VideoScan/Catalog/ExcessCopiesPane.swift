@@ -1,6 +1,6 @@
 // ExcessCopiesPane.swift
 // Triage ▸ CLEAN UP ▸ "Excess copies (archived)" — the catalog-wide view of
-// the ONE prune plan (2026-10-21, docs/design/pruneplan_simple_2026-10-21.md);
+// the ONE prune plan (2026-10-21, docs/archive/design/pruneplan_simple_2026-10-21.md);
 // "Archived — what next?" shows the same plan for one batch. Shown only with
 // View ▸ Curator on (Rick 2026-10-07: "calm by default, depth on request").
 //

@@ -1,6 +1,6 @@
 // CatalogCommitter.swift
 // Where the three save funnels go once catalog.sqlite is the authority
-// (cutover B2, docs/design/catalog_cutover_f_prime_2026_10_17.md §3 and §10
+// (cutover B2, docs/archive/design/catalog_cutover_f_prime_2026_10_17.md §3 and §10
 // "B2-lite"). One sentence: when the app would have saved catalog.json, it
 // commits the records that changed since the last commit into catalog.sqlite
 // instead — same debounce, same synchronous save at quit.

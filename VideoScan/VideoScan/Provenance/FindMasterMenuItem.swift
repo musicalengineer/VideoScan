@@ -1,5 +1,5 @@
 // FindMasterMenuItem.swift — Catalog row menu ▸ Provenance ▸ Find ▸ Master
-// (sound). Design: docs/design/provenance_retroactive_2026_10_26.md §Phase A;
+// (sound). Design: docs/design/provenance.md §Phase A;
 // the Provenance submenu itself is ProvenanceMenu.swift (2026-10-26: Find ▸
 // beside Set Role ▸ — the item moved, its behaviour did not).
 //

@@ -1,5 +1,5 @@
 // CompareMediaView.swift
-// Compare Media, step 1 of the view (docs/design/event_analyzer_compare_media_2026_10_15.md §2):
+// Compare Media, step 1 of the view (docs/archive/design/event_analyzer_compare_media_2026_10_15.md §2):
 // the verdict band, the evidence lines, the recommendation, and the two
 // sound spools — drawn from last night's fingerprints — above the
 // existing pair-compare detail (streams table, tiers). The next-face

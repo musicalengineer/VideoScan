@@ -1,5 +1,5 @@
 // P0TruthRegressionTests.swift
-// The cumulative P0 suite (GH #327; docs/design/integrity_first_2026_10_16.md
+// The cumulative P0 suite (GH #327; docs/archive/design/integrity_first_2026_10_16.md
 // §2, §5, §6a): every surface that on 2026-10-16 STATED A FACT IT HAD NOT
 // VERIFIED gets one test here, named after the fall, driving the REAL
 // surface model (never the view) over the shared fixture catalog

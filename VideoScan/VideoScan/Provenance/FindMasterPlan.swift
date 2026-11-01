@@ -1,5 +1,5 @@
 // FindMasterPlan.swift — Provenance ▸ Find Master (by sound), the PLAN.
-// Design: docs/design/provenance_retroactive_2026_10_26.md §Phase A.
+// Design: docs/design/provenance.md §Phase A.
 //
 // ONE SENTENCE: from a snapshot of the selected records and the catalog,
 // decide which files can be searched (their sidecar key) and which are

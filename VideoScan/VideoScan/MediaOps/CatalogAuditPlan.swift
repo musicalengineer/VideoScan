@@ -1,6 +1,6 @@
 // CatalogAuditPlan.swift
 // "Audit Catalog…" tier 0 — the values and the planner (Rick 2026-10-15/16;
-// docs/design/catalog_status_freshness_2026_10_16.md §6, audit_archive §2a).
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §6, audit_archive §2a).
 //
 // One sentence: check that every catalog row on a connected drive still
 // points at its file, and mark the ones that are gone as Missing.

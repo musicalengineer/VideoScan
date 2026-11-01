@@ -1,5 +1,5 @@
 // OneEngineDoorCharacterizationTests.swift
-// GH #143 step 2 (docs/design/one_removal_marker_and_trash_engine.md §5):
+// GH #143 step 2 (docs/archive/design/one_removal_marker_and_trash_engine.md §5):
 // pins the door behaviour that must SURVIVE the move onto one removal
 // marker and one Trash engine. These are written against the base, and
 // must pass there, before any door moves.

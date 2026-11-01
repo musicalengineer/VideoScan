@@ -2,7 +2,7 @@ import Foundation
 import VideoScanCore
 
 /// THE one call that hands a catalog media file to the Finder Trash
-/// (GH #143, docs/design/one_removal_marker_and_trash_engine.md §3).
+/// (GH #143, docs/archive/design/one_removal_marker_and_trash_engine.md §3).
 ///
 /// Every Trash door reaches it: the engine's disk turn
 /// (`JunkDiskTurn`, behind Delete Junk, ⌘⌫, Prune / Excess copies and

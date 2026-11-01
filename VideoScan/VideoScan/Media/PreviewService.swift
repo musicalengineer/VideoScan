@@ -4,7 +4,7 @@
 // and the background preview sweep — moved off VideoScanModel into one
 // store the model owns (`model.previewService`).
 //
-// Behaviour-preserving move (docs/design/vsm_split_plan_2026_10_19.md §2):
+// Behaviour-preserving move (docs/design/cleanup_and_operations.md §2):
 //   - VideoScanModel keeps every old name as a computed forwarder, so all
 //     call sites (views, extensions, ~40 tests) compile unchanged. In C++
 //     terms: a pimpl with inline forwarding accessors.

@@ -1,5 +1,5 @@
 // FileFact.swift
-// The truth contract (GH #327; docs/design/integrity_first_2026_10_16.md §5):
+// The truth contract (GH #327; docs/archive/design/integrity_first_2026_10_16.md §5):
 // a fact a surface shows about a file carries the evidence it came from and
 // when that evidence was taken. "Unknown" is a legal value; a guess is not.
 //

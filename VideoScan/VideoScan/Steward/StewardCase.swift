@@ -1,6 +1,6 @@
 // StewardCase.swift
 // The content steward's vocabulary (trial UI, 2026-10-03; design §5.6 of
-// docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md): a CASE
+// docs/design/catalog.md): a CASE
 // is one thing that would tidy the catalog — what, why (evidence), payoff,
 // do it / skip. Archive Angel's shape, second instance: the Angel's verb is
 // "keep forever"; this one's are "let go" and "belong together".

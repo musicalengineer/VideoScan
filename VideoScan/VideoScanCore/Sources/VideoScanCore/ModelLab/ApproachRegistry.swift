@@ -2,7 +2,7 @@
 // ONE SENTENCE: the pure description of an Approach (one model + one host +
 // one prompt family + one output contract), the registry that knows every
 // (id, revision) once, and the payload gate that is CLAUDE.md rule 13
-// carried by code (docs/design/video_llm_lab_2026_10_30.md §3.3, §7).
+// carried by code (docs/design/machine_intelligence.md §3.3, §7).
 //
 // For Rick (C++): `ApproachRegistry` is a factory keyed by (id, revision) —
 // a `std::map<std::pair<Id,int>, Descriptor>` whose `insert` throws on a

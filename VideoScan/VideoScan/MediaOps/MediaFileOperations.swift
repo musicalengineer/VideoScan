@@ -412,7 +412,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     // only ever reaches the Trash, warmer and browner than DELETE's red and
     // TRASH's oxblood. Δ ≥ 0.15 from every other fill, contrast vs white ≈ 9.5.
     /// "Move N files to the Trash" from Triage ▸ Cleanup
-    /// (docs/design/cleanup_kiss_2026_10_12.md): extra copies — each read in
+    /// (docs/archive/design/cleanup_kiss_2026_10_12.md): extra copies — each read in
     /// full with the copy that stays, equal SHA-256 — and the junk Rick
     /// marked, one frozen selection through the one Trash engine. CleanupTrashJob.
     /// (Not `.cleanup`, which is the older "Clean Up Video" recipe verb.)
@@ -447,7 +447,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     // its report. Δ ≥ 0.21 from every other fill (nearest: Compare's cobalt),
     // contrast vs white ≈ 5.2. The badge reads "Verify Catalog" because
     // "Verify" is Verify Audio's (badges must be unique).
-    /// "Verify Catalog…" (Rick 2026-10-16, docs/design/integrity_first_2026_10_16.md):
+    /// "Verify Catalog…" (Rick 2026-10-16, docs/archive/design/integrity_first_2026_10_16.md):
     /// tiers 0–6 over the catalog's rows, stamps and relations, a dated
     /// report beside the catalog, Catalog Status fed. Nothing on media is
     /// opened; no row is changed. VerifyCatalogJob.
@@ -475,7 +475,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     // contrast vs white ≈ 8.5. The badge's question mark is deliberate: the
     // answers are geometry ("inside", "contains"), never "this is the master".
     /// "Provenance ▸ Find Master (sound)" (Rick 2026-10-26,
-    /// docs/design/provenance_retroactive_2026_10_26.md §Phase A): for each
+    /// docs/design/provenance.md §Phase A): for each
     /// selected file, every other content whose sound lines up with it, by
     /// the pair matcher's verdict. FindMasterJob.
     static let findMaster = Self("findMaster", hasDetailView: true,

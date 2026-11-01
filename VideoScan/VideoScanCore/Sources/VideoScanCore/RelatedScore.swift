@@ -1,6 +1,6 @@
 // RelatedScore.swift
 // The ladder of evidence for TWO recordings — "how are these connected?"
-// (docs/design/related_score_2026_10_14.md, event_analyzer_compare_media_2026_10_15.md).
+// (docs/archive/design/related_score_2026_10_14.md, event_analyzer_compare_media_2026_10_15.md).
 //
 // Pure: the app projects what it knows about each side into `RelatedEvidence`
 // (hashes, the audio match, dates, people, words, folders, archive state,

@@ -1,5 +1,5 @@
 // VideoScanModel+RelatedEvidence.swift
-// Compare Media's catalog half (docs/design/event_analyzer_compare_media_2026_10_15.md):
+// Compare Media's catalog half (docs/archive/design/event_analyzer_compare_media_2026_10_15.md):
 // two records → `RelatedEvidence` (values, on the main actor) → the audio
 // match off the main actor → `RelatedLadder.judge` and
 // `EventRecommendation.recommend` (pure, VideoScanCore).

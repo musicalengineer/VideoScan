@@ -1,5 +1,5 @@
 // CatalogConstraints.swift
-// Tier 5 of Verify Catalog (Rick 2026-10-16, docs/design/integrity_first_2026_10_16.md
+// Tier 5 of Verify Catalog (Rick 2026-10-16, docs/archive/design/integrity_first_2026_10_16.md
 // §3a "declarative constraints"): the PK / FK / check / not-null rules a
 // JSON catalog never had, as PURE value code. Rows in, findings out; no I/O,
 // no model, no clock. One index pass (O(rows)) and then one small NAMED

@@ -4,7 +4,7 @@ import VideoScanCore
 // MARK: - The removal marker's one writer (GH #143)
 //
 // Catalog half of the one Trash engine
-// (docs/design/one_removal_marker_and_trash_engine.md §3). Every door that
+// (docs/archive/design/one_removal_marker_and_trash_engine.md §3). Every door that
 // makes a row "gone" — the Trash engine's outcomes (`deleteConfirmedJunk`),
 // Delete Duplicates' settle, Workbench discard, Remove from Catalog, the
 // Archive Angel companion settle, the analysis missing-file purge, Migrate's

@@ -1,6 +1,6 @@
 // CatalogAuditJob.swift
 // "Audit Catalog…" — the Media File Operation (Rick 2026-10-15/16, tier 0;
-// docs/design/catalog_status_freshness_2026_10_16.md §6): stat every live
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §6): stat every live
 // catalog row on a mounted drive; mark the ones whose file is gone as
 // Missing; make a Missing row live again when its file is back. ~10k stats
 // take seconds; it runs nightly (`--audit-catalog`) and on demand.

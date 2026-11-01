@@ -1096,7 +1096,7 @@ extension HallieTurnExecutor {
             performsFirstOfferedAction: immediateAction != nil,
             immediateOfferedAction: immediateAction,
             // GH #210 — merge semantics (decided 2026-10-01, documented in
-            // docs/guides/hallie.md "Two questions in one turn"):
+            // docs/design/hallie.md "Two questions in one turn"):
             //   • the LATER clause wins, like `mode`: the ranking a scope
             //     correction re-runs, the list "and the newest?" sorts;
             //   • the life status follows the SUBJECT the join names

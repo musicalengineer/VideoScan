@@ -1,5 +1,5 @@
 // CleanupPane.swift
-// Triage ▸ Cleanup — the page (docs/design/cleanup_kiss_2026_10_12.md).
+// Triage ▸ Cleanup — the page (docs/archive/design/cleanup_kiss_2026_10_12.md).
 // One question: "Which files are extra, and can go to the Trash?"
 //
 //   (N files · X GB are hidden by an old “deleted” label — the app never moved them… Show them again…)

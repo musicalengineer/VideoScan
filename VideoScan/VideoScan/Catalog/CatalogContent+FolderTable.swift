@@ -1,6 +1,6 @@
 // CatalogContent+FolderTable.swift
 // Show ▸ Events & Copies as Folders — the Catalog's folder view as a
-// two-level Finder (docs/design/footage_folders_2026_10_16.md §2; Rick
+// two-level Finder (docs/archive/design/footage_folders_2026_10_16.md §2; Rick
 // 2026-10-17: "I'd really like it to look like Finder in this view, with
 // MarksBirthday, Cape1990, etc, then double-click shows the event
 // including copies"). A second Table over `FootageFolderTableRow` (why:

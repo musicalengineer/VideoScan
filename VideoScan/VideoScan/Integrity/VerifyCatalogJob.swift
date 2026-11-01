@@ -1,6 +1,6 @@
 // VerifyCatalogJob.swift
 // "Verify Catalog…" — the Media File Operation behind the integrity process
-// (Rick 2026-10-16, docs/design/integrity_first_2026_10_16.md §2.2): run the
+// (Rick 2026-10-16, docs/archive/design/integrity_first_2026_10_16.md §2.2): run the
 // tiers over what the catalog records, write the dated report, feed Catalog
 // Status. FIRST SLICE: tiers 0, 1, 3, 4, 5 from the stamps and the rows
 // (VerifyCatalogTiers.swift); 2 and 6 say "not built yet".

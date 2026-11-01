@@ -1,5 +1,5 @@
 // OneEngineSensorTests.swift
-// GH #143 step 5–6 (docs/design/one_removal_marker_and_trash_engine.md §5):
+// GH #143 step 5–6 (docs/archive/design/one_removal_marker_and_trash_engine.md §5):
 // sensors that keep ONE Trash engine and ONE removal marker true at the
 // source level, plus the audit's T5.
 //

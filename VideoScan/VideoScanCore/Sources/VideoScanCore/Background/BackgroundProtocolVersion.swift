@@ -1,7 +1,7 @@
 // BackgroundProtocolVersion.swift — VideoScanCore/Background
 //
 // The wire contract between VideoScan.app and "VideoScan Background" (the
-// launchd agent inside the app bundle; docs/design/background_service_2026_10_30.md
+// launchd agent inside the app bundle; docs/design/background_service.md
 // §3.3). Everything in Background/ is Foundation-only: the helper, the app and
 // the tests all link it, and nothing here may import AppKit, CoreGraphics,
 // SwiftUI or GRDB (BackgroundServiceSensorTests pins that).

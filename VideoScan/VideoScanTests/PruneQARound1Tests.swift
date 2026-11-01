@@ -1,5 +1,5 @@
 // PruneQARound1Tests.swift
-// QA round 1 on the simple PrunePlan (docs/design/pruneplan_simple_2026-10-21.md).
+// QA round 1 on the simple PrunePlan (docs/archive/design/pruneplan_simple_2026-10-21.md).
 // Two RED findings (Tidy's backlog door) and one GREEN sensor (I2: a path that
 // reaches the archive file through a symlinked folder is never moved).
 // Sandbox fixture from PruneApplyTests; no real volume, no real Trash.

@@ -1,6 +1,6 @@
 // AnalyzeCyclers.swift
 // The knowledge kinds the Analyze panel shows, one row each
-// (Rick 2026-10-02, docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md
+// (Rick 2026-10-02, docs/design/catalog.md
 // §5.5 "governing distinction"):
 //
 //   MFO = file operations a person started (Combine, Trim, Delete on X…).

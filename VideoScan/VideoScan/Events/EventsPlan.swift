@@ -1,6 +1,6 @@
 // EventsPlan.swift
 // Triage ▸ Events v1 — the PLAN: "which recordings belong to the same
-// family memory?" (docs/design/events_design.md v2;
+// family memory?" (docs/archive/design/events_design.md v2;
 // docs/design/events_v1_plan_2026_10_14.md, sections 2 and 4).
 //
 // Values plus ONE pure pipeline (`EventsPlanner.plan`). It never touches

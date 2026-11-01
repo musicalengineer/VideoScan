@@ -7,7 +7,7 @@
 // ADDITIVE ONLY — one new table, one index, the veto trigger, two
 // append-only triggers, and the schema version raised to 14 so a build that
 // does not know the table refuses the file instead of writing around it.
-// Exactly the C2 table of docs/design/provenance_retroactive_2026_10_26.md
+// Exactly the C2 table of docs/design/provenance.md
 // §v14 — nothing else of v14 (content_excerpts, carriers, capture tables
 // wait for their own migration). Verbatim in
 // docs/design/catalog_sqlite_schema_v1.sql §18 (CatalogDataSchemaTests

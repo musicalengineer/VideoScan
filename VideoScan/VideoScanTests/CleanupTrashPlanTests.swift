@@ -1,5 +1,5 @@
 // CleanupTrashPlanTests.swift
-// Triage ▸ Cleanup v1 — the PLAN's rules (docs/design/cleanup_kiss_2026_10_12.md),
+// Triage ▸ Cleanup v1 — the PLAN's rules (docs/archive/design/cleanup_kiss_2026_10_12.md),
 // ported case by case from tests/test_one_time_cleanup.py and extended with
 // codex's design findings. Pure: synthetic rows and disk facts, no files.
 //

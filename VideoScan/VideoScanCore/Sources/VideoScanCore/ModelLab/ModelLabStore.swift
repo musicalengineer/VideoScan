@@ -1,7 +1,7 @@
 // ModelLabStore.swift (VideoScanCore/ModelLab)
 // ONE SENTENCE: the lab notebook — the SQLite sidecar `model-lab.sqlite`
 // where EVERY run of EVERY approach lands its raw output before anyone
-// decides whether it was any good (docs/design/video_llm_lab_2026_10_30.md
+// decides whether it was any good (docs/design/machine_intelligence.md
 // §3.4). Append-only; keyed by content digest; never a path as identity.
 //
 // File: `model-lab.sqlite` beside `audio-fingerprints.sqlite` in

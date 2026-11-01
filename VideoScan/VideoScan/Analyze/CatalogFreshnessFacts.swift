@@ -1,6 +1,6 @@
 // CatalogFreshnessFacts.swift
 // The NON-RECORD facts the Catalog Status band needs (Rick 2026-10-16,
-// docs/design/catalog_status_freshness_2026_10_16.md §2–§3): what the last
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §2–§3): what the last
 // Audit Catalog run left in `catalog-audit.json`, and whether the sound
 // fingerprint sidecar can be opened at all. Both are read OFF the main
 // actor, in the same detached pass that computes AnalyzeCoverageReport —

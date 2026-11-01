@@ -1,6 +1,6 @@
 // CatalogFreshness.swift (VideoScanCore)
 // THE rule for "is what the catalog knows current?" (Rick 2026-10-16,
-// docs/design/catalog_status_freshness_2026_10_16.md §3).
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §3).
 //
 // Every knowledge kind the Analyze panel lists (Full Hashes, Sound Prints,
 // File Presence, the metadata cyclers) reports ONE FreshnessRow: how many

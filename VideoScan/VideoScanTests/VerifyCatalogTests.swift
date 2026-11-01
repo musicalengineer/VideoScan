@@ -1,6 +1,6 @@
 // VerifyCatalogTests.swift
 // Verify Catalog, first slice (Rick 2026-10-16,
-// docs/design/integrity_first_2026_10_16.md §3–§5) — the five dimensions
+// docs/archive/design/integrity_first_2026_10_16.md §3–§5) — the five dimensions
 // plus TRUTH:
 //   LOGIC     — every constraint rule red and green on synthetic rows (one
 //               test per rule); the tier evaluators from the stamps; the

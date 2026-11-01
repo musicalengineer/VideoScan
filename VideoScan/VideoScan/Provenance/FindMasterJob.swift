@@ -1,5 +1,5 @@
 // FindMasterJob.swift — Provenance ▸ Find Master (by sound), the MFO JOB.
-// Design: docs/design/provenance_retroactive_2026_10_26.md §Phase A.
+// Design: docs/design/provenance.md §Phase A.
 //
 // ONE SENTENCE: open the sound-print sidecar, build the catalog-wide sound
 // index off the main actor, ask AudioMasterFinder about each selected file,

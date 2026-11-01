@@ -1,7 +1,7 @@
 // FootageFolderWords.swift
 // Every word, glyph, colour and spacing the Footage folders view shows —
 // in ONE place so Rick can iterate on the real app without touching the
-// model or the table (docs/design/footage_folders_2026_10_16.md §2: the
+// model or the table (docs/archive/design/footage_folders_2026_10_16.md §2: the
 // UI is tried on the real catalog and tweaked by eye). Since 2026-10-17
 // the view is a two-level Finder (FootageFolderLevel.swift): the words
 // for the breadcrumb bar and the Back button live here too.

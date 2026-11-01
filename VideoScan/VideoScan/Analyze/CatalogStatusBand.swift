@@ -7,7 +7,7 @@
 // colour) and the information lines (CatalogRealityLines).
 //
 // The summary band at the top of the Analyze panel (Rick 2026-10-16,
-// docs/design/catalog_status_freshness_2026_10_16.md §2.1): one colour,
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §2.1): one colour,
 // one headline, one line per non-green item with its ONE button —
 // yellow → Run now; red → the door a person needs (Fix Links…, which is
 // not built yet and says so; Fingerprint again; Run again) — and "Update

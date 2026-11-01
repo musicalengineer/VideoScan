@@ -1,5 +1,5 @@
 // PrunePlanTests.swift
-// LOGIC + SCALE for the simple prune plan (docs/design/pruneplan_simple_2026-10-21.md).
+// LOGIC + SCALE for the simple prune plan (docs/archive/design/pruneplan_simple_2026-10-21.md).
 // Rick's rule: offer byte-identical copies of a verified archive file; for
 // everything else say "no obvious choices" and why.
 //

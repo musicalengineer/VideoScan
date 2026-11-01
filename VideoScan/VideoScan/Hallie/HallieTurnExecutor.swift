@@ -2227,7 +2227,7 @@ enum HallieTurnExecutor {
             knowledgeCitations: knowledgeCitations,
             catalogPersonName: answered ? plan.subject : nil,
             // The approved CyberBrain claims, verbatim, are the only thing a
-            // model may rephrase for this answer (docs/design/cyberbrain_design.md §9).
+            // model may rephrase for this answer (docs/archive/design/cyberbrain_design.md §9).
             answerPlan: answered
                 ? HallieAnswerPlan.biography(plan, fallbackText: prose, subjectLifeStatus: life)
                 : nil,

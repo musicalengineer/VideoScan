@@ -1,6 +1,6 @@
 // CatalogStatusChip.swift
 // The catalog's fourth vital sign on the totals strip (Rick 2026-10-16,
-// docs/design/catalog_status_freshness_2026_10_16.md §4): far left of
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §4): far left of
 // "TOTAL CATALOG", in line with UNIQUE and ARCHIVED. A coloured dot and
 // one short sentence; click opens Content Analysis, where the summary
 // band at the top says the same thing with the items behind it.

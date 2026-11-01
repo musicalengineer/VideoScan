@@ -1,7 +1,7 @@
 // CatalogJSONValueEncoder.swift
 // Encodes any `Encodable` straight into a `CatalogJSONValue` tree — the DOM
 // the importer reads — with NO JSON text in between (cutover B1,
-// docs/design/catalog_cutover_f_prime_2026_10_17.md §2–§3).
+// docs/archive/design/catalog_cutover_f_prime_2026_10_17.md §2–§3).
 //
 // Why it exists: `CatalogRecordDTO.init(record: VideoRecord)` must give the
 // SAME DTO the importer builds from the catalog.json bytes of that record.

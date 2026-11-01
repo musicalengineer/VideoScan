@@ -28,7 +28,7 @@ import Foundation
 //     and the orchestrator (`VideoScanModel.isDossierReadOnly`). Before
 //     this, every FamilyArchive master was dropped here, because Promote
 //     creates archive copies as `.archived`
-//     (docs/design/segments_and_content_coverage_2026_10_10.md §2).
+//     (docs/design/people_events.md §2).
 //     Trashed and Deleted stay out.
 //
 // Filtering by *video presence* (streamType) is left to the per-

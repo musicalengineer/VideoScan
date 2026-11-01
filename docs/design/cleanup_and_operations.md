@@ -1,4 +1,12 @@
-# Cleanup proposal — 2026-10-31 (inventory only; nothing moved or deleted)
+# Cleanup and operations — the proposals waiting on Rick
+
+Status: in flight — 2026-11-01. Three proposals, none executed: the 10/31 disk cleanup inventory (Rick reviews, then `.trash/` first; nothing has been moved or deleted), Audit Archive (proposed 2026-10-15, not built), and the `VideoScanModel` split (#337, plan waiting on Rick's go on its §6). The removal machinery they lean on is built; its contracts are in `docs/ARCHITECTURE.md` §10.3–§10.4.
+
+This is where operational proposals wait for Rick's word: what to clear off the disks (Part I, ≈ 118 GB reclaimable if every DELETE is accepted), an overnight health check of the Master Archive that audits and never fixes (Part II), and how to split the god object without changing behaviour (Part III). The last section summarises the built designs for letting copies go — one removal marker, one Trash engine, Cleanup, PrunePlan — whose full texts are archived.
+
+**Contents:** Part I — Cleanup proposal (inventory, 2026-10-31) · Part II — Audit Archive (proposed 2026-10-15) · Part III — Splitting `VideoScanModel` (#337, 2026-10-19) · Built: letting copies go (summaries).
+
+# Part I — Cleanup proposal, 2026-10-31 (inventory only; nothing moved or deleted)
 
 *Rick, 2026-10-31: "cleanup application files, backup files, old catalogs we don't need… tomorrow I will review and then eventually we can delete. We always have git."*
 
@@ -318,3 +326,225 @@ The five largest single items: gauntlet build products in Logs (3 × ~6 GB), the
    §5) and a bound for `findtag-journal/` (§1a).
 
 *Inventory produced read-only on 2026-10-31 21:00–21:40 ET by Claude; branch `cleanup-proposal-2026-10-31` under the `docs/` prefix.*
+
+# Part II — Audit Archive (proposed 2026-10-15)
+
+*From `design/audit_archive_2026_10_15.md`, whole; archived at `docs/archive/design/`. Not built (no Audit Archive job in the source on 2026-11-01). Its §2a, tier 0 presence ("every row points at a real file"), is the tier 0 that Verify Catalog runs today (ARCHITECTURE §10.2).*
+
+
+**Status:** PROPOSED 2026-10-15 (Rick + Claude). No code yet. Reuses Archive ▸ Verify
+(fixity), Check Media (ffprobe + the audio diagnosis), the Fingerprint Sound stamps (decode
+outcome, audible seconds), and the one Repair door (`repair_center_one_door`). Serves goal 1
+(preserve) and goal 5 (repair) in `docs/project_goals.md`.
+
+### 1. In Rick's words
+
+"What if we have a Verify Archive that I can kick off at bed time and let it run overnight …
+verifies the catalog is robust and correct, every file pointed to exists and has audible
+audio, can be played, video can be verified … in the past I had files that I kept for many
+years on a computer, then one day I clicked play and got zilch: the OS was updated and the
+codec was obsoleted … Doing this manually by playing every file in the archive with a human
+sitting in front of every frame, verifying audio sounds good, well, that's a lot to ask."
+"If it is intense we can do it by decade or subsections."
+
+### 2. Principle: audit, never fix
+
+The job reads; it moves, rewrites and transcodes nothing. Every finding is a flag in words
+on the record, with the door that fixes it (Repair, Update…, or Promote a better transfer).
+The archive stays read-only to background jobs (Rick 2026-09-27).
+
+### 2a. Tier 0 — Audit Catalog: every row points at a real file (Rick, 2026-10-15 evening)
+
+The staging copy of a VHS capture vanished from Projects on October 4 — outside the app, no
+receipt, no ledger line — and for eleven days its catalog row posed as a live copy: the
+duplicates job held its twin ("could not read the keeper", correctly), and Compare Media's
+band said "byte for byte" from the stored hashes while the tiers could not read the file.
+Rick: "if by some weird turn of events … someone moved the file or deleted the file, the
+catalog has no knowledge … run an audit overnight or periodically or prior to doing a backup
+catalog … ensure the catalog entries all have links to real media."
+
+So the first tier is cheap and catalog-wide, not archive-only:
+- **What:** stat every live row on every mounted volume (device + inode + size against the
+  record's identity stamp where one exists). ~10,000 stats, seconds.
+- **Outcome per row:** present · present but changed (size or identity differ: "replaced
+  since cataloged") · gone → the existing removal marker `.missing` through the one engine,
+  with the audit as the reason; a row whose drive is not mounted is "not asked", never
+  marked.
+- **When:** every night before the metrics publish; before any catalog backup / export;
+  from Catalog ▸ Audit Catalog… on demand. One START / OUTCOME pair; the OUTCOME names the
+  counts and the folders where files went missing ("3 gone under Projects/_staging_…").
+- **Why it is separate from Rescan:** Rescan asks one volume when you ask; the audit is a
+  standing guarantee over the whole catalog and marks nothing but presence.
+- **Build first:** it is the smallest piece of this design and it closes the hole that was
+  open for eleven days. Compare Media now refuses a verdict for a file that is not on disk
+  (RelatedLadder.notOnDisk) — the audit is what keeps that case rare.
+
+### 2b. What to do with the holes — Fix Links (Rick, 2026-10-15 evening)
+
+"So we run an audit and it reports 115 files are no longer where we said … what to do? …
+rescan sounds expensive and may reingest stuff we don't want, but we could search for the
+missing or moved files and, after reporting the changes or missing links, have at-the-ready
+a fix-links with a review."
+
+1. **Group by folder.** One line per vanished folder ("38 gone under Projects/_staging_…"),
+   because a folder move or a cleaned staging area is the common cause.
+2. **Search before asking, cheapest first, no media read:**
+   a. another live catalog row with the same whole-file SHA-256 and size (the file was moved
+      and its new place was already scanned) — proven already;
+   b. the same file name and size on any mounted drive through Spotlight (`NSMetadataQuery`
+      on name + size; instant) — a candidate, confirmed by a full hash before it is called
+      the same file;
+   c. the vanished folder's name elsewhere on the same drive (the moved-folder case) —
+      candidates per file as in b.
+3. **Fix Links — one review sheet:** old path · found at · how proven (same SHA-256 /
+   name + size, hashed now / not found) · choice per row and per folder: **Relink** (the
+   row points at the new path and keeps its hand marks: stars, people, dates, notes;
+   when the file was found as a second row the two MERGE — hand marks to the survivor, the
+   old row marked "moved, now at …", never deleted) · **Mark missing** (the removal marker
+   `.missing`, reason "audit"; visible under Show Removed; relinkable later when a drive
+   comes back) · **Leave**. Applied through the one marker engine with a receipt.
+4. **Never rescan to fix a hole.** Rescan ingests; Fix Links moves pointers. Nothing enters
+   the catalog from the audit.
+
+Outcomes: relinked · merged · marked missing · left · could not prove (a name + size
+candidate whose hash differs: shown, never relinked).
+
+### 3. The job: Archive ▸ Audit Archive…
+
+An MFO job (chip AUDIT), overnight, resumable, scoped to the whole archive or one decade.
+Confirm sheet: files to audit, bytes to read, time at the archive drive's rate, what will be
+skipped (audited since its bytes last changed). Pause / Stop as every MFO job. START /
+progress / OUTCOME through the one sink. Finished row: "N audited · M flagged (k audio,
+j video, i codec risk, h missing) · X skipped as current".
+
+#### The checks, cheapest first, each with its own stamp
+
+| # | Check | How | Reused from | Flag words |
+|---|---|---|---|---|
+| 1 | present | the file is at its path, device + inode + size as recorded | FileIdentityStamp | "not at its path" / "replaced since promotion" |
+| 2 | fixity | whole-file SHA-256 equals archiveFixity | Archive ▸ Verify | "bytes changed since promotion" |
+| 3 | facts | ffprobe streams match the record (duration, codecs, frame size) | Check Media | "the file's streams no longer match the catalog" |
+| 4 | decodes | ffmpeg decodes video AND audio to the last frame (`-f null`), errors and early EOF counted | new; the fingerprint decoder's ProcessRunner shape | "video stops at 12:40 of 38:00" / "audio stream can't be decoded" |
+| 5 | audio heard | audible seconds / duration from the fingerprint's audible map | Fingerprint Sound stamp | "no sound" / "silent after 2:10" |
+| 6 | audio quality | from the same decode: clipping ratio, spectral flatness (noise), 50/60 Hz hum, DC offset, channel imbalance | the audio diagnosis + a small new analyzer | "mostly noise" / "clipped" / "hum" / "one channel dead" |
+| 7 | codec risk | video/audio codec against the list of formats Apple has dropped or deprecated (Sorenson Video, Cinepak, Indeo, Animation/RLE, Graphics, QDesign, MACE, IMA4 in old containers, Apple Intermediate…) and containers that need QuickTime 7 | new table, versioned | "codec Apple no longer plays — make a preservation copy (FFV1 / ProRes)" |
+| 8 | transcript sanity | audible sound but an empty or gibberish transcript (low dictionary ratio) | audioTranscript | "the transcript doesn't match the sound — re-transcribe or listen" |
+| 9 | thumbnails | a preview frame exists and is not black | preview cache | "no usable preview" |
+
+Checks 4–6 are one decode per file, shared. A file is skipped when its identity and the
+checks' version match its last audit stamp.
+
+#### The stamp
+
+`VideoRecord.archiveAudit: ArchiveAuditStamp?` — auditedAt, checksVersion, identity, outcome
+(.healthy / .flagged([Finding]) / .couldNotAudit(reason)), each Finding = check, words,
+severity (needs a fix / worth a look / note). The Archive tab shows per-decade counts and a
+"Flagged" list; the inspector shows the findings with their doors.
+
+### 4. Cost
+
+Rick's archive 10/15: 653 files / 3.2 TB. One full read at the Pegasus's rate (≈ 400–600 MB/s)
+is 1.5–2.5 h; incremental after that. RAM: the decode is streamed (`-f null`), the audio
+analyzer works per block; the job keeps the fingerprint job's 1.5 GB / 4-decode budget.
+
+### 5. What it is not
+
+- Not a repair: Repair stays the one door; the audit hands it the file and the finding.
+- Not a promotion gate: Promote keeps its own vetting; the audit catches what slipped
+  through and what the years do to a format.
+- Not a judgement of content: a boring minute is not a finding.
+
+### 6. Tests (five dimensions)
+
+Logic: each check against synthetic good / bad inputs (truncated file, dead audio stream,
+noise, clipped, hum, obsolete codec, gibberish transcript). Scale: 100k stamps, skip logic
+O(1) per record. Media matrix: mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv, plus one
+Cinepak and one Sorenson fixture. Isolation: never touches a non-archive path; a test host
+audits only fixtures. Sensor: nothing in the audit writes under the archive root (the
+one-writer rule), the view body does no O(records) work.
+
+### 7. Order
+
+After the Event Analyzer's engines (RelatedScore, EventRecommendation). The codec-risk table
+and the decode-to-end check are the two pieces that do not exist anywhere yet and carry the
+"clicked play, got zilch" value; build those first, then fold the reused checks in.
+
+# Part III — Splitting `VideoScanModel` (GH #337)
+
+*From `design/vsm_split_plan_2026_10_19.md` (plan agent, 2026-10-19), whole; archived at `docs/archive/design/`. Still waiting on Rick's §6 decisions (STATUS 2026-11-01: "VideoScanModel split #337 (plan → Rick's go)"). The "JSON gone by Friday" section is dated: the cutover landed 10/18; step G is in progress.*
+
+
+Plan agent (Fable), read-only, main @ fccceeaee, 2026-10-19. Saved by the Manager. **Nothing starts before Rick's go on the §6 decisions.**
+
+### 1. Measured scope
+- `Model/VideoScanModel.swift`: 1,857 lines, **90 `@Published`**, plus 115 other stored members (caches, tasks, snapshots, test hooks).
+- **134 `extension VideoScanModel` files:** MediaOps 37, Catalog 28, Archive 20, Volumes 15, Media 11, People 6, ArchiveAngel 4, others 1–2 each.
+- **73 view files bind the model** (65 `@EnvironmentObject`, 8 `@ObservedObject`); 43 of them read `records` directly.
+- `records` is read in 472 app files and 698 test files, and 257 test files assign it. **It stays on the model as the facade**; every other store is pulled out around it.
+- The `records` didSet fans out to 9 callees (VideoScanModel.swift:18-41). The comment at :23-29 records a real data-loss mode: a stale path index lost a dossier write-back. **Index invalidation must stay synchronous.**
+- Precedent: `MediaFileOperationsCenter`, `PersonFinderModel` and `DashboardState` are already separate objects injected through the environment. The app has no `@Observable` classes today.
+
+### 2. Mechanism (behaviour-preserving)
+- Each slice moves its members into a new `@Observable @MainActor final class XStore`, which the model holds as `let x = XStore()`.
+- The old names stay on the model as computed forwarders. In C++ terms: a pimpl per feature with inline forwarding accessors.
+- So all 134 extension files and ~1,000 test files compile unchanged, and the 73 views keep working.
+- Moving each view onto its store directly is a separate, optional PR per store, done later.
+- Copy the shape of the exemplar: `VideoScanCore/.../Commit/CatalogCommit.swift` (outcomes as enums, value state in structs).
+
+### 3. Slices
+| # | Slice | Files | Data-loss path | Codex | Effort |
+|---|---|---|---|---|---|
+| 0 | Guard rails: sensor (extension count ≤ 134, `@Published` ≤ 90, numbers only fall); measure full-suite wall time | +1 test | no | no | 0.5 night |
+| 1 | PreviewService (Media/ +Thumbnail, +Filmstrip, +PreviewSweep) | 3 | no | no | 1 night |
+| 2 | ScanStore (Volumes/: scanTargets, isScanning, volume caches, rename migration, scanOptions, perfSettings) | 15 (+58 readers) | **yes** (ScanMerge, DeleteScanTarget, Retire) | yes | 2 nights |
+| 3 | RelocateQueue | 3 | **yes** (moves media) | yes | 1 night |
+| 4 | NavigationStore (18 pending/sheet props) | 0 ext | no | no | 1 night, after Rick's folder UI settles |
+| 5 | ArchiveStore (masterArchive, promote state, audit revision) | 20 | **yes** | yes | 2–3 nights |
+| 6 | DuplicateJobs (correlate, analyze, delete duplicates, combine) | 11 | **yes** | yes | 2 nights; Q4 first |
+| 7 | Change bus replacing the `records` didSet (a synchronous subscriber list, not AsyncStream) | model | **yes** | yes | 1 night, after 1, 2, 5 |
+| 8 | RemovalStore (Cleanup, purge, junk, prune) | 14 | **yes** | yes | 2 nights; **blocked on Q4** |
+| 9 | CatalogStore (the `records` owner) + People/Events/Steward | ~40 | **yes** | yes | 4+ nights, last |
+| — | Activity enum (flag soup) | — | behaviour-*changing* | — | parked: needs a table of flag combinations first |
+
+**Parallel-safe pairs:** 1 ∥ 2, 2 ∥ 3, 5 ∥ 6. **Serial:** 0 first, 7 after 1/2/5, 9 last. At most two move-slices in flight at once; the third worktree is for tests.
+
+**Resources:**
+- Claude worktree agents do every move and proof run.
+- codex gets one bundled pass after 2+3, one after 5, and one after 7.
+- qwen triages each night's diff and log in the morning.
+- CC cloud drafts the move manifests only (it can't build the app).
+- The M5 Ultra, from 10/27, takes slices 5, 6 and 9.
+
+### 4. Estimate
+- **By Fri 10/23: not the whole split.** The coherent, achievable stopping point:
+  - slice 0 (Mon), slice 1 (Tue), slice 2 (Wed–Thu, codex Fri), plus slice 3 if there's room;
+  - that moves ~21 of 134 extensions and ~25 of 90 properties, puts the sensors in force, and proves the pattern on one no-risk store and one data-risk store.
+  - Confidence: moderate-high for 0–1, moderate for 2.
+- **Whole programme (0–9, without the Activity enum and RemovalStore until Q4):** ~14–18 agent-nights. That's **3–4 calendar weeks, finishing around 11/13**, with moderate confidence. The biggest unknown is the full-suite wall time per night, which slice 0 measures.
+
+### 5. Guard rails
+- **Standing rule:** no new `extension VideoScanModel` and no new `@Published` on the model. The sensor enforces this in CI.
+- **Day/night protocol:**
+  - Daytime work doesn't edit the model's property declarations, and merges to main by evening.
+  - Night slices start by rebasing and touch only their folder plus the model file.
+  - The Catalog and MediaOps slices wait for the daytime UI burst to end.
+- **Rollback:** one squash-merge per slice; revert the merge commit.
+
+### 6. Rick's decisions (before slice 1)
+1. **The forwarder approach** (callers untouched) instead of a hard cut (73 views + ~1,000 tests). Recommended.
+2. **`@Observable` for the new stores**, an architecture change. macOS 26 target, mixing with ObservableObject is supported, and settings keep their explicit `save()` because of the didSet gotcha.
+3. **Threading: no change.** Every store is `@MainActor`.
+4. **Change bus:** synchronous inline calls, not a queue.
+5. **The Activity enum** is outside this programme.
+6. **Retrospective Q4 (removal lanes) and Q8 (Angel)** must be decided before slices 6 and 8.
+
+### 7. Interaction with "JSON gone by Friday"
+Added by the Manager. The JSON retirement (step G plus Import removal) touches the ~150 save-wrapper sites, and many of them are in model extensions. It runs as its own track; see `docs/archive/reviews/cutover_acceptance_audit_2026_10_19.md`. Merges are sequenced so the two tracks never touch the same files in the same night.
+
+# Built: letting copies go
+
+*Summaries of three built designs; the full texts are under `docs/archive/design/` with their names. The rules they established are contracts in `docs/ARCHITECTURE.md` §10.3 (removal) and §10.4 (archive); DECISIONS 2026-10-11 and 2026-10-12 record the rulings.*
+
+- **One removal marker, one Trash engine** (GH #143, Rick's rulings 2026-10-11; `docs/archive/design/one_removal_marker_and_trash_engine.md`). Rows are never deleted: `VideoRecord.removal: RemovalMarker?` is `nil` when live, otherwise `inTrash` (since, the path macOS returned, and when the Trash was seen emptied) · `removedFromCatalog` (the file untouched, the row hidden, restore is one click) · `missing` (vanished outside the app), each with an open-string `reason`. Markers are built only through factories and written only by `VideoScanModel+RemovalMarker`; older catalogs migrate at load. `MediaTrash.move` is the only call to `FileManager.trashItem`; the test host routes it to a scratch Trash. Codex round 1 closed 2026-10-12.
+- **Cleanup, from scratch (KISS)** (v2 built and merged 2026-10-12 after QA and two Codex rounds; the "copies the archive already holds" lane folded in 2026-10-15; `docs/archive/design/cleanup_kiss_2026_10_12.md`). Triage ▸ Cleanup answers one question — "Which files are extra, and can go to the Trash?" — where *extra* means an identical copy (full SHA-256 and size) stays somewhere else. One table, one button; unsure files, A/V pair halves and Avid media are never in it; a file without a stored full hash is never deleted; a fresh full read of both files proves the copy at the moment of the move.
+- **PrunePlan, simplified** (designed 2026-10-21 for Rick's decision, rebuilt 2026-10-22; `docs/archive/design/pruneplan_simple_2026-10-21.md`). Rick's rule: check for duplicates and copies and offer to delete; if none, say so; if it is too hard to tell, do not prune — say "no obvious choices". In one sentence: once a file is promoted, offer its byte-identical extra copies for the Trash; for everything else say "no obvious choices" and why. It replaced ~6,260 production lines (`PrunePlan.plan` at CCN 52).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Video-LLM benchmark harness — Phase 0 of docs/design/video_llm_lab_2026_10_30.md.
+"""Video-LLM benchmark harness — Phase 0 of docs/design/machine_intelligence.md.
 
 Three subcommands, one file, no package:
 
@@ -2539,7 +2539,7 @@ def format_summary_markdown(summary: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("*Written by `tools/video-llm-bench/bench.py summarize`; overwritten on every run, never appended "
                  "(CLAUDE.md). Aggregates only — per-clip results stay in `.scratch/` (DECISIONS 2026-10-26). "
-                 "Design: `docs/design/video_llm_lab_2026_10_30.md` §4.*")
+                 "Design: `docs/design/machine_intelligence.md` §4.*")
     lines.append("")
     lines.append("## Approach `{}` — baseline (today's 3B captioner, stills, the three app prompts)".format(summary["approach_id"]))
     lines.append("")

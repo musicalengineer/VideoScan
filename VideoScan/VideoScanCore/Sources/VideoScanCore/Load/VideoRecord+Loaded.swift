@@ -2,7 +2,7 @@
 // The record a SQLite load gives back for one `files` row — the exact
 // reverse of the importer's mapping (CatalogRecordDTO.init(record:) and its
 // row builders), field by field per the contract's §a Fate table (cutover
-// B1, docs/design/catalog_cutover_f_prime_2026_10_17.md §2). The app's
+// B1, docs/archive/design/catalog_cutover_f_prime_2026_10_17.md §2). The app's
 // `VideoRecord.init(row:)` calls this, then fills the four display strings
 // with its own formatters.
 //

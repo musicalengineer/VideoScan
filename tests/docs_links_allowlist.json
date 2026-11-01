@@ -208,7 +208,7 @@
   "docs/archive/design/nightly_adversarial_review_design_2026-10-01.md": {
     "docs/reviews/adversarial/declined.jsonl": "Planned generated ledger in the proposed nightly adversarial design; no implementation exists yet."
   },
-  "docs/guides/facial-recognition.md": {
+  "docs/archive/guides/facial-recognition.md": {
     "docs/catalog-aided-face-detection.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
     "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
     "docs/donna-gallery-report-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",

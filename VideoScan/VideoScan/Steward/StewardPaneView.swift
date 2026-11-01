@@ -1,7 +1,7 @@
 // StewardPaneView.swift
 // The content steward's pane at the top of the Triage tab (trial UI,
 // 2026-10-03; design §5.6 of
-// docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md):
+// docs/design/catalog.md):
 //
 //   ┌ Here is what is in the catalog, by occasion — and what would tidy it ── Show skipped (3) · What the catalog knows… ┐
 //   │ (All | Events | Same footage | Space | Not worth keeping)  [ ] By year   1,204 of 9,310 clips have a date…        │

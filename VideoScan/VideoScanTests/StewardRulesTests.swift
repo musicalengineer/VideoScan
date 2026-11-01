@@ -1,6 +1,6 @@
 // StewardRulesTests.swift
 // The two rules of the content steward that are "the first tests" (design
-// §5.6 of docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md):
+// §5.6 of docs/design/catalog.md):
 //
 //   RULE 1 — a delete card shows the PROOF, not the score. The "N verified
 //            copies would remain" on a Reclaim set card is the Delete

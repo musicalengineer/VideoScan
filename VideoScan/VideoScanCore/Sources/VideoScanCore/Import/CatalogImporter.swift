@@ -1,5 +1,5 @@
 // CatalogImporter.swift
-// Step D′ of docs/design/catalog_sqlite_migration_2026_10_16.md §10a — the
+// Step D′ of docs/archive/design/catalog_sqlite_migration_2026_10_16.md §10a — the
 // job that moves the frozen catalog.json into SQLite. Rick's sentence:
 // "import every verified row of the JSON catalog into SQLite, quarantine the
 // rest with their words, lose nothing, and prove it with a comparator before

@@ -1,6 +1,6 @@
 // FootageFolders.swift
 // Footage folders — the Catalog shows events and copies the way the Finder
-// shows folders (docs/design/footage_folders_2026_10_16.md §3 and §4).
+// shows folders (docs/archive/design/footage_folders_2026_10_16.md §3 and §4).
 //
 // This file is the JOIN, pure and off the main actor: values in, values
 // out, no record, no model, no disk.

@@ -1,5 +1,5 @@
 // IntegrityReport.swift
-// The report Verify Catalog leaves behind (docs/design/integrity_first_2026_10_16.md
+// The report Verify Catalog leaves behind (docs/archive/design/integrity_first_2026_10_16.md
 // §4): `integrity-latest.json` beside catalog.json plus a dated copy
 // `integrity-<ISO date>.json` (one per day; a later run the same day
 // replaces it). Per tier 0–6: name, when and by which run it was verified,

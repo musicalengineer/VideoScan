@@ -1,5 +1,5 @@
 // VerifyCatalogTiers.swift
-// The seven tiers of Verify Catalog (docs/design/integrity_first_2026_10_16.md
+// The seven tiers of Verify Catalog (docs/archive/design/integrity_first_2026_10_16.md
 // §3), each a pure function from the snapshot to one IntegrityTier line and
 // its findings. THIS SLICE fills tiers 0, 1, 3, 4 and 5 from what the
 // catalog already records — the audit's marker, the fixity and sound-print

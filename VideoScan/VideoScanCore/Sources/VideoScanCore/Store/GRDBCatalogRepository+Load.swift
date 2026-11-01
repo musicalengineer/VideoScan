@@ -1,5 +1,5 @@
 // GRDBCatalogRepository+Load.swift (VideoScanCore/Store)
-// The load readings (cutover B1, docs/design/catalog_cutover_f_prime_2026_10_17.md
+// The load readings (cutover B1, docs/archive/design/catalog_cutover_f_prime_2026_10_17.md
 // §2): every `files` row with everything a VideoRecord needs, streamed as
 // `CatalogLoadedRow` values. Raw SQL only (CatalogStoreSensorTests).
 //

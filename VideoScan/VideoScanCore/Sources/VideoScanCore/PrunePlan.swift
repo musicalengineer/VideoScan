@@ -1,6 +1,6 @@
 // PrunePlan.swift
 // "Archived — what next?" and Triage ▸ Clean up ▸ Excess copies share THIS
-// plan (docs/design/pruneplan_simple_2026-10-21.md, Rick 2026-10-21).
+// plan (docs/archive/design/pruneplan_simple_2026-10-21.md, Rick 2026-10-21).
 //
 // Rick's rule: "Check for dups and copies, offer to delete; if none, say so;
 // otherwise let the user delete what he wants. If it is too difficult to

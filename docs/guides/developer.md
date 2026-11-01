@@ -88,7 +88,7 @@ SwiftUI pieces.
 
 **Steward/** — the content steward's trial pane at the top of the Triage tab
 (2026-10-03; design §5.6 of
-`docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md`): the Events
+`docs/design/catalog.md`): the Events
 lane (`StewardEvents.swift` — occasions grouped from the Angel's event labels
 and trusted day, asked only through the Angel's front door
 `archiveAngel.occasionReader` in `ArchiveAngel/Facade/ArchiveAngel+Occasions.swift`;

@@ -1,6 +1,6 @@
 # Video-LLM benchmark harness (`tools/video-llm-bench`)
 
-Phase 0 of `docs/design/video_llm_lab_2026_10_30.md` §4: a Judge that scores a video-model
+Phase 0 of `docs/design/machine_intelligence.md` §4: a Judge that scores a video-model
 *approach* against ground truth the catalog already holds, starting with **`a0-py`** — today's
 captioner (Qwen2.5-VL-3B-Instruct-4bit, stills, the three prompts `MLXVLMCaptionRunner.dossier`
 sends) run through `mlx-vlm` in `venv-mlx`. Every later approach is compared to A0's numbers.

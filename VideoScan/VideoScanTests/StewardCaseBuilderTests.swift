@@ -1,6 +1,6 @@
 // StewardCaseBuilderTests.swift
 // The content steward's case builder and skip memory (trial UI, 2026-10-03;
-// design §5.6 of docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md).
+// design §5.6 of docs/design/catalog.md).
 //
 // Five-dimension coverage (CLAUDE.md checklist):
 //   Logic     — each housekeeping card type (Reclaim per drive, Reclaim per

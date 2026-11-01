@@ -1,5 +1,5 @@
 // FindMasterAnswer.swift — Provenance ▸ Find Master (by sound), the WORDS.
-// Design: docs/design/provenance_retroactive_2026_10_26.md §Phase A.
+// Design: docs/design/provenance.md §Phase A.
 //
 // ONE SENTENCE: every sentence and log line the job shows or writes, as pure
 // functions of the evidence, so the truth tests can read them directly.

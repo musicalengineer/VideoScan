@@ -1,5 +1,5 @@
 // CatalogFreshnessTests.swift — the colour rules of
-// docs/design/catalog_status_freshness_2026_10_16.md §3, pinned.
+// docs/archive/design/catalog_status_freshness_2026_10_16.md §3, pinned.
 //
 // Every rule, the precedence between them, the summary headline for each
 // colour, the worst-of ordering, the words for a handful of rows, a

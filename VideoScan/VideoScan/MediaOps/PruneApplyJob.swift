@@ -1,7 +1,7 @@
 // PruneApplyJob.swift
 // "Move N copies to the Trash" as a Media File Operation — the one job for
 // the one prune plan: "Archived — what next?" and Triage ▸ Clean up ▸ Excess
-// copies both start it (2026-10-21, docs/design/pruneplan_simple_2026-10-21.md).
+// copies both start it (2026-10-21, docs/archive/design/pruneplan_simple_2026-10-21.md).
 // Rick 2026-09-20: "the app blocks when post-promote delete of big files" —
 // every copy and its archive file are read in full before it goes (minutes
 // per file on a tape capture), so nothing of it runs behind a modal. The job

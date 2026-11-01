@@ -1,6 +1,6 @@
 // StewardSensorTests.swift
 // Source-level sensors for the content steward's trial UI (2026-10-03;
-// design §5.6 of docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md).
+// design §5.6 of docs/design/catalog.md).
 //
 // What they pin:
 //   * NO O(records) work in the pane's or the card's view bodies — they
