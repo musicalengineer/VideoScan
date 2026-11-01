@@ -90,6 +90,17 @@ are settled.
 
 *From `design/segments_and_content_coverage_2026_10_10.md`, whole; archived at `docs/archive/design/`. Still a proposal: no segment model is in the source on 2026-11-01. Its §8 decisions are open.*
 
+> **Superseded assumptions — read before implementing (Codex docs review F09, 2026-11-01).** This proposal predates the
+> SQLite cutover (2026-10-18) and the catalog contracts (`docs/ARCHITECTURE.md` §10.1). Where it says otherwise, the
+> contracts win: (1) **storage** — §3.2's JSON sidecar (`segments/segments.json`, option B) and "a new schema is an
+> escalation item" are superseded: curated knowledge lives in `catalog.sqlite`, keyed by digest, written only through
+> the one commit door, as an additive migration Rick approves (CLAUDE.md rule 6); `catalog.json` is frozen history;
+> (2) **identity** — §3.3's `referenceContentHash` as `contentHash` (`v1:`, head‖middle‖tail‖size) is superseded:
+> identity is the **whole-file SHA-256** (`content.digest`), and a sampled `v1:` hash never says "same" (§10.2); the
+> `FootageKey` should name the reference content by digest; (3) Rick's knowledge attaches to **content**, so a segment
+> is keyed to a digest plus an alignment, never to a record UUID or a path. The segment model, alignment and marking
+> workflow (§§3.1, 3.4–5) are unaffected. §8's decisions stay open.
+
 
 *Design, 2026-10-10. Status: PROPOSED, no code changed. Author: Claude (design agent, worktree branch `design/segments-content-coverage-2026-10-10`). Trigger: the family demo miss — "the Hudsons at Thanksgiving 1984" is inside a 94-minute VHS capture and nothing in the catalog could say so, let alone where. Related: `docs/design/hallie_proposer_with_tools_design.md` §R6 (item 5 names this document), `docs/design/scene_captions_plan.md`, `docs/design/catalog.md`, `docs/ARCHITECTURE.md` (goals 2 and 4).*
 
