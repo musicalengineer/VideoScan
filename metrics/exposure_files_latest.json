@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-31T10:40:41Z",
- "sha": "73100528",
+ "ts": "2026-11-01T11:35:18Z",
+ "sha": "c5d23462",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 470,
@@ -203,8 +203,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/ContentView.swift": {
-   "lines": 1917,
-   "decls": 45,
+   "lines": 1956,
+   "decls": 46,
    "could_be_private": [
     "CatalogView.volumeShowFilterDidChange",
     "CatalogView.deleteDuplicatesConfirmMessage",
@@ -1869,7 +1869,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift": {
-   "lines": 2116,
+   "lines": 2092,
    "decls": 80,
    "could_be_private": [
     "CatalogContent.MusicTriagePayload",
@@ -1940,8 +1940,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogQueries.swift": {
-   "lines": 893,
-   "decls": 41,
+   "lines": 907,
+   "decls": 42,
    "could_be_private": [
     "pfCodecFieldMatches",
     "pfRecordHasVerifiedBackup",
@@ -2040,7 +2040,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogShowingSummary.swift": {
-   "lines": 491,
+   "lines": 492,
    "decls": 53,
    "could_be_private": [
     "CatalogShowingSummary.Pill.Emphasis",
@@ -11960,7 +11960,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/TimingBudget.swift": {
-   "lines": 425,
+   "lines": 433,
    "decls": 2,
    "could_be_private": [
     "TimingBudget.LoadSample.coresText"

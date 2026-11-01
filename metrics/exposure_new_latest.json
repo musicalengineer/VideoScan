@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-31T10:40:41Z",
- "sha": "73100528",
+ "ts": "2026-11-01T11:35:18Z",
+ "sha": "c5d23462",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
