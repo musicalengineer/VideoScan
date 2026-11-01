@@ -109,3 +109,5 @@ docs/project_goals.md -> docs/archive/project_goals.md
 docs/design/provenance.md#data-model-draft-ddl -> docs/archive/design/provenance_schema_draft_2026_10_26.md
 docs/design/provenance.md#part-ii-provenance-lightweight -> docs/archive/design/provenance_lightweight_2026_10_22.md
 docs/BACKLOG.md#long-lines -> docs/archive/backlog_detail_2026_11_01.md
+docs/design/catalog.md#5.6-content-steward -> docs/archive/design/analyze_knowledge_and_storage_actions_2026-10-02.md
+docs/design/catalog.md#5.7-one-election-two-stewards -> docs/archive/design/analyze_knowledge_and_storage_actions_2026-10-02.md

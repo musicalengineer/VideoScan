@@ -387,196 +387,50 @@ Discussion with Rick after the first draft:
   versioned stamps, scheduler conflict table, retire ad-hoc flags and the
   old dashboard (§6 stages 1–3, full discipline).
 
-### 5.6 The content steward (Rick, 2026-10-03) — Archive Angel's shape, second instance
+### 5.6 The content steward — the effective contract (built as a trial, `VideoScan/VideoScan/Steward/`)
 
-Rick, after a morning with the Phase A trial: "I am dreaming of a new
-angel … Content Angel, BUT we're not gonna call it that." What he wants:
-(1) runs in the background; (2) can run in the foreground on the catalog
-or a volume with feedback; (3) queryable from menus and, later, Hallie;
-(4) finds dups and related footage, provides transcripts and captions,
-decodes OCR, infers dates; (5) helps the user *see and understand* the
-content so it is easier to manage; (6) can recommend ("2 GB occupied by 4
-dups over 3 volumes — clean up?"); (7) where AA guides *promotion*, this
-guides *content management* — what to let go, big payoffs, large groups
-of the same event; (8) the puzzle is the UI/UX.
+*Cut to the contract on 2026-11-01 (Codex docs review F07). The 10/03 exploration — Rick's eight wishes, the
+Archive-Angel comparison table, the trial card list, the priority ruling, the "as built in the trial" notes — is
+verbatim in `docs/archive/design/analyze_knowledge_and_storage_actions_2026-10-02.md` §5.6. Whether the steward pane
+folds into Events / the Analyzer or is cut is BACKLOG's ruling Q2.*
 
-**The answer to (8): do not invent a shape — reuse Archive Angel's.**
+- **What it is.** Archive Angel's shape, second instance: where the Angel guides *promotion* ("keep forever"), the
+  steward guides *content management* ("let go" and "belong together"). It lives in the **Triage** tab as Content
+  Steward cards; the Catalog stays the inventory, Storage the per-drive view, the cyclers' panel (§5.5) its engine room.
+- **A queue of payoff cases, one at a time:** what · why (evidence you can open) · payoff · do it / skip. A skip is
+  remembered and never re-proposed (`StewardSkipStore`). Lanes, in order: **Events** · unlabelled days · Same footage
+  · Reclaim space · Probably not worth keeping; a filter (All · Events · Same footage · Space · Not worth keeping) and a
+  "By year" order are view state only.
+- **Rules (each a test):** (1) a delete card shows the **proof, not the score** — the verified copies that would
+  remain, by drive and date; (2) one steward's cases are never another's loss — never propose letting go of an
+  archived copy, a file the Angel has designated or is preparing, or anything on FamilyArchive; (3) short clips and
+  junk get a *disposition review*, never a deletion; (4) an event card never offers a delete; its actions only look
+  (the Catalog, the footage group, the copies among them).
+- **Events, as the steward derives them:** one labelled occasion in one year, from the one labeller the Angel also
+  uses (`VideoScanCore/EventLabeler`: calendar holidays, People-tab birthdays, a name lexicon — one labeller, two
+  stewards). A card needs two clips, or one of 20 minutes or more. An unlabelled day is 4 or more clips on one trusted
+  day (the Angel's `ArchiveAngelEvent.derive`) or on up to 3 days running, keyed by its busiest day so a Skip survives
+  an adjacent arrival. A 1 January day nobody typed is a reset camera clock and places nothing, except a phone's stamp
+  after 00:00:00 and before 08:00 UTC (US New Year's Eve read as UTC). **Open: Rick** — move that rule into the
+  Angel's day rule, or keep it here only.
+- **Nothing is stored:** events are derived on every build; naming or confirming one is a gap. Log lines carry an
+  event's kind and counts, never its title.
 
-| | Archive Angel | the content steward |
-|---|---|---|
-| verb | keep forever | **let go**, and **belong together** |
-| knowledge | fixity, dates, originality, footage groups | dup groups + keepers, footage groups, junk score, dates, transcripts, captions, OCR (the §5.5 cyclers) |
-| recommender | readiness | **payoff** — bytes reclaimed, or clarity gained |
-| case | "this clip is ready to promote" | "4 copies over 3 drives, 2 GB — keep LaCie's, reclaim 1.5 GB" · "27 clips, 3 tapes, Christmas 2006 — one event; name it?" |
-| action | Promote | Delete duplicates (existing job) · set disposition · group / name footage · hand to the Angel |
+### 5.7 One election, two stewards — the effective contract
 
-- **Home: the Triage tab, evolved** (Rick: "Triage (or whatever) is the
-  place to review the content en masse or individually; unlike the Catalog
-  view, which is file-oriented, Triage/Content is associations,
-  recommendations, groups"). The Catalog stays the inventory; Storage
-  keeps the per-drive view; the cyclers' panel (§5.5) is the steward's
-  engine room, opened from the tab. **Name stays "Triage" for the trial**
-  — decided by use, like Analyze was (candidates: Content, Tidy).
-- **A queue of payoffs, one focused case at a time** (the librarian
-  model): what · why (evidence you can open) · payoff · do it / skip.
-  A skip is remembered (the Angel's attention-memory lesson: never
-  re-propose what was declined).
-- **Two rules that are the first tests:**
-  1. *Delete cards show the proof, not the score* — "3 verified copies
-     remain: LaCie, FamilyArchive, SanDisk", with dates, on the card.
-  2. *One steward's cases are never another's loss* — never propose
-     letting go of an archived copy, a file the Angel has designated or
-     is preparing, or anything on the FamilyArchive volume (near
-     read-only ruling, 2026-09-22). Short clips are low signal, not
-     delete candidates (2026-09-26 ruling): junk cards propose a
-     *disposition review*, never a deletion.
-- **Trial (UI-first, same phasing as §5.5):** three card types over
-  knowledge that already exists on the records, wired to actions that
-  already exist, inside the existing Triage tab with its table retained:
-  1. **Reclaim space** — per-drive ("SanDisk: 412 GB in 1,208 duplicate
-     copies") and the largest individual dup groups; evidence = each
-     copy, its drive and the verified copies that would remain; action =
-     the existing Delete-duplicates flow preselected to that drive, and
-     "Show in Catalog". (Per-group delete does not exist; shown as a gap.)
-  2. **Same footage** — footage groups by size; evidence = members,
-     likely original, date span; actions = the existing group sheet,
-     name-this-footage, One Per Footage.
-  3. **Probably not worth keeping** — junk-score clusters by reason
-     ("38 clips under 5 s"); action = review / set disposition in the
-     Triage table. Never delete.
-  Then Rick drives it; the recommender proper (ranking, cross-steward
-  arbitration, Hallie queries, per-group actions) is built only on his
-  go-ahead.
-- **Events are the unit the steward should eventually speak in** (Rick,
-  2026-10-03: "there are 12 copies or similar clips of [a son's] 1st
-  birthday … it helps demo the theme I am shooting for"). Duplicates and
-  footage groups are the machine's concepts; an *event* is the family's.
-  An Event = one footage group (later: neighbouring groups) + a name the
-  catalog proposes and the user confirms — the same propose-then-verify
-  shape as Hallie and the Angel. Ingredients already exist: footage
-  groups (same footage), dates (embedded / OCR / inferred), People-tab
-  birthdates (a group dated near a birthday anniversary ⇒ "Nth
-  birthday"; the arithmetic gives N), Find and Tag (who is in frame),
-  transcripts ("happy birthday"), calendar anchors (Christmas,
-  Thanksgiving, July 4).
-  - *In the trial:* the Same-footage card leads with the footage's name
-    when it has one, otherwise a clearly-labelled guess from the date
-    ("Around …'s 1st birthday?"), with "Name this footage…" pre-filled so
-    one click turns the guess into a fact. One pure function; the guess
-    is never written on its own.
-  - *Direction:* Events as the steward's top-level unit — clusters across
-    groups, people in frame, transcript cues, "the best copy of this
-    event" handed to the Angel; Hallie answers "show me [someone]'s first
-    birthday" from the same facts.
-- **Priority ruling (Rick, 2026-10-03, afternoon): events are the point;
-  duplicate deletion is housekeeping.** "It should help find events,
-  groups of similar events in time … we can't reliably find [a person]
-  in videos since the family looks too similar, [but] we can use
-  heuristic metadata, like AA does for promotion recommendations, to
-  identify [someone's] birthday or Christmas or Thanksgiving or 'down the
-  Cape' … The deletion of dups is just to keep the database down."
-  - The occasion labeller already exists: `VideoScanCore/EventLabeler`
-    (Angel rules v14, 2026-09-29) — calendar holidays, People-tab
-    birthdays, and a name lexicon over file and folder names ("xmas94",
-    "cape", trips), each with a human reason line. The Angel uses it only
-    for scoring; the steward makes it visible. **One labeller, two
-    stewards** — no second implementation (the trial's
-    `StewardEventGuess` is removed in favour of it).
-  - The pane leads with **Events** ("Christmas 1994 — 14 clips · 3 drives
-    · 2 h 10 m"), then **unlabelled days** (≥ 4 clips on one trusted day,
-    waiting for a name), then Same footage, then Reclaim space, then
-    Probably not worth keeping. An event card shows *why* (reasons,
-    counted) and *what's inside* (copies of each other, same footage, in
-    the archive); it never offers a delete.
-  - Evidence the labeller could gain later, in the Angel's
-    evidence-fusion spirit (and where face recognition stays demoted):
-    transcript cues ("happy birthday", carols), OCR'd title cards, user
-    places, GPS where a file has it, and recurrence (the same week every
-    summer ⇒ a trip).
-  - Cadence for the housekeeping side ("turn the dial over time"): as
-    files are promoted to the archive, duplicate-cleanup passes cycle
-    behind them. GH #258 (the delete planner must leave alone what the
-    Angel has chosen or Rick has filed as Archived) is the prerequisite
-    and was approved the same day.
-  - *As built in the trial* (branch `feat/steward-events-lane`; what the
-    bullets above do not already say):
-    - An event is one labelled occasion in one year. A clip with several
-      labels is in each event ("also in: …"); a clip whose footage group
-      (Likely or stronger) has a member in an event joins it "by matching
-      footage" unless its own date says otherwise. An event card needs two
-      clips, or one clip of 20 minutes or more (a whole tape) — QA F8,
-      2026-10-03. The lane is ordered by clip count, then length.
-    - An unlabelled day is 4 or more clips on one trusted day, or on up
-      to 3 days running. Its card is keyed by the run's busiest day (the
-      earliest of a tie), so a clip arriving on an adjacent day does not
-      change the id or lose a Skip (QA F7).
-    - Lane after lane (nothing takes turns), with a filter above the list
-      (All · Events · Same footage · Space · Not worth keeping) and a "By
-      year" order for the events — both pure view state. The list keeps
-      200 events and 25 of each other kind (skipped ones ride along for
-      "Show skipped").
-    - The trusted day is the Angel's own (`ArchiveAngelEvent.derive`);
-      the Same-footage title guess is the labeller's majority among the
-      group's members that have one, and a tie is no guess.
-    - Event actions only look: the Catalog, the footage group when there
-      is exactly one, the copies among them. A card may list archived
-      clips and the Angel's picks because it proposes nothing about them.
-    - Nothing is stored: events are derived on every build; naming or
-      confirming one is shown as a gap. Log lines carry an event's kind
-      and counts, never its title.
-    - One rule is the steward's own: a 1 January day nobody typed is a
-      reset camera clock, so neither its day **nor its year** places
-      anything (a name word then explains but keys no event, and the clip
-      is free to join its footage twin's event). Exception (QA F2): a
-      PHONE's stamp on 1 January after 00:00:00 and before 08:00 UTC is New
-      Year's Eve in the US read as UTC, and is kept; exactly midnight stays
-      a reset. The Angel's resolver has
-      no such rule — **open question for Rick:** move it into the Angel's
-      day rule, or keep it here only.
+*The 10/03 measurements and the "why duplicates keep showing up" analysis are verbatim in the archived file above,
+§5.7.*
 
-### 5.7 One election, two stewards (Rick + Claude, 2026-10-03)
-
-Rick's statement of the goal: "the goal of AA and CA is to curate content
-and recommend **saving unique content** and **eliminating dups that have
-been over-copied** and … keep showing up no matter [what]."
-
-- **One question, asked once per set of identical files: which copy is
-  the one?** The duplicate analysis's keeper election answers it. The
-  Angel promotes *that* copy; the cleanup removes the others once enough
-  verified copies remain — and the archive copy counts toward "enough".
-  Two stewards, one answer.
-- **Measured 2026-10-03** (live catalog + the Angel's evidence store):
-  12,286 active records · 998 keepers · 2,818 extra copies · 419 records
-  the Angel is considering · **0 of those 419 are extra copies.** The
-  Angel already defers to the keeper election. So a delete-time "protect
-  the Angel's pick" rule guards a case that does not occur; it is made a
-  rule by a guard test instead ("the Angel never recommends an extra
-  copy").
-- **Holds are for files in use, not for opinions.** Delete Duplicates
-  leaves alone: a file in a running or ready Angel batch (Promote re-reads
-  the source to re-prove its bytes), a promoted archive copy, and anything
-  on a **Read-only volume**. It does *not* hold copies the Angel merely
-  lists, nor copies wearing the lifecycle "Archived" label — that label
-  already follows the keeper (GH #258 as reshaped).
-- **Read only ≠ ignore.** A Read-only volume (user toggle in Storage;
-  FamilyArchive by rule) is never deleted from, moved from or rewritten
-  by a bulk verb, but its files **still count as copies** when other
-  drives are cleaned — that is what an archive drive is for. "Ignore /
-  don't count as a backup" is a different notion (cf. retired drives) and
-  is not this flag.
-- **Why duplicates "keep showing up no matter", from the 2026-10-03
-  runs:** (1) false duplicates are never forgotten — 408 "content
-  differs — NOT a duplicate" refusals, re-read and re-refused each run
-  (GH #259); (2) most true duplicates exist in exactly two places, so
-  removing one would leave a single copy and the run leaves it alone
-  every time (SanDisk: 103 of 114) — they clear only when a third
-  verified copy exists, which promotion creates; (3) nothing records a
-  human "keep both — decided", so decided sets return.
-- **The dial (Rick: "low-hanging fruit, turn the dial over time; as files
-  promote to archive, we cycle on delete-dup passes"):** promotion is
-  what *unlocks* cleanup. A natural steward card, later: "Promote these N
-  ready clips → M GB of over-copies become removable", and after a
-  Promote, queue a cleanup pass behind it.
+- **One question per set of identical files, asked once: which copy is the one?** The duplicate analysis's keeper
+  election answers it. The Angel promotes *that* copy; cleanup removes the others while ONE proven copy remains (the
+  keeper, proven at the move — DECISIONS 2026-10-09, which superseded this section's original "enough verified
+  copies"), and the archive copy counts. Guard test: the Angel never recommends an extra copy.
+- **Holds are for files in use, not for opinions.** Delete Duplicates leaves alone a file in a running or ready Angel
+  batch, a promoted archive copy, and anything on a Read-only volume; it does not hold copies the Angel merely lists,
+  nor the lifecycle "Archived" label (it follows the keeper; GH #258).
+- **Read only ≠ ignore.** A Read-only volume (Storage toggle; FamilyArchive by rule) is never deleted from, moved
+  from or rewritten by a bulk verb, but its files **still count as copies** when other drives are cleaned.
+- **The dial:** promotion is what unlocks cleanup; a cleanup pass may queue behind a Promote (a later card).
 
 ### 6. Staging (each stage ships whole; nothing half-moved)
 
