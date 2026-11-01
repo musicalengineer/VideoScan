@@ -197,7 +197,7 @@ Rick's guide (`audio_video_digital_forensics_guide.pdf`) is court-oriented and s
 
 ## 0.7 Where the machine intelligence lives, and what to call it (Rick, 2026-10-31 evening)
 
-**Name: observations.** Rick's own word in §0 ("populate observations or derived machine-generated information"). A fact Rick set is a
+**Name: observations** (glossary: `docs/ARCHITECTURE.md` "Terms"). Rick's own word in §0 ("populate observations or derived machine-generated information"). A fact Rick set is a
 **decision**; a fact a machine produced is an **observation**. Not "meta-metadata" (it describes the footage, not the metadata) and
 not "machine intel" (it sounds like it reasons; it records). Every observation carries who made it (`by = engine@version`, the model
 and prompt hash for a model), when, and its evidence; a decision always outranks an observation; an observation never supports the
