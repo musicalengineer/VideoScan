@@ -3,5 +3,43 @@
 # text that may not be edited (DECISIONS, STATUS, and archived documents);
 # every other citation names the new path. Index with reasons: README.md here.
 docs/practices/invariants -> docs/archive/practices/invariants
-# moved 2026-10-31 (the earlier pass; listed so archived text that names the old folder resolves)
 docs/ops -> docs/archive/ops
+docs/reviews/codex/codex-review-383-editor-caches-2026-10-25.md -> docs/archive/reviews/codex/codex-review-383-editor-caches-2026-10-25.md
+docs/reviews/codex/codex-review-401-scan-location-volume-2026-10-30.md -> docs/archive/reviews/codex/codex-review-401-scan-location-volume-2026-10-30.md
+docs/reviews/codex/codex-review-401-scan-location-volume-closing-2026-10-30.md -> docs/archive/reviews/codex/codex-review-401-scan-location-volume-closing-2026-10-30.md
+docs/reviews/codex/codex-review-adversarial-p2-2026-10-26.md -> docs/archive/reviews/codex/codex-review-adversarial-p2-2026-10-26.md
+docs/reviews/codex/codex-review-adversarial-p2-closing-2026-10-26.md -> docs/archive/reviews/codex/codex-review-adversarial-p2-closing-2026-10-26.md
+docs/reviews/codex/codex-review-adversarial-p2-round3-2026-10-26.md -> docs/archive/reviews/codex/codex-review-adversarial-p2-round3-2026-10-26.md
+docs/reviews/codex/codex-review-adversarial-p2-round4-2026-10-26.md -> docs/archive/reviews/codex/codex-review-adversarial-p2-round4-2026-10-26.md
+docs/reviews/codex/codex-review-background-step-1-journal-applier-2026-11-01.md -> docs/archive/reviews/codex/codex-review-background-step-1-journal-applier-2026-11-01.md
+docs/reviews/codex/codex-review-catalog-store-consistency-2026-10-25.md -> docs/archive/reviews/codex/codex-review-catalog-store-consistency-2026-10-25.md
+docs/reviews/codex/codex-review-committer-lost-writes-2026-10-25.md -> docs/archive/reviews/codex/codex-review-committer-lost-writes-2026-10-25.md
+docs/reviews/codex/codex-review-committer-refuse-and-name-2026-10-25.md -> docs/archive/reviews/codex/codex-review-committer-refuse-and-name-2026-10-25.md
+docs/reviews/codex/codex-review-committer-round3-2026-10-26.md -> docs/archive/reviews/codex/codex-review-committer-round3-2026-10-26.md
+docs/reviews/codex/codex-review-day-2026-10-31.md -> docs/archive/reviews/codex/codex-review-day-2026-10-31.md
+docs/reviews/codex/codex-review-disk-check-2026-10-29.md -> docs/archive/reviews/codex/codex-review-disk-check-2026-10-29.md
+docs/reviews/codex/codex-review-disk-check-closing-2026-10-29.md -> docs/archive/reviews/codex/codex-review-disk-check-closing-2026-10-29.md
+docs/reviews/codex/codex-review-disk-check-closing2-2026-10-29.md -> docs/archive/reviews/codex/codex-review-disk-check-closing2-2026-10-29.md
+docs/reviews/codex/codex-review-disk-check-closing3-2026-10-29.md -> docs/archive/reviews/codex/codex-review-disk-check-closing3-2026-10-29.md
+docs/reviews/codex/codex-review-disk-check-closing4-2026-10-29.md -> docs/archive/reviews/codex/codex-review-disk-check-closing4-2026-10-29.md
+docs/reviews/codex/codex-review-diskfull-ballast-fd-leak-test-only-2026-10-27.md -> docs/archive/reviews/codex/codex-review-diskfull-ballast-fd-leak-test-only-2026-10-27.md
+docs/reviews/codex/codex-review-provenance-set-role-2026-10-26.md -> docs/archive/reviews/codex/codex-review-provenance-set-role-2026-10-26.md
+docs/reviews/codex/codex-review-provenance-set-role-closing-2026-10-26.md -> docs/archive/reviews/codex/codex-review-provenance-set-role-closing-2026-10-26.md
+docs/reviews/codex/codex-review-store-durability-closing-2026-10-25.md -> docs/archive/reviews/codex/codex-review-store-durability-closing-2026-10-25.md
+docs/reviews/codex/codex-review-store-durability-third-2026-10-25.md -> docs/archive/reviews/codex/codex-review-store-durability-third-2026-10-25.md
+docs/reviews/codex/codex-review-store-open-387-386-2026-10-26.md -> docs/archive/reviews/codex/codex-review-store-open-387-386-2026-10-26.md
+docs/reviews/codex/codex-review-store-open-387-386-closing-2026-10-26.md -> docs/archive/reviews/codex/codex-review-store-open-387-386-closing-2026-10-26.md
+docs/reviews/codex/codex-review-swift-6-stage-5-7-data-risk-isolation-edits-2026-10-25.md -> docs/archive/reviews/codex/codex-review-swift-6-stage-5-7-data-risk-isolation-edits-2026-10-25.md
+docs/reviews/codex/codex-review-swift-6-stage-8-flip-2026-10-25.md -> docs/archive/reviews/codex/codex-review-swift-6-stage-8-flip-2026-10-25.md
+docs/reviews/codex/codex-review-timingbudget-tier-aware-busy-rule-2026-10-27.md -> docs/archive/reviews/codex/codex-review-timingbudget-tier-aware-busy-rule-2026-10-27.md
+docs/reviews/codex/test-host-icon-guard.md -> docs/archive/reviews/codex/test-host-icon-guard.md
+docs/reviews/BRIEF_TEMPLATE.md -> docs/archive/reviews/BRIEF_TEMPLATE.md
+docs/reviews/adversarial/2026-10-18-open-findings.md -> docs/archive/reviews/adversarial/2026-10-18-open-findings.md
+docs/reviews/adversarial/README.md -> docs/archive/reviews/adversarial/README.md
+docs/reviews/qa/ndsa_self_score_2026-10-02.md -> docs/archive/reviews/qa/ndsa_self_score_2026-10-02.md
+docs/reviews/swift-expert/2026-10-18-reading-guide-best-vs-worst.md -> docs/archive/reviews/swift-expert/2026-10-18-reading-guide-best-vs-worst.md
+docs/reviews/tab_charter_audit_2026_10_11.md -> docs/archive/reviews/tab_charter_audit_2026_10_11.md
+docs/reviews/gh_issue_triage_2026_10_11.md -> docs/archive/reviews/gh_issue_triage_2026_10_11.md
+docs/reviews/p0-regression-2026-10-17.md -> docs/archive/reviews/p0-regression-2026-10-17.md
+docs/reviews/cutover_acceptance_audit_2026_10_19.md -> docs/archive/reviews/cutover_acceptance_audit_2026_10_19.md
+docs/reviews/video_llm_design.md -> docs/archive/stubs/reviews/video_llm_design.md

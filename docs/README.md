@@ -57,9 +57,17 @@ Correct, read on demand; a guide exists where a reader would otherwise have to r
 
 ## Reviews and evidence (`reviews/`)
 
-Live evidence, overwritten in place: [`video_llm_benchmarks.md`](reviews/video_llm_benchmarks.md) (the model ladder's numbers), [`hallie_benchmarks.md`](reviews/hallie_benchmarks.md) (Hallie's replay), [`household_roster_feasibility.md`](reviews/household_roster_feasibility.md) (the roster as a filter, not a namer). [`BRIEF_TEMPLATE.md`](reviews/BRIEF_TEMPLATE.md) is the Codex brief shape.
+Live evidence, overwritten in place, one file per area: [`codex.md`](reviews/codex.md) (the standing Codex verdict per area, and the brief template), [`video_llm_benchmarks.md`](reviews/video_llm_benchmarks.md) (the model ladder's numbers), [`household_roster_feasibility.md`](reviews/household_roster_feasibility.md) (the roster as a filter, not a namer; written by `tools/household-roster/roster.py`). `reviews/cloud/LEDGER.md` is the cloud-session ledger, live until the credits expire on 2026-11-05. `tools/codex_review.py` writes new pass transcripts to `reviews/codex/`, and `tools/adversarial_nightly.py` puts triaged nights in `reviews/adversarial/`.
 
-Records kept for the rulings that cite them: [`tab_charter_audit_2026_10_11.md`](reviews/tab_charter_audit_2026_10_11.md), [`gh_issue_triage_2026_10_11.md`](reviews/gh_issue_triage_2026_10_11.md), [`p0-regression-2026-10-17.md`](reviews/p0-regression-2026-10-17.md), [`cutover_acceptance_audit_2026_10_19.md`](reviews/cutover_acceptance_audit_2026_10_19.md), [`qa/ndsa_self_score_2026-10-02.md`](reviews/qa/ndsa_self_score_2026-10-02.md), [`adversarial/`](reviews/adversarial/), [`swift-expert/2026-10-18-reading-guide-best-vs-worst.md`](reviews/swift-expert/2026-10-18-reading-guide-best-vs-worst.md), [`cloud/LEDGER.md`](reviews/cloud/LEDGER.md) (credits to 2026-11-05). `reviews/codex/` holds Codex pass records from 10/25–10/30 that Swift test headers cite (#404); `PROCESS.md` §5 says new verdicts go in the PR, not here.
+Records kept for the rulings and tests that cite them, now in [`archive/reviews/`](archive/reviews/) (summaries, 2026-11-01):
+- **Codex transcripts, 10/25 → 11/01** (28): one row each in `codex.md`.
+- **Adversarial review 2026-10-18** (`adversarial/2026-10-18-open-findings.md`): ten findings on `93c72a704..64ea21ac6`; #1 #2 #3 #9 #10 confirmed and fixed, #8 tests added, #4–#7 deferred to the Import code removal.
+- **NDSA self-assessment 2026-10-02** (`qa/ndsa_self_score_2026-10-02.md`): highest level fully met Storage 0 · Integrity 0 · Control 1 · Metadata 2 · Content 1; the software is ahead of the storage (every copy in one building).
+- **Reading guide 2026-10-18** (`swift-expert/2026-10-18-reading-guide-best-vs-worst.md`): the module to copy is Core `Commit` + the Store seam (grade A); the one to fix is PrunePlan (rebuilt simple on 10/22).
+- **Tab-charter audit 2026-10-11** (`tab_charter_audit_2026_10_11.md`): misplaced features and red tests (`TabCharterAuditTests`, `OneRemovalShapeTests`).
+- **GitHub issue triage 2026-10-11** (`gh_issue_triage_2026_10_11.md`): 170 open issues sorted into close / keep / merge, cited by DECISIONS.
+- **P0 truth-regression run sheet 2026-10-17** (`p0-regression-2026-10-17.md`, GH #327): the red/green sheet behind `P0TruthFixture` and `P0TruthRegressionTests`.
+- **Cutover acceptance audit 2026-10-19** (`cutover_acceptance_audit_2026_10_19.md`): "solid, with 6 named gaps"; gap 1 became #340 (P0).
 
 ## Research (`research/`)
 

@@ -1,6 +1,6 @@
 // CatalogStoreDurabilityCodex141Tests.swift
-// Codex cycle #141 (docs/reviews/codex/codex-review-catalog-store-consistency-
-// 2026-10-25.md), findings 1, 4 and 6 — each seen RED before its fix:
+// Codex cycle #141 (docs/archive/reviews/codex/codex-review-catalog-store-consistency-2026-10-25.md),
+// findings 1, 4 and 6 — each seen RED before its fix:
 //
 //   | finding | test                                              | red (before)                                  | green (after) |
 //   |---------|---------------------------------------------------|-----------------------------------------------|---------------|
@@ -14,8 +14,8 @@
 //   |         |                                                   | read 2/2 (WAL) and a -wal appeared — the pool | 1/1, no -wal  |
 //   |         |                                                   | was built before the version check            |               |
 //
-// Closing pass (docs/reviews/codex/codex-review-store-durability-closing-
-// 2026-10-25.md, cycle #142) — three residuals on F6, each seen RED:
+// Closing pass (docs/archive/reviews/codex/codex-review-store-durability-closing-2026-10-25.md,
+// cycle #142) — three residuals on F6, each seen RED:
 //
 //   | finding | test                                              | red (before)                                  | green (after) |
 //   |---------|---------------------------------------------------|-----------------------------------------------|---------------|

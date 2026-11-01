@@ -1,6 +1,6 @@
 // EditorCacheCodexRound2Tests.swift
-// GH #383, Codex review round 2 (docs/reviews/codex/codex-review-383-
-// editor-caches-2026-10-25.md). Each suite is one finding, seen RED on
+// GH #383, Codex review round 2 (docs/archive/reviews/codex/codex-review-383-editor-caches-2026-10-25.md).
+// Each suite is one finding, seen RED on
 // dd1a6735a before its fix.
 //
 // Finding 1 (P1) — an editor-cache ignore entry propagated through the

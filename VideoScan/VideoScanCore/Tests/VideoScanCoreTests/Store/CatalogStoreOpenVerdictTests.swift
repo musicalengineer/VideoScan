@@ -3,8 +3,8 @@
 // deletes a journal file, and the open checks (version, integrity, foreign
 // keys) run inside the writer's first BEGIN IMMEDIATE with the normal busy
 // timeout — so the lock that admits the file is the lock that writes it.
-// One test per Codex #144 finding (docs/reviews/codex/codex-review-store-
-// durability-third-2026-10-25.md); the red/green table is in the commit.
+// One test per Codex #144 finding (docs/archive/reviews/codex/codex-review-store-durability-third-2026-10-25.md);
+// the red/green table is in the commit.
 //
 // Lives under Tests/…/Store/ because it opens the same file with plain GRDB
 // queues (the sensor allows `import GRDB` only here and in Sources/…/Store/).

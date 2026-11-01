@@ -1,4 +1,4 @@
-// TabCharterAuditTests.swift — QA red tests from docs/reviews/tab_charter_audit_2026_10_11.md
+// TabCharterAuditTests.swift — QA red tests from docs/archive/reviews/tab_charter_audit_2026_10_11.md
 // (T1, T2, T3 — T4 and T5 wait on Rick's rulings and are not here).
 import Foundation
 import Testing

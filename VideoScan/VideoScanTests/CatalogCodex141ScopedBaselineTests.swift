@@ -1,6 +1,6 @@
 // CatalogCodex141ScopedBaselineTests.swift
-// Codex cycle #141, finding 3 (docs/reviews/codex/
-// codex-review-catalog-store-consistency-2026-10-25.md): a SCOPED save
+// Codex cycle #141, finding 3 (docs/archive/reviews/codex/codex-review-catalog-store-consistency-2026-10-25.md):
+// a SCOPED save
 // (`commitNow(ids:)` — the removal-marker door, `commitBeforeReplacing`)
 // advanced a dirty sibling's per-field baseline to the committed value, so
 // the sibling's next delta REMOVED what the other copy had added.

@@ -1,5 +1,5 @@
 // OneRemovalShapeTests.swift
-// GH #143 — the tab-charter audit's T4 (docs/reviews/tab_charter_audit_2026_10_11.md
+// GH #143 — the tab-charter audit's T4 (docs/archive/reviews/tab_charter_audit_2026_10_11.md
 // §4), now green: every Trash door keeps the row, marked with the one
 // removal marker, so Show Removed → Restore can bring the file back.
 // Before GH #143, Delete Duplicates' settle deleted the row

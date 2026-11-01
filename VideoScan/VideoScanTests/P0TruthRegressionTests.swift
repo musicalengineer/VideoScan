@@ -20,7 +20,7 @@
 //      People-tab picks and rows, "Watch the copy with sound" — 2026-10-19
 //   + source sensors pinning the one door each surface goes through.
 //
-// RED RUNS (docs/reviews/p0-regression-2026-10-17.md). The suite is run at
+// RED RUNS (docs/archive/reviews/p0-regression-2026-10-17.md). The suite is run at
 // the commit before each fix. Some surfaces did not EXIST before their fix,
 // so a red build passes one compilation condition and the absent API is
 // compiled out (its test records that the surface is absent):

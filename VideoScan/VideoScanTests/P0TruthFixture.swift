@@ -20,7 +20,7 @@
 // logs); the rows are set on it as the catalog.
 //
 // This file must compile at the RED commits too (the suite is run there
-// for its red half — see docs/reviews/p0-regression-2026-10-17.md), so it
+// for its red half — see docs/archive/reviews/p0-regression-2026-10-17.md), so it
 // uses only API that exists at b03c3ce6b and later.
 //
 // (For Rick: the table is a constant array of plain structs — think a
