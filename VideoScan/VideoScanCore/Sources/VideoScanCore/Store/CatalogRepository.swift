@@ -203,7 +203,7 @@ public protocol CatalogLiveReading {
 
 /// The handle a `read` body receives.
 public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading, CatalogFolderReading,
-                               CatalogDecisionReading, CatalogProvenanceRoleReading {
+                               CatalogDecisionReading, CatalogProvenanceRoleReading, CatalogProvenanceAssertionReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
@@ -217,7 +217,7 @@ public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, Catalog
 /// CatalogProvenanceRoleRows.swift): their readings and doors ride on the
 /// same transaction.
 public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, CatalogFolderWriting, CatalogDecisionWriting,
-                                    CatalogProvenanceRoleWriting {
+                                    CatalogProvenanceRoleWriting, CatalogProvenanceAssertionWriting {
     /// The generation this write advances TO (the committed one plus one).
     /// Rows written in this transaction are stamped with it.
     var generation: Int { get }

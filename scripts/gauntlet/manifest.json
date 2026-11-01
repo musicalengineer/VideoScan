@@ -315,8 +315,8 @@
       "suites": [
         "BackoffPolicyTests",
         "IdleExitPolicyTests",
-        "PeerRequirementTests",
-        "PeerTrustPolicyTests"
+        "PeerTrustPolicyTests",
+        "PeerRequirementTests"
       ],
       "tests": [
         "adHoc",
@@ -1315,13 +1315,13 @@
       ],
       "tests": [
         "fullNamesFuseButALeadingMacIsAGivenName",
+        "fusedParticleSurnameSurvivesTheWriterRoundTrip",
         "gedcomDisplayAndSurnameAreFusedWhileLookupsAcceptEitherSpelling",
         "lowercaseParticlesAreLeftAlone",
-        "spacedParticlesFuseInSurnames",
-        "fusedParticleSurnameSurvivesTheWriterRoundTrip",
         "particleBeforeTheSlashFusesIntoTheSurnameSoTheDisplayedNameFindsThePerson",
         "particleRunsAcrossTheSlashResolveToOneDisplayAndSurname",
-        "qaR1DisplayIsAFixedPointForEveryParticleShape"
+        "qaR1DisplayIsAFixedPointForEveryParticleShape",
+        "spacedParticlesFuseInSurnames"
       ]
     },
     {
@@ -3137,8 +3137,8 @@
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Preflight/PreflightQAR1RedTests.swift",
       "stage": "unit",
       "suites": [
-        "LaunchPreflightTests",
-        "PreflightGateTests"
+        "PreflightGateTests",
+        "LaunchPreflightTests"
       ],
       "tests": [
         "qaR1_catalogThatFailedQuickCheckHoldsEdits",
@@ -3939,7 +3939,7 @@
         "aFileHoldingAPoisonedRoleKeyIsRefusedAtOpenWithWords",
         "aPoisonedRoleKeyReadsAsUnreadableUnknownAndNeverThrows",
         "aReadOnlyOpenRefusesARoleWrite",
-        "aSchemaTwelveDatabaseOpensAsThirteenWithEveryContentRowIntact",
+        "aSchemaTwelveDatabaseOpensAtTheCurrentVersionWithEveryContentRowIntact",
         "everyChoiceIsANewRowAndTheNewestIsCurrent",
         "oneHundredThousandContentsCurrentRoleInsideBudgets",
         "settingUnknownAppendsAnUnknownRowAndResets",
@@ -3947,6 +3947,26 @@
         "theCheckListIsExactlyTheNineRoleKeys",
         "theTableIsAppendOnlyAndItsChecksHold",
         "theWholeTableReadingGivesOneCurrentRowPerDigest"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogProvenanceAssertionsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogProvenanceAssertionsTests"
+      ],
+      "tests": [
+        "aDigestInAnySpellingIsContentDigestsSpelling",
+        "aDigestThatIsNotContentWritesNothing",
+        "aFourteenFileIsRefusedInWordsByTheGateAThirteenBuildRan",
+        "aSchemaThirteenDatabaseOpensAsFourteenWithEveryContentRowIntact",
+        "anObservationLandsAndTheSameLineTwiceIsOneRow",
+        "anObservationLandsOnAnArchivedContentButANameOrDateDoesNot",
+        "rickRejectingAValueVetoesItsReProposalAndAConfirmLiftsIt",
+        "theFieldPolicyNamesObservationsAndNamesOrDates",
+        "theTableIsAppendOnlyAndItsChecksHold"
       ]
     },
     {
@@ -4698,10 +4718,10 @@
       "tests": [
         "aHashedUntouchedBackupInvitesRetire",
         "aMissingSourceWithholdsSafeAndRetire",
-        "anAdoptionOfAnUntouchedHashedSourceIsProven",
-        "anAdoptionWhoseSourceChangedIsNotProven",
         "aSizeOnlyAdoptionNeverInvitesRetire",
         "allSafeWordsAskAboutFailedAndUnmatchedFiles",
+        "anAdoptionOfAnUntouchedHashedSourceIsProven",
+        "anAdoptionWhoseSourceChangedIsNotProven",
         "anAgingOnlyBackupNeverInvitesRetire",
         "anOverwrittenBackupIsNotProven",
         "anUnhashedBackupIsNotProven",
@@ -6653,10 +6673,10 @@
       "path": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
       "stage": "regression",
       "suites": [
-        "ArchiveDetailSheetWordsTests",
         "ArchiveDoorSourceSensors",
-        "ArchivePlayableRecordIsolationTests",
-        "ArchivePlayableRecordTests"
+        "ArchivePlayableRecordTests",
+        "ArchiveDetailSheetWordsTests",
+        "ArchivePlayableRecordIsolationTests"
       ],
       "tests": [
         "aLostFileShowsTheArchiveWords",
@@ -6714,15 +6734,15 @@
       "path": "VideoScan/VideoScanTests/ArchiveProtectionFollowupTests.swift",
       "stage": "unit",
       "suites": [
-        "ArchiveSnapshotMainThreadTests",
-        "ArchiveSnapshotStaleWindowQATests",
-        "ArchiveVolumeSnapshotCacheTests",
-        "CatalogRemovalArchiveVolumeTests",
-        "CatalogRemovalUnprovableQATests",
-        "DeleteDuplicatesArchiveVolumeRecheckTests",
-        "DerivativePublishQATests",
         "TranscodeArchiveFollowupTests",
-        "TranscodeReplaceTrashTests"
+        "ArchiveSnapshotMainThreadTests",
+        "DeleteDuplicatesArchiveVolumeRecheckTests",
+        "CatalogRemovalArchiveVolumeTests",
+        "ArchiveVolumeSnapshotCacheTests",
+        "TranscodeReplaceTrashTests",
+        "ArchiveSnapshotStaleWindowQATests",
+        "CatalogRemovalUnprovableQATests",
+        "DerivativePublishQATests"
       ],
       "tests": [
         "aDesignationChangeOrAVolumeRenameMakesTheSnapshotStale",
@@ -6807,13 +6827,13 @@
       "path": "VideoScan/VideoScanTests/ArchiveSoundMarkTests.swift",
       "stage": "unit",
       "suites": [
+        "ArchiveSoundMarkPolicyTests",
+        "ArchiveSoundMarkTruthTests",
         "ArchiveSoundMarkCardTests",
         "ArchiveSoundMarkGetInfoTests",
         "ArchiveSoundMarkOneQuestionTests",
-        "ArchiveSoundMarkPolicyTests",
         "ArchiveSoundMarkRepairTests",
-        "ArchiveSoundMarkScaleTests",
-        "ArchiveSoundMarkTruthTests"
+        "ArchiveSoundMarkScaleTests"
       ],
       "tests": [
         "aChannelWhoseLoudnessWasNeverReadIsNotMeasured",
@@ -9781,9 +9801,9 @@
       "suites": [
         "CatalogChromeCountsCacheTests",
         "CatalogChromeCountsScaleTests",
-        "CatalogResizeLoopSourceSensors",
         "VolumeColumnAnchorsTests",
-        "VolumeTableDateTextTests"
+        "VolumeTableDateTextTests",
+        "CatalogResizeLoopSourceSensors"
       ],
       "tests": [
         "aBurstOfSavesCoalescesIntoOneRecompute",
@@ -11694,10 +11714,10 @@
       "path": "VideoScan/VideoScanTests/CopiesAdviceTests.swift",
       "stage": "unit",
       "suites": [
-        "CopiesAdviceEndToEndTests",
-        "CopiesAdviceKeeperTests",
         "CopiesAdviceRuleTableTests",
-        "CopiesAdviceWordsTests"
+        "CopiesAdviceKeeperTests",
+        "CopiesAdviceWordsTests",
+        "CopiesAdviceEndToEndTests"
       ],
       "tests": [
         "aDifferentFileInTheSameGroup_isNotACopy_soThisIsTheOnlyCopy",
@@ -12929,8 +12949,8 @@
       "path": "VideoScan/VideoScanTests/DiagnosticBannerMediaTests.swift",
       "stage": "integration",
       "suites": [
-        "DiagnosticBannerVerifySensorTests",
-        "MediaRepairAddSoundEngineTests"
+        "MediaRepairAddSoundEngineTests",
+        "DiagnosticBannerVerifySensorTests"
       ],
       "tests": [
         "addsTheSoundIntoANewFileAndTouchesNothingElse",
@@ -12944,8 +12964,8 @@
       "stage": "unit",
       "suites": [
         "DiagnosticBannerNoSoundTests",
-        "MediaRepairAddSoundPlanTests",
-        "NoSoundSummaryTests"
+        "NoSoundSummaryTests",
+        "MediaRepairAddSoundPlanTests"
       ],
       "tests": [
         "aCopyWithSoundIsNamedAndRepairStillLooks",
@@ -21138,8 +21158,8 @@
       "path": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
       "stage": "regression",
       "suites": [
-        "ArchiveSearchSharedSensorTests",
-        "MainTabTagSensorTests"
+        "MainTabTagSensorTests",
+        "ArchiveSearchSharedSensorTests"
       ],
       "tests": [
         "archiveTag",
@@ -21857,9 +21877,9 @@
       "path": "VideoScan/VideoScanTests/MediaRepairEngineTests.swift",
       "stage": "unit",
       "suites": [
+        "MediaRepairRefusalTests",
         "MediaRepairEngineTests",
-        "MediaRepairMediaMatrixTests",
-        "MediaRepairRefusalTests"
+        "MediaRepairMediaMatrixTests"
       ],
       "tests": [
         "cancelled_removesPartial_publishesNothing",
@@ -21897,8 +21917,8 @@
       "stage": "unit",
       "suites": [
         "MediaRepairJobTests",
-        "MediaRepairPlanTimeCountTests",
-        "MediaRepairSelectionTests"
+        "MediaRepairSelectionTests",
+        "MediaRepairPlanTimeCountTests"
       ],
       "tests": [
         "anUnavailableFixCannotBeTicked",
@@ -23186,12 +23206,12 @@
       "path": "VideoScan/VideoScanTests/PerceptualFingerprintStoreTests.swift",
       "stage": "unit",
       "suites": [
-        "PerceptualFingerprintBackfillJobTests",
-        "PerceptualFingerprintIsolationTests",
-        "PerceptualFingerprintMediaMatrixTests",
+        "StoredPerceptualFingerprintLogicTests",
         "PerceptualFingerprintPlanTests",
+        "PerceptualFingerprintBackfillJobTests",
         "PerceptualFingerprintScaleTests",
-        "StoredPerceptualFingerprintLogicTests"
+        "PerceptualFingerprintMediaMatrixTests",
+        "PerceptualFingerprintIsolationTests"
       ],
       "tests": [
         "additiveCodable",
@@ -24078,10 +24098,10 @@
       "path": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
       "stage": "integration",
       "suites": [
-        "PlaybackAudioCheckerTests",
-        "PlaybackAudioMismatchMediaMatrixTests",
         "PlaybackAudioMismatchSourceSensors",
-        "PlaybackAudioMismatchTests"
+        "PlaybackAudioCheckerTests",
+        "PlaybackAudioMismatchTests",
+        "PlaybackAudioMismatchMediaMatrixTests"
       ],
       "tests": [
         "aCheckThatFinishesAfterTheNextStartIsStale",
@@ -27209,10 +27229,10 @@
       "path": "VideoScan/VideoScanTests/SoundPresencePolicyTests.swift",
       "stage": "unit",
       "suites": [
-        "SoundCopyFinderDecideTests",
-        "SoundPresenceCardTests",
         "SoundPresencePolicyTruthTableTests",
-        "SoundPresenceRecordBridgeTests"
+        "SoundPresenceRecordBridgeTests",
+        "SoundPresenceCardTests",
+        "SoundCopyFinderDecideTests"
       ],
       "tests": [
         "aCopyWithSoundBeatsCombining",
@@ -28991,8 +29011,8 @@
       "path": "VideoScan/VideoScanTests/VideoScanModelSplitGuardTests.swift",
       "stage": "regression",
       "suites": [
-        "ObservableForwarderPatternTests",
-        "VideoScanModelSplitSensorTests"
+        "VideoScanModelSplitSensorTests",
+        "ObservableForwarderPatternTests"
       ],
       "tests": [
         "bridgeFiresBeforeTheChange",
@@ -29065,8 +29085,8 @@
       "path": "VideoScan/VideoScanTests/VolumeMediaTallyTests.swift",
       "stage": "unit",
       "suites": [
-        "VolumeMediaTallyInvariantTests",
         "VolumeMediaTallyLogicTests",
+        "VolumeMediaTallyInvariantTests",
         "VolumeMediaTallySensorTests"
       ],
       "tests": [
@@ -29502,9 +29522,9 @@
       "path": "VideoScan/VideoScanTests/WorkbenchDiscardTrashFailureTests.swift",
       "stage": "regression",
       "suites": [
+        "WorkbenchDiscardTrashFailureTests",
         "RestoreResetsTrashedStageTests",
-        "SwallowedTrashThenPurgeSensorTests",
-        "WorkbenchDiscardTrashFailureTests"
+        "SwallowedTrashThenPurgeSensorTests"
       ],
       "tests": [
         "aFileWhoseDriveIsNotConnectedIsLeftAloneAsOffline",
@@ -32701,6 +32721,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogProvenanceRolesTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogProvenanceAssertionsTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {

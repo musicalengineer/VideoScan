@@ -71,6 +71,11 @@
 -- the newest row per digest current (VideoScanCore/Store/CatalogProvenanceRolesSchema.swift,
 -- migration `v8_provenance_roles`, which raises catalog_state.schema_version to 13). ADDITIVE: one
 -- new table, one index, two append-only triggers; no earlier table, trigger, index or CHECK changed.
+-- Revision 14 (v1.13, 2026-11-01, background service step 1; Rick approved the DDL 2026-11-01): §18 —
+-- `provenance_assertions`, every value a machine observes or Rick decides, per field, append-only,
+-- with the veto trigger (VideoScanCore/Store/CatalogProvenanceAssertionsSchema.swift, migration
+-- `v9_provenance_assertions`, which raises catalog_state.schema_version to 14). ADDITIVE: one new
+-- table, one index, three triggers; no earlier table, trigger, index or CHECK changed.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1750,3 +1755,48 @@ CREATE TRIGGER provenance_roles_no_update BEFORE UPDATE ON provenance_roles
 BEGIN SELECT RAISE(ABORT, 'provenance_roles is append-only history'); END;
 CREATE TRIGGER provenance_roles_no_delete BEFORE DELETE ON provenance_roles
 BEGIN SELECT RAISE(ABORT, 'provenance_roles is append-only history'); END;
+
+-- ---------------------------------------------------------------------------------------------
+-- 18. PROVENANCE ASSERTIONS (v1.13, 2026-11-01, migration `v9_provenance_assertions`). Exactly the
+--     C2 table of docs/design/provenance_retroactive_2026_10_26.md §v14 — nothing else of v14.
+--     Every value a MACHINE observes (state 'inferred', by 'machine:<approach id>@r<revision>') and
+--     every value Rick DECIDES (confirmed / corrected / rejected), per (subject, field). For
+--     subject_kind 'content', subject_id is the 64-hex digest exactly as content.digest holds it
+--     (no 'sha256:' prefix). confidence is required on an inferred row and is the model's own
+--     selfConfidence clamped to [0,1]: kept for the Judge, never shown (events_design rule 9).
+--     The literal 'rick' in the by CHECK means the catalog's owning (admin) user, not a person's
+--     name; generalising it is a later additive migration (DECISIONS 2026-11-01, BACKLOG).
+--     The veto: an inferred value whose latest human decision on the same (subject, field, value)
+--     is 'rejected' is IGNORED (not ABORTed, so a batch survives); the writer reads changes() = 0
+--     and records "vetoed". APPEND-ONLY: UPDATE and DELETE are refused. Step 1's only writer is the
+--     app's JournalApplier (era.yearRange, era.fused, ocr.date — observations, never shown as a
+--     date, DECISIONS 2026-11-01).
+--     The migration then runs: UPDATE catalog_state SET schema_version = 14; PRAGMA user_version = 14.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE provenance_assertions (       -- v1.13: every value a machine observes or Rick decides, per field, append-only
+  seq           INTEGER PRIMARY KEY,
+  subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('content','carrier','captureEvent','captureSetup','excerpt')),
+  subject_id    TEXT NOT NULL,                  -- digest hex (as content.digest), or the entity's UUID
+  field         TEXT NOT NULL,                  -- 'era.yearRange','era.fused','ocr.date','role','carrier','tapeYear',…
+  value         TEXT NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('inferred','confirmed','corrected','rejected')),
+  by            TEXT NOT NULL CHECK (by = 'rick' OR by GLOB 'machine:*'),  -- 'rick' = the catalog's owning (admin) user, not a name; else 'machine:<approach id>@r<revision>'
+  at            INTEGER NOT NULL,
+  confidence    REAL CHECK (confidence BETWEEN 0 AND 1),
+  evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+  CHECK ((state = 'inferred') = (by GLOB 'machine:*')),            -- only the machine infers; only Rick decides
+  CHECK (state <> 'inferred' OR confidence IS NOT NULL)
+) STRICT;
+CREATE INDEX provenance_assertions_by_subject
+  ON provenance_assertions(subject_kind, subject_id, field, value, seq);
+CREATE TRIGGER provenance_assertions_veto BEFORE INSERT ON provenance_assertions
+WHEN NEW.state = 'inferred' AND (
+  SELECT state FROM provenance_assertions
+   WHERE subject_kind = NEW.subject_kind AND subject_id = NEW.subject_id
+     AND field = NEW.field AND value = NEW.value AND state <> 'inferred'
+   ORDER BY seq DESC LIMIT 1) = 'rejected'
+BEGIN SELECT RAISE(IGNORE); END;
+CREATE TRIGGER provenance_assertions_no_update BEFORE UPDATE ON provenance_assertions
+BEGIN SELECT RAISE(ABORT, 'provenance_assertions is append-only'); END;
+CREATE TRIGGER provenance_assertions_no_delete BEFORE DELETE ON provenance_assertions
+BEGIN SELECT RAISE(ABORT, 'provenance_assertions is append-only'); END;

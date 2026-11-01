@@ -248,7 +248,7 @@ struct CatalogProvenanceRolesTests {
 
     // MARK: - Migration from a schema-12 database
 
-    @Test func aSchemaTwelveDatabaseOpensAsThirteenWithEveryContentRowIntact() async throws {
+    @Test func aSchemaTwelveDatabaseOpensAtTheCurrentVersionWithEveryContentRowIntact() async throws {
         let fixture = StoreFixture(kind: .grdb, directory: try StoreFixture.temporaryDirectory())
         defer { fixture.remove() }
         var v111 = DatabaseMigrator()
@@ -296,8 +296,8 @@ struct CatalogProvenanceRolesTests {
              try Int.fetchOne(db, sql: "PRAGMA user_version"),
              try Int.fetchOne(db, sql: "SELECT count(*) FROM content"))
         }
-        #expect(after.0 == 13)
-        #expect(after.1 == 13)
+        #expect(after.0 == GRDBCatalogRepository.currentSchemaVersion)   // 13, then v9_provenance_assertions → 14
+        #expect(after.1 == GRDBCatalogRepository.currentSchemaVersion)
         #expect(after.2 == 3)
     }
 

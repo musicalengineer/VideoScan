@@ -457,15 +457,23 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // Provenance assertions (v1.13, Rick approved 2026-11-01): additive —
+        // `provenance_assertions` with the veto trigger, version 14.
+        migrator.registerMigration(CatalogProvenanceAssertionsSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
+            for statement in CatalogProvenanceAssertionsSchema.statements + CatalogProvenanceAssertionsSchema.versionBump {
+                try db.execute(sql: statement)
+            }
+        }
         return migrator
     }
 
     /// The `catalog_state.schema_version` a fully migrated database carries
     /// (v1 creates 7; `v3_live_writes` raises it to 8; `v4_pending_rows` to
     /// 9; `v5_b22_commit` to 10; `v6_folder_kind` to 11; `v7_decision_tables`
-    /// to 12; `v8_provenance_roles` to 13). A HIGHER number is a newer
-    /// build's file and is refused at open.
-    static let currentSchemaVersion = CatalogProvenanceRolesSchema.schemaVersion
+    /// to 12; `v8_provenance_roles` to 13; `v9_provenance_assertions` to
+    /// 14). A HIGHER number is a newer build's file and is refused at open.
+    static let currentSchemaVersion = CatalogProvenanceAssertionsSchema.schemaVersion
 
     // MARK: - High-water at open (DDL §11)
 
@@ -1311,11 +1319,14 @@ extension GRDBCatalogRepository {
         }
     }
 
-    private static func checkSchemaVersion(_ db: Database) throws {
+    /// `understands` is this build's version; a test passes an OLDER
+    /// build's number (13) to prove the gate that build ran refuses a v14
+    /// file in words (the gate's code is unchanged since v1.7).
+    static func checkSchemaVersion(_ db: Database, understands: Int = currentSchemaVersion) throws {
         guard try db.tableExists("catalog_state") else { return }
         let found = try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state WHERE singleton = 1")
-        if let found, found > currentSchemaVersion {
-            throw Refusal(reason: "schema version \(found) is newer than this build understands (\(currentSchemaVersion)) — open it with a newer VideoScan")
+        if let found, found > understands {
+            throw Refusal(reason: "schema version \(found) is newer than this build understands (\(understands)) — open it with a newer VideoScan")
         }
     }
 
