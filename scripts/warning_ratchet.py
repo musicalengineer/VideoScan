@@ -3,7 +3,7 @@
 
 Why: on 2026-10-25 a clean Debug build of main carried 454 distinct compiler
 warnings in the repo's own files, 299 of them strict-concurrency findings that
-Swift 6 language mode turns into errors (docs/design/swift6_migration_2026_10_25.md).
+Swift 6 language mode turns into errors (docs/archive/design/swift6_migration_2026_10_25.md).
 At that volume a new warning is invisible, so the pile grows. This ratchet is
 the floor under the migration: every build is compared, per file AND per
 category, with a committed baseline; a (file, category) whose count rose is
@@ -268,7 +268,7 @@ def progress(baseline: Path = BASELINE, markdown: bool = False) -> str:
             "- By category: " + ", ".join(f"{c} {n}" for c, n in by_cat.most_common()),
             f"- Files with warnings: {len(by_file)}",
             "- Heaviest files: " + ", ".join(f"`{p}` ({n})" for p, n in by_file.most_common(8)),
-            "- Plan and stages: `docs/design/swift6_migration_2026_10_25.md`"]
+            "- Plan and stages: `docs/archive/design/swift6_migration_2026_10_25.md`"]
     return "\n".join(body)
 
 

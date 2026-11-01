@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Nightly adversarial review of the day's merges to local main (2026-10-01).
 
-Design: docs/design/nightly_adversarial_review_design_2026-10-01.md
+Design: docs/guides/testing.md
 Installed in SHADOW MODE: a review doc, a ledger row and a
 morning-brief line only — no issues filed, no codex, no commits.
 

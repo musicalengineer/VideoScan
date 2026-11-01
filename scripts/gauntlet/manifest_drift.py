@@ -33,7 +33,7 @@ SKIP_DIRS = {'.build', '__pycache__', 'fixtures', 'venv', 'node_modules',
 _COMMENT_LINE = re.compile(r'(?m)^\s*//.*$')
 _SWIFT_TEST = re.compile(r'@Test\b[\s\S]*?\bfunc\s+[A-Za-z_][A-Za-z_0-9]*\s*\(')
 _XCTEST = re.compile(r'\bfunc\s+test[A-Za-z_0-9]*\s*\(')
-HOW = ('assign it a stage in scripts/gauntlet/manifest.json (docs/guides/gauntlet.md), then run '
+HOW = ('assign it a stage in scripts/gauntlet/manifest.json (docs/guides/testing.md), then run '
        'swift scripts/gauntlet/inventory.swift --validate . scripts/gauntlet/manifest.json')
 
 

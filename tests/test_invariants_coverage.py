@@ -27,7 +27,7 @@ import invariants  # noqa: E402
 APP = "VideoScan/VideoScan"
 CORE = "VideoScan/VideoScanCore/Sources/VideoScanCore"
 
-# docs/guides/source_layout.md, "Data-risk code", plus the CyberBrain writer.
+# docs/guides/developer.md, "Data-risk code", plus the CyberBrain writer.
 DATA_RISK_FOLDERS = [
     f"{APP}/Archive",
     f"{APP}/MediaOps",

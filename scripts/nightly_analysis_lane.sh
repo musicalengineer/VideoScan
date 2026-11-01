@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # nightly_analysis_lane.sh — the nightly Swift 6 static-analysis lane (the
-# "Coverity analogue"; docs/design/swift6_migration_2026_10_25.md §7, GH #376).
+# "Coverity analogue"; docs/archive/design/swift6_migration_2026_10_25.md §7, GH #376).
 #
 # Runs on the fleet in the away window after the 02:00 test nightly, never on
 # Rick's machine while he works. It VERIFIES and REPORTS; it never commits to

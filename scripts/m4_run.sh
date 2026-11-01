@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # m4_run.sh — run the UI test plans and/or the deep gauntlet on a test host,
-# on demand, in that host's GUI session (docs/design/m4_staging_gate_2026_10_28.md).
+# on demand, in that host's GUI session (docs/guides/operations.md).
 #
 #   scripts/m4_run.sh ui     [--host m4|ultra] [--ref <rev>] [--only <UITestClass>[,…]] [--wait] [--dry-run]
 #   scripts/m4_run.sh deep   [--host m4|ultra] [--ref <rev>] [--wait] [--dry-run]

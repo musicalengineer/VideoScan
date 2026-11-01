@@ -33,7 +33,7 @@ One file per approved design; retired to `archive/` when built or dropped. The o
 | [`check_media_and_menu_cleanup_2026_10_07.md`](design/check_media_and_menu_cleanup_2026_10_07.md), [`audit_archive_2026_10_15.md`](design/audit_archive_2026_10_15.md) | Check Media (built) and Audit Archive (proposed). |
 | [`analyze_knowledge_and_storage_actions_2026-10-02.md`](design/analyze_knowledge_and_storage_actions_2026-10-02.md), [`tab_charters.md`](design/tab_charters.md) | The workflow redesign of Analyze / Knowledge / Storage actions, and the one question each tab answers. |
 | [`cyberbrain_design.md`](design/cyberbrain_design.md), [`kinship_inference_design.md`](design/kinship_inference_design.md) | Family knowledge: CyberBrain (testimony, attestations) and kinship inference across the tree and the People tab. |
-| [`swift6_migration_2026_10_25.md`](design/swift6_migration_2026_10_25.md), [`vsm_split_plan_2026_10_19.md`](design/vsm_split_plan_2026_10_19.md), [`m4_staging_gate_2026_10_28.md`](design/m4_staging_gate_2026_10_28.md), [`nightly_adversarial_review_design_2026-10-01.md`](design/nightly_adversarial_review_design_2026-10-01.md) | Engineering: the Swift 6 migration (done), the `VideoScanModel` split (#337, waiting on Rick), the M4 testbed, the nightly adversarial review. |
+| [`swift6_migration_2026_10_25.md`](archive/design/swift6_migration_2026_10_25.md), [`vsm_split_plan_2026_10_19.md`](design/vsm_split_plan_2026_10_19.md), [`m4_staging_gate_2026_10_28.md`](guides/operations.md), [`nightly_adversarial_review_design_2026-10-01.md`](guides/testing.md) | Engineering: the Swift 6 migration (done), the `VideoScanModel` split (#337, waiting on Rick), the M4 testbed, the nightly adversarial review. |
 | [`October_Design_Retrospective.md`](design/October_Design_Retrospective.md) | The long form of `ARCHITECTURE.md`, as built in October, with Rick's open design questions. |
 
 ## Guides (`guides/`)
@@ -42,9 +42,9 @@ Correct, read on demand; a guide exists where a reader would otherwise have to r
 
 | File | One line |
 |---|---|
-| [`source_layout.md`](guides/source_layout.md) | Where the app source lives, folder by folder. |
-| [`testing.md`](guides/testing.md), [`gauntlet.md`](guides/gauntlet.md) | The five test categories; the Release gauntlet and how to run it in an away window. |
-| [`media-archive.md`](guides/media-archive.md), [`archive_angel_policy.md`](guides/archive_angel_policy.md), [`provenance_roles.md`](guides/provenance_roles.md) | The Master Archive: preservation, promotion, cleanup; the Archive Angel's rule set (data, not code); what each file's role means in Rick's words. |
+| [`source_layout.md`](guides/developer.md) | Where the app source lives, folder by folder. |
+| [`testing.md`](guides/testing.md), [`gauntlet.md`](guides/testing.md) | The five test categories; the Release gauntlet and how to run it in an away window. |
+| [`media-archive.md`](guides/media-archive.md), [`archive_angel_policy.md`](guides/media-archive.md), [`provenance_roles.md`](guides/provenance_roles.md) | The Master Archive: preservation, promotion, cleanup; the Archive Angel's rule set (data, not code); what each file's role means in Rick's words. |
 | [`date_inference_catchup_and_propagation.md`](guides/date_inference_catchup_and_propagation.md), [`notes_authorship.md`](guides/notes_authorship.md) | Inferred dates (catch-up, propagation, folder-year prior); who said what in a note. |
 | [`Avid-Format-Reverse-Engineering.md`](guides/Avid-Format-Reverse-Engineering.md), [`drive_health.md`](guides/drive_health.md) | The native Avid bin/media parsers; SMART data per scan target. |
 | [`gedcom.md`](guides/gedcom.md) | GEDCOM export and import: the family tree is the fact store. |
@@ -53,7 +53,7 @@ Correct, read on demand; a guide exists where a reader would otherwise have to r
 
 ## Practices (`practices/`)
 
-[`swift_playbook.md`](practices/swift_playbook.md) (patterns and in-repo exemplars for the jobs we do again and again) · [`testing_retrospective_2026_07_05.md`](practices/testing_retrospective_2026_07_05.md) (the five dimensions) · [`invariants.md`](practices/invariants.md) (what the nightly adversarial review attacks, one section per area) · [`nightly-metrics-setup.md`](practices/nightly-metrics-setup.md) (what feeds the metrics page, `index.html`).
+[`swift_playbook.md`](practices/swift_playbook.md) (patterns and in-repo exemplars for the jobs we do again and again) · [`testing_retrospective_2026_07_05.md`](guides/testing.md) (the five dimensions) · [`invariants.md`](practices/invariants.md) (what the nightly adversarial review attacks, one section per area) · [`nightly-metrics-setup.md`](guides/testing.md) (what feeds the metrics page, `index.html`).
 
 ## Reviews and evidence (`reviews/`)
 

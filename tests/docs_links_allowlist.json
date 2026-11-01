@@ -205,7 +205,7 @@
   "VideoScan/VideoScanTests/VolumeRoleTests.swift": {
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "docs/design/nightly_adversarial_review_design_2026-10-01.md": {
+  "docs/archive/design/nightly_adversarial_review_design_2026-10-01.md": {
     "docs/reviews/adversarial/declined.jsonl": "Planned generated ledger in the proposed nightly adversarial design; no implementation exists yet."
   },
   "docs/guides/facial-recognition.md": {
@@ -262,6 +262,9 @@
     "docs/runbook_2026_08_18_catalog_cleanup.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
     "docs/video_classification.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/guides/testing.md": {
+    "docs/reviews/adversarial/declined.jsonl": "Planned generated ledger in the proposed nightly adversarial design; no implementation exists yet."
   },
   "scripts/find_donna_scan.py": {
     "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."

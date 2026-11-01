@@ -6,7 +6,7 @@ import PackageDescription
 // Extracted from the app target so the data layer compiles independently,
 // enforces a UI-free boundary, and can be unit-tested in isolation.
 //
-// Swift 6 language mode (Rick 2026-10-25, docs/design/swift6_migration_2026_10_25.md,
+// Swift 6 language mode (Rick 2026-10-25, docs/archive/design/swift6_migration_2026_10_25.md,
 // stage 1): strict concurrency is implicit and its findings are ERRORS, so a
 // data race on tracked state cannot compile. The app target follows once its
 // own diagnostics are at zero (stage 8). Platform floor is intentionally low

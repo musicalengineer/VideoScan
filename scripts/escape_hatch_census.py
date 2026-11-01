@@ -3,7 +3,7 @@
 
 Swift 6 language mode proves the absence of data races on all TRACKED state.
 Each of these constructs steps outside the proof, so the migration policy
-(docs/design/swift6_migration_2026_10_25.md §5) is: every one carries a comment
+(docs/archive/design/swift6_migration_2026_10_25.md §5) is: every one carries a comment
 saying why it is safe, and the nightly counts them. This is the count.
 
   python3 scripts/escape_hatch_census.py                    # the line, nothing persisted

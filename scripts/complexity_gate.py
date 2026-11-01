@@ -45,7 +45,7 @@ Existing offenders that do not get worse pass, so their files can still be
 edited. The fix for a RATCHET block is to split along a real concept (an
 enum, a value type, a focused protocol, a pure function), never to chunk the
 function into step1/step2 helpers: see "Splitting a function" in
-docs/practices/nightly-metrics-setup.md.
+docs/guides/testing.md.
 
 Function identity is the same `file::Type.function` key the nightly uses.
 A function that is not on the baseline under its key is first matched against
@@ -122,7 +122,7 @@ HOW_TO_FIX = ("Split it: pull branches or steps out into named helpers. If it tr
               "as is: COMPLEXITY_OVERRIDE=\"<reason>\" git commit ... (recorded and reported nightly).")
 RATCHET_HINT = ("CCN is a signal, not the goal. Split along a real concept (an enum, value type, focused "
                 "protocol, pure function), never step1/step2 helpers. See \"Splitting a function\" in "
-                "docs/practices/nightly-metrics-setup.md.")
+                "docs/guides/testing.md.")
 
 
 over_gate = cm.over_gate

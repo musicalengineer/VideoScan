@@ -41,7 +41,7 @@ Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Ever
 ## 4. Testing
 
 - **Five categories** (`docs/guides/testing.md`): unit · regression sensor · integration (gauntlet) · performance · stress.
-- **Five dimensions per change** (`docs/practices/testing_retrospective_2026_07_05.md`): logic · scale (100k synthetic rows, explicit budget) · media matrix (mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv) · isolation (poisoned state; never real prefs/paths) · a production-scale sensor.
+- **Five dimensions per change** (`docs/guides/testing.md`): logic · scale (100k synthetic rows, explicit budget) · media matrix (mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv) · isolation (poisoned state; never real prefs/paths) · a production-scale sensor.
 - **Red first, always.** Fix → test → revert fix → see red → restore → commit both. A test that never failed is theater. Reviewers deliver reproducible findings as the red test, not prose.
 - **Severe bugs** also get a production-shape test on a `.backup` copy of the live catalog and a selector in the gauntlet regression stage (`scripts/gauntlet/manifest.json`), never `blocked`.
 - **Lanes:** `run_sensors.sh` (pre-merge, ~70 s) → `run_catalog_tests.sh` (catalog work) → full Debug suite on the fleet → Release gauntlet in the away window → 02:00 nightly (metrics, complexity gate, adversarial review). GitHub CI is lint/static/metrics only; Apple-silicon hardware is the authority for test results.

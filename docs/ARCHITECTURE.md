@@ -81,7 +81,7 @@ Invariant files the nightly adversarial review attacks: `docs/practices/invarian
 
 ## 7. Source layout
 
-`VideoScan/VideoScan/<Feature>/` (file-system-synchronized Xcode group; drop a file beside its neighbours; file names unique across the tree because source sensors look files up by name). Pure logic in `VideoScan/VideoScanCore/Sources/` (SwiftPM; best-tested code: store/commit/import, GEDCOM graph, PrunePlan, Cleanup). Tests: `VideoScanTests/` (~1,000 files), `VideoScanCore/Tests/`, `VideoScanUITests/Gauntlet/`, `tests/` (Python). Scripts: `scripts/` (sensor lane, catalog tests, gauntlet, nightly, dev bring-up), `tools/` (codex_review, adversarial nightly, metrics). Folder-by-folder detail: `docs/guides/source_layout.md`.
+`VideoScan/VideoScan/<Feature>/` (file-system-synchronized Xcode group; drop a file beside its neighbours; file names unique across the tree because source sensors look files up by name). Pure logic in `VideoScan/VideoScanCore/Sources/` (SwiftPM; best-tested code: store/commit/import, GEDCOM graph, PrunePlan, Cleanup). Tests: `VideoScanTests/` (~1,000 files), `VideoScanCore/Tests/`, `VideoScanUITests/Gauntlet/`, `tests/` (Python). Scripts: `scripts/` (sensor lane, catalog tests, gauntlet, nightly, dev bring-up), `tools/` (codex_review, adversarial nightly, metrics). Folder-by-folder detail: `docs/guides/developer.md`.
 
 Size (non-test Swift, 2026-10-18): app 348K + Core 65K = 413K; Hallie 74K, Shared/MediaOps/Media/App 99K, Catalog 69K, Family Tree 55K, Triage 37K, People 35K, Archive 25K, Storage 19K. Tests ≈ 14,000.
 
@@ -93,4 +93,4 @@ Size (non-test Swift, 2026-10-18): app 348K + Core 65K = 413K; Hallie 74K, Share
 5. Concurrency escape hatches (`@unchecked Sendable`, `Task.detached`, `nonisolated(unsafe)`) where the model forced them (`docs/practices/swift_playbook.md`).
 
 ## 9. Further reading
-`docs/project_goals.md` · `docs/DESIGN.md` (contracts) · `docs/design/tab_charters.md` · `docs/guides/source_layout.md` · `docs/design/integrity_first_2026_10_16.md` · `docs/design/catalog_cutover_f_prime_2026_10_17.md` · `docs/design/one_removal_marker_and_trash_engine.md` · `docs/design/cleanup_kiss_2026_10_12.md` · `docs/guides/media-archive.md` · `docs/guides/testing.md` · `docs/guides/gauntlet.md` · `docs/practices/swift_playbook.md` · `docs/design/October_Design_Retrospective.md` (the long form of this document, with Rick's open questions in its §5).
+`docs/project_goals.md` · `docs/DESIGN.md` (contracts) · `docs/design/tab_charters.md` · `docs/guides/developer.md` · `docs/design/integrity_first_2026_10_16.md` · `docs/design/catalog_cutover_f_prime_2026_10_17.md` · `docs/design/one_removal_marker_and_trash_engine.md` · `docs/design/cleanup_kiss_2026_10_12.md` · `docs/guides/media-archive.md` · `docs/guides/testing.md` · `docs/guides/testing.md` · `docs/practices/swift_playbook.md` · `docs/design/October_Design_Retrospective.md` (the long form of this document, with Rick's open questions in its §5).

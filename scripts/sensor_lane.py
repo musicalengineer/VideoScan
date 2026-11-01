@@ -557,7 +557,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  core (swift test --filter):      {p} passed, {f} failed, rc={rc}, {el:.0f}s", flush=True)
         if f or rc != 0 or p == 0:
             red += [f"VideoScanCoreTests: {n}" for n in names] or [f"VideoScanCoreTests: rc={rc}, {p} passed — see {log_dir}/sensor-lane-core.log"]
-    # Warning ratchet (Swift 6 stage 0, docs/design/swift6_migration_2026_10_25.md):
+    # Warning ratchet (Swift 6 stage 0, docs/archive/design/swift6_migration_2026_10_25.md):
     # no (file, category) may carry more compiler warnings than
     # scripts/warnings_baseline.tsv records. Per file, so this lane's incremental
     # build is enough; only a clean build rewrites the baseline

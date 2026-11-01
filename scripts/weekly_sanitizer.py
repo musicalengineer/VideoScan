@@ -13,7 +13,7 @@ Two launchd jobs (scripts/install_sanitizer_weekly.sh) call this:
                                          share a build with ASan)
 
 The Swift 6 nightly analysis lane (scripts/nightly_analysis_lane.sh, stage 2
-of docs/design/swift6_migration_2026_10_25.md §7) calls the same runner with
+of docs/archive/design/swift6_migration_2026_10_25.md §7) calls the same runner with
 `--configuration Release --target all` (Release where the nightly is Release;
 Core + app) and reads the row it writes; `--subset catalog` is the time-boxed
 subset (all of VideoScanCore — the catalog store lives there — plus the app

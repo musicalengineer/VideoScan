@@ -65,7 +65,7 @@ Claude Code and Rick read this as the starting point; it is not yet built.*
 | Tool-transport benchmark discipline (run record: model tag + digest, prompt hash, git SHA, seed, corpus hash) | `tools/qwen-bench/` | the template for §4's harness |
 | Catalog tables for derived text: `captions (scene/ocrDate/ocrText)`, `caption_runs`, `transcripts`, `dossiers`, `inferred_dates`; bound-vs-`derived_unverified` discipline | `docs/design/catalog_sqlite_schema_v1.sql` | live; triggers refuse silent replacement |
 | Provenance assertion table with the rejected-value veto | `provenance_retroactive_2026_10_26.md` §v14 | designed, not built (schema v14 needs Rick) |
-| Python venvs: `venv-mlx/` (mlx-vlm, mlx-whisper, Python 3.12), separate from `venv/` | `scripts/requirements-mlx.txt`, `docs/guides/ops/python_paths.md` | live on all fleet nodes |
+| Python venvs: `venv-mlx/` (mlx-vlm, mlx-whisper, Python 3.12), separate from `venv/` | `scripts/requirements-mlx.txt`, `docs/guides/developer.md` | live on all fleet nodes |
 
 ## 3. The design
 
