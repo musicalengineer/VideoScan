@@ -30536,6 +30536,24 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_docs_shape.py",
+      "stage": "unit",
+      "suites": [
+        "test_docs_shape.py"
+      ],
+      "tests": [
+        "test_a_design_doc_without_status_or_with_it_too_late_is_reported",
+        "test_archive_index_names_every_archived_file",
+        "test_every_design_doc_carries_a_status_line",
+        "test_live_docs_stay_under_the_ceiling",
+        "test_the_archive_index_must_name_each_file_but_not_itself_or_ignored_ones",
+        "test_the_ceiling_counts_live_markdown_only_and_names_every_file",
+        "test_the_guards_scale_to_ten_thousand_archived_files"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_dv_datecode.py",
       "stage": "integration",
       "suites": [
@@ -34888,6 +34906,10 @@
         },
         {
           "name": "tests/test_docs_links.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_docs_shape.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

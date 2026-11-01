@@ -126,3 +126,12 @@ Three kinds of retirement live here. Nothing is ever deleted; git has every revi
 | `design/tab_charters.md` | `docs/design/tab_charters.md` | Tab charters: the one question each tab answers (agreed 2026-10-11). | Carried into `docs/ARCHITECTURE.md` §2 (the two rules) and §3 (one question per tab). |
 | `DESIGN.md` | `docs/DESIGN.md` | The design contracts each module keeps, one page (rewritten in place). | Whole text in `docs/ARCHITECTURE.md` §10 "Contracts", sections 10.1–10.8 in the same order; the safety rules of the old ARCHITECTURE §5 joined it as §10.0. |
 | `project_goals.md` | `docs/project_goals.md` | Rick's seven ranked goals (2026-10-07) and Hallie's purpose. | The goals, verbatim, in `docs/ARCHITECTURE.md` §1; Hallie's purpose, verbatim, in `docs/design/hallie.md` §1. |
+
+**Renamed in place (still live, not archived):**
+
+- `docs/guides/source_layout.md` → `docs/guides/developer.md` — Renamed to `docs/guides/developer.md` and extended (Python paths, lldb, the complexity counter, Swift 6 summary); the rename commit more than doubled it, so follow its history with `git log --follow -M30% -- docs/guides/developer.md`.
+- `docs/design/background_service_2026_10_30.md` → `docs/design/background_service.md` — Renamed to `docs/design/background_service.md`; status line added.
+- `docs/design/video_llm_lab_2026_10_30.md` → `docs/design/machine_intelligence.md` — Renamed to `docs/design/machine_intelligence.md`; the model list appended as Part II.
+- `docs/design/provenance_retroactive_2026_10_26.md` → `docs/design/provenance.md` — Renamed to `docs/design/provenance.md`; the 10/22 lightweight design appended as Part II.
+- `docs/design/cleanup_proposal_2026_10_31.md` → `docs/design/cleanup_and_operations.md` — Renamed to `docs/design/cleanup_and_operations.md`, Part I; the other operations proposals follow it.
+- `docs/guides/hallie.md` → `docs/design/hallie.md` — Moved to `docs/design/hallie.md` (Hallie's one subsystem doc); her purpose and the benchmarks joined it.
