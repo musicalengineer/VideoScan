@@ -243,8 +243,8 @@
    "nloc": 149
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.computeFiltered": {
-   "ccn": 26,
-   "nloc": 89
+   "ccn": 18,
+   "nloc": 72
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.previewPlayer": {
    "ccn": 31,
