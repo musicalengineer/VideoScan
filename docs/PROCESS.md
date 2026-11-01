@@ -78,3 +78,12 @@ Rick's machine (the M5 Ultra from 2026-10-28; the M4 Studio until then) is inter
 - `docs/design/<topic>.md`: one per approved design; retired to `docs/archive/` when built or dropped. `docs/research/`: one per study.
 - Everything transient (briefs, morning notes, handoffs, review transcripts, cloud routine prompts) lives in `.scratch/` and is not committed. If a doc is wanted a week later, it belongs in the living set.
 - Memory (`~/.claude/projects/…/memory/`) holds nothing a session needs to be correct. Rules → this file. State → `STATUS.md`. Rulings → `DECISIONS.md`.
+
+IMPORTANT NOTE: Rick has a lot of ideas, many discussions with Claude, sometimes Codex, possible users, plus all the other normal dev process, of bug fixing, etc., so we tend to accumulate
+a lot of docs and other memories so we periodically must prune and delete outdated, superseded, defunct ideas, experiments, etc. Since git stores everything, we should try to keep
+our dev and doc files cleaned up, pruned, and only relevant files kept. Software entropy and doc entropy can generate a lot of extra cruft that we don't need, so to combat this we will:
+1. Periodically review the docs dir, say once a week, maybe Monday mornings and remove docs we're not using anymore. Like I said we have git.
+2. If Rick says the same thing three times in different words, most likely we already have it written down, so don't write it down again.
+3. KISS principle on docs, consolidate similar ideas into one larger doc with the same theme rather than having 4-5 docs discussing slightly different themes.
+4. We try to keep the doc count to a reasonable number, imagine you're a new experienced engineer who has to wade through all these, have mercy, KISS.
+5. PDF Visuals, PPT, or other visual aids are helpful to Rick, as a human, he needs pictures sometimes and reading 25 MD files when a few pictures might help is appreciated.
