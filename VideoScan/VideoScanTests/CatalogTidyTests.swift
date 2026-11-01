@@ -97,6 +97,20 @@ struct CatalogTidyTests {
         #expect(rows[2].detail.contains("no cleanup action yet"))
     }
 
+    @Test("LOGIC: the menu counts only rows with a Run — junk captions alone hide Tidy; one non-video row shows (1)")
+    func menuCountsOnlyRowsWithARun() {
+        let junkOnly = CatalogTidyCounts(degenerateOCRCaptions: 2_850)
+        #expect(junkOnly.menuTotal == 0)
+        #expect(!CatalogMenuLayout.entries(tidyTotal: junkOnly.menuTotal).contains { if case .tidyCatalog = $0 { return true }; return false },
+                "a count-only row never keeps the item on the menu")
+        #expect(CatalogTidyRow.rows(junkOnly).first { $0.kind == .degenerateOCRCaptions }?.number == 2_850, "…but the sheet still shows it")
+        let one = CatalogTidyCounts(nonVideoRows: 1, degenerateOCRCaptions: 2_850)
+        #expect(one.menuTotal == 1)
+        #expect(CatalogMenuLayout.titles(CatalogMenuLayout.entries(tidyTotal: one.menuTotal), statusTitle: "S")[3] == "Tidy Catalog… (1)")
+        let menu = (try? SourceTree.strippingComments(SourceTree.appSource(named: "CatalogMenu.swift"))) ?? ""
+        #expect(menu.contains("private var tidyTotal: Int { coverage.report.tidy.menuTotal }"))
+    }
+
     @Test("TRUTH + ISOLATION: each count equals what its engine acts on, on the same records (removed, digest-less, extensionless rows included)")
     func countsMatchTheEngines() {
         let (records, g1, g3) = TidyFixture.catalog()
@@ -178,7 +192,7 @@ struct CatalogTidySensorTests {
         #expect(pass.contains("let tidy = CatalogTidyCalculator.project(records)"))
         #expect(pass.contains("report.tidy = CatalogTidyCalculator.counts(tidy, degenerateOCRCaptions: report.degenerateOCRDates)"))
         let menu = try Self.code("CatalogMenu.swift")
-        #expect(menu.contains("private var tidyTotal: Int { coverage.report.tidy.total }"))
+        #expect(menu.contains("private var tidyTotal: Int { coverage.report.tidy.menuTotal }"))
         #expect(menu.contains("CatalogTidySheet(model: model, center: center)"))
     }
 }

@@ -13,8 +13,9 @@
 //                                 engine exists yet, so the row says so
 //                                 and has no Run
 //
-// The menu item reads "Tidy Catalog… (N)" with N = the sum, and is not
-// there when every count is 0 (CatalogMenuLayout).
+// The menu item reads "Tidy Catalog… (N)" with N = the sum of the rows that
+// have a Run, and is not there when that sum is 0 (CatalogMenuLayout); a
+// count-only row is still listed in the sheet.
 //
 // COUNTS. Computed in the coverage pass the Catalog Status snapshot already
 // rides (VideoScanModel+AnalyzeCoverage): `project` on the main actor (one
@@ -51,6 +52,12 @@ struct CatalogTidyCounts: Sendable, Equatable {
     var degenerateOCRCaptions = 0
 
     var total: Int { nonVideoRows + duplicateGroupsToSplit + degenerateOCRCaptions }
+    /// The menu's "(N)" and its hidden-at-zero rule: only rows that have a
+    /// Run (coordinator 2026-11-01). A count-only row — #402's junk
+    /// captions, no engine yet — is shown in the sheet but never keeps the
+    /// item on the menu. Derived from the rows, so a row that gains an
+    /// engine (a runTitle) joins the total by itself.
+    var menuTotal: Int { CatalogTidyRow.rows(self).filter { $0.runTitle != nil }.reduce(0) { $0 + $1.number } }
 }
 
 /// One live grouped row, as the split count needs it.

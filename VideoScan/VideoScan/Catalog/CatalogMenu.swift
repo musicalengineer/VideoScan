@@ -214,7 +214,7 @@ struct CatalogMenuContent: View {
     let isReadOnly: Bool
 
     /// The Tidy sheet's live total (0 = the row is not shown).
-    private var tidyTotal: Int { coverage.report.tidy.total }
+    private var tidyTotal: Int { coverage.report.tidy.menuTotal }
 
     @Environment(\.openWindow) private var openWindow
 
