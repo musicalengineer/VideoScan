@@ -32566,6 +32566,26 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalyzerRunsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AnalyzerRunsLogicTests",
+        "AnalyzerRunsFollowUpTests",
+        "AnalyzerRunsSensorTests"
+      ],
+      "tests": [
+        "driveAwayNeverSplits",
+        "howLongWords",
+        "oneHundredPercentRule",
+        "oneHundredPercentSplitsOnce",
+        "poisonedAndEmptyRates",
+        "rowWordsOnlyForTheThreeAndOnlyWhenIdle",
+        "theRowsAndTheEngines",
+        "theSplitIsTheOneEngine"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogMenuTests.swift",
       "stage": "unit",
       "suites": [
@@ -35287,7 +35307,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3136,
+      "expected_floor": 3144,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35362,6 +35382,9 @@
         "VideoScanTests/AmbiguousAnchorNoteConcurrencyTests",
         "VideoScanTests/AnalyzeReclaimableLogicTests",
         "VideoScanTests/AnalyzeReclaimableScaleTests",
+        "VideoScanTests/AnalyzerRunsFollowUpTests",
+        "VideoScanTests/AnalyzerRunsLogicTests",
+        "VideoScanTests/AnalyzerRunsSensorTests",
         "VideoScanTests/AppSupportSideStoreInventoryTests",
         "VideoScanTests/ArcFaceAlignmentTests",
         "VideoScanTests/ArchiveAngelAudioOutcomeTests",

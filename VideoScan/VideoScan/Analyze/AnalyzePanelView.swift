@@ -203,7 +203,18 @@ struct AnalyzePanelView: View {
         return AnalyzeRowFacts(cycler: cycler, state: state, coverageLine: words.line, sideLine: words.side,
                                note: words.note, schedule: schedule, isPaused: liveRule.isPaused,
                                isRunning: liveRule.isRunning, volumes: volumeLines(cycler),
-                               freshnessColour: verdict?.colour, freshnessWords: verdict?.words ?? "")
+                               freshnessColour: verdict?.colour, freshnessWords: verdict?.words ?? "",
+                               sentence: AnalyzerRunWords.sentence(cycler) ?? "",
+                               howLong: Self.howLongWords(cycler, remaining: counts.remaining,
+                                                          rate: live.rates[cycler], isRunning: liveRule.isRunning))
+    }
+
+    /// The three analyzers that left the Catalog menu (Rick 2026-11-01) say
+    /// how long a run would take; while one runs its progress line (the
+    /// MFO job's own words) already says it, so this stays quiet.
+    static func howLongWords(_ cycler: AnalyzeCycler, remaining: Int, rate: AnalyzerRunRate?, isRunning: Bool) -> String {
+        guard AnalyzerRunRates.analyzers.contains(cycler), !isRunning else { return "" }
+        return AnalyzerRunWords.howLong(remaining: remaining, rate: rate)
     }
 
     /// The counts a row renders. File Presence has no per-record stamp:
@@ -422,6 +433,8 @@ struct AnalyzePanelView: View {
         s.dossierIndex = orchestrator.liveCurrentIndex
         s.dossierTotal = orchestrator.liveTotal
         for c in AnalyzeCycler.allCases { s.schedules[c] = AnalyzeSchedule.stored(for: c) }
+        // Three small defaults keys: the analyzers' last measured pace.
+        s.rates = AnalyzerRunRates.readAll()
         // O(targets), not O(records): the per-volume disclosure's rows.
         s.volumes = CatalogScanTarget.excludingScratch(model.scanTargets)
             .filter { !$0.isRetired && !$0.searchPath.isEmpty }
@@ -457,6 +470,8 @@ struct AnalyzeLiveSample: Equatable {
     var dossierTotal = 0
     var schedules: [AnalyzeCycler: AnalyzeSchedule] = [:]
     var volumes: [Volume] = []
+    /// The last run's pace of the three analyzers (AnalyzerRunRates).
+    var rates: [AnalyzeCycler: AnalyzerRunRate] = [:]
 }
 
 // MARK: - One row's values
@@ -481,6 +496,11 @@ struct AnalyzeRowFacts: Equatable {
     /// The freshness column (Catalog Status §2): nil until judged.
     var freshnessColour: FreshnessColour?
     var freshnessWords: String
+    /// What it does in one sentence (the three analyzers that left the
+    /// Catalog menu, 11/01); "" = the row has none.
+    var sentence: String = ""
+    /// "How long: …" from the last run's pace and the count left; "" = none.
+    var howLong: String = ""
 }
 
 // MARK: - Row view (value-only; Equatable so an unchanged row is skipped)
@@ -553,6 +573,18 @@ struct AnalyzeCyclerRow: View, Equatable {
                                 .foregroundStyle(.secondary)
                         }
                         freshnessColumn
+                    }
+                    if !facts.sentence.isEmpty {
+                        Text(facts.sentence)
+                            .font(.system(size: 12))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("analyze.row.\(cycler.rawValue).sentence")
+                    }
+                    if !facts.howLong.isEmpty {
+                        Text(facts.howLong)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("analyze.row.\(cycler.rawValue).howLong")
                     }
                     if !facts.note.isEmpty {
                         Text(facts.note)

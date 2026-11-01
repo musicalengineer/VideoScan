@@ -962,6 +962,11 @@ final class MediaFileOperationsCenter: ObservableObject {
     private var terminalWatchers: [UUID: AnyCancellable] = [:]
     /// Jobs whose OUTCOME line has been written — the exactly-once guard.
     private var terminalLogged: Set<UUID> = []
+    /// Told exactly once per job, at its terminal transition, right after
+    /// the exactly-once guard (Rick 2026-11-01: AnalyzerRunFollowUp records
+    /// the last run's pace and splits duplicate groups when Full Hashes
+    /// reaches 100 %). Installed once at launch; never removed.
+    var onJobTerminal: [@MainActor (any MediaFileOperationJob) -> Void] = []
     /// Coalesces the change-event flood (progress beats arrive 4–10 Hz
     /// per job) down to one pending state check at a time.
     private var terminalCheckScheduled: Set<UUID> = []
@@ -1225,6 +1230,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         guard !job.state.isActive, !terminalLogged.contains(job.id) else { return }
         terminalLogged.insert(job.id)
         terminalWatchers[job.id] = nil
+        for observer in onJobTerminal { observer(job) }
         // Delete Duplicates writes its own final line ("delete duplicates
         // done: <volume> — deleted N (X) · trashed …", 2026-09-22): one
         // line per run, not two.

@@ -569,6 +569,10 @@ struct VideoScanApp: App {
     /// The Catalog menu's feature store (Rick 2026-11-01 regrouping): which
     /// sheet the menu asked the main window to show. CatalogMenu.swift.
     @StateObject private var catalogMenu = CatalogMenuStore()
+    /// Content Analysis's three analyzers (11/01): the last run's pace, and
+    /// Split Duplicate Groups by Full Hash when Full Hashes reaches 100 %.
+    /// Told by the MFO center at each job's end (AnalyzerRuns.swift).
+    @State private var analyzerFollowUp = AnalyzerRunFollowUp()
     // The two run markers (fullhash-backfill.json, catalog-audit.json) are
     // MODEL-OWNED since 2026-10-16 (`catalogModel.fullHashResumeMarker`,
     // `catalogModel.catalogAuditRunMarker`) so the Catalog menu, the
@@ -671,6 +675,7 @@ struct VideoScanApp: App {
                         // launch line is written by the snapshot itself on its
                         // first computed state (announceAtLaunch).
                         catalogModel.catalogFreshness.observeRunning(in: fileOpsCenter)
+                        analyzerFollowUp.attach(center: fileOpsCenter, model: catalogModel)
                         // … and the dossier engine (Captions / OCR /
                         // Transcribe), so a running pass is "running" here
                         // too (codex cycle #80). The model's own engine

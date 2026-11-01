@@ -111,7 +111,11 @@ struct AnalyzeRunner {
 
         case .embeddedDates:
             Task { [model] in
+                let began = Date()
                 let r = await model.runEmbeddedDateBackfill(pathPrefix: volume)
+                // The last run's pace for the row's "how long" (AnalyzerRuns.swift).
+                AnalyzerRunRates.record(.embeddedDates, files: r.dated + r.noTag + r.failed,
+                                        seconds: Date().timeIntervalSince(began))
                 outcome(cycler, "\(r.dated) dated, \(r.noTag) with no tag, \(r.failed) could not be read")
             }
 
