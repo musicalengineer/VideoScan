@@ -43,7 +43,7 @@
 
 ## Next
 1. UI worker for step 1 item 8 (also: era words into the search index — DECISIONS 2026-11-01 "human words") (after the v14 migration is on the branch); merge after Rick's DDL word and the Codex pass; M4 corpus run; first convergence reading.
-2. `dvrescue` (Rick installing 11/01; Brewfile entry in) → DV datecode per frame over the ten raw `.dv` captures; ExifTool date tabulation over the corpus; pulldown detector.
+2. **DV datecode measured** (`scripts/dv_datecode.py`, merged 11/01): 707 DV contents, **297 carry a recording date in the frames** (raw DV 262 of 348 = 75 %); on 231 the recording is earlier than the file's own date (137 by 14+ years) — the transfer-versus-content number. Next: ExifTool date tabulation over the corpus; pulldown detector; the DV date as a deterministic bound (Phase D) once Rick rules how it ranks against the embedded date.
 3. Prompt r4 (a legible stamp = one year; narrowest range the evidence supports) on clips HELD OUT of the corpus.
 4. #408: repoint the five gauntlet UI flows; turn the runner's UI stage on for the away window.
 5. Cleanup execution after Rick's ruling on the proposal; the "Rick to rule" docs list (BACKLOG).
