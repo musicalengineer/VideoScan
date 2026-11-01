@@ -33,7 +33,7 @@ Each opens with a one-paragraph summary and a `Status: built | in flight | parke
 
 ## Guides (`guides/`)
 
-[`developer.md`](guides/developer.md) (source layout folder by folder, bring-up, Swift 6, Python paths, lldb, the complexity counter) · [`testing.md`](guides/testing.md) (the five categories and five dimensions, the Release gauntlet, test-Mac setup, the nightly adversarial review, the metrics page) · [`operations.md`](guides/operations.md) (the M4 deep-test host, storage layout, the TB5 check) · [`media-archive.md`](guides/media-archive.md) (preservation, promotion, cleanup, and §16 the Archive Angel's rule set) · [`provenance_roles.md`](guides/provenance_roles.md) (what each file's role means, in Rick's words).
+[`developer.md`](guides/developer.md) (source layout folder by folder, bring-up, Swift 6, Python paths, lldb, the complexity counter) · [`testing.md`](guides/testing.md) (the five categories and five dimensions, the Release gauntlet, the runbook — what runs where and how to start it —, the metrics page) · [`operations.md`](guides/operations.md) (the M4 deep-test host, storage layout, the TB5 check) · [`media-archive.md`](guides/media-archive.md) (preservation, promotion, cleanup, and §16 the Archive Angel's rule set) · [`provenance_roles.md`](guides/provenance_roles.md) (what each file's role means, in Rick's words).
 
 ## Practices (`practices/`)
 
