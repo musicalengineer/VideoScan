@@ -6,7 +6,7 @@
 
 | Run | Value |
 |---|---|
-| generated | 2026-10-31T19:50:59+00:00 |
+| generated | 2026-11-01T01:39:43+00:00 |
 | run id | 20261030T201824-a0-py |
 | model | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` |
 | weights sha256 (first 12) | `0ab6cb1e8958` |
@@ -94,7 +94,7 @@ Truth: the `DateTriangulator` on-screen date in `inferred_dates.reason` when pre
 
 | Run | Value |
 |---|---|
-| generated | 2026-10-31T19:50:59+00:00 |
+| generated | 2026-11-01T01:39:43+00:00 |
 | run id | 20261030T212056-a1-py |
 | model | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` |
 | weights sha256 (first 12) | `0ab6cb1e8958` |
@@ -224,7 +224,7 @@ No ground truth yet (design §4: needs Rick's place labels); reported for shape 
 
 | Run | Value |
 |---|---|
-| generated | 2026-10-31T19:50:59+00:00 |
+| generated | 2026-11-01T01:39:43+00:00 |
 | run id | 20261031T120156-a2-py |
 | model | `mlx-community/Qwen3-VL-8B-Instruct-4bit` |
 | weights sha256 (first 12) | `21deb91391e7` |
@@ -348,12 +348,12 @@ No ground truth yet (design §4: needs Rick's place labels); reported for shape 
 
 **A3 vs A2**
 
-1. **Era, 32B vs 8B on the Rick-dated stratum:** MAE A2 3.6 → A3 5.0 y; truth inside the range 86% → 56% of answered; median width 10.0 → 10.0 y; answered 100% → 100%.
-2. **Cost, 32B vs 8B:** 1.54 → 7.16 s per multi-image window generation; peak RSS 0.04 → 0.04 GB; model load 14.3 s. A3 ran the Rick-dated stratum only (48 clips), so its OCR table is empty by design.
+1. **Era, 32B vs 8B on the Rick-dated stratum:** MAE A2 3.6 → A3 4.7 y; truth inside the range 86% → 58% of answered; median width 10.0 → 10.0 y; answered 100% → 100%.
+2. **Cost, 32B vs 8B:** 1.54 → 7.26 s per multi-image window generation; peak RSS 0.04 → 20.48 GB; model load 14.3 s. A3 ran the Rick-dated stratum only (72 clips), so its OCR table is empty by design.
 
 | Run | Value |
 |---|---|
-| generated | 2026-10-31T19:50:59+00:00 |
+| generated | 2026-11-01T01:39:43+00:00 |
 | run id | 20261031T151246-a3-py |
 | model | `mlx-community/Qwen3-VL-32B-Instruct-4bit` |
 | weights sha256 (first 12) | `b105ba39009e` |
@@ -364,8 +364,8 @@ No ground truth yet (design §4: needs Rick's place labels); reported for shape 
 | mlx-vlm / mlx | 0.5.0 / 0.31.2 |
 | git | `3c18ed0d2922` |
 | corpus hash (first 12) | `10295f9e9b14` |
-| run state | deadline · selection stratum-rick-dated |
-| clips | 48 done · 0 partial · 0 unreadable · ERA scored 48/272 · OCR scored 4/63 |
+| run state | finished · selection stratum-rick-dated |
+| clips | 72 done · 0 partial · 0 unreadable · ERA scored 72/272 · OCR scored 6/63 |
 
 **Partial run:** the tables below cover only the clips scored so far.
 
@@ -374,20 +374,20 @@ No ground truth yet (design §4: needs Rick's place labels); reported for shape 
 | Metric | Value |
 |---|---|
 | model load | 14.3 s |
-| s / clip (all generations + ffmpeg) | 46.8 |
-| s / frame (all generations ÷ frames ripped) | 1.82 |
-| s / window generation (multi-image, era or roomFeatures) | 7.16 |
+| s / clip (all generations + ffmpeg) | 47.3 |
+| s / frame (all generations ÷ frames ripped) | 1.84 |
+| s / window generation (multi-image, era or roomFeatures) | 7.26 |
 | s / OCR date generation (one frame) | — |
-| ffmpeg rip s / frame | 0.19 |
-| peak RSS | 0.04 GB |
-| frames · windows · window gens · date gens · errors | 1117 · 142 · 284 · 0 · 0 |
+| ffmpeg rip s / frame | 0.17 |
+| peak RSS | 20.48 GB |
+| frames · windows · window gens · date gens · errors | 1693 · 214 · 428 · 0 · 0 |
 
 ### Schema-valid rate per family (per window)
 
 | Family | windows | schema-valid | rate | invalid, by reason |
 |---|---|---|---|---|
-| era | 142 | 140 | 99% | not JSON (prose, fence, truncated, trailing text) 2 |
-| roomFeatures | 142 | 142 | 100% | — |
+| era | 214 | 208 | 97% | not JSON (prose, fence, truncated, trailing text) 6 |
+| roomFeatures | 214 | 214 | 100% | — |
 
 ### ERA — yearRange vs truth
 
@@ -395,20 +395,20 @@ Rule: a schema-valid `era` window is an answer. Per clip, range = [median FROM, 
 
 | Group | n | answered | no answer | MAE y | median y | ±5 y (answered) | ±5 y (all) | inside range (answered) | inside range (all) | median width y |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **all** | 48 | 48 | 0% | 5.0 | 3.5 | 60% | 60% | 56% | 56% | 10.0 |
-| family: rick-dated | 48 | 48 | 0% | 5.0 | 3.5 | 60% | 60% | 56% | 56% | 10.0 |
-| decade: 1960s | 3 | 3 | 0% | 8.3 | 12.5 | 33% | 33% | 33% | 33% | 15.0 |
-| decade: 1980s | 8 | 8 | 0% | 8.3 | 7.2 | 25% | 25% | 25% | 25% | 10.0 |
-| decade: 1990s | 27 | 27 | 0% | 4.9 | 2.0 | 59% | 59% | 56% | 56% | 10.0 |
-| decade: 2000s | 7 | 7 | 0% | 0.8 | 1.0 | 100% | 100% | 100% | 100% | 10.0 |
+| **all** | 72 | 72 | 0% | 4.7 | 3.5 | 61% | 61% | 58% | 58% | 10.0 |
+| family: rick-dated | 72 | 72 | 0% | 4.7 | 3.5 | 61% | 61% | 58% | 58% | 10.0 |
+| decade: 1960s | 4 | 4 | 0% | 9.4 | 12.5 | 25% | 25% | 25% | 25% | 15.0 |
+| decade: 1980s | 14 | 14 | 0% | 7.0 | 6.0 | 21% | 21% | 21% | 21% | 10.0 |
+| decade: 1990s | 40 | 40 | 0% | 4.2 | 2.0 | 68% | 68% | 65% | 65% | 10.0 |
+| decade: 2000s | 10 | 10 | 0% | 1.4 | 1.0 | 100% | 100% | 100% | 100% | 10.0 |
 | decade: 2010s | 2 | 2 | 0% | 3.0 | 3.0 | 100% | 100% | 100% | 100% | 10.0 |
-| decade: 2020s | 1 | 1 | 0% | 5.0 | 5.0 | 100% | 100% | 0% | 0% | 8.0 |
-| stratum: rick-dated/1960s | 3 | 3 | 0% | 8.3 | 12.5 | 33% | 33% | 33% | 33% | 15.0 |
-| stratum: rick-dated/1980s | 8 | 8 | 0% | 8.3 | 7.2 | 25% | 25% | 25% | 25% | 10.0 |
-| stratum: rick-dated/1990s | 27 | 27 | 0% | 4.9 | 2.0 | 59% | 59% | 56% | 56% | 10.0 |
-| stratum: rick-dated/2000s | 7 | 7 | 0% | 0.8 | 1.0 | 100% | 100% | 100% | 100% | 10.0 |
+| decade: 2020s | 2 | 2 | 0% | 7.0 | 7.0 | 50% | 50% | 0% | 0% | 9.0 |
+| stratum: rick-dated/1960s | 4 | 4 | 0% | 9.4 | 12.5 | 25% | 25% | 25% | 25% | 15.0 |
+| stratum: rick-dated/1980s | 14 | 14 | 0% | 7.0 | 6.0 | 21% | 21% | 21% | 21% | 10.0 |
+| stratum: rick-dated/1990s | 40 | 40 | 0% | 4.2 | 2.0 | 68% | 68% | 65% | 65% | 10.0 |
+| stratum: rick-dated/2000s | 10 | 10 | 0% | 1.4 | 1.0 | 100% | 100% | 100% | 100% | 10.0 |
 | stratum: rick-dated/2010s | 2 | 2 | 0% | 3.0 | 3.0 | 100% | 100% | 100% | 100% | 10.0 |
-| stratum: rick-dated/2020s | 1 | 1 | 0% | 5.0 | 5.0 | 100% | 100% | 0% | 0% | 8.0 |
+| stratum: rick-dated/2020s | 2 | 2 | 0% | 7.0 | 7.0 | 50% | 50% | 0% | 0% | 9.0 |
 
 ### OCR — not run for A3 (Rick-dated stratum only)
 
@@ -416,10 +416,11 @@ A3 covers the one stratum with era truth; the OCR corpus was not sent to the 32B
 
 | Group | n | any-frame exact | majority exact | year match | schema-valid | date frames | frames with a date | degenerate frames |
 |---|---|---|---|---|---|---|---|---|
-| **all** | 4 | 0% | 0% | 0% | 0% | 0 | — | — |
+| **all** | 6 | 0% | 0% | 0% | 0% | 0 | — | — |
 | stratum: ocr/dvvideo | 1 | 0% | 0% | 0% | 0% | 0 | — | — |
+| stratum: ocr/ffv1 | 1 | 0% | 0% | 0% | 0% | 0 | — | — |
 | stratum: ocr/h264 | 1 | 0% | 0% | 0% | 0% | 0 | — | — |
-| stratum: ocr/hevc | 2 | 0% | 0% | 0% | 0% | 0 | — | — |
+| stratum: ocr/hevc | 3 | 0% | 0% | 0% | 0% | 0 | — | — |
 
 ### roomFeatures
 
@@ -427,31 +428,31 @@ No ground truth yet (design §4: needs Rick's place labels); reported for shape 
 
 | Metric | Value |
 |---|---|
-| schema-valid windows | 142 of 142 (100%) |
-| feature items · distinct vocabulary | 1009 · 504 |
-| items not printable (capital / digit / punctuation) | 3 |
-| setting | indoor 84, outdoor 43, mixed 11, unknown 4 |
+| schema-valid windows | 214 of 214 (100%) |
+| feature items · distinct vocabulary | 1519 · 662 |
+| items not printable (capital / digit / punctuation) | 7 |
+| setting | indoor 131, outdoor 63, mixed 13, unknown 7 |
 
 | # | feature | occurrences (a window may repeat an item) |
 |---|---|---|
-| 1 | wooden floor | 15 |
-| 2 | green grass | 13 |
-| 3 | white plastic chairs | 13 |
-| 4 | kitchen counter | 12 |
-| 5 | trees | 12 |
-| 6 | bookshelf | 10 |
-| 7 | carpeted floor | 10 |
-| 8 | dark walls | 10 |
-| 9 | white refrigerator | 10 |
-| 10 | white walls | 10 |
-| 11 | curtained window | 9 |
-| 12 | sand | 9 |
-| 13 | window with blinds | 9 |
-| 14 | wooden door | 9 |
-| 15 | bathroom sink | 8 |
-| 16 | blue sky | 8 |
-| 17 | brick fireplace | 8 |
-| 18 | dark flooring | 8 |
-| 19 | fence | 8 |
-| 20 | sand beach | 8 |
+| 1 | wooden floor | 25 |
+| 2 | bookshelf | 22 |
+| 3 | kitchen counter | 17 |
+| 4 | white plastic chairs | 17 |
+| 5 | carpeted floor | 16 |
+| 6 | green grass | 15 |
+| 7 | trees | 14 |
+| 8 | wooden table | 14 |
+| 9 | brick fireplace | 13 |
+| 10 | curtained window | 13 |
+| 11 | dark walls | 13 |
+| 12 | blue sky | 12 |
+| 13 | dark flooring | 12 |
+| 14 | white refrigerator | 12 |
+| 15 | wooden chair | 12 |
+| 16 | wooden dining table | 12 |
+| 17 | curtains | 11 |
+| 18 | sand | 11 |
+| 19 | wood-paneled walls | 11 |
+| 20 | wooden door | 11 |
 
