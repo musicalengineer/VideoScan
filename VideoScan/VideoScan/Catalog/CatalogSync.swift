@@ -1116,8 +1116,9 @@ final class CatalogSync: ObservableObject {
 
     // MARK: - last_sync.txt persistence
 
-    /// ISO-8601 string. Plain text so a user can `cat` it.
-    private static func readLastSyncTimestamp(at url: URL) -> Date? {
+    /// ISO-8601 string. Plain text so a user can `cat` it. Also read by
+    /// Catalog Database Info… off the main actor (hence nonisolated).
+    nonisolated static func readLastSyncTimestamp(at url: URL) -> Date? {
         guard let s = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         let fmt = ISO8601DateFormatter()

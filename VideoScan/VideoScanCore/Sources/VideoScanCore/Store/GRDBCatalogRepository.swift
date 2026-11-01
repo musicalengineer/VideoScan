@@ -475,6 +475,24 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// 14). A HIGHER number is a newer build's file and is refused at open.
     static let currentSchemaVersion = CatalogProvenanceAssertionsSchema.schemaVersion
 
+    /// The tables this build's migrations create — the SAME migrator `open`
+    /// runs, played once into an in-memory database (so no list can drift
+    /// from the DDL; CatalogDataSchemaTests pins that DDL to the design
+    /// document). `sqlite_*` internals are left out. nil only if the
+    /// in-memory migration itself fails. Computed once per process: a few
+    /// ms, a few KB; the Catalog Database sheet compares the live file to it.
+    nonisolated static let expectedTableNames: Set<String>? = {
+        guard let queue = try? DatabaseQueue() else { return nil }
+        do {
+            try migrator(host: "schema-layout").migrate(queue)
+            return try queue.read { db in
+                Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"))
+            }
+        } catch {
+            return nil
+        }
+    }()
+
     // MARK: - High-water at open (DDL §11)
 
     private struct Settled: Sendable {

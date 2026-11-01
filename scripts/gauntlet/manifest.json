@@ -3810,6 +3810,28 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDatabaseInfoReaderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogDatabaseInfoReaderTests"
+      ],
+      "tests": [
+        "aCatalogStateWithNoRowIsUnknownInWordsAndTheRestStillReads",
+        "aFreshStoreReadsItsOwnSchemaGenerationAndLastDoor",
+        "aGarbageFileIsUnknownEverywhereNeverACrash",
+        "aMissingWalStillReadsEveryFact",
+        "aReadChangesNoByteAndNoGeneration",
+        "hundredThousandRowsCountExactlyWithinBudget",
+        "noCatalogStateTableIsUnknownInWords",
+        "noFileIsUnknownWithThePath",
+        "theExpectedTablesComeFromThisBuildsMigrations",
+        "theLayoutDiffIsPure",
+        "theLayoutNamesAnExtraAndAMissingTable",
+        "theSchemaFactMovesWhenTheFixtureMigratesFromThirteenToFourteen"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDecisionTablesTests.swift",
@@ -9183,6 +9205,46 @@
         "holdWaits",
         "readOnlyKeepsChanges",
         "saveNowCommits"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogDatabaseInfoSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogDatabaseInfoSensorTests"
+      ],
+      "tests": [
+        "theCoreReaderOpensReadOnlyAndOnlyReads",
+        "theMenuItemIsNamedApartAndLeavesCommandIAlone",
+        "theSheetExtendsNoModelAndReachesNoWriteDoor",
+        "theViewBodyOnlyLaysOutRows"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogDatabaseInfoTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogDatabaseInfoTests"
+      ],
+      "tests": [
+        "aCatalogStateWithNoRowIsUnknownNotZero",
+        "aMissingWalShowsAbsentAndTheFactsStillRead",
+        "aViewerSaysItsMasterAndItsLastSync",
+        "anEmptyFolderIsUnknownEverywhereAndCreatesNothing",
+        "anUnreadableIntegrityFileIsUnknownInItsWords",
+        "everyMissingSourceIsUnknownWithItsReason",
+        "everyRowInOrderWithTheSchemaFirst",
+        "plainTextCarriesEveryRow",
+        "theBackupDefaultsAreReadNow",
+        "theBackupRowChecksThePathNow",
+        "theJournalIsCountedFromTheFolderNow",
+        "theLayoutRowNamesExtraAndMissingTables",
+        "theModelPublishesFreshRowsOnEveryRefresh",
+        "theSchemaRowIsThePragmaAndTheCatalogStateOfARealStore",
+        "theSchemaRowSaysWhenTheTwoVersionsDisagreeOrTheBuildExpectsAnother",
+        "theValidateRowFollowsTheReport"
       ]
     },
     {
@@ -35189,9 +35251,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3102,
+      "expected_floor": 3122,
       "name": "unit",
-      "package_expected_floor": 629,
+      "package_expected_floor": 641,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35200,6 +35262,7 @@
         "VideoScanCoreTests.CaptionTextQualityTests",
         "VideoScanCoreTests.CatalogChangeDetectorTests",
         "VideoScanCoreTests.CatalogDDLVocabularyTests",
+        "VideoScanCoreTests.CatalogDatabaseInfoReaderTests",
         "VideoScanCoreTests.CatalogFreshnessTests",
         "VideoScanCoreTests.CatalogImporterAppMarkerTests",
         "VideoScanCoreTests.CatalogJSONValueCoderTests",
@@ -35340,6 +35403,8 @@
         "VideoScanTests/CatalogChromeCountsScaleTests",
         "VideoScanTests/CatalogCodexSlice2Tests",
         "VideoScanTests/CatalogCoverageExclusionTests",
+        "VideoScanTests/CatalogDatabaseInfoSensorTests",
+        "VideoScanTests/CatalogDatabaseInfoTests",
         "VideoScanTests/CatalogDateColumnResolverTests",
         "VideoScanTests/CatalogDistributionOffMainTests",
         "VideoScanTests/CatalogFreshnessFactsTests",

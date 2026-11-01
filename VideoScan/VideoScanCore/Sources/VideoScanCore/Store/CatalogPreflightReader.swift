@@ -189,7 +189,9 @@ public enum CatalogPreflightReader {
         }
     }
 
-    private static func openReadOnly(_ databaseURL: URL) throws -> DatabaseQueue {
+    /// Also the Catalog Database sheet's one open (CatalogDatabaseInfoReader):
+    /// the same read-only rules, its own label.
+    static func openReadOnly(_ databaseURL: URL, label: String = "preflight") throws -> DatabaseQueue {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: databaseURL.path])
         }
@@ -200,7 +202,7 @@ public enum CatalogPreflightReader {
         }
         var configuration = Configuration()
         configuration.readonly = true
-        configuration.label = "preflight"
+        configuration.label = label
         return try DatabaseQueue(path: databaseURL.path, configuration: configuration)
     }
 }

@@ -934,6 +934,10 @@ struct VideoScanApp: App {
                 // Catalog Status (2026-10-16): opens Content Analysis with
                 // the summary band; the title carries the colour word.
                 CatalogStatusMenuItem(freshness: catalogModel.catalogFreshness)
+                // Catalog Database Info… (Rick 2026-11-01): read-only facts
+                // about catalog.sqlite itself. Not ⌘I — that is the
+                // per-volume "Catalog Info" window below.
+                CatalogDatabaseInfoMenuItem()
             }
         }
 
@@ -1007,6 +1011,17 @@ struct VideoScanApp: App {
                 .environmentObject(catalogModel.dashboard)
         }
         .defaultPosition(.bottomTrailing)
+
+        // Catalog ▸ Catalog Database Info… (2026-11-01): one compact,
+        // read-only window about catalog.sqlite. The sources are resolved
+        // on every read, so a catalog opened after the window still counts.
+        Window(CatalogDatabaseInfoView.windowTitle, id: CatalogDatabaseInfoView.sceneID) {
+            CatalogDatabaseInfoView(sources: { [catalogModel, catalogSync] in
+                CatalogDatabaseInfoSources.live(model: catalogModel, sync: catalogSync)
+            })
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
 
         // Independent resizable window per-volume for "Catalog Info" — the
         // value-based WindowGroup reuses the window when the same volume is
