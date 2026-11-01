@@ -143,4 +143,4 @@ Sections of live documents that were superseded or were negotiation rather than 
 | Now at | Cut from | What it was | What stayed live |
 |---|---|---|---|
 | `design/provenance_schema_draft_2026_10_26.md` | `docs/design/provenance.md` "Data model — schema changes" | The 10/26 draft DDL, numbered v13 (`picture_prints`) and v14 (`content_excerpts`, `provenance_assertions`, the carrier and capture tables) before the numbers were taken by what shipped. (F02) | provenance.md "Data model": Shipped (v13 `provenance_roles`, v14 `provenance_assertions` only, DDL in the schema file §17–§18) and Designed, not built (one line per table). |
-
+| `backlog_detail_2026_11_01.md` | `docs/BACKLOG.md`, 13 long lines | The full text of BACKLOG lines that had grown into mini-designs (Catalog Info, the UPS app, the helper icon, Ultra work, night-shift review models, UI smoke and tests, Hallie benchmark follow-ups, two M4 testbeds, A7, the Public view, the video-LLM follow-ups). (F06) | One line each in BACKLOG, pointing here by heading; settled lines moved to BACKLOG's Done. |

@@ -108,3 +108,4 @@ docs/project_goals.md -> docs/archive/project_goals.md
 # Cut 2026-11-01 (Codex docs review): `<live doc>#<section> -> <archive file>` — a section, not a file, moved.
 docs/design/provenance.md#data-model-draft-ddl -> docs/archive/design/provenance_schema_draft_2026_10_26.md
 docs/design/provenance.md#part-ii-provenance-lightweight -> docs/archive/design/provenance_lightweight_2026_10_22.md
+docs/BACKLOG.md#long-lines -> docs/archive/backlog_detail_2026_11_01.md
