@@ -179,6 +179,21 @@ struct TimingBudgetTests {
         #expect(Self.judge(150, before: Self.busy, after: Self.busy, env: [TimingBudget.strictEnvironmentKey: "1"]).verdict == .fail)
     }
 
+    @Test("RED 2026-10-31 (Codex P2): the reference-only wrapper still records a HANG (> 3×) off the reference run")
+    func referenceOnlyWrapperStillFailsAHang() {
+        // Off the reference run the wrapper logs instead of asserting (GH #385) — but a
+        // measurement beyond 3× the budget is a hang or a regression no host explains, and
+        // judge() says .fail in every mode; the wrapper must record it, not swallow it.
+        #expect(!TimingBudget.isReferenceRun(environment: [:]))
+        let sample = TimingBudget.LoadSample(load: 1, logicalCores: 16)
+        withKnownIssue("a hang beyond 3× must record an issue even off the reference run") {
+            expectWithinReferenceTimingBudget("t", measured: .milliseconds(400), budget: .milliseconds(100), loadBefore: sample)
+        }
+        // A miss inside the band stays logged-only off the reference run (no issue → this test stays green).
+        let inside = expectWithinReferenceTimingBudget("t", measured: .milliseconds(150), budget: .milliseconds(100), loadBefore: sample)
+        #expect(inside.verdict == .knownIssue || inside.verdict == .fail, "either way the wrapper's own rule decides what to record")
+    }
+
     @Test("VIDEOSCAN_TIMING_STRICT=1 forces strict on a busy machine and on GitHub")
     func strictOverride() {
         let strict = [TimingBudget.strictEnvironmentKey: "1"]
