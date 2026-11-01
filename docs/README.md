@@ -69,9 +69,9 @@ Records kept for the rulings and tests that cite them, now in [`archive/reviews/
 - **P0 truth-regression run sheet 2026-10-17** (`p0-regression-2026-10-17.md`, GH #327): the red/green sheet behind `P0TruthFixture` and `P0TruthRegressionTests`.
 - **Cutover acceptance audit 2026-10-19** (`cutover_acceptance_audit_2026_10_19.md`): "solid, with 6 named gaps"; gap 1 became #340 (P0).
 
-## Research (`research/`)
+## Research
 
-One per study; still cited by code or by a live design: [`familysearch_api_notes.md`](research/familysearch_api_notes.md) (and its production-key blocker), [`irish_records_design_2026-09-30.md`](research/irish_records_design_2026-09-30.md) and [`uk_scotland_records_survey_2026-10-01.md`](research/uk_scotland_records_survey_2026-10-01.md) (the Record Finder's sources), [`provenance_deep_dive_2026-10-23.md`](research/provenance_deep_dive_2026-10-23.md) and [`provenance_retroactive_fingerprinting_2026-10-25.md`](research/provenance_retroactive_fingerprinting_2026-10-25.md) (what the provenance designs rest on). Model and LLM research was folded into `design/models.md` on 2026-10-31; the originals are in `archive/research/`.
+Research notes live in `.scratch/` while they are being written (CLAUDE.md) and are archived when a design has taken what is still true. All of `docs/research/` moved to [`archive/research/`](archive/research/) on 2026-11-01: the Record Finder sources (FamilySearch API notes and its production-key blocker, the Irish records design, the UK and Scotland survey) are summarised in [`design/people_events.md`](design/people_events.md); the two provenance studies in [`design/provenance.md`](design/provenance.md); the model and LLM studies in [`design/machine_intelligence.md`](design/machine_intelligence.md) (since 10/31).
 
 ## Also in this folder
 

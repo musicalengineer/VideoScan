@@ -27,7 +27,7 @@ All transcripts are under [`../archive/reviews/codex/`](../archive/reviews/codex
 
 ## The brief template
 
-*Moved here from `docs/reviews/BRIEF_TEMPLATE.md` on 2026-11-01 (text unchanged except the contracts pointer, which now names `docs/ARCHITECTURE.md` §10, where `DESIGN.md`'s contracts went).*
+*Moved here on 2026-11-01 from `reviews/BRIEF_TEMPLATE.md` (now `docs/archive/reviews/BRIEF_TEMPLATE.md`) (text unchanged except the contracts pointer, which now names `docs/ARCHITECTURE.md` §10, where `DESIGN.md`'s contracts went).*
 
 # Codex review brief — <title>
 

@@ -6,7 +6,7 @@
 //
 //   getmyancestors authenticates by POSTing the user's FamilySearch username
 //   and password straight at ident.familysearch.org's login form — it does
-//   NOT use the sanctioned OAuth browser flow. docs/research/familysearch_api_notes.md
+//   NOT use the sanctioned OAuth browser flow. docs/archive/research/familysearch_api_notes.md
 //   rules that VideoScan must "never collect or proxy the user's FamilySearch
 //   password". Terminal is therefore the seam: the tool prompts for the
 //   password itself (getpass, on its own tty) and VideoScan never sees,

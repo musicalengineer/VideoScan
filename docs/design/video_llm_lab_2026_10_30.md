@@ -5,8 +5,8 @@
 evidence engine in the INGEST → MANAGE → ARCHIVE spine, how we plug in one approach after another and measure which
 earns its place, and what "an expert on the Breen media" means under the rulings. It builds on
 `docs/design/provenance_retroactive_2026_10_26.md` (Phases A–E, the assertion table),
-`docs/research/provenance_retroactive_fingerprinting_2026-10-25.md` (what exists, what the outside specs got wrong),
-`docs/research/family_event_learning_review_2026-10-16.md` (what "training on our media" may mean) and
+`docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md` (what exists, what the outside specs got wrong),
+`docs/archive/research/family_event_learning_review_2026-10-16.md` (what "training on our media" may mean) and
 `docs/design/events_design.md` §1 (the ten evidence rules). It repeats none of them where a pointer will do.
 Claude Code and Rick read this as the starting point; it is not yet built.*
 
@@ -295,8 +295,8 @@ and the Phase A spot tests finish, and it touches no catalog table.
 
 ## 10. Sources
 
-Repo: `docs/design/provenance_retroactive_2026_10_26.md` · `docs/research/provenance_retroactive_fingerprinting_2026-10-25.md`
-· `docs/research/family_event_learning_review_2026-10-16.md` · `docs/design/events_design.md` · `docs/design/cyberbrain_design.md`
+Repo: `docs/design/provenance_retroactive_2026_10_26.md` · `docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md`
+· `docs/archive/research/family_event_learning_review_2026-10-16.md` · `docs/design/events_design.md` · `docs/design/cyberbrain_design.md`
 · `Media/CaptionRunner.swift` · `scripts/whisper_worker.py` · `tools/qwen-bench/README.md` · `docs/DECISIONS.md`
 (2026-08-14, 2026-08-16, 2026-09-23, 2026-10-10, 2026-10-26). Outside input (Rick, 2026-10-29): "SW_Video_LLMs_MediaExpert"
 and "Modular Video Intelligence Architecture for Apple Silicon & Cloud"; their useful parts are in §1's last three rows.

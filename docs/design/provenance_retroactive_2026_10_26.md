@@ -1,8 +1,8 @@
 # Provenance, retroactive — design (2026-10-26)
 
 *Rick said "design it" on 2026-10-26. This builds on `provenance_lightweight_2026_10_22.md` (the workflow and the
-records), `docs/research/provenance_deep_dive_2026-10-23.md` (vocabulary, per-field state, backfill rules) and
-`docs/research/provenance_retroactive_fingerprinting_2026-10-25.md` (phases A–F, the engines that already exist).
+records), `docs/archive/research/provenance_deep_dive_2026-10-23.md` (vocabulary, per-field state, backfill rules) and
+`docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md` (phases A–F, the engines that already exist).
 It repeats none of them where a pointer will do. Phase A is written to be implemented as-is; B–E are written to be
 planned from.*
 

@@ -43,3 +43,11 @@ docs/reviews/gh_issue_triage_2026_10_11.md -> docs/archive/reviews/gh_issue_tria
 docs/reviews/p0-regression-2026-10-17.md -> docs/archive/reviews/p0-regression-2026-10-17.md
 docs/reviews/cutover_acceptance_audit_2026_10_19.md -> docs/archive/reviews/cutover_acceptance_audit_2026_10_19.md
 docs/reviews/video_llm_design.md -> docs/archive/stubs/reviews/video_llm_design.md
+docs/research/familysearch_api_notes.md -> docs/archive/research/familysearch_api_notes.md
+docs/research/irish_records_design_2026-09-30.md -> docs/archive/research/irish_records_design_2026-09-30.md
+docs/research/uk_scotland_records_survey_2026-10-01.md -> docs/archive/research/uk_scotland_records_survey_2026-10-01.md
+docs/research/provenance_deep_dive_2026-10-23.md -> docs/archive/research/provenance_deep_dive_2026-10-23.md
+docs/research/provenance_retroactive_fingerprinting_2026-10-25.md -> docs/archive/research/provenance_retroactive_fingerprinting_2026-10-25.md
+docs/research/family_event_learning_review_2026-10-16.md -> docs/archive/stubs/research/family_event_learning_review_2026-10-16.md
+docs/research/video_llm_for_family_media_2026-10-29.md -> docs/archive/stubs/research/video_llm_for_family_media_2026-10-29.md
+docs/research -> docs/archive/research

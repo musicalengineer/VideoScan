@@ -5,7 +5,7 @@ Produces machine-inferred provenance DRAFTS, each value tagged with state, confi
 and evidence, for (a) every archive Master (archive_copies digests) and (b) every file
 of the July 2026 VHS batch (any path containing `Converted_VHS_Tapes_2026/`), grouped
 by proposed tape (carrier).  Lens 4 of the provenance deep dive
-(docs/research/provenance_deep_dive_2026-10-23.md): real drafts to judge the design by.
+(docs/archive/research/provenance_deep_dive_2026-10-23.md): real drafts to judge the design by.
 
     python3 scripts/provenance_harvest.py <catalog-backup.sqlite> \
         [--out-dir DIR] [--csv PATH] [--html PATH] [--no-probe] [--no-thumbs] [--july-root DIR]

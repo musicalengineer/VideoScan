@@ -27,7 +27,7 @@ Use this document for the common contracts, operating boundaries, and roadmap. K
 | [Qwen measurements](../archive/2026-Q3/qwen_metrics_2026_08_27.md) | Reproducible benchmark identity, artifact hashes, uncertainty and invalidated-pilot correction. |
 
 Detailed tree ingest/cache and web contracts remain separate: [GEDCOM](gedcom.md), [offline tree cache](../design/offline_family_tree_cache.md),
-[FamilySearch API notes](../research/familysearch_api_notes.md), and [web interface](../design/web_interface.md). This document does not redefine their
+[FamilySearch API notes](../archive/research/familysearch_api_notes.md), and [web interface](../design/web_interface.md). This document does not redefine their
 storage, authentication, export, or serving protocols. September 12–15 code-review and refactoring reports remain independent records.
 
 ## Status: decisions, implementation evidence, and proposals
