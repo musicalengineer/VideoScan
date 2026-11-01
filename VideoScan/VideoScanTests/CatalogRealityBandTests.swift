@@ -252,10 +252,10 @@ struct CatalogRealityStateTests {
         var broke = greenFacts; broke.breaks = [CatalogRealityCount(count: 1, words: "1 paths have more than one live row")]
         let red = CatalogFreshnessState.judged(rows: [], reality: CatalogRealityInputs(facts: broke), now: now, wording: wording)
         #expect(CatalogStatusWords.chipWords(red) == "Needs attention…")
-        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — Needs attention…")
+        // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
         let yellow = CatalogFreshnessState.judged(rows: [], now: now, wording: wording)
         #expect(yellow.summary.colour == .yellow, "nothing known = never validated")
         #expect(CatalogStatusWords.chipWords(yellow) == "Needs validation")
-        #expect(CatalogStatusWords.menuTitle(.yellow) == "Catalog Status…")
+        // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
     }
 }

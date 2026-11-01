@@ -1,5 +1,7 @@
-// CatalogDatabaseInfoSensorTests.swift — the architecture sensor for
-// Catalog ▸ Catalog Database Info… (rule 8, sensor dimension): its code
+// CatalogDatabaseInfoSensorTests.swift — the architecture sensor for the
+// database facts (built 11/01 as Catalog ▸ Catalog Database Info…; the same
+// day's regrouping moved the rows into the Catalog Status window) and for
+// that window (rule 8, sensor dimension): its code
 // extends no model (rule 12, #337), reaches no write door (no committer, no
 // repository write, no SQL that changes a row), runs no integrity_check
 // (Rick 2026-11-01: seconds on 315 MB — Validate Catalog's job), does no
@@ -24,7 +26,8 @@ struct CatalogDatabaseInfoSensorTests {
             .joined(separator: "\n")
     }
 
-    static let appFiles = ["VideoScan/Catalog/CatalogDatabaseInfo.swift", "VideoScan/Catalog/CatalogDatabaseInfoView.swift"]
+    static let appFiles = ["VideoScan/Catalog/CatalogDatabaseInfo.swift", "VideoScan/Catalog/CatalogDatabaseInfoView.swift",
+                           "VideoScan/Catalog/CatalogStatusWindow.swift", "VideoScan/Analyze/CatalogStatusLines.swift"]
     static let coreReader = "VideoScanCore/Sources/VideoScanCore/Store/CatalogDatabaseInfoReader.swift"
 
     @Test func theSheetExtendsNoModelAndReachesNoWriteDoor() throws {
@@ -59,16 +62,15 @@ struct CatalogDatabaseInfoSensorTests {
         }
     }
 
-    @Test func theMenuItemIsNamedApartAndLeavesCommandIAlone() throws {
-        let view = try Self.code("VideoScan/Catalog/CatalogDatabaseInfoView.swift")
-        #expect(view.contains("static let menuTitle = \"Catalog Database Info…\""))
-        #expect(view.contains("static let windowTitle = \"Catalog Database\""))
-        let item = try #require(view.range(of: "struct CatalogDatabaseInfoMenuItem")).lowerBound
-        #expect(!String(view[item...]).contains("keyboardShortcut"), "no shortcut on the database item (⌘I is the volume's)")
+    @Test func theRowsLiveInTheStatusWindowAndCommandIStaysTheVolumes() throws {
+        let window = try Self.code("VideoScan/Catalog/CatalogStatusWindow.swift")
+        #expect(window.contains("CatalogDatabaseInfoRows(model: info)"), "the 11/01 rows, reused")
+        #expect(window.contains("CatalogDatabaseInfoModel(sources: sources)"), "the 11/01 read, reused")
+        #expect(!window.contains("keyboardShortcut"), "no shortcut here (⌘I is the volume's)")
         let app = try Self.code("VideoScan/App/VideoScanApp.swift")
-        // Rick 2026-11-01: the item left the Catalog menu; its rows move to
-        // the Catalog Status window.
-        #expect(!app.contains("CatalogDatabaseInfoMenuItem()"))
+        #expect(!app.contains("CatalogDatabaseInfoMenuItem"), "the item left the Catalog menu")
+        #expect(!app.contains("catalog-database-info") && !app.contains("CatalogDatabaseInfoView("), "its window is gone")
+        #expect(app.contains("Window(CatalogStatusWindow.windowTitle, id: CatalogStatusWindow.sceneID)"))
         #expect(app.contains("WindowGroup(\"Catalog Info\", for: CatalogInfoItem.self)"), "the per-volume window stays")
     }
 }

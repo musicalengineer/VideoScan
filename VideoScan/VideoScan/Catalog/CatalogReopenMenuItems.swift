@@ -4,7 +4,11 @@
 // CatalogSwitchToSQLite.swift when "Switch Catalog to SQLite…" was retired
 // (2026-10-20, "JSON gone": the cutover is done — catalog.sqlite is the only
 // catalog). Reopen stays as the recovery path while saving to catalog.sqlite
-// has stopped, until a red "Can't Save" status offers it instead.
+// has stopped. Since the 11/01 Catalog regrouping (DECISIONS 2026-11-01) the
+// two buttons live in the Catalog Status window, and each is there only when
+// it applies (Reopen: saving stopped and the committer can reopen; Adopt:
+// the catalog opened read-only below the high-water) — the same conditions
+// that enabled the menu items.
 
 import SwiftUI
 import VideoScanCore
@@ -15,15 +19,16 @@ struct CatalogReopenMenuItems: View {
     @ObservedObject var cutover: CatalogCutoverState
 
     var body: some View {
-        Button("Reopen SQLite Catalog") {
-            Task { await cutover.reopen() }
+        if cutover.canReopen {
+            Button("Reopen SQLite Catalog") {
+                Task { await cutover.reopen() }
+            }
+            .help(cutover.blockedReason.map { "Saving to catalog.sqlite stopped: \($0). Reopen to try again." } ?? "Reopen catalog.sqlite.")
+            .accessibilityIdentifier("catalog.menu.reopenSQLite")
         }
-        .disabled(!cutover.canReopen)
-        .help(cutover.blockedReason.map { cutover.canReopen ? "Saving to catalog.sqlite stopped: \($0). Reopen to try again."
-                                                            : "Saving to catalog.sqlite stopped: \($0)." } ?? "Saving to catalog.sqlite is working.")
-        .accessibilityIdentifier("catalog.menu.reopenSQLite")
-
-        CatalogAdoptMenuItem(cutover: cutover)
+        if cutover.canAdopt {
+            CatalogAdoptMenuItem(cutover: cutover)
+        }
     }
 }
 

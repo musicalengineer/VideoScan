@@ -1,10 +1,10 @@
 // CatalogStatusMenuItem.swift
-// Catalog ▸ "Catalog Status…" (Rick 2026-10-16, Catalog Status freshness
-// §2 / §4.2) — opens the Analyze panel (Content Analysis), where the
-// summary band sits at the top. The title carries the colour word when
-// the summary is not green: "Catalog Status — needs a decision…" /
-// "Catalog Status — needs attention…". Observes the one freshness
-// snapshot; never the model.
+// Catalog ▸ "Catalog Status…" — opens the Catalog Status window (Rick
+// 2026-11-01: one window, three coloured lines — Database, Files, Content —
+// then the band's details and the database facts). The title names the
+// worst line: "Catalog Status — Files needs attention…", or "Catalog Status
+// — Green…" when all three are green (CatalogStatusLines.menuTitle).
+// Observes the one freshness snapshot; never the model.
 
 import SwiftUI
 import VideoScanCore
@@ -15,14 +15,11 @@ struct CatalogStatusMenuItem: View {
 
     var body: some View {
         Button(title) {
-            AnalyzeWindowOpener.open(using: openWindow, source: "catalog-menu")
+            openWindow(id: CatalogStatusWindow.sceneID)
         }
         .help(CatalogActionBrief.catalogStatus.help)
         .accessibilityIdentifier("catalog.menu.catalogStatus")
     }
 
-    private var title: String {
-        let s = freshness.state
-        return CatalogStatusWords.menuTitle(s.isComputed ? s.summary.colour : .grey)
-    }
+    private var title: String { CatalogStatusWords.menuTitle(freshness.state) }
 }

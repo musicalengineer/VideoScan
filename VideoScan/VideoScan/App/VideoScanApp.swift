@@ -958,15 +958,19 @@ struct VideoScanApp: App {
         }
         .defaultPosition(.bottomTrailing)
 
-        // Catalog ▸ Catalog Database Info… (2026-11-01): one compact,
-        // read-only window about catalog.sqlite. The sources are resolved
+        // Catalog ▸ Catalog Status… (Rick 2026-11-01): the three lines
+        // (Database · Files · Content), the band's details, the database
+        // facts (once their own Catalog Database Info window) and — only
+        // when they apply — Reopen / Adopt. The facts' sources are resolved
         // on every read, so a catalog opened after the window still counts.
-        Window(CatalogDatabaseInfoView.windowTitle, id: CatalogDatabaseInfoView.sceneID) {
-            CatalogDatabaseInfoView(sources: { [catalogModel, catalogSync] in
+        Window(CatalogStatusWindow.windowTitle, id: CatalogStatusWindow.sceneID) {
+            CatalogStatusWindow(model: catalogModel, center: fileOpsCenter, orchestrator: captionOrchestrator,
+                                sources: { [catalogModel, catalogSync] in
                 CatalogDatabaseInfoSources.live(model: catalogModel, sync: catalogSync)
             })
+            .environment(\.mediaFileOperationsCenterReference, fileOpsCenter)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .defaultPosition(.center)
 
         // Independent resizable window per-volume for "Catalog Info" — the

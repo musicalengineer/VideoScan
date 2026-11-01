@@ -7,7 +7,8 @@
 //           duplicate groups agree, relations / constraints hold, derived
 //           stamps are about the right content) AND the last Validate
 //           Catalog (files on disk, then the catalog) completed and is
-//           fresh (≤ 7 days) AND every row's presence state matches the
+//           fresh (≤ 24 hours — DECISIONS 2026-11-01; was 7 days; the
+//           nightly runs it at 02:00) AND every row's presence state matches the
 //           disk. A file marked Missing that IS missing is reality — fine.
 //   YELLOW  the catalog can't fully vouch for reality — Validate overdue or
 //           never run, a large share of rows could not be checked (drives
@@ -245,8 +246,11 @@ public struct CatalogRealityVerdict: Sendable, Equatable {
 
 public enum CatalogRealityPolicy {
 
-    /// A Validate older than this is overdue (Rick: ≤ 7 days is fresh).
-    public static let freshFor: TimeInterval = 7 * 24 * 3_600
+    /// A Validate older than this is overdue (DECISIONS 2026-11-01: green
+    /// when the check ran within 24 hours and passed — the nightly runs it
+    /// at 02:00; replaces the 7-day rule). The Catalog Status window's
+    /// Database line reads the same constant.
+    public static let freshFor: TimeInterval = 24 * 3_600
     /// A share of rows the file check could not reach at or above this is
     /// "a large share" — yellow. Below it the rows are simply not asked.
     public static let largeShareNotChecked = 0.10
@@ -325,11 +329,18 @@ public enum CatalogRealityPolicy {
         case .neverValidated: return "Validate Catalog has not run — Catalog ▸ Validate Catalog…"
         case .validatePartial: return "the last Validate Catalog stopped part way — run it again"
         case .validateOverdue(let at):
-            let days = max(8, Int(now.timeIntervalSince(at) / 86_400))
-            return "the last Validate Catalog was \(days) days ago — run it again"
+            return "the last Validate Catalog was \(age(now.timeIntervalSince(at))) ago — run it again"
         case .largeShareNotChecked(let n, let total):
             return "\(n.formatted()) of \(total.formatted()) files could not be checked (drives not connected?)"
         case .unsettled(let c): return c.words
         }
+    }
+
+    /// "30 hours" under two days, "10 days" after; never under the 24 hours
+    /// that made it overdue.
+    public static func age(_ seconds: TimeInterval) -> String {
+        let hours = max(24, Int(seconds / 3_600))
+        if hours < 48 { return "\(hours) hours" }
+        return "\(hours / 24) days"
     }
 }

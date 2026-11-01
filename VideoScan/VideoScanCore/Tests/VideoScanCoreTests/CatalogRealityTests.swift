@@ -1,7 +1,8 @@
 // CatalogRealityTests.swift
 // THE colour of the Catalog Status band (Rick 2026-10-20): does the catalog
 // reflect reality? One test per colour and per reason, the boundaries
-// (7 days; the 10 % share not checked), the headline words, and the SENSOR
+// (24 hours since Rick 2026-11-01 — was 7 days; the 10 % share not
+// checked), the headline words, and the SENSOR
 // that review items never move the band off green — at production scale.
 
 import Foundation
@@ -14,9 +15,9 @@ struct CatalogRealityTests {
     let now = Date(timeIntervalSince1970: 2_000_000_000)
     let day: TimeInterval = 86_400
 
-    /// The catalog reflects reality: validated yesterday, everything checked, nothing broken or unsettled.
+    /// The catalog reflects reality: validated 12 hours ago, everything checked, nothing broken or unsettled.
     var green: CatalogRealityFacts {
-        CatalogRealityFacts(validation: .completed(at: now.addingTimeInterval(-day)), rowsToCheck: 14_000, rowsNotChecked: 0)
+        CatalogRealityFacts(validation: .completed(at: now.addingTimeInterval(-day / 2)), rowsToCheck: 14_000, rowsNotChecked: 0)
     }
 
     @Test("GREEN: a fresh, completed Validate, nothing broken, nothing unsettled — 'The catalog is reconciled'")
@@ -27,22 +28,25 @@ struct CatalogRealityTests {
         #expect(v.reasons.isEmpty && v.reviewLine == nil)
     }
 
-    @Test("GREEN still: exactly 7 days is fresh; a few rows not checked (under 10 %) is fine")
+    @Test("GREEN still: 23 h 59 min and exactly 24 h are fresh (DECISIONS 2026-11-01); a few rows not checked (under 10 %) is fine")
     func greenBoundaries() {
+        #expect(CatalogRealityPolicy.freshFor == 24 * 3_600)
         var f = green
-        f.validation = .completed(at: now.addingTimeInterval(-7 * day))
+        f.validation = .completed(at: now.addingTimeInterval(-(23 * 3_600 + 59 * 60)))
         f.rowsNotChecked = 1_399                          // 9.99 %
+        #expect(CatalogRealityPolicy.colour(f, now: now) == .green)
+        f.validation = .completed(at: now.addingTimeInterval(-day))
         #expect(CatalogRealityPolicy.colour(f, now: now) == .green)
     }
 
-    @Test("YELLOW: never validated · stopped part way · overdue past 7 days · a large share not checked · unsettled rows")
+    @Test("YELLOW: never validated · stopped part way · overdue past 24 hours (24 h 01 min) · a large share not checked · unsettled rows")
     func yellowCannotFullyVouch() {
         var never = green; never.validation = .neverRan
         #expect(CatalogRealityPolicy.reasons(never, now: now) == [.neverValidated])
         var partial = green; partial.validation = .partial(at: now)
         #expect(CatalogRealityPolicy.reasons(partial, now: now) == [.validatePartial])
-        var overdue = green; overdue.validation = .completed(at: now.addingTimeInterval(-7 * day - 1))
-        #expect(CatalogRealityPolicy.reasons(overdue, now: now) == [.validateOverdue(lastCompleted: now.addingTimeInterval(-7 * day - 1))])
+        var overdue = green; overdue.validation = .completed(at: now.addingTimeInterval(-day - 60))
+        #expect(CatalogRealityPolicy.reasons(overdue, now: now) == [.validateOverdue(lastCompleted: now.addingTimeInterval(-day - 60))])
         var offline = green; offline.rowsNotChecked = 1_400                     // exactly 10 %
         #expect(CatalogRealityPolicy.reasons(offline, now: now) == [.largeShareNotChecked(notChecked: 1_400, of: 14_000)])
         var unsettled = green; unsettled.unsettled = [CatalogRealityCount(count: 4, words: "4 files changed size on disk")]
@@ -116,8 +120,12 @@ struct CatalogRealityTests {
         }
     }
 
-    @Test("an overdue Validate says how many days; a large share says how many of how many")
+    @Test("an overdue Validate says how many hours (under two days) or days; a large share says how many of how many")
     func reasonWords() {
+        #expect(CatalogRealityPolicy.words(.validateOverdue(lastCompleted: now.addingTimeInterval(-day - 60)), now: now)
+                == "the last Validate Catalog was 24 hours ago — run it again")
+        #expect(CatalogRealityPolicy.words(.validateOverdue(lastCompleted: now.addingTimeInterval(-30 * 3_600)), now: now)
+                == "the last Validate Catalog was 30 hours ago — run it again")
         #expect(CatalogRealityPolicy.words(.validateOverdue(lastCompleted: now.addingTimeInterval(-10 * day)), now: now)
                 == "the last Validate Catalog was 10 days ago — run it again")
         #expect(CatalogRealityPolicy.words(.neverValidated, now: now) == "Validate Catalog has not run — Catalog ▸ Validate Catalog…")

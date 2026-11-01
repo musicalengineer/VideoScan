@@ -140,8 +140,8 @@ struct CatalogAuthorityCornerTests {
         let log = scene.sandbox.catalogLogText()
         #expect(!afterReopen, "a commit ran after Reopen on a replaced catalog.sqlite")
         #expect(scene.model.catalogCutover.blockedReason == stop)
-        #expect(log.contains("REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop)"), Comment(rawValue: log))
-        #expect(!log.contains("(Catalog ▸ Reopen SQLite Catalog)"), "the NOT SAVED line still points at Reopen")
+        #expect(log.contains("REFUSED Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog — \(stop)"), Comment(rawValue: log))
+        #expect(!log.contains("(Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog)"), "the NOT SAVED line still points at Reopen")
         #expect(try CornerFiles.sha256(scene.databaseURL) == replacementBefore, "the replacement catalog.sqlite was written")
         // No reload of the replacement here: the session still holds the old
         // catalog's -wal at the path, and opening beside it is the separate
@@ -247,7 +247,7 @@ struct CatalogAuthorityCornerTests {
         let stop = "catalog.sqlite was replaced or moved while VideoScan was open; nothing more will be saved — quit and reopen"
         #expect(swapping.openCalls == 0, "Reopen opened the replacement")
         #expect(committer.blockedReason == stop, "\(committer.blockedReason ?? "nil")")
-        #expect(lines.contains { $0.contains("REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop)") }, "\(lines)")
+        #expect(lines.contains { $0.contains("REFUSED Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog — \(stop)") }, "\(lines)")
         #expect(swapping.replacementSHA == (try CornerFiles.sha256(scene.databaseURL)), "the replacement was written")
     }
 

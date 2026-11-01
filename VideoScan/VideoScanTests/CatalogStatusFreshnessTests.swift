@@ -367,7 +367,7 @@ struct CatalogStatusWordsTests {
         ], reality: validatedAnHourAgo)
         #expect(s.summary.colour == .green)
         #expect(CatalogStatusWords.chipWords(s) == "Reconciled")
-        #expect(CatalogStatusWords.menuTitle(s.summary.colour) == "Catalog Status…")
+        // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
     }
 
     @Test func yellowAndRedChipsAreShort() {
@@ -381,7 +381,7 @@ struct CatalogStatusWordsTests {
         ], reality: unsettled)
         #expect(CatalogStatusWords.chipWords(yellow) == "Needs a look")
         #expect(yellow.summary.headline == "Tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")
-        #expect(CatalogStatusWords.menuTitle(yellow.summary.colour) == "Catalog Status…")
+        // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
         #expect(yellow.summary.items.map(\.words) == ["660 files without a full hash", "12 files without a sound print"],
                 "the stale rows are still listed under the band")
 
@@ -390,7 +390,7 @@ struct CatalogStatusWordsTests {
                          CatalogRealityCount(count: 1, words: "1 duplicate groups hold files with different whole-file digests")]
         let red = state([], reality: broken)
         #expect(CatalogStatusWords.chipWords(red) == "Needs attention…")
-        #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — Needs attention…")
+        // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
         #expect(CatalogStatusWords.launchLine(red.reality)
                 == "Needs attention: 2 paths have more than one live row · 1 more — 1 duplicate groups hold files with different whole-file digests. Catalog ▸ Catalog Status… lists the doors.")
     }

@@ -9216,7 +9216,7 @@
       ],
       "tests": [
         "theCoreReaderOpensReadOnlyAndOnlyReads",
-        "theMenuItemIsNamedApartAndLeavesCommandIAlone",
+        "theRowsLiveInTheStatusWindowAndCommandIStaysTheVolumes",
         "theSheetExtendsNoModelAndReachesNoWriteDoor",
         "theViewBodyOnlyLaysOutRows"
       ]
@@ -32605,6 +32605,27 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogStatusLinesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogStatusLinesLogicTests",
+        "CatalogStatusLinesTruthTests",
+        "CatalogStatusWindowSensorTests"
+      ],
+      "tests": [
+        "builtOnce",
+        "content",
+        "databaseLineAndFactsAgree",
+        "databaseOnTheBoundary",
+        "databaseOtherStates",
+        "files",
+        "filesLineAndSnapshot",
+        "theWindow",
+        "worstAndTitle"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTidyTests.swift",
       "stage": "unit",
       "suites": [
@@ -35307,7 +35328,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3144,
+      "expected_floor": 3153,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35508,9 +35529,12 @@
         "VideoScanTests/CatalogSettleFindingsSensorTests",
         "VideoScanTests/CatalogSettleRealCopyEvidence",
         "VideoScanTests/CatalogSnapshotVersionTests",
+        "VideoScanTests/CatalogStatusLinesLogicTests",
+        "VideoScanTests/CatalogStatusLinesTruthTests",
         "VideoScanTests/CatalogStatusSensorTests",
         "VideoScanTests/CatalogStatusStructureTests",
         "VideoScanTests/CatalogStatusUpdateQueueTests",
+        "VideoScanTests/CatalogStatusWindowSensorTests",
         "VideoScanTests/CatalogStatusWordsTests",
         "VideoScanTests/CatalogStoreAsyncSaveTests",
         "VideoScanTests/CatalogStoreHardeningTests",

@@ -256,7 +256,7 @@ final class CatalogCommitter {
         // opened. The words end "quit and reopen" — never Catalog ▸ Reopen,
         // which would open the replacement and commit memory into it.
         if let stop = fileStop { return Self.cantSaveUntilQuit(stop) }
-        if let blockedReason { return Self.cantSave(blockedReason, until: "you choose Catalog ▸ Reopen SQLite Catalog") }
+        if let blockedReason { return Self.cantSave(blockedReason, until: "you choose Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog") }
         let now = input()
         if let readOnly = now.readOnlyReason { return Self.readOnlyWords(readOnly) }
         if let hold = now.holdReason { return Self.cantSave("held — \(hold)", until: "that job finishes") }
@@ -289,7 +289,7 @@ final class CatalogCommitter {
         blockedReason == nil ? nil : repository.fileStopWords
     }
 
-    /// Catalog ▸ Reopen SQLite Catalog is refused after a file-stop.
+    /// Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog is refused after a file-stop.
     var canReopen: Bool { blockedReason != nil && fileStop == nil }
 
     /// A read-only session never saves; there is no "try again when".
@@ -487,7 +487,7 @@ final class CatalogCommitter {
 
     // MARK: - Reopen / adopt
 
-    /// Catalog ▸ Reopen SQLite Catalog: close, open again, and — when the
+    /// Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog: close, open again, and — when the
     /// store is writable — commit what is still changed.
     func reopen(at url: URL) async {
         // GH #359: the file at `url` is not the one this session opened —
@@ -495,7 +495,7 @@ final class CatalogCommitter {
         // the store left as it is, the same words as every refused save.
         if let stop = fileStop ?? repository.fileStopWords {
             blockedReason = stop
-            sink("Catalog store: REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop). Nothing was opened or written.")
+            sink("Catalog store: REFUSED Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog — \(stop). Nothing was opened or written.")
             return
         }
         reopening = true
@@ -507,7 +507,7 @@ final class CatalogCommitter {
         if let stop = repository.fileStopWords {
             reopening = false
             blockedReason = stop
-            sink("Catalog store: REFUSED Catalog ▸ Reopen SQLite Catalog — \(stop). Nothing was opened or written.")
+            sink("Catalog store: REFUSED Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog — \(stop). Nothing was opened or written.")
             return
         }
         let opened = await repository.open(at: url, requiringLatch: true)   // QA r1 D (#359): no latch, no reopen
@@ -523,7 +523,7 @@ final class CatalogCommitter {
         }
     }
 
-    /// Catalog ▸ Adopt This SQLite Catalog… (gap 5): the person accepted a
+    /// Catalog ▸ Catalog Status… ▸ Adopt This SQLite Catalog… (gap 5): the person accepted a
     /// restored catalog.sqlite below the high-water this Mac already wrote.
     func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome {
         reopening = true
@@ -605,7 +605,7 @@ final class CatalogCommitter {
             if let stop = fileStop {
                 noteOnce("Catalog store: NOT SAVED — \(stop)")       // GH #359: quit and reopen, not Reopen
             } else {
-                noteOnce("Catalog store: NOT SAVED — \(blockedReason) (Catalog ▸ Reopen SQLite Catalog)")
+                noteOnce("Catalog store: NOT SAVED — \(blockedReason) (Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog)")
             }
             return nil
         }
@@ -746,7 +746,7 @@ final class CatalogCommitter {
                 sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written.")
             } else {
                 sink("Catalog store: REFUSED via \(door) — \(words). Nothing was written; the changes stay in memory "
-                     + "until Catalog ▸ Reopen SQLite Catalog.")
+                     + "until Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog.")
             }
             return false
         case .generationMismatch(let expected, let found):

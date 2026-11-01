@@ -176,6 +176,9 @@ struct CatalogFreshnessState: Equatable {
     /// False until the first coverage pass has landed (the chip stays
     /// quiet rather than claiming "nothing to check" at launch).
     var isComputed = false
+    /// Catalog Status's three lines — Database, Files, Content (Rick
+    /// 2026-11-01; CatalogStatusLines.swift). nil until the first pass.
+    var lines: CatalogStatusLines?
 
     func verdict(_ cycler: AnalyzeCycler) -> FreshnessVerdict? { verdicts[cycler] }
     func row(_ cycler: AnalyzeCycler) -> FreshnessRow? { rows.first { $0.kind == cycler.rawValue } }
@@ -225,12 +228,11 @@ enum CatalogStatusWords {
         }
     }
 
-    /// Catalog ▸ "Catalog Status…" carries the colour word when not green.
-    static func menuTitle(_ colour: FreshnessColour) -> String {
-        switch colour {
-        case .red: return "Catalog Status — Needs attention…"
-        case .yellow, .green, .grey: return "Catalog Status…"
-        }
+    /// Catalog ▸ "Catalog Status — <Database|Files|Content> needs
+    /// attention…" naming the worst of the three lines, or "— Green…"
+    /// (Rick 2026-11-01; replaces the band-colour word).
+    static func menuTitle(_ state: CatalogFreshnessState) -> String {
+        CatalogStatusLines.menuTitle(state.isComputed ? state.lines : nil)
     }
 
     /// The one console/log line at launch when the band is red: the
@@ -424,7 +426,9 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         let reality = CatalogRealityFactsBuilder.inputs(facts: facts, missing: report.missingCopies,
                                                         degenerateOCRDates: report.degenerateOCRDates,
                                                         backgroundJournal: backgroundJournal, machineEra: machineEra)
-        let new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
+        var new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
+        // The three lines read the SAME facts and report the band just used.
+        new.lines = CatalogStatusLinesPolicy.lines(facts: facts, report: report, now: now)
         guard new != state else { return }
         publishCount += 1
         state = new

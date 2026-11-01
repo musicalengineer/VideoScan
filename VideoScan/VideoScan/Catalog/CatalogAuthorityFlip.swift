@@ -292,7 +292,7 @@ extension VideoScanModel {
             committer.block("read-only: \(reason)")
             updateReadOnlyFacts { $0.sessionReadOnlyByLaunch = true }
             catalogAuthorityNote("catalog.sqlite opened READ-ONLY — \(reason). Nothing will be saved this session"
-                                 + (reason.hasPrefix("restoredBelowHighWater") ? " unless you choose Catalog ▸ Adopt This SQLite Catalog…." : "."))
+                                 + (reason.hasPrefix("restoredBelowHighWater") ? " unless you choose Catalog ▸ Catalog Status… ▸ Adopt This SQLite Catalog…." : "."))
         } else {
             updateReadOnlyFacts { $0.sessionReadOnlyByLaunch = false }
             // Codex cycle #112: the launch-migration commit only when this
