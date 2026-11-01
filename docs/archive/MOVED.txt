@@ -117,3 +117,4 @@ docs/guides/testing.md#6-the-m1-macbook-pro-as-a-test-runner -> docs/archive/gui
 docs/guides/testing.md#7-the-nightly-adversarial-review -> docs/archive/design/nightly_adversarial_review_design_2026-10-01.md
 docs/guides/operations.md#1-the-m4-deep-test-host -> docs/archive/design/m4_staging_gate_2026_10_28.md
 docs/guides/operations.md#2-storage-layout -> docs/archive/guides/ops/storage_layout_2026_08_13.md
+docs/practices/invariants.md#MOPS-14-MOPS-16-paragraphs -> docs/archive/practices/invariants_MOPS-14_MOPS-16_2026_11_01.md
