@@ -1,6 +1,6 @@
 # VideoScan Background — the analyzer service
 
-Status: in flight — 2026-11-01. Step 0 is built (the helper, its launchd job, XPC control, a no-op job; off unless `background.service.enabled` is set, no Settings toggle yet). Step 1 merged on 2026-11-01 (`0656aee6`): the seated 8B era/OCR job, the observation journal, `JournalApplier` through the commit door, schema v14 `provenance_assertions` (DECISIONS 2026-10-31, 2026-11-01). The corpus run waits for Rick's window on the Ultra (STATUS).
+Status: in flight — 2026-11-01. Step 0 is built (the helper, its launchd job, XPC control, a no-op job; off unless `background.service.enabled` is set, no Settings toggle yet). Step 1 merged on 2026-11-01 (`0656aee6`): the seated 8B era/OCR job, the observation journal, `JournalApplier` through the commit door, schema v14 `provenance_assertions` (DECISIONS 2026-10-31, 2026-11-01). The corpus run proceeds in Rick's windows on the Ultra (STATUS). Step 2, captions on the 8B, is §4.
 
 VideoScan Background is the helper process that keeps analysing after the app quits: a login-item launchd job the app registers, controlled over XPC, with its durable state in files under `App Support/VideoScan/background/`, backing off when Rick is working, and taking one engine at a time out of the app so the app is never down for a rewrite. What it may run is listed in §3.6; it never touches media. §0.6 (Rick, 10/31) says what goes in and what comes out; §0.7 names the outputs **observations**, says where they live (the three homes) and in what order they are produced (1960–2010, oldest first). An observation reaches the catalog only through the app's one commit door, and is never shown as a date (DECISIONS 2026-11-01). The first job it hosts is the video-model work in `docs/design/machine_intelligence.md`.
 
@@ -150,8 +150,8 @@ ranges are padded (15–20 y wide on 9 of the 13 misses) — a prompt/contract p
 
 | Output | How it is made | Store | Unlocks |
 |---|---|---|---|
-| **Era / date claim** | 8B vision model, windows + contract (A2); fused with the file's facts as bounds (codec/carrier floor, stamp read, DV datecode, metadata on camera-native files) | journal → `inferred_dates` / `provenance_assertions` (v14) | sort and search by date; "Cape 1990–1995" |
-| Burned-in date (OCR) | 8B `date` prompt on 5 stills | journal → captions (ocrDate) | exact dates on camcorder footage |
+| **Era / date claim** | 8B vision model, windows + contract (A2); fused with the file's facts as bounds (codec/carrier floor, stamp read, DV datecode, metadata on camera-native files) | journal → `provenance_assertions` (v14) only — never `inferred_dates`, the triangulator or a filter (DECISIONS 2026-11-01) | its own inspector line; the convergence count; search by era words ("90s"); a date only if Rick later rules |
+| Burned-in date (OCR) | 8B `date` prompt on 5 stills | journal → `provenance_assertions` (`ocr.date`, step 1) | exact dates on camcorder footage, once Rick rules how they rank |
 | Scene captions, on-screen text | 8B `scene` / `text` prompts (the captioner moves to the 8B) | journal → `captions` | free-text search |
 | Transcript, spoken names | Whisper; name presence | journal → `transcripts` | search by what was said; people |
 | Room / place signature | `roomFeatures` contract → signature over the corpus | sidecar (vectors) + journal (place label once ruled) | "find the Cape house"; events |
@@ -192,9 +192,8 @@ Rick's guide (`audio_video_digital_forensics_guide.pdf`) is court-oriented and s
     grouping uncropped phone clips from one phone.
   - **3:2 pulldown as a film detector — untested**, still worth a day.
 
-**Step 1's definition, as agreed in conversation (to be written up with the brief):** the 8B era/OCR job first; captions second, moving
-to the 8B, uncaptioned files first then a backfill; schema v14 lands with step 1 because an assertion that has earned its seat is
-catalog data. §7 ruling 4 answered; 2 and 3 take the defaults unless Rick says otherwise.
+**Step 1, as built (DECISIONS 2026-10-31; merged 2026-11-01):** the 8B era/OCR job first, with schema v14; captions second (§4).
+§7 ruling 4 answered; 2 and 3 take the defaults unless Rick says otherwise.
 
 ## 0.7 Where the machine intelligence lives, and what to call it (Rick, 2026-10-31 evening)
 
@@ -206,7 +205,7 @@ inference that produced it.
 
 **Where (three homes, see `docs/design/data_organization_2026_10_31.md` — the full table-by-table map, also rendered as a PDF for Rick):**
 1. **`catalog.sqlite`** — observations that have earned a seat, as ordinary rows beside Rick's decisions: `captions` / `caption_runs`,
-   `transcripts`, `inferred_dates` (range, confidence, source, reason), `dossiers`, `sound_prints` / `perceptual_prints` stamps,
+   `transcripts`, `inferred_dates` (range, confidence, source, reason — never the 8B's era, DECISIONS 2026-11-01), `dossiers`, `sound_prints` / `perceptual_prints` stamps,
    `footage_likeness` / `footage_membership`, `duplicate_*`, `media_checks`, and (v14) `provenance_assertions`. They get there only
    through the app's one committer, from the helper's journal. Searchable, backed up, fixity-checked, never deleted.
 2. **Sidecar stores** the engines own, regenerable bulk the app reads directly: `audio-fingerprints.sqlite` (landmarks),
@@ -323,7 +322,7 @@ line and the verbs that need the service are disabled with the reason; nothing s
 |---|---|---|
 | Queue | `queue/<jobID>.json` | the `JobRequest`; atomic write-then-rename; the supervisor scans it at start and on XPC `enqueue` |
 | Checkpoints | `checkpoints/<jobID>.json` | last completed unit (digest + window); rewritten atomically per unit |
-| Journal | `journal/<yyyy-mm-dd>.jsonl` | append-only, one line per catalog-bound fact: `{digest, table, field, value, by, evidence, at}`; fsync per batch |
+| Journal | `journal/<yyyy-mm-dd>.jsonl` (UTC day) | append-only, one line per observation, version 1, canonical JSON: `{at, by, confidence, evidence, field, id, job, state, subject_id, subject_kind, table, unit, v, value}`; `id` = SHA-256 of the line without `id` (the idempotence key); one `write(2)` + `F_FULLFSYNC` per unit; a torn tail is sealed and refused, never glued (`ObservationJournal.swift`) |
 | Sidecars | `../model-lab.sqlite`, `../audio-fingerprints.sqlite`, `../picture-prints.sqlite` | as designed already; the service is their only writer once the engine has moved |
 | Log | `~/Library/Logs/VideoScan/background.log` | same line format as `videoscan.log`, same `LogSink` class, its own file (two processes never append to one file) |
 
@@ -365,17 +364,58 @@ point is untouched because the service never has a delete verb.
 
 ## 4. The move, one engine at a time (no two-week outage)
 
-| Step | Moves | Proof that nothing changed | Leaves in the app |
-|---|---|---|---|
-| **0 — skeleton** (≈ 3 days) | the helper target, plist, `SMAppService` registration, XPC protocol, `JobSupervisor` with a `NoOpJob`, `Backoff`, `videoscan-bg`, Settings ▸ Background, the MFO row for a service job | the sensor set in §6; Activity Monitor shows "VideoScan Background"; quit the app, the no-op job keeps counting | everything |
-| **1 — model lab `A0`** (the video-LLM design's Phase 0) | born in the service: `ModelLabJob` running `MLXVLMCaptionRunner` out of `VideoScanEngine` | baseline numbers published from a service run; same numbers from the harness | Scene Captions still in-app (two processes could both want the resident model: the service refuses to load while the app's captioner reports loaded, via XPC status — temporary, removed in step 2) |
-| **2 — Scene Captions** | `CaptionOrchestrator` → `CaptionJob`; results via journal into `captions`/`caption_runs` | the caption truth tests pass against journal-applied rows; the catalog writer quartet (debounce, write hold, role flip, relaunch) on `JournalApplier` | the in-app captioner is **deleted** (rule 4: one engine) |
-| **3 — fingerprints** | sound prints, picture prints backfills | row counts in sidecars before/after match an in-app run on the same fixture set | deleted in-app |
-| **4 — Content Analysis, Event Analysis evidence** | transcripts (the Whisper worker becomes a child of the service), OCR, event evidence packets | the Analyze cycler stamps read the same | deleted in-app; the Analyze pane becomes a view of service state |
-| **5 — nightly** | `--validate-catalog` and the fixity re-read run as service jobs enqueued by the nightly | the morning metrics line unchanged | the headless-app CLI modes retire |
+*Rewritten 2026-11-01 to the effective handoff (Codex docs review F04). The original 10/30 step table, where step 1 was
+the model lab's A0 and the order was still a question (§7 ruling 4), is in git history; ruling 4 was answered by
+DECISIONS 2026-10-31.*
 
-Each step is one branch, one gate, Codex on step 2 (it writes the catalog through the applier). Between steps the
-app is whole; a job that has not moved runs as it does today.
+| Step | State | What it is |
+|---|---|---|
+| **0 — skeleton** | **built** | the helper target, plist, `SMAppService` registration, XPC protocol, `JobSupervisor` with a `NoOpJob`, `Backoff`, `videoscan-bg`, the MFO row for a service job. Off unless `background.service.enabled`; no Settings toggle yet. |
+| **1 — the 8B era/OCR job** | **merged 2026-11-01** (`0656aee6`) | `EraJob` runs the seated 8B (`qwen3-vl-8b-4bit`, the A2 contract, pixels only; the file's own facts enter as deterministic bounds, never prompt text) through `ClipService` / `PythonClipWorker` (watchdog), oldest first, digests already seen by that signer skipped. Per window it writes `era.yearRange` and `ocr.date` observations and one `era.fused` per file to the journal; the app's `JournalApplier` commits them through the commit door into v14 `provenance_assertions`. UI: the inspector's "Machine era … · 8B, unconfirmed" line, Catalog Status's convergence and journal lines, era words in search. Started by hand (`--run era` / `--enqueue era`). A machine era is never a date (DECISIONS 2026-11-01). Open to-file item (STATUS): a file with no valid window writes nothing, so it is retried every run — it should get an explicit `era.none` line. |
+| **2 — captions on the 8B** | **next** | `CaptionOrchestrator` → a `CaptionJob` in the helper on the 8B; uncaptioned files first, then a backfill; the 3B captioner then retires and the in-app captioner is **deleted** (rule 4: one engine). Contract below. |
+| **3 — fingerprints** | planned | sound prints, picture prints backfills; row counts in sidecars before/after match an in-app run on the same fixture set; deleted in-app. |
+| **4 — Content Analysis, Event Analysis evidence** | planned | transcripts (the Whisper worker becomes a child of the service), event evidence packets; the Analyze cycler stamps read the same; the Analyze pane becomes a view of service state. |
+| **5 — nightly** | planned | `--validate-catalog` and the fixity re-read as service jobs enqueued by the nightly; the morning metrics line unchanged; the headless-app CLI modes retire. |
+
+Each step is one branch, one gate, and a Codex pass when it writes the catalog through the applier (step 1: #187;
+step 2 needs its own). Between steps the app is whole; a job that has not moved runs as it does today.
+
+**Step 2, the caption journal contract.** It mirrors step 1's journal (§3.4, `ObservationJournal.swift`): one line
+per caption the 8B produced, each with its `id` (SHA-256 of the canonical line, the idempotence key), its `by`
+(`machine:<approach id>@r<revision>` for the 8B caption approach) and its `evidence` (window, frame times, prompt
+hash), appended per unit (one file) and fsynced once per unit, the unit checkpointed only after its lines are whole.
+The destinations are the existing `captions` (one row per `(digest, kind, seq)`, kinds `scene` / `ocrDate` /
+`ocrText`, `at_s`, `text`) and `caption_runs` (one row per digest: `model`, `made_at`) — so a caption line carries
+`table = "captions"` with kind, seq and time, and a file's run is one closing `caption_runs` line written after its
+caption lines; the applier commits a file's captions and its run row together, so a run row never stands without its
+captions. **A file the 8B looked at and found nothing in gets an explicit "none" line** (its `caption_runs` row with
+no caption rows, the same shape as a transcript's empty text = "ran, found no speech"), so it is not retried every
+run — the fix the era job still owes (`era.none`, above). The applier gains `captions` / `caption_runs` as known
+tables (today it refuses anything but `provenance_assertions` as `unknownTable`); every other refusal rule
+(`unknownDigest`, `archivedNameOrDate`, `invalid`, torn tail) and the `refused.jsonl` count apply unchanged. Caching
+(§0.7): a digest with a `caption_runs` row for the same model is never re-run.
+
+Open: Rick —
+1. **The 3B rows during the 8B backfill.** Today `caption_runs` holds one row per digest and `captions` refuses a
+   different text at an occupied `(digest, kind, seq)` (trigger `captions_bound_conflict`), so the 8B cannot simply
+   overwrite a 3B caption. Keep the 3B rows and skip those files, replace them (needs a supersession rule), or keep
+   both (an additive migration keyed by model) — a schema question, so Rick's.
+2. **The `by` / evidence for a caption row.** `captions` has no `by` or evidence column (only `provenance = 'bound'`);
+   whether the journal's `by` and evidence land in `caption_runs.model` alone or in a new additive column is the same
+   approval.
+
+**Tests that already exist and bind to step 2** (cite these; extend, do not duplicate):
+- Writer quartet on the applier: `VideoScanTests/JournalApplierWriterTests` (debounce window, write hold,
+  viewer/master flip, quit with lines waiting → relaunch); truth and logic: `JournalApplierTruthTests`,
+  `JournalApplierCodex187Tests`, `JournalApplierSensorTests` (all in `VideoScanTests/JournalApplierTests.swift`); Core:
+  `ObservationJournalTests`, `JournalApplicationTests`, `JobSupervisorIsolationTests`, `JobSupervisorScaleTests`
+  (`VideoScanCore/Tests/VideoScanCoreTests/Background/`).
+- Caption truth: `CaptionDegenerateRefusalTests`, `CaptionDegenerateReaderRouteTests`,
+  `CatalogStatusDegenerateOCRTests` (`VideoScanTests/CaptionDegenerateRefusalTests.swift`, GH #402: junk OCR is never
+  date evidence on any route), `SceneCaptionsTests`, `CaptionOrchestratorTests`, and the archived-row rule
+  `DossierArchivedAdmissionTests`. The cutover passes when these hold against journal-applied rows.
+- Host and fixtures: the app suites run on the M4 (PROCESS §8, the default testbed); a live 8B smoke needs the Ultra
+  (the model and the media are there). The five-container media matrix uses the existing extractor fixtures (§6).
 
 ## 5. Machines
 
@@ -414,8 +454,7 @@ app is whole; a job that has not moved runs as it does today.
    "VideoScan Local") — acceptable? It is the price of its own name and lifecycle. Default: yes. Rick Agrees.
 2. **Name and icon:** "VideoScan Background" with the app icon badged (gear-in-arrows or clock, BACKLOG 10/28)?
 3. **Exit-when-idle (default) or always resident?** Default: exit after 10 idle minutes; a Settings toggle pins it.
-4. **Step order:** model lab first (new, no risk, proves the service), captions second? Or captions first because
-   they are the most-restarted job today?
+4. ~~Step order~~ — **answered** (DECISIONS 2026-10-31): the 8B era/OCR job first (step 1, merged), captions second.
 
 ## 8. Sources
 

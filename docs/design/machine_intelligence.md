@@ -1,6 +1,6 @@
 # Machine intelligence — the video-model lab, the evidence inventory, the one list of models
 
-Status: in flight — 2026-11-01. Lab phases 0–2 built (samplers, approaches A0–A3 measured, the Judge, the review page); the 8B (`qwen3-vl-8b-4bit`, approach A2) is seated as the era/OCR expert and runs as background step 1; the 32B is parked (DECISIONS 2026-10-31); captions on the 8B come second. §9 rulings 1, 2 and 4 are open (STATUS).
+Status: in flight — 2026-11-01. Lab phases 0–2 built (samplers, approaches A0–A3 measured, the Judge, the review page); the 8B (`qwen3-vl-8b-4bit`, approach A2) is seated as the era/OCR expert and runs as background step 1; the 32B is parked (DECISIONS 2026-10-31); captions on the 8B come second. §9 rulings 1, 2 and 5 are open (3 and 4 settled); a machine era is never shown as a date (DECISIONS 2026-11-01).
 
 How a machine-learned model becomes one more evidence engine in INGEST → MANAGE → ARCHIVE: a pluggable lab (sampler · approach · contract, a registry, a Judge that is the red/green for a model) that measures each approach against Rick's own dated clips before it earns a seat; what its output may say (structured assertions with evidence, pixels-only, never a family fact or a name); and where the output lives (observations, `docs/design/background_service.md` §0.7). §11 is the evidence inventory: what a media file can tell us without a model, which the deterministic engines answer first. Part II is the one list of every model VideoScan runs, has run or has measured, with its status and the document that proves its row; the numbers are in `docs/reviews/video_llm_benchmarks.md`.
 
@@ -87,7 +87,7 @@ Claude Code and Rick read this as the starting point; it is not yet built.*
                                                    │
                                      promoted only ▼
                               catalog, through the one commit door:
-                  provenance_assertions · captions · transcripts · inferred_dates(era)
+                  provenance_assertions · captions · transcripts   (never inferred_dates: §3.4)
 ```
 
 C++ reading: `VideoEvidenceApproach` is an abstract base class; `ApproachRegistry` is a factory keyed by
@@ -181,8 +181,16 @@ protocol VideoEvidenceApproach: Sendable {
 | Stage | Store | Rule |
 |---|---|---|
 | Every run, every approach | **sidecar `model-lab.sqlite`** beside `audio-fingerprints.sqlite`: `runs (run_id, approach_id, revision, prompt_hash, host, model_digest, git_sha, started_at)`, `outputs (run_id, content_digest, size_bytes, window_start_s, window_end_s, family, raw_json, schema_valid, elapsed_s)`, `segments (content_digest, engine, start_s, end_s, text)` for timed transcripts; `vectors` for §5 `A4`. Keyed by digest; open/close/WAL rules exactly as `provenance_retroactive_2026_10_26.md` §sidecars; never in git; nightly `.backup` with the catalog | the lab notebook; append-only; `BEFORE DELETE … RAISE(ABORT)` |
-| Promoted approach only | the catalog, through `CatalogCommitter`: `provenance_assertions` (state `inferred`, Phase C / v14) for era, carrier clues, room features, occasion kind; `captions` for scene/OCR text (existing kinds); `inferred_dates` with a new `source = 'era:<approach>'` and a `DateCriterionClaim.Kind.era` ranked **below `pathHint`** at confidence ≤ 0.3 with a ±7-year range | an approach is promoted by a Judge verdict (§4) recorded in `docs/reviews/video_llm_benchmarks.md` and one DECISIONS line; never by a flag flip alone |
+| Promoted approach only | the catalog, through the app's committer (`JournalApplier` applying the background helper's journal, `docs/design/background_service.md` §3.4): `provenance_assertions` (v14, built 2026-11-01; state `inferred`, by `machine:<approach id>@r<revision>`) for era (`era.yearRange`, `era.fused`), burned-in dates (`ocr.date`) and later carrier clues, room features, occasion kind; `captions` / `caption_runs` for scene and on-screen text (background step 2) | an approach is promoted by a Judge verdict (§4) recorded in `docs/reviews/video_llm_benchmarks.md` and one DECISIONS line; never by a flag flip alone (the 8B for era/OCR: DECISIONS 2026-10-31) |
 | Archived rows | background writers add metadata only; never a name or date (rule 3) | unchanged |
+
+**A machine era is never a date (DECISIONS 2026-11-01).** It does not enter `inferred_dates`, the
+`DateTriangulator` or any filter. It is shown only as its own line under Rick's confirmed date ("Machine era:
+1991–1995 · 8B, unconfirmed") and counted in Catalog Status's convergence line ("Machine era agrees with your
+confirmed date within 5 y: N of M"). Whether it ever ranks as date evidence (the design once proposed an `era:` source
+below `pathHint`) is Rick's ruling, after the convergence number has been read for a few weeks. **It does reach search,
+as human words** (DECISIONS 2026-11-01, "Observations serve two uses"): an era record indexes as "1990s" / "90s" /
+"early 90s"; its technical form (range, approach id, digest) stays in the inspector and the Provenance sheet.
 
 An unpromoted approach cannot reach the catalog: the only writer is the promotion job, and it takes an approach id
 that must appear in the promoted set compiled into the build (a sensor proves it, §6).
@@ -286,7 +294,7 @@ date on an archived row; DBSCAN or any clustering that *creates* an event withou
 | **0 — the lab, no new model** (≈ 2 days) | Core types (`EvidenceSampler`, `VideoEvidenceApproach`, `EvidenceAssertion`, schemas); `ApproachRegistry`; sidecar `model-lab.sqlite`; `A0` wrapping `MLXVLMCaptionRunner`; the MFO job; `tools/video-llm-bench/` with `validate-corpus`, `run`, `summarize`; the era/OCR corpus manifests; **baseline numbers published** | none (sidecar only) | sensors green; the five dimensions; baseline table in `docs/reviews/video_llm_benchmarks.md` | Claude (module-internal); Rick sees the numbers |
 | **1 — windows and contract** | `WindowSampler` with scene cuts; `AudioSegmentSampler` and the Whisper worker returning segments; `A1` | none | A1 vs A0 table | Claude |
 | **2 — the Ultra model** | `.pythonWorker` host; pinned `mlx-vlm`; `A2` (8B, then 32B); `A3`; **Phase E era benchmark** | none | the era bar; cost table | Rick rules on promotion from the numbers |
-| **3 — promotion** | the promotion job → `provenance_assertions` (v14) · `inferred_dates` era source · `DateCriterionClaim.Kind.era`; Provenance sheet and inspector wording | **v14** (Phase C of the provenance design; Rick approves) | writer quartet; Codex pass; truth tests | Rick (schema, wording); Codex |
+| **3 — promotion** (era/OCR: **built** 2026-11-01 as background step 1) | the 8B era/OCR job in the background helper → its journal → `JournalApplier` → `provenance_assertions` (v14); the inspector line, the Catalog Status convergence line, era words in search. Not built, by ruling: an `inferred_dates` era source, `DateCriterionClaim.Kind.era`, any filter (DECISIONS 2026-11-01). Next: captions on the 8B (background step 2) | **v14** (approved and built 2026-11-01; `provenance_assertions` + veto only) | writer quartet; Codex pass (#187); truth tests | Rick (schema, wording, whether an era ever ranks as a date); Codex |
 | **4 — retrieval and learning** | `A4` vectors + Related-ladder suggestions; Rick's 50 place labels; `A5` example memory; the pair classifier export of Events decisions (the 10/16 review §5) | sidecar; later a `places` link if Rick wants it | precision@k gates; the classifier's held-out table | Rick (what is suggested where) |
 | **5 — adapters** | `A6` LoRA on extraction, only if Phase 4's errors say so | none | same benchmark, one more revision | Rick |
 
@@ -298,9 +306,11 @@ and the Phase A spot tests finish, and it touches no catalog table.
 1. **Cloud on derived text** (captions, transcripts, never pixels or audio) for later labelling: allowed behind the
    payload gate, or local only? The slot ships disabled either way. (BACKLOG, open since 10/12.)
 2. **The 50 place labels** for `roomFeatures`: an hour of your time in the Catalog, or defer `A4` until after Phase 3?
-3. **Which model first on the Ultra**: Qwen3-VL-32B 4-bit (≈ 20 GB, native video) or Gemma 4 31B (65–75 GB at long
-   context)? Default: Qwen first, Gemma as `A3`.
-4. **Schema v14** timing: Phase 3 needs it; it is the same approval the provenance design already asks for.
+3. ~~Which model first on the Ultra~~ — **settled**: the 8B (`qwen3-vl-8b-4bit`, A2) is seated for era/OCR; the 32B
+   is parked (DECISIONS 2026-10-31).
+4. ~~Schema v14 timing~~ — **settled**: approved 2026-11-01, `provenance_assertions` + veto only, landed with step 1.
+5. **Whether a machine era ever ranks as date evidence** (enters `inferred_dates` / the triangulator / a filter):
+   open, after a few weeks of the convergence number (DECISIONS 2026-11-01).
 
 ## 10. Sources
 
@@ -401,4 +411,4 @@ Rule 13: nothing of living immediate family — pixels, audio, frames, face embe
 
 ### Where model outputs live
 
-Rick's word is **observations**: a fact Rick set is a decision, a fact a machine produced is an observation, and a decision always outranks an observation. Every observation carries `by = engine@version` (model and prompt hash for a model), when, and its evidence. Observations that have earned a seat are ordinary rows in `catalog.sqlite` beside Rick's decisions (`captions` / `caption_runs`, `transcripts`, `inferred_dates`, `dossiers`, and schema v14's `provenance_assertions`), written only through the app's one committer from the helper's journal; raw model output, segments and vectors stay in the engines' sidecar `model-lab.sqlite` (append-only by trigger); work in transit is the helper's queue, checkpoints and journal; `.scratch/` is the lab bench and is never committed. The full statement is `docs/design/background_service.md` §0.7; the table-by-table map is `docs/design/data_organization_2026_10_31.md`.
+They are **observations** (glossary: `docs/ARCHITECTURE.md` "Terms"); where each kind lives — the catalog, the engines' sidecars, the helper's files — is defined once in `docs/design/background_service.md` §0.7, and table by table in `docs/design/data_organization_2026_10_31.md`.
