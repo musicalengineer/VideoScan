@@ -1,0 +1,1902 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>VideoScan catalog — how the data is organized</title><style>body{margin:0;background:#0d1117;color:#e6edf3;font:14px -apple-system,system-ui,sans-serif}header{position:sticky;top:0;background:#0d1117;border-bottom:1px solid #30363d;padding:12px 20px;z-index:2}header b{font-size:18px} .lg{color:#9aa4b2;margin-top:4px} .wrap{overflow:auto;padding:10px 20px}.tabs{margin-top:8px} .tabs button{font:inherit;font-weight:600;padding:6px 14px;border-radius:7px;border:1px solid #30363d;background:#161b22;color:#e6edf3;cursor:pointer;margin-right:6px}.tabs button.on{border-color:#58a6ff;outline:2px solid #58a6ff33} .page{display:none} .page.on{display:block}.table{cursor:pointer} .table.dim{opacity:.25} .edge.dim{opacity:.06} .edge.hot{opacity:1;stroke-width:2.5}@media print{body{background:#fff;color:#111} header{position:static;border:0} .tabs{display:none} .page{display:block} #p2{page-break-before:always} .wrap{overflow:visible} svg text{fill:#111} .lg{color:#444} rect[fill='#161b22']{fill:#fff}}</style></head><body><header><b>VideoScan — how the data is organized</b> &nbsp; schema 13 · 63 tables · 70 foreign keys · 2026-10-31<div class="lg"><span style="color:#2f6fb3">■ A. Identity</span> · <span style="color:#3b8f5a">■ B. Rick&#x27;s decisions</span> · <span style="color:#7a4fa8">■ C. Machine observations</span> · <span style="color:#b07a1f">■ D. Search</span> · <span style="color:#6b7280">■ E. Bookkeeping</span> &nbsp;·&nbsp; schema only, no family data</div><div class="tabs"><button class="on" data-p="p1">Page 1 — the big picture</button><button data-p="p2">Page 2 — every table</button></div></header><div class="page on" id="p1"><div class="wrap"><svg xmlns="http://www.w3.org/2000/svg" width="1180" height="640" viewBox="0 0 1180 640" font-family="-apple-system, system-ui, sans-serif" font-size="13">
+<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9aa4b2"/></marker></defs>
+<rect x="400" y="40" width="420" height="560" rx="16" fill="#58a6ff22" stroke="#58a6ff" stroke-width="2"/>
+<text x="416" y="68" font-size="18" font-weight="700" fill="#58a6ff">catalog.sqlite — the truth (one committer, fixity, backups, rows never deleted)</text>
+<rect x="420" y="90" width="380" height="86" rx="16" fill="#2f6fb322" stroke="#2f6fb3" stroke-width="2"/>
+<text x="436" y="118" font-size="15" font-weight="700" fill="#2f6fb3">A. Identity  ·  9 tables · 54,495 rows</text>
+<text x="436" y="142" fill="#e6edf3" font-size="12">what a file IS: content (SHA-256), files (sightings on volumes), tombs</text>
+<text x="436" y="160" fill="#e6edf3" font-size="12">tones</text>
+<rect x="420" y="190" width="380" height="86" rx="16" fill="#3b8f5a22" stroke="#3b8f5a" stroke-width="2"/>
+<text x="436" y="218" font-size="15" font-weight="700" fill="#3b8f5a">B. Rick&#x27;s decisions  ·  18 tables · 6,470 rows</text>
+<text x="436" y="242" fill="#e6edf3" font-size="12">user dates / places / notes, stars, people tags, events, archive — hig</text>
+<text x="436" y="260" fill="#e6edf3" font-size="12">hest rank</text>
+<rect x="420" y="290" width="380" height="86" rx="16" fill="#7a4fa822" stroke="#7a4fa8" stroke-width="2"/>
+<text x="436" y="318" font-size="15" font-weight="700" fill="#7a4fa8">C. Machine observations  ·  19 tables · 182,826 rows</text>
+<text x="436" y="342" fill="#e6edf3" font-size="12">captions, transcripts, inferred dates, dossiers, prints, likeness, dup</text>
+<text x="436" y="360" fill="#e6edf3" font-size="12">licates</text>
+<rect x="420" y="390" width="380" height="86" rx="16" fill="#b07a1f22" stroke="#b07a1f" stroke-width="2"/>
+<text x="436" y="418" font-size="15" font-weight="700" fill="#b07a1f">D. Search  ·  6 tables · 3 rows</text>
+<text x="436" y="442" fill="#e6edf3" font-size="12">full-text index over captions and transcripts</text>
+<rect x="420" y="490" width="380" height="86" rx="16" fill="#6b728022" stroke="#6b7280" stroke-width="2"/>
+<text x="436" y="518" font-size="15" font-weight="700" fill="#6b7280">E. Bookkeeping  ·  11 tables · 44,365 rows</text>
+<text x="436" y="542" fill="#e6edf3" font-size="12">generations, the ledger, imports, audits, job markers</text>
+<rect x="40" y="60" width="300" height="150" rx="16" fill="#3b8f5a22" stroke="#3b8f5a" stroke-width="2"/>
+<text x="56" y="88" font-size="15" font-weight="700" fill="#3b8f5a">Rick</text>
+<text x="56" y="112" fill="#e6edf3" font-size="12">decisions typed in the app:</text>
+<text x="56" y="130" fill="#e6edf3" font-size="12">dates, places, people, events, archive, stars.</text>
+<text x="56" y="148" fill="#e6edf3" font-size="12">Always outrank a machine observation.</text>
+<rect x="40" y="250" width="300" height="170" rx="16" fill="#7a4fa822" stroke="#7a4fa8" stroke-width="2"/>
+<text x="56" y="278" font-size="15" font-weight="700" fill="#7a4fa8">Engines and models (the helper)</text>
+<text x="56" y="302" fill="#e6edf3" font-size="12">captioner (8B), Whisper, era contract, prints,</text>
+<text x="56" y="320" fill="#e6edf3" font-size="12">fingerprint matching, integrity checks.</text>
+<text x="56" y="338" fill="#e6edf3" font-size="12">Writes a JOURNAL, never the catalog.</text>
+<rect x="40" y="460" width="300" height="140" rx="16" fill="#b07a1f22" stroke="#b07a1f" stroke-width="2"/>
+<text x="56" y="488" font-size="15" font-weight="700" fill="#b07a1f">Media files + volumes</text>
+<text x="56" y="512" fill="#e6edf3" font-size="12">the footage itself, probed read-only:</text>
+<text x="56" y="530" fill="#e6edf3" font-size="12">container, codecs, dates, DV datecode.</text>
+<rect x="880" y="60" width="270" height="230" rx="16" fill="#7a4fa822" stroke="#7a4fa8" stroke-width="2"/>
+<text x="896" y="88" font-size="15" font-weight="700" fill="#7a4fa8">Sidecar stores (bulk, regenerable)</text>
+<text x="896" y="112" fill="#e6edf3" font-size="12">audio-fingerprints.sqlite — landmarks</text>
+<text x="896" y="130" fill="#e6edf3" font-size="12">model-lab.sqlite — every raw model</text>
+<text x="896" y="148" fill="#e6edf3" font-size="12">   output, segments, vectors (append-only)</text>
+<text x="896" y="166" fill="#e6edf3" font-size="12">metadata_cache.sqlite — ffprobe cache</text>
+<text x="896" y="184" fill="#e6edf3" font-size="12">   (keyed by path + size + mtime)</text>
+<rect x="880" y="330" width="270" height="130" rx="16" fill="#6b728022" stroke="#6b7280" stroke-width="2"/>
+<text x="896" y="358" font-size="15" font-weight="700" fill="#6b7280">Helper files (in transit)</text>
+<text x="896" y="382" fill="#e6edf3" font-size="12">background/queue — job requests</text>
+<text x="896" y="400" fill="#e6edf3" font-size="12">background/checkpoints — last unit done</text>
+<text x="896" y="418" fill="#e6edf3" font-size="12">background/journal/*.jsonl — facts to apply</text>
+<rect x="880" y="500" width="270" height="100" rx="16" fill="#6b728022" stroke="#6b7280" stroke-width="2"/>
+<text x="896" y="528" font-size="15" font-weight="700" fill="#6b7280">.scratch/ (lab bench, thrown away)</text>
+<text x="896" y="552" fill="#e6edf3" font-size="12">bench runs, frames, review verdicts</text>
+<text x="896" y="570" fill="#e6edf3" font-size="12">never in git, never a source of truth</text>
+<path d="M340 135 C370.0 135 370.0 160 400 160" fill="none" stroke="#9aa4b2" stroke-width="2" marker-end="url(#ah)"/>
+<text x="370.0" y="141.5" fill="#9aa4b2" font-size="11" text-anchor="middle">commit door</text>
+<path d="M340 335 C610.0 335 610.0 395 880 395" fill="none" stroke="#7a4fa8" stroke-width="2" marker-end="url(#ah)"/>
+<text x="610.0" y="359.0" fill="#7a4fa8" font-size="11" text-anchor="middle">writes</text>
+<path d="M880 440 C850.0 440 850.0 330 820 330" fill="none" stroke="#7a4fa8" stroke-width="2" marker-end="url(#ah)"/>
+<text x="850.0" y="379.0" fill="#7a4fa8" font-size="11" text-anchor="middle">committer applies the journal</text>
+<path d="M340 310 C610.0 310 610.0 170 880 170" fill="none" stroke="#7a4fa8" stroke-width="2" marker-end="url(#ah)"/>
+<text x="610.0" y="234.0" fill="#7a4fa8" font-size="11" text-anchor="middle">bulk outputs</text>
+<path d="M340 530 C370.0 530 370.0 150 400 150" fill="none" stroke="#9aa4b2" stroke-width="2" marker-end="url(#ah)"/>
+<text x="370.0" y="334.0" fill="#9aa4b2" font-size="11" text-anchor="middle">scan, hash, probe</text>
+<path d="M880 180 C850.0 180 850.0 300 820 300" fill="none" stroke="#9aa4b2" stroke-width="2" marker-end="url(#ah)"/>
+<text x="850.0" y="234.0" fill="#9aa4b2" font-size="11" text-anchor="middle">app reads directly</text>
+<text x="40" y="626" fill="#9aa4b2" font-size="12">A decision always outranks an observation. An observation never supports the inference that produced it. 70 foreign keys tie the tables to content and files.</text>
+</svg></div></div><div class="page" id="p2"><div class="wrap"><div class="lg" style="margin-bottom:8px">PK primary key · FK foreign key · hover a table to light its links</div><svg xmlns="http://www.w3.org/2000/svg" width="1880" height="3268" viewBox="0 0 1880 3268" font-family="-apple-system, system-ui, sans-serif" font-size="11">
+<text x="40" y="40" font-size="15" font-weight="700" fill="#2f6fb3">A. Identity</text>
+<text x="40" y="56" font-size="11" fill="#9aa4b2">9 tables</text>
+<text x="400" y="40" font-size="15" font-weight="700" fill="#3b8f5a">B. Rick&#x27;s decisions</text>
+<text x="400" y="56" font-size="11" fill="#9aa4b2">18 tables</text>
+<text x="760" y="40" font-size="15" font-weight="700" fill="#7a4fa8">C. Machine observations</text>
+<text x="760" y="56" font-size="11" fill="#9aa4b2">19 tables</text>
+<text x="1120" y="40" font-size="15" font-weight="700" fill="#b07a1f">D. Search</text>
+<text x="1120" y="56" font-size="11" fill="#9aa4b2">6 tables</text>
+<text x="1480" y="40" font-size="15" font-weight="700" fill="#6b7280">E. Bookkeeping</text>
+<text x="1480" y="56" font-size="11" fill="#9aa4b2">11 tables</text>
+<path class="edge e-archive_copies e-files" d="M400 619.5 C370.0 619.5 370.0 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-archive_copies e-files" d="M400 604.5 C370.0 604.5 370.0 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-audit_results e-import_runs" d="M1780 285.5 C1820 285.5 1820 1891.5 1780 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-av_pairs e-content" d="M340 2054.5 C380 2054.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-av_pairs e-content" d="M340 2024.5 C380 2024.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-av_pairs e-content" d="M340 2009.5 C380 2009.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-backup_attestations e-content" d="M400 863.5 C370.0 863.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-backup_destinations e-files" d="M400 2582.5 C370.0 2582.5 370.0 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-caption_runs e-content" d="M760 1257.5 C550.0 1257.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-captions e-content" d="M760 300.5 C550.0 300.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-derived_unverified e-import_runs" d="M1060 193.5 C1270.0 193.5 1270.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-derived_unverified e-content" d="M760 103.5 C550.0 103.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-dispositions e-content" d="M400 103.5 C370.0 103.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-dossiers e-content" d="M760 1561.5 C550.0 1561.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-duplicate_members e-files" d="M760 846.5 C550.0 846.5 550.0 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-duplicate_members e-duplicate_groups" d="M1060 831.5 C1100 831.5 1100 1165.5 1060 1165.5" fill="none" stroke="#7a4fa8" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-event_decisions e-import_runs" d="M700 1212.5 C1090.0 1212.5 1090.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-event_members e-content" d="M400 1319.5 C370.0 1319.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-event_members e-events" d="M700 1304.5 C740 1304.5 740 1578.5 700 1578.5" fill="none" stroke="#3b8f5a" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-events e-import_runs" d="M700 1683.5 C1090.0 1683.5 1090.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-family_music e-content" d="M400 2186.5 C370.0 2186.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-files e-volumes" d="M340 133.5 C380 133.5 380 1750.5 340 1750.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-files e-content" d="M340 118.5 C380 118.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-footage_decisions e-content" d="M400 2079.5 C370.0 2079.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-footage_decisions e-content" d="M400 2064.5 C370.0 2064.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-footage_decisions e-import_runs" d="M700 2004.5 C1090.0 2004.5 1090.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-footage_likeness e-content" d="M760 1987.5 C550.0 1987.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-footage_likeness e-content" d="M760 1972.5 C550.0 1972.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-footage_membership e-content" d="M760 1820.5 C550.0 1820.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-ignored_content e-content" d="M400 360.5 C370.0 360.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-ignored_content e-import_runs" d="M700 240.5 C1090.0 240.5 1090.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-ignored_content_put_back e-ignored_content" d="M700 2490.5 C740 2490.5 740 210.5 700 210.5" fill="none" stroke="#3b8f5a" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-import_items e-import_runs" d="M1780 103.5 C1820 103.5 1820 1891.5 1780 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-inferred_dates e-content" d="M760 1379.5 C550.0 1379.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-job_markers e-import_runs" d="M1780 1510.5 C1820 1510.5 1820 1891.5 1780 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-knowledge_sources e-content" d="M760 694.5 C550.0 694.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-knowledge_sources e-import_runs" d="M1060 649.5 C1270.0 649.5 1270.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-ledger e-import_runs" d="M1780 647.5 C1820 647.5 1820 1891.5 1780 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-ledger e-content" d="M1480 587.5 C910.0 587.5 910.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-legacy_pair_ids e-content" d="M340 1628.5 C380 1628.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-legacy_pair_ids e-import_runs" d="M340 1583.5 C910.0 1583.5 910.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-lineage e-content" d="M760 2670.5 C550.0 2670.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-lineage e-content" d="M760 2655.5 C550.0 2655.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-lineage_pending e-content" d="M760 2381.5 C550.0 2381.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-lineage_pending e-content" d="M760 2351.5 C550.0 2351.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-lineage_pending e-import_runs" d="M1060 2291.5 C1270.0 2291.5 1270.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-media_checks e-content" d="M760 2488.5 C550.0 2488.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-pending_purges e-pending_rows" d="M340 1476.5 C380 1476.5 380 1369.5 340 1369.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-people_tags e-content" d="M400 452.5 C370.0 452.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-perceptual_prints e-content" d="M760 2837.5 C550.0 2837.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-person_searches e-import_runs" d="M1060 3169.5 C1270.0 3169.5 1270.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-person_searches e-content" d="M760 3004.5 C550.0 3004.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-provenance_roles e-content" d="M400 2338.5 C370.0 2338.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-quarantine e-files" d="M1480 979.5 C910.0 979.5 910.0 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-quarantine e-import_runs" d="M1780 769.5 C1820 769.5 1820 1891.5 1780 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-regen_context e-content" d="M760 2169.5 C550.0 2169.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-regen_context e-import_runs" d="M1060 2124.5 C1270.0 2124.5 1270.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-row_knowledge e-import_runs" d="M1060 557.5 C1270.0 557.5 1270.0 1891.5 1480 1891.5" fill="none" stroke="#6b7280" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-row_knowledge e-content" d="M760 482.5 C550.0 482.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-row_knowledge e-files" d="M760 467.5 C550.0 467.5 550.0 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-sound_prints e-content" d="M760 983.5 C550.0 983.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-stars e-content" d="M400 756.5 C370.0 756.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-supersessions e-content" d="M340 1902.5 C380 1902.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-supersessions e-content" d="M340 1887.5 C380 1887.5 380 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-tombstones e-files" d="M340 1005.5 C380 1005.5 380 103.5 340 103.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-transcripts e-content" d="M760 1683.5 C550.0 1683.5 550.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-user_dates e-content" d="M400 1030.5 C370.0 1030.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-user_notes e-content" d="M400 1790.5 C370.0 1790.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-user_places e-content" d="M400 1441.5 C370.0 1441.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<path class="edge e-workflow_tags e-content" d="M400 1897.5 C370.0 1897.5 370.0 1232.5 340 1232.5" fill="none" stroke="#2f6fb3" stroke-width="1.2" opacity="0.45"/>
+<g class="table" data-t="files">
+<rect x="40" y="70" width="300" height="874" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="70" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="87" fill="#fff" font-weight="700" font-size="12">files</text>
+<text x="332" y="87" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">23,060 rows</text>
+<text x="46" y="107" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="107" fill="#e6edf3">id</text>
+<text x="332" y="107" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="122" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="122" fill="#e6edf3">content_digest</text>
+<text x="332" y="122" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="137" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="137" fill="#e6edf3">volume_uuid</text>
+<text x="332" y="137" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="152" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="152" fill="#e6edf3">volume_case_sensitive</text>
+<text x="332" y="152" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="167" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="167" fill="#e6edf3">full_path</text>
+<text x="332" y="167" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="182" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="182" fill="#e6edf3">path_fold</text>
+<text x="332" y="182" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="197" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="197" fill="#e6edf3">filename</text>
+<text x="332" y="197" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="212" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="212" fill="#e6edf3">ext</text>
+<text x="332" y="212" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="227" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="227" fill="#e6edf3">directory</text>
+<text x="332" y="227" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="242" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="242" fill="#e6edf3">size_bytes</text>
+<text x="332" y="242" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="257" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="257" fill="#e6edf3">fs_created_at</text>
+<text x="332" y="257" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="272" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="272" fill="#e6edf3">fs_modified_at</text>
+<text x="332" y="272" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="287" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="287" fill="#e6edf3">stamp_device</text>
+<text x="332" y="287" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="302" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="302" fill="#e6edf3">stamp_inode</text>
+<text x="332" y="302" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="317" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="317" fill="#e6edf3">stamp_mtime_ns</text>
+<text x="332" y="317" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="332" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="332" fill="#e6edf3">stamp_ctime_ns</text>
+<text x="332" y="332" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="347" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="347" fill="#e6edf3">stamp_volume_uuid</text>
+<text x="332" y="347" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="362" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="362" fill="#e6edf3">digest_computed_at</text>
+<text x="332" y="362" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="377" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="377" fill="#e6edf3">digest_source</text>
+<text x="332" y="377" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="392" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="392" fill="#e6edf3">sampled_hash</text>
+<text x="332" y="392" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="407" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="407" fill="#e6edf3">sampled_hash_at</text>
+<text x="332" y="407" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="422" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="422" fill="#e6edf3">partial_md5</text>
+<text x="332" y="422" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="437" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="437" fill="#e6edf3">stream_type</text>
+<text x="332" y="437" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="452" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="452" fill="#e6edf3">duration_s</text>
+<text x="332" y="452" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="46" y="467" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="467" fill="#e6edf3">container</text>
+<text x="332" y="467" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="482" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="482" fill="#e6edf3">video_codec</text>
+<text x="332" y="482" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="497" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="497" fill="#e6edf3">audio_codec</text>
+<text x="332" y="497" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="512" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="512" fill="#e6edf3">embedded_created_at</text>
+<text x="332" y="512" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="527" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="527" fill="#e6edf3">embedded_created_source</text>
+<text x="332" y="527" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="542" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="542" fill="#e6edf3">probe_extra</text>
+<text x="332" y="542" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="557" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="557" fill="#e6edf3">scan_host</text>
+<text x="332" y="557" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="572" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="572" fill="#e6edf3">scanned_at</text>
+<text x="332" y="572" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="587" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="587" fill="#e6edf3">scan_root_label</text>
+<text x="332" y="587" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="602" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="602" fill="#e6edf3">bundle_container</text>
+<text x="332" y="602" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="617" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="617" fill="#e6edf3">source_host</text>
+<text x="332" y="617" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="632" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="632" fill="#e6edf3">original_full_path</text>
+<text x="332" y="632" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="647" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="647" fill="#e6edf3">origin_volume</text>
+<text x="332" y="647" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="662" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="662" fill="#e6edf3">machine_notes</text>
+<text x="332" y="662" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="677" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="677" fill="#e6edf3">lifecycle</text>
+<text x="332" y="677" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="692" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="692" fill="#e6edf3">archive_stage</text>
+<text x="332" y="692" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="707" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="707" fill="#e6edf3">master_location</text>
+<text x="332" y="707" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="722" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="722" fill="#e6edf3">set_aside_reason</text>
+<text x="332" y="722" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="737" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="737" fill="#e6edf3">needs_reformat</text>
+<text x="332" y="737" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="752" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="752" fill="#e6edf3">workspace_active</text>
+<text x="332" y="752" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="767" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="767" fill="#e6edf3">removal_state</text>
+<text x="332" y="767" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="782" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="782" fill="#e6edf3">removal_since</text>
+<text x="332" y="782" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="797" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="797" fill="#e6edf3">removal_reason</text>
+<text x="332" y="797" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="812" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="812" fill="#e6edf3">removal_trash_path</text>
+<text x="332" y="812" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="827" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="827" fill="#e6edf3">removal_trash_emptied_at</text>
+<text x="332" y="827" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="842" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="842" fill="#e6edf3">removal_last_seen</text>
+<text x="332" y="842" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="857" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="857" fill="#e6edf3">removal_revision</text>
+<text x="332" y="857" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="872" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="872" fill="#e6edf3">audit_seen_volume_uuid</text>
+<text x="332" y="872" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="887" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="887" fill="#e6edf3">audit_seen_mount_from</text>
+<text x="332" y="887" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="902" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="902" fill="#e6edf3">audit_seen_device_key</text>
+<text x="332" y="902" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="917" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="917" fill="#e6edf3">audit_seen_at</text>
+<text x="332" y="917" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="932" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="932" fill="#e6edf3">catalogued_at</text>
+<text x="332" y="932" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="tombstones">
+<rect x="40" y="972" width="300" height="199" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="972" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="989" fill="#fff" font-weight="700" font-size="12">tombstones</text>
+<text x="332" y="989" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">12,730 rows</text>
+<text x="46" y="1009" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1009" fill="#e6edf3">file_id</text>
+<text x="332" y="1009" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1024" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1024" fill="#e6edf3">revision</text>
+<text x="332" y="1024" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1039" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1039" fill="#e6edf3">state</text>
+<text x="332" y="1039" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1054" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1054" fill="#e6edf3">since</text>
+<text x="332" y="1054" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1069" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1069" fill="#e6edf3">reason</text>
+<text x="332" y="1069" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1084" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1084" fill="#e6edf3">trash_path</text>
+<text x="332" y="1084" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1099" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1099" fill="#e6edf3">trash_emptied_at</text>
+<text x="332" y="1099" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1114" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1114" fill="#e6edf3">last_seen</text>
+<text x="332" y="1114" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1129" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1129" fill="#e6edf3">written_at</text>
+<text x="332" y="1129" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1144" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1144" fill="#e6edf3">door</text>
+<text x="332" y="1144" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1159" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1159" fill="#e6edf3">generation</text>
+<text x="332" y="1159" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="content">
+<rect x="40" y="1199" width="300" height="109" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1199" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1216" fill="#fff" font-weight="700" font-size="12">content</text>
+<text x="332" y="1216" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">6,594 rows</text>
+<text x="46" y="1236" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1236" fill="#e6edf3">digest</text>
+<text x="332" y="1236" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1251" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1251" fill="#e6edf3">algorithm</text>
+<text x="332" y="1251" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1266" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1266" fill="#e6edf3">byte_count</text>
+<text x="332" y="1266" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1281" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1281" fill="#e6edf3">first_seen_at</text>
+<text x="332" y="1281" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1296" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1296" fill="#e6edf3">first_seen_how</text>
+<text x="332" y="1296" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="pending_rows">
+<rect x="40" y="1336" width="300" height="79" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1336" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1353" fill="#fff" font-weight="700" font-size="12">pending_rows</text>
+<text x="332" y="1353" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">4,422 rows</text>
+<text x="46" y="1373" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1373" fill="#e6edf3">id</text>
+<text x="332" y="1373" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1388" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1388" fill="#e6edf3">json</text>
+<text x="332" y="1388" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1403" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1403" fill="#e6edf3">queued_at</text>
+<text x="332" y="1403" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="pending_purges">
+<rect x="40" y="1443" width="300" height="79" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1443" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1460" fill="#fff" font-weight="700" font-size="12">pending_purges</text>
+<text x="332" y="1460" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">4,420 rows</text>
+<text x="46" y="1480" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1480" fill="#e6edf3">id</text>
+<text x="332" y="1480" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1495" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1495" fill="#e6edf3">purged_at</text>
+<text x="332" y="1495" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1510" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1510" fill="#e6edf3">door</text>
+<text x="332" y="1510" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="legacy_pair_ids">
+<rect x="40" y="1550" width="300" height="139" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1550" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1567" fill="#fff" font-weight="700" font-size="12">legacy_pair_ids</text>
+<text x="332" y="1567" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">3,260 rows</text>
+<text x="46" y="1587" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1587" fill="#e6edf3">import_run</text>
+<text x="332" y="1587" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1602" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1602" fill="#e6edf3">source_ordinal</text>
+<text x="332" y="1602" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="46" y="1617" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1617" fill="#e6edf3">json_row_id</text>
+<text x="332" y="1617" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1632" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="1632" fill="#e6edf3">digest</text>
+<text x="332" y="1632" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1647" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1647" fill="#e6edf3">paired_with_id</text>
+<text x="332" y="1647" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1662" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1662" fill="#e6edf3">pair_group_id</text>
+<text x="332" y="1662" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1677" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1677" fill="#e6edf3">event_member_keys</text>
+<text x="332" y="1677" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="volumes">
+<rect x="40" y="1717" width="300" height="109" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1717" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1734" fill="#fff" font-weight="700" font-size="12">volumes</text>
+<text x="332" y="1734" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">9 rows</text>
+<text x="46" y="1754" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1754" fill="#e6edf3">volume_uuid</text>
+<text x="332" y="1754" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1769" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1769" fill="#e6edf3">last_name</text>
+<text x="332" y="1769" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1784" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1784" fill="#e6edf3">mount_type</text>
+<text x="332" y="1784" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1799" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1799" fill="#e6edf3">remote_server</text>
+<text x="332" y="1799" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1814" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1814" fill="#e6edf3">case_sensitive</text>
+<text x="332" y="1814" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="supersessions">
+<rect x="40" y="1854" width="300" height="79" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1854" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1871" fill="#fff" font-weight="700" font-size="12">supersessions</text>
+<text x="332" y="1871" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="46" y="1891" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1891" fill="#e6edf3">retired_digest</text>
+<text x="332" y="1891" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1906" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="1906" fill="#e6edf3">by_digest</text>
+<text x="332" y="1906" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="1921" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="1921" fill="#e6edf3">confirmed_at</text>
+<text x="332" y="1921" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="av_pairs">
+<rect x="40" y="1961" width="300" height="109" rx="7" fill="#161b22" stroke="#2f6fb3" stroke-width="1.5"/>
+<rect x="40" y="1961" width="300" height="26" rx="7" fill="#2f6fb3"/>
+<text x="48" y="1978" fill="#fff" font-weight="700" font-size="12">av_pairs</text>
+<text x="332" y="1978" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="46" y="1998" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="66" y="1998" fill="#e6edf3">pair_group_id</text>
+<text x="332" y="1998" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="2013" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="2013" fill="#e6edf3">video_digest</text>
+<text x="332" y="2013" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="2028" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="2028" fill="#e6edf3">audio_digest</text>
+<text x="332" y="2028" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="2043" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="66" y="2043" fill="#e6edf3">confidence</text>
+<text x="332" y="2043" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="46" y="2058" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="66" y="2058" fill="#e6edf3">combined_digest</text>
+<text x="332" y="2058" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="dispositions">
+<rect x="400" y="70" width="300" height="79" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="70" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="87" fill="#fff" font-weight="700" font-size="12">dispositions</text>
+<text x="692" y="87" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">3,228 rows</text>
+<text x="406" y="107" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="107" fill="#e6edf3">digest</text>
+<text x="692" y="107" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="122" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="122" fill="#e6edf3">disposition</text>
+<text x="692" y="122" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="137" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="137" fill="#e6edf3">conflict</text>
+<text x="692" y="137" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="ignored_content">
+<rect x="400" y="177" width="300" height="214" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="177" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="194" fill="#fff" font-weight="700" font-size="12">ignored_content</text>
+<text x="692" y="194" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1,713 rows</text>
+<text x="406" y="214" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="214" fill="#e6edf3">ignored_seq</text>
+<text x="692" y="214" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="229" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="229" fill="#e6edf3">entry_id</text>
+<text x="692" y="229" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="244" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="244" fill="#e6edf3">import_run</text>
+<text x="692" y="244" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="259" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="259" fill="#e6edf3">source_ordinal</text>
+<text x="692" y="259" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="274" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="274" fill="#e6edf3">partial_md5</text>
+<text x="692" y="274" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="289" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="289" fill="#e6edf3">size_bytes</text>
+<text x="692" y="289" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="304" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="304" fill="#e6edf3">filename</text>
+<text x="692" y="304" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="319" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="319" fill="#e6edf3">reason</text>
+<text x="692" y="319" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="334" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="334" fill="#e6edf3">added_at</text>
+<text x="692" y="334" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="349" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="349" fill="#e6edf3">sample_path</text>
+<text x="692" y="349" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="364" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="364" fill="#e6edf3">digest</text>
+<text x="692" y="364" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="379" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="379" fill="#e6edf3">binding</text>
+<text x="692" y="379" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="people_tags">
+<rect x="400" y="419" width="300" height="124" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="419" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="436" fill="#fff" font-weight="700" font-size="12">people_tags</text>
+<text x="692" y="436" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">813 rows</text>
+<text x="406" y="456" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="456" fill="#e6edf3">digest</text>
+<text x="692" y="456" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="471" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="471" fill="#e6edf3">name</text>
+<text x="692" y="471" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="486" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="486" fill="#e6edf3">kind</text>
+<text x="692" y="486" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="501" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="501" fill="#e6edf3">confirmed_at</text>
+<text x="692" y="501" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="516" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="516" fill="#e6edf3">conflict</text>
+<text x="692" y="516" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="531" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="531" fill="#e6edf3">provenance</text>
+<text x="692" y="531" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="archive_copies">
+<rect x="400" y="571" width="300" height="124" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="571" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="588" fill="#fff" font-weight="700" font-size="12">archive_copies</text>
+<text x="692" y="588" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">193 rows</text>
+<text x="406" y="608" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="608" fill="#e6edf3">file_id</text>
+<text x="692" y="608" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="623" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="623" fill="#e6edf3">source_file_id</text>
+<text x="692" y="623" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="638" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="638" fill="#e6edf3">source_row_id</text>
+<text x="692" y="638" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="653" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="653" fill="#e6edf3">archived_at</text>
+<text x="692" y="653" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="668" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="668" fill="#e6edf3">fixity_verified_at</text>
+<text x="692" y="668" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="683" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="683" fill="#e6edf3">promoted_by</text>
+<text x="692" y="683" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="stars">
+<rect x="400" y="723" width="300" height="79" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="723" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="740" fill="#fff" font-weight="700" font-size="12">stars</text>
+<text x="692" y="740" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">145 rows</text>
+<text x="406" y="760" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="760" fill="#e6edf3">digest</text>
+<text x="692" y="760" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="775" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="775" fill="#e6edf3">rating</text>
+<text x="692" y="775" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="790" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="790" fill="#e6edf3">conflict</text>
+<text x="692" y="790" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="backup_attestations">
+<rect x="400" y="830" width="300" height="139" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="830" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="847" fill="#fff" font-weight="700" font-size="12">backup_attestations</text>
+<text x="692" y="847" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">144 rows</text>
+<text x="406" y="867" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="867" fill="#e6edf3">digest</text>
+<text x="692" y="867" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="882" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="882" fill="#e6edf3">kind</text>
+<text x="692" y="882" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="897" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="897" fill="#e6edf3">answer</text>
+<text x="692" y="897" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="912" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="912" fill="#e6edf3">label</text>
+<text x="692" y="912" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="927" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="927" fill="#e6edf3">attested_at</text>
+<text x="692" y="927" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="942" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="942" fill="#e6edf3">by_whom</text>
+<text x="692" y="942" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="957" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="957" fill="#e6edf3">conflict</text>
+<text x="692" y="957" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="user_dates">
+<rect x="400" y="997" width="300" height="109" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="997" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1014" fill="#fff" font-weight="700" font-size="12">user_dates</text>
+<text x="692" y="1014" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">74 rows</text>
+<text x="406" y="1034" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1034" fill="#e6edf3">digest</text>
+<text x="692" y="1034" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1049" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1049" fill="#e6edf3">value</text>
+<text x="692" y="1049" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1064" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1064" fill="#e6edf3">confidence</text>
+<text x="692" y="1064" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1079" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1079" fill="#e6edf3">set_at</text>
+<text x="692" y="1079" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="1094" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1094" fill="#e6edf3">conflict</text>
+<text x="692" y="1094" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="event_decisions">
+<rect x="400" y="1134" width="300" height="109" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1134" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1151" fill="#fff" font-weight="700" font-size="12">event_decisions</text>
+<text x="692" y="1151" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">43 rows</text>
+<text x="406" y="1171" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1171" fill="#e6edf3">seq</text>
+<text x="692" y="1171" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="1186" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1186" fill="#e6edf3">kind</text>
+<text x="692" y="1186" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1201" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1201" fill="#e6edf3">payload</text>
+<text x="692" y="1201" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1216" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="1216" fill="#e6edf3">import_run</text>
+<text x="692" y="1216" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1231" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1231" fill="#e6edf3">source_ordinal</text>
+<text x="692" y="1231" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="event_members">
+<rect x="400" y="1271" width="300" height="109" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1271" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1288" fill="#fff" font-weight="700" font-size="12">event_members</text>
+<text x="692" y="1288" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">42 rows</text>
+<text x="406" y="1308" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="1308" fill="#e6edf3">event_id</text>
+<text x="692" y="1308" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1323" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="1323" fill="#e6edf3">digest</text>
+<text x="692" y="1323" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1338" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1338" fill="#e6edf3">range_start_s</text>
+<text x="692" y="1338" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="406" y="1353" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1353" fill="#e6edf3">range_end_s</text>
+<text x="692" y="1353" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="406" y="1368" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1368" fill="#e6edf3">imported_key</text>
+<text x="692" y="1368" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="user_places">
+<rect x="400" y="1408" width="300" height="109" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1408" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1425" fill="#fff" font-weight="700" font-size="12">user_places</text>
+<text x="692" y="1425" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">25 rows</text>
+<text x="406" y="1445" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1445" fill="#e6edf3">digest</text>
+<text x="692" y="1445" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1460" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1460" fill="#e6edf3">place</text>
+<text x="692" y="1460" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1475" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1475" fill="#e6edf3">confidence</text>
+<text x="692" y="1475" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1490" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1490" fill="#e6edf3">set_at</text>
+<text x="692" y="1490" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="1505" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1505" fill="#e6edf3">conflict</text>
+<text x="692" y="1505" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="events">
+<rect x="400" y="1545" width="300" height="184" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1545" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1562" fill="#fff" font-weight="700" font-size="12">events</text>
+<text x="692" y="1562" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">18 rows</text>
+<text x="406" y="1582" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1582" fill="#e6edf3">event_id</text>
+<text x="692" y="1582" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1597" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1597" fill="#e6edf3">name</text>
+<text x="692" y="1597" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1612" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1612" fill="#e6edf3">state</text>
+<text x="692" y="1612" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1627" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1627" fill="#e6edf3">categories</text>
+<text x="692" y="1627" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1642" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1642" fill="#e6edf3">note</text>
+<text x="692" y="1642" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1657" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1657" fill="#e6edf3">created_at</text>
+<text x="692" y="1657" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="1672" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1672" fill="#e6edf3">updated_at</text>
+<text x="692" y="1672" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="1687" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="1687" fill="#e6edf3">import_run</text>
+<text x="692" y="1687" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1702" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1702" fill="#e6edf3">source_ordinal</text>
+<text x="692" y="1702" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="1717" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1717" fill="#e6edf3">kind</text>
+<text x="692" y="1717" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="user_notes">
+<rect x="400" y="1757" width="300" height="79" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1757" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1774" fill="#fff" font-weight="700" font-size="12">user_notes</text>
+<text x="692" y="1774" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">13 rows</text>
+<text x="406" y="1794" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1794" fill="#e6edf3">digest</text>
+<text x="692" y="1794" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1809" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1809" fill="#e6edf3">text</text>
+<text x="692" y="1809" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1824" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="1824" fill="#e6edf3">conflict</text>
+<text x="692" y="1824" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="workflow_tags">
+<rect x="400" y="1864" width="300" height="64" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1864" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1881" fill="#fff" font-weight="700" font-size="12">workflow_tags</text>
+<text x="692" y="1881" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">9 rows</text>
+<text x="406" y="1901" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1901" fill="#e6edf3">digest</text>
+<text x="692" y="1901" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="1916" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1916" fill="#e6edf3">tag</text>
+<text x="692" y="1916" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="footage_decisions">
+<rect x="400" y="1956" width="300" height="169" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="1956" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="1973" fill="#fff" font-weight="700" font-size="12">footage_decisions</text>
+<text x="692" y="1973" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">7 rows</text>
+<text x="406" y="1993" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="1993" fill="#e6edf3">decision_id</text>
+<text x="692" y="1993" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2008" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="2008" fill="#e6edf3">import_run</text>
+<text x="692" y="2008" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2023" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2023" fill="#e6edf3">source_ordinal</text>
+<text x="692" y="2023" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2038" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2038" fill="#e6edf3">row_id</text>
+<text x="692" y="2038" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2053" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2053" fill="#e6edf3">other_row_id</text>
+<text x="692" y="2053" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2068" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="2068" fill="#e6edf3">digest</text>
+<text x="692" y="2068" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2083" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="2083" fill="#e6edf3">other_digest</text>
+<text x="692" y="2083" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2098" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2098" fill="#e6edf3">verdict</text>
+<text x="692" y="2098" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2113" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2113" fill="#e6edf3">decided_at</text>
+<text x="692" y="2113" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="family_music">
+<rect x="400" y="2153" width="300" height="109" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="2153" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="2170" fill="#fff" font-weight="700" font-size="12">family_music</text>
+<text x="692" y="2170" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">3 rows</text>
+<text x="406" y="2190" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="2190" fill="#e6edf3">digest</text>
+<text x="692" y="2190" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2205" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2205" fill="#e6edf3">performer</text>
+<text x="692" y="2205" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2220" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2220" fill="#e6edf3">title</text>
+<text x="692" y="2220" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2235" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2235" fill="#e6edf3">marked_at</text>
+<text x="692" y="2235" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2250" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2250" fill="#e6edf3">conflict</text>
+<text x="692" y="2250" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="provenance_roles">
+<rect x="400" y="2290" width="300" height="124" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="2290" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="2307" fill="#fff" font-weight="700" font-size="12">provenance_roles</text>
+<text x="692" y="2307" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="406" y="2327" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="2327" fill="#e6edf3">role_id</text>
+<text x="692" y="2327" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2342" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="2342" fill="#e6edf3">digest</text>
+<text x="692" y="2342" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2357" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2357" fill="#e6edf3">role</text>
+<text x="692" y="2357" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2372" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2372" fill="#e6edf3">decided_at</text>
+<text x="692" y="2372" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2387" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2387" fill="#e6edf3">source_missing</text>
+<text x="692" y="2387" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2402" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2402" fill="#e6edf3">note</text>
+<text x="692" y="2402" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="ignored_content_put_back">
+<rect x="400" y="2442" width="300" height="79" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="2442" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="2459" fill="#fff" font-weight="700" font-size="12">ignored_content_put_back</text>
+<text x="692" y="2459" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="406" y="2479" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="2479" fill="#e6edf3">put_back_seq</text>
+<text x="692" y="2479" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2494" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="426" y="2494" fill="#e6edf3">ignored_seq</text>
+<text x="692" y="2494" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="406" y="2509" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2509" fill="#e6edf3">put_back_at</text>
+<text x="692" y="2509" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="backup_destinations">
+<rect x="400" y="2549" width="300" height="94" rx="7" fill="#161b22" stroke="#3b8f5a" stroke-width="1.5"/>
+<rect x="400" y="2549" width="300" height="26" rx="7" fill="#3b8f5a"/>
+<text x="408" y="2566" fill="#fff" font-weight="700" font-size="12">backup_destinations</text>
+<text x="692" y="2566" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="406" y="2586" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="2586" fill="#e6edf3">file_id</text>
+<text x="692" y="2586" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2601" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="2601" fill="#e6edf3">name</text>
+<text x="692" y="2601" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2616" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="426" y="2616" fill="#e6edf3">kind</text>
+<text x="692" y="2616" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="406" y="2631" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="426" y="2631" fill="#e6edf3">recorded_at</text>
+<text x="692" y="2631" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="derived_unverified">
+<rect x="760" y="70" width="300" height="169" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="70" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="87" fill="#fff" font-weight="700" font-size="12">derived_unverified</text>
+<text x="1052" y="87" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">83,567 rows</text>
+<text x="766" y="107" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="107" fill="#e6edf3">digest</text>
+<text x="1052" y="107" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="122" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="122" fill="#e6edf3">kind</text>
+<text x="1052" y="122" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="137" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="137" fill="#e6edf3">seq</text>
+<text x="1052" y="137" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="152" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="152" fill="#e6edf3">source_json_row_id</text>
+<text x="1052" y="152" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="167" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="167" fill="#e6edf3">value_json</text>
+<text x="1052" y="167" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="182" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="182" fill="#e6edf3">stamp_json</text>
+<text x="1052" y="182" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="197" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="197" fill="#e6edf3">import_run</text>
+<text x="1052" y="197" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="212" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="212" fill="#e6edf3">source_ordinal</text>
+<text x="1052" y="212" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="227" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="227" fill="#e6edf3">conflict</text>
+<text x="1052" y="227" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="captions">
+<rect x="760" y="267" width="300" height="124" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="267" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="284" fill="#fff" font-weight="700" font-size="12">captions</text>
+<text x="1052" y="284" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">25,806 rows</text>
+<text x="766" y="304" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="304" fill="#e6edf3">digest</text>
+<text x="1052" y="304" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="319" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="319" fill="#e6edf3">kind</text>
+<text x="1052" y="319" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="334" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="334" fill="#e6edf3">seq</text>
+<text x="1052" y="334" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="349" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="349" fill="#e6edf3">at_s</text>
+<text x="1052" y="349" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="364" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="364" fill="#e6edf3">text</text>
+<text x="1052" y="364" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="379" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="379" fill="#e6edf3">provenance</text>
+<text x="1052" y="379" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="row_knowledge">
+<rect x="760" y="419" width="300" height="169" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="419" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="436" fill="#fff" font-weight="700" font-size="12">row_knowledge</text>
+<text x="1052" y="436" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">18,918 rows</text>
+<text x="766" y="456" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="456" fill="#e6edf3">write_id</text>
+<text x="1052" y="456" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="471" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="471" fill="#e6edf3">file_id</text>
+<text x="1052" y="471" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="486" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="486" fill="#e6edf3">digest</text>
+<text x="1052" y="486" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="501" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="501" fill="#e6edf3">field</text>
+<text x="1052" y="501" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="516" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="516" fill="#e6edf3">value_json</text>
+<text x="1052" y="516" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="531" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="531" fill="#e6edf3">set_at</text>
+<text x="1052" y="531" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="546" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="546" fill="#e6edf3">source</text>
+<text x="1052" y="546" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="561" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="561" fill="#e6edf3">import_run</text>
+<text x="1052" y="561" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="576" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="576" fill="#e6edf3">generation</text>
+<text x="1052" y="576" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="knowledge_sources">
+<rect x="760" y="616" width="300" height="154" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="616" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="633" fill="#fff" font-weight="700" font-size="12">knowledge_sources</text>
+<text x="1052" y="633" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">10,727 rows</text>
+<text x="766" y="653" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="653" fill="#e6edf3">import_run</text>
+<text x="1052" y="653" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="668" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="668" fill="#e6edf3">source_ordinal</text>
+<text x="1052" y="668" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="683" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="683" fill="#e6edf3">json_row_id</text>
+<text x="1052" y="683" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="698" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="698" fill="#e6edf3">digest</text>
+<text x="1052" y="698" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="713" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="713" fill="#e6edf3">field</text>
+<text x="1052" y="713" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="728" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="728" fill="#e6edf3">value_json</text>
+<text x="1052" y="728" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="743" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="743" fill="#e6edf3">set_at</text>
+<text x="1052" y="743" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="758" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="758" fill="#e6edf3">source</text>
+<text x="1052" y="758" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="duplicate_members">
+<rect x="760" y="798" width="300" height="124" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="798" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="815" fill="#fff" font-weight="700" font-size="12">duplicate_members</text>
+<text x="1052" y="815" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">9,717 rows</text>
+<text x="766" y="835" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="835" fill="#e6edf3">group_id</text>
+<text x="1052" y="835" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="850" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="850" fill="#e6edf3">file_id</text>
+<text x="1052" y="850" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="865" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="865" fill="#e6edf3">confidence</text>
+<text x="1052" y="865" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="880" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="880" fill="#e6edf3">disposition</text>
+<text x="1052" y="880" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="895" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="895" fill="#e6edf3">reasons</text>
+<text x="1052" y="895" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="910" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="910" fill="#e6edf3">best_match</text>
+<text x="1052" y="910" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="sound_prints">
+<rect x="760" y="950" width="300" height="154" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="950" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="967" fill="#fff" font-weight="700" font-size="12">sound_prints</text>
+<text x="1052" y="967" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">6,362 rows</text>
+<text x="766" y="987" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="987" fill="#e6edf3">digest</text>
+<text x="1052" y="987" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1002" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1002" fill="#e6edf3">engine_version</text>
+<text x="1052" y="1002" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1017" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1017" fill="#e6edf3">outcome</text>
+<text x="1052" y="1017" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1032" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1032" fill="#e6edf3">analyzed_s</text>
+<text x="1052" y="1032" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="1047" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1047" fill="#e6edf3">complete</text>
+<text x="1052" y="1047" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1062" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1062" fill="#e6edf3">landmarks</text>
+<text x="1052" y="1062" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1077" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1077" fill="#e6edf3">blob_bytes</text>
+<text x="1052" y="1077" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1092" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1092" fill="#e6edf3">computed_at</text>
+<text x="1052" y="1092" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="duplicate_groups">
+<rect x="760" y="1132" width="300" height="64" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1132" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1149" fill="#fff" font-weight="700" font-size="12">duplicate_groups</text>
+<text x="1052" y="1149" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">5,652 rows</text>
+<text x="766" y="1169" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1169" fill="#e6edf3">group_id</text>
+<text x="1052" y="1169" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1184" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1184" fill="#e6edf3">analyzed_at</text>
+<text x="1052" y="1184" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="caption_runs">
+<rect x="760" y="1224" width="300" height="94" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1224" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1241" fill="#fff" font-weight="700" font-size="12">caption_runs</text>
+<text x="1052" y="1241" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">4,654 rows</text>
+<text x="766" y="1261" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1261" fill="#e6edf3">digest</text>
+<text x="1052" y="1261" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1276" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1276" fill="#e6edf3">model</text>
+<text x="1052" y="1276" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1291" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1291" fill="#e6edf3">made_at</text>
+<text x="1052" y="1291" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1306" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1306" fill="#e6edf3">provenance</text>
+<text x="1052" y="1306" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="inferred_dates">
+<rect x="760" y="1346" width="300" height="154" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1346" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1363" fill="#fff" font-weight="700" font-size="12">inferred_dates</text>
+<text x="1052" y="1363" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">4,522 rows</text>
+<text x="766" y="1383" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1383" fill="#e6edf3">digest</text>
+<text x="1052" y="1383" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1398" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1398" fill="#e6edf3">date_at</text>
+<text x="1052" y="1398" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1413" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1413" fill="#e6edf3">confidence</text>
+<text x="1052" y="1413" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="1428" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1428" fill="#e6edf3">source</text>
+<text x="1052" y="1428" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1443" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1443" fill="#e6edf3">range_start</text>
+<text x="1052" y="1443" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1458" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1458" fill="#e6edf3">range_end</text>
+<text x="1052" y="1458" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1473" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1473" fill="#e6edf3">reason</text>
+<text x="1052" y="1473" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1488" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1488" fill="#e6edf3">provenance</text>
+<text x="1052" y="1488" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="dossiers">
+<rect x="760" y="1528" width="300" height="94" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1528" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1545" fill="#fff" font-weight="700" font-size="12">dossiers</text>
+<text x="1052" y="1545" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">4,508 rows</text>
+<text x="766" y="1565" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1565" fill="#e6edf3">digest</text>
+<text x="1052" y="1565" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1580" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1580" fill="#e6edf3">processed_at</text>
+<text x="1052" y="1580" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1595" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1595" fill="#e6edf3">processed_by</text>
+<text x="1052" y="1595" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1610" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1610" fill="#e6edf3">provenance</text>
+<text x="1052" y="1610" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="transcripts">
+<rect x="760" y="1650" width="300" height="109" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1650" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1667" fill="#fff" font-weight="700" font-size="12">transcripts</text>
+<text x="1052" y="1667" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">3,888 rows</text>
+<text x="766" y="1687" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1687" fill="#e6edf3">digest</text>
+<text x="1052" y="1687" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1702" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1702" fill="#e6edf3">text</text>
+<text x="1052" y="1702" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1717" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1717" fill="#e6edf3">model</text>
+<text x="1052" y="1717" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1732" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1732" fill="#e6edf3">made_at</text>
+<text x="1052" y="1732" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1747" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1747" fill="#e6edf3">provenance</text>
+<text x="1052" y="1747" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="footage_membership">
+<rect x="760" y="1787" width="300" height="109" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1787" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1804" fill="#fff" font-weight="700" font-size="12">footage_membership</text>
+<text x="1052" y="1804" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">2,747 rows</text>
+<text x="766" y="1824" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1824" fill="#e6edf3">digest</text>
+<text x="1052" y="1824" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1839" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1839" fill="#e6edf3">group_id</text>
+<text x="1052" y="1839" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1854" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1854" fill="#e6edf3">membership</text>
+<text x="1052" y="1854" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1869" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1869" fill="#e6edf3">scanned_at</text>
+<text x="1052" y="1869" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1884" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="1884" fill="#e6edf3">provenance</text>
+<text x="1052" y="1884" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="footage_likeness">
+<rect x="760" y="1924" width="300" height="139" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="1924" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="1941" fill="#fff" font-weight="700" font-size="12">footage_likeness</text>
+<text x="1052" y="1941" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1,368 rows</text>
+<text x="766" y="1961" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="1961" fill="#e6edf3">likeness_id</text>
+<text x="1052" y="1961" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="1976" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="1976" fill="#e6edf3">digest_a</text>
+<text x="1052" y="1976" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="1991" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="1991" fill="#e6edf3">digest_b</text>
+<text x="1052" y="1991" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2006" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2006" fill="#e6edf3">reasons</text>
+<text x="1052" y="2006" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2021" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2021" fill="#e6edf3">strength</text>
+<text x="1052" y="2021" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2036" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2036" fill="#e6edf3">source</text>
+<text x="1052" y="2036" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2051" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2051" fill="#e6edf3">recorded_at</text>
+<text x="1052" y="2051" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="regen_context">
+<rect x="760" y="2091" width="300" height="139" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="2091" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="2108" fill="#fff" font-weight="700" font-size="12">regen_context</text>
+<text x="1052" y="2108" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">242 rows</text>
+<text x="766" y="2128" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2128" fill="#e6edf3">import_run</text>
+<text x="1052" y="2128" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2143" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2143" fill="#e6edf3">source_ordinal</text>
+<text x="1052" y="2143" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="2158" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2158" fill="#e6edf3">json_row_id</text>
+<text x="1052" y="2158" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2173" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="2173" fill="#e6edf3">digest</text>
+<text x="1052" y="2173" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2188" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2188" fill="#e6edf3">kind</text>
+<text x="1052" y="2188" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2203" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2203" fill="#e6edf3">value_json</text>
+<text x="1052" y="2203" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2218" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2218" fill="#e6edf3">reason</text>
+<text x="1052" y="2218" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="lineage_pending">
+<rect x="760" y="2258" width="300" height="169" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="2258" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="2275" fill="#fff" font-weight="700" font-size="12">lineage_pending</text>
+<text x="1052" y="2275" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">70 rows</text>
+<text x="766" y="2295" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2295" fill="#e6edf3">import_run</text>
+<text x="1052" y="2295" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2310" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2310" fill="#e6edf3">source_ordinal</text>
+<text x="1052" y="2310" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="2325" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2325" fill="#e6edf3">relation</text>
+<text x="1052" y="2325" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2340" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2340" fill="#e6edf3">child_row_id</text>
+<text x="1052" y="2340" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2355" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="2355" fill="#e6edf3">child_digest</text>
+<text x="1052" y="2355" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2370" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2370" fill="#e6edf3">parent_row_id</text>
+<text x="1052" y="2370" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2385" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="2385" fill="#e6edf3">parent_digest</text>
+<text x="1052" y="2385" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2400" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2400" fill="#e6edf3">payload</text>
+<text x="1052" y="2400" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2415" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2415" fill="#e6edf3">resolved_at</text>
+<text x="1052" y="2415" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="media_checks">
+<rect x="760" y="2455" width="300" height="139" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="2455" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="2472" fill="#fff" font-weight="700" font-size="12">media_checks</text>
+<text x="1052" y="2472" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">56 rows</text>
+<text x="766" y="2492" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2492" fill="#e6edf3">digest</text>
+<text x="1052" y="2492" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2507" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2507" fill="#e6edf3">kind</text>
+<text x="1052" y="2507" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2522" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2522" fill="#e6edf3">status</text>
+<text x="1052" y="2522" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2537" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2537" fill="#e6edf3">note</text>
+<text x="1052" y="2537" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2552" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2552" fill="#e6edf3">checked_at</text>
+<text x="1052" y="2552" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="2567" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2567" fill="#e6edf3">card</text>
+<text x="1052" y="2567" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2582" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2582" fill="#e6edf3">provenance</text>
+<text x="1052" y="2582" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="lineage">
+<rect x="760" y="2622" width="300" height="154" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="2622" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="2639" fill="#fff" font-weight="700" font-size="12">lineage</text>
+<text x="1052" y="2639" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">18 rows</text>
+<text x="766" y="2659" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2659" fill="#e6edf3">child_digest</text>
+<text x="1052" y="2659" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2674" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2674" fill="#e6edf3">parent_digest</text>
+<text x="1052" y="2674" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2689" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2689" fill="#e6edf3">kind</text>
+<text x="1052" y="2689" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2704" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2704" fill="#e6edf3">cleanup_recipe_id</text>
+<text x="1052" y="2704" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2719" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2719" fill="#e6edf3">cleanup_recipe_version</text>
+<text x="1052" y="2719" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="2734" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2734" fill="#e6edf3">trim_in_s</text>
+<text x="1052" y="2734" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="2749" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2749" fill="#e6edf3">trim_out_s</text>
+<text x="1052" y="2749" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="2764" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2764" fill="#e6edf3">recorded_at</text>
+<text x="1052" y="2764" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="perceptual_prints">
+<rect x="760" y="2804" width="300" height="124" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="2804" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="2821" fill="#fff" font-weight="700" font-size="12">perceptual_prints</text>
+<text x="1052" y="2821" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">4 rows</text>
+<text x="766" y="2841" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2841" fill="#e6edf3">digest</text>
+<text x="1052" y="2841" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2856" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2856" fill="#e6edf3">algorithm_version</text>
+<text x="1052" y="2856" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="2871" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2871" fill="#e6edf3">hashes_b64</text>
+<text x="1052" y="2871" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="2886" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2886" fill="#e6edf3">duration_s</text>
+<text x="1052" y="2886" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="2901" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2901" fill="#e6edf3">computed_at</text>
+<text x="1052" y="2901" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="2916" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="2916" fill="#e6edf3">provenance</text>
+<text x="1052" y="2916" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="person_searches">
+<rect x="760" y="2956" width="300" height="244" rx="7" fill="#161b22" stroke="#7a4fa8" stroke-width="1.5"/>
+<rect x="760" y="2956" width="300" height="26" rx="7" fill="#7a4fa8"/>
+<text x="768" y="2973" fill="#fff" font-weight="700" font-size="12">person_searches</text>
+<text x="1052" y="2973" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="766" y="2993" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="786" y="2993" fill="#e6edf3">search_id</text>
+<text x="1052" y="2993" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="3008" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="3008" fill="#e6edf3">digest</text>
+<text x="1052" y="3008" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3023" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3023" fill="#e6edf3">person_id</text>
+<text x="1052" y="3023" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3038" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3038" fill="#e6edf3">person_name</text>
+<text x="1052" y="3038" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3053" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3053" fill="#e6edf3">searched_at</text>
+<text x="1052" y="3053" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="3068" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3068" fill="#e6edf3">engine</text>
+<text x="1052" y="3068" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3083" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3083" fill="#e6edf3">threshold</text>
+<text x="1052" y="3083" fill="#9aa4b2" text-anchor="end" font-size="10">real</text>
+<text x="766" y="3098" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3098" fill="#e6edf3">hits</text>
+<text x="1052" y="3098" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="766" y="3113" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3113" fill="#e6edf3">outcome</text>
+<text x="1052" y="3113" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3128" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3128" fill="#e6edf3">source_json_row_id</text>
+<text x="1052" y="3128" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3143" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3143" fill="#e6edf3">provenance</text>
+<text x="1052" y="3143" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3158" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3158" fill="#e6edf3">source_key</text>
+<text x="1052" y="3158" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3173" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="786" y="3173" fill="#e6edf3">import_run</text>
+<text x="1052" y="3173" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="766" y="3188" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="786" y="3188" fill="#e6edf3">source_ordinal</text>
+<text x="1052" y="3188" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="content_text_fts_data">
+<rect x="1120" y="70" width="300" height="64" rx="7" fill="#161b22" stroke="#b07a1f" stroke-width="1.5"/>
+<rect x="1120" y="70" width="300" height="26" rx="7" fill="#b07a1f"/>
+<text x="1128" y="87" fill="#fff" font-weight="700" font-size="12">content_text_fts_data</text>
+<text x="1412" y="87" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">2 rows</text>
+<text x="1126" y="107" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1146" y="107" fill="#e6edf3">id</text>
+<text x="1412" y="107" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1126" y="122" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="122" fill="#e6edf3">block</text>
+<text x="1412" y="122" fill="#9aa4b2" text-anchor="end" font-size="10">blob</text>
+</g>
+<g class="table" data-t="content_text_fts_config">
+<rect x="1120" y="162" width="300" height="64" rx="7" fill="#161b22" stroke="#b07a1f" stroke-width="1.5"/>
+<rect x="1120" y="162" width="300" height="26" rx="7" fill="#b07a1f"/>
+<text x="1128" y="179" fill="#fff" font-weight="700" font-size="12">content_text_fts_config</text>
+<text x="1412" y="179" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1 rows</text>
+<text x="1126" y="199" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1146" y="199" fill="#e6edf3">k</text>
+<text x="1412" y="199" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="214" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="214" fill="#e6edf3">v</text>
+<text x="1412" y="214" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+</g>
+<g class="table" data-t="content_text_fts">
+<rect x="1120" y="254" width="300" height="124" rx="7" fill="#161b22" stroke="#b07a1f" stroke-width="1.5"/>
+<rect x="1120" y="254" width="300" height="26" rx="7" fill="#b07a1f"/>
+<text x="1128" y="271" fill="#fff" font-weight="700" font-size="12">content_text_fts</text>
+<text x="1412" y="271" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="1126" y="291" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="291" fill="#e6edf3">text</text>
+<text x="1412" y="291" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="306" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="306" fill="#e6edf3">digest</text>
+<text x="1412" y="306" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="321" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="321" fill="#e6edf3">kind</text>
+<text x="1412" y="321" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="336" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="336" fill="#e6edf3">seq</text>
+<text x="1412" y="336" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="351" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="351" fill="#e6edf3">provenance</text>
+<text x="1412" y="351" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="366" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="366" fill="#e6edf3">source_json_row_id</text>
+<text x="1412" y="366" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+</g>
+<g class="table" data-t="content_text_fts_content">
+<rect x="1120" y="406" width="300" height="139" rx="7" fill="#161b22" stroke="#b07a1f" stroke-width="1.5"/>
+<rect x="1120" y="406" width="300" height="26" rx="7" fill="#b07a1f"/>
+<text x="1128" y="423" fill="#fff" font-weight="700" font-size="12">content_text_fts_content</text>
+<text x="1412" y="423" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="1126" y="443" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1146" y="443" fill="#e6edf3">id</text>
+<text x="1412" y="443" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1126" y="458" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="458" fill="#e6edf3">c0</text>
+<text x="1412" y="458" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="473" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="473" fill="#e6edf3">c1</text>
+<text x="1412" y="473" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="488" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="488" fill="#e6edf3">c2</text>
+<text x="1412" y="488" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="503" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="503" fill="#e6edf3">c3</text>
+<text x="1412" y="503" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="518" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="518" fill="#e6edf3">c4</text>
+<text x="1412" y="518" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="533" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="533" fill="#e6edf3">c5</text>
+<text x="1412" y="533" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+</g>
+<g class="table" data-t="content_text_fts_docsize">
+<rect x="1120" y="573" width="300" height="64" rx="7" fill="#161b22" stroke="#b07a1f" stroke-width="1.5"/>
+<rect x="1120" y="573" width="300" height="26" rx="7" fill="#b07a1f"/>
+<text x="1128" y="590" fill="#fff" font-weight="700" font-size="12">content_text_fts_docsize</text>
+<text x="1412" y="590" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="1126" y="610" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1146" y="610" fill="#e6edf3">id</text>
+<text x="1412" y="610" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1126" y="625" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="625" fill="#e6edf3">sz</text>
+<text x="1412" y="625" fill="#9aa4b2" text-anchor="end" font-size="10">blob</text>
+</g>
+<g class="table" data-t="content_text_fts_idx">
+<rect x="1120" y="665" width="300" height="79" rx="7" fill="#161b22" stroke="#b07a1f" stroke-width="1.5"/>
+<rect x="1120" y="665" width="300" height="26" rx="7" fill="#b07a1f"/>
+<text x="1128" y="682" fill="#fff" font-weight="700" font-size="12">content_text_fts_idx</text>
+<text x="1412" y="682" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="1126" y="702" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1146" y="702" fill="#e6edf3">segid</text>
+<text x="1412" y="702" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="717" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1146" y="717" fill="#e6edf3">term</text>
+<text x="1412" y="717" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+<text x="1126" y="732" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1146" y="732" fill="#e6edf3">pgno</text>
+<text x="1412" y="732" fill="#9aa4b2" text-anchor="end" font-size="10"></text>
+</g>
+<g class="table" data-t="import_items">
+<rect x="1480" y="70" width="300" height="154" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="70" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="87" fill="#fff" font-weight="700" font-size="12">import_items</text>
+<text x="1772" y="87" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">27,580 rows</text>
+<text x="1486" y="107" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="107" fill="#e6edf3">import_run</text>
+<text x="1772" y="107" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="122" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="122" fill="#e6edf3">source_file</text>
+<text x="1772" y="122" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="137" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="137" fill="#e6edf3">source_ordinal</text>
+<text x="1772" y="137" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="152" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="152" fill="#e6edf3">item_kind</text>
+<text x="1772" y="152" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="167" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="167" fill="#e6edf3">source_key</text>
+<text x="1772" y="167" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="182" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="182" fill="#e6edf3">curated_fields</text>
+<text x="1772" y="182" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="197" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="197" fill="#e6edf3">landed_table</text>
+<text x="1772" y="197" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="212" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="212" fill="#e6edf3">landed_ref</text>
+<text x="1772" y="212" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="audit_results">
+<rect x="1480" y="252" width="300" height="169" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="252" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="269" fill="#fff" font-weight="700" font-size="12">audit_results</text>
+<text x="1772" y="269" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">11,194 rows</text>
+<text x="1486" y="289" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="289" fill="#e6edf3">import_run</text>
+<text x="1772" y="289" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="304" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="304" fill="#e6edf3">source_ordinal</text>
+<text x="1772" y="304" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="319" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="319" fill="#e6edf3">json_row_id</text>
+<text x="1772" y="319" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="334" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="334" fill="#e6edf3">result</text>
+<text x="1772" y="334" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="349" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="349" fill="#e6edf3">detail</text>
+<text x="1772" y="349" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="364" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="364" fill="#e6edf3">judged_path</text>
+<text x="1772" y="364" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="379" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="379" fill="#e6edf3">row_full_path</text>
+<text x="1772" y="379" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="394" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="394" fill="#e6edf3">row_audit_seen_at</text>
+<text x="1772" y="394" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="409" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="409" fill="#e6edf3">accepted</text>
+<text x="1772" y="409" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="ledger">
+<rect x="1480" y="449" width="300" height="229" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="449" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="466" fill="#fff" font-weight="700" font-size="12">ledger</text>
+<text x="1772" y="466" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">2,289 rows</text>
+<text x="1486" y="486" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="486" fill="#e6edf3">seq</text>
+<text x="1772" y="486" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="501" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="501" fill="#e6edf3">at</text>
+<text x="1772" y="501" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="516" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="516" fill="#e6edf3">generation</text>
+<text x="1772" y="516" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="531" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="531" fill="#e6edf3">kind</text>
+<text x="1772" y="531" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="546" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="546" fill="#e6edf3">actor</text>
+<text x="1772" y="546" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="561" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="561" fill="#e6edf3">record_id</text>
+<text x="1772" y="561" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="576" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="576" fill="#e6edf3">content_key</text>
+<text x="1772" y="576" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="591" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="1506" y="591" fill="#e6edf3">digest</text>
+<text x="1772" y="591" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="606" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="606" fill="#e6edf3">path</text>
+<text x="1772" y="606" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="621" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="621" fill="#e6edf3">payload</text>
+<text x="1772" y="621" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="636" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="636" fill="#e6edf3">imported</text>
+<text x="1772" y="636" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="651" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="1506" y="651" fill="#e6edf3">import_run</text>
+<text x="1772" y="651" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="666" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="666" fill="#e6edf3">source_ordinal</text>
+<text x="1772" y="666" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="quarantine">
+<rect x="1480" y="706" width="300" height="364" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="706" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="723" fill="#fff" font-weight="700" font-size="12">quarantine</text>
+<text x="1772" y="723" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">2,110 rows</text>
+<text x="1486" y="743" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="743" fill="#e6edf3">qid</text>
+<text x="1772" y="743" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="758" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="758" fill="#e6edf3">origin</text>
+<text x="1772" y="758" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="773" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="1506" y="773" fill="#e6edf3">import_run</text>
+<text x="1772" y="773" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="788" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="788" fill="#e6edf3">source_ordinal</text>
+<text x="1772" y="788" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="803" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="803" fill="#e6edf3">json_row_id</text>
+<text x="1772" y="803" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="818" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="818" fill="#e6edf3">full_path</text>
+<text x="1772" y="818" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="833" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="833" fill="#e6edf3">size_bytes</text>
+<text x="1772" y="833" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="848" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="848" fill="#e6edf3">digest</text>
+<text x="1772" y="848" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="863" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="863" fill="#e6edf3">evidence_digests</text>
+<text x="1772" y="863" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="878" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="878" fill="#e6edf3">sampled_hash</text>
+<text x="1772" y="878" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="893" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="893" fill="#e6edf3">reason_code</text>
+<text x="1772" y="893" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="908" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="908" fill="#e6edf3">words</text>
+<text x="1772" y="908" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="923" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="923" fill="#e6edf3">findings</text>
+<text x="1772" y="923" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="938" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="938" fill="#e6edf3">raw_row</text>
+<text x="1772" y="938" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="953" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="953" fill="#e6edf3">quarantined_at</text>
+<text x="1772" y="953" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="968" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="968" fill="#e6edf3">generation</text>
+<text x="1772" y="968" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="983" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="1506" y="983" fill="#e6edf3">resolved_file_id</text>
+<text x="1772" y="983" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="998" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="998" fill="#e6edf3">resolved_at</text>
+<text x="1772" y="998" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1013" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1013" fill="#e6edf3">resolution</text>
+<text x="1772" y="1013" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1028" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1028" fill="#e6edf3">resolution_note</text>
+<text x="1772" y="1028" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1043" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1043" fill="#e6edf3">resolved_rule</text>
+<text x="1772" y="1043" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1058" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1058" fill="#e6edf3">resolved_integrity_run</text>
+<text x="1772" y="1058" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="generation_history">
+<rect x="1480" y="1098" width="300" height="169" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="1098" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="1115" fill="#fff" font-weight="700" font-size="12">generation_history</text>
+<text x="1772" y="1115" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1,179 rows</text>
+<text x="1486" y="1135" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1135" fill="#e6edf3">generation</text>
+<text x="1772" y="1135" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1150" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1150" fill="#e6edf3">committed_at</text>
+<text x="1772" y="1150" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1165" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1165" fill="#e6edf3">host</text>
+<text x="1772" y="1165" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1180" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1180" fill="#e6edf3">writer</text>
+<text x="1772" y="1180" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1195" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1195" fill="#e6edf3">files_live</text>
+<text x="1772" y="1195" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1210" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1210" fill="#e6edf3">files_total</text>
+<text x="1772" y="1210" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1225" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1225" fill="#e6edf3">export_sha256</text>
+<text x="1772" y="1225" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1240" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1240" fill="#e6edf3">kind</text>
+<text x="1772" y="1240" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1255" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1255" fill="#e6edf3">from_generation</text>
+<text x="1772" y="1255" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="grdb_migrations">
+<rect x="1480" y="1295" width="300" height="49" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="1295" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="1312" fill="#fff" font-weight="700" font-size="12">grdb_migrations</text>
+<text x="1772" y="1312" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">8 rows</text>
+<text x="1486" y="1332" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1332" fill="#e6edf3">identifier</text>
+<text x="1772" y="1332" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="job_markers">
+<rect x="1480" y="1372" width="300" height="184" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="1372" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="1389" fill="#fff" font-weight="700" font-size="12">job_markers</text>
+<text x="1772" y="1389" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">2 rows</text>
+<text x="1486" y="1409" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1409" fill="#e6edf3">job</text>
+<text x="1772" y="1409" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1424" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1424" fill="#e6edf3">scope</text>
+<text x="1772" y="1424" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1439" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1439" fill="#e6edf3">started_at</text>
+<text x="1772" y="1439" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1454" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1454" fill="#e6edf3">finished_at</text>
+<text x="1772" y="1454" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1469" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1469" fill="#e6edf3">outcome</text>
+<text x="1772" y="1469" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1484" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1484" fill="#e6edf3">generation</text>
+<text x="1772" y="1484" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1499" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1499" fill="#e6edf3">detail</text>
+<text x="1772" y="1499" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1514" fill="#8ab4f8" font-size="9" font-weight="700">FK</text>
+<text x="1506" y="1514" fill="#e6edf3">import_run</text>
+<text x="1772" y="1514" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1529" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1529" fill="#e6edf3">source_file</text>
+<text x="1772" y="1529" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1544" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1544" fill="#e6edf3">source_ordinal</text>
+<text x="1772" y="1544" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="catalog_state">
+<rect x="1480" y="1584" width="300" height="94" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="1584" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="1601" fill="#fff" font-weight="700" font-size="12">catalog_state</text>
+<text x="1772" y="1601" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1 rows</text>
+<text x="1486" y="1621" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1621" fill="#e6edf3">singleton</text>
+<text x="1772" y="1621" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1636" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1636" fill="#e6edf3">schema_version</text>
+<text x="1772" y="1636" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1651" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1651" fill="#e6edf3">master_archive</text>
+<text x="1772" y="1651" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1666" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1666" fill="#e6edf3">imported_from</text>
+<text x="1772" y="1666" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+</g>
+<g class="table" data-t="generations">
+<rect x="1480" y="1706" width="300" height="124" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="1706" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="1723" fill="#fff" font-weight="700" font-size="12">generations</text>
+<text x="1772" y="1723" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1 rows</text>
+<text x="1486" y="1743" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1743" fill="#e6edf3">id</text>
+<text x="1772" y="1743" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1758" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1758" fill="#e6edf3">generation</text>
+<text x="1772" y="1758" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1773" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1773" fill="#e6edf3">saved_at</text>
+<text x="1772" y="1773" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1788" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1788" fill="#e6edf3">saved_from_host</text>
+<text x="1772" y="1788" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1803" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1803" fill="#e6edf3">adopted_at</text>
+<text x="1772" y="1803" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1818" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1818" fill="#e6edf3">adopted_from</text>
+<text x="1772" y="1818" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="import_runs">
+<rect x="1480" y="1858" width="300" height="289" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="1858" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="1875" fill="#fff" font-weight="700" font-size="12">import_runs</text>
+<text x="1772" y="1875" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">1 rows</text>
+<text x="1486" y="1895" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="1895" fill="#e6edf3">run_id</text>
+<text x="1772" y="1895" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1910" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1910" fill="#e6edf3">started_at</text>
+<text x="1772" y="1910" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1925" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1925" fill="#e6edf3">finished_at</text>
+<text x="1772" y="1925" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1940" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1940" fill="#e6edf3">source_sha256</text>
+<text x="1772" y="1940" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1955" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1955" fill="#e6edf3">source_generation</text>
+<text x="1772" y="1955" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="1970" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1970" fill="#e6edf3">integrity_run_id</text>
+<text x="1772" y="1970" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="1985" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="1985" fill="#e6edf3">audit_run_started_at</text>
+<text x="1772" y="1985" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2000" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2000" fill="#e6edf3">audit_run_finished_at</text>
+<text x="1772" y="2000" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2015" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2015" fill="#e6edf3">audit_generation</text>
+<text x="1772" y="2015" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2030" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2030" fill="#e6edf3">integrity_started_at</text>
+<text x="1772" y="2030" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2045" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2045" fill="#e6edf3">integrity_generation</text>
+<text x="1772" y="2045" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2060" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2060" fill="#e6edf3">rows_before</text>
+<text x="1772" y="2060" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2075" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2075" fill="#e6edf3">rows_main</text>
+<text x="1772" y="2075" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2090" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2090" fill="#e6edf3">rows_quarantine</text>
+<text x="1772" y="2090" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2105" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2105" fill="#e6edf3">digests_seen</text>
+<text x="1772" y="2105" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2120" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2120" fill="#e6edf3">knowledge_rows</text>
+<text x="1772" y="2120" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2135" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2135" fill="#e6edf3">comparator_ok</text>
+<text x="1772" y="2135" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+<g class="table" data-t="integrity_runs">
+<rect x="1480" y="2175" width="300" height="169" rx="7" fill="#161b22" stroke="#6b7280" stroke-width="1.5"/>
+<rect x="1480" y="2175" width="300" height="26" rx="7" fill="#6b7280"/>
+<text x="1488" y="2192" fill="#fff" font-weight="700" font-size="12">integrity_runs</text>
+<text x="1772" y="2192" fill="#e6edf3" font-size="10" text-anchor="end" opacity="0.85">0 rows</text>
+<text x="1486" y="2212" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="2212" fill="#e6edf3">run_id</text>
+<text x="1772" y="2212" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="2227" fill="#f0b429" font-size="9" font-weight="700">PK</text>
+<text x="1506" y="2227" fill="#e6edf3">tier</text>
+<text x="1772" y="2227" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2242" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2242" fill="#e6edf3">verified_at</text>
+<text x="1772" y="2242" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2257" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2257" fill="#e6edf3">generation</text>
+<text x="1772" y="2257" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2272" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2272" fill="#e6edf3">result</text>
+<text x="1772" y="2272" fill="#9aa4b2" text-anchor="end" font-size="10">text</text>
+<text x="1486" y="2287" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2287" fill="#e6edf3">checked</text>
+<text x="1772" y="2287" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2302" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2302" fill="#e6edf3">passed</text>
+<text x="1772" y="2302" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2317" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2317" fill="#e6edf3">needs_decision</text>
+<text x="1772" y="2317" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+<text x="1486" y="2332" fill="#8ab4f8" font-size="9" font-weight="700"></text>
+<text x="1506" y="2332" fill="#e6edf3">could_not_check</text>
+<text x="1772" y="2332" fill="#9aa4b2" text-anchor="end" font-size="10">integer</text>
+</g>
+</svg></div></div><script>const ts=[...document.querySelectorAll(".table")],es=[...document.querySelectorAll(".edge")];ts.forEach(g=>{g.onmouseenter=()=>{const t=g.dataset.t;const near=new Set([t]);es.forEach(e=>{if(e.classList.contains("e-"+t)){e.classList.add("hot");[...e.classList].filter(c=>c.startsWith("e-")).forEach(c=>near.add(c.slice(2)))}else e.classList.add("dim")});ts.forEach(o=>{if(!near.has(o.dataset.t))o.classList.add("dim")})};g.onmouseleave=()=>{es.forEach(e=>e.classList.remove("hot","dim"));ts.forEach(o=>o.classList.remove("dim"))}});document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on",p.id===b.dataset.p))});</script></body></html>
