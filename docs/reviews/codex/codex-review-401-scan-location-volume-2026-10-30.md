@@ -82,3 +82,7 @@ Evidence already run: touched suites 46 tests in 7 suites green (Debug); Core Re
 Output contract: findings with severity P0–P3, file:line, a concrete failing scenario; end with
 `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`.
 Do not explore outside these files.
+
+## Closed
+
+Closed by `claude (main session, 2026-11-01)` at 2026-11-01T16:42:05Z. superseded by cycle 185 '401 scan location volume closing' (verdict merge, 2026-10-30 19:03); the first cycle was never marked closed
