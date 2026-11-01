@@ -32089,6 +32089,26 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_video_llm_bench_service.py",
+      "stage": "unit",
+      "suites": [
+        "test_video_llm_bench_service.py"
+      ],
+      "tests": [
+        "test_a_half_year_median_is_widened_never_narrowed",
+        "test_a_stamp_cited_in_two_windows_collapses_the_range",
+        "test_an_unknown_context_is_refused",
+        "test_analyze_clip_is_one_bench_record_and_its_frames_are_gone",
+        "test_it_is_the_benchmarks_code_path",
+        "test_load_reply_names_the_approach_revision_and_model",
+        "test_no_valid_window_means_no_fused_range",
+        "test_the_factory_ref_builds_a_clip_service_on_the_seated_a2",
+        "test_the_worker_protocol_end_to_end"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_video_llm_bench_watchdog.py",
       "stage": "unit",
       "suites": [
@@ -34968,6 +34988,10 @@
         },
         {
           "name": "tests/test_video_llm_bench_a2.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_video_llm_bench_service.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

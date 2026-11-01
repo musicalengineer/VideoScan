@@ -37,6 +37,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import platform
 import random
@@ -1319,11 +1320,16 @@ def factory_ref_for_approach(approach_id: str, model_dir: Optional[str]) -> str:
 
 def build_from_factory_ref(ref: str) -> Any:
     """``approach:<id>:<model_dir or empty>`` → the registered approach;
+    ``clip-service:<id>:<model_dir or empty>`` → a `ClipService` on it (the
+    background helper's worker, VideoScanCore PythonClipWorker);
     ``import:<sys_path dir>:<module>:<attribute>`` → ``attribute()`` (tests)."""
     kind, _, rest = ref.partition(":")
     if kind == "approach":
         approach_id, _, model_dir = rest.partition(":")
         return resolve_approach(approach_id, model_dir or None)
+    if kind == "clip-service":
+        approach_id, _, model_dir = rest.partition(":")
+        return ClipService(resolve_approach(approach_id, model_dir or None))
     if kind == "import":
         directory, module_name, attribute = rest.rsplit(":", 2)
         if directory and directory not in sys.path:
@@ -1728,6 +1734,175 @@ def run_corpus(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Appro
     return progress
 
 
+def analyze_clip_into(entry: Dict[str, Any], corpora: Iterable[str], approach: Any, frames_per_window: int,
+                      clip_tmp: Path, emit: Callable[[Dict[str, Any]], None], *,
+                      ripper: Callable[[str, float, Path, float], bool] = default_ripper,
+                      duration_of: Callable[[str, float], float] = lambda p, d: d if d > 0 else probe_duration(p),
+                      families: Sequence[str] = A1_FAMILY_ORDER,
+                      ocr_sampler: str = OCR_SAMPLER_WINDOW_FRAMES,
+                      ocr_stills: int = A2_OCR_STILLS,
+                      keep_frames: bool = False,
+                      prompt_context: Optional[str] = None,
+                      technical_of: Callable[[str], Dict[str, Any]] = probe_technical,
+                      run_id: Optional[str] = None) -> Dict[str, Any]:
+    """ONE clip through a windowed approach — the code path the benchmark
+    (`run_corpus_a1`) and the background service (`ClipService.analyze_clip`)
+    share, so the number in the benchmark is the number the job gets.
+
+    Emits, through ``emit``, exactly the records `run_corpus_a1` writes for the
+    clip: the ``clip`` header, ``frame_failed`` / ``result`` (A0 `date` prompt) /
+    ``window_result`` records, and the ``clip_done`` footer.  Frames are ripped
+    into ``clip_tmp`` (the caller creates and removes it) and each one is
+    deleted after use unless ``keep_frames``.  Returns the clip's counters.
+
+    C++ reading: a free function with an output iterator (`emit`) and an
+    injected ripper; no state of its own."""
+    digest = entry["digest"]
+    corpora = set(corpora)
+    gen_seconds = 0.0
+    timeouts = windows_done = 0
+    clip_started = time.perf_counter()
+    approach.seed(MLX_SEED)
+    duration = duration_of(entry["path"], float(entry.get("duration_s") or 0.0))
+    plan = plan_clip_sampling(corpora, duration, frames_per_window, ocr_sampler, ocr_stills)
+    windows = plan["windows"]
+    rip_failures = frames_ok = records_written = window_records = 0
+    technical: Dict[str, Any] = {}
+    context_line: Optional[str] = None
+    if prompt_context in (PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE) and windows and "era" in corpora:
+        try:
+            technical = technical_of(entry["path"]) or {}
+        except Exception:  # noqa: BLE001 — a probe failure is a missing line, not a dead run
+            technical = {}
+        context_line = technical_context_line(technical, picture_only=(prompt_context == PROMPT_CONTEXT_PICTURE)) or None
+
+    def ask_date(png: Path, frame_index: int, window_index: Optional[int], at_s: float, rip_s: float,
+                 sampler: Optional[str]) -> None:
+        # A0's `date` prompt on one frame; the record is shaped like A0's so
+        # `score_ocr_clip` scores every approach the same way.
+        nonlocal gen_seconds, records_written, timeouts
+        gen_started = time.perf_counter()
+        error = None
+        try:
+            text, counters = approach.answer(png, "date")
+        except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
+            error, is_timeout = _generation_error(exc)
+            text, counters = "", {}
+            timeouts += int(is_timeout)
+        elapsed = time.perf_counter() - gen_started
+        gen_seconds += elapsed
+        record = {
+            "record_type": "result", "digest": digest, "frame_index": frame_index,
+            "window_index": window_index, "at_s": at_s, "prompt_kind": "date",
+            "prompt_sha256": sha256_text(PROMPTS["date"]), "raw_text": text,
+            "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s, 3), "error": error,
+            "counters": counters,
+            "parsed": {"dates": parse_dates(text), "years": parse_years(text),
+                       "decades": parse_decades(text), "degenerate": is_degenerate(text)},
+        }
+        if sampler is not None:
+            record["sampler"] = sampler
+        emit(record)
+        records_written += 1
+
+    header = {
+        "record_type": "clip", "digest": digest, "corpus": entry["corpus"],
+        "corpora": sorted(corpora), "stratum": entry["stratum"], "truth": entry["truth"],
+        "duration_s": duration, "windows": windows,
+        "frames_requested": sum(len(w["frame_times_s"]) for w in windows) + len(plan["ocr_still_times_s"]),
+        "run_id": run_id}
+    if ocr_sampler != OCR_SAMPLER_WINDOW_FRAMES:
+        header.update(ocr_sampler=ocr_sampler, ocr_still_times_s=plan["ocr_still_times_s"])
+    if keep_frames:
+        header["frames_dir"] = "frames/{}".format(digest[:16])
+    if prompt_context:
+        header["prompt_context"] = prompt_context
+        header["technical"] = technical
+        header["context_line"] = context_line
+    emit(header)
+    frame_index = 0
+    for window in windows:
+        pngs: List[Path] = []
+        rip_s_window = 0.0
+        for at_s in window["frame_times_s"]:
+            png = clip_tmp / "w{}_f{:03d}.png".format(window["index"], frame_index)
+            rip_started = time.perf_counter()
+            ok = ripper(entry["path"], at_s, png, duration)
+            rip_s = time.perf_counter() - rip_started
+            rip_s_window += rip_s
+            if not ok:
+                rip_failures += 1
+                emit({
+                    "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
+                    "window_index": window["index"], "at_s": at_s, "rip_s": round(rip_s, 3)})
+            else:
+                frames_ok += 1
+                pngs.append(png)
+                if plan["date_on_window_frames"]:
+                    ask_date(png, frame_index, window["index"], at_s, rip_s, None)
+            frame_index += 1
+        if pngs and "era" in corpora:
+            for family in families:
+                gen_started = time.perf_counter()
+                error = None
+                is_timeout = False
+                try:
+                    text, counters = (approach.answer_window(pngs, family, window, context_line) if context_line
+                                      else approach.answer_window(pngs, family, window))
+                except Exception as exc:  # noqa: BLE001
+                    error, is_timeout = _generation_error(exc)
+                    text, counters = "", {}
+                    timeouts += int(is_timeout)
+                elapsed = time.perf_counter() - gen_started
+                gen_seconds += elapsed
+                if error is None:
+                    value, reason = decode_contract(family, text)
+                else:
+                    value, reason = None, ("timeout" if is_timeout else "generation error")
+                emit({
+                    "record_type": "window_result", "digest": digest, "window_index": window["index"],
+                    "window": [window["start_s"], window["end_s"]],
+                    "frame_times_s": window["frame_times_s"], "frames_shown": len(pngs),
+                    "family": family, "prompt_sha256": sha256_text(A1_PROMPTS[family]),
+                    "context_sha256": sha256_text(context_line) if context_line else None,
+                    "raw_text": text, "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s_window, 3),
+                    "error": error, "counters": counters, "schema_valid": value is not None,
+                    "schema_invalid_reason": reason, "decoded": value,
+                })
+                records_written += 1
+                window_records += 1
+            windows_done += 1
+        if not keep_frames:
+            for png in pngs:
+                png.unlink(missing_ok=True)
+    for at_s in plan["ocr_still_times_s"]:
+        png = clip_tmp / "s_f{:03d}.png".format(frame_index)
+        rip_started = time.perf_counter()
+        ok = ripper(entry["path"], at_s, png, duration)
+        rip_s = time.perf_counter() - rip_started
+        if not ok:
+            rip_failures += 1
+            emit({
+                "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
+                "window_index": None, "sampler": OCR_SAMPLER_STILLS, "at_s": at_s,
+                "rip_s": round(rip_s, 3)})
+        else:
+            frames_ok += 1
+            ask_date(png, frame_index, None, at_s, rip_s, OCR_SAMPLER_STILLS)
+            if not keep_frames:
+                png.unlink(missing_ok=True)
+        frame_index += 1
+    clip_elapsed = time.perf_counter() - clip_started
+    emit({
+        "record_type": "clip_done", "digest": digest, "frames_ok": frames_ok,
+        "frames_failed": rip_failures, "results": records_written, "window_results": window_records,
+        "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": _peak_rss_of(approach),
+        "finished_at": utc_now()})
+    return {"gen_seconds": gen_seconds, "timeouts": timeouts, "windows_done": windows_done, "frames_ok": frames_ok,
+            "rip_failures": rip_failures, "records_written": records_written, "window_records": window_records,
+            "windows": windows, "duration_s": duration, "clip_s": clip_elapsed}
+
+
 def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: Any,
                   frames_per_window: int, run_record: Dict[str, Any],
                   ripper: Callable[[str, float, Path, float], bool] = default_ripper,
@@ -1798,148 +1973,23 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
             corpora = corpora_of[digest]
             clip_tmp = (frames_root if keep_frames else tmp_root) / digest[:16]
             clip_tmp.mkdir(parents=True, exist_ok=True)
-            clip_started = time.perf_counter()
-            approach.seed(MLX_SEED)
-            duration = duration_of(entry["path"], float(entry.get("duration_s") or 0.0))
-            plan = plan_clip_sampling(corpora, duration, frames_per_window, ocr_sampler, ocr_stills)
-            windows = plan["windows"]
-            rip_failures = frames_ok = records_written = window_records = 0
-            technical: Dict[str, Any] = {}
-            context_line: Optional[str] = None
-            if prompt_context in (PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE) and windows and "era" in corpora:
-                try:
-                    technical = technical_of(entry["path"]) or {}
-                except Exception:  # noqa: BLE001 — a probe failure is a missing line, not a dead run
-                    technical = {}
-                context_line = technical_context_line(technical, picture_only=(prompt_context == PROMPT_CONTEXT_PICTURE)) or None
-
-            def ask_date(png: Path, frame_index: int, window_index: Optional[int], at_s: float, rip_s: float,
-                         stream: Any, sampler: Optional[str]) -> None:
-                # A0's `date` prompt on one frame; the record is shaped like A0's so
-                # `score_ocr_clip` scores every approach the same way.
-                nonlocal gen_seconds, records_written, timeouts
-                gen_started = time.perf_counter()
-                error = None
-                try:
-                    text, counters = approach.answer(png, "date")
-                except Exception as exc:  # noqa: BLE001 — one bad frame never ends the run
-                    error, is_timeout = _generation_error(exc)
-                    text, counters = "", {}
-                    timeouts += int(is_timeout)
-                elapsed = time.perf_counter() - gen_started
-                gen_seconds += elapsed
-                record = {
-                    "record_type": "result", "digest": digest, "frame_index": frame_index,
-                    "window_index": window_index, "at_s": at_s, "prompt_kind": "date",
-                    "prompt_sha256": sha256_text(PROMPTS["date"]), "raw_text": text,
-                    "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s, 3), "error": error,
-                    "counters": counters,
-                    "parsed": {"dates": parse_dates(text), "years": parse_years(text),
-                               "decades": parse_decades(text), "degenerate": is_degenerate(text)},
-                }
-                if sampler is not None:
-                    record["sampler"] = sampler
-                stream.write(json.dumps(record, sort_keys=True) + "\n")
-                stream.flush()
-                records_written += 1
-
             with target.open("w", encoding="utf-8") as stream:
-                header = {
-                    "record_type": "clip", "digest": digest, "corpus": entry["corpus"],
-                    "corpora": sorted(corpora), "stratum": entry["stratum"], "truth": entry["truth"],
-                    "duration_s": duration, "windows": windows,
-                    "frames_requested": sum(len(w["frame_times_s"]) for w in windows) + len(plan["ocr_still_times_s"]),
-                    "run_id": run_record.get("run_id")}
-                if ocr_sampler != OCR_SAMPLER_WINDOW_FRAMES:
-                    header.update(ocr_sampler=ocr_sampler, ocr_still_times_s=plan["ocr_still_times_s"])
-                if keep_frames:
-                    header["frames_dir"] = "frames/{}".format(digest[:16])
-                if prompt_context:
-                    header["prompt_context"] = prompt_context
-                    header["technical"] = technical
-                    header["context_line"] = context_line
-                stream.write(json.dumps(header, sort_keys=True) + "\n")
-                frame_index = 0
-                for window in windows:
-                    pngs: List[Path] = []
-                    rip_s_window = 0.0
-                    for at_s in window["frame_times_s"]:
-                        png = clip_tmp / "w{}_f{:03d}.png".format(window["index"], frame_index)
-                        rip_started = time.perf_counter()
-                        ok = ripper(entry["path"], at_s, png, duration)
-                        rip_s = time.perf_counter() - rip_started
-                        rip_s_window += rip_s
-                        if not ok:
-                            rip_failures += 1
-                            stream.write(json.dumps({
-                                "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
-                                "window_index": window["index"], "at_s": at_s, "rip_s": round(rip_s, 3)},
-                                sort_keys=True) + "\n")
-                        else:
-                            frames_ok += 1
-                            pngs.append(png)
-                            if plan["date_on_window_frames"]:
-                                ask_date(png, frame_index, window["index"], at_s, rip_s, stream, None)
-                        frame_index += 1
-                    if pngs and "era" in corpora:
-                        for family in families:
-                            gen_started = time.perf_counter()
-                            error = None
-                            is_timeout = False
-                            try:
-                                text, counters = (approach.answer_window(pngs, family, window, context_line) if context_line
-                                                  else approach.answer_window(pngs, family, window))
-                            except Exception as exc:  # noqa: BLE001
-                                error, is_timeout = _generation_error(exc)
-                                text, counters = "", {}
-                                timeouts += int(is_timeout)
-                            elapsed = time.perf_counter() - gen_started
-                            gen_seconds += elapsed
-                            if error is None:
-                                value, reason = decode_contract(family, text)
-                            else:
-                                value, reason = None, ("timeout" if is_timeout else "generation error")
-                            stream.write(json.dumps({
-                                "record_type": "window_result", "digest": digest, "window_index": window["index"],
-                                "window": [window["start_s"], window["end_s"]],
-                                "frame_times_s": window["frame_times_s"], "frames_shown": len(pngs),
-                                "family": family, "prompt_sha256": sha256_text(A1_PROMPTS[family]),
-                                "context_sha256": sha256_text(context_line) if context_line else None,
-                                "raw_text": text, "elapsed_s": round(elapsed, 3), "rip_s": round(rip_s_window, 3),
-                                "error": error, "counters": counters, "schema_valid": value is not None,
-                                "schema_invalid_reason": reason, "decoded": value,
-                            }, sort_keys=True) + "\n")
-                            stream.flush()
-                            records_written += 1
-                            window_records += 1
-                        windows_done += 1
-                    if not keep_frames:
-                        for png in pngs:
-                            png.unlink(missing_ok=True)
-                for at_s in plan["ocr_still_times_s"]:
-                    png = clip_tmp / "s_f{:03d}.png".format(frame_index)
-                    rip_started = time.perf_counter()
-                    ok = ripper(entry["path"], at_s, png, duration)
-                    rip_s = time.perf_counter() - rip_started
-                    if not ok:
-                        rip_failures += 1
-                        stream.write(json.dumps({
-                            "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
-                            "window_index": None, "sampler": OCR_SAMPLER_STILLS, "at_s": at_s,
-                            "rip_s": round(rip_s, 3)}, sort_keys=True) + "\n")
-                    else:
-                        frames_ok += 1
-                        ask_date(png, frame_index, None, at_s, rip_s, stream, OCR_SAMPLER_STILLS)
-                        if not keep_frames:
-                            png.unlink(missing_ok=True)
-                    frame_index += 1
-                frames_done += frames_ok
-                clip_elapsed = time.perf_counter() - clip_started
-                stream.write(json.dumps({
-                    "record_type": "clip_done", "digest": digest, "frames_ok": frames_ok,
-                    "frames_failed": rip_failures, "results": records_written, "window_results": window_records,
-                    "clip_s": round(clip_elapsed, 3), "peak_rss_bytes": _peak_rss_of(approach),
-                    "finished_at": utc_now()}, sort_keys=True) + "\n")
+                def emit(record: Dict[str, Any], stream: Any = stream) -> None:
+                    stream.write(json.dumps(record, sort_keys=True) + "\n")
+                    stream.flush()
+                stats = analyze_clip_into(
+                    entry, corpora, approach, frames_per_window, clip_tmp, emit,
+                    ripper=ripper, duration_of=duration_of, families=families, ocr_sampler=ocr_sampler,
+                    ocr_stills=ocr_stills, keep_frames=keep_frames, prompt_context=prompt_context,
+                    technical_of=technical_of, run_id=run_record.get("run_id"))
+            gen_seconds += stats["gen_seconds"]
+            timeouts += stats["timeouts"]
+            windows_done += stats["windows_done"]
+            frames_done += stats["frames_ok"]
+            records_written = stats["records_written"]
+            windows = stats["windows"]
+            frames_ok = stats["frames_ok"]
+            clip_elapsed = stats["clip_s"]
             if not keep_frames:
                 shutil.rmtree(clip_tmp, ignore_errors=True)
             approach.after_clip()
@@ -1963,6 +2013,127 @@ def run_corpus_a1(entries: Sequence[Dict[str, Any]], out_dir: Path, approach: An
                     finished_at=utc_now())
     write_json(progress_path, progress)
     return progress
+
+
+# ===========================================================================
+# The background service's clip worker (background service step 1, item 4).
+# VideoScan Background's EraJob spawns `bench.py worker --factory
+# clip-service:a2-py:<model dir>` (VideoScanCore PythonClipWorker) and asks,
+# one JSON line per clip, `analyze_clip(path, duration_s, context)`; the reply
+# is exactly one bench clip record — through `analyze_clip_into`, the same code
+# `run_corpus_a1` runs, so the number in the benchmark is the number the job
+# gets.  The seated approach (docs/reviews/video_llm_benchmarks.md): A2, the 8B,
+# era windows (3 × N=8 frames, ≤ 60 s each, the r3 contract) + A0's `date`
+# prompt on 5 stills; pixels only (DECISIONS 2026-10-31: the file's own facts
+# enter as deterministic bounds, never as prompt text) — `context` stays None
+# unless a caller asks for the lab's `technical` / `picture` variants.
+#
+# `summary` adds the clip-level reading the review page computes: the windows'
+# median range (`clip_year_range`), the years read off a burned-in stamp
+# (`burned_in_years`), and their deterministic fusion (`fuse_range`), widened
+# to whole years for the `era.fused` assertion.
+#
+# Memory (worst case, per clip): A2's (weights ≈ 5.8 GB resident + one
+# window's generation) + ≤ 3 × 8 + 5 letterboxed 448×448 PNGs in a temp dir
+# removed before the reply; the reply ≈ a few KB of model text.
+# ===========================================================================
+CLIP_SERVICE_APPROACH_ID = "qwen3-vl-8b-4bit/era-v1/window-60s"   # VideoScanCore ApproachID: model/promptFamily/sampler
+CLIP_SERVICE_FRAMES_PER_WINDOW = 8
+CLIP_SERVICE_FAMILIES = ("era",)
+
+
+class ClipService:
+    """One clip in, one bench clip record out.  `load()` once; `analyze_clip`
+    per file.  C++ reading: a facade over an Approach and `analyze_clip_into`."""
+
+    def __init__(self, approach: Any = None, frames_per_window: int = CLIP_SERVICE_FRAMES_PER_WINDOW,
+                 ripper: Callable[[str, float, Path, float], bool] = default_ripper,
+                 duration_of: Callable[[str, float], float] = lambda p, d: d if d > 0 else probe_duration(p),
+                 ocr_stills: int = A2_OCR_STILLS,
+                 technical_of: Callable[[str], Dict[str, Any]] = probe_technical):
+        self.approach = approach if approach is not None else A2Python()
+        self.frames_per_window = int(frames_per_window)
+        self.ripper = ripper
+        self.duration_of = duration_of
+        self.ocr_stills = int(ocr_stills)
+        self.technical_of = technical_of
+        self.load_info: Dict[str, Any] = {}
+
+    def load(self) -> Dict[str, Any]:
+        info = dict(self.approach.load() or {})
+        info.update({
+            "approach_id": CLIP_SERVICE_APPROACH_ID,
+            "bench_approach": getattr(self.approach, "id", None),
+            "revision": A1_PROMPT_REVISION,
+            "model": getattr(self.approach, "model_id", info.get("model")),
+            "prompts_sha256": {"era": sha256_text(A1_ERA_PROMPT), "date": sha256_text(PROMPTS["date"])},
+            "frames_per_window": self.frames_per_window,
+            "ocr_sampler": OCR_SAMPLER_STILLS, "ocr_stills": self.ocr_stills,
+            "families": list(CLIP_SERVICE_FAMILIES),
+            "prefill_step_size": PREFILL_STEP_SIZE,
+        })
+        self.load_info = info
+        return info
+
+    def analyze_clip(self, path: str, duration_s: float, context: Optional[str] = None) -> Dict[str, Any]:
+        if context not in (None, PROMPT_CONTEXT_TECHNICAL, PROMPT_CONTEXT_PICTURE):
+            raise ValueError("unknown context {!r}".format(context))
+        entry = {"digest": "", "path": str(path), "duration_s": float(duration_s or 0.0), "corpus": "era",
+                 "stratum": "service", "truth": None}
+        records: List[Dict[str, Any]] = []
+        clip_tmp = Path(tempfile.mkdtemp(prefix="videoscan-bg-frames-"))
+        try:
+            analyze_clip_into(entry, ("era", "ocr"), self.approach, self.frames_per_window, clip_tmp, records.append,
+                              ripper=self.ripper, duration_of=self.duration_of, families=CLIP_SERVICE_FAMILIES,
+                              ocr_sampler=OCR_SAMPLER_STILLS, ocr_stills=self.ocr_stills, keep_frames=False,
+                              prompt_context=context, technical_of=self.technical_of, run_id=None)
+        finally:
+            shutil.rmtree(clip_tmp, ignore_errors=True)
+            self.approach.after_clip()
+        return clip_service_record(records)
+
+    def after_clip(self) -> None:
+        pass
+
+    def seed(self, value: int) -> None:
+        self.approach.seed(value)
+
+
+def clip_service_record(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """The emitted records of one clip → {header, window_results, results,
+    frames_failed, footer, summary}.  Pure."""
+    out: Dict[str, Any] = {"header": None, "window_results": [], "results": [], "frames_failed": [], "footer": None}
+    for record in records:
+        kind = record.get("record_type")
+        if kind == "clip":
+            out["header"] = record
+        elif kind == "window_result":
+            out["window_results"].append(record)
+        elif kind == "result":
+            out["results"].append(record)
+        elif kind == "frame_failed":
+            out["frames_failed"].append(record)
+        elif kind == "clip_done":
+            out["footer"] = record
+    span = clip_year_range(out["window_results"])
+    answers = []
+    for record in out["window_results"]:
+        if record.get("family") != "era" or record.get("error"):
+            continue
+        value, _ = decode_contract("era", record.get("raw_text") or "")
+        if value is not None:
+            answers.append(value)
+    burned = burned_in_years([{"answers": answers}])
+    fused = fuse_range(span, burned)
+    out["summary"] = {
+        "year_range": list(span) if span else None,
+        "burned_in_years": burned,
+        "fused": list(fused) if fused else None,
+        # Whole years for the assertion, widened (never narrowed) when a median is x.5.
+        "fused_years": [int(math.floor(fused[0])), int(math.ceil(fused[1]))] if fused else None,
+        "valid_era_windows": len(answers),
+    }
+    return out
 
 
 def build_run_record(manifest: Dict[str, Any], manifest_path: Path, approach: Approach,
