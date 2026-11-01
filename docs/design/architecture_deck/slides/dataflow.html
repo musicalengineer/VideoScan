@@ -1,0 +1,41 @@
+<section id="dataflow" data-transition="fade" style="background:#F7F7F2;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Data flow: Ingest → Manage → Archive, around one catalog</h2>
+<div style="display:flex;gap:24px;align-items:flex-start">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;background:#2F6FED;color:#F7F7F2;padding:12px 24px;border-radius:10px;text-align:center">1 · INGEST</p>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Scan every drive (resumable, checkpointed)</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#7FA7F5;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">ffprobe: container, codec, size, rate, scan</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#7FA7F5;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Whole-file SHA-256: the identity, never the path</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#7FA7F5;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">One commit; no gate, junk skipped; provenance drafted here, required at Promote</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;background:#2F6FED;color:#F7F7F2;padding:12px 24px;border-radius:10px;text-align:center">2 · MANAGE</p>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Catalog: identify, date, repair, search, inspect</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#7FA7F5;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Triage lens: Events (group by occasion), Cleanup (copies proved byte-for-byte, Trash only)</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#7FA7F5;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">People and Family Tree enrich: who, born when, how related</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#7FA7F5;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Machine observations arrive with evidence; Rick confirms; a rejected value is never re-proposed</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:28px;font-weight:600;background:#D9711C;color:#F7F7F2;padding:12px 24px;border-radius:10px;text-align:center">3 · ARCHIVE</p>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Promote: copy to the Master Archive, filed by decade</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#E9A86E;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Hash before and after; 00_Index manifest under a lock; append-only ledger line</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#E9A86E;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Fixity re-read on cadence (Verify Catalog tiers 0–6)</p>
+<x-shape kind="arrow-down" style="width:32px;height:24px;background:#E9A86E;align-self:center"></x-shape>
+<p style="font-size:24px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:14px 20px">Archived means fixed: only Rick changes a name or date, through Update…</p>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:24px;background:#14213D;color:#F7F7F2;border-radius:16px;padding:20px 32px">
+<x-icon name="Database" style="width:48px;height:48px;color:#7FA7F5"></x-icon>
+<p style="font-size:26px;line-height:1.3;color:#DCE4F5">Every stage reads and writes one catalog.sqlite through one commit door. Hallie reads everything and changes nothing. Media files are only ever read; Trash, never unlink.</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6A7179">Shape borrowed from PBCore (one carrier, many files, each with a role) and PREMIS (a dated event log of who did what), at family scale.</p>
+<aside>Each column is one stage of the spine read top to bottom. The dark bar is the catalog every stage goes through. ARCHITECTURE §2 has the same table in words.</aside>
+</section>

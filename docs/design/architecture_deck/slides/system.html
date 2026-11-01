@@ -1,0 +1,36 @@
+<section id="system" data-transition="fade" style="background:#F7F7F2;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Architecture and system context: the layers</h2>
+<div style="display:flex;gap:24px">
+<div style="flex:3;display:flex;flex-direction:column;gap:16px;background:#2F6FED;color:#F7F7F2;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:30px;font-weight:600">VideoScan.app — the UI/UX and the one catalog committer</h3>
+<p style="font-size:24px;line-height:1.35;color:#DCE4F5">Six tabs and the Ask Hallie Mae window · every long job is a Media File Operation with Pause/Stop and a log line · applies the helper’s journal through the commit door</p>
+</div>
+<div style="flex:2;display:flex;flex-direction:column;gap:16px;background:#D9711C;color:#F7F7F2;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:30px;font-weight:600">VideoScan Background.app — launchd helper</h3>
+<p style="font-size:24px;line-height:1.35;color:#FBE4D0">Keeps analyzing after the app quits · XPC control · reads the catalog read-only · writes an observation journal, never the catalog</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#14213D;color:#F7F7F2;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:30px;font-weight:600">VideoScanCore — the pure Swift package both processes link</h3>
+<p style="font-size:24px;line-height:1.35;color:#BFD0F0">Catalog store and the commit door (GRDB) · identity by whole-file SHA-256 · engines: fingerprints, date triangulator, prune plans, family graph · background jobs and the journal · the model lab types</p>
+</div>
+<div style="display:flex;gap:24px">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FDFDFB;border:1px solid #DADDE3;border-radius:16px;padding:20px 28px">
+<h3 style="font-size:28px;font-weight:600;color:#2F6FED">Apple frameworks</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">SwiftUI · AVFoundation · Vision · Core ML · ServiceManagement (login item) · XPC</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FDFDFB;border:1px solid #DADDE3;border-radius:16px;padding:20px 28px">
+<h3 style="font-size:28px;font-weight:600;color:#2F6FED">Swift packages</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">GRDB (SQLite) · MLX-Swift and mlx-swift-examples (on-device models) · swift-algorithms</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FDFDFB;border:1px solid #DADDE3;border-radius:16px;padding:20px 28px">
+<h3 style="font-size:28px;font-weight:600;color:#2F6FED">Child processes</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">ffmpeg and ffprobe (all media I/O) · MediaInfo, dvrescue, ExifTool · Python workers: mlx-vlm (8B), mlx-whisper · Ollama (Hallie)</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px;background:#E7EAF0;border-radius:16px;padding:20px 32px">
+<p style="font-size:26px;font-weight:600">macOS 15+ on Apple silicon — unified memory, launchd, SQLite, Finder Trash, the file system, GPU and Neural Engine</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6A7179">Rule: media is only ever read; every file operation runs ffmpeg through one streaming runner, never a bare Process. The helper never links the committer (a sensor proves it).</p>
+<aside>Top to bottom is dependency order. The two apps share Core; nothing in Core imports SwiftUI. Models never live in the app bundle: they sit in ~/.cache/huggingface and ~/.ollama.</aside>
+</section>

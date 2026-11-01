@@ -1,0 +1,41 @@
+<section id="stack" data-transition="fade" style="background:#F7F7F2;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:64px;font-weight:600;line-height:1.1">Tech stack, and how the app talks to models</h2>
+<div style="display:flex;gap:28px;align-items:flex-start">
+<table style="width:760px;font-size:24px;color:#14213D;background:#FDFDFB;border:1px solid #DADDE3;border-radius:12px">
+<tr style="background:#E7EAF0"><th style="width:28%;text-align:left;padding:10px 16px">Layer</th><th style="width:30%;text-align:left">Tool</th><th style="width:42%;text-align:left">Job</th></tr>
+<tr><td>Language</td><td>Swift 6, SwiftUI</td><td>app, helper, Core package</td></tr>
+<tr><td>Database</td><td>SQLite via GRDB</td><td>the catalog, sidecars</td></tr>
+<tr><td>Media I/O</td><td>ffmpeg, ffprobe</td><td>every read, probe, rip, transcode</td></tr>
+<tr><td>Metadata</td><td>MediaInfo, dvrescue, ExifTool</td><td>DV datecode, container dates</td></tr>
+<tr><td>Playback</td><td>AVFoundation, VLC</td><td>preview and open</td></tr>
+<tr><td>Vision</td><td>Vision, Core ML, ArcFace</td><td>faces (frozen)</td></tr>
+<tr><td>Models</td><td>MLX: mlx-vlm, mlx-whisper, MLX-Swift</td><td>8B era/OCR witness, transcripts</td></tr>
+<tr><td>Chat LLM</td><td>Ollama (qwen3 27B, llama 70B)</td><td>Hallie’s query translator</td></tr>
+<tr><td>Tooling</td><td>Python 3.14 and 3.12 venvs, Homebrew</td><td>scripts, bench, workers</td></tr>
+</table>
+<div style="flex:1;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:30px;font-weight:600;color:#2F6FED">Two kinds of model, two doors, no cloud on media</h3>
+<div style="display:flex;align-items:center;gap:14px">
+<p style="font-size:24px;font-weight:600;background:#2F6FED;color:#F7F7F2;padding:12px 16px;border-radius:10px;text-align:center;width:190px">Hallie</p>
+<x-shape kind="arrow-right" style="width:48px;height:24px;background:#7FA7F5"></x-shape>
+<p style="font-size:23px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:10px 16px;width:300px">Ollama, local or RicksM4.local:11434; failover list</p>
+<x-shape kind="arrow-right" style="width:48px;height:24px;background:#7FA7F5"></x-shape>
+<p style="font-size:23px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:10px 16px;width:280px">fixed query schema → validator → executors; the model never sees catalog content</p>
+</div>
+<div style="display:flex;align-items:center;gap:14px">
+<p style="font-size:24px;font-weight:600;background:#D9711C;color:#F7F7F2;padding:12px 16px;border-radius:10px;text-align:center;width:190px">Era job</p>
+<x-shape kind="arrow-right" style="width:48px;height:24px;background:#E9A86E"></x-shape>
+<p style="font-size:23px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:10px 16px;width:300px">Python worker on this Mac: mlx-vlm, Qwen3-VL-8B, JSON lines, watchdog</p>
+<x-shape kind="arrow-right" style="width:48px;height:24px;background:#E9A86E"></x-shape>
+<p style="font-size:23px;line-height:1.3;background:#FDFDFB;border:1px solid #DADDE3;border-radius:10px;padding:10px 16px;width:280px">pixels in, a typed claim out; the file’s own facts enter as bounds, never as prompt text</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px;background:#14213D;color:#F7F7F2;border-radius:12px;padding:18px 24px">
+<p style="font-size:26px;font-weight:600;color:#7FA7F5">The fleet</p>
+<p style="font-size:24px;line-height:1.35;color:#DCE4F5">M5 Ultra (96 GB): dev machine, live catalog, the 8B, Hallie local · M4 Max (64 GB): default testbed, nightly, Ollama host, catalog sync master · two MacBook Pros: overflow and viewers · one service per Mac, none talk to each other</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">Hard rule 13: nothing of living family, pixels or audio, goes to a cloud model. The payload gate enforces it in code; a sensor proves a remote host never receives pixels.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6A7179">The one list of models, with purpose, host and status: docs/design/machine_intelligence.md Part II</p>
+<aside>Two doors on purpose: Hallie translates words into a query and never touches media; the era job looks at pixels and writes observations. Both run only on Rick’s machines.</aside>
+</section>
