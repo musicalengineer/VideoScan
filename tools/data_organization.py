@@ -301,7 +301,7 @@ def render_overview(group_counts, n_links: int) -> str:
         g.append('<text x="{}" y="{}" fill="{}" font-size="11" text-anchor="middle">{}</text>'.format((x1 + x2) / 2, (y1 + y2) / 2 - 6, colour, H.escape(label)))
     g.append('<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9aa4b2"/></marker></defs>')
     # the catalog: the truth, with its five groups inside
-    blob(400, 40, 420, 560, "#58a6ff", "catalog.sqlite — the truth (one committer, fixity, backups, rows never deleted)", [], big=True)
+    blob(400, 40, 420, 560, "#58a6ff", catalog_db.DATABASE_FILE_NAME + " — the truth (one committer, fixity, backups, rows never deleted)", [], big=True)
     inner = [("A. Identity", GROUP_COLOURS[0], "what a file IS: content (SHA-256), files (sightings on volumes), tombstones"),
              ("B. Rick's decisions", GROUP_COLOURS[1], "user dates / places / notes, stars, people tags, events, archive — highest rank"),
              ("C. Machine observations", GROUP_COLOURS[2], "captions, transcripts, inferred dates, dossiers, prints, likeness, duplicates"),
