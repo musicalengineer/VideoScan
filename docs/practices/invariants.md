@@ -4,7 +4,7 @@ Status: built — the nightly adversarial review and `tests/test_invariants_cove
 
 One section per area, in this one file. `tools/adversarial_nightly.py` (through
 `tools/invariants.py`) reads it to decide what is in scope each night and to build
-the reviewer's brief. Design: `docs/guides/testing.md` §"The nightly adversarial review".
+the reviewer's brief. Design: `docs/archive/design/nightly_adversarial_review_design_2026-10-01.md` (how to run it: `docs/guides/testing.md` §4 "Runbook").
 
 ## Area shape
 

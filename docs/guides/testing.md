@@ -1,11 +1,11 @@
 # Testing — categories, dimensions, the gauntlet, the nightly
 
-*Rewritten in place. Consolidated 2026-11-01 (DECISIONS 2026-11-01) from this guide, `guides/gauntlet.md`, `practices/testing_retrospective_2026_07_05.md`, `practices/nightly-metrics-setup.md`, three machine notes from `guides/ops/` and the nightly adversarial review design; each section names its source and date, and every original is under `docs/archive/` with its name kept. The rules themselves (red first, five dimensions, "done") are in `CLAUDE.md` and `docs/PROCESS.md` §4; this guide is the how.*
+*Rewritten in place. Consolidated 2026-11-01 (DECISIONS 2026-11-01) from this guide, `guides/gauntlet.md`, `practices/testing_retrospective_2026_07_05.md`, `practices/nightly-metrics-setup.md`, three machine notes from `guides/ops/` and the nightly adversarial review design (those four became the §4 runbook on 2026-11-01); each section names its source and date, and every original is under `docs/archive/` with its name kept. The rules themselves (red first, five dimensions, "done") are in `CLAUDE.md` and `docs/PROCESS.md` §4; this guide is the how.*
 
 How VideoScan proves itself: five **categories** of test (what a test is for), five **dimensions** a feature is tested on (logic · scale · media matrix · isolation · sensor, from the 2026-07-05 retrospective), the **lanes** that run them (`scripts/run_sensors.sh` before every merge, `scripts/run_catalog_tests.sh` for catalog work, the full suite and the Release gauntlet on the fleet in an away window, the 02:00 nightly with metrics and the adversarial review — order and gates in `docs/PROCESS.md` §4), and the machines they run on (`docs/guides/operations.md`, PROCESS §8).
 
 ## Contents
-1. The five test categories · 2. The five dimensions (testing retrospective, 2026-07-05) · 3. The Release gauntlet · 4. Gauntlet: TCC and exit masking · 5. Setting up a test Mac · 6. The M1 MacBook Pro as a test runner · 7. The nightly adversarial review · 8. Metrics: what feeds the metrics page
+1. The five test categories · 2. The five dimensions (testing retrospective, 2026-07-05) · 3. The Release gauntlet · 4. Runbook — what runs where, how to start it, the gotchas · 5. Metrics: what feeds the metrics page
 
 ## 1. The five test categories
 
@@ -403,224 +403,49 @@ session and a fixture-only launch. `caffeinate` does not unlock the screen.
 Never launch UI tests on the M4 while Rick is using it. Claude reviews this
 branch before any merge; phase 1 does not authorize a main-branch merge.
 
-## 4. Gauntlet: TCC and exit masking
-
-*From `guides/ops/gauntlet_tcc_and_exit_masking.md` (operational notes 2026-07-20 → 2026-10-05, moved out of Claude memory on 2026-10-23), whole.*
-
-<!-- moved from Claude memory (reference_gauntlet_tcc_and_exit_masking) on 2026-10-23; operational reference, rewrite in place -->
-
-Merged from: project_gauntlet_testing_vision.md, reference_release_unit_tests_need_testability.md (2026-10-05)
-
-Two operational gotchas confirmed 2026-07-20 while trying to pre-validate main with the gauntlet:
-
-0. **Gauntlet can't run UNATTENDED OVERNIGHT — needs an unlocked, awake desktop (confirmed 2026-07-20 ~23:xx).** Even WITH Rick's Terminal TCC grant that made it work in the afternoon, overnight runs exit 3 ("Timed out while enabling automation mode") consistently (not flaky — two attempts, single-flow probe too). Root cause: XCUITest/`testmanagerd` needs an active, UNLOCKED GUI session; when the M4 screen is locked/asleep overnight it can't enable automation mode. Claude can't unlock the screen. So UI automation is a "Rick-present / screen-unlocked" activity, NOT an overnight-unattended one — schedule gauntlet runs during Rick's active windows (afternoon/evening), or Rick must leave the session unlocked + `caffeinate -d`. Non-UI work (unit tests, builds, the 2AM nightly `xcodebuild test`) runs fine overnight regardless.
-
-1. **Gauntlet (XCUITest) won't run from the Claude Code terminal on the M4.**
-   `scripts/run_gauntlet.sh` exits **3** with "✗ AUTOMATION PERMISSION NEEDED — Grant Accessibility/Automation to this terminal in System Settings › Privacy & Security." The terminal/session Claude runs in lacks the Automation/Accessibility TCC grant, so `testmanagerd` can't enable automation mode (same root cause as the `VideoScanUITests-Runner` "Timed out while enabling automation mode" seen in unit runs). Needs Rick to grant it interactively, OR run on a machine/terminal that already has it. Policy is **M1-first** anyway (M4 testmanagerd bootstrap is flaky); the gauntlet UI-test track is codex-owned — delegate M1 runs to codex. See [[project_gauntlet_testing_vision]].
-
-2. **`| tail` (or any pipe) masks the real exit code.** `run_gauntlet.sh ... 2>&1 | tail -40; echo $?` reports **tail's** exit (0), not the script's (3). The testing agent hit the identical trap with a piped `xcodebuild`. When a piped command's exit code matters, use `set -o pipefail`, capture `${PIPESTATUS[0]}`, or read the tool's own printed status line — never trust `$?` after a pipe.
-
-
-**2026-09-27 — the password wall is gone on the M4:** Rick ran `sudo automationmodetool enable-automationmode-without-authentication` ("succeeded"). `automationmodetool` now reports automation mode does not require authentication. Remaining constraint: an UNLOCKED, awake GUI session (the Gauntlet runs only when Rick says he's away; `caffeinate -dimsu` for the run). Codex was asked for a Gauntlet design the same day (docs/guides/testing.md + codex proposal).
-
----
-#### From project_gauntlet_testing_vision.md
-
-Stated 2026-07-13. Rick's testing north star: "hey my AI friends, run my app through the gauntlet" — automated test categories that mimic his spot-testing (real mouse-click-level operations, full Release build, real data, weird/typical-human usage patterns), so that all-categories-green = ready for his human spot test, and his pass = ship. Rationale: unit tests exercise modules, not interactions; his manual spot-testing keeps finding boundary bugs but is very time-consuming and generates artificial video files.
-
-Categories he named: (1) regression/integration tests mimicking mouse clicks (UI tests re-enabled locally), (2) stress tests, (3) accuracy benchmarks — "find Donna in these videos" against clearcut known ground truth, measuring recognition accuracy (ties to feature/person-recognition-evaluator branch + the codex evaluator NSApplication bug), (4) a mini report published into the metrics dashboard.
-
-**Division of labor:** codex owns the UI-testing track (challenges hit re-enabling UI tests; wrote it up in docs — see `codex-ui-testing-handoff.md` (retired 2026-09-16; in git history) in repo). Rick told codex NOT to bump into Claude; codex uses worktrees; Claude+Rick sometimes work directly on main. Standing guardrail applies: check git state before edits, ask about foreign changes.
-
-Connects to: GH #105–#108 integration-test ladder, testing retrospective 2026-07-05 (boundary bugs), TestDriver harness (natural gauntlet home — already Release + metrics publishing), [[complexity-humility]]. Claude's suggested alternative if XCUITest keeps fighting: app-internal scriptable "driver mode" channel invoking the same actions as buttons — most integration coverage, far less flake.
-
-
-**2026-09-27 revival:** automation-mode password removed on the M4 (Rick ran automationmodetool + DevToolsSecurity). Codex designed it (docs/design/gauntlet-design-codex-2026-09-27.md) and is building PHASE 1 on feature/release-gauntlet: one scripts/run_gauntlet.sh --away, one Release build, timed stages unit→regression→integration→performance→hallie→stress→(ui = phase 2), manifest that fails on unassigned/zero-count tests, result.json + history.jsonl + dashboard trend. Claude's 3 changes: Person Finder flow → Archive Lock/Unlock/Remove; simple confinement (sparse disk image + path allowlist); honest "UI not run". **Rick: first run = a ~15-min SUBSET he watches (proves it + settles permissions), then the dinner-length full run. Long term the thorough Gauntlet lives on the M5 Ultra (96 GB) so it doesn't hog the M4.**
-
----
-#### From reference_release_unit_tests_need_testability.md
-
-`xcodebuild test -configuration Release … -only-testing:VideoScanTests` fails at compile time: the VideoScanCore package is built without `-enable-testing` in Release, so the test target cannot import it. Add `ENABLE_TESTABILITY=YES` to the command line — optimizer stays on (-O, whole-module). With it, 2026-09-25 main 44708097: 9,009 tests in 945 s on the M5, only the pre-existing RecoveryOutcomeContractTests failure.
-
-**Why:** the build-mode policy says Release for production-parity test runs, but CI and nightly use Debug, so the gap was never hit.
-**How to apply:** any Release unit-test run (gauntlet, perf baselines) passes ENABLE_TESTABILITY=YES. UI gauntlet still needs an UNLOCKED desktop ([[reference_gauntlet_tcc_and_exit_masking]]). M1 timing budgets fail under load (Spotlight/Screen Sharing); judge budgets on the M5.
-
-## 5. Setting up a test Mac — automation mode and Xcode first launch
-
-*From `guides/ops/test_mac_setup_automation_mode.md` (diagnosed 2026-10-21), whole.*
-
-<!-- moved from Claude memory (reference_test_mac_setup_automation_mode) on 2026-10-23; operational reference, rewrite in place -->
-
-Diagnosed 2026-10-21. The M5 nightly reported "zero-tests-ran: test-rc=65" because the APP's test host (not the UI-test target, which is already skipped) hung for 120 s: "Timed out … initiating control session with daemon"; "The test runner hung before establishing connection".
-
-The cause was setup, not code:
-1. `automationmodetool` said "requires user authentication". The M4 has had it password-free since 9/27; the M5 never had. Rick often saw the "allow testbed" dialog, which had already timed out by the time he saw it.
-2. Xcode 27.1 was updated without first-launch: `xcodebuild -checkFirstLaunchStatus` gave rc 69, and the log said "CoreSimulator is out of date".
-
-**Fix (Rick ran it at a real terminal, 10/21):**
-`sudo automationmodetool enable-automationmode-without-authentication && sudo xcodebuild -runFirstLaunch`
-Verify without sudo: `automationmodetool` (expect "DOES NOT REQUIRE"), and `xcodebuild -checkFirstLaunchStatus` (expect rc 0).
-
-3. **Metal Toolchain:** since Xcode 27.1 it's a separate download. Without it, mlx-swift's .metal files fail and every gauntlet stage is BLOCKED (build rc 65). Install it with `xcodebuild -downloadComponent MetalToolchain` (no sudo; a few minutes) and verify with `xcrun -f metal`.
-
-**How to apply:**
-- Add both steps to the Ultra setup and to any new test Mac.
-- Re-run first-launch after every Xcode update.
-- `sudo` cannot prompt for a password through `!` in Claude Code (no TTY); Rick must run it in a real Terminal.
-
-Related: [[reference_gauntlet_tcc_and_exit_masking]], [[project_m5_ultra_migration]].
-
-## 6. The M1 MacBook Pro as a test runner
-
-*From `guides/ops/mbp_test_runner.md` (2026-06-01 → 2026-10-05), whole. The M4 is the default testbed since 2026-10-31 (PROCESS §8); the M1 takes overflow.*
-
-<!-- moved from Claude memory (reference_mbp_test_runner) on 2026-10-23; operational reference, rewrite in place -->
-
-Merged from: feedback_mbp_fast_user_switching.md (2026-10-05)
-Remote test machine: M1 Max MacBook Pro
-- Hostname: ricksm1.local (verified 2026-06-01; previous `ricksmacbookpro.local` no longer resolves on the network)
-- User: rickb
-- Repo path on MBP: `~/dev/VideoScan` (matches Mac Studio; verified 2026-06-01 — older `~/developer/VideoScan` path is gone)
-- SSH: `ssh rickb@ricksm1.local`
-- Use for: xcodebuild test runs to avoid stealing focus on Mac Studio
-
-#### Workflow — sync code via git, never rsync
-
-Rick's hard rule: **use git push/pull via origin, do not rsync working trees.**
-Confirmed 2026-05-02 after I tried rsync — got bounced.
-
-Standard sequence to run tests on a feature branch:
-1. Local: commit on the feature branch (ask first per CLAUDE.md unless explicitly authorized).
-2. Local: `git push -u origin <branch>`.
-3. MBP: `ssh rickb@ricksm1.local 'cd ~/dev/VideoScan && git fetch origin <branch> && git checkout <branch>'`.
-4. MBP: `xcodebuild test -project VideoScan/VideoScan.xcodeproj -scheme VideoScan -destination "platform=macOS" -only-testing:VideoScanTests` (skip UI tests per test-etiquette memory).
-
-**Why git over rsync:** clear history of what was tested, no working-tree drift between machines, and the MBP can be left dirty-free at HEAD of whatever branch was last checked out.
-
-**Why:** dual-monitor focus stealing on Mac Studio when xcodebuild runs UI tests; MBP isolates that.
-**How to apply:** any time tests should run remotely, commit + push + ssh-fetch — never rsync the working tree.
-
-#### When NOT to use the MBP for tests
-
-Rick uses the MBP for non-VideoScan work too. Established 2026-05-04:
-- **2:30–4 PM daily**: MBP is reserved for Rick's own use (lunch + afternoon).
-  Do NOT run xcodebuild tests on the MBP during this window.
-- **Outside that window**: still ASK before running tests on the MBP unless
-  Rick has just said it's free for a specific time. Don't assume availability.
-- The Mac Studio is always fine for tests (focus-steal cost accepted when
-  Rick isn't actively working on it).
-
-Future: Rick is getting a new M5 in May 2026; once that's set up the M1 MBP
-will be less central as a test runner. This rule applies until then; revisit
-when the M5 lands.
-
-**2026-08-29 gotcha:** app-hosted `xcodebuild test` over ssh on ricksm1 FAILS when the console user is `donna` (fast user switching): rickb has no GUI launchd domain → testmanagerd "Failed to establish communication with the test runner". Symptom earlier: "Executed 0 tests" tails. Use `ricksm5.local` (rickb has a GUI session) or wait for rickb to be the console user on the M1. Headless Core `swift test` is unaffected.
-
----
-#### From feedback_mbp_fast_user_switching.md
-
-Symptom: `ssh rickb@ricksmacbookpro.local 'xcodebuild test ...'` exits 134 with
-`DVTAssertions: ASSERTION FAILURE in IDELaunchServicesLauncher.m:418 — Assertion
-failed: childPID > 0`. Build phase succeeds, "Testing started" prints, then the
-test runner spawn aborts.
-
-Root cause: Xcode 26.x's IDELaunchServicesLauncher needs the user's *Aqua* launchd
-domain to spawn the app-hosted test runner. SSH sessions land in a different
-launchd domain. Even with rickb on the foreground console, direct invocation
-fails. `caffeinate -is`, `ssh -t`, and clean DerivedData do not help.
-
-**Fix (verified working, recipe from claude-4-6 on 2026-05-02):** wrap the
-xcodebuild call in `launchctl submit`, which schedules it via launchd and runs
-it in the right context.
-
-```bash
-# From Mac Studio over SSH — kick off (returns immediately):
-ssh rickb@ricksmacbookpro.local 'launchctl submit -l com.videoscan.test -- bash -c "cd ~/developer/VideoScan && xcodebuild test -project VideoScan/VideoScan.xcodeproj -scheme VideoScan -destination \"platform=macOS\" -only-testing:VideoScanTests > /tmp/unit_test_output.txt 2>&1"'
-
-# Poll for completion (blocks until done):
-ssh rickb@ricksmacbookpro.local 'while ! grep -q "TEST SUCCEEDED\|TEST FAILED" /tmp/unit_test_output.txt 2>/dev/null; do sleep 10; done; grep -c "passed" /tmp/unit_test_output.txt; grep "TEST SUCCEEDED\|TEST FAILED" /tmp/unit_test_output.txt; launchctl remove com.videoscan.test 2>/dev/null'
-```
-
-For full suite including UI tests, drop `-only-testing:VideoScanTests`.
-
-**Why:** Verified empirically 2026-05-02 — five direct-SSH attempts failed identically.
-**How to apply:** Always wrap MBP-side xcodebuild test in `launchctl submit -l <label> -- bash -c "..."`,
-then poll a log file for the SUCCEEDED/FAILED line. Direct `ssh ... xcodebuild test` is broken.
-Skip the MBP entirely if Rick is using it (background videos, etc.) — run on Mac Studio.
-
-## 7. The nightly adversarial review
-
-*From `design/nightly_adversarial_review_design_2026-10-01.md`, whole. It was written as a proposal; it is built (`tools/adversarial_nightly.py`, its invariants in `docs/practices/invariants.md`, sensor `tests/test_invariants_coverage.py`). The status words inside are the 10/01 text.*
-
-### Nightly adversarial review — design (PROPOSED, 2026-10-01)
-
-Status: **PROPOSED** — awaiting Rick's approval. Author: Claude (Manager) via Plan agent. No code yet.
-
-#### Summary
-1. A launchd job on the M4 (not GitHub) reviews each day's merges to local `main` — GH never sees unpushed work, and the claude/codex logins live there.
-2. Scope = data-risk + truthfulness files touched since the last successful run, pure renames/tests/docs dropped; nothing in scope → one line, exit 0.
-3. Per-folder invariants live in `docs/archive/practices/invariants/<Folder>.md` (not in source folders — synced-group/resource clash risk).
-4. `tools/adversarial_nightly.py` auto-builds the brief in the #230 brief's shape and output contract; reuses `codex_review.py`'s parser and cycle records.
-5. Tier A nightly: headless `claude -p`, Opus 5.5, effort high (xhigh for data-risk), read-only tools, dollar cap.
-6. Tier B: codex only for P0/P1 in data-risk folders (≤1/night, ≤4/week) + one bundled Sunday sweep.
-7. Every P1/P2 carries a drafted red test; a 05:30 sandboxed scratch worktree runs them and labels each finding `confirmed-red` / `unconfirmed`.
-8. Output: untracked review doc + ledger row; after a shadow week, `adversarial-review` issues; a 🔴/🟢/⚪ morning-brief line; Manager closes or declines each finding.
-9. Failed nights are never silent: START/OUTCOME log, `failed` phase in review-cycles.json, morning 🔴; findings-per-dollar logged every run.
-10. Rollout: shadow 10-02 → 10-08, then filing. Keep/kill = kept P1/P2 per week (closed against a pinning test) + precision.
-
-#### 1. Trigger and scope
-- **Placement:** two LaunchAgents on the M4, cloned from `com.videoscan.nightly-review.plist` (same PATH, `Nice 10`, log `~/Library/Logs/VideoScan/adversarial_review_launchd.log`):
-  - `com.videoscan.adversarial-review` 00:30 — Tier A (cloud-side, light on the M4, done before the 02:00 nightly).
-  - `com.videoscan.adversarial-confirm` 05:30 — red tests → Tier B → filing (after `nightly_guarded.sh` ~02:00–03:30 and `nightly_review.sh` 04:30).
-  - No M1/M5 failover (they may be asleep/away).
-- **Range:** `state/last_sha..main`, baseline advanced only on success (copied from `nightly_review.sh`), so a failed night carries its SHAs forward.
-- **Files:** `git diff --name-status -M90% <range>` → drop pure renames (R100; the 09-29 layout move would otherwise flood scope), `*Tests*`, `docs/`, non-Swift → intersect with `paths:` globs in `docs/archive/practices/invariants/*.md`.
-- **Buckets:** data-risk (docs/guides/developer.md §Data-risk + `CyberBrainWriter.swift`); truth (Hallie answer/executor, date resolution, Core genealogy incl. `Gedcom*`, `*Kinship*`, `LineageTrail`, `LifeAndTimes/`).
-- **Load (14-day sample):** 0–5 data-risk and 0–15 truth files/day; about half of nights have something in scope.
-- **Gap found:** source_layout did not list `RecordFinderFiling.swift` / `ResearchStore.swift` — where codex found the #230 P1s. Add a pytest sensor `tests/test_invariants_coverage.py`: any Swift file in a data-risk folder that writes via `FileManager` / `write(to:)` / `CyberBrainWriter` must match a glob.
-
-#### 2. Auto-generated brief (`tools/adversarial_nightly.py brief`)
-- **Invariants files:** `docs/archive/practices/invariants/{Archive,MediaOps,FamilyTree,ArchiveAngelPromote,Volumes,Hallie,Dates,Genealogy}.md` — YAML front matter (`tier`, `paths`), numbered invariants (ARCH-1…), and "Known and accepted (do not report)". Seed from existing briefs (#230's 7 → FT-1..7).
-- **Brief sections (order of the #230 brief):** (a) range + merge subjects; (b) files in scope with changed `func` names + "do not explore outside"; (c) callers via `git grep -n -w`, ≤8/symbol, read-only; (d) invariants + known-accepted; (e) already-reported fingerprints (open issues, prior review docs touching the same files); (f) tests already run (latest metrics testdriver row for main + "green" clauses of merge subjects); (g) coverage/logging directive; (h) privacy line; (i) output contract.
-- **Output contract:** existing `Credits spent: … | Finding count: N` first line and `Verdict:` line (so `codex_review.parse_output()` / `validate_brief()` work unchanged), plus per finding `### F<n> — P<0-3> — <title>`, `- File:`, `- Invariant:`, `- Key: <path>#<symbol>#<ID>`, and a ```swift red test tagged `// target:` and `// test: Suite/testName`; "read, no findings" per clean file.
-- **Size cap:** ≤12 files per brief; split into ≤3 briefs by folder; overflow listed as "NOT REVIEWED" (visible, never dropped).
-
-#### 3. Tiering
-- **Tier A** (verified: `~/.local/bin/claude` 2.1.287, claude.ai OAuth login; not on launchd PATH → absolute path). cwd = detached scratch worktree at head:
-  `~/.local/bin/claude -p --model claude-opus-5-5 --effort high --restricted --tools "Read,Grep,Glob" --strict-mcp-config --permission-mode dontAsk --no-session-persistence --max-budget-usd 10 --output-format json < brief.md` (`--effort xhigh` for data-risk).
-  - `--restricted` ignores project settings, so the SessionStart morning hook does not fire at 00:30 and eat Rick's morning digest. No `--bare` (API-key only; this account is OAuth).
-- **Tier B:** `tools/codex_review.py --title "adv <date>" --range … --brief <codex brief> --doc docs/reviews/adversarial/<date>-codex.md --timeout 1800`. Gate: P0/P1 in data-risk; ≤1/night, ≤4/week; Sunday 05:30 bundled weekly sweep if the week touched data-risk. Codex brief = Tier A brief + "claims to confirm or refute (with red-test outcome)" + "find what this reviewer missed".
-  - **Policy change needed:** CLAUDE.md's codex spend policy says Rick triggers each pass; gated nightly/weekly passes would need to be pre-approved there (Rick's call).
-- **Dedupe:** fingerprint = sha1(path + symbol + invariant ID), no line numbers; `<!-- adv-fp:<hash> -->` in issue bodies; checked against `gh issue list --label adversarial-review --state all`, `docs/reviews/adversarial/declined.jsonl`, and prior review docs by file+symbol → "dup of #N".
-
-#### 4. Output
-- **Doc:** `docs/reviews/adversarial/<YYYY-MM-DD>.md` (header like `write_doc()`: range, tier, model/effort, tokens, notional $, findings by severity, confirmed-red, verdict; then findings, then brief). Written untracked; the Manager commits it with triage decisions — no unattended commits to main. Each run is recorded via `codex_review.new_cycle/update_cycle` for the status line.
-- **Issues:** via the nightly findings→issues tool (in progress in parallel) with labels `adversarial-review` + `confirmed-red|unconfirmed`; bodies scrubbed of names, outside paths, transcriptions.
-- **Morning brief:** ~15 lines in `.claude/scripts/session_morning_hook.sh` reading `~/Library/Logs/VideoScan/adversarial-review/latest.json`: `🔴 2 P1 (1 confirmed-red), 1 P2 → doc`, `🔴 FAILED: <reason>`, `🔴 did not run`, `🟢 clean, N files`, `⚪ nothing in scope`.
-- **Triage:** `adversarial_nightly.py close --fp <h> --test <Suite/test> --sha <fix>` / `decline --fp <h> --reason "…"`.
-
-#### 5. Verifying claims (05:30)
-- Each drafted test → its own `AdvDraft_<hash8>.swift` in a fresh scratch worktree at head. Core: `swift test --package-path … --filter`. App: one batched `build-for-testing` / `test-without-building -only-testing:VideoScanTests/<Suite>/<test>` with its own derivedData, wrapped in the process-group watchdog lifted from `nightly_local_tests.sh`.
-- `confirmed-red` = compiled and failed at an `#expect`/`#require` naming the claim; `unconfirmed` = passed / didn't compile / crashed / timed out (reason recorded).
-- **Safety:** static lint rejects drafts mentioning `/Volumes`, `applicationSupportDirectory`, `homeDirectoryForCurrentUser`, `FamilyArchive`, `00_Index`, `Process(`, `URLSession`, or absolute paths outside `temporaryDirectory`; `sandbox-exec` profile `scripts/adversarial/redtest.sb` denies writes to `/Volumes`, App Support/VideoScan, `~/Pictures`, archive roots, and non-loopback network; 10 min/test, 60 min total; skip if `nightly_local_tests.sh` still runs or a `(VideoScan)` exit corpse exists; no UI tests, no app launch; worktree removed, at the latest by 09:30.
-
-#### 6. Budgets, stop rules, failures
-- Tier A ≤$10/brief notional × ≤3 briefs; 40 min wall clock per brief; Tier B per its caps; all done by 09:30.
-- Stop rules: >5 P1 in one run → treat as noisy, skip Tier B, flag; 3 failed nights in a row → self-disable (flag file) + morning 🔴 "disabled".
-- START/OUTCOME to `~/Library/Logs/VideoScan/adversarial_review.log` (one sink). Ledger `~/Library/Logs/VideoScan/adversarial-review/ledger.jsonl`: date, range, tier, model, effort, files, tokens, cost/credits, findings by P, confirmed-red, later kept/declined → findings per dollar.
-- Failure: `failed` phase, morning 🔴, baseline not advanced; a job that never fires is caught by the missing OUTCOME line.
-
-#### 7. Rollout and keep/kill
-- Shadow 10-02 → 10-08: doc + ledger + morning line only; no issues, no codex. Turn on filing + Tier B on 10-09 if the shadow docs read sanely.
-- Metric (reviewed with the end-of-October codex policy review): kept P1/P2 per week and precision = kept / (kept + declined). Keep at ≥1 kept P1/P2 per week and ≥40% precision; drop to weekly or kill after two zero-kept weeks or precision <25%. Also track later codex/QA misses in files the nightly reviewed.
-
-#### Not verified on this machine
-- `claude -p` with OAuth under a LaunchAgent (keychain access while locked); `total_cost_usd` meaning on a subscription and weekly-limit accounting; `--restricted` with OAuth; `sandbox-exec` with xcodebuild/SwiftPM (module caches in ~/Library may need allows); findings→issues tool interface (in progress); codex credits (not exposed); whether `.md` in synced groups gets bundled. No headless claude/codex call was made during design.
-
-#### Critical files
-`tools/codex_review.py`, `tools/model-fitness/nightly_review.sh` (+ its plist), `docs/guides/developer.md`, `.claude/scripts/session_morning_hook.sh`, `scripts/nightly_local_tests.sh`, `docs/reviews/briefs/230-filing-brief.md`, `docs/reviews/codex/codex-review-record-finder-filing-2026-10-01.md`.
-
-## 8. Metrics: what feeds the metrics page
+## 4. Runbook — what runs where, and how to start it (current 2026-11-01)
+
+*Replaces four accumulated notes (Codex docs review F11, 2026-11-01). Their full text, with the history behind each
+rule (the 2026-07-20 TCC diagnosis, the 10/21 test-Mac setup, the M1 runner recipes, the 10/01 adversarial-review
+proposal), is archived verbatim: `docs/archive/guides/ops/gauntlet_tcc_and_exit_masking.md`,
+`docs/archive/guides/ops/test_mac_setup_automation_mode.md`, `docs/archive/guides/ops/mbp_test_runner.md`,
+`docs/archive/design/nightly_adversarial_review_design_2026-10-01.md`. The "M1-first" policy and the "PROPOSED, no code
+yet" status in them are superseded: the M4 is the default testbed (PROCESS §8) and the adversarial review is built.*
+
+**Where.** Rick's machine (the M5 Ultra) is for rapid dev; heavy runs only in a window he declares. **The M4 is the
+default testbed** for full suites, the gauntlet and long builds (PROCESS §8): push main, pull it there, run that commit,
+name it in the report. The laptops (M5 Pro, M1) take overflow and are off the nightly rota (DECISIONS 2026-10-28).
+
+| What | Where | How to start it |
+|---|---|---|
+| Sensor lane (pre-merge for app code; ~600 tests, ~70 s) | any Mac, your own DerivedData | `scripts/run_sensors.sh --derived-data <abs dd>`; it must print `sensor lane GREEN (N tests)` |
+| Catalog suites (catalog work) | any Mac | `scripts/run_catalog_tests.sh` |
+| Core | any Mac | `swift test --package-path <abs>/VideoScan/VideoScanCore` |
+| Python tooling and docs guards | any Mac | `venv/bin/python3 -m pytest tests/` |
+| Full app suite (Debug) | the M4 | `xcodebuild test -project <abs>/VideoScan/VideoScan.xcodeproj -scheme VideoScan -derivedDataPath <abs dd> -only-testing:VideoScanTests` |
+| Release gauntlet (§3) | the M4, on request | `scripts/m4_run.sh deep` from the Ultra (it pushes the commit to the M4 and runs `scripts/run_gauntlet.sh --away` in the M4's GUI session); `scripts/m4_run.sh status` reads it back |
+| UI test plans (Smoke, Gauntlet) | the M4, on request | `scripts/m4_run.sh ui [--only <UITestClass>]`; `all` = deep then ui |
+| Nightly (app, Core, Hallie replay, analysis lane) | both Studios at 02:00 on the rota | launchd, installed by `scripts/install_nightly.sh`; the rota is `scripts/nightly_rota.json`; timing budgets are strict only there (`VIDEOSCAN_TIMING_STRICT=1`, DECISIONS 2026-10-31) |
+| Nightly UI smoke on the M4 | ruled 2026-10-28, not yet nightly | five stale flows first (#408; BACKLOG "Nightly UI smoke on the M4") |
+| Nightly adversarial review | built | `tools/adversarial_nightly.py` reads the invariants in `docs/practices/invariants.md` (`tools/invariants.py` parses them; `tests/test_invariants_coverage.py` pins 8 areas); its reviews are in `docs/reviews/codex.md` |
+
+**Gotchas that still bite** (each proven on the fleet; detail in the archived notes above):
+- **UI automation needs an unlocked, awake GUI session.** XCUITest's `testmanagerd` cannot enable automation mode on a
+  locked screen or from an ssh session; that is why `m4_run.sh` runs a one-shot LaunchAgent in the host's GUI domain.
+  Unit tests, builds and the 02:00 `xcodebuild test` are unaffected.
+- **A new test Mac, and after every Xcode update:** `sudo automationmodetool enable-automationmode-without-authentication`
+  and `sudo xcodebuild -runFirstLaunch` (Rick, in a real Terminal: `sudo` has no TTY in Claude Code), then
+  `xcodebuild -downloadComponent MetalToolchain` (no sudo). Verify: `automationmodetool` says "DOES NOT REQUIRE",
+  `xcodebuild -checkFirstLaunchStatus` returns 0, `xcrun -f metal` resolves.
+- **A pipe masks the exit code.** Never pipe a build or test into `tail`/`head`; redirect to a log and read the
+  tool's own status line (CLAUDE.md, command shape).
+- **Release unit tests need `ENABLE_TESTABILITY=YES`** (the gauntlet passes it); the optimizer stays on.
+- **App-hosted `xcodebuild test` over ssh** needs the user's GUI launchd domain: run it through `launchctl submit` (or
+  `m4_run.sh`), and not while another user holds the console. Headless Core `swift test` is unaffected.
+- **SSH builds cannot use the "VideoScan Local" signing key** (the login keychain is locked over ssh): they use the
+  ad-hoc override the nightly uses.
+
+## 5. Metrics: what feeds the metrics page
 
 *From `practices/nightly-metrics-setup.md` (rewritten 2026-10-02; sections to 2026-10-07), whole.*
 
