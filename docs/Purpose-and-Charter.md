@@ -69,26 +69,9 @@ Originally we thought we'd "train" an LLM or a Visual LLM on the Breen Family me
 **Where the design lives:** `docs/design/machine_intelligence.md` (the design: samplers, approaches, the judge, the approach ladder A0–A6), `docs/archive/reviews/video_llm_design.md` (the running review verdict), `docs/archive/research/video_llm_for_family_media_2026-10-29.md` (the research behind it). Provenance: `docs/design/provenance.md` and `docs/guides/provenance_roles.md`. Earlier research is in `docs/archive/research`.
 
 ## Claude Feedback — the Mixture-of-Experts idea against what the designs settled (2026-10-30)
-**The architecture is right; the word "trained" is the only disagreement.** A master controller routing work to specialist engines and judging their output is exactly what the model-lab design describes (`ApproachRegistry` + the MFO job + the `Judge`), and the experts already exist or are designed:
+**The architecture is right; the word "trained" is the only disagreement.** A controller routing work to specialist engines and judging their output is the model lab (`ApproachRegistry`, the MFO job, the Judge); the experts are mostly deterministic or frozen, and what learns is the router and the judge, never weights holding family facts (rulings 2026-08-14, 08-16, 10-14). Duplicates need no model; people are a constraint solver (A7 Household Roster), not a VLM; a model earns its seat the way a bug fix does, against Rick's own dated clips; no pixels or audio of living family leave the house (rule 13). The design, its ladder and the measurements: `docs/design/machine_intelligence.md` §0, §4–§5 and Part II; A7: `docs/reviews/household_roster_feasibility.md`.
 
-| Goal | Expert | Kind |
-|---|---|---|
-| Provenance | whole-file SHA-256, 25 M audio landmarks, picture prints, encoder-signature chains, `DateTriangulator` | deterministic; built or designed |
-| Events | Events v1 rules, transcripts, captions; VLM `occasionKind` / `roomFeatures` | rules built; VLM planned, gated |
-| Duplicates | hashes, sound prints, picture prints, supersessions | deterministic; built |
-| Era / date | OCR burn-ins (1,448), camera stamps, VLM `era` claim | built; VLM gated on MAE < 7 years |
-| Knowledge | GEDCOM graph + CyberBrain; Hallie's fixed tool schema | built |
-
-What is **not** done is training the experts' weights on family facts, and three rulings close that door on purpose (2026-08-16 no fine-tune as a fact store; 2026-08-14 deterministic facts, LLM phrases; 2026-10-14 no percentages without calibration on Rick's own footage). The reason is practical, not purist: a wrong weight cannot be corrected through Update…, and a LoRA on 18 confirmed events and 73 dates would mostly learn which carpets the family films on. What *is* trained, honestly, is the **gating**: Rick's confirmed examples retrieved into the prompt (A5), a small pair-classifier over his Events decisions (the 10/16 review), and LoRA only on *extraction* (reading an OSD) if the error analysis says the model sees the clue but writes it down badly (A6). So: a Mixture of Experts whose experts are mostly deterministic or frozen, and whose learning lives in the router and the judge. The facts live in the catalog and the tree, inspectable and correctable.
-
-**Goal 3 (duplicates) needs no model.** It is solved by fingerprints; a VLM adds nothing there. The open work is coverage and scale of the picture-print backfill, not intelligence.
-
-**Goal 4 (people) is a constraint solver, not a VLM, and nobody has designed it yet.** Proposed as the first honest rung, `A7 Household Roster`: for a file's date window (from the triangulator), the tree gives who was alive, their ages and sex, who lived in the house, and who was probably holding the camera (absent from frame). The VLM contributes only attribute perceptions — adult/child, age band, sex, "infant present" — never a name. The intersection usually leaves one or two candidates with a written reason ("woman 30–40 with an infant; in 1991 the household had one woman 30–40; Rick was likely filming"). It is a proposal to Rick, never a name written by the machine (ruling 2026-10-10), and it shows no percentage until calibrated against his confirmations (ruling 2026-10-14). Deterministic, cheap, testable; the VLM's part is the same attribute schema the era work already needs.
-
-**How a model earns its place.** The way a bug fix does: seen failing (the baseline numbers from today's 3B captioner), then seen passing a bar measured on ground truth we already hold (73 Rick-dated files, 5,635 camera-dated files, 18 confirmed events, 1,448 OCR dates). Phase 0 of the design — wrap what exists, publish its numbers — needs no schema change and no ruling, and every later model is compared to that number.
-
-**Privacy holds by code.** No pixels or audio of living family to a cloud model (rule 13); the runner refuses the payload before a byte leaves the process, and a sensor proves it.
-
+----
 # 5. Architecture and Design
 Modularity, Object-Orientation, and state-of-the-art software development design patterns will be used. Algorithms and libraries of known good quality will be used rather than home grown code.
 
@@ -127,12 +110,7 @@ A starting point for the top-level shape:
 ## Claude Feedback — the background analyzer service (2026-10-30)
 Rick, 2026-10-30: "The app is essentially the UI/UX… peel off services into a BG process that can keep running,
 persist after we quit the app… I don't like the idea of having an option to launch the app in the BG… we can't lose
-the app for 2 weeks." Designed in `docs/design/background_service.md`; the shape in four lines:
-- **`VideoScan Background.app`**, a helper inside the app bundle registered as a launchd agent through Apple's `SMAppService`: its own name and badged icon in Activity Monitor and Login Items; launchd keeps it alive after the app quits and across reboots; it exits when idle and relaunches on the next request. Not a copy of the app in the background.
-- **It never writes the catalog.** Read-only catalog, results into sidecar SQLite files and an append-only journal that the app's one committer applies. The one-committer rule stands.
-- **Engines move, never copy** (one engine per action): model lab first (born there), then Scene Captions, fingerprints, the rest of Content Analysis, Event Analysis. The app is whole at every step.
-- **XPC for control and progress; files for durable state.** The MFO window shows service jobs in the same row as in-app jobs; `videoscan-bg status|pause|stop` and Activity Monitor are the window when the app is closed. It backs off while Rick is at the keyboard and runs full-out at night and on the M4.
-The one cost: the helper is its own bundle, so macOS asks once for Full Disk Access for it (sticky under the "VideoScan Local" signature). Rick's call.
+the app for 2 weeks." Built as `VideoScan Background.app`, a launchd helper that never writes the catalog (a journal the app's one committer applies), moving one engine at a time so the app is never down; step 1, the 8B era job, merged 2026-11-01. How it works and what moves next: `docs/design/background_service.md` (§0–§0.7, §3, §4).
 
 ## Hallie: deterministic tool-calling and the persona (advisory starting point)
 To let the LLM query the media database and family tree without hallucinated answers, the client enforces native JSON tool-calling schemas: the model returns `tool_calls`, the client validates arguments against typed Swift functions, dispatches the work to the background database queue, and feeds the result back as a tool message for the natural-language reply. Example tools: `query_family_tree` (structured GEDCOM relations, e.g. "who are the four sons of Rick Breen?"), `search_media_catalog(keyword, decade?)`. (Built this way: Hallie's QueryAST → deterministic executors; DECISIONS 2026-08-14.)
@@ -161,7 +139,7 @@ We use state-of-the-art overnight methods to improve and ensure the robustness a
 Codex performs adversarial code reviews, scoped and focused so as not to get sidetracked, and after several iterations Claude must decide that it is good enough for now — incremental progress is important. If an issue is seen by Codex or testing and we still want to proceed, we file a GH issue and circle back.
 
 ### Claude Feedback — local review models on the night shift (Rick's direction, 2026-10-30)
-Codex runs out of usage; the Ultra (96 GB) and the M4 (64 GB) sit idle after Rick goes to bed. Direction: try a local model as an overnight code reviewer, one folder at a time; grade its findings against held answers (historical bugs at their pre-fix commits, their fixed versions as negative controls); keep it if it finds real defects at a triage cost Rick accepts, otherwise try the next model. This is tooling, separate from the app, and it never replaces the Codex pass that data-risk code requires. Codex's unmerged pilot (`experiment/attended-model-review`: attended runner, pinned-SHA packets, honest `failed`/`completed_unverified` outcomes, a proposed 04:00 slot) is the starting point; its first live run has yet to happen (the agent sandbox blocked localhost).
+Try a local model as an overnight reviewer, graded against historical bugs before it is trusted; tooling only, never a substitute for Codex on data-risk code (DECISIONS 2026-10-30; next steps in `docs/BACKLOG.md`, "Local review models on the night shift").
 
 ## Bug Reports
 GH Issues are filed on GH; p0 for severe, p1 for critical, etc. The bug reports are reviewed weekly.

@@ -60,7 +60,7 @@ Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Ever
 - Codex's instructions are `AGENTS.md`, which points at `CLAUDE.md`; both agents read one rulebook.
 
 ## 6. Escalate to Rick before
-New dependencies · non-additive schema changes · threading-model changes · replacing `ExecuteShellCommand`/`ProcessRunner` · anything touching recovered MXF pair data · log paths or formats · anything irreversible against the live catalog or the archive · removing a feature. Everything else: research, propose, proceed.
+New dependencies · any schema change (additive only, through a migration; Rick approves the DDL — CLAUDE.md rule 6) · threading-model changes · replacing `ExecuteShellCommand`/`ProcessRunner` · anything touching recovered MXF pair data · log paths or formats · anything irreversible against the live catalog or the archive · removing a feature. Everything else: research, propose, proceed.
 
 ## 7. Rhythm
 
