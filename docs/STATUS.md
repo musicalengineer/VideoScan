@@ -1,114 +1,55 @@
 # Status — rewritten, never appended
 
-*Updated 2026-10-31 evening (Saturday; morning testbed, stability fixes, afternoon and evening rapid dev with Rick on the review page). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-01 (Sunday morning edition, written overnight 10/31). Rick corrects this file; agents read it at session start.*
 
-## Where main stands — `697237a2`, pushed, checkout clean
-**Stability call for today: main is green on every lane that measures code.** The only reds of the day were two
-measurement rules, both fixed on main:
-- **Timing budgets are strict only where the lane pins them** (`VIDEOSCAN_TIMING_STRICT=1`, the 2 AM nightly on a dedicated
-  Mac Studio); a load-average guess never makes a budget strict (Rick's ruling, DECISIONS 2026-10-31, closes #407). Everywhere
-  else a miss up to 3× is a visible known issue, beyond 3× still a failure. Why: the daytime Ultra ran every search query ~35 %
-  slower than at 02:00 on the same code, load 2.9 on 30 cores was called "quiet", and one 50 ms budget failed twice at 1.01–1.02×.
-- **The nightly card names every lane.** Last night's card read "12,645 passed · 0 failed — broken" with "0 failing" above it;
-  the Core lane (1 failed) and the Hallie replay (failed) were unnamed. The publisher now carries app / Core / Hallie per cell,
-  one Core failure is WATCH like one app failure, and the tile says "2 AM run of <date>". **Lane ladders** (Rick's ask, afternoon):
-  one vertical ladder per Mac on that tile, one rung per lane (App, Core, Hallie strict, Hallie advisory, Hallie voice), each
-  rung by its own lane's rule, grey where the lane did not run; hover gives numbers and the reason code. Both show from the
-  next nightly's publish (the publisher runs with it).
-- **Testbed machine rule (PROCESS §8, Rick 2026-10-31):** the **M4 is the default testbed**; the Ultra during the day is rapid dev
-  with Claude, nothing else, unless Rick declares a window. No machine named for a testbed means the M4; "On the M4?" is fine.
+## Read first (five minutes)
+1. **Nothing was deleted overnight.** The cleanup proposal is `docs/design/cleanup_proposal_2026_10_31.md` (≈ 118 GB reclaimable if every DELETE is accepted; you rule, then `.trash/` first).
+2. **Docs were reorganized**: `docs/README.md` is now the one entry point; `docs/design/models.md` is THE list of models (what, where, why, status); seven model/LLM research and review docs moved to `docs/archive/` with one-line stubs; `docs/design/data_organization_2026_10_31.md` is your file-locations map, filled in (your text kept, generated tables between markers), with the two-page diagram at `docs/design/data_organization_2026_10_31.html` and the PDF in `~/Downloads`. "Rick to rule" docs are listed in BACKLOG.
+3. **The background service is NOT running and cannot analyze videos yet** (step 0 only: helper, launchd, XPC, no-op job; off behind `defaults write Rick-Breen.VideoScan background.service.enabled -bool true`, no Settings toggle yet). Step 1 (the 8B era/OCR job) is the next brief — say go.
+4. **Verdicts from the day:** seat the 8B as the era/OCR expert; the 32B is parked (worse on all 72 Rick-dated clips at 4.7× the cost); the model stays a pixels-only witness and the file's facts enter as deterministic bounds (telling it the codec moved a 1965 film to 1975–1985); "close enough" = midpoint within 5 y AND range ≤ 10 y wide; your 25 dates all stood in the review.
 
-## Today's testbed, M5 Ultra, main `fc620035` (Rick's declared window, before the rule above)
+## Testbeds overnight (all against main unless said)
 | Lane | Result |
 |---|---|
-| App unit suite, Release, run 1 and run 2 | 12,637 passed · 1 failed both times: the 100k keystroke budget '1990s' at 50.8 / 50.5 ms vs 50 ms (host ~35 % slower than at 02:00; 13 known issues) |
-| Core, Release, serial (the nightly's `--no-parallel`) | 1,918 passed · 0 failed · 13 known issues |
-| Core, Release, parallel (two runs) | 2 failed both times: resident-size growth checks contaminated by sibling suites → #407, fixed by the timing ruling |
-| UI smoke (`run_ui_smoke.sh`) | passed |
-| Gauntlet UI plan, 17 flows on the real screen | 12 passed · 5 failed deterministically against today's UI → **#408** (three flows look for "Catalog Options" on the Catalog tab, one for File ▸ Catalog Info, one needs the face-photo fixture) |
-| **Release gauntlet on the M4**, main `fc620035` (1,664 s) | **5,494 passed · 0 failed** — unit 3,647 · regression 634 (7 known issues) · integration 6 · performance 82 (the keystroke budget passes on the M4) · hallie 1,116 · stress 9. The runner stamps it FAILED by its own policy: known issues count as failures and phase-1 subsets are "blocked" (658 unadapted suites in unit). That policy is the open ruling below. |
+| M4 Release gauntlet #1, `fc620035` | 5,494 passed · 0 failed · 7 known issues; runner stamps FAILED by policy (known issues count; phase-1 subsets "blocked") |
+| M4 Release gauntlet #2, `ae3acedc` | 5,504 passed · 0 failed · 7 known issues; same stamp |
+| Ultra Release gauntlet, `937de636` | **5,504 passed · 0 failed · 7 known issues** in 1,512 s — identical to the M4's, same policy stamp (first attempt refused to start: manifest inventory mismatch after the Codex-P2 test — resynced `937de636`); off the Ultra by 22:06 |
+| Codex review of the day's Swift (`30e41529..d3d46db0`) | verdict **merge**, one P2 (the reference-only timing wrapper swallowed a hang off the pinned run) — **fixed red-first** `33a41214`, cycle closed; `docs/reviews/codex/codex-review-day-2026-10-31.md` |
+| 02:00 nightly | runs on both Macs after this file was written; the first clean reading of Hallie advisory since the GPU hang; the lane ladders show from its publish |
 
-Nightly 2026-10-31 02:00 (Ultra, `30e41529`): app 12,645 / 0; Core 2,133 / 1 (the pause/resume race test, fixed `6891a20c`);
-Hallie strict 52 / 56 (pre-existing, route_mismatch ×4), advisory 145 / 826 in the 3600 s cap — the GPU was held all night by a
-wedged model process (#406, fixed). Tonight's nightly is the first clean reading of both.
+## Spot tests for Rick (Debug)
+- **Catalog ▸ Show ▸ "Confirmed Date"**: the Showing box reads "… · Confirmed date · …" and every row's inspector says "Saved: … — you're sure / best guess". (Open: should the chip show its count? needs a debounced model-owned cache.)
+- **Background helper (step 0)**: `defaults write Rick-Breen.VideoScan background.service.enabled -bool true` → launch once → `launchctl print gui/$(id -u)/Rick-Breen.VideoScan.Background` → helper `--status`, `--enqueue noop 120 1000` → `tail -f ~/Library/Logs/VideoScan/background.log` → quit the app, it keeps counting. Allow the login-item notification.
+- **#402**: Catalog Status shows "N degenerate OCR captions stored before this build refused them"; junk no longer counts as date evidence.
+- **Review page** (outside the app): `venv/bin/python3 tools/video-llm-bench/bench.py watch --run <bench-a2>/.scratch/bench/runs/review-a2-rickdated-25 --manifest <bench-a2>/.scratch/bench/manifest.json --port 8765 --open` — your 25 verdicts are in `verdicts.jsonl` beside the run.
+- Older: GEDCOM dates + sparkle; Hallie after the refactor; Provenance ▸ Set Role and Find Master; Archive 144 Masters; #375; #345; People row removal; arrow keys; Migrate words; ⌘⌫ on a duplicate pair; #383.
 
-## Video-LLM lab — where it stands (`docs/reviews/video_llm_benchmarks.md`, `tools/video-llm-bench/README.md`)
-- **A0 (3B, stills)** and **A1 (3B, windows + contracts)** published. A1 raised ERA answered 18 % → 98 % without improving accuracy
-  where it answers (Rick-dated MAE 5.9 y); windows cost OCR 4–6 points → one engine, two samplers.
-- **A2 (Qwen3-VL-8B-4bit) — DONE, published** (`docs/reviews/video_llm_benchmarks.md`; 327 clips, N=8, 0 timeouts under the #406
-  watchdog, 7.0 s/clip, +17 % over A1). **The 8B is the first model that moves the era reading:** Rick-dated MAE A0 6.9 / A1 5.9 /
-  **A2 3.6 y**, truth inside the range 86 %, within 5 y 74 %; all readable ERA clips MAE 22.8 → 9.7 y; 2020s phone clips 36 → 12.8 y
-  (still the weakest stratum — the codec/carrier floor must outrank it). OCR on A0's stills: any-frame exact 92 → 95 %, majority
-  90 → 92 %. Verdict: **seat the 8B as the era expert; keep the 3B for nothing.**
-- **A3 (Qwen3-VL-32B-4bit) — 48 of 72 Rick-dated clips, deadline-stopped at 15:50, resume-safe** (`.scratch/bench/runs/full-a3-py-r3-n8-rickdated`,
-  ≈ 19 min to finish). On the SAME 48 clips: A1 MAE 6.3 · **A2 3.7** · A3 5.0 y; inside-range 77 / **88** / 56 %; within 5 y 50 / **75** / 60 %;
-  cost 7.2 s per window generation vs 1.5 (≈ 5×), load 14 s. **The 32B does not earn its cost on era** at N=8 with prompt r3 (tuned on
-  the 3B/8B — one caveat; a 32B-tuned prompt is the only thing that could change this). Finish the 24 clips for the record, then park it.
-- Run-record caveat: the peak-RSS figure in both A2 and A3 records is the watchdog parent's (0.04 GB), not the worker's — fixed on main
-  (`994429d6`); the A3 resume writes the real figure.
-- **32B weights are cached** (18 GB, `models--mlx-community--Qwen3-VL-32B-Instruct-4bit`); one run on the 72 Rick-dated clips after A2 reads.
-- **Household Roster (A7) feasibility** published `2cb31fa5`: a filter, not a namer; ties are same-sex same-generation siblings.
+## Landed 10/31 (all pushed; main `937de636` + this file)
+- **Stability**: timing budgets strict only where the lane pins them (DECISIONS 2026-10-31; closes #407); the nightly card names every lane and counts Core failures; **lane ladders** on the dashboard (one per Mac, one rung per lane); the JobSupervisor pause/resume race test made deterministic; PROCESS §8: **the M4 is the default testbed**, the Ultra only in a declared window, "On the M4?" is fine.
+- **Catalog ▸ Show ▸ Confirmed Date** (38 tests on five dimensions; the Show filters became a predicate table, CCN 27 → 18).
+- **Video-LLM lab**: #406 watchdog (model in a worker process, per-generation cap, run deadline); **the mlx-vlm 0.5.0 prefill bug** (prompts over 2048 tokens chunked, the tail chunk dies in Metal — ten crashes; last night's N=12 collapse) fixed with one prefill step; **A2 published** (8B: Rick-dated MAE 3.6 y, inside-range 86 %, OCR 95 %, 7.0 s/clip); **A3 published** (32B, parked); `--context technical` / `picture` variants (the codec anchors the model; picture facts do no harm and little good); **the review page** (`watch`, `--keep-frames`; one binary question about Rick's date; the model's grade as a computed badge; stamp fusion collapses a padded range to a cited on-screen year — 7 of 25); lab design §11 evidence inventory.
+- **Design**: background service §0.6 (goal in Rick's words, calibrated claims not percentiles, inputs, outputs, forensics read for bulk, step 1 as agreed) and §0.7 (**observations** is the name; the three homes; priorities 1960–2010 oldest first; people facts as constraints; the caching rule). Rulings given in conversation, to be written up with the step 1 brief: 8B era job first, captions second (on the 8B, uncaptioned first then backfill), **v14 lands with step 1**.
+- **Household Roster (A7)** feasibility published; **evidence tests checked**: ExifTool dates first; DV datecode real (MediaInfo finds a date on 5 of 51 DV clips; the 1990s raw `.dv` captures need `dvrescue`, **Brewfile entry = Rick's install**); ENF dropped; PRNU grouping-only.
+- Issues: #406 (fixed), #407 (fixed), #408 gauntlet UI flows (5 of 17 stale against today's UI), #403, #404.
 
-## Landed this afternoon (Rick seated; all pushed)
-- **Catalog ▸ Show ▸ "Confirmed Date"** (`feat/confirmed-date-filter`): only rows carrying Rick's OWN date (either confidence), never
-  a machine date; the filter pass split into a per-filter predicate table (CCN 27 → 18). 38 tests on five dimensions, lane GREEN 597.
-  **Spot test (Debug):** Catalog ▸ Show ▸ Confirmed Date → the Showing box reads "… · Confirmed date · …" and every row's inspector says
-  "Saved: … — you're sure / best guess". Open question for Rick: should the chip show its count (needs a debounced model-owned cache)?
-- **The review page** (`tools/video-llm-bench/bench.py watch`, `--keep-frames`): Rick's "Is Donna in this video?" loop for dates, outside
-  the app — the frames the model saw, his date, the model's era with rationale and timed cues, Agree / Disagree / Unsure to
-  `verdicts.jsonl` beside the run. Loopback only; the run dir must be under `.scratch/`. First session: 25 Rick-dated clips through the 8B.
-  Tier 2 (after step 1): the in-app "Realtime Content Analyzer" window fed by the helper over XPC.
-- **Review-page findings on 25 Rick-dated clips (8B, same clips, three prompts):** pixels only — 12 close enough (midpoint within 5 y AND
-  range ≤ 10 y wide), 20 midpoints within 5 y, mean error 3.3 y, 11 ranges wider than 10 y · told the codec — 16 close but it ANCHORED on the
-  carrier (a 1965 film in DV moved to 1975–1985; your date left the range on 6 clips) · picture facts only (size/scan/aspect, no codec) —
-  no anchoring, mean error 3.1 y, ranges as wide as pixels only. **Ruling that falls out: the model stays a pixels-only witness; the
-  file's facts enter as deterministic bounds in the fusion layer, never as prompt hints.** Fusion step one landed: a date stamp the model
-  cites collapses its padded range to that year (7 of the 25; the Cape Cod 1997 clip went 1995–2000 → 1997). Rick's verdicts so far:
-  7 close · 8 not close · 1 where his call and the rule differ. One conflict to look at: a file labelled 2000-something whose stamp reads '97.
-- **mlx-vlm 0.5.0 prefill bug found and fixed** (`PREFILL_STEP_SIZE`): any prompt over 2048 tokens was chunked and the tail chunk died in
-  Metal — ten worker crashes behind the "Python quit unexpectedly" dialogs, and last night's N=12 collapse. With it fixed, N=12 runs
-  (2,800-token prompts, 0 crashes) but schema-valid drops to 7/12 vs 17/18 at N=8: **N=8 stays.**
-- **Lab design §11, the evidence inventory** (Rick's ask): six layers of what a file can tell, have / not yet; first three cheap tests
-  that could each date a stratum alone — DV datecode, 3:2 pulldown as a film detector, mains-hum ENF.
-- Rulings taken today (DECISIONS): timing strict only where the lane pins it. **Rulings Rick gave in conversation, to be written up with
-  the step 1 brief:** step order = the 8B era/OCR job first, captions second (moving to the 8B, remainder first then backfill);
-  schema v14 lands with step 1 (the assertions are catalog data once an expert earns its seat).
-
-## Landed last night (all pushed)
-- Background service step 0 (`dfafcc98` + `5c9686d8`): helper target, SMAppService, XPC with peer trust, supervisor, off by default
-  behind `background.service.enabled`. **Spot test (Debug):** `defaults write Rick-Breen.VideoScan background.service.enabled -bool true`
-  → launch once → `launchctl print gui/$(id -u)/Rick-Breen.VideoScan.Background` → helper `--status`, `--enqueue noop 120 1000` →
-  `tail -f ~/Library/Logs/VideoScan/background.log` → quit the app, it keeps counting.
-- Model-lab Core types (`2a2c3c5f`); **#402 part A + readers** (`85fe3140`): degenerate captioner output refused at the write routes,
-  every OCR-date reader uses `usableOCRDates`, Catalog Status counts the stored junk. **Spot test:** junk no longer counts as date evidence.
-- Issues filed: #402 (comments), #403 iMovie reference movies, #404 docs-links guard, #406 watchdog (fixed), #407 (fixed), #408 gauntlet UI flows.
+## Next (when Rick says go)
+1. **Step 1 brief**: the 8B era/OCR job as the helper's first real job, assertions → journal → committer, v14 migration; Catalog Status convergence line; inspector "Machine era" line.
+2. `dvrescue` in the Brewfile → DV datecode per frame over the ten raw `.dv` captures; ExifTool date tabulation over the corpus; pulldown detector.
+3. Prompt r4 (a legible stamp = one year; narrowest range the evidence supports) on clips HELD OUT of the corpus.
+4. #408: repoint the five gauntlet UI flows; turn the runner's UI stage on for the away window.
+5. Cleanup execution after Rick's ruling on the proposal; the "Rick to rule" docs list (BACKLOG).
 
 ## Waiting on Rick
-- **Rulings:** background service design §7 — 2 name/icon badge, 3 exit-when-idle default, 4 step order (1 agreed). Video-LLM
-  design §9 — cloud on derived text · 50 place labels · Qwen vs Gemma first · v14 timing. A2 N=8 (rule) vs N=6.
-- **Terminal run** of Codex's attended review pilot (`VideoScan-wt/attended-model-review`, `tools/model-fitness/attended_review.py --execute`).
-- **Modes draft** (`process-modes` branch). Older: strict-034; #397; gauntlet runner policy; toolchain list.
-- **Spot tests (Debug):** background helper; #402; GEDCOM dates + sparkle; Hallie after the refactor; Provenance ▸ Set Role and
-  Find Master; Archive 144 Masters; #375; #345; People row removal; arrow keys; Migrate words; ⌘⌫ on a duplicate pair; #383.
-- **Allowlist:** read-only ssh/status commands; a `kill <own pid>` shape for an agent's own model process.
+- **Rulings**: background service §7 items 2 (icon badge) and 3 (exit-when-idle default) — defaults proposed; video-LLM §9 items 1 (cloud on derived text), 2 (the 50 place labels), 4 (v14 timing — proposed: with step 1). Gauntlet runner policy (known issues as failures). CatalogSync master hostname (still `RicksM4.local`).
+- **Terminal run** of Codex's attended review pilot (`VideoScan-wt/attended-model-review`).
+- **Allowlist**: read-only ssh/status commands; a `kill <own pid>` shape for an agent's own model process.
 
-## Next
-1. A3's last 24 clips (declared window, ≈ 19 min) → re-summarize; then the era expert goes into the model-lab as A2's contract (design §5).
-   Prompt r4 (a legible stamp = a single-year range; prefer the narrowest range the evidence supports) tested on clips HELD OUT of the corpus.
-   Evidence-inventory tests (design §0.6, checked 10/31 evening): ExifTool date tabulation first (hours); DV datecode via `dvrescue` (needs a
-   Brewfile entry — Rick's install); pulldown detector. ENF dropped (no US reference for 1985–2010); PRNU grouping-only, later.
-2. #408: repoint the five gauntlet UI flows, then turn the runner's UI stage on for the away window.
-3. Background service step 1 (first real job into the helper; §5 order pending ruling 4). #402 supersede pass brief → Codex.
-4. Resource allocation for LLMs and visual LLMs across the fleet (Rick's agenda item, 10/31).
-
-## State of the machines (10/31 afternoon)
-- Ultra: free for rapid dev; no agent jobs (A2 done, A3 paused at the deadline). M4: idle after the gauntlet (`RicksM4.local`, main `fc620035` pulled, 259 GB free).
-- Worktrees under `VideoScan-wt/`: all landed except `attended-model-review` (Codex pilot, dirty) and `process-modes` (draft).
-  `bench-a2` holds the A2 run state under `.scratch/`. Nothing deleted; prune is Rick's call.
+## State of the machines (11/01 morning)
+- Ultra: free; the two review pages may still be serving on 8765/8766 (harmless `watch` processes). M4: idle after two gauntlets (`RicksM4.local`, main pulled).
+- Worktrees under `VideoScan-wt/`: all landed except `attended-model-review` (Codex pilot, dirty) and `process-modes` (draft); `bench-a2/.scratch/` holds the bench runs and Rick's verdicts (KEEP). Prune per the cleanup proposal, after Rick's word.
 
 ## To file
-- Stale `volume_uuid` rows (6); ~330 Hallie questions never replayed; 557 Thread Performance Checker traces; Hallie strict
-  route_mismatch ×4 two nights running — check against existing issues first.
+- Stale `volume_uuid` rows (6); ~330 Hallie questions never replayed; 557 Thread Performance Checker traces; Hallie strict route_mismatch ×4 two nights running; `findtag-journal/` unbounded; `previewSweepEnabled` stale key; `MediaPersonLinks.swift` uncalled.
 
 ## In flight (unchanged)
 - `fix/committer-lost-writes-codex141`: parked. Swift 6 (#376): close once #381/#385 are called.
