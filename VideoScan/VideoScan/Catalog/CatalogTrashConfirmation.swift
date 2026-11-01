@@ -6,7 +6,7 @@
 // `VideoScanModel.trashSelectedRecords`.
 //
 //   Move 3 files (1.2 GB) to the Trash?
-//   You can put them back from the Trash until you empty it.
+//   They move to the Finder Trash; you can put them back until you empty it.
 //   2 will be held back: half of a recovered audio/video pair (1), drive not connected (1).
 //   [Move to Trash]  [Cancel]        (Return = Move to Trash, Esc = Cancel)
 //
@@ -75,7 +75,7 @@ struct CatalogTrashConfirmation: Equatable {
 
     /// The put-back sentence, then what will be held back and why.
     var detail: String {
-        var text = "You can put \(moveCount == 1 ? "it" : "them") back from the Trash until you empty it."
+        var text = "\(moveCount == 1 ? "It moves" : "They move") to the Finder Trash; you can put \(moveCount == 1 ? "it" : "them") back until you empty it."
         if let warning = onlyCopyWarning { text += "\n\n" + warning }
         let heldCount = held.reduce(0) { $0 + $1.count }
         if heldCount > 0 {

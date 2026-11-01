@@ -398,14 +398,13 @@ struct CatalogQuitRecoverySensorTests {
         }
     }
 
-    @Test("the retired Catalog menu items are gone; Reopen SQLite Catalog stays; Split Duplicate Groups by Full Hash stays (its finding's only door)")
+    @Test("the retired Catalog menu items are gone; Reopen SQLite Catalog keeps its button (the Catalog Status window, 11/01); Split Duplicate Groups by Full Hash leaves the menu for Tidy Catalog…")
     func theRetiredMenuItemsAreGone() throws {
         let app = try Self.code("App/VideoScanApp.swift")
-        #expect(app.contains("CatalogReopenMenuItems(cutover: catalogModel.catalogCutover)"))
         #expect(!app.contains("ImportToSQLiteMenuItems"))
         #expect(!app.contains("CatalogSwitchMenuItems"))
-        #expect(app.contains("Button(VideoScanModel.duplicateDigestSplitTitle)"))
-        #expect(app.contains("fileOpsCenter.splitDuplicateGroupsKeepingSameFootage(model: catalogModel)"))
+        // Rick 2026-11-01: the one-off hygiene verbs are off the menu.
+        #expect(!app.contains("Button(VideoScanModel.duplicateDigestSplitTitle)"))
         #expect(!app.contains("attachImportDryRunMarker"))
         let reopen = try Self.code("Catalog/CatalogReopenMenuItems.swift")
         #expect(reopen.contains("Button(\"Reopen SQLite Catalog\")"))
@@ -415,13 +414,11 @@ struct CatalogQuitRecoverySensorTests {
         #expect(split.contains("func splitDuplicateGroupsKeepingSameFootage("))
     }
 
-    @Test("QA 2026-10-20: the red duplicateGroupDigestsAgree finding names a door the Catalog menu offers, and no Catalog finding names a retired menu item")
+    @Test("QA 2026-10-20: the red duplicateGroupDigestsAgree finding names a door the Catalog menu offers (Tidy Catalog…, 11/01), and no Catalog finding names a retired menu item")
     func digestFindingNamesALiveDoor() throws {
         let constraints = try Self.code("Integrity/CatalogConstraints.swift")
         let title = VideoScanModel.duplicateDigestSplitTitle
-        #expect(constraints.contains(title + " settles it"), "the finding's words name \(title)")
-        let app = try Self.code("App/VideoScanApp.swift")
-        #expect(app.contains("Button(VideoScanModel.duplicateDigestSplitTitle)"), "…and the Catalog menu offers it")
+        #expect(constraints.contains("Tidy Catalog… ▸ " + title + " settles it"), "the finding's words name the door")
         for name in ["Integrity/CatalogConstraints.swift", "Integrity/VerifyCatalogTiers.swift", "Integrity/VerifyCatalogJob.swift",
                      "MediaOps/ValidateCatalogJob.swift"] {
             let code = try Self.code(name)

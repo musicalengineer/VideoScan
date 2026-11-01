@@ -71,7 +71,7 @@ struct CatalogTrashOnlyCopyTests {
         let p = plan(m, [only])
         #expect(p.onlyCopy == [only.id])
         let c = confirmation(p, [only])
-        #expect(c.detail == "You can put it back from the Trash until you empty it.\n\n⚠︎ This is the only copy we know of.")
+        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.\n\n⚠︎ This is the only copy we know of.")
         #expect(!c.moveIsDefault)
     }
 
@@ -83,7 +83,7 @@ struct CatalogTrashOnlyCopyTests {
         #expect(p.onlyCopy.isEmpty)
         let c = confirmation(p, [a])
         #expect(c.onlyCopyWarning == nil && c.moveIsDefault)
-        #expect(c.detail == "You can put it back from the Trash until you empty it.")
+        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.")
     }
 
     @Test("both copies selected: nothing survives, both are the only copy")

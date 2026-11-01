@@ -58,10 +58,9 @@ struct UpdateCatalogSheet: View {
                 Text("Update Catalog")
                     .font(.title2.weight(.semibold))
             }
-            Text("If files or folders were moved, renamed, added or deleted outside VideoScan, this rescans the drives you pick and relinks each catalog record to wherever its file is now — tags, people, notes and dates stay with the file. Preview first; nothing changes until you press Apply.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // The 11/01 "what and how long" rule: the first lines are the
+            // menu item's brief (its help repeats the first one).
+            CatalogActionBriefHeader(brief: .updateCatalog)
         }
     }
 

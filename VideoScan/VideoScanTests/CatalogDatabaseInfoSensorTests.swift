@@ -66,7 +66,9 @@ struct CatalogDatabaseInfoSensorTests {
         let item = try #require(view.range(of: "struct CatalogDatabaseInfoMenuItem")).lowerBound
         #expect(!String(view[item...]).contains("keyboardShortcut"), "no shortcut on the database item (⌘I is the volume's)")
         let app = try Self.code("VideoScan/App/VideoScanApp.swift")
-        #expect(app.contains("CatalogDatabaseInfoMenuItem()"))
+        // Rick 2026-11-01: the item left the Catalog menu; its rows move to
+        // the Catalog Status window.
+        #expect(!app.contains("CatalogDatabaseInfoMenuItem()"))
         #expect(app.contains("WindowGroup(\"Catalog Info\", for: CatalogInfoItem.self)"), "the per-volume window stays")
     }
 }

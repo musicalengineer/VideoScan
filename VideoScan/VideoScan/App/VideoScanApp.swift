@@ -566,6 +566,9 @@ struct VideoScanApp: App {
     /// context menu, the operations window, and the quit guard all see
     /// the same instance — jobs survive the window closing.
     @StateObject private var fileOpsCenter = MediaFileOperationsCenter()
+    /// The Catalog menu's feature store (Rick 2026-11-01 regrouping): which
+    /// sheet the menu asked the main window to show. CatalogMenu.swift.
+    @StateObject private var catalogMenu = CatalogMenuStore()
     // The two run markers (fullhash-backfill.json, catalog-audit.json) are
     // MODEL-OWNED since 2026-10-16 (`catalogModel.fullHashResumeMarker`,
     // `catalogModel.catalogAuditRunMarker`) so the Catalog menu, the
@@ -586,6 +589,8 @@ struct VideoScanApp: App {
                     // start jobs (CatalogView). See
                     // MediaFileOperationsCenterReference.swift (2026-09-22).
                     .environment(\.mediaFileOperationsCenterReference, fileOpsCenter)
+                    // Catalog ▸ Validate Catalog… / Tidy Catalog… sheets.
+                    .modifier(CatalogMenuSheetHost(store: catalogMenu, model: catalogModel, center: fileOpsCenter))
                     .onAppear { [catalogModel] in
                         // Explicit strong capture: this one-shot wiring
                         // closure holds the model the app already owns (no
@@ -860,84 +865,20 @@ struct VideoScanApp: App {
             CommandGroup(after: .toolbar) {
                 CuratorMenuToggle()
             }
-            // Catalog maintenance actions. The unified "Purge Non-Video
-            // Media…" dialog REPLACES the two former single-purpose commands
-            // (Purge Cover-Art Music Records / Purge Non-Video Audio Junk).
-            // It opens a dialog (bound in ContentView) where Rick picks which
-            // categories of non-video junk and which volumes to purge, with
-            // live counts, and removes only on explicit Purge — files on disk
-            // untouched. The same dialog is reachable by right-clicking a
-            // volume in the Volumes window (that volume pre-selected).
             CommandMenu("Catalog") {
-                // ⌘⌫ as a real key equivalent (2026-09-20) — see
-                // CatalogTrashCommand.swift.
-                CatalogTrashMenuItem()
-                Divider()
-                // Update Catalog (2026-08-17): rescan + relink after files
-                // were moved/renamed outside the app; preview, then Apply.
-                Button("Update Catalog…") {
-                    catalogModel.openUpdateCatalog()
-                }
-                .disabled(catalogModel.isReadOnly)
-                .help("Files or folders moved or renamed outside VideoScan? Rescan the drives you pick and relink every record to where its file is now — with a preview before anything changes.")
-                Divider()
-                Button("Purge Non-Video Media…") {
-                    catalogModel.showNonVideoMediaPurgeSheet = true
-                }
-                Divider()
-                // Refresh Embedded Dates (2026-08-16): one cheap tag-only
-                // ffprobe per reachable record that has no container
-                // creation date yet. Never automatic — Rick starts it.
-                Button(catalogModel.isRefreshingEmbeddedDates
-                       ? "Refreshing Embedded Dates…" : "Refresh Embedded Dates") {
-                    Task { await catalogModel.runEmbeddedDateBackfill() }
-                }
-                .disabled(catalogModel.isReadOnly || catalogModel.isRefreshingEmbeddedDates)
-                .help("Read the creation date and camera/app that each file carries inside it (survives copies; used to file the Master Archive). Only records missing one are probed.")
-                // Fill In Full Hashes (2026-10-11): whole-catalog SHA-256
-                // backfill as an MFO job; restart = resume.
-                FullHashBackfillMenuItem(model: catalogModel, center: fileOpsCenter,
-                                         marker: catalogModel.fullHashResumeMarker, isReadOnly: catalogModel.isReadOnly)
-                // Fingerprint Sound (2026-10-14): whole-catalog audio
-                // fingerprint backfill as an MFO job; confirm sheet first;
-                // restart = resume.
-                AudioFingerprintBackfillMenuItem(model: catalogModel)
-                Divider()
-                // Validate Catalog (Rick 2026-10-20, ONE verb): every live
-                // row on a connected drive is stat'ed (gone → Missing, back
-                // → live), then — only after a complete file check — the
-                // catalog is checked against itself (tiers 0–6, the report
-                // beside the catalog). One MFO job; the same job the nightly
-                // runs through --validate-catalog / --audit-catalog.
-                ValidateCatalogMenuItem(model: catalogModel, center: fileOpsCenter,
-                                        marker: catalogModel.catalogAuditRunMarker, isReadOnly: catalogModel.isReadOnly)
-                // Split Duplicate Groups by Full Hash (2026-10-19): settles
-                // Verify's duplicateGroupDigestsAgree findings — the machine
-                // has the digests. Safety copy first; one commit; logged.
-                // A file that leaves the copies but is the same footage (a
-                // re-encode, a rewrap) stays linked as the same footage:
-                // Find Similar Footage runs right after to record the links.
-                // It is that finding's only door (QA 2026-10-20): it stays
-                // here until a Catalog Status action replaces it.
-                Button(VideoScanModel.duplicateDigestSplitTitle) {
-                    fileOpsCenter.splitDuplicateGroupsKeepingSameFootage(model: catalogModel)
-                }
-                    .disabled(catalogModel.isReadOnly)
-                    .help("Every duplicate group whose files carry different whole-file SHA-256s is split into groups of true copies; a file whose bytes match no other member leaves its group. A file that is the same footage in another codec or container stays linked as SAME FOOTAGE (Find Similar Footage runs next to record it) — never as a copy to delete. Only the duplicate-group fields change — no file is touched. A safety copy of the catalog is made first.")
-                Divider()
-                // Reopen when saving to catalog.sqlite was refused (and Adopt
-                // for a restore below the high-water). Import to SQLite and
-                // Switch Catalog to SQLite were retired 2026-10-20: the
-                // cutover is done, catalog.sqlite is the only catalog.
-                CatalogReopenMenuItems(cutover: catalogModel.catalogCutover)
-                Divider()
-                // Catalog Status (2026-10-16): opens Content Analysis with
-                // the summary band; the title carries the colour word.
-                CatalogStatusMenuItem(freshness: catalogModel.catalogFreshness)
-                // Catalog Database Info… (Rick 2026-11-01): read-only facts
-                // about catalog.sqlite itself. Not ⌘I — that is the
-                // per-volume "Catalog Info" window below.
-                CatalogDatabaseInfoMenuItem()
+                // The Catalog menu in three groups (Rick 2026-11-01, DECISIONS
+                // "The Catalog menu is three groups…"): catalog verbs · the
+                // file verb · the content verb. The item list and order are
+                // ONE value (CatalogMenuLayout.entries); CatalogMenuContent
+                // renders exactly that list. Purge Non-Video Media, Split
+                // Duplicate Groups by Full Hash (and #402's junk captions)
+                // moved into Tidy Catalog…; Refresh Embedded Dates, Fill In
+                // Full Hashes and Fingerprint Sound into Content Analysis;
+                // Reopen / Adopt and the database facts into the Catalog
+                // Status window. Same engines, new doors (rule 4).
+                CatalogMenuContent(model: catalogModel, store: catalogMenu,
+                                   coverage: catalogModel.analyzeCoverageSnapshot,
+                                   isReadOnly: catalogModel.isReadOnly)
             }
         }
 

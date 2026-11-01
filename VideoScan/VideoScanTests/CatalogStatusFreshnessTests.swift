@@ -736,9 +736,8 @@ struct CatalogStatusSensorTests {
         // the dossier engine from the app, the model's flags from its init.
         #expect(app.contains("catalogModel.catalogFreshness.observeDossier(captionOrchestrator.dashboardSnapshot)"))
         #expect(code(try source("VideoScanModel.swift")).contains("catalogFreshness.observeEngines(of: self)"))
-        #expect(app.contains("CatalogStatusMenuItem(freshness: catalogModel.catalogFreshness)"))
-        #expect(app.contains("marker: catalogModel.catalogAuditRunMarker"))
-        #expect(app.contains("marker: catalogModel.fullHashResumeMarker"))
+        // Rick 2026-11-01: the Catalog menu is CatalogMenuContent's value.
+        #expect(try source("CatalogMenu.swift").contains("CatalogStatusMenuItem(freshness: model.catalogFreshness)"))
         #expect(!app.contains("@StateObject private var catalogAuditMarker"), "the markers are model-owned")
         let coverage = code(try source("VideoScanModel+AnalyzeCoverage.swift"))
         #expect(coverage.contains("CatalogFreshnessFactsReader.read(catalogFile: catalogFile)"), "facts read in the detached pass")

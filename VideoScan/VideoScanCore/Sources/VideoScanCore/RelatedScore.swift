@@ -291,7 +291,7 @@ public enum RelatedLadder {
             // the sampled `v1:` hash, so this rung never fired and the pair read as
             // "two transfers" — say so, instead of staying silent.
             let which = e.a.digest == nil && e.b.digest == nil ? "either file" : e.a.digest == nil ? "the first file" : "the second file"
-            lines.append(.init(.missing, "No whole-file SHA-256 for \(which) — Catalog ▸ Fill In Full Hashes… proves whether these are copies."))
+            lines.append(.init(.missing, "No whole-file SHA-256 for \(which) — Content Analysis ▸ Full Hashes proves whether these are copies."))
         }
         return nil
     }
@@ -354,7 +354,7 @@ public enum RelatedLadder {
         if e.a.isSilent || e.b.isSilent {
             lines.append(.init(.nonClue, "No sound in \(which(e.a.isSilent, e.b.isSilent)) — the sound can't say."))
         } else if !e.a.hasFingerprint || !e.b.hasFingerprint {
-            lines.append(.init(.missing, "No sound fingerprint yet for \(which(!e.a.hasFingerprint, !e.b.hasFingerprint)) — Catalog ▸ Fingerprint Sound…"))
+            lines.append(.init(.missing, "No sound fingerprint yet for \(which(!e.a.hasFingerprint, !e.b.hasFingerprint)) — Content Analysis ▸ Sound Prints"))
         }
     }
 

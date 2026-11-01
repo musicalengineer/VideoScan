@@ -340,9 +340,10 @@ final class CatalogKeyboardUITests: GauntletTestCase {
         let menu = app.menuBars.menuBarItems["Catalog"]
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "Catalog menu missing")
         menu.click()
-        let item = app.menuItems.matching(
-            NSPredicate(format: "title BEGINSWITH 'Move' AND title ENDSWITH 'to Trash'")).firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "Move to Trash item missing")
+        // Rick 2026-11-01: Catalog ▸ Move to Trash is now "Delete Selected
+        // Files…" (same handler, ⌘⌫, to the Finder Trash).
+        let item = app.menuItems["Delete Selected Files…"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "Delete Selected Files… item missing")
         let enabled = item.isEnabled
         app.typeKey(.escape, modifierFlags: [])
         Thread.sleep(forTimeInterval: 0.3)

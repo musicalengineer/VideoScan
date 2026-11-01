@@ -46,6 +46,7 @@ extension VideoScanModel {
         analyzeCoverageTask?.cancel()
         let inputs = AnalyzeCoverageCalculator.project(records)
         let missing = MissingCopyCalculator.project(records)
+        let tidy = CatalogTidyCalculator.project(records)
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let scope = analyzeCoverageScope
         let catalogFile = catalogStore.fileLocation
@@ -56,6 +57,7 @@ extension VideoScanModel {
                                                                mountedRoots: VolumeReachability.currentMountedRoots(),
                                                                scope: scope)
                 report.missingCopies = MissingCopyCalculator.count(missing)
+                report.tidy = CatalogTidyCalculator.counts(tidy, degenerateOCRCaptions: report.degenerateOCRDates)
                 let facts = CatalogFreshnessFactsReader.read(catalogFile: catalogFile)
                 return (report, facts)
             }.value

@@ -254,7 +254,7 @@ struct CleanupPane: View {
                 GridRow {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Not checked yet").font(.system(size: 13, weight: .medium))
-                        Text("no full hash yet — information only (Catalog ▸ Fill In Full Hashes… reads them)")
+                        Text("no full hash yet — information only (Content Analysis ▸ Full Hashes reads them)")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     Text(plan.notChecked.files.formatted()).monospacedDigit()

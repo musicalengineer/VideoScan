@@ -291,13 +291,16 @@ struct ValidateCatalogMenuSensorTests {
     @Test("SENSOR: the Catalog menu has exactly ONE checking verb, \"Validate Catalog…\" — no \"Audit Catalog…\" and no \"Verify Catalog…\" item anywhere in the app's menus")
     func exactlyOneVerbInTheMenu() throws {
         let app = try Self.code("VideoScanApp.swift")
-        #expect(app.components(separatedBy: "ValidateCatalogMenuItem(model: catalogModel, center: fileOpsCenter,").count == 2)
-        #expect(app.contains("marker: catalogModel.catalogAuditRunMarker"))
         #expect(!app.contains("CatalogAuditMenuItem(") && !app.contains("VerifyCatalogMenuItem("))
+        // Rick 2026-11-01: the menu is one value with ONE Validate entry; the
+        // item opens the brief sheet, whose Start is the one engine.
+        #expect(CatalogMenuLayout.entries(tidyTotal: 7).filter { $0 == .validateCatalog }.count == 1)
+        let menu = try Self.code("CatalogMenu.swift")
+        #expect(menu.components(separatedBy: "ValidateCatalogMenuItem(store: store, isReadOnly: isReadOnly)").count == 2)
+        #expect(menu.contains("$0.startValidateCatalog(model: model, marker: model.catalogAuditRunMarker)"))
         let item = try Self.code("ValidateCatalogMenuItem.swift")
-        #expect(item.components(separatedBy: "Button(").count == 2, "one button")
         #expect(item.contains("Button(\"Validate Catalog…\")"))
-        #expect(item.contains("$0.startValidateCatalog(model: model, marker: marker)"))
+        #expect(item.contains("CatalogMenuActions.startValidate(model: model, center: center)"))
         for source in SourceTree.appSources {
             let text = SourceTree.strippingComments(try String(contentsOf: source.url, encoding: .utf8))
             // A Button titled with either retired verb, anywhere in the app.

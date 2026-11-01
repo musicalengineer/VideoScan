@@ -32566,6 +32566,42 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogMenuTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogMenuTests",
+        "CatalogMenuSensorTests"
+      ],
+      "tests": [
+        "deleteConfirmationSaysFinderTrash",
+        "everyEllipsisItemSaysWhatAndHowLong",
+        "helpIsTheBrief",
+        "noNewModelExtension",
+        "oneEnginePerVerb",
+        "theListAndOrderWithNothingToTidy",
+        "theMenuIsTheValue",
+        "tidyShowsItsTotal"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTidyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTidyTests",
+        "CatalogTidySensorTests"
+      ],
+      "tests": [
+        "countsMatchTheEngines",
+        "groupsToSplitRule",
+        "runsCallTheEngines",
+        "scale",
+        "theReportCarriesTheCounts",
+        "totalRowsAndHiddenAtZero"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/MachineEraStoreTests.swift",
       "stage": "unit",
       "suites": [
@@ -35251,7 +35287,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3122,
+      "expected_floor": 3136,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35413,6 +35449,8 @@
         "VideoScanTests/CatalogFreshnessSnapshotTests",
         "VideoScanTests/CatalogJSONReadSensorTests",
         "VideoScanTests/CatalogLockRobustnessTests",
+        "VideoScanTests/CatalogMenuSensorTests",
+        "VideoScanTests/CatalogMenuTests",
         "VideoScanTests/CatalogNoCatalogDoorsTests",
         "VideoScanTests/CatalogPathMatchingContractTests",
         "VideoScanTests/CatalogPersonFilterLogicTests",
@@ -35456,6 +35494,8 @@
         "VideoScanTests/CatalogStoreHoldTests",
         "VideoScanTests/CatalogTableDateTests",
         "VideoScanTests/CatalogTargetStatusResilienceTests",
+        "VideoScanTests/CatalogTidySensorTests",
+        "VideoScanTests/CatalogTidyTests",
         "VideoScanTests/CatalogTrashConsistencyTests",
         "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogVolumePaneHeightTests",

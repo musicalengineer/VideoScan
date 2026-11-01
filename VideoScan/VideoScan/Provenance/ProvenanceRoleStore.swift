@@ -58,10 +58,10 @@ enum ProvenanceRoleWords {
     static let decider = "Rick"
 
     static let noDigestHelp = "A role belongs to a file's content, identified by its full SHA-256. "
-        + "This file has none yet — choose Catalog ▸ Fill In Full Hashes first."
+        + "This file has none yet — run Content Analysis ▸ Full Hashes first."
     static func someWithoutDigestHelp(_ missing: Int, of total: Int) -> String {
         "\(missing) of the \(total) selected files have no full SHA-256 yet, so no role can be set for the selection. "
-            + "Choose Catalog ▸ Fill In Full Hashes first, or select only hashed files."
+            + "Run Content Analysis ▸ Full Hashes first, or select only hashed files."
     }
     static let setRoleHelp = "Say what this content is. Byte-identical copies share the role; only you set it."
 

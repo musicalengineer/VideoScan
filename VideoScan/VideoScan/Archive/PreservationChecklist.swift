@@ -140,7 +140,7 @@ enum PreservationChecklist {
     /// The Signed step's words when the row carries only a sampled `v1:`
     /// signature (GH #327, Rick 2026-10-23).
     static let sampledSignatureTitle = "Sampled signature — not verified"
-    static let sampledSignatureTodo = "Read the whole file for a full SHA-256 (Catalog ▸ Fill In Full Hashes…) — "
+    static let sampledSignatureTodo = "Read the whole file for a full SHA-256 (Fill In Full Hashes: Content Analysis ▸ Full Hashes ▸ Run now) — "
         + "a sampled signature reads only three small pieces of it."
 
     /// Signed answers for the CONTENT, by a WHOLE-FILE SHA-256 only: this

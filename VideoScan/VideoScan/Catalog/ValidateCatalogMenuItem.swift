@@ -1,26 +1,61 @@
 // ValidateCatalogMenuItem.swift
 // Catalog ▸ "Validate Catalog…" — the ONE catalog-checking verb (Rick
 // 2026-10-20; it replaces the separate "Audit Catalog…" and "Verify
-// Catalog…" items). Starts ValidateCatalogJob as a Media File Operation (the
+// Catalog…" items). Since the 11/01 "what and how long" rule the item opens
+// ValidateCatalogSheet first: what it touches, what it never touches, how
+// long; Start there runs ValidateCatalogJob as a Media File Operation (the
 // MFO window comes forward via `startedByUser`): every file on disk first,
 // then — only after a complete file check — the catalog against itself.
-// Never starts on its own; the nightly runs the same job through
+// The Catalog Status window's "Check Now…" opens the same sheet. Never
+// starts on its own; the nightly runs the same job through
 // `--validate-catalog` (or the older `--audit-catalog`).
 
 import SwiftUI
 
 struct ValidateCatalogMenuItem: View {
-    let model: VideoScanModel
-    let center: MediaFileOperationsCenter
-    let marker: CatalogAuditRunMarker
+    @ObservedObject var store: CatalogMenuStore
     let isReadOnly: Bool
 
     var body: some View {
         Button("Validate Catalog…") {
-            _ = center.startedByUser { $0.startValidateCatalog(model: model, marker: marker) }
+            store.present(.validateCatalog)
         }
         .disabled(isReadOnly)
-        .help("Step 1: check that every catalog entry on a connected drive still points at its file (one stat per file, nothing is opened) — a file that is gone is marked Missing, a Missing file that is back is shown again, a changed size is reported. Step 2, only after a complete step 1: check the catalog agrees with itself — ids, paths, lineage, fixity digests, the removal markers, the sound prints — and write a dated report beside the catalog for Catalog Status. Drives that are not connected are left alone.")
+        .help(CatalogActionBrief.validateCatalog.help)
         .accessibilityIdentifier("catalog.menu.validateCatalog")
+    }
+}
+
+/// The sheet in front of Validate Catalog: the brief, then Start / Cancel.
+/// Start is the one engine (`CatalogMenuActions.startValidate`).
+struct ValidateCatalogSheet: View {
+    let model: VideoScanModel
+    let center: MediaFileOperationsCenter
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Validate Catalog")
+                .font(.title2.weight(.semibold))
+            CatalogActionBriefHeader(brief: .validateCatalog)
+            Text("Step 1 asks every connected drive's files; step 2 runs only after a complete step 1. The report is what Catalog Status reads.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Start") {
+                    CatalogMenuActions.startValidate(model: model, center: center)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isReadOnly)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+        .accessibilityIdentifier("sheet.validateCatalog")
     }
 }

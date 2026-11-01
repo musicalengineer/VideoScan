@@ -114,10 +114,9 @@ struct AnalyzePanelView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(AnalyzeWindowOpener.windowTitle)
                     .font(.title.weight(.semibold))
-                Text("What the catalog keeps current about your files, and how far along each one is. These run in the background; nothing here changes or removes a file.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The 11/01 "what and how long" rule: Catalog ▸ Content
+                // Analysis…'s brief is this window's first lines.
+                CatalogActionBriefHeader(brief: .contentAnalysis)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {

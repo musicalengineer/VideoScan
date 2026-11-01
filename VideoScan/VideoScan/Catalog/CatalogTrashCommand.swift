@@ -43,22 +43,21 @@ extension FocusedValues {
     }
 }
 
-/// The Catalog ▸ Move to Trash item. Lives in its own View so
-/// `@FocusedValue` can be read inside the Commands builder.
+/// The Catalog ▸ Delete Selected Files… item (renamed from "Move to Trash"
+/// by the 11/01 regrouping; the same handler, the same one Trash routine,
+/// the same confirmation, which says "moves to the Finder Trash" and keeps
+/// the only-copy warning). Lives in its own View so `@FocusedValue` can be
+/// read inside the Commands builder.
 struct CatalogTrashMenuItem: View {
     @FocusedValue(\.catalogTrashSelection) private var selection
 
     var body: some View {
-        Button(title) {
+        Button(CatalogMenuLayout.deleteTitle) {
             selection?.perform()
         }
         .keyboardShortcut(.delete, modifiers: .command)
         .disabled((selection?.count ?? 0) == 0)
-        .help("Move the highlighted catalog rows to the Trash — the Finder gesture. Master Archive files, recovered A/V pair halves and offline copies are refused with a console line.")
-    }
-
-    private var title: String {
-        let n = selection?.count ?? 0
-        return n > 1 ? "Move \(n) to Trash" : "Move to Trash"
+        .help(CatalogActionBrief.deleteSelectedFiles.help)
+        .accessibilityIdentifier("catalog.menu.deleteSelectedFiles")
     }
 }

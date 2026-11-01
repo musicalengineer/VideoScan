@@ -270,6 +270,8 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// GH #402: degenerate OCR date captions still stored on live rows
     /// (Catalog Status information line; read-only, nothing supersedes them yet).
     var degenerateOCRDates = 0
+    /// Catalog ▸ Tidy Catalog…'s live counts (Rick 2026-11-01; CatalogTidy.swift).
+    var tidy = CatalogTidyCounts()
     /// When these counts were computed — a CAPTION ("counts as of …"),
     /// deliberately outside `==` below.
     var computedAt: Date = Date(timeIntervalSince1970: 0)
@@ -287,6 +289,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.activeRecords == rhs.activeRecords
             && lhs.missingCopies == rhs.missingCopies
             && lhs.degenerateOCRDates == rhs.degenerateOCRDates
+            && lhs.tidy == rhs.tidy
     }
 
     /// Cyclers whose per-record stamp does not exist today, so the

@@ -587,7 +587,7 @@ enum CatalogConstraints {
         idx.disagreeingGroups.sorted { $0.key.uuidString < $1.key.uuidString }.map { group, g in
             let formed = g.sampledHashMatch ? "formed on a sampled-hash match" : "formed on likeness alone (similar footage, not copies)"
             return Finding(.duplicateGroupDigestsAgree, recordID: g.firstID,
-                           words: "duplicate group \(short(group)): \(formed), but its members carry \(g.digests.count) different whole-file digests — Split Duplicate Groups by Full Hash settles it")
+                           words: "duplicate group \(short(group)): \(formed), but its members carry \(g.digests.count) different whole-file digests — Catalog ▸ Tidy Catalog… ▸ Split Duplicate Groups by Full Hash settles it")
         }
     }
 

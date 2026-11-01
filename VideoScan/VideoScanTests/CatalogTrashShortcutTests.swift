@@ -225,8 +225,11 @@ struct CatalogTrashShortcutTests {
         #expect(command.contains(".keyboardShortcut(.delete, modifiers: .command)"), "⌘⌫ as the key equivalent")
         #expect(command.contains("@FocusedValue(\\.catalogTrashSelection)"))
         #expect(!command.contains("FileManager"), "no file deletion of its own")
-        let app = try productionSource("VideoScanApp.swift")
-        #expect(app.contains("CatalogTrashMenuItem()"), "the item is in the Catalog menu")
+        // Rick 2026-11-01: the item is Catalog ▸ Delete Selected Files…, in
+        // the menu's value (CatalogMenuSensorTests pins the rendering).
+        let menu = try productionSource("CatalogMenu.swift")
+        #expect(menu.contains("CatalogTrashMenuItem()"), "the item is in the Catalog menu")
+        #expect(CatalogMenuLayout.entries(tidyTotal: 0).contains(.deleteSelectedFiles))
 
         let plan = try productionSource("VideoScanModel+TrashSelection.swift")
         #expect(plan.contains("await deleteConfirmedJunk(targets, mode: .toTrash, reason: .catalogTrash, guard: fileGuard)"), "the ONE existing Trash routine")

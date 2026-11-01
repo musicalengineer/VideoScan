@@ -1303,7 +1303,7 @@ struct VerifyCatalogSensorTests {
         let snapshot = try SourceTree.appSource(named: "CatalogFreshnessSnapshot.swift")
         #expect(snapshot.contains("else if job is VerifyCatalogJob { s.insert(.integrity) }"))
         #expect(snapshot.contains("if job is ValidateCatalogJob { s.formUnion([.filePresence, .integrity]) }"))
-        let app = try SourceTree.appSource(named: "VideoScanApp.swift")
-        #expect(app.contains("ValidateCatalogMenuItem(model: catalogModel, center: fileOpsCenter"))
+        let menu = try SourceTree.appSource(named: "CatalogMenu.swift")
+        #expect(menu.contains("ValidateCatalogMenuItem(store: store, isReadOnly: isReadOnly)"))
     }
 }
