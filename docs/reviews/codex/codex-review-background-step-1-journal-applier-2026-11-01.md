@@ -52,3 +52,7 @@ Look for, with a concrete failing scenario each:
 Out of scope: UI, the EraJob, Python. Do not propose new features.
 
 Output contract (exactly): first line `Credits spent: <amount> | Finding count: <N>`, then one numbered finding per issue with severity P1/P2/P3, file:line, the failing scenario, and the fix; then a line `Verdict: <merge | fix | block>`.
+
+## Closed
+
+Closed by `caafc68d` at 2026-11-01T16:48:38Z. 10 of 10 fixed red-first (3 P1, 7 P2); no re-review run

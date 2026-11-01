@@ -2878,6 +2878,24 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/PythonClipWorkerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PythonClipWorkerTests"
+      ],
+      "tests": [
+        "aClipPastItsCapIsKilledAndTheNextClipRespawnsAndReloads",
+        "aLoadPastItsCapIsATimeout",
+        "aLoadReplyWithoutAValidApproachIdIsRefused",
+        "aMissingInterpreterIsRefusedInWords",
+        "aRemoteHostIsRefusedByThePayloadGateBeforeAnySpawn",
+        "aWorkerThatDiesMidClipIsDiedWithItsLastWordsAndTheNextClipRespawns",
+        "anExceptionIsAWorkerErrorAndTheWorkerStaysUp",
+        "loadNamesWhatRanAndAClipComesBackAsTheWorkersRecord"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/ModelLabSamplerTests.swift",
       "stage": "unit",
       "suites": [
@@ -35067,7 +35085,7 @@
       ],
       "expected_floor": 3089,
       "name": "unit",
-      "package_expected_floor": 591,
+      "package_expected_floor": 599,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35125,6 +35143,7 @@
         "VideoScanCoreTests.PoisonedCatalogFixtureAppDecodeTests",
         "VideoScanCoreTests.PreflightCancellationQAR2Tests",
         "VideoScanCoreTests.PreflightGateTests",
+        "VideoScanCoreTests.PythonClipWorkerTests",
         "VideoScanCoreTests.RowPreflightTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests"
       ],
