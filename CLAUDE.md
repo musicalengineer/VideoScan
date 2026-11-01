@@ -27,6 +27,7 @@ Read first: `docs/Purpose-and-Charter.md` (Rick's purpose, workflow and process 
 ## Ideas, rulings, state: where they go (not here, not in memory)
 - An **idea** → one line in `docs/BACKLOG.md` (or a GH issue labelled `idea`), then back to the task. Rick thinks out loud; parking is the correct response, not a design.
 - A **ruling** → one dated line in `docs/DECISIONS.md`.
+- **Check before writing (Rick, 2026-11-01).** Rick thinks out loud and repeats himself in different words; that is not a new ruling or idea. Before adding a DECISIONS, BACKLOG or design line, grep for it; if it exists, say "we already have this" with the file and date and write nothing. Only a change or a genuinely new rule gets a line. Fewer words, faster search.
 - **What is in flight / next** → `docs/STATUS.md`, rewritten, never appended.
 - A **rule that must survive `/clear`** → a change to this file or `docs/PROCESS.md`, reviewed by Rick. Memory files are not a rulebook.
 - **Briefs, research, review transcripts** → `.scratch/` (ignored). A review verdict Rick wants kept goes in `docs/reviews/<area>.md`, overwritten, not multiplied. Design docs are written after Rick says "design it", into `docs/design/`, and retired to `docs/archive/` when built.
