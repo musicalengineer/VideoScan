@@ -54,7 +54,7 @@ Rick teach the archive what the family knows. The catalog remains a primary
 surface; conversational queries should expose useful, editable results there.
 
 The durable rule is **family knowledge lives in inspectable data**. A model
-can interpret language or phrase an approved answer. It is not the authority for a family fact, a person's identity, a write, or an action.
+can interpret language or phrase an approved answer. It is not the authority for a family fact, a person's identity, a write, or an action. What the model sees in each of its two steps is stated once, under "Grounded composition and its limits" below.
 
 Use this document for the common contracts, operating boundaries, and roadmap. Keep these focused specifications beside it:
 
@@ -196,10 +196,10 @@ photo offers, and titled-ancestor answers were explicit later phases in the two-
 
 ### Grounded composition and its limits
 
-The August 17 implementation adds an optional rendering step **after** Swift
-has produced the factual result. The model sees a bounded approved plan and at most three recent turns, never the entire archive. Translation and
-composition have different payloads; the early “model never sees evidence”
-wording must not obscure the later explicit AnswerPlan rendering exception.
+**What Hallie's model sees — two steps, two payloads.** *Translation:* the LLM sees the question only and emits a fixed schema (`NLQuerySpec` / `QueryAST`), never free text about the data; a strict decoder rejects unknown fields and a validator fails closed to literal substring search; deterministic Swift executors produce the answer and its evidence. *Composition* (optional, built 2026-08-17): the LLM sees a bounded, validated `HallieAnswerPlan` — the claims Swift already proved, each with its evidence id, plus at most three recent turns — never raw catalog rows or the archive; every sentence must cite plan claim ids, and `HallieCompositionVerifier` rejects any name, date, place, number or relation not in the cited claims (HAL-1); a rejected, empty or over-budget phrasing shows the deterministic template. In neither step is the model the authority for a family fact, a write or an action.
+
+The rest of this section is the composition step's detail. (The August 14 wording "the model never sees catalog
+content" described translation alone; the statement above supersedes it.)
 
 `HallieAnswerPlan` carries route, subject, shape, claim IDs/text/evidence IDs,
 labeled counts, and fallback prose. Presence/cross plans bound item claims
