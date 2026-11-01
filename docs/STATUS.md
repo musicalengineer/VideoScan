@@ -15,7 +15,7 @@
 | M4 Release gauntlet #2, `ae3acedc` | 5,504 passed · 0 failed · 7 known issues; same stamp |
 | Ultra Release gauntlet, `937de636` | **5,504 passed · 0 failed · 7 known issues** in 1,512 s — identical to the M4's, same policy stamp (first attempt refused to start: manifest inventory mismatch after the Codex-P2 test — resynced `937de636`); off the Ultra by 22:06 |
 | Codex review of the day's Swift (`30e41529..d3d46db0`) | verdict **merge**, one P2 (the reference-only timing wrapper swallowed a hang off the pinned run) — **fixed red-first** `33a41214`, cycle closed; `docs/reviews/codex/codex-review-day-2026-10-31.md` |
-| 02:00 nightly | runs on both Macs after this file was written; the first clean reading of Hallie advisory since the GPU hang; the lane ladders show from its publish |
+| 02:00 nightly, both Macs, `4fc66b94` | **App 12,654 / 0** on both. **Core 2,135 / 1** on both — the one failure was the Codex-P2 test from 10/31 reading `VIDEOSCAN_TIMING_STRICT` from the process (the nightly pins it; a 1.5× miss IS a failure there, by design) — **fixed red-first `99fe0a04`** (environment injected into `judgeNow` and both wrapper copies; the test pins it both ways). **Hallie strict: M4 56 / 56 green; Ultra 54 / 56** (strict-033/034, the "how many from the 90s / 80s" follow-ups — right count, llama phrasing missed the regex; model flake, not code). **Advisory: M4 645 / 826, Ultra 627 / 826** — the first clean reading since the GPU hang. Voice ok on both. Ladders published. |
 
 ## Spot tests for Rick (Debug)
 - **Catalog ▸ Show ▸ "Confirmed Date"**: the Showing box reads "… · Confirmed date · …" and every row's inspector says "Saved: … — you're sure / best guess". (Open: should the chip show its count? needs a debounced model-owned cache.)
