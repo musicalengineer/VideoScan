@@ -1787,6 +1787,13 @@ final class VideoScanModel: ObservableObject {
     /// authority; a viewer or a JSON session leaves it unattached (refuses).
     let provenanceRoles = ProvenanceRoleStore()
 
+    /// The background helper's journal into catalog.sqlite (schema v1.13,
+    /// JournalApplier.swift; rule 12: state behind a seam). Attached to the
+    /// committer when catalog.sqlite becomes the authority; its journal is
+    /// `background/journal` beside catalog.json (App Support in production,
+    /// the sandbox under a test host).
+    let journalApplier = JournalApplier()
+
     /// Alert driver: "You need to designate a volume as the master
     /// archive." Carries the ids the user tried to promote so the fix-it
     /// button can re-offer the promotion after Initialize.

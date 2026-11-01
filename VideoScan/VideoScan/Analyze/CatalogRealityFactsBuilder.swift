@@ -34,9 +34,10 @@ struct CatalogRealityInputs: Sendable, Equatable {
 enum CatalogRealityFactsBuilder {
 
     static func inputs(facts: CatalogFreshnessFacts, missing: MissingCopyCounts,
-                       degenerateOCRDates: Int = 0) -> CatalogRealityInputs {
+                       degenerateOCRDates: Int = 0, backgroundJournal: JournalApplier.Counts? = nil) -> CatalogRealityInputs {
         CatalogRealityInputs(facts: realityFacts(facts), review: review(facts.integrity, missing: missing),
-                             information: information(facts.integrity, degenerateOCRDates: degenerateOCRDates))
+                             information: information(facts.integrity, degenerateOCRDates: degenerateOCRDates,
+                                                      backgroundJournal: backgroundJournal))
     }
 
     /// The colour's inputs — no review item can reach them.
@@ -79,7 +80,8 @@ enum CatalogRealityFactsBuilder {
         ]
     }
 
-    static func information(_ integrity: IntegrityReportFacts, degenerateOCRDates: Int = 0) -> [String] {
+    static func information(_ integrity: IntegrityReportFacts, degenerateOCRDates: Int = 0,
+                            backgroundJournal: JournalApplier.Counts? = nil) -> [String] {
         var out = integrity.reality.information
         if integrity.reality.findingsCapped {
             out.append("the last check kept its first \(IntegrityReport.findingsCap.formatted()) findings — the counts may be low")
@@ -87,6 +89,9 @@ enum CatalogRealityFactsBuilder {
         // GH #402: said, never counted — information lines change neither
         // the colour nor "N to review".
         if let line = degenerateOCRLine(degenerateOCRDates) { out.append(line) }
+        // Background step 1: the helper's journal, said once the applier has
+        // counted it (information — never the colour, never "to review").
+        if let backgroundJournal { out.append(JournalApplierWords.statusLine(backgroundJournal)) }
         return out
     }
 

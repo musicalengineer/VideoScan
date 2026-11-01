@@ -323,6 +323,17 @@ extension VideoScanModel {
         }
         provenanceRoles.attach(ProvenanceRoleCatalogBacking(committer: committer))
         Task { [weak self] in _ = await self?.provenanceRoles.load() }
+        // The background helper's observations (schema v1.13): its journal
+        // beside catalog.json, applied through this committer at launch and
+        // every 5 minutes; Catalog Status hears the waiting / refused counts.
+        journalApplier.note = { [weak self] line in
+            self?.log("Background journal: " + line)
+            appLog.write("[background-journal] " + line)
+        }
+        journalApplier.onCounts = { [weak self] counts in self?.catalogFreshness.setBackgroundJournal(counts) }
+        let journalFolder = URL(fileURLWithPath: catalogStore.fileLocation).deletingLastPathComponent()
+            .appendingPathComponent("background/journal", isDirectory: true)
+        journalApplier.attach(JournalApplierBacking(committer: committer), journal: ObservationJournal(directory: journalFolder))
         // Catalog folders live in catalog.sqlite (2026-10-19): the one store
         // writes through this committer from now on; its first load imports
         // events-decisions.json once. Not under a test host — a sandbox

@@ -387,6 +387,9 @@ final class CatalogCommitter {
         case footageLikeness = "footage likeness"
         case ignoredContent = "ignored content"
         case provenanceRoles = "provenance roles"
+        /// The background helper's observations (schema v1.13), from its
+        /// journal through JournalApplier — the only road in (design §3.4).
+        case observations = "background observations"
 
         var change: String { self == .folders ? "a folder change" : "a \(rawValue) change" }
     }

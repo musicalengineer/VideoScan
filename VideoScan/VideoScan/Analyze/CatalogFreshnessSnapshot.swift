@@ -269,8 +269,18 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     private var dossierSubscription: AnyCancellable?
     private var clock: AnyCancellable?
     private var announced = false
+    /// The background journal's counts (JournalApplier, after each pass);
+    /// nil until the first pass — then one information line.
+    private var backgroundJournal: JournalApplier.Counts?
 
     init() {}
+
+    /// From JournalApplier after a pass (equality-gated by the applier).
+    func setBackgroundJournal(_ counts: JournalApplier.Counts) {
+        guard counts != backgroundJournal else { return }
+        backgroundJournal = counts
+        rejudge()
+    }
 
     /// From the coverage pass: the report and the two file facts.
     func publish(report: AnalyzeCoverageReport, facts: CatalogFreshnessFacts, catalogFile: String? = nil) {
@@ -402,7 +412,8 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         guard report.computedAt.timeIntervalSince1970 > 0 else { return }
         let rows = CatalogFreshnessRows.rows(report: report, facts: facts, running: running)
         let reality = CatalogRealityFactsBuilder.inputs(facts: facts, missing: report.missingCopies,
-                                                        degenerateOCRDates: report.degenerateOCRDates)
+                                                        degenerateOCRDates: report.degenerateOCRDates,
+                                                        backgroundJournal: backgroundJournal)
         let new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
         guard new != state else { return }
         publishCount += 1
