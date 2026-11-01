@@ -11,6 +11,7 @@
 // the body is expected to record an issue; one that does is reported as
 // known instead of failing the test.
 
+import Foundation
 import Testing
 import VideoScanCore
 
@@ -40,11 +41,12 @@ func expectWithinReferenceTimingBudget(
     measured: Duration,
     budget: Duration,
     loadBefore: TimingBudget.LoadSample,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
     sourceLocation: SourceLocation = #_sourceLocation
 ) -> TimingBudget.Judgement {
     let judgement = TimingBudget.judgeNow(label, budget: budget, measured: measured,
-                                          loadBefore: loadBefore)
-    if TimingBudget.isReferenceRun() {
+                                          loadBefore: loadBefore, environment: environment)
+    if TimingBudget.isReferenceRun(environment: environment) {
         recordTimingJudgement(judgement, sourceLocation: sourceLocation)
     } else if judgement.verdict == .fail {
         // Off the reference run the number is logged, not asserted (GH #385) — except a

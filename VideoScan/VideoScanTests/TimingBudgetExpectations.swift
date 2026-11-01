@@ -11,6 +11,7 @@
 // TEST_RUNNER_VIDEOSCAN_TIMING_STRICT=1 (xcodebuild strips the prefix);
 // scripts/nightly_local_tests.sh exports both spellings.
 
+import Foundation
 import Testing
 import VideoScanCore
 
@@ -46,11 +47,12 @@ func expectWithinReferenceTimingBudget(
     measured: Duration,
     budget: Duration,
     loadBefore: TimingBudget.LoadSample,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
     sourceLocation: SourceLocation = #_sourceLocation
 ) -> TimingBudget.Judgement {
     let judgement = TimingBudget.judgeNow(label, budget: budget, measured: measured,
-                                          loadBefore: loadBefore)
-    if TimingBudget.isReferenceRun() {
+                                          loadBefore: loadBefore, environment: environment)
+    if TimingBudget.isReferenceRun(environment: environment) {
         recordTimingJudgement(judgement, sourceLocation: sourceLocation)
     } else if judgement.verdict == .fail {
         // Off the reference run the number is logged, not asserted (GH #385) — except a

@@ -302,11 +302,14 @@ public enum TimingBudget {
     }
 
     /// `judge` with the after-sample taken now, and the line logged.
+    /// `environment` is injectable so a test of the rule itself does not
+    /// inherit the lane's pin (the nightly exports VIDEOSCAN_TIMING_STRICT=1).
     public static func judgeNow(
-        _ label: String, budget: Duration, measured: Duration, loadBefore: LoadSample
+        _ label: String, budget: Duration, measured: Duration, loadBefore: LoadSample,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Judgement {
         let j = judge(label, budget: budget, measured: measured,
-                      before: loadBefore, after: sampleLoad())
+                      before: loadBefore, after: sampleLoad(), environment: environment)
         print(j.logLine)
         return j
     }

@@ -184,14 +184,27 @@ struct TimingBudgetTests {
         // Off the reference run the wrapper logs instead of asserting (GH #385) — but a
         // measurement beyond 3× the budget is a hang or a regression no host explains, and
         // judge() says .fail in every mode; the wrapper must record it, not swallow it.
-        #expect(!TimingBudget.isReferenceRun(environment: [:]))
+        // The environment is pinned both ways: the nightly exports VIDEOSCAN_TIMING_STRICT=1,
+        // and read from the process this test turned red there on 2026-11-01 (the 1.5× miss
+        // below IS a failure on the reference run — by design, not by accident).
+        let off: [String: String] = [:]
+        let reference = [TimingBudget.strictEnvironmentKey: "1"]
+        #expect(!TimingBudget.isReferenceRun(environment: off) && TimingBudget.isReferenceRun(environment: reference))
         let sample = TimingBudget.LoadSample(load: 1, logicalCores: 16)
         withKnownIssue("a hang beyond 3× must record an issue even off the reference run") {
-            expectWithinReferenceTimingBudget("t", measured: .milliseconds(400), budget: .milliseconds(100), loadBefore: sample)
+            expectWithinReferenceTimingBudget("t", measured: .milliseconds(400), budget: .milliseconds(100),
+                                              loadBefore: sample, environment: off)
         }
         // A miss inside the band stays logged-only off the reference run (no issue → this test stays green).
-        let inside = expectWithinReferenceTimingBudget("t", measured: .milliseconds(150), budget: .milliseconds(100), loadBefore: sample)
-        #expect(inside.verdict == .knownIssue || inside.verdict == .fail, "either way the wrapper's own rule decides what to record")
+        let inside = expectWithinReferenceTimingBudget("t", measured: .milliseconds(150), budget: .milliseconds(100),
+                                                       loadBefore: sample, environment: off)
+        #expect(inside.verdict == .knownIssue && !inside.strict, "off the pin a miss inside 3× is a known issue, and the wrapper records nothing")
+        // On the reference run the same miss is a real failure and the wrapper records it.
+        withKnownIssue("on the reference run every miss is recorded") {
+            let pinned = expectWithinReferenceTimingBudget("t", measured: .milliseconds(150), budget: .milliseconds(100),
+                                                           loadBefore: sample, environment: reference)
+            #expect(pinned.verdict == .fail && pinned.strict)
+        }
     }
 
     @Test("VIDEOSCAN_TIMING_STRICT=1 forces strict on a busy machine and on GitHub")
