@@ -20,6 +20,8 @@ import VideoScanCore
 @Suite("Catalog Move to Trash — the only-copy warning (audit T3)", .serialized)
 @MainActor
 struct CatalogTrashOnlyCopyTests {
+    /// The brief's never-touches line and time class (11/01), second in every detail.
+    static let never = "Never touches Master Archive files, either half of a recovered audio/video pair, or files on drives that are not connected. Instant."
 
     /// A row; a non-empty `md5` also gives it a usable whole-file SHA-256
     /// fixity derived from it (since Codex #150 F3 a copy is known only by
@@ -71,7 +73,7 @@ struct CatalogTrashOnlyCopyTests {
         let p = plan(m, [only])
         #expect(p.onlyCopy == [only.id])
         let c = confirmation(p, [only])
-        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.\n\n⚠︎ This is the only copy we know of.")
+        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.\n" + Self.never + "\n\n⚠︎ This is the only copy we know of.")
         #expect(!c.moveIsDefault)
     }
 
@@ -83,7 +85,7 @@ struct CatalogTrashOnlyCopyTests {
         #expect(p.onlyCopy.isEmpty)
         let c = confirmation(p, [a])
         #expect(c.onlyCopyWarning == nil && c.moveIsDefault)
-        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.")
+        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.\n" + Self.never)
     }
 
     @Test("both copies selected: nothing survives, both are the only copy")

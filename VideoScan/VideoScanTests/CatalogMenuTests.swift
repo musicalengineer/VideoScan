@@ -69,7 +69,9 @@ struct CatalogMenuTests {
         var plan = VideoScanModel.catalogTrashPlan(for: [a, b], isMasterArchive: { _ in false }, isOffline: { _ in false })
         plan.onlyCopy = [a.id]
         let c = CatalogTrashConfirmation(plan: plan, sizes: [a.id: 10, b.id: 10])
-        #expect(c.detail.hasPrefix("They move to the Finder Trash; you can put them back until you empty it."))
+        #expect(c.detail.hasPrefix("They move to the Finder Trash; you can put them back until you empty it.\n"
+                                    + CatalogActionBrief.deleteSelectedFiles.neverTouches + " Instant."),
+                "the confirmation's first lines are the brief: what · never · how long")
         #expect(c.detail.contains("⚠︎ 1 of these is the only copy we know of."))
         #expect(!c.moveIsDefault, "the only copy keeps Move to Trash a deliberate click")
     }
@@ -138,6 +140,9 @@ struct CatalogMenuSensorTests {
         #expect(try Self.code("UpdateCatalogSheet.swift").contains("CatalogActionBriefHeader(brief: .updateCatalog)"))
         #expect(try Self.code("ValidateCatalogMenuItem.swift").contains("CatalogActionBriefHeader(brief: .validateCatalog)"))
         #expect(try Self.code("AnalyzePanelView.swift").contains("CatalogActionBriefHeader(brief: .contentAnalysis)"))
+        #expect(try Self.code("CatalogTidy.swift").contains("CatalogActionBriefHeader(brief: .tidyCatalog)"))
+        #expect(try Self.code("CatalogStatusWindow.swift").contains("CatalogActionBriefHeader(brief: .catalogStatus)"))
+        #expect(try Self.code("CatalogTrashConfirmation.swift").contains("CatalogActionBrief.deleteSelectedFiles.neverTouches"))
     }
 
     @Test("SENSOR: the new Catalog menu files add no `extension VideoScanModel` (rule 12)")

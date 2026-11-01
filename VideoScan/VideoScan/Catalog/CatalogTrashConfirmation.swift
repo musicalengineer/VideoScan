@@ -75,7 +75,10 @@ struct CatalogTrashConfirmation: Equatable {
 
     /// The put-back sentence, then what will be held back and why.
     var detail: String {
+        // The 11/01 "what and how long" rule: what it touches, what it
+        // never touches, how long (CatalogActionBrief.deleteSelectedFiles).
         var text = "\(moveCount == 1 ? "It moves" : "They move") to the Finder Trash; you can put \(moveCount == 1 ? "it" : "them") back until you empty it."
+        text += "\n" + CatalogActionBrief.deleteSelectedFiles.neverTouches + " " + CatalogActionBrief.deleteSelectedFiles.time.words
         if let warning = onlyCopyWarning { text += "\n\n" + warning }
         let heldCount = held.reduce(0) { $0 + $1.count }
         if heldCount > 0 {

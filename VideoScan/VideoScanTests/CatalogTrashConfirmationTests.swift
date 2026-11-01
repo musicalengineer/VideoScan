@@ -41,6 +41,8 @@ struct CatalogTrashConfirmationSensorTests {
 @Suite("Catalog Move to Trash — the confirmation's words (codex F8)")
 @MainActor
 struct CatalogTrashConfirmationTests {
+    /// The brief's never-touches line and time class (11/01), second in every detail.
+    static let never = "Never touches Master Archive files, either half of a recovered audio/video pair, or files on drives that are not connected. Instant."
 
     private func rec(_ size: Int64) -> VideoRecord {
         let r = VideoRecord()
@@ -59,7 +61,7 @@ struct CatalogTrashConfirmationTests {
         #expect(c.canMove && c.moveCount == 3 && c.moveBytes == 6_000_000)
         let size = ByteCountFormatter.string(fromByteCount: 6_000_000, countStyle: .file)
         #expect(c.title == "Move 3 files (\(size)) to the Trash?")
-        #expect(c.detail == "They move to the Finder Trash; you can put them back until you empty it.\n\n"
+        #expect(c.detail == "They move to the Finder Trash; you can put them back until you empty it.\n" + Self.never + "\n\n"
                 + "2 will be held back: half of a recovered audio/video pair (1), drive not connected (1).")
         #expect(CatalogTrashConfirmation.moveButton == "Move to Trash")
     }
@@ -69,7 +71,7 @@ struct CatalogTrashConfirmationTests {
         let plan = VideoScanModel.catalogTrashPlan(for: [one], isMasterArchive: { _ in false }, isOffline: { _ in false })
         let c = CatalogTrashConfirmation(plan: plan, sizes: [one.id: 4_096])
         #expect(c.title.hasPrefix("Move 1 file (") && c.title.hasSuffix(") to the Trash?"))
-        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.")
+        #expect(c.detail == "It moves to the Finder Trash; you can put it back until you empty it.\n" + Self.never)
     }
 
     /// Nothing can move → no question is asked (the result explains).
