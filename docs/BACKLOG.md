@@ -196,3 +196,4 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
   headers are fixed; archive `m4_staging_gate` and `nightly_adversarial_review_design` once the scripts' comments point elsewhere; the cloud
   briefs retire after 2026-11-05; the two provenance research docs archive when v14 lands; `cyberbrain_design` / `kinship_inference_design`
   headers say PROPOSED for things that appear built; `October_Design_Retrospective` keep or fold.
+- `provenance_assertions.by = 'rick'` is really "the admin user" (Rick, 2026-11-01, on approving v14): one day replace the literal with the owner's identity (a `users`/owner row or a constant the app sets), by an additive migration that keeps old rows readable; nothing until a second user exists.
