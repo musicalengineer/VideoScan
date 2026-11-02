@@ -64,4 +64,53 @@ extension FamilyTreeLiveModel {
             return lhs.id < rhs.id
         }
     }
+
+    /// "status active → retracted (wrong person)" and friends, with quoted
+    /// text cut to 80 characters so a log line stays one line.
+    nonisolated static func correctionChange(_ receipt: CyberBrainWriter.CorrectionReceipt) -> String {
+        func quoted(_ text: String) -> String {
+            let flat = text.replacingOccurrences(of: "\n", with: " ")
+            return "\"" + (flat.count > 80 ? String(flat.prefix(79)) + "…" : flat) + "\""
+        }
+        let old = receipt.archive.people.lazy.flatMap(\.items).first { $0.id == receipt.itemID }
+        let why = old?.correction.map { FamilyTreeNoteCorrectionLine.reasonText($0) } ?? "?"
+        switch receipt.action {
+        case .removed:
+            return "status active → retracted (\(why)); text kept \(quoted(receipt.oldText))"
+        case .edited:
+            return "text \(quoted(receipt.oldText)) → \(quoted(receipt.newText ?? "")); "
+                + "\(receipt.itemID) superseded by \(receipt.newItemID ?? "?")"
+        case .moved:
+            return "person \(receipt.fromPersonID) → \(receipt.toPersonID ?? "?")"
+                + " (\(receipt.toPersonName ?? "?")\(receipt.createdTargetPerson ? ", new record" : ""));"
+                + " \(receipt.itemID) retracted, copy \(receipt.newItemID ?? "?"); text \(quoted(receipt.oldText))"
+        }
+    }
+
+    /// Everyone's sidebar summary in sidebar order — O(people), pure,
+    /// built in parallel chunks of rows (each slot written once; the
+    /// life-years line comes from the compiled index, so no date is
+    /// parsed here). Same rows as `sidebarOrder.map { summary($0) }`
+    /// (FamilyTreeLaunchBundleTests pins it).
+    nonisolated static func sidebarRows(of graph: GedcomFamilyGraph) -> [FamilyTreePersonSummary] {
+        let index = graph.index
+        let count = index.count
+        let chunk = 4096
+        let chunks = (count + chunk - 1) / chunk
+        return [FamilyTreePersonSummary](unsafeUninitializedCapacity: count) { buffer, initialized in
+            // Swift 6: the inout buffer pointer may not be captured by the concurrent closure; each
+            // chunk initializes only its disjoint [lo, hi) — no race (the FamilyTreeNameSearch shape).
+            nonisolated(unsafe) let slots = buffer
+            DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                let lo = c * chunk, hi = min(count, lo + chunk)
+                for row in lo..<hi {
+                    let o = Int(index.sidebarOrder[row])
+                    let years = index.lifeYears[o]
+                    (slots.baseAddress! + row).initialize(
+                        to: summary(graph.people[index.ids[o]]!, years: years.isEmpty ? nil : years))
+                }
+            }
+            initialized = count
+        }
+    }
 }
