@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 371,
+ "entry_count": 370,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -55,7 +55,7 @@
    "nloc": 84
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body": {
-   "ccn": 14,
+   "ccn": 13,
    "nloc": 238
   },
   "VideoScan/VideoScan/Archive/ArchiveIndexRename.swift::ArchiveIndexRename.jsonStringValues": {
@@ -375,8 +375,8 @@
    "nloc": 59
   },
   "VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift::FamilySearchPullCoordinator.performMerge": {
-   "ccn": 18,
-   "nloc": 98
+   "ccn": 17,
+   "nloc": 87
   },
   "VideoScan/VideoScan/FamilyTree/FamilySearchPullSheet.swift::FamilySearchPullSheet.footer": {
    "ccn": 16,
@@ -387,7 +387,7 @@
    "nloc": 105
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeCards.swift::FamilyTreePersonCard.body": {
-   "ccn": 19,
+   "ccn": 18,
    "nloc": 180
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift::FamilyTreeLiveModel.refilterNow": {
@@ -404,7 +404,7 @@
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::FamilyTreeView.inspector": {
    "ccn": 17,
-   "nloc": 127
+   "nloc": 123
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::FamilyTreeView.sidebar": {
    "ccn": 12,
@@ -413,10 +413,6 @@
   "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::FamilyTreeView.treeCanvas": {
    "ccn": 8,
    "nloc": 133
-  },
-  "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::FamilyTreeView.withSheets": {
-   "ccn": 5,
-   "nloc": 81
   },
   "VideoScan/VideoScan/FamilyTree/RecordFinderFoundSheet.swift::RecordFinderFoundSheet.body": {
    "ccn": 8,
@@ -1303,8 +1299,8 @@
    "nloc": 33
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyGraphCompiledStore.swift::FamilyGraphCompiledStore.ingestLocked": {
-   "ccn": 13,
-   "nloc": 94
+   "ccn": 8,
+   "nloc": 84
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::BirthplaceUnitResolver.apply.asciiKey": {
    "ccn": 21,
