@@ -240,7 +240,7 @@ extension VideoScanModel {
         // path bypasses the confirmation dialog, and records nested under
         // ANOTHER registered target's root are not this target's to delete.
         let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog",
-                                           remembered: target.volumeUUID)
+                                           identity: .own(target.volumeUUID))
         finishDeleteCatalog(for: target, volName: volName, removed: outcome.removed)
     }
 

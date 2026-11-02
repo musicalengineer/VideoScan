@@ -27114,10 +27114,13 @@
         "duplicatePathPlannerUsesSelectedTargetsVolume",
         "filesOnAnotherVolumeAreNotCountedUnderTheSamePath",
         "hundredThousandRowsTwentyTargetsWithinBudget",
+        "identityChangeIsRefusedEvenWithAnEmptyPlan",
         "knownLocationNeverShowsAFileWithoutEvidence",
         "legacyOfflineLocationIsToldByUnanimousRows",
         "legacyOfflineLocationWithDisagreeingRowsIsUnknown",
+        "localityIsDecidedByTheDeepestMountPoint",
         "mountedLocationIsToldByItsMount",
+        "mountedVolumeLookupNeverTouchesStatfs",
         "movedFileWithStaleScanVolumeStaysOnItsNewDrive",
         "nestedDifferentVolumesMatchRemovalCount",
         "noEvidenceAnywhereKeepsThePathRule",
@@ -27130,6 +27133,7 @@
         "removalPlanForAnOfflineLocationRemovesOnlyItsOwnDisk",
         "removalScopeNeverClaimsAnotherVolumesFiles",
         "sameVolumeFilesAreUnchanged",
+        "selectedTargetWithUnknownMemoryNeverBorrowsAnother",
         "signatureCoverageReadsTheProjection",
         "theLenientRuleIsGone",
         "thePaneAndThePlannerResolveThroughTheOneFunction",
@@ -36604,7 +36608,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 382,
+      "expected_floor": 386,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [

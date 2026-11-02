@@ -1883,7 +1883,7 @@ final class VideoScanModel: ObservableObject {
         // no-removal). The bare removeAll that used to live here is the
         // hole QA flagged after the 2,720-record folder-target loss.
         removeCatalogRecords(underTargetRoot: target.searchPath, action: "reset",
-                             remembered: target.volumeUUID)
+                             identity: .own(target.volumeUUID))
     }
 
     // MARK: - Probe-cache count (memoized)

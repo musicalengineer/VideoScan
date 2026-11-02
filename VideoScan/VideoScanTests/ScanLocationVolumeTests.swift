@@ -231,6 +231,24 @@ struct ScanLocationVolumeTests {
         #expect(volumes[id] == ultra)
     }
 
+    /// Codex #210 F3, the rule itself with injected mount tables: the
+    /// deepest mount point containing the path decides, and only a LOCAL
+    /// one says yes — a share under /Volumes, a share mounted inside the
+    /// home folder, and a path on "/" itself.
+    @Test func localityIsDecidedByTheDeepestMountPoint() {
+        let mounted: Set<String> = ["/", "/Volumes/Projects", "/Volumes/NAS", "/Users/rickb/Shares/office", "/System/Volumes/Data"]
+        let local: Set<String> = ["/", "/Volumes/Projects", "/System/Volumes/Data"]
+        #expect(ScanTargetVolume.isOnLocalMount("/Volumes/Projects/a.mov", mounted: mounted, local: local))
+        #expect(ScanTargetVolume.isOnLocalMount("/Volumes/Projects", mounted: mounted, local: local))
+        #expect(!ScanTargetVolume.isOnLocalMount("/Volumes/NAS/a.mov", mounted: mounted, local: local), "an SMB share under /Volumes")
+        #expect(!ScanTargetVolume.isOnLocalMount("/Users/rickb/Shares/office/x", mounted: mounted, local: local), "a share inside the home folder")
+        #expect(ScanTargetVolume.isOnLocalMount("/Users/rickb/Shares", mounted: mounted, local: local), "its parent is on the boot disk")
+        #expect(ScanTargetVolume.isOnLocalMount("/System/Volumes/Data/x", mounted: mounted, local: local))
+        #expect(!ScanTargetVolume.isOnLocalMount("/Volumes/Projects2/a.mov", mounted: ["/", "/Volumes/Projects"], local: ["/Volumes/Projects"]),
+                "a sibling mount name is not the mount; the path is on '/', which is not in the local set here")
+        #expect(!ScanTargetVolume.isOnLocalMount("/anything", mounted: [], local: []), "an empty table says nothing")
+    }
+
     // MARK: Scale
 
     /// The pass runs inside the coalesced recompute on the main actor; the
@@ -428,6 +446,59 @@ struct ScanLocationVolumeModelTests {
         #expect(model.records.count == 12, "nothing removed")
     }
 
+    // MARK: Codex 2026-11-02 closing pass (cycle #210)
+
+    /// Codex #210 F1: a SELECTED target whose memory is unknown is not a
+    /// bare root — it must never take another registration's memory. With
+    /// mixed rows under the path it is unknown and owns nothing, through
+    /// the plan, the Delete count, reset and the unplanned delete.
+    @Test func selectedTargetWithUnknownMemoryNeverBorrowsAnother() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let path = offlinePath()
+        let first = CatalogScanTarget(searchPath: path), second = CatalogScanTarget(searchPath: path)
+        first.volumeUUID = m4
+        second.volumeUUID = nil
+        model.scanTargets = [first, second]
+        model.records = m4Movies(path) + ultraMovies(path)
+
+        #expect(model.planTargetRemoval(for: second).recordIDs.isEmpty, "unknown owns nothing; the M4's memory is not hers")
+        let volumes = ScanTargetVolume.resolve(model.scanTargets.map { ($0.id, $0.searchPath, $0.volumeUUID) },
+                                               records: model.records)
+        #expect(ScanTargetRecordFacts.project(model.records,
+                                              targets: model.scanTargets.map { ($0.id, $0.searchPath) },
+                                              targetVolumes: volumes)[second.id]?.records == 0)
+        model.resetTarget(second)
+        #expect(model.records.count == 12, "reset of an unknown location removes nothing")
+        model.deleteCatalogForTarget(second)
+        #expect(model.records.count == 12, "unplanned delete of an unknown location removes nothing")
+    }
+
+    /// Codex #210 F2: a confirmation expires when the location's identity
+    /// changes, even when the record set is the same (here: empty) — the
+    /// plan carries the disk it was made for.
+    @Test func identityChangeIsRefusedEvenWithAnEmptyPlan() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let moviesDir = try mounted(tmp, "Movies")
+        let target = CatalogScanTarget(searchPath: moviesDir)
+        target.phase = .cataloged
+        model.scanTargets = [target]
+        model.records = []
+
+        let plan = VolumeIdentity.$resolverOverride.withValue({ _ in m4 }) { model.planTargetRemoval(for: target) }
+        #expect(plan.recordIDs.isEmpty)
+        VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) { model.refreshTargetReachability() }
+        let result = VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) {
+            model.deleteCatalogForTarget(target, plan: plan)
+        }
+        guard case .refusedStale = result else {
+            Issue.record("expected .refusedStale, got \(result)")
+            return
+        }
+        #expect(target.phase == .cataloged, "a refused plan leaves target state untouched")
+    }
+
     /// The refresh learns a mounted location's volume from its mount,
     /// re-learns a swapped drive, and leaves an offline location's memory
     /// alone.
@@ -525,6 +596,22 @@ struct ScanLocationVolumeSensorTests {
         #expect(body.contains("scanTargetFacts[target.id]?.signaturePlan"))
         #expect(!body.contains("model.records"), "an O(records) walk is back in a context menu")
         #expect(!body.contains("isUnder("), "the path-only scope is back")
+    }
+
+    /// Codex #210 F3: telling a location its mounted volume runs on the
+    /// main actor (reachability refresh, Browse…). It must classify
+    /// local-vs-network from the in-kernel mount table (`getmntinfo`,
+    /// MNT_NOWAIT), never through `statfs` on the path — a hung share
+    /// would block before the guard could refuse it.
+    @Test func mountedVolumeLookupNeverTouchesStatfs() throws {
+        let src = try code("VideoScanModel+DeleteScanTarget.swift")
+        let start = try #require(src.range(of: "enum ScanTargetVolume {"))
+        let end = try #require(src.range(of: "struct TargetRemovalPlan", range: start.upperBound..<src.endIndex))
+        let body = String(src[start.upperBound..<end.lowerBound])
+        #expect(body.contains("currentLocalMountedRoots()"))
+        for forbidden in ["isNetworkVolume(", "mountInfo(", "statfs("] {
+            #expect(!body.contains(forbidden), Comment(rawValue: "\(forbidden) can block on a hung share"))
+        }
     }
 
     /// Every production reading of the volume rule goes through `agree`;
