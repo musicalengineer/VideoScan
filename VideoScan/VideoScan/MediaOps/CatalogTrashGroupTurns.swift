@@ -38,19 +38,64 @@ final class CatalogTrashGroupTurns {
     func group(of id: UUID) -> CatalogPairGroups.Group? { groupOf[id].map { groups[$0] } }
 
 
+    // MARK: The live catalog decides membership (Codex #197)
+
+    private var liveIndexKey: [UInt64]?
+    private var liveIndexCache: CatalogPairGroups.Index?
+
+    /// The pair index of the LIVE catalog, rebuilt whenever any row's pair
+    /// link, path or removal marker changed or rows were added/replaced
+    /// (`VideoRecord.pairLinkGeneration`, `identityGeneration`, the model's
+    /// mutation revision, the row count). Cost: one O(records) pass per
+    /// rebuild — normally once per batch; worst-case memory: three
+    /// dictionary entries per half (every row a half: ≈ 10 MB at 100k).
+    func liveIndex(_ model: VideoScanModel) -> CatalogPairGroups.Index {
+        let key = [VideoRecord.pairLinkGeneration, VideoRecord.identityGeneration,
+                   model.catalogMutationRevision, UInt64(model.records.count)]
+        if key != liveIndexKey || liveIndexCache == nil {
+            liveIndexCache = CatalogPairGroups.Index(catalog: model.records)
+            liveIndexKey = key
+        }
+        return liveIndexCache ?? CatalogPairGroups.Index(catalog: model.records)
+    }
+
+    /// Is the LIVE row `id` in a pair group now, in any link direction?
+    func isLiveGroupMember(_ id: UUID, model: VideoScanModel) -> Bool {
+        guard let live = model.record(forID: id) else { return false }
+        return liveIndex(model).isGroupMember(live)
+    }
+
     /// The catalog half of a group member's turn in phase 1 of its unit
-    /// (the routine runs it for EVERY member before any moves). nil = go on.
+    /// (the routine runs it for EVERY member before any moves). Everything
+    /// here is read from the LIVE row fetched by id and the LIVE catalog's
+    /// pair index — never from the selection's row object (Codex #197): the
+    /// group is resolved again now and must EQUAL the confirmed members
+    /// (a new, lost or restored member holds the unit). nil = go on.
     func problem(_ rec: VideoRecord, model: VideoScanModel) -> String? {
         guard let gi = groupOf[rec.id] else { return Self.notConfirmedAsGroupNote }
         if let why = stopped[gi] { return CatalogPairGroups.groupHeldNote(why) + " — nothing moved" }
         let g = groups[gi]
         guard let k = g.members.firstIndex(of: rec.id) else { return Self.notConfirmedAsGroupNote }
+        guard let live = model.record(forID: rec.id) else {
+            return stop(gi, "\(g.filenames[k]) is no longer in the catalog")
+        }
         // The file this turn would move must be the one the plan proved
         // (Codex #191 F1) — a stale row object never moves.
-        if rec.fullPath != g.paths[k] {
+        if rec.fullPath != g.paths[k] || live.fullPath != g.paths[k] {
             return stop(gi, "\(g.filenames[k]) is not the file you confirmed (its catalog row points elsewhere)")
         }
-        guard let live = model.record(forID: rec.id), Self.stillAsPlanned(live, g, k) else {
+        let now = CatalogPairGroups.resolve(live, in: liveIndex(model))
+        if now.unknown || !now.missingOnDisk.isEmpty {
+            return stop(gi, "the catalog can't account for every related half of \(g.filenames[k]) now")
+        }
+        let nowIDs = Set(now.members.map(\.id)), confirmedIDs = Set(g.members)
+        if nowIDs != confirmedIDs {
+            let joined = now.members.filter { !confirmedIDs.contains($0.id) }.map(\.filename)
+            let why = joined.isEmpty ? "a related half left the pair since you confirmed"
+                : "\(CatalogPairGroups.list(joined)) joined the pair since you confirmed"
+            return stop(gi, why)
+        }
+        guard Self.stillAsPlanned(live, g, k, departed: now.departedIDs) else {
             return stop(gi, "\(g.filenames[k]) changed in the catalog since you confirmed")
         }
         return nil
@@ -75,12 +120,13 @@ final class CatalogTrashGroupTurns {
     }
 
     /// The live row is still the half the plan admitted. Its links may name
-    /// only members — or a sibling that departed (Codex #195 F4).
-    private static func stillAsPlanned(_ live: VideoRecord, _ g: CatalogPairGroups.Group, _ j: Int) -> Bool {
+    /// only members — or a sibling that is departed NOW (Codex #195 F4, #197 F4).
+    private static func stillAsPlanned(_ live: VideoRecord, _ g: CatalogPairGroups.Group, _ j: Int,
+                                       departed: [UUID]) -> Bool {
         guard !live.isPurged, !live.isSetAside, !live.isSuperseded,
               live.combinedFromPairID == nil,
               live.fullPath == g.paths[j], live.pairGroupID == g.pairGroupIDs[j] else { return false }
-        let allowed = Set(g.members).union(g.departedIDs)
+        let allowed = Set(g.members).union(departed)
         if let p = live.pairedWith?.id, !allowed.contains(p) { return false }
         if let p = live.pendingPairedWithID, !allowed.contains(p) { return false }
         return true

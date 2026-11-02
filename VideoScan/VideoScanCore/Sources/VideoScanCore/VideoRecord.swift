@@ -36,6 +36,13 @@ public class VideoRecord: Identifiable, Decodable {
     // one counter; `didSet` ≈ a setter hook that runs after the store.)
     private static let identityGenerationLock = OSAllocatedUnfairLock<UInt64>(initialState: 0)
 
+    /// Bumped by any write of a pair link (paired/pending/group/combined) on any row, so ⌘⌫'s
+    /// live pair index knows when to rebuild (Codex #197). As identityGeneration; decode never bumps.
+    private static let pairLinkGenerationLock = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+    public static var pairLinkGeneration: UInt64 { pairLinkGenerationLock.withLock { $0 } }
+    @inline(__always)
+    private static func bumpPairLinkGeneration() { pairLinkGenerationLock.withLock { $0 &+= 1 } }
+
     /// The current identity generation; compare two reads to learn whether
     /// any record's filename / fullPath / purgedAt changed in between.
     public static var identityGeneration: UInt64 {
@@ -203,11 +210,17 @@ public class VideoRecord: Identifiable, Decodable {
     /// added (re-scan picks it up).
     public var materialPackageUMID: String = ""
 
-    public var pairedWith: VideoRecord?
+    public var pairedWith: VideoRecord? {
+        didSet { Self.bumpPairLinkGeneration() }
+    }
     /// Set during decode; CatalogStore resolves it to a real `pairedWith`
     /// reference after the entire array has been decoded.
-    public var pendingPairedWithID: UUID?
-    public var pairGroupID: UUID?
+    public var pendingPairedWithID: UUID? {
+        didSet { Self.bumpPairLinkGeneration() }
+    }
+    public var pairGroupID: UUID? {
+        didSet { Self.bumpPairLinkGeneration() }
+    }
     public var pairConfidence: PairConfidence?
     public var duplicateGroupID: UUID?
     public var duplicateConfidence: DuplicateConfidence?
@@ -354,7 +367,9 @@ public class VideoRecord: Identifiable, Decodable {
     /// whisper-medium-mlx-q4" provenance string.
     public var audioTranscriptDate: Date?
 
-    public var combinedFromPairID: UUID?             // links back to source pair group
+    public var combinedFromPairID: UUID? {           // links back to source pair group
+        didSet { Self.bumpPairLinkGeneration() }
+    }
 
     /// Hostname of the machine that originally cataloged this record.
     /// Empty on records scanned locally; populated on import from another

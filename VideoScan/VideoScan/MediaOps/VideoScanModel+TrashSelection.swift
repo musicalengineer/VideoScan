@@ -176,9 +176,10 @@ extension VideoScanModel {
     /// O(records) index pass, only when the selection holds a half) and
     /// lstat's each admitted half once (`identity`, injectable for scale
     /// tests whose rows have no files).
-    func catalogTrashPlan(for records: [VideoRecord],
+    func catalogTrashPlan(for selected: [VideoRecord],
                           isOffline: (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume,
                           identity: (VideoRecord) -> PairHalfIdentity? = { PairHalfIdentity.capture(path: $0.fullPath) }) -> CatalogTrashPlan {
+        let records = liveSelection(selected)
         let archiveVolume = archiveVolumeProtection()
         var plan = Self.catalogTrashPlan(
             for: records, catalog: self.records,
@@ -243,9 +244,13 @@ extension VideoScanModel {
     /// `fileOperation` is the tests' seam for the file operation (nil =
     /// the routine's own move to the Trash — every production caller).
     @discardableResult
-    func trashSelectedRecords(_ requested: [VideoRecord],
+    func trashSelectedRecords(_ selected: [VideoRecord],
                               confirmed: CatalogTrashPlan,
                               fileOperation: (@Sendable (URL) throws -> Void)? = nil) async -> JunkDeletionResult {
+        // The selection names intent; the LIVE catalog decides (Codex #197):
+        // every row is the catalog's own row by id, so pair fields, markers
+        // and the marker-save gate are the live rows'.
+        let requested = liveSelection(selected)
         guard !requested.isEmpty else { return .empty }
         guard !isReadOnly else {
             log("Move to Trash refused — read-only viewer mode.")
@@ -371,6 +376,10 @@ extension VideoScanModel {
             if let why = groups.problem(rec, model: self) { return why }
         } else if CatalogScopePolicy.isPairProtected(rec) {
             return groups == nil ? Self.pairMemberHeldNote : CatalogTrashGroupTurns.notConfirmedAsGroupNote
+        } else if let groups, groups.isLiveGroupMember(rec.id, model: self) {
+            // In a pair NOW by the live catalog, in any link direction —
+            // e.g. a sibling linked to it during an earlier turn (Codex #197 F3).
+            return CatalogTrashGroupTurns.notConfirmedAsGroupNote
         }
         if !confirmed.contains(rec.id) { return Self.notConfirmedHeldNote }
         if warnedOnlyCopy.contains(rec.id) {
@@ -383,6 +392,18 @@ extension VideoScanModel {
         proofs?.record(.claims(source: ContentCopyProof.Claim(path: rec.fullPath, fixity: source), copies: claims),
                        for: rec.fullPath)
         return nil
+    }
+
+    /// Each selected row replaced by the catalog's LIVE row with its id when
+    /// that row still describes the same file (same path). A row the catalog
+    /// no longer has, or now points elsewhere, is kept as selected — the
+    /// pair gate and the turn hold it (a stale copy never moves for a pair).
+    func liveSelection(_ selected: [VideoRecord]) -> [VideoRecord] {
+        let live = records(forIDs: selected.map(\.id))
+        return selected.map { sel in
+            guard let row = live[sel.id], row.fullPath == sel.fullPath else { return sel }
+            return row
+        }
     }
 
     /// The plan's console lines before any disk work: what was refused and

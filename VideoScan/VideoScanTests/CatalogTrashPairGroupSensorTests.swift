@@ -82,6 +82,19 @@ struct CatalogTrashPairGroupSensorTests {
         for gone in ["LaterHalves", "problemAhead", "isLeaving", "junkTurnWouldRefuse"] {
             #expect(!plan.contains(gone) && !engine.contains(gone), "no simulated look-ahead: \(gone)")
         }
+        // Codex #197: the selection names intent, the LIVE catalog decides.
+        #expect(plan.contains("let requested = liveSelection(selected)"), "the routine gets the catalog's own rows")
+        #expect(plan.contains("let records = liveSelection(selected)"), "the plan too")
+        let turns = try SourceTree.appCode(named: "CatalogTrashGroupTurns.swift")
+        let probStart = try #require(turns.range(of: "func problem(_ rec: VideoRecord, model: VideoScanModel)"))
+        let probEnd = try #require(turns.range(of: "func holdGroups(", range: probStart.upperBound..<turns.endIndex))
+        let problem = turns[probStart.upperBound..<probEnd.lowerBound]
+        #expect(problem.contains("model.record(forID: rec.id)") && problem.contains("resolve(live, in: liveIndex(model))"),
+                "membership is resolved again from the live row and the live index")
+        #expect(problem.contains("nowIDs != confirmedIDs"), "the live set must equal the confirmed set")
+        for field in ["rec.pairGroupID", "rec.pairedWith", "rec.pendingPairedWithID", "rec.removal", "rec.isPurged", "rec.combinedFromPairID"] {
+            #expect(!problem.contains(field), "the turn never reads \(field) from the selection's row")
+        }
         // Codex #195 F1: every row in a group in ANY link direction meets the gate.
         let groups = try SourceTree.appCode(named: "CatalogPairGroups.swift")
         #expect(groups.contains("for half in selection where index.isGroupMember(half)"))

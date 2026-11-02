@@ -772,6 +772,99 @@ struct CatalogTrashPairGroupTests {
         #expect(result.succeeded == 1 && !exists(v), "\(result.items.map(\.outcome))")
     }
 
+    // MARK: Codex #197 — the live catalog decides membership (red first)
+
+    @Test("codex #197 F1: a stale selected copy of a half with no pair fields never moves outside the pair gate")
+    func staleUnpairedSelectionNeverMoves() async throws {
+        let d = try disk("pgstale2")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_s2.V.mxf", seed: 111, .videoOnly), a = try file(d, "test_s2.A.mxf", seed: 112, .audioOnly)
+        let staleV = v.snapshotClone()            // taken before the pairing
+        let gid = UUID()
+        v.pairGroupID = gid; a.pairGroupID = gid  // live rows paired by group id only
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [staleV], isOffline: { _ in false })
+        #expect(p.toTrash.isEmpty, "\(p.refused)")
+        let result = await d.model.trashSelectedRecords([staleV], confirmed: p)
+        #expect(result.succeeded == 0 && exists(v) && exists(a))
+    }
+
+    @Test("codex #197 F2: clones of BOTH halves selected still meet the live rows' marker-save refusal")
+    func bothSelectedClonesHonorMarkerWriteHold() async throws {
+        let scene = try CutoverScene.make("pg_marker_both"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let vURL = try MasterArchiveTestSupport.writeBlob(at: scene.folder.appendingPathComponent("test_mb.V.mxf"), bytes: 1024, seed: 113)
+        let aURL = try MasterArchiveTestSupport.writeBlob(at: scene.folder.appendingPathComponent("test_mb.A.mxf"), bytes: 1024, seed: 114)
+        let v = try scene.freshCopy(of: .healthy, path: vURL.path)
+        let a = try scene.freshCopy(of: .healthy, path: aURL.path)
+        for (r, st) in [(v, StreamType.videoOnly), (a, StreamType.audioOnly)] {
+            r.streamTypeRaw = st.rawValue; r.sizeBytes = 1024; r.ext = "mxf"
+        }
+        pair(v, a)
+        scene.model.records += [v, a]
+        #expect(scene.model.saveCatalogNow())
+        let vClone = v.snapshotClone(), aClone = a.snapshotClone()
+        let confirmed = scene.model.catalogTrashPlan(for: [vClone, aClone], isOffline: { _ in false })
+        try #require(confirmed.toTrash == [v.id, a.id], "\(confirmed.refused)")
+        await scene.hold()
+        defer { scene.release() }
+        #expect(CatalogMarkerRelay.saveRefusal(for: v) != nil && CatalogMarkerRelay.saveRefusal(for: a) != nil,
+                "fixture: the live rows' marker gates refuse under the hold")
+        let result = await scene.model.trashSelectedRecords([vClone, aClone], confirmed: confirmed)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(FileManager.default.fileExists(atPath: vURL.path) && FileManager.default.fileExists(atPath: aURL.path))
+    }
+
+    @Test("codex #197 F3: a reverse link added during an earlier turn holds the now-linked file at its turn")
+    func reverseLinkAddedBeforeTurnHoldsHalf() async throws {
+        let d = try disk("pgrevlate")
+        defer { d.sb.cleanup() }
+        let o = try file(d, "test_rl2.O.mov", seed: 115, .videoAndAudio)
+        let v = try file(d, "test_rl2.V.mxf", seed: 116, .videoOnly), a = try file(d, "test_rl2.A.mxf", seed: 117, .audioOnly)
+        d.model.records = [o, v, a]
+        let p = d.model.catalogTrashPlan(for: [o, v], isOffline: { _ in false })
+        try #require(p.toTrash == [o.id, v.id] && p.groups.isEmpty)
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let oPath = o.fullPath
+        let refs = Ref((v: v, a: a))
+        let result = await d.model.trashSelectedRecords([o, v], confirmed: p, fileOperation: { url in
+            try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+            if url.path == oPath {
+                DispatchQueue.main.sync { MainActor.assumeIsolated { refs.value.a.pairedWith = refs.value.v } }
+            }
+        })
+        #expect(result.succeeded == 1 && !exists(o), "\(result.items.map(\.outcome))")
+        #expect(exists(v) && exists(a), "V became a pair half mid-batch; it never moves alone")
+    }
+
+    @Test("codex #197 F4: a departed sibling restored mid-batch is a member again — the remainder is held")
+    func restoredDepartedSiblingHoldsRemainder() async throws {
+        let d = try disk("pgrestore")
+        defer { d.sb.cleanup() }
+        let o = try file(d, "test_rs2.O.mov", seed: 118, .videoAndAudio)
+        let v = try file(d, "test_rs2.V.mxf", seed: 119, .videoOnly), a = try file(d, "test_rs2.A.mxf", seed: 120, .audioOnly)
+        pair(v, a)
+        a.purgedAt = Date()             // removed from the catalog; its file stays
+        d.model.records = [o, v, a]
+        let p = d.model.catalogTrashPlan(for: [o, v], isOffline: { _ in false })
+        try #require(p.toTrash == [o.id, v.id] && p.groups.first?.departed == ["test_rs2.A.mxf"])
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let oPath = o.fullPath
+        let model = Ref(d.model), aRef = Ref(a)
+        let result = await d.model.trashSelectedRecords([o, v], confirmed: p, fileOperation: { url in
+            try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+            if url.path == oPath {
+                DispatchQueue.main.sync { MainActor.assumeIsolated { _ = model.value.clearRemoval(aRef.value) } }
+            }
+        })
+        #expect(!a.isPurged, "fixture: A is restored")
+        #expect(result.succeeded == 1 && !exists(o), "\(result.items.map(\.outcome))")
+        #expect(exists(v) && exists(a))
+        #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+    }
+
     // MARK: TRUTH — the sheet, the OUTCOME line, the ledger
 
     @Test("truth: the sheet says what the plan admitted — files · pair groups, one line per group, the held reasons")
