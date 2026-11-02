@@ -46,7 +46,9 @@ final class CatalogTrashGroupTurns {
     /// The pair index of the LIVE catalog, rebuilt whenever any row's pair
     /// link, path or removal marker changed or rows were added/replaced
     /// (`VideoRecord.pairLinkGeneration`, `identityGeneration`, the model's
-    /// mutation revision, the row count). Cost: one O(records) pass per
+    /// mutation revision — bumped by EVERY assignment of `records`, so a
+    /// reload of decoded rows (no field setter runs) is seen too — the row
+    /// count). Cost: one O(records) pass per
     /// rebuild — normally once per batch; worst-case memory: three
     /// dictionary entries per half (every row a half: ≈ 10 MB at 100k).
     func liveIndex(_ model: VideoScanModel) -> CatalogPairGroups.Index {
@@ -150,11 +152,15 @@ final class CatalogTrashGroupTurns {
         var failed: [CatalogPairGroups.HeldGroup] = []
         /// Some halves moved, some did not: each line says where each file is.
         var split: [String] = []
-        var isEmpty: Bool { moved.isEmpty && held.isEmpty && failed.isEmpty && split.isEmpty }
+        /// Moved, but a sibling was linked, restored or added while the
+        /// unit's disk work ran (DECISIONS 2026-11-01): never plain success.
+        var lateLinked: [String] = []
+        var isEmpty: Bool { moved.isEmpty && held.isEmpty && failed.isEmpty && split.isEmpty && lateLinked.isEmpty }
 
-        /// "pair groups: moved 1 · held 1 · failed 0 · split 0"
+        /// "pair groups: moved 1 · held 1 · failed 0 · split 0 · linked during the move 0"
         var counts: String {
             "pair groups: moved \(moved.count) · held \(held.count) · failed \(failed.count) · split \(split.count)"
+                + " · linked during the move \(lateLinked.count)"
         }
 
         /// The result alert's line: "Recovered A/V pairs: 1 moved whole, 1 kept."
@@ -163,11 +169,14 @@ final class CatalogTrashGroupTurns {
             if !held.isEmpty { parts.append("\(held.count) kept") }
             if !failed.isEmpty { parts.append("\(failed.count) could not be moved") }
             if !split.isEmpty { parts.append("\(split.count) SPLIT — see below") }
+            if !lateLinked.isEmpty { parts.append("\(lateLinked.count) moved while a half was linked to it — see below") }
             return "Recovered A/V pairs: " + parts.joined(separator: ", ") + "."
         }
 
         /// The result alert's lines (empty when no pair was involved).
-        var alertNotes: [String] { isEmpty ? [] : [alertCounts] + split.map { "Split pair: " + $0 } }
+        var alertNotes: [String] {
+            isEmpty ? [] : [alertCounts] + split.map { "Split pair: " + $0 } + lateLinked.map { "Linked during the move: " + $0 }
+        }
 
         /// The OUTCOME line's addition (nil when no pair was involved).
         var outcomeNote: String? { isEmpty ? nil : counts }
@@ -177,6 +186,7 @@ final class CatalogTrashGroupTurns {
             held.map { "Move to Trash: kept the pair \(CatalogPairGroups.list($0.filenames)) — \($0.reason)." }
                 + failed.map { "Move to Trash: the pair \(CatalogPairGroups.list($0.filenames)) could not be moved — \($0.reason); every half is where it was." }
                 + split.map { "Move to Trash: SPLIT PAIR — \($0)" }
+                + lateLinked.map { "Move to Trash: PAIR CHANGED DURING THE MOVE — \($0)" }
         }
     }
 
@@ -188,7 +198,8 @@ final class CatalogTrashGroupTurns {
     /// half that stayed is at report time — Codex #194 F3).
     func summary(plan: VideoScanModel.CatalogTrashPlan, alsoHeld: [CatalogPairGroups.Group] = [],
                  result: VideoScanModel.JunkDeletionResult,
-                 currentPath: (UUID) -> String? = { _ in nil }) -> Summary {
+                 currentPath: (UUID) -> String? = { _ in nil },
+                 lateSiblings: (CatalogPairGroups.Group) -> [String] = { _ in [] }) -> Summary {
         // A confirmed pair the plan now holds is summarised once, below,
         // from its members' outcomes.
         let confirmedIDs = Set(groups.flatMap(\.members))
@@ -200,7 +211,13 @@ final class CatalogTrashGroupTurns {
         for g in groups {
             let outs = g.members.map { outcome[$0] }
             let movedIdx = outs.indices.filter { outs[$0]?.isMoved == true }
-            if movedIdx.count == g.members.count { s.moved.append(g.filenames); continue }
+            let late = movedIdx.isEmpty ? [] : lateSiblings(g)
+            if movedIdx.count == g.members.count {
+                if late.isEmpty { s.moved.append(g.filenames); continue }
+                s.lateLinked.append("\(CatalogPairGroups.list(g.filenames)) moved to the Trash, but \(CatalogPairGroups.list(late)) "
+                                    + "was linked during the move — it keeps its pair protection; check it (Show Removed ▸ Restore puts the pair back)")
+                continue
+            }
             guard let firstStay = outs.indices.first(where: { outs[$0]?.isMoved != true }) else { continue }
             let why = outs[firstStay].map { Self.words($0) } ?? "it was not reached"
             if movedIdx.isEmpty {
@@ -217,7 +234,8 @@ final class CatalogTrashGroupTurns {
             let stayed = outs.indices.filter { outs[$0]?.isMoved != true }.map { i in
                 "\(g.filenames[i]) \(Self.location(planned: g.paths[i], now: currentPath(g.members[i]))) (\(outs[i].map { Self.words($0) } ?? "not reached"))"
             }
-            s.split.append((movedText + stayed).joined(separator: "; ")
+            let lateNote = late.isEmpty ? "" : "; \(CatalogPairGroups.list(late)) was linked during the move and keeps its pair protection"
+            s.split.append((movedText + stayed).joined(separator: "; ") + lateNote
                            + " — put the moved half back (Show Removed ▸ Restore) or move the rest again.")
         }
         return s

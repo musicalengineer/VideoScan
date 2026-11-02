@@ -53,11 +53,17 @@ extension VideoScanModel {
             /// Already removed, set aside, or replaced by a repair — the
             /// row menu never offers Delete for these either.
             case notActive
+            /// The selected row is not the catalog's row any more (it points
+            /// at another path, or the catalog no longer has it) — the routine
+            /// acts only on the catalog's row (DECISIONS 2026-11-01 contract).
+            case changedInCatalog
 
             /// A row's refusal on its own, before the pair gate. A Combine
             /// output keeps the pair refusal here; a half is the gate's.
             nonisolated static func alone(_ rec: VideoRecord, isMasterArchive: (VideoRecord) -> Bool,
-                                          isOffline: (VideoRecord) -> Bool) -> Refusal? {
+                                          isOffline: (VideoRecord) -> Bool,
+                                          isStale: (VideoRecord) -> Bool = { _ in false }) -> Refusal? {
+                if isStale(rec) { return .changedInCatalog }
                 if rec.isPurged || rec.isSetAside || rec.isSuperseded { return .notActive }
                 if isMasterArchive(rec) { return .masterArchive }
                 if CatalogScopePolicy.isPairProtected(rec) && !CatalogPairGroups.isHalf(rec) { return .pairMember }
@@ -145,12 +151,14 @@ extension VideoScanModel {
         catalog: [VideoRecord]? = nil,
         isMasterArchive: (VideoRecord) -> Bool,
         isOffline: (VideoRecord) -> Bool,
-        identity: (VideoRecord) -> PairHalfIdentity? = { PairHalfIdentity.capture(path: $0.fullPath) }
+        identity: (VideoRecord) -> PairHalfIdentity? = { PairHalfIdentity.capture(path: $0.fullPath) },
+        isStale: (VideoRecord) -> Bool = { _ in false }
     ) -> CatalogTrashPlan {
         // 1. Each row on its own (a half meets the pair gate in step 2).
         var alone: [UUID: CatalogTrashPlan.Refusal] = [:]
         for rec in records {
-            alone[rec.id] = CatalogTrashPlan.Refusal.alone(rec, isMasterArchive: isMasterArchive, isOffline: isOffline)
+            alone[rec.id] = CatalogTrashPlan.Refusal.alone(rec, isMasterArchive: isMasterArchive, isOffline: isOffline,
+                                                           isStale: isStale)
         }
         // 2. The pair gate: a group goes whole or not at all.
         // Always indexed (O(catalog)): a row only its sibling links to is
@@ -184,7 +192,9 @@ extension VideoScanModel {
         var plan = Self.catalogTrashPlan(
             for: records, catalog: self.records,
             isMasterArchive: { self.bulkDeleteRefusal($0, volume: archiveVolume) != nil },
-            isOffline: isOffline, identity: identity)
+            isOffline: isOffline, identity: identity,
+            // A selected copy that is not the catalog's row now never moves.
+            isStale: { [live = self.records(forIDs: records.map(\.id))] in live[$0.id] !== $0 })
         plan.onlyCopy = catalogOnlyCopyIDs(plan.toTrash, among: records, isOffline: isOffline)
         return plan
     }
@@ -343,8 +353,15 @@ extension VideoScanModel {
         logJunkLaneOutcome(result, verb: "Move to Trash")
         // From the outcomes before Trash failures become holds, so a pair
         // the Trash refused is counted as failed, not held.
+        // DECISIONS 2026-11-01 (contract): a sibling linked, restored or
+        // added while a unit's off-main disk work ran is not seen by that
+        // unit — the settlement looks again (one catalog pass) and says so.
+        let afterMoves = groupTurns.groups.isEmpty ? nil : CatalogPairGroups.Index(catalog: self.records)
         let pairs = groupTurns.summary(plan: plan, alsoHeld: unconfirmedGroups, result: merged,
-                                       currentPath: { [weak self] in self?.record(forID: $0)?.fullPath })
+                                       currentPath: { [weak self] in self?.record(forID: $0)?.fullPath },
+                                       lateSiblings: { g in
+                                           afterMoves.map { CatalogPairGroups.linkedOutside(g, in: $0).map(\.filename) } ?? []
+                                       })
         for line in pairs.lines { log(line) }
         result.groupNotes = pairs.alertNotes
         // The plan's refusals, then OUTCOME (+ the pairs' counts) + the receipt.
@@ -371,6 +388,9 @@ extension VideoScanModel {
         if rec.isPurged || rec.isSetAside || rec.isSuperseded {
             return "was removed, set aside or replaced by a repair since you chose it — nothing moved"
         }
+        // The routine acts only on the catalog's row fetched by id NOW —
+        // never on a stale selection copy (DECISIONS 2026-11-01 contract).
+        if groups != nil, record(forID: rec.id) !== rec { return Self.changedInCatalogHeldNote }
         if let groups, groups.group(of: rec.id) != nil {
             // A member of a pair the person confirmed whole.
             if let why = groups.problem(rec, model: self) { return why }
@@ -433,6 +453,10 @@ extension VideoScanModel {
         }
     }
 
+    /// The selected row is not the catalog's row any more.
+    nonisolated static let changedInCatalogHeldNote =
+        "changed in the catalog since you selected it (its row points elsewhere or is gone) — nothing moved"
+
     /// A row the confirmation held back (or never showed) that is movable
     /// now — the move never exceeds what the person said yes to.
     nonisolated static let notConfirmedHeldNote =
@@ -484,6 +508,8 @@ extension VideoScanModel {
             return .held(note ?? CatalogPairGroups.groupHeldNote("another half of it is held"))
         case .notActive:
             return .held("was already removed, set aside or replaced by a repair — nothing more to do")
+        case .changedInCatalog:
+            return .held(Self.changedInCatalogHeldNote)
         case .masterArchive:
             let note = bulkDeleteRefusal(rec, volume: archiveVolume)
                 .map { Self.bulkDeleteRefusalNote($0, volume: archiveVolume?.label ?? "the archive volume") }

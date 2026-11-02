@@ -202,6 +202,9 @@ struct ArchiveVolumeProtectionTests {
         // refused .offlineVolume on any host without that drive — the
         // test passed on the M4 only because X10 happens to be mounted.
         // The archive predicate stays the model's real one.
+        // ⌘⌫ selects catalog rows; since DECISIONS 2026-11-01 (contract) a
+        // row the catalog does not hold is refused as changedInCatalog.
+        model.records = [a, b]
         let plan = model.catalogTrashPlan(for: [a, b], isOffline: { _ in false })
         #expect(plan.refused.map(\.id) == [a.id])
         #expect(plan.refused.first?.reason == .masterArchive)
@@ -215,6 +218,7 @@ struct ArchiveVolumeProtectionTests {
         let model = isolatedModel()
         designateFamilyArchive(model)
         let a = record(onVolume), b = record(elsewhere)
+        model.records = [a, b]   // catalog rows (DECISIONS 2026-11-01 contract)
         let plan = model.catalogTrashPlan(for: [a, b], isOffline: { _ in true })
         #expect(plan.toTrash.isEmpty)
         #expect(plan.refused.map(\.reason) == [.masterArchive, .offlineVolume])

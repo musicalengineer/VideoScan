@@ -133,6 +133,7 @@ struct CatalogTrashConfirmation: Equatable {
         case .pairGroupHeld: return "held with its recovered audio/video pair"
         case .offlineVolume: return "drive not connected"
         case .notActive: return "already removed or set aside"
+        case .changedInCatalog: return "changed in the catalog since you selected it"
         }
     }
 }

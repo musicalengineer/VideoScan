@@ -260,6 +260,25 @@ enum CatalogPairGroups {
         return out
     }
 
+    /// Live rows linked to `g` from OUTSIDE its members, in any direction
+    /// (same pairGroupID, a link to a member, a member's link to it) — after
+    /// the unit's moves, a sibling linked, restored or added while its
+    /// off-main disk work ran (DECISIONS 2026-11-01 contract). O(group).
+    nonisolated static func linkedOutside(_ g: Group, in index: Index) -> [VideoRecord] {
+        let members = Set(g.members)
+        var found: [UUID: VideoRecord] = [:]
+        var candidates = g.members.flatMap { index.pointingAt[$0] ?? [] }
+        candidates += g.pairGroupIDs.compactMap { $0 }.flatMap { index.byGroup[$0] ?? [] }
+        for m in g.members {
+            guard let row = index.byID[m] else { continue }
+            for link in [row.pairedWith?.id, row.pendingPairedWithID].compactMap({ $0 }) {
+                if let r = index.byID[link] { candidates.append(r) }
+            }
+        }
+        for r in candidates where !members.contains(r.id) && !r.isPurged { found[r.id] = r }
+        return found.values.sorted { $0.filename < $1.filename }
+    }
+
     /// "a.mxf" · "a.mxf and b.mxf" · "a.mxf, b.mxf and c.mxf".
     nonisolated static func list(_ names: [String]) -> String {
         guard names.count > 1, let last = names.last else { return names.first ?? "" }

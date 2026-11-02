@@ -865,6 +865,80 @@ struct CatalogTrashPairGroupTests {
         #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
     }
 
+    // MARK: DECISIONS 2026-11-01 contract — the off-main residual is reported; live rows only
+
+    @Test("contract: a sibling linked while the pair's disk work runs is reported in words, never as plain success")
+    func lateLinkedSiblingIsReported() async throws {
+        let d = try disk("pglatelink")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_ll.V.mxf", seed: 121, .videoOnly), a = try file(d, "test_ll.A.mxf", seed: 122, .audioOnly)
+        let x = try file(d, "test_ll.X.mxf", seed: 123, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a, x]
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.groups.count == 1)
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let vPath = v.fullPath
+        let refs = Ref((v: v, x: x))
+        // The hook: phase 1 is done (every half gated and reserved); the
+        // first move has not happened — the off-main window of the contract.
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p, fileOperation: { url in
+            if url.path == vPath {
+                DispatchQueue.main.sync { MainActor.assumeIsolated { refs.value.x.pairedWith = refs.value.v } }
+            }
+            try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+        })
+        #expect(result.succeeded == 2, "the accepted residual: the unit was decided at its turn")
+        #expect(result.groupNotes.contains { $0.contains("test_ll.X.mxf") && $0.contains("was linked during the move") },
+                "\(result.groupNotes)")
+        #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "never plain success: \(result.groupNotes)")
+        #expect(await consoleLine(d.model, containing: "linked during the move 1") != nil)
+        #expect(exists(x), "the late sibling keeps its file and its pair protection")
+    }
+
+    @Test("contract: the live pair index never goes stale on a decoded reload of the rows (no field write, same count)")
+    func liveIndexFollowsADecodedReload() throws {
+        let v = rec("/Volumes/X9/avid/test_rl3.V.mxf", .videoOnly), x = rec("/Volumes/X9/avid/test_rl3.X.mxf", .audioOnly)
+        let m = VideoScanModel()
+        m.records = [v, x]
+        let turns = CatalogTrashGroupTurns(groups: [])
+        #expect(!turns.isLiveGroupMember(v.id, model: m))
+        // A reload: the same rows decoded afresh (no didSet runs in a decoder),
+        // X now carrying a decoded link to V.
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        func decoded(_ r: VideoRecord, linkTo: UUID?) throws -> VideoRecord {
+            var o = try #require(try JSONSerialization.jsonObject(with: encoder.encode(VideoRecordDTO(r))) as? [String: Any])
+            if let linkTo { o["pairedWithID"] = linkTo.uuidString }
+            return try decoder.decode(VideoRecord.self, from: JSONSerialization.data(withJSONObject: o))
+        }
+        let pairGen = VideoRecord.pairLinkGeneration, idGen = VideoRecord.identityGeneration
+        let reloaded = [try decoded(v, linkTo: nil), try decoded(x, linkTo: v.id)]
+        #expect(reloaded[1].pendingPairedWithID == v.id, "fixture: the decoded link")
+        #expect(VideoRecord.pairLinkGeneration == pairGen && VideoRecord.identityGeneration == idGen,
+                "fixture: decoding wrote no field through a setter")
+        m.records = reloaded
+        #expect(turns.isLiveGroupMember(v.id, model: m), "the reload is seen: V is linked now")
+    }
+
+    @Test("contract: a stale ordinary copy pointing at another path is held, never moved — the routine acts on the catalog's row")
+    func staleOrdinaryCopyIsHeld() async throws {
+        let d = try disk("pgstaleord")
+        defer { d.sb.cleanup() }
+        let o = try file(d, "test_so.O.mov", seed: 124, .videoAndAudio)
+        let old = try MasterArchiveTestSupport.writeBlob(at: d.sb.sources.appendingPathComponent("test_so_old.O.mov"), bytes: 1024, seed: 125)
+        let staleO = o.snapshotClone()
+        staleO.fullPath = old.path
+        staleO.filename = old.lastPathComponent
+        d.model.records = [o]
+        let p = d.model.catalogTrashPlan(for: [staleO], isOffline: { _ in false })
+        #expect(p.toTrash.isEmpty, "\(p.refused)")
+        let result = await d.model.trashSelectedRecords([staleO], confirmed: p)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(exists(o) && FileManager.default.fileExists(atPath: old.path))
+    }
+
     // MARK: TRUTH — the sheet, the OUTCOME line, the ledger
 
     @Test("truth: the sheet says what the plan admitted — files · pair groups, one line per group, the held reasons")
