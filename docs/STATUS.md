@@ -17,7 +17,13 @@
 | Codex review of the day's Swift (`30e41529..d3d46db0`) | verdict **merge**, one P2 (the reference-only timing wrapper swallowed a hang off the pinned run) — **fixed red-first** `33a41214`, cycle closed; `docs/reviews/codex/codex-review-day-2026-10-31.md` |
 | 02:00 nightly, both Macs, `4fc66b94` | **App 12,654 / 0** on both. **Core 2,135 / 1** on both — the one failure was the Codex-P2 test from 10/31 reading `VIDEOSCAN_TIMING_STRICT` from the process (the nightly pins it; a 1.5× miss IS a failure there, by design) — **fixed red-first `99fe0a04`** (environment injected into `judgeNow` and both wrapper copies; the test pins it both ways). **Hallie strict: M4 56 / 56 green; Ultra 54 / 56** (strict-033/034, the "how many from the 90s / 80s" follow-ups — right count, llama phrasing missed the regex; model flake, not code). **Advisory: M4 645 / 826, Ultra 627 / 826** — the first clean reading since the GPU hang. Voice ok on both. Ladders published. |
 
-## Spot tests for Rick (Debug)
+## Spot tests for Rick (Debug) — the 11/01 evening set
+- **Catalog menu** (merged `9d6ca34b`): seven items in three groups — Catalog Status — <word>… · Validate Catalog… · Update Catalog… · Tidy Catalog… (N, hidden at 0) · Delete Selected Files… ⌘⌫ · Content Analysis…. Every "…" item opens with its brief (touches · never touches · time class). The eight old items are gone; the analyzers are rows in Content Analysis with "how long"; Split runs itself after a 100 % Full Hashes run (offline lane → no split, reason logged); Reopen/Adopt only in the restore state.
+- **Catalog Status window**: three coloured lines — Database (integrity check: green ≤ 24 h, Check Now…), Files (present / missing), Content (green · in progress · yellow = nothing will do it) — then the database facts (Schema 14 bold, layout matches, size, counts, last commit, last backup, role, sync, journal). The menu title names only a yellow/red line.
+- **Toolbar**: "Set Aside Photos & Music" (was "Tidy Catalog"); Catalog Options section "Set Aside".
+- Coming on branches tonight: the Family Tree read-only without the archive (viewer Macs), and Delete Selected Files taking a whole recovered A/V pair group.
+
+## Spot tests (earlier today)
 - **Catalog ▸ Show ▸ "Confirmed Date"**: the Showing box reads "… · Confirmed date · …" and every row's inspector says "Saved: … — you're sure / best guess". (Open: should the chip show its count? needs a debounced model-owned cache.)
 - **Background helper (step 0)**: `defaults write Rick-Breen.VideoScan background.service.enabled -bool true` → launch once → `launchctl print gui/$(id -u)/Rick-Breen.VideoScan.Background` → helper `--status`, `--enqueue noop 120 1000` → `tail -f ~/Library/Logs/VideoScan/background.log` → quit the app, it keeps counting. Allow the login-item notification.
 - **#402**: Catalog Status shows "N degenerate OCR captions stored before this build refused them"; junk no longer counts as date evidence.
