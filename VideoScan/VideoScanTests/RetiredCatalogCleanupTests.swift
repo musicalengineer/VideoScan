@@ -109,12 +109,11 @@ final class RetiredCatalogCleanupTests: XCTestCase {
         m.records = makeRecords(under: "/Volumes/OldDrive", count: 4)
 
         let c = m.retiredCatalogCleanupCandidates()
-        // hasPrefix("/Volumes/Old") DOES match "/Volumes/OldDrive/..." —
-        // pin the current behavior loudly so a future path-boundary fix
-        // flips this assertion deliberately rather than by surprise.
-        XCTAssertEqual(c.first?.recordCount, 4,
-                       "KNOWN LIMITATION: prefix match crosses volume-name boundaries; "
-                       + "if this fails, the boundary bug was fixed — update this pin")
+        // Fixed 2026-11-02 (#401, codex #212): the candidates carry the
+        // guarded removal's own plan (component-boundary PathScope, volume
+        // aware), so "/Volumes/Old" no longer swallows "/Volumes/OldDrive"
+        // — the retired volume has nothing to clean up and is not offered.
+        XCTAssertTrue(c.isEmpty, "a sibling volume's records are not this retired volume's")
     }
 
     func testSelectorIsSinglePassAtScale() {

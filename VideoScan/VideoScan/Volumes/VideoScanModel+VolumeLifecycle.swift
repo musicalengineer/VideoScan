@@ -363,10 +363,23 @@ extension VideoScanModel {
     // is already caring for the catalog — and the prompt PERFORMS the
     // deletion (nag-button pattern: the badge does the fix).
 
-    /// Retired targets that still hold catalog records. One pass over
-    /// `records` regardless of target count (checklist: no O(records ×
-    /// targets) scans).
-    func retiredCatalogCleanupCandidates() -> [(target: CatalogScanTarget, recordCount: Int)] {
+    /// One retired volume the cleanup dialog offers: the target and the
+    /// EXACT removal plan it would apply (codex #212), so the count shown
+    /// is the count removed, and a disk that changed under the path while
+    /// the dialog was up refuses instead of removing the newcomer's rows.
+    struct RetiredCleanupCandidate {
+        let target: CatalogScanTarget
+        let plan: TargetRemovalPlan
+        var recordCount: Int { plan.count }
+    }
+
+    /// Retired targets that still hold catalog records, each with the plan
+    /// the guarded removal would apply right now (`planTargetRemoval(for:)`:
+    /// the same volume-aware, component-boundary scope as every other
+    /// removal — the old raw `hasPrefix` count credited "/Volumes/X2" and
+    /// other disks' rows to X). O(records × targets) per retired target;
+    /// a handful of retired drives at backup time, never a view body.
+    func retiredCatalogCleanupCandidates() -> [RetiredCleanupCandidate] {
         // Retirement has ONE owner — `retiredAt` (taxonomy cleanup
         // 2026-08-16; the `.retired` role case is gone and legacy role
         // strings are converted to a stamp at decode time). Rick's
@@ -375,18 +388,25 @@ extension VideoScanModel {
         let retired = scanTargets.filter { $0.isRetired
                                            && $0.phase != .noCatalog
                                            && !$0.searchPath.isEmpty }
-        guard !retired.isEmpty else { return [] }
-        var counts: [ObjectIdentifier: Int] = [:]
-        for r in records {
-            for t in retired where r.fullPath.hasPrefix(t.searchPath) {
-                counts[ObjectIdentifier(t), default: 0] += 1
-                break
-            }
-        }
         return retired.compactMap { t in
-            guard let n = counts[ObjectIdentifier(t)], n > 0 else { return nil }
-            return (t, n)
+            let plan = planTargetRemoval(for: t)
+            return plan.recordIDs.isEmpty ? nil : RetiredCleanupCandidate(target: t, plan: plan)
         }
+    }
+
+    /// The dialog's confirm: apply exactly the plans that were shown.
+    /// Returns how many volumes were cleaned and how many refused (the
+    /// catalog or the disk changed while the dialog was up; the model
+    /// logged why — the nag returns at the next backup).
+    @discardableResult
+    func applyRetiredCatalogCleanup(_ chosen: [RetiredCleanupCandidate]) -> (removed: Int, refused: Int) {
+        var removed = 0, refused = 0
+        for c in chosen {
+            // The guarded, plan-carrying apply (codex #1417 / #212): exactly
+            // the shown plan, or a refusal with the reason logged.
+            if case .applied = deleteCatalogForTarget(c.target, plan: c.plan) { removed += 1 } else { refused += 1 }
+        }
+        return (removed, refused)
     }
 
     /// Post-backup nag: list retired volumes still carrying records and
@@ -464,10 +484,9 @@ extension VideoScanModel {
         alert.addButton(withTitle: "Remove Catalogs")
         if alert.runModal() == .alertSecondButtonReturn {
             let chosen = zip(candidates, checks).filter { $0.1.state == .on }.map(\.0)
-            for c in chosen {
-                deleteCatalogForTarget(c.target)
-            }
-            log("Retired-volume cleanup: removed catalogs for \(chosen.count) of \(candidates.count) volume(s) at prompt.")
+            let done = applyRetiredCatalogCleanup(chosen)
+            log("Retired-volume cleanup: removed catalogs for \(done.removed) of \(candidates.count) volume(s) at prompt"
+                + (done.refused > 0 ? "; \(done.refused) refused — changed while the prompt was up, ask again at the next backup." : "."))
         } else {
             log("Retired-volume cleanup deferred — will ask again at next backup (\(candidates.count) volume(s) pending).")
         }

@@ -27133,6 +27133,7 @@
         "removalPlanForALegacyLocationWithUnanimousRowsRemovesThem",
         "removalPlanForAnOfflineLocationRemovesOnlyItsOwnDisk",
         "removalScopeNeverClaimsAnotherVolumesFiles",
+        "retiredCleanupConfirmationNeverDeletesAReplacementDisk",
         "sameVolumeFilesAreUnchanged",
         "selectedTargetWithUnknownMemoryNeverBorrowsAnother",
         "signatureCoverageReadsTheProjection",
@@ -36609,7 +36610,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 387,
+      "expected_floor": 388,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [

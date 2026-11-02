@@ -529,6 +529,38 @@ struct ScanLocationVolumeModelTests {
         #expect(model.records.count == 12, "nothing removed")
     }
 
+    /// Codex #212 (third closing pass): the retired-volume cleanup dialog
+    /// captures its candidates before the modal and applies after. The
+    /// plan it SHOWED is the plan it applies: a disk swapped under the
+    /// path while the dialog was up (B's rows arriving) is refused, never
+    /// removed on the strength of A's confirmation.
+    @Test func retiredCleanupConfirmationNeverDeletesAReplacementDisk() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let path = try mounted(tmp, "Movies")
+        let target = CatalogScanTarget(searchPath: path)
+        target.retiredAt = Date()
+        target.phase = .cataloged
+        model.scanTargets = [target]
+        model.records = m4Movies(path)
+
+        // The dialog is built while the path is disk A: nine rows shown.
+        let shown = try #require(VolumeIdentity.$resolverOverride.withValue({ _ in m4 }) {
+            model.retiredCatalogCleanupCandidates().first
+        })
+        #expect(shown.recordCount == 9)
+
+        // While the dialog is up, disk B replaces A and three of its rows arrive.
+        model.records += ultraMovies(path)
+        let done = VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) {
+            model.applyRetiredCatalogCleanup([shown])
+        }
+        #expect(done.removed == 0)
+        #expect(done.refused == 1)
+        #expect(model.records.count == 12, "nothing removed: neither A's shown rows nor B's")
+        #expect(target.phase == .cataloged, "a refused cleanup leaves the target as it was")
+    }
+
     /// The refresh learns a mounted location's volume from its mount,
     /// re-learns a swapped drive, and leaves an offline location's memory
     /// alone.
