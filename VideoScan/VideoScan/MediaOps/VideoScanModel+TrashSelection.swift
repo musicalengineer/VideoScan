@@ -372,8 +372,8 @@ extension VideoScanModel {
         result.groupNotes = pairs.alertNotes
         result.groupNeedsAttention = pairs.needsAttention
         // The plan's refusals, then OUTCOME (+ the pairs' counts) + the receipt.
-        // The OUTCOME line counts kept markers for every row (Codex #204).
-        audit.finish(result, note: pairs.outcomeNote(keptMarkers: result.markerKept.count))
+        // The OUTCOME line names kept markers for every row (Codex #204/#205).
+        audit.finish(result, note: pairs.outcomeNote(warnings: TrashWarnings(result)))
         result.receipt = audit.receipt.url
         return result
     }

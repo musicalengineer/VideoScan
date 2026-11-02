@@ -81,8 +81,19 @@ extension VideoScanModel {
     @discardableResult
     func discardWorkbench(_ requested: [VideoRecord],
                           trash: (@Sendable (URL) throws -> Void)? = nil) async -> Int {
-        if workbenchDiscardRefusedOnViewer(requested) { return 0 }
-        guard !requested.isEmpty else { return 0 }
+        guard let result = await discardWorkbenchResult(requested, trash: trash) else { return 0 }
+        return result.succeeded + result.alreadyMissing
+    }
+
+    /// Discard's whole result (nil = refused or empty, nothing ran). The
+    /// routine's settlement warnings (a row another action re-marked while
+    /// its file moved — Codex #205) go on the OUTCOME line and the console
+    /// through `TrashWarnings`; Triage shows the result sheet when they
+    /// need attention.
+    func discardWorkbenchResult(_ requested: [VideoRecord],
+                                trash: (@Sendable (URL) throws -> Void)? = nil) async -> JunkDeletionResult? {
+        if workbenchDiscardRefusedOnViewer(requested) { return nil }
+        guard !requested.isEmpty else { return nil }
         let audit = DeletionAudit(kind: .workbench, verb: "Discard", linePrefix: "[workbench] ", sink: deletionAuditSink())
         audit.start(scope: "\(requested.count) selected in Under Construction", requested: requested.count,
                     bytes: requested.reduce(Int64(0)) { $0 + $1.sizeBytes })
@@ -90,10 +101,11 @@ extension VideoScanModel {
             authorize: { _ in nil }, beforeRemoval: { _ in nil }, remove: trash,
             settled: { rec, outcome in audit.record(Self.discardAuditRow(rec, outcome), id: rec.id) })
         let result = await deleteConfirmedJunk(requested, mode: .toTrash, reason: .workbench, guard: fileGuard)
-        audit.finish()
-        let gone = result.succeeded + result.alreadyMissing
-        if gone > 0 { saveCatalogNow() }
-        return gone
+        let warnings = TrashWarnings(result)
+        for line in warnings.lines { log("[workbench] " + line) }
+        audit.finish(note: warnings.outcomeNote())
+        if result.succeeded + result.alreadyMissing > 0 { saveCatalogNow() }
+        return result
     }
 
     /// The junk lanes' audit row, except that a Trash call that threw is

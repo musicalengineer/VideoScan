@@ -786,11 +786,16 @@ struct TriageView: View {
         // (GH #143); the view only waits for the count. (≈ posting the work
         // and handling the completion on the UI thread.)
         Task { @MainActor in
-            let n = await model.discardWorkbench(recs)
+            guard let result = await model.discardWorkbenchResult(recs) else { return }
             catalogEdited()
+            let n = result.succeeded + result.alreadyMissing
             if n > 0 {
                 model.log("Under Construction: discarded \(n) file\(n == 1 ? "" : "s") to Trash")
             }
+            // Codex #205: a settlement warning is shown, never console-only —
+            // the same result sheet Delete Junk uses (one presenter).
+            let report = JunkDeletionReport(result)
+            if report.warnings.needsAttention { junkSheet = .result(report) }
         }
     }
 

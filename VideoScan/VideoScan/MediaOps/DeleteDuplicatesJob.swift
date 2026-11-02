@@ -789,6 +789,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// interrupted — "put back at …" or "could not put back — …" — in
     /// the order they settled. The quit path logs these, observed.
     private(set) var interruptedFileOutcomes: [String] = []
+    /// Rows another action re-marked while their file moved: kept as that
+    /// action set it, never overwritten, and named in the summary (the
+    /// Trash routine's rule — Codex #205 sibling).
+    private(set) var keptMarkerNotes: [String] = []
     /// Stop (default): put the pair in flight back, keep the plan
     /// resumable and offer it at once.
     private(set) var stopKeepingPlan = false
@@ -1450,7 +1454,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         // the copies never taken because the Archive Angel is using them.
         var summaryParts = [report.line]
         if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
-        let summary = summaryParts.joined(separator: " · ")
+        let summary = Self.summaryLine(summaryParts, keptMarkerNotes: keptMarkerNotes)
         logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
             finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summary))")
@@ -1920,7 +1924,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             isWorkingCopy: entry.isWorkingCopy, batchID: batchID,
             keeperMatchedByStoredFixity: !proof.keeperReadInFull,
             tier: tier, remainingVerifiedCopies: decision?.remainingVerifiedCopies,
-            trashVolume: trashVolume, tierReason: decision?.reason, trashPath: trashPath)
+            trashVolume: trashVolume, tierReason: decision?.reason, trashPath: trashPath,
+            keptMarker: { [weak self] note in self?.keptMarkerNotes.append(note) })
         tally.catalogMutated = tally.catalogMutated || mutated
     }
 
@@ -1951,6 +1956,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// "[dupjob] trashed copy.mov (1.2 GB) — 2 verified copies remain: …".
     private func rowLog(_ verb: String, _ entry: DeleteDuplicatesPlan.Entry, _ detail: String) {
         jobLog(Self.rowLine(verb: verb, filename: entry.filename, bytes: entry.sizeBytes, detail: detail))
+    }
+
+    /// The row's one line: the outcome parts, then every row whose marker
+    /// another action changed while its file moved (Codex #205 sibling) —
+    /// the same words the Trash routine's doors use (`TrashWarnings`).
+    nonisolated static func summaryLine(_ parts: [String], keptMarkerNotes: [String]) -> String {
+        (parts + [TrashWarnings(keptMarkerNotes: keptMarkerNotes).inlineClause()].compactMap { $0 })
+            .joined(separator: " · ")
     }
 
     nonisolated static func rowLine(verb: String, filename: String, bytes: Int64, detail: String) -> String {

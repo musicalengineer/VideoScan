@@ -215,10 +215,10 @@ final class CatalogTrashGroupTurns {
         /// The OUTCOME line's addition (nil when no pair was involved).
         var outcomeNote: String? { isEmpty ? nil : counts }
 
-        /// The OUTCOME addition with the kept-marker count for every row
-        /// (Codex #204): "… · kept another action's marker N".
-        func outcomeNote(keptMarkers n: Int) -> String? {
-            let notes = [outcomeNote, n == 0 ? nil : "kept another action's marker \(n)"].compactMap { $0 }
+        /// The OUTCOME addition with the routine's warnings for every row
+        /// (Codex #204/#205): "… · kept another action's marker N: …".
+        func outcomeNote(warnings: TrashWarnings) -> String? {
+            let notes = [outcomeNote, warnings.outcomeNote()].compactMap { $0 }
             return notes.isEmpty ? nil : notes.joined(separator: " · ")
         }
 

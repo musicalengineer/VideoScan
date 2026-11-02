@@ -766,7 +766,8 @@ extension VideoScanModel {
                                 keeperMatchedByStoredFixity: Bool,
                                 tier: DeletionTier = .permanent, remainingVerifiedCopies: Int? = nil,
                                 trashVolume: String? = nil, tierReason: String? = nil,
-                                trashPath: String? = nil) -> Bool {
+                                trashPath: String? = nil,
+                                keptMarker: ((String) -> Void)? = nil) -> Bool {
         var catalogMutated = false
         let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
         let liveInstances = Set(records.map(ObjectIdentifier.init))
@@ -831,7 +832,15 @@ extension VideoScanModel {
         // The live row, or — when it was replaced — the detached snapshot
         // the ledger line is written from (never a retained live row).
         // The file already left: a disk fact (B2.3).
-        recordFileLeft(removed, marker, stage: stage, whereNow: "left its folder (verified identical to its keeper)")
+        // Detect, then write — never overwrite (the Trash routine's rule,
+        // Codex #202 / #205 sibling): a marker another action wrote to the
+        // live row while the file was moving is kept, and said.
+        if let note = duplicateKeptMarkerNote(currentRecord, preAwait: snapshot, trashPath: trashPath, permanent: tier == .permanent) {
+            log("  " + note)
+            keptMarker?(note)
+        } else {
+            recordFileLeft(removed, marker, stage: stage, whereNow: "left its folder (verified identical to its keeper)")
+        }
         if currentRecord != nil {
             catalogMutated = true
         } else {
@@ -840,11 +849,8 @@ extension VideoScanModel {
         // Media Ledger: one copyDeleted line per file that left the disk,
         // batch-keyed to the plan so the run reads as one decision.
         let permanent = tier == .permanent
-        var detail = [MediaLedgerEvent.Detail.tier: tier.rawValue]
-        if let remainingVerifiedCopies {
-            detail[MediaLedgerEvent.Detail.remainingVerifiedCopies] = String(remainingVerifiedCopies)
-        }
-        if let tierReason, !tierReason.isEmpty { detail[MediaLedgerEvent.Detail.reason] = tierReason }
+        let detail = Self.duplicateLedgerDetail(tier: tier, remainingVerifiedCopies: remainingVerifiedCopies,
+                                                tierReason: tierReason, trashPath: trashPath)
         ledgerCopyRemoved([removed], permanent: permanent, by: .rick, batchID: batchID, extraDetail: detail)
         let how = keeperMatchedByStoredFixity
             ? "keeper matched by stored fixity, not re-read"
@@ -860,6 +866,31 @@ extension VideoScanModel {
             log("  \(where_) (verified identical to \(keeperFilename)): \(record.filename) [\(how)]\(copies)")
         }
         return catalogMutated
+    }
+
+    /// The removed copy's ledger detail: its tier, the verified copies that
+    /// remain, the tier's reason, and where the file went — whatever the
+    /// row's marker says (Codex #203 F1 / #205 sibling). Pure.
+    nonisolated static func duplicateLedgerDetail(tier: DeletionTier, remainingVerifiedCopies: Int?,
+                                                  tierReason: String?, trashPath: String?) -> [String: String] {
+        var detail = [MediaLedgerEvent.Detail.tier: tier.rawValue]
+        if let remainingVerifiedCopies {
+            detail[MediaLedgerEvent.Detail.remainingVerifiedCopies] = String(remainingVerifiedCopies)
+        }
+        if let tierReason, !tierReason.isEmpty { detail[MediaLedgerEvent.Detail.reason] = tierReason }
+        if let trashPath { detail[MediaLedgerEvent.Detail.trashPath] = trashPath }
+        return detail
+    }
+
+    /// The sentence for a live row whose marker another action changed
+    /// between the pair's turn (`preAwait`) and its settlement; nil = no
+    /// change, stamp it. The same words as the Trash routine's.
+    func duplicateKeptMarkerNote(_ live: VideoRecord?, preAwait: VideoRecord,
+                                 trashPath: String?, permanent: Bool) -> String? {
+        guard let live, live !== preAwait, live.removalRevision != preAwait.removalRevision else { return nil }
+        let kept = live.removal.map { "\($0.state.rawValue)" } ?? "live"
+        let whereNow = permanent ? "was deleted" : "is in the Trash at \(trashPath ?? "an unrecorded place")"
+        return "\(live.filename) kept another action's marker (\(kept)) — it \(whereNow); its catalog row was not overwritten"
     }
 
     /// The family's copies the copy-count tier will ask the disk about,

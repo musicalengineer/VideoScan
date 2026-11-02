@@ -180,6 +180,11 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     @Published private(set) var stayed: [CleanupTrashItem] = []
     @Published private(set) var moved: [CleanupTrashItem] = []
     @Published private(set) var totals = CleanupTrashTotals()
+    /// The Trash routine's settlement warnings for the whole run — a row
+    /// another action re-marked while its file moved (Codex #205). Folded
+    /// in from every per-file result through `TrashWarnings`; shown in the
+    /// subtitle, the detail and the OUTCOME line.
+    @Published private(set) var warnings = TrashWarnings()
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
     }
@@ -329,6 +334,13 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             // and the receipt.
             for item in result.items where !settledIDs.contains(item.record.id) {
                 settle(item.record, item.outcome, lane: lane)
+            }
+            // The settlement's warnings come only in the result (the guard's
+            // `settled` runs before the routine detects a kept marker).
+            let more = TrashWarnings(result)
+            if more.needsAttention {
+                warnings.add(result)
+                for line in more.lines { model.cleanupNote(line) }
             }
         }
     }
@@ -560,8 +572,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// of `state` (the page's "Last run") reads the subtitle the moment the
     /// state lands (codex r1 P2-4).
     private func conclude(model: VideoScanModel, audit: DeletionAudit) async {
-        audit.finish()
-        let line = totals.line
+        audit.finish(note: warnings.outcomeNote())
+        let line = [totals.line, warnings.summaryClause].compactMap { $0 }.joined(separator: " · ")
         fractionValue = 1
         isPausedValue = false
         if saveFailed {

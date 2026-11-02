@@ -141,7 +141,7 @@ extension VideoScanModel {
         var result = await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, reason: .junk, guard: fileGuard)
             .trashFailuresHeld()
         logJunkLaneOutcome(result, verb: "Delete Confirmed Junk")
-        audit.finish(result)
+        audit.finish(result, note: TrashWarnings(result).outcomeNote())
         result.receipt = audit.receipt.url
         return result
     }

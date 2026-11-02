@@ -51,6 +51,9 @@ extension VideoScanModel {
         var failed: [String] = []
         /// Checked here, but the batch before in the queue already moved them.
         var movedByEarlierBatch = 0
+        /// The Trash routine's settlement warnings, one sentence each (a
+        /// copy another action re-marked while it moved — Codex #205).
+        var warnings: [String] = []
 
         var summary: String {
             var parts = ["Moved \(trashed) cop\(trashed == 1 ? "y" : "ies") to the Trash (\(MediaBytes.display(trashedBytes)))"]
@@ -61,6 +64,7 @@ extension VideoScanModel {
             if skippedOffline > 0 { parts.append("\(skippedOffline) on a drive that isn't connected") }
             if !held.isEmpty { parts.append("\(held.count) held back") }
             if !failed.isEmpty { parts.append("\(failed.count) could not be moved") }
+            if let changed = TrashWarnings(keptMarkerNotes: warnings).inlineClause() { parts.append(changed) }
             return parts.joined(separator: " · ")
         }
 
@@ -68,6 +72,7 @@ extension VideoScanModel {
         mutating func absorb(_ o: PruneCopyOutcome, item: PruneItem) {
             if o.readInFull { verified += 1 }
             if o.archiveReadInFull { archiveReads += 1 }
+            warnings += o.warnings
             switch o.result {
             case .trashed(let bytes): trashed += 1; trashedBytes += bytes
             case .held(let why): held.append("\(item.filename) — \(why)")
@@ -201,6 +206,8 @@ extension VideoScanModel {
         var readInFull = false
         /// The archive file was read in full for this copy (first of its batch).
         var archiveReadInFull = false
+        /// The Trash routine's settlement warnings for this copy (`TrashWarnings.lines`).
+        var warnings: [String] = []
 
         static func held(_ why: String, archiveReadInFull: Bool = false) -> PruneCopyOutcome {
             PruneCopyOutcome(result: .held(why), archiveReadInFull: archiveReadInFull)
@@ -243,8 +250,9 @@ extension VideoScanModel {
             return PruneCopyOutcome(result: .held("stopped before it was moved"), readInFull: true,
                                     archiveReadInFull: archiveRead)
         }
-        let result = await pruneMove(rec, proof: proof, hooks: hooks)
-        return PruneCopyOutcome(result: result, readInFull: true, archiveReadInFull: archiveRead)
+        let (result, warnings) = await pruneMove(rec, proof: proof, hooks: hooks)
+        return PruneCopyOutcome(result: result, readInFull: true, archiveReadInFull: archiveRead,
+                                warnings: warnings.lines)
     }
 
     /// The live catalog, before a byte is read: the copy is the same active
@@ -299,7 +307,8 @@ extension VideoScanModel {
     /// The ONE Trash routine moves the file, behind the proof's guard: the
     /// live catalog on main just before the hop, the network probe and both
     /// stat stamps immediately before the file's own Trash.
-    private func pruneMove(_ rec: VideoRecord, proof: PruneProof, hooks: PruneVerifyHooks) async -> PruneCopyResult {
+    private func pruneMove(_ rec: VideoRecord, proof: PruneProof,
+                           hooks: PruneVerifyHooks) async -> (PruneCopyResult, TrashWarnings) {
         let isNetwork = hooks.isNetworkMount
         let fileGuard = JunkDeletionGuard(
             authorize: { [weak self] live in
@@ -323,7 +332,11 @@ extension VideoScanModel {
         if let refused = result.refused.first {
             log("Archived — what next?: held back at the last moment: \(rec.filename) — \(refused.reason)")
         }
-        return Self.pruneCopyResult(result, bytes: rec.sizeBytes)
+        // The routine's settlement warnings travel with the copy's result
+        // (Codex #205: `.trashed(bytes:)` alone read as a clean move).
+        let warnings = TrashWarnings(result)
+        for line in warnings.lines { log("Archived — what next?: " + line) }
+        return (Self.pruneCopyResult(result, bytes: rec.sizeBytes), warnings)
     }
 
     /// The Trash routine's answer for ONE record, as this copy's result.

@@ -28217,6 +28217,35 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TrashWarningsDoorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TrashWarningsDoorTests"
+      ],
+      "tests": [
+        "cleanupKeptMarkerRequiresAttention",
+        "deleteDuplicatesKeepsAConcurrentMarker",
+        "deleteDuplicatesSummaryCarriesKeptMarkers",
+        "deleteJunkKeptMarkerOnOutcome",
+        "pruneKeptMarkerInSummary",
+        "workbenchKeptMarkerOnOutcome"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TrashWarningsSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TrashWarningsSensorTests"
+      ],
+      "tests": [
+        "everyCallerRendersTheWarnings",
+        "reportUsesTheOnePresenter"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TreeIdentityDeriverTests.swift",
       "stage": "unit",
       "suites": [
@@ -33739,6 +33768,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/TrashWarningsDoorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -35451,7 +35484,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3165,
+      "expected_floor": 3173,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35965,6 +35998,7 @@
         "VideoScanTests/TidyCatalogTests",
         "VideoScanTests/TranscodeTests",
         "VideoScanTests/TransitionRuleTests",
+        "VideoScanTests/TrashWarningsSensorTests",
         "VideoScanTests/TreeIdentityRefreshOwnershipTests",
         "VideoScanTests/TreeIdentityStaleCoverageTests",
         "VideoScanTests/TreeWalkStep0LineAttributionTests",

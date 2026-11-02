@@ -14,6 +14,14 @@ struct CleanupTrashJobDetailView: View {
             Text(job.totals.line)
                 .font(.system(size: 12, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
+            // The routine's settlement warnings (Codex #205) — the job keeps
+            // them as each file settles; never derived here.
+            ForEach(Array(job.warnings.lines.enumerated()), id: \.offset) { _, line in
+                Label(line, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("“Moved” means moved to the Finder Trash on that file's drive — Put Back restores it. Nothing is freed until you empty the Trash yourself.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)

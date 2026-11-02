@@ -539,6 +539,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
                 trashed.append(rec)
             }
             show(one.result, for: item, model: model)
+            if !one.warnings.isEmpty { noteRow(item.copyID, one.warnings.joined(separator: "; ")) }
             if let error = one.result.errorText {
                 errorLines.append("\(item.filename) — \(error)")
                 model.log("Archived — what next?: could not move \(item.filename) — \(error)")
@@ -585,6 +586,12 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         var text = "\(n) cop\(n == 1 ? "y" : "ies") could not be moved — \(errors.first ?? "")"
         if n > 1 { text += " (and \(n - 1) more)" }
         return text + " · " + summary
+    }
+
+    /// The row's note replaced, its status kept (a settlement warning).
+    private func noteRow(_ id: UUID, _ note: String) {
+        guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
+        rows[i].note = note
     }
 
     private func setRow(_ id: UUID, status: Row.Status, note: String) {

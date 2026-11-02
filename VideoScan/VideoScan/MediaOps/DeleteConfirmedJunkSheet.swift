@@ -110,7 +110,9 @@ struct DeleteConfirmedJunkResultSheet: View {
                 }
             }
 
-            if report.hasNotes {
+            // A warning alone (a kept marker) is in the summary above; the
+            // list is only for files that stayed.
+            if !report.lines.isEmpty {
                 Text("These stayed where they are:")
                     .font(.callout.weight(.medium))
                 ScrollView {

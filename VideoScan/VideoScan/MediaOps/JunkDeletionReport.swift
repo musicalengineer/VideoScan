@@ -29,16 +29,16 @@ struct JunkDeletionReport {
     /// Every settlement warning is surfaced, whatever the headline (Codex
     /// #201 F3): a SPLIT or a change during the move shows the alert even
     /// when every file moved.
-    var hasNotes: Bool { !lines.isEmpty || groupNeedsAttention || keptMarker }
-    /// A kept concurrent marker on any row (Codex #204) — every door.
-    private let keptMarker: Bool
+    var hasNotes: Bool { !lines.isEmpty || warnings.needsAttention }
+    /// The routine's settlement warnings (pairs, kept markers — Codex
+    /// #204/#205), through the one function every door uses.
+    let warnings: TrashWarnings
     /// The alert's title — from the result, never the reverse.
     var headline: String {
-        lines.isEmpty && (groupNeedsAttention || keptMarker)
+        lines.isEmpty && warnings.needsAttention
             ? "Move to Trash \u{2014} the catalog changed during the move"
             : "Move to Trash \u{2014} some files stayed"
     }
-    private let groupNeedsAttention: Bool
 
     init(_ result: VideoScanModel.JunkDeletionResult) {
         var lines: [Line] = []
@@ -49,9 +49,8 @@ struct JunkDeletionReport {
         self.lines = lines
         self.movedCount = result.succeeded
         self.bytesMoved = result.bytesMoved
-        self.summary = Self.summary(result)
-        self.groupNeedsAttention = result.groupNeedsAttention
-        self.keptMarker = !result.keptMarkerNotes.isEmpty
+        self.warnings = TrashWarnings(result)
+        self.summary = Self.summary(result, warnings: warnings)
     }
 
     /// Why one file did not move; nil when it moved.
@@ -66,7 +65,7 @@ struct JunkDeletionReport {
         }
     }
 
-    private static func summary(_ r: VideoScanModel.JunkDeletionResult) -> [String] {
+    private static func summary(_ r: VideoScanModel.JunkDeletionResult, warnings: TrashWarnings) -> [String] {
         func files(_ n: Int) -> String { "\(n) file\(n == 1 ? "" : "s")" }
         var out: [String] = []
         if r.succeeded > 0 {
@@ -78,7 +77,7 @@ struct JunkDeletionReport {
         if r.skippedOffline > 0 { out.append("\(files(r.skippedOffline)) skipped \u{2014} drive not connected") }
         if r.cancelled > 0 { out.append("\(files(r.cancelled)) not reached \u{2014} stopped") }
         if out.isEmpty { out.append("Nothing was selected") }
-        return out + r.groupNotes + r.keptMarkerNotes
+        return out + warnings.lines
     }
 
     /// The whole list as plain text, one file per line (the Catalog
