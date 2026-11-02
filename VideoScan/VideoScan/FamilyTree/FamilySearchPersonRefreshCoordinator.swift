@@ -68,6 +68,13 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @Published private(set) var previewLine = ""
     /// This refresh's own folder (`<root>/<FSID>-<stamp>/`).
     private(set) var stagingFolder: URL?
+    /// Where the spawned tool writes its answer: a scratch folder OUTSIDE
+    /// every family-data location (codex #196 F3). The Terminal process
+    /// cannot be reached by the permit, so it never writes into the refresh
+    /// root; the coordinator PUBLISHES the answer there through the
+    /// primitive, at the moment it reads it — refused once revoked.
+    var answerScratchRoot: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("VideoScan-person-refresh", isDirectory: true)
 
     private let root: URL
     private let overlayStore: PersonFactOverlayStore
@@ -162,7 +169,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     isDirectory: true)
             suffix += 1
         }
-        let output = folder.appendingPathComponent(PersonRefreshPaths.outputFileName)
+        // The tool's -o: scratch, not the refresh root (#196 F3).
+        let output = answerScratchRoot.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+            .appendingPathComponent(PersonRefreshPaths.outputFileName)
         // The attempt is on record BEFORE anything can refuse it: a run that
         // could not start still reads `started` … `failed: could not start`.
         note(PersonRefreshAuditLines.started(answerFile: Self.relative(output)))
@@ -182,14 +191,22 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             let script = FamilySearchPersonRefreshScript(
                 command: command, personName: target.personName,
                 scriptURL: folder.appendingPathComponent(PersonRefreshPaths.scriptFileName))
-            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.launch (script)",
-                                               mode: writeMode) { _ = try script.write() }
+            // The script, the scratch folder AND the spawn are inside the
+            // primitive; the spawned tool's only output path is `output`,
+            // in scratch (#196 F3).
+            let launcher = self.launcher
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.launch (script + spawn → \(output.lastPathComponent) in scratch)",
+                                               mode: writeMode) {
+                try FileManager.default.createDirectory(at: output.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                _ = try script.write()
+                launcher.open(script.scriptURL)
+            }
             stagingFolder = folder
             previewLine = command.displayLine
             launchDate = Date()
             startedAt = started
             quietSince = nil
-            launcher.open(script.scriptURL)
             phase = .waiting(output: output)
             startWatching(output: output)
         } catch {
@@ -220,6 +237,23 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             noteOutcome(PersonRefreshAuditLines.cancelled(pendingFields: pending, stage: stage))
         }
         phase = .idle
+    }
+
+    /// Copy the answer from scratch into `<run>/person.ged` under the refresh
+    /// root, inside the primitive. A run with no staging folder (not
+    /// launched here) reads the file where it is.
+    private func publishAnswer(_ scratch: URL) throws -> URL {
+        guard let folder = stagingFolder,
+              scratch.deletingLastPathComponent().standardizedFileURL != folder.standardizedFileURL else { return scratch }
+        let published = folder.appendingPathComponent(PersonRefreshPaths.outputFileName)
+        try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.answer (publish)", mode: writeMode) {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: published.path) {
+                throw FamilySearchPullError.scriptWriteFailed("\(published.lastPathComponent) already exists in \(folder.lastPathComponent)")
+            }
+            try FileManager.default.copyItem(at: scratch, to: published)
+        }
+        return published
     }
 
     /// `<FSID>-<stamp>/person.ged` — the answer file, relative to the root.
@@ -278,7 +312,20 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// it against what the tree shows now (overlay included, so a second
     /// refresh after an Apply reads "Already matches FamilySearch.").
     /// Internal so tests (and a future "use this file") can hand a file in.
-    func read(output: URL) {
+    func read(output scratch: URL) {
+        // Publish the tool's answer into the run folder — a write, so it is
+        // inside the primitive and asked NOW (#196 F3). Refused: nothing
+        // lands in the refresh root and the run fails in words.
+        let output: URL
+        do {
+            output = try publishAnswer(scratch)
+        } catch {
+            let message = FamilyTreeWriteGate.refusalText(.personRefresh, mode: writeMode())
+                ?? "Could not keep the answer file: \(error.localizedDescription). Nothing was changed."
+            phase = .failed(message: message)
+            noteOutcome(PersonRefreshAuditLines.failed(message))
+            return
+        }
         parseTask?.cancel()
         generation &+= 1
         let token = generation

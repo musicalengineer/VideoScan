@@ -2648,9 +2648,13 @@ final class FamilyTreeLiveModel: ObservableObject {
                 return .failure(DocumentRemovalRefusal.missingOnDisk(url))
             }
             do {
-                // At the moment of the move, not only at the click (F2).
-                try authority.check(.document, path: "FamilyTreeLiveModel.removeDocument (move)", log: refusalLog)
-                try store.removeDocument(document, from: folder, for: owner)
+                // The MODEL's authority is bound through the store's wait
+                // (clock, sidecar lock) and asked at each mutation inside
+                // it (codex #190 F2, #196 F1).
+                try authority.withWrite(.document, path: "FamilyTreeLiveModel.removeDocument (move)",
+                                        log: refusalLog) {
+                    try store.removeDocument(document, from: folder, for: owner)
+                }
                 return .success(())
             } catch {
                 return .failure(error)

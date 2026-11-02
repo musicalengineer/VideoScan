@@ -154,9 +154,11 @@ struct FamilyDocumentAddSheet: View {
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<PersonDocument, Error> in
                 do {
-                    let folder = try store.folderForPhotoRequest(person: person)
-                    let document = try store.importPersonDocument(
-                        from: source, kind: kind, note: note, into: folder, for: person)
+                    let document = try FamilyTreeWriteAuthority.process.withWrite(.document, path: "Add document…") {
+                        let folder = try store.folderForPhotoRequest(person: person)
+                        return try store.importPersonDocument(
+                            from: source, kind: kind, note: note, into: folder, for: person)
+                    }
                     return .success(document)
                 } catch {
                     return .failure(error)

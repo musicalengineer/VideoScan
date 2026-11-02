@@ -19,11 +19,12 @@ struct FamilyPhotoAdjustSource: Identifiable {
     /// The on-disk original, when there is one. Nil for a photo that only
     /// exists as this session's in-memory override.
     let originalURL: URL?
-    /// Where Save writes. Resolved by the presenter (a snapshot of the
-    /// configuration at present time) rather than by the sheet reaching for
-    /// the shared configuration center at Save — so the sheet is
-    /// testable and cannot save into a store that changed underneath it.
-    let store: FamilyAssetStore
+    /// Where Save writes: a SUPPLIER of a live store (codex #196), asked at
+    /// Save. A live store bound to the archive it was opened on refuses if
+    /// that archive is revoked or replaced while the sheet is up — it can
+    /// never save into a different store.
+    let makeStore: () -> FamilyAssetStore
+    var store: FamilyAssetStore { makeStore() }
 }
 
 struct FamilyPhotoAdjustSheet: View {
@@ -167,8 +168,9 @@ struct FamilyPhotoAdjustSheet: View {
             return
         }
         do {
-            let url = try source.store.saveCardPhoto(data, for: source.assetPerson,
-                                              nextTo: source.originalURL)
+            let url = try FamilyTreeWriteAuthority.process.withWrite(.photo, path: "Adjust Photo (save crop)") {
+                try source.store.saveCardPhoto(data, for: source.assetPerson, nextTo: source.originalURL)
+            }
             onSaved(cropped, url)
         } catch {
             errorText = error.localizedDescription

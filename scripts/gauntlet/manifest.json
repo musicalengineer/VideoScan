@@ -15370,6 +15370,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing3Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing3Tests"
+      ],
+      "tests": [
+        "aDocumentRemovalHeldWhileTheModelGoesReadOnlyMovesNothing",
+        "aRefreshToolThatWritesAfterRevocationLandsNothingInTheRefreshRoot",
+        "theCrestPickersStoreRefusesOnceTheArchiveIsRevoked"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyIsolationTests.swift",
       "stage": "unit",
       "suites": [
@@ -15415,7 +15428,8 @@
         "identityCenterWritesOnlyThroughTheGatedStore",
         "loaderReadOnlyBranchComesFirst",
         "theModelNeverListsTheArchiveBeforeTheAccessCheck",
-        "theScannerFlagsAWriteOutsideThePrimitive"
+        "theScannerFlagsAWriteOutsideThePrimitive",
+        "theScannerFlagsTheCodex196Shapes"
       ]
     },
     {
@@ -35464,7 +35478,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3199,
+      "expected_floor": 3203,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35775,6 +35789,7 @@
         "VideoScanTests/FamilyTreePullDatesTests",
         "VideoScanTests/FamilyTreeReadOnlyClosingTests",
         "VideoScanTests/FamilyTreeReadOnlyClosing2Tests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing3Tests",
         "VideoScanTests/FamilyTreeReadOnlyDocumentTransitionTests",
         "VideoScanTests/FamilyTreeReadOnlyInFlightTests",
         "VideoScanTests/FamilyTreeReadOnlyIsolationTests",

@@ -346,8 +346,11 @@ struct RecordFinderFiler {
         }
         let document: PersonDocument
         do {
-            document = try assetStore.importPersonDocument(
-                from: s.file, kind: s.recordType.documentKind, note: pre.note, into: folder, for: assetPerson)
+            document = try FamilyTreeAccessMode.withWrite(.document, path: "RecordFinderFiler.file (import)",
+                                                          mode: writeMode) {
+                try assetStore.importPersonDocument(
+                    from: s.file, kind: s.recordType.documentKind, note: pre.note, into: folder, for: assetPerson)
+            }
         } catch let failure as FamilyAssetStore.DocumentImportFailure {
             // The document WAS written, then the import failed (codex review
             // #18 F4). Report what is on disk now, not what was hoped.
@@ -751,7 +754,9 @@ struct RecordFinderFiler {
     private func undoDocument(_ document: PersonDocument, folder: URL, why: String) -> Undone {
         let trash = FamilyAssetStore.documentsTrashFolderName
         do {
-            try assetStore.removeDocument(document, from: folder, for: assetPerson)
+            try FamilyTreeAccessMode.withWrite(.document, path: "RecordFinderFiler.undo (to .trash)", mode: writeMode) {
+                try assetStore.removeDocument(document, from: folder, for: assetPerson)
+            }
             return Undone(outcome: .rolledBack("\(why). The file was moved to Documents/\(trash)/\(document.filename)."),
                           file: "Documents/\(trash)/\(document.filename)")
         } catch {

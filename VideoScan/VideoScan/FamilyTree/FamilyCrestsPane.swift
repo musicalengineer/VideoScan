@@ -10,7 +10,17 @@ struct FamilyCrestsPane: View {
         var id: String { crest.id }
     }
 
-    let store: FamilyAssetStore
+    /// A SUPPLIER, never a stored store (codex #196 F2): each use takes the
+    /// store as it is now.
+    let makeStore: () -> FamilyAssetStore
+    private var store: FamilyAssetStore { makeStore() }
+
+    /// The store the tab hands this pane (the writer behind Add crest). A
+    /// LIVE store: the picker is modal and the archive can go while it is
+    /// open; a snapshot would keep its old `.readWrite` (codex #196 F2).
+    static func writerStore(center: FamilyAssetConfigurationCenter = .shared) -> FamilyAssetStore {
+        center.makeLiveStore()
+    }
 
     @State private var rows: [Row] = []
     @State private var surname = ""
@@ -83,7 +93,11 @@ struct FamilyCrestsPane: View {
         panel.message = "Choose the crest image for the \(surname.trimmingCharacters(in: .whitespacesAndNewlines)) family"
         guard panel.runModal() == .OK, let source = panel.url else { return }
         do {
-            try store.importCrest(from: source, surname: surname)
+            // After the modal picker: asked now, with a LIVE store (#196 F2).
+            let store = makeStore()
+            _ = try FamilyTreeWriteAuthority.process.withWrite(.crest, path: "FamilyCrestsPane.importCrest") {
+                try store.importCrest(from: source, surname: surname)
+            }
             surname = ""
             errorMessage = nil
             reload()

@@ -217,13 +217,20 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
 
             previewLine = command.displayLine
             let script = FamilySearchPullScript(command: command, scriptURL: scriptURL)
-            try FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.launch (script)",
-                                               mode: writeMode) { _ = try script.write(fileManager: fileManager) }
+            // The script AND the spawn are inside the primitive; the spawned
+            // tool's only output is request.outputURL, in the user's Downloads
+            // (not family data); the archive install is a separate write.
+            let workspace = self.workspace, scriptURL = self.scriptURL
+            try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                               path: "FamilySearchPull.launch (script + spawn → \(request.outputURL.lastPathComponent) in Downloads)",
+                                               mode: writeMode) {
+                _ = try script.write(fileManager: fileManager)
+                workspace.open(scriptURL)
+            }
 
             launchDate = Date()
             startedAt = launchDate
             quietSince = nil
-            workspace.open(scriptURL)
             phase = .waiting(output: request.outputURL)
             startWatching(output: request.outputURL)
         } catch let error as FamilySearchPullError {

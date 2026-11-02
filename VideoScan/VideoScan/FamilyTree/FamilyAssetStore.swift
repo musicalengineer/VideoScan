@@ -1896,8 +1896,11 @@ struct FamilyAssetStore: @unchecked Sendable {
     func withWrite<T>(_ what: String, _ body: () throws -> T) throws -> T {
         try requireWriteAccess()
         let store = self
+        // The store's access AND whatever the caller bound (a model's
+        // authority), both CHECKED here and bound for the helpers inside
+        // (codex #196 F1: binding alone did not check the caller's permit).
         let permit = WritePermit { _ in (try? store.requireWriteAccess()) != nil }.and(WritePermit.current)
-        return try WritePermit.$current.withValue(permit) { try body() }
+        return try WritePermit.$current.withValue(permit) { try permit.withWrite(what, body) }
     }
 
     func requireWriteAccess() throws {

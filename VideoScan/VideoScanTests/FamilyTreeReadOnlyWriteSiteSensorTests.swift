@@ -57,13 +57,28 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
             + [("FamilyGraphCompiledStore.swift", try String(contentsOf: core, encoding: .utf8))]
     }
 
-    /// The violations in `files`: write tokens outside any `withWrite`.
+    /// codex #196 (a): a writer method on ANOTHER object (the asset store)
+    /// whose own wait would otherwise run without the caller's authority.
+    static let delegatedWriters = #"\b(store|assetStore|source\.store)\.(removeDocument|importCrest|recordPhotoChoice|choosePhoto|saveCardPhoto|importPersonDocument|importPersonPhoto|excludePhoto)\("#
+    /// codex #196 (c): launching a process / script.
+    static let spawns = #"\b(launcher|workspace)\.open\(|\bProcess\(\)"#
+    /// codex #196 (b): authority-carrying types a view or sheet item must
+    /// not STORE (only a supplier closure).
+    static let authorityTypes = #"(FamilyAssetStore|FamilyTreeAccessMode|FamilyTreeWriteAuthority|FamilyAssetStore\.Access)\??\s*$"#
+
+    /// The violations in `files`: write tokens outside any `withWrite`, an
+    /// `await` inside one, a delegated writer or a spawn outside one (a spawn
+    /// must also declare its output path), and an authority stored in a
+    /// view or sheet item.
     static func violations(in files: [(String, String)], exempt: [String: String]) throws -> [String] {
         let regex = try NSRegularExpression(pattern: writeTokens.joined(separator: "|"))
+        let delegated = try NSRegularExpression(pattern: delegatedWriters)
+        let spawn = try NSRegularExpression(pattern: spawns)
         var out: [String] = []
         var exemptSeen = Set<String>()
         for (name, text) in files {
             let scanned = scan(text)
+            out += structuralViolations(name: name, scanned: scanned, delegated: delegated, spawn: spawn)
             for (i, line) in scanned.lines.enumerated() where matches(regex, line) && !line.contains("func ") {
                 let key = "\(name):\(scanned.owner[i])"
                 if exempt[key] != nil { exemptSeen.insert(key); continue }
@@ -75,6 +90,55 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         }
         for key in exempt.keys.sorted() where !exemptSeen.contains(key) && files.contains(where: { key.hasPrefix($0.0 + ":") }) {
             out.append("stale exemption \(key): no write there any more — remove it")
+        }
+        return out
+    }
+
+    /// Rules (a), (b), (c) of codex #196, per file.
+    static func structuralViolations(name: String, scanned: Scanned, delegated: NSRegularExpression,
+                                     spawn: NSRegularExpression) -> [String] {
+        var out: [String] = []
+        let isStoreFile = name.hasPrefix("FamilyAssetStore")
+        for (i, line) in scanned.lines.enumerated() where !line.contains("func ") {
+            let key = "\(name):\(scanned.owner[i])"
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if scanned.inWrite[i], line.range(of: #"\bawait\b"#, options: .regularExpression) != nil {
+                out.append("\(key) line \(i + 1): `await` inside withWrite — the authority must be asked after the wait")
+            }
+            if !isStoreFile, matches(delegated, line), !scanned.inWrite[i] {
+                out.append("\(key) line \(i + 1): `\(trimmed)` calls another object's writer outside withWrite "
+                           + "— its wait would run without the caller's authority")
+            }
+            if matches(spawn, line), !(scanned.inWrite[i] && scanned.writeDeclaresOutput[i]) {
+                out.append("\(key) line \(i + 1): `\(trimmed)` launches a process outside a withWrite that declares "
+                           + "its output path (\"… → <output>\")")
+            }
+        }
+        out += storedAuthorityViolations(name: name, lines: scanned.lines)
+        return out
+    }
+
+    /// (b): in a `View` or `Identifiable` (sheet item / picker) struct, a
+    /// stored property whose type carries write authority.
+    static func storedAuthorityViolations(name: String, lines: [String]) -> [String] {
+        var out: [String] = []
+        var depth = 0
+        var holderDepth: Int?
+        let holder = try! NSRegularExpression(pattern: #"\bstruct\s+\w+[^{]*:\s*[^{]*\b(View|Identifiable)\b"#)
+        let stored = try! NSRegularExpression(pattern: #"^\s*(?:private\s+|fileprivate\s+|@State\s+|@Binding\s+)*(?:let|var)\s+\w+\s*:\s*"# + authorityTypes)
+        for (i, line) in lines.enumerated() {
+            if holderDepth == nil, matches(holder, line) { holderDepth = depth + 1 }
+            if let d = holderDepth, depth == d, matches(stored, line) {
+                out.append("\(name) line \(i + 1): `\(line.trimmingCharacters(in: .whitespaces))` stores a write "
+                           + "authority in a view or sheet item — store a supplier closure instead")
+            }
+            for ch in line {
+                if ch == "{" { depth += 1 }
+                if ch == "}" {
+                    depth -= 1
+                    if let d = holderDepth, depth < d { holderDepth = nil }
+                }
+            }
         }
         return out
     }
@@ -202,6 +266,55 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         #expect(problems.contains { $0.hasPrefix("Planted.swift:sneaky") })
     }
 
+    /// The #196 shapes are caught: an `await` inside withWrite, another
+    /// object's writer called after a check, a spawn with no declared output,
+    /// and an authority stored in a view.
+    @Test func theScannerFlagsTheCodex196Shapes() throws {
+        let planted = #"""
+        struct Planted {
+            func awaitInside() async throws {
+                try authority.withWrite(.note, path: "p") {
+                    await somethingElse()
+                    try Data().write(to: url)
+                }
+            }
+            func checkThenDelegate() throws {
+                try authority.check(.document, path: "p")
+                try store.removeDocument(document, from: folder, for: owner)
+            }
+            func delegateInside() throws {
+                try authority.withWrite(.document, path: "p") {
+                    try store.removeDocument(document, from: folder, for: owner)
+                }
+            }
+            func spawnUndeclared() throws {
+                try FamilyTreeAccessMode.withWrite(.personRefresh, path: "launch", mode: m) {
+                    launcher.open(script)
+                }
+            }
+            func spawnDeclared() throws {
+                try FamilyTreeAccessMode.withWrite(.personRefresh, path: "launch → answer.ged in scratch",
+                                                   mode: m) {
+                    launcher.open(script)
+                }
+            }
+        }
+        struct PlantedPane: View {
+            let store: FamilyAssetStore
+            let makeStore: () -> FamilyAssetStore
+            var body: some View { EmptyView() }
+        }
+        """#
+        let problems = try Self.violations(in: [("Planted.swift", planted)], exempt: [:])
+        #expect(problems.contains { $0.hasPrefix("Planted.swift:awaitInside") && $0.contains("await") }, "\(problems)")
+        #expect(problems.contains { $0.hasPrefix("Planted.swift:checkThenDelegate") }, "\(problems)")
+        #expect(!problems.contains { $0.hasPrefix("Planted.swift:delegateInside") }, "\(problems)")
+        #expect(problems.contains { $0.hasPrefix("Planted.swift:spawnUndeclared") }, "\(problems)")
+        #expect(!problems.contains { $0.hasPrefix("Planted.swift:spawnDeclared") }, "\(problems)")
+        #expect(problems.contains { $0.contains("let store: FamilyAssetStore") }, "\(problems)")
+        #expect(!problems.contains { $0.contains("makeStore") }, "\(problems)")
+    }
+
     // MARK: Scanner
 
     static func familyTreeSources() throws -> [(String, String)] {
@@ -227,6 +340,9 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         /// True when the line is inside a scope opened by a `withWrite` call
         /// (or the line itself calls it, a one-line `withWrite { … }`).
         var inWrite: [Bool] = []
+        /// True when the enclosing write scope's `withWrite` call declares
+        /// the spawned process's output path (its path text has a `→`).
+        var writeDeclaresOutput: [Bool] = []
     }
 
     /// The text of one member's body (code only), or nil.
@@ -248,11 +364,12 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         var scopes = ScopeTracker()
         for (lineNo, raw) in text.components(separatedBy: "\n").enumerated() {
             let code = lexer.code(of: raw)
-            let owner = scopes.feed(code, line: lineNo)
+            let owner = scopes.feed(code, line: lineNo, raw: raw)
             out.lines.append(code)
             out.owner.append(owner.name)
             out.ownerStart.append(owner.start)
             out.inWrite.append(owner.inWrite)
+            out.writeDeclaresOutput.append(owner.declaresOutput)
         }
         return out
     }
@@ -350,21 +467,28 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
     /// own a body. A line's owner is the OUTERMOST member function (nested
     /// helpers belong to it), else a member `var`, else "top".
     struct ScopeTracker {
-        struct Scope { let name: String?; let isMember: Bool; let start: Int; var isWrite = false }
+        struct Scope { let name: String?; let isMember: Bool; let start: Int; var isWrite = false
+                       var declaresOutput = false }
         struct Pending { let name: String; let parens: Int; let isFunc: Bool; let line: Int }
         var stack: [Scope] = []
         var pending: Pending?
         var parens = 0
         /// A `withWrite(` call whose `{` has not opened yet (multi-line call).
         var pendingWrite = false
+        var pendingDeclares = false
         static let decl = try! NSRegularExpression(
             pattern: #"(?<![.\w])(?:func\s+([A-Za-z_]\w*)|(init)\??\s*[(<]|(?:var|let)\s+([A-Za-z_]\w*)\b)"#)
 
-        mutating func feed(_ code: String, line: Int) -> (name: String, start: Int, inWrite: Bool) {
+        mutating func feed(_ code: String, line: Int, raw: String = "")
+            -> (name: String, start: Int, inWrite: Bool, declaresOutput: Bool) {
             noteDeclaration(in: code, line: line)
             var owner = currentOwner(line: line)
             let callsWrite = code.contains("withWrite")
             var inWrite = callsWrite || stack.contains { $0.isWrite }
+            // The declared output lives in the path STRING, so it is read
+            // from the raw line (the lexer blanks string contents).
+            let declares = callsWrite && raw.contains("→")
+            var declaresOutput = declares || stack.contains { $0.isWrite && $0.declaresOutput }
             var seenWrite = false
             var prefix = ""
             for ch in code {
@@ -374,13 +498,17 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
                 count(ch)
                 if opensWrite, !stack.isEmpty {
                     stack[stack.count - 1].isWrite = true
+                    stack[stack.count - 1].declaresOutput = declares || pendingDeclares
+                    if pendingDeclares { declaresOutput = true }
                     pendingWrite = false
+                    pendingDeclares = false
                     seenWrite = false
                     inWrite = true
                 }
             }
             // `withWrite(` on this line, its `{` on a later one.
-            if seenWrite { pendingWrite = true }
+            if seenWrite { pendingWrite = true; pendingDeclares = pendingDeclares || declares }
+            if pendingWrite, raw.contains("→") { pendingDeclares = true }
             // A member that opened on this line owns this line.
             if owner.name == "top" || owner.name.hasPrefix("var ") {
                 let now = currentOwner(line: line)
@@ -390,7 +518,7 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
             // (`if case .x(let y) = z {` is not a declaration with a body); a
             // func whose parentheses closed below its own level is gone.
             if let p = pending, !p.isFunc || parens < p.parens { pending = nil }
-            return (owner.name, owner.start, inWrite)
+            return (owner.name, owner.start, inWrite, declaresOutput)
         }
 
         private mutating func noteDeclaration(in code: String, line: Int) {

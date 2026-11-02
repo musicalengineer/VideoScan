@@ -489,8 +489,10 @@ struct FamilyTreeView: View, Equatable {
                         model.setPhotoOverride(cropped, for: source.personID)
                         appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
                         do {
-                            try source.store.recordPhotoChoice(
-                                url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
+                            try FamilyTreeWriteAuthority.process.withWrite(.photo, path: "Adjust Photo (record choice)") {
+                                try source.store.recordPhotoChoice(
+                                    url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
+                            }
                             model.notePhotoChoiceWritten()
                             adjustError = nil
                         } catch {
@@ -2143,8 +2145,9 @@ struct FamilyTreeView: View, Equatable {
                     return .failure(FamilyAssetStore.StoreError.sourceIsNotARegularImage(store.peopleDirectory))
                 }
                 do {
-                    return .success(try store.choosePhoto(
-                        data, fileExtension: "jpg", for: assetPerson, source: source))
+                    return .success(try FamilyTreeWriteAuthority.process.withWrite(.photo, path: "Pick a photo (choose)") {
+                        try store.choosePhoto(data, fileExtension: "jpg", for: assetPerson, source: source)
+                    })
                 } catch {
                     return .failure(error)
                 }
@@ -2192,7 +2195,7 @@ struct FamilyTreeView: View, Equatable {
             adjustSource = FamilyPhotoAdjustSource(
                 personID: person.id, personName: person.name,
                 assetPerson: assetPerson, image: image, originalURL: originalURL,
-                store: store)
+                makeStore: { store })
         }
     }
 
@@ -2236,9 +2239,7 @@ struct FamilyTreeView: View, Equatable {
 
     @ViewBuilder private var crestsPaneIfReadable: some View {
         if model.accessMode.allowsWrites {
-            FamilyCrestsPane(
-                store: FamilyAssetConfigurationCenter.shared
-                    .snapshot().makeStore())
+            FamilyCrestsPane(makeStore: { FamilyCrestsPane.writerStore() })
                 .padding(14)
                 .background(panelBackground)
         }
