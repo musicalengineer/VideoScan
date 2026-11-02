@@ -82,11 +82,20 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Where the spawned tool writes — its `-o` AND its working directory
     /// (codex #198 F1): a scratch folder OUTSIDE every family-data location
     /// and outside the user's chosen output folder. The finished export is
-    /// PUBLISHED to `request.outputURL` through the primitive. Tests that
-    /// simulate the tool by writing the chosen output set this to that
-    /// folder (then nothing needs publishing).
+    /// PUBLISHED to `request.outputURL` through the primitive.
     var answerScratchRoot: URL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("VideoScan-family-pull-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        .appendingPathComponent("VideoScan-family-pull", isDirectory: true)
+    /// The tool's -o for ONE launch: a fresh UUID folder per launch,
+    /// retries included (codex #199) — two pulls (a forgotten one still
+    /// running in Terminal, and the next) can never share it, so the watcher
+    /// only ever accepts its own run's export. Tests that play the tool by
+    /// writing the chosen output set `{ $0.outputURL }` (nothing to publish).
+    lazy var toolOutputLocation: (FamilySearchPullRequest) -> URL = { [unowned self] request in
+        self.answerScratchRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent(request.outputURL.lastPathComponent)
+    }
+    /// This launch's scratch output (the only file the watcher accepts).
+    private(set) var launchOutput: URL?
     /// Where a merge is written BEFORE it is activated. Injected so tests
     /// stage under their own temp root; production: App Support
     /// family-tree/staging/. Nothing here is ever read by the loader.
@@ -215,7 +224,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 throw FamilySearchPullError.toolNotFound
             }
             // The tool's -o and cwd: scratch (#198 F1).
-            let scratch = answerScratchRoot.appendingPathComponent(request.outputURL.lastPathComponent)
+            let scratch = toolOutputLocation(request)
+            launchOutput = scratch
             var toolRequest = request
             toolRequest.outputURL = scratch
             let command = try FamilySearchPullCommand(toolURL: toolURL, request: toolRequest)

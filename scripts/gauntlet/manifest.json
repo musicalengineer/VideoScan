@@ -15395,6 +15395,17 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing5Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing5Tests"
+      ],
+      "tests": [
+        "twoPullsNeverShareScratchAndBPublishesOnlyItsOwnBytes"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyIsolationTests.swift",
       "stage": "unit",
       "suites": [
@@ -35490,7 +35501,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3205,
+      "expected_floor": 3206,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35803,6 +35814,7 @@
         "VideoScanTests/FamilyTreeReadOnlyClosing2Tests",
         "VideoScanTests/FamilyTreeReadOnlyClosing3Tests",
         "VideoScanTests/FamilyTreeReadOnlyClosing4Tests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing5Tests",
         "VideoScanTests/FamilyTreeReadOnlyDocumentTransitionTests",
         "VideoScanTests/FamilyTreeReadOnlyInFlightTests",
         "VideoScanTests/FamilyTreeReadOnlyIsolationTests",
