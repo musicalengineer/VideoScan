@@ -64,6 +64,7 @@
 - Worktrees under `VideoScan-wt/`: all landed except `attended-model-review` (Codex pilot, dirty) and `process-modes` (draft); `bench-a2/.scratch/` holds the bench runs and Rick's verdicts (KEEP). Prune per the cleanup proposal, after Rick's word.
 
 ## To file
+- `scripts/run_catalog_tests.sh` prints CATALOG TESTS RED on today's main although every test passes: the Core lane runs 403 tests against a floor of 409 (tests renamed or merged since the floor was set); re-baseline the floor from the manifest or make the script count by manifest, not by a hard number (seen 11/01 evening on two branches).
 - Era job re-analyzes a file that produced no `era.fused` line (12 of batch 1 were not "cached" in batch 2's plan — every window refused or empty); the caching rule (§0.7) says a digest the signer has seen is never recomputed: the plan should treat any journal/catalog row by that signer as seen, and a file with zero valid windows should get a `era.none` observation so it is not retried every run.
 - Three Python tests red on main, pre-existing (11/01): `test_codeql_extraction_floor::test_sensor_real_repo_scope_is_app_plus_core`, `test_docs_links::test_tracked_docs_references_exist` (#404), `test_gauntlet_runner::test_poisoned_home_and_roots_replaced_in_child_and_xctestrun`.
 - Stale `volume_uuid` rows (6); ~330 Hallie questions never replayed; 557 Thread Performance Checker traces; Hallie strict route_mismatch ×4 two nights running; `findtag-journal/` unbounded; `previewSweepEnabled` stale key; `MediaPersonLinks.swift` uncalled.
