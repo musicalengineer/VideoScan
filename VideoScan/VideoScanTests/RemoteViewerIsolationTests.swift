@@ -106,9 +106,9 @@ struct RemoteViewerIsolationTests {
                                masterHostname: defaults.string(forKey: CatalogSyncDefaultsKey.masterHostname) ?? defaultMasterHostname,
                                remoteUser: "rickb", log: { log.append($0) })
         #expect(sync.mode == .viewer)
-        #expect(sync.masterHostname == "RicksM4.local", "a non-string override falls back to the default master")
+        #expect(sync.masterHostname == "RicksUltra.local", "a non-string override falls back to the default master — the Ultra (DECISIONS 2026-10-27)")
         ViewerModeCenter.shared.install(sync.viewerRole)
-        #expect(ViewerModeCenter.shared.masterDisplayName == "RicksM4")
+        #expect(ViewerModeCenter.shared.masterDisplayName == "RicksUltra")
 
         // Every reader over the poison answers sanely and writes nothing.
         #expect(CatalogSync.readExternalSourcesFile(in: live).isEmpty, "unsafe keys and non-absolute values are dropped")
@@ -138,7 +138,7 @@ struct RemoteViewerIsolationTests {
                                            mappedVolumes: settings.mappedVolumes, masterReachable: false,
                                            isMounted: { _ in true })
         #expect(resolver.resolve(recordID: UUID(), fullPath: "/Volumes/FamilyArchive/x.mov", videoCodec: "h264")
-                == .masterOffline(masterDisplayName: "RicksM4"))
+                == .masterOffline(masterDisplayName: "RicksUltra"))
         #expect(ViewerWriteGuard.refuse("isolation.probe") == true)
 
         // A failed sync leaves the poison as-is (it IS the last-good here).

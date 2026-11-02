@@ -95,9 +95,12 @@ enum CatalogSyncDefaultsKey {
     static let masterHostname = "CatalogSyncMasterHostname"
 }
 
-/// Hard-coded default master. Matches the hostname of Rick's Mac Studio M4 Max
-/// as documented in CLAUDE.md / MEMORY.md. The Plist override above wins.
-let defaultMasterHostname = "RicksM4.local"
+/// Hard-coded default master: the M5 Ultra (DECISIONS 2026-10-27). The
+/// defaults key above wins. 2026-11-02: this said RicksM4 for a week after
+/// the ruling, and the M4 — whose key had landed in a stale sandbox
+/// container plist the non-sandboxed app never reads — ran as a second
+/// master on a diverging copy. A missing key must name the real master.
+let defaultMasterHostname = "RicksUltra.local"
 
 // MARK: - Scope (what a viewer mirrors)
 

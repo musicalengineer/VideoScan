@@ -206,6 +206,42 @@ struct ModeResolutionTests {
     }
 }
 
+// MARK: - The code default names the master (DECISIONS 2026-10-27)
+
+/// 2026-11-02: the M4 ran as a second master twice (10/27 → 11/01, and
+/// again today 16:26 → 17:4x) because its defaults key was missing and the
+/// code default still named the M4. A missing key must mean "the Ultra is
+/// the master" — the M4 becomes a viewer, the Ultra the master.
+@MainActor
+struct DefaultMasterHostnameTests {
+
+    private func emptyDefaults() -> UserDefaults {
+        UserDefaults(suiteName: "test.default-master.\(UUID().uuidString)")!
+    }
+
+    @Test("the code default is the Ultra, the ruling of 2026-10-27")
+    func theDefaultIsTheUltra() {
+        #expect(CatalogSync.hostnameMatches(local: "RicksUltra", master: defaultMasterHostname))
+        #expect(!CatalogSync.hostnameMatches(local: "RicksM4", master: defaultMasterHostname))
+    }
+
+    @Test("with no defaults key, the M4 launches as a viewer and the Ultra as the master")
+    func missingKeyMakesTheM4AViewer() {
+        let defaults = emptyDefaults()
+        #expect(CatalogSync.launchMode(hostnameSource: FixedHostname(value: "RicksM4"), defaults: defaults) == .viewer)
+        #expect(CatalogSync.launchMode(hostnameSource: FixedHostname(value: "RicksUltra.local"), defaults: defaults) == .master)
+        #expect(CatalogSync.launchMode(hostnameSource: FixedHostname(value: "ricksm5"), defaults: defaults) == .viewer)
+    }
+
+    @Test("the defaults key still wins over the code default")
+    func theKeyStillWins() {
+        let defaults = emptyDefaults()
+        defaults.set("RicksM4.local", forKey: CatalogSyncDefaultsKey.masterHostname)
+        #expect(CatalogSync.launchMode(hostnameSource: FixedHostname(value: "RicksM4"), defaults: defaults) == .master)
+        #expect(CatalogSync.launchMode(hostnameSource: FixedHostname(value: "RicksUltra"), defaults: defaults) == .viewer)
+    }
+}
+
 // MARK: - sha256 + manifest computation
 
 @MainActor
