@@ -60,11 +60,15 @@ final class FamilySearchPullCenter: ObservableObject {
     /// sheet reopens onto it. Only a settled one (idle/installed) is
     /// replaced — and then against the directory the tab resolved *now*.
     @discardableResult
-    func begin(gedcomDirectory: URL) -> FamilySearchPullCoordinator {
+    func begin(gedcomDirectory: URL,
+               writeMode: (@Sendable () -> FamilyTreeAccessMode)? = nil) -> FamilySearchPullCoordinator {
         if let existing = coordinator, !Self.isSettled(existing.phase) {
+            if let writeMode { existing.writeMode = writeMode }
             return existing
         }
         let fresh = makeCoordinator(gedcomDirectory)
+        // The presenting model's authority, when it gave one (#198 F2).
+        if let writeMode { fresh.writeMode = writeMode }
         adopt(fresh)
         return fresh
     }

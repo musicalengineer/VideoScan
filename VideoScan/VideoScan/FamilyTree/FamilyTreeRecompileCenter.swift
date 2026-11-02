@@ -40,6 +40,9 @@ final class FamilyTreeRecompileCenter {
     private weak var liveModel: FamilyTreeLiveModel?
     private(set) var isRunning = false
 
+    /// The access state the standalone path writes under. Tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+
     init() {}
 
     /// The production Family Tree tab model registers itself so the
@@ -91,7 +94,16 @@ final class FamilyTreeRecompileCenter {
         // Path 2: standalone, through the loader on the (injected or
         // production) store. Off the main actor; captions hop back.
         let configuration = configuration ?? FamilyAssetConfigurationCenter.shared.snapshot()
-        let store = store ?? FamilyGraphCompiledStore.app
+        // Read-only state (2026-11-01): a compile writes the store.
+        let writeMode = self.writeMode
+        if FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeRecompileCenter.recompile",
+                                      mode: FamilyTreeAccessMode.resolve(
+                                        access: configuration.access,
+                                        isViewer: ViewerModeCenter.shared.isViewer).strictest(writeMode())) {
+            return .failed
+        }
+        // Even the pending-sources read may promote: guarded (codex #192 F2).
+        let store = (store ?? FamilyGraphCompiledStore.app).guarded { writeMode().allowsWrites }
         let sources = cache.needsRecompile(for: configuration, store: store)
         guard !sources.isEmpty else {
             store.log("[family-tree] recompile: nothing is pending "
@@ -101,13 +113,21 @@ final class FamilyTreeRecompileCenter {
         store.log("\(FamilyTreeLiveModel.recompileStartedPrefix) \(sources.count) sources: "
                   + sources.map(\.lastPathComponent).joined(separator: ", ") + " (standalone path)")
         let directory = configuration.gedcomDirectory()
+        // Asked again at the moment of every store write (codex #190 F2).
+        var guarded = store
+        guarded.writeGuard = {
+            !FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeRecompileCenter.recompile (ingest)",
+                                        mode: writeMode())
+        }
         let promoted = await Task.detached(priority: .userInitiated) { () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
-            loader.compiledStore = store
+            loader.compiledStore = guarded
             loader.progress = { phase in
                 Task { @MainActor in progress(phase) }
             }
-            return loader.recompile(sources: sources) != nil
+            return (try? FamilyTreeAccessMode.withWrite(.recompile, path: "FamilyTreeRecompileCenter.recompile",
+                                                        mode: writeMode) { loader.recompile(sources: sources) != nil })
+                ?? false
         }.value
         cache.invalidate()
         guard promoted else { return .failed }

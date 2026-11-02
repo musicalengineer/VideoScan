@@ -75,6 +75,27 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Where the archive wants the finished file. Injected so tests never
     /// write near a real archive.
     private let gedcomDirectory: URL
+    /// The Family Tree's read-only state (2026-11-01): every download,
+    /// install and merge is refused in it — the GEDCOM folder is on the
+    /// absent archive. Read at each use; tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+    /// Where the spawned tool writes — its `-o` AND its working directory
+    /// (codex #198 F1): a scratch folder OUTSIDE every family-data location
+    /// and outside the user's chosen output folder. The finished export is
+    /// PUBLISHED to `request.outputURL` through the primitive.
+    var answerScratchRoot: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("VideoScan-family-pull", isDirectory: true)
+    /// The tool's -o for ONE launch: a fresh UUID folder per launch,
+    /// retries included (codex #199) — two pulls (a forgotten one still
+    /// running in Terminal, and the next) can never share it, so the watcher
+    /// only ever accepts its own run's export. Tests that play the tool by
+    /// writing the chosen output set `{ $0.outputURL }` (nothing to publish).
+    lazy var toolOutputLocation: (FamilySearchPullRequest) -> URL = { [unowned self] request in
+        self.answerScratchRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent(request.outputURL.lastPathComponent)
+    }
+    /// This launch's scratch output (the only file the watcher accepts).
+    private(set) var launchOutput: URL?
     /// Where a merge is written BEFORE it is activated. Injected so tests
     /// stage under their own temp root; production: App Support
     /// family-tree/staging/. Nothing here is ever read by the loader.
@@ -197,12 +218,17 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Write the script, open it in Terminal, and start watching for output.
     /// Nothing runs until the user presses Return in that window.
     func launch() {
-        if ViewerWriteGuard.refuse("FamilySearchPull.launch") { return }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.launch", mode: writeMode()) { return }
         do {
             guard let toolURL = locator.locate() else {
                 throw FamilySearchPullError.toolNotFound
             }
-            let command = try FamilySearchPullCommand(toolURL: toolURL, request: request)
+            // The tool's -o and cwd: scratch (#198 F1).
+            let scratch = toolOutputLocation(request)
+            launchOutput = scratch
+            var toolRequest = request
+            toolRequest.outputURL = scratch
+            let command = try FamilySearchPullCommand(toolURL: toolURL, request: toolRequest)
             let outputDirectory = request.outputURL.deletingLastPathComponent()
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: outputDirectory.path,
@@ -212,15 +238,26 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             }
 
             previewLine = command.displayLine
-            let script = FamilySearchPullScript(command: command, scriptURL: scriptURL)
-            try script.write(fileManager: fileManager)
+            let script = FamilySearchPullScript(command: command, scriptURL: scriptURL,
+                                                workingDirectory: scratch.deletingLastPathComponent())
+            // The script, the scratch folder AND the spawn are inside the
+            // primitive; the spawned tool's -o and its working directory are
+            // the scratch folder; the chosen output and the archive install
+            // are later, separate writes through the permit (#198 F1).
+            let workspace = self.workspace, scriptURL = self.scriptURL
+            try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                               path: "FamilySearchPull.launch (script + spawn → \(scratch.lastPathComponent) in scratch)",
+                                               mode: writeMode) {
+                try fileManager.createDirectory(at: scratch.deletingLastPathComponent(), withIntermediateDirectories: true)
+                _ = try script.write(fileManager: fileManager)
+                workspace.open(scriptURL)
+            }
 
             launchDate = Date()
             startedAt = launchDate
             quietSince = nil
-            workspace.open(scriptURL)
-            phase = .waiting(output: request.outputURL)
-            startWatching(output: request.outputURL)
+            phase = .waiting(output: scratch)
+            startWatching(output: scratch)
         } catch let error as FamilySearchPullError {
             phase = .failed(message: error.localizedDescription)
         } catch {
@@ -240,9 +277,19 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         phase = .idle
         // A merge still writing to staging finds its generation stale
         // after the write and cleans up itself; a finished-but-unactivated
-        // one is dropped here.
+        // one is dropped here — except in the read-only state, where nothing
+        // is removed either (codex #190 F2): the staged file stays for the
+        // next session and the log says where.
         if let staging = stagingInFlight {
-            try? fileManager.removeItem(at: staging)
+            do {
+                try FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.cancel (remove staging)",
+                                                   mode: writeMode) {
+                    try? fileManager.removeItem(at: staging)
+                }
+            } catch {
+                appLog.write("Family Tree: cancelled merge left its staging in place (read-only): "
+                    + staging.lastPathComponent)
+            }
             stagingInFlight = nil
         }
     }
@@ -251,7 +298,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// watching, a MacFamilyTree export, an Ancestry download): same parse,
     /// same replace prompt, same install. Nothing is copied until Replace.
     func installFromFile(_ url: URL) {
-        if ViewerWriteGuard.refuse("FamilySearchPull.installFromFile") { return }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.installFromFile", mode: writeMode()) { return }
         watchTask?.cancel()
         watchTask = nil
         guard url.pathExtension.lowercased() == "ged" else {
@@ -298,7 +345,15 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 // the middle of a big write means "finished".
                 if size > 0, await Self.hasGedcomTrailer(at: output) {
                     self.quietSince = nil
-                    self.beginParse(output: output)
+                    // Published to the chosen output through the permit;
+                    // refused once revoked (#198 F1).
+                    do {
+                        self.beginParse(output: try self.publishPull(output))
+                    } catch {
+                        let mode = self.writeMode()
+                        self.phase = .failed(message: FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode)
+                            ?? "Could not keep \(output.lastPathComponent): \(error.localizedDescription)")
+                    }
                     return
                 }
                 if size > 0, size == lastSize {
@@ -385,6 +440,31 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Start (or restart) the parse. Only the newest generation may
     /// publish; anything older that is still running is cancelled and, if
     /// it cannot observe that, its result is dropped on return.
+    /// Copy the finished export from scratch to the chosen output, inside the
+    /// primitive. Same place (a test simulating the tool there) = nothing to
+    /// publish.
+    private func publishPull(_ scratch: URL) throws -> URL {
+        let chosen = request.outputURL
+        guard scratch.standardizedFileURL.resolvingSymlinksInPath()
+                != chosen.standardizedFileURL.resolvingSymlinksInPath() else { return scratch }
+        let fm = fileManager
+        return try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                                  path: "FamilySearchPull.publish (\(chosen.lastPathComponent))",
+                                                  mode: writeMode) { () throws -> URL in
+            // No-clobber: an earlier export at the chosen name is kept and
+            // this one gets the next free name beside it (never overwrite).
+            var destination = chosen
+            var suffix = 2
+            while fm.fileExists(atPath: destination.path) {
+                destination = chosen.deletingLastPathComponent().appendingPathComponent(
+                    chosen.deletingPathExtension().lastPathComponent + "-\(suffix)." + chosen.pathExtension)
+                suffix += 1
+            }
+            try fm.copyItem(at: scratch, to: destination)
+            return destination
+        }
+    }
+
     private func beginParse(output: URL) {
         parseTask?.cancel()
         parseGeneration &+= 1
@@ -530,10 +610,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// loader takes the newest valid file, so this is additive — the
     /// previous tree stays on disk as its own history.
     func install() {
-        if ViewerWriteGuard.refuse("FamilySearchPull.install") { return }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.install", mode: writeMode()) { return }
         guard case .ready(let output, let new, _, _) = phase, !isInstalling else { return }
         let people = new.people
         do {
+            try FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.install (write)", mode: writeMode) {
             try fileManager.createDirectory(
                 at: gedcomDirectory, withIntermediateDirectories: true)
             let stamp = Self.timestampFormatter.string(from: Date())
@@ -547,6 +628,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             }
             try fileManager.copyItem(at: output, to: destination)
             phase = .installed(installed: destination, people: people)
+            }
         } catch {
             phase = .failed(message:
                 FamilySearchPullError.installFailed(error.localizedDescription)
@@ -584,7 +666,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     private func currentTreeLoader(promoting: Bool = true,
                                    usingStore: Bool = true) -> FamilyGraphFileLoader {
         var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory)
-        loader.compiledStore = usingStore ? compiledStore() : nil
+        // Guarded: a promoting base load asks the authority at each store
+        // write, so a merge revoked before it yields promotes nothing (#192 F2).
+        let mode = writeMode
+        loader.compiledStore = usingStore ? compiledStore()?.guarded { mode().allowsWrites } : nil
         loader.readOnly = !promoting && usingStore
         // The production store's logger is a no-op, so anything the loader
         // says while compiling would vanish (codex, 2026-09-17).
@@ -597,7 +682,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// the wrong store in tests and absent on a read-only viewer, and a
     /// guard nobody can exercise is a guard nobody can trust — which is
     /// the whole reason this P1 shipped in the first place.
-    var compiledStore: @Sendable () -> FamilyGraphCompiledStore? = { .production }
+    var compiledStore: @Sendable () -> FamilyGraphCompiledStore? = { .app }
 
     /// "Add to current tree": build a DERIVED merge artifact from the
     /// verified export and the tree the loader reads today, keyed by
@@ -624,7 +709,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     func installMerged(
         policy: GedcomFamilyGraph.MergePolicy = .unionKeepingFirst
     ) -> Task<Void, Never> {
-        if ViewerWriteGuard.refuse("FamilySearchPull.installMerged") { return Task {} }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.installMerged", mode: writeMode()) { return Task {} }
         if let running = installTask { return running }
         guard case .ready(let output, _, _, _) = phase else { return Task {} }
         isInstalling = true
@@ -664,9 +749,6 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let stamp = Self.timestampFormatter.string(from: Date())
         let verb = policy == .refreshFromNewer ? "refreshed" : "merged"
         let fileName = "familysearch-\(verb)-\(stamp).ged"
-        // Two-case outcome (C++: a tagged union), because the failure is
-        // a sentence for the sheet, not an `Error`.
-        enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
         let loader = currentTreeLoader()
         // THE BASELINE IS READ BEFORE THE LOAD (codex, 2026-09-17).
         // `loadNewestOutcome` below may itself compile and promote a
@@ -682,13 +764,13 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // source missing, `loadCurrent()` returned nil and the guard was
         // skipped; the manifest still reports every source.
         let baselineGeneration = self.compiledStore()?.loadCurrentManifest()
-        let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
-            let fileManager = FileManager.default
-            guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
+        let writeMode = self.writeMode
+        let staged = await Task.detached(priority: .userInitiated) { () -> MergeStaged in
+            guard let new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
             }
             let outcome = loader.loadNewestOutcome()
-            guard var current = outcome.graph, let currentURL = outcome.selectedURL else {
+            guard let current = outcome.graph, let currentURL = outcome.selectedURL else {
                 return .failed("There is no current tree to add to — use Install family tree instead.")
             }
             // WHAT WE ARE REBASING ONTO — say it before a byte moves, so a
@@ -719,27 +801,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                     + "\(baseSources.count) could be loaded as the base. Merging now would "
                     + "silently drop the others. Recompile the family tree first, then try again.")
             }
-            // Sidecars beside the raw sources (never touching the sources);
-            // the hashes are also the merge's source fingerprints.
-            let currentSHA = Self.sha256Sidecar(for: currentURL, fileManager: fileManager)
-            let newSHA = Self.sha256Sidecar(for: output, fileManager: fileManager)
-            current.sourceFingerprint = currentSHA
-            new.sourceFingerprint = newSHA
-            let merge = current.merge(with: new, policy: policy)
-            let provenance = Self.provenanceNote(
-                stamp: stamp, merge: merge,
-                current: (currentURL, current.people.count, currentSHA),
-                added: (output, new.people.count, newSHA))
-            let text = merge.graph.gedcomText(provenance: provenance)
-            let stagedFile = staging.appendingPathComponent(fileName)
-            do {
-                try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-                try text.write(to: stagedFile, atomically: true, encoding: .utf8)
-            } catch {
-                try? fileManager.removeItem(at: staging)
-                return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
-            }
-            return .written(stagedFile, merge.graph.people.count, merge)
+            return Self.stageMerge(current: current, at: currentURL, new: new, from: output, policy: policy,
+                                   stamp: stamp, fileName: fileName, staging: staging, writeMode: writeMode)
         }.value
 
         if parseDelay > .zero {
@@ -747,12 +810,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             // the staged write and the activation check.
             try? await Task.sleep(for: parseDelay)
         }
+        if abandonIfRevoked(staged, staging: staging) { return }
         // Validate AFTER the write: Keep current / Forget / a newer parse
         // since we started means this artifact is nobody's — drop it.
         var stillReady = false
         if case .ready = phase { stillReady = true }
         guard generation == parseGeneration, stillReady else {
-            try? fileManager.removeItem(at: staging)
+            try? FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.drop staging",
+                                                mode: writeMode) { try? fileManager.removeItem(at: staging) }
             if stagingInFlight == staging { stagingInFlight = nil }
             return
         }
@@ -762,6 +827,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             phase = .failed(message: message)
         case .written(let stagedFile, let people, let merge):
             do {
+                // The activation's bytes, asked at the write (codex #193).
+                let destination = try FamilyTreeAccessMode.withWrite(
+                    .familySearchPull, path: "FamilySearchPull.activate (write)", mode: writeMode) { () throws -> URL in
                 try fileManager.createDirectory(at: gedcomDirectory, withIntermediateDirectories: true)
                 var destination = gedcomDirectory.appendingPathComponent(fileName)
                 var suffix = 2
@@ -776,15 +844,99 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 try fileManager.moveItem(at: stagedFile, to: partial)
                 try fileManager.moveItem(at: partial, to: destination)
                 try? fileManager.removeItem(at: staging)
+                return destination
+                }
                 stagingInFlight = nil
                 appLog.write("Family Tree: merge artifact \(destination.lastPathComponent): \(merge.sharedPeopleCount) shared + \(merge.addedPeopleCount) added people; \(merge.conflicts.count) conflicts kept for review")
                 phase = .installed(installed: destination, people: people)
             } catch {
-                try? fileManager.removeItem(at: staging)
+                try? FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.activate cleanup",
+                                                    mode: writeMode) { try? fileManager.removeItem(at: staging) }
                 stagingInFlight = nil
                 phase = .failed(message: FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
             }
         }
+    }
+
+    /// Two-case outcome of staging a merge (C++: a tagged union), because
+    /// the failure is a sentence for the sheet, not an `Error`.
+    enum MergeStaged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
+
+    /// The staging step of a merge, off the main actor: sidecars beside the
+    /// raw sources, the merged text under `staging/`. The parse before it
+    /// took a while, so the authority is asked again first (codex #190 F2):
+    /// a revoked archive gets no sidecar and no staging.
+    nonisolated static func stageMerge(current: GedcomFamilyGraph, at currentURL: URL,
+                                       new: GedcomFamilyGraph, from output: URL,
+                                       policy: GedcomFamilyGraph.MergePolicy, stamp: String, fileName: String,
+                                       staging: URL,
+                                       writeMode: @escaping @Sendable () -> FamilyTreeAccessMode) -> MergeStaged {
+        // The parse took a while: every byte below is inside the primitive,
+        // which asks the live mode at the write (codex #190/#193).
+        do {
+            return try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                                      path: "FamilySearchPull.merge (sidecars + staging)",
+                                                      mode: writeMode) {
+                try stageMergeAllowed(current: current, at: currentURL, new: new, from: output, policy: policy,
+                                      stamp: stamp, fileName: fileName, staging: staging)
+            }
+        } catch {
+            let mode = writeMode()
+            return .failed(FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode)
+                           ?? error.localizedDescription)
+        }
+    }
+
+    nonisolated private static func stageMergeAllowed(current: GedcomFamilyGraph, at currentURL: URL,
+                                                      new: GedcomFamilyGraph, from output: URL,
+                                                      policy: GedcomFamilyGraph.MergePolicy, stamp: String,
+                                                      fileName: String, staging: URL) throws -> MergeStaged {
+        var current = current, new = new
+        let fileManager = FileManager.default
+        // Sidecars beside the raw sources (never touching the sources);
+        // the hashes are also the merge's source fingerprints.
+        let currentSHA = Self.sha256Sidecar(for: currentURL, fileManager: fileManager)
+        let newSHA = Self.sha256Sidecar(for: output, fileManager: fileManager)
+        current.sourceFingerprint = currentSHA
+        new.sourceFingerprint = newSHA
+        let merge = current.merge(with: new, policy: policy)
+        let provenance = Self.provenanceNote(
+            stamp: stamp, merge: merge,
+            current: (currentURL, current.people.count, currentSHA),
+            added: (output, new.people.count, newSHA))
+        let text = merge.graph.gedcomText(provenance: provenance)
+        let stagedFile = staging.appendingPathComponent(fileName)
+        do {
+            try WritePermit.current.withWrite("merge staging") {
+                try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+                try text.write(to: stagedFile, atomically: true, encoding: .utf8)
+            }
+        } catch let refused as WritePermit.Refused {
+            throw refused
+        } catch {
+            try? WritePermit.current.withWrite("merge staging cleanup") { try fileManager.removeItem(at: staging) }
+            return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
+        }
+        return .written(stagedFile, merge.graph.people.count, merge)
+    }
+
+    /// Revoked while staging (codex #190 F2): activate nothing, remove
+    /// nothing, never recreate an absent archive folder. The staged file
+    /// stays where it is and the log names it. True = abandoned.
+    private func abandonIfRevoked(_ staged: MergeStaged, staging: URL) -> Bool {
+        let mode = writeMode()
+        guard FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.activate", mode: mode) else {
+            return false
+        }
+        if case .written(let stagedFile, _, _) = staged {
+            appLog.write("Family Tree: merge NOT activated (read-only); staged copy left at "
+                + stagedFile.deletingLastPathComponent().lastPathComponent + "/" + stagedFile.lastPathComponent)
+        }
+        if stagingInFlight == staging { stagingInFlight = nil }
+        if case .ready = phase {
+            phase = .failed(message: FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode) ?? "")
+        }
+        return true
     }
 
     /// The HEAD NOTE of a merge artifact: what it is (derived, lossy),
@@ -849,7 +1001,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let line = "\(hex)  \(url.lastPathComponent)\n"
         // Only write when the sidecar is missing or disagrees with the bytes.
         if (try? String(contentsOf: sidecar, encoding: .utf8)) != line {
-            try? line.write(to: sidecar, atomically: true, encoding: .utf8)
+            try? WritePermit.current.withWrite(".sha256 sidecar") {
+                try line.write(to: sidecar, atomically: true, encoding: .utf8)
+            }
         }
         return hex
     }

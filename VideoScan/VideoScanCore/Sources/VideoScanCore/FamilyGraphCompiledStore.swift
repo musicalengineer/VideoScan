@@ -110,6 +110,14 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// the root, and say so in the log. The app sets it from
     /// ViewerModeCenter; a CLI never sets it.
     public var refusesWrites = false
+    /// Asked at the MOMENT of every write (ingest, rollback, repoint,
+    /// adopt) — false refuses it exactly as `refusesWrites` does. The app's
+    /// Family Tree read-only state (2026-11-01, codex #190 F2) sets it so a
+    /// compile that was allowed when it started cannot promote after the
+    /// archive went away while it parsed. Nil = no extra check.
+    public var writeGuard: (@Sendable () -> Bool)? = nil
+    /// `refusesWrites`, or the guard saying no right now.
+    var writesRefused: Bool { refusesWrites || writeGuard?() == false }
     /// The log line every refused write starts with (test sensor).
     public static let refusedWritePrefix = "[family-tree] refused write on a viewer:"
 
@@ -544,7 +552,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// since (rule 3b re-review, finding 1). Returning early there handed the
     /// caller a stale graph while the pointer on disk said otherwise.
     public func adopt(_ found: RecoveryCandidate) -> Adoption {
-        guard !refusesWrites else {
+        guard !writesRefused else {
             log("\(Self.refusedWritePrefix) adopt \(found.generation) — pointer untouched")
             return .adopted(found.graph)
         }
@@ -658,7 +666,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// the pointer on disk is still the one we based the decision on (an
     /// ingest may have promoted a fresh generation meanwhile).
     private func repoint(from seen: Pointer, current: String, sourceKeys: [String]) {
-        if refusesWrites {
+        if writesRefused {
             log("\(Self.refusedWritePrefix) repoint to \(current) — pointer untouched")
             return
         }
@@ -701,7 +709,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// as `previous`, and prune never deletes a freshly promoted sibling.
     public func ingest(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String? = nil,
                        progress: (String) -> Void = { _ in }) -> GedcomFamilyGraph? {
-        if refusesWrites {
+        if writesRefused {
             log("\(Self.refusedWritePrefix) ingest (\(sources.count) sources) — the tree is compiled on the master")
             return nil
         }
@@ -717,7 +725,9 @@ public struct FamilyGraphCompiledStore: Sendable {
                               progress: (String) -> Void) -> GedcomFamilyGraph? {
         let generation = freshGenerationName()
         do {
-            try fileManager.createDirectory(at: generationURL(generation), withIntermediateDirectories: true)
+            try withWrite("generation \(generation)") {
+                try fileManager.createDirectory(at: generationURL(generation), withIntermediateDirectories: true)
+            }
             // Hash the sources FIRST (fresh read), then bind them to the
             // graph's provenance by position: count, basename and the hash
             // the graph carried from its own parse must all agree (codex
@@ -729,12 +739,12 @@ public struct FamilyGraphCompiledStore: Sendable {
                 try graph.bindSources(Array(zip(sources.map(\.lastPathComponent), keys)).map { (name: $0.0, sha256: $0.1) })
             } catch {
                 log("[family-tree] compiled generation \(generation) REFUSED, not promoted: sources do not bind to the graph's provenance — \(error)")
-                try? fileManager.removeItem(at: generationURL(generation))
+                try? withWrite("cleanup \(generation)") { try fileManager.removeItem(at: generationURL(generation)) }
                 return nil
             }
             progress("Compiling family tree (\(graph.people.count.formatted()) people)…")
             let data = GedcomCompiledTree.encode(graph)
-            try data.write(to: artifactURL(generation), options: .atomic)
+            try withWrite("artifact \(generation)") { try data.write(to: artifactURL(generation), options: .atomic) }
 
             progress("Verifying compiled tree…")
             let decoded = try GedcomCompiledTree.decode(try Data(contentsOf: artifactURL(generation)))
@@ -771,9 +781,13 @@ public struct FamilyGraphCompiledStore: Sendable {
                 let changed = zip(sources, zip(keys, rehashed)).filter { $0.1.0 != $0.1.1 }.map(\.0.lastPathComponent)
                 log("[family-tree] compiled generation \(generation) REFUSED, not promoted: "
                     + "source\(changed.count == 1 ? "" : "s") \(changed.joined(separator: ", ")) changed during compile/verify (hash differs from the bound hash)")
-                try? fileManager.removeItem(at: generationURL(generation))
+                try? withWrite("cleanup \(generation)") { try fileManager.removeItem(at: generationURL(generation)) }
                 return nil
             }
+            // Every mutation below is inside `withWrite`, which asks the
+            // guard and the bound WritePermit AT the write (codex #192/#193):
+            // a revocation during compile/verify promotes, prunes and
+            // cleans up nothing — the root stays as it was at that moment.
             let manifest = Manifest(
                 schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
                 index: GedcomFamilyGraph.TreeIndex.formatVersion, generation: generation,
@@ -782,7 +796,9 @@ public struct FamilyGraphCompiledStore: Sendable {
                 verification: problems, mergeReport: mergeReport,
                 localDroppedLineCount: decoded.droppedLineCount,
                 totalDroppedLineCount: decoded.totalDroppedLineCount)
-            try Self.encoder.encode(manifest).write(to: manifestURL(generation), options: .atomic)
+            try withWrite("manifest \(generation)") {
+                try Self.encoder.encode(manifest).write(to: manifestURL(generation), options: .atomic)
+            }
 
             guard problems.isEmpty else {
                 log("[family-tree] compiled generation \(generation) FAILED verification, not promoted: "
@@ -803,21 +819,7 @@ public struct FamilyGraphCompiledStore: Sendable {
             // deliberate ("Replace family tree" with a shorter pull), and
             // trading a silent loss for a silent block would be no better.
             // The rollback the store has always had is the remedy.
-            let previousManifest = readPointer().flatMap { readManifest($0.current) }
-            let integrity = TreeIntegrityCheck.compare(incoming: manifest, against: previousManifest)
-            for finding in integrity {
-                let tag: String
-                switch finding.severity {
-                case .note:    tag = "tree integrity"
-                case .warning: tag = "tree integrity WARNING"
-                case .alarm:   tag = "tree integrity ALARM"
-                }
-                log("[family-tree] \(tag): \(finding.message)")
-            }
-            if TreeIntegrityCheck.hasAlarm(integrity) {
-                log("[family-tree] generation \(generation) is being promoted DESPITE the alarm above. "
-                    + "If this was not intended, roll back to \(previousManifest?.generation ?? "the previous generation").")
-            }
+            logIntegrityAudit(of: manifest, generation: generation)
 
             try writeSidecars(sourceRecords)
             let old = readPointer()
@@ -833,10 +835,46 @@ public struct FamilyGraphCompiledStore: Sendable {
             return decoded
         } catch {
             log("[family-tree] compile of generation \(generation) failed: \(error)")
-            try? fileManager.removeItem(at: generationURL(generation))
+            // A refusal changes nothing more: the cleanup asks too.
+            try? withWrite("cleanup \(generation)") { try fileManager.removeItem(at: generationURL(generation)) }
             return nil
         }
     }
+
+    /// The integrity audit written before every promotion (2026-09-16): a
+    /// note when the tree grew, an alarm when a source or a tenth of the
+    /// people went missing. Reports, never refuses (see ingestLocked).
+    private func logIntegrityAudit(of manifest: Manifest, generation: String) {
+        let previousManifest = readPointer().flatMap { readManifest($0.current) }
+        let integrity = TreeIntegrityCheck.compare(incoming: manifest, against: previousManifest)
+        for finding in integrity {
+            let tag: String
+            switch finding.severity {
+            case .note:    tag = "tree integrity"
+            case .warning: tag = "tree integrity WARNING"
+            case .alarm:   tag = "tree integrity ALARM"
+            }
+            log("[family-tree] \(tag): \(finding.message)")
+        }
+        if TreeIntegrityCheck.hasAlarm(integrity) {
+            log("[family-tree] generation \(generation) is being promoted DESPITE the alarm above. "
+                + "If this was not intended, roll back to \(previousManifest?.generation ?? "the previous generation").")
+        }
+    }
+
+    /// THE store's write primitive (codex #193): `refusesWrites`, the
+    /// `writeGuard` and the caller's bound `WritePermit.current`, all asked
+    /// at the moment of the write. Every mutation of the root is inside it.
+    func withWrite<T>(_ what: String, _ body: () throws -> T) throws -> T {
+        guard !refusesWrites, writeGuard?() != false else {
+            log("\(Self.refusedWritePrefix) \(what) — refused at the write")
+            throw WriteRefused()
+        }
+        return try WritePermit.current.withWrite("compiled store: \(what)", body)
+    }
+
+    /// The pointer writers' refusal (thrown under the lock).
+    struct WriteRefused: Error {}
 
     /// Swap current and previous. False when there is no previous, when
     /// the previous manifest did not verify clean, or when the previous
@@ -844,7 +882,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// untouched in every false case.
     @discardableResult
     public func rollback() -> Bool {
-        if refusesWrites {
+        if writesRefused {
             log("\(Self.refusedWritePrefix) rollback — pointer untouched")
             return false
         }
@@ -883,8 +921,10 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// closing the descriptor releases the lock even if `body` throws.
     /// Blocks until the lock is free (an ingest is seconds at most).
     func withLock<T>(_ body: () throws -> T) throws -> T {
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let fd = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        let fd = try withWrite("lock file") {
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+            return open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        }
         guard fd >= 0 else { throw StoreError.lockFailed(errno: errno) }
         defer { close(fd) }
         guard flock(fd, LOCK_EX) == 0 else { throw StoreError.lockFailed(errno: errno) }
@@ -895,19 +935,25 @@ public struct FamilyGraphCompiledStore: Sendable {
     // MARK: Private
 
     private func writePointer(_ pointer: Pointer) throws {
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        // `.atomic` = write a temp file then rename over the old pointer, so
-        // a reader sees the old or the new pointer, never a torn one.
-        try JSONEncoder().encode(pointer).write(to: pointerURL, options: .atomic)
+        // Every pointer write — ingest, rollback, repoint, adopt — asks at
+        // the write, after any wait for the lock (codex #192/#193).
+        try withWrite("pointer") {
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+            // `.atomic` = write a temp file then rename over the old pointer, so
+            // a reader sees the old or the new pointer, never a torn one.
+            try JSONEncoder().encode(pointer).write(to: pointerURL, options: .atomic)
+        }
     }
 
     private func writeSidecars(_ sources: [Source]) throws {
         let dir = root.appendingPathComponent("sources", isDirectory: true)
-        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        for source in sources {
-            let url = dir.appendingPathComponent(source.key + ".sha256")
-            // sha256sum format, plus the file the hash belongs to.
-            try "\(source.sha256)  \(source.fileName)\n".write(to: url, atomically: true, encoding: .utf8)
+        try withWrite("sidecars") {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+            for source in sources {
+                let url = dir.appendingPathComponent(source.key + ".sha256")
+                // sha256sum format, plus the file the hash belongs to.
+                try "\(source.sha256)  \(source.fileName)\n".write(to: url, atomically: true, encoding: .utf8)
+            }
         }
     }
 
@@ -940,7 +986,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     private func prune(keeping pointer: Pointer?) {
         var keep: Set<String> = []
         guard let pointer else {
-            for name in generations() { try? fileManager.removeItem(at: generationURL(name)) }
+            for name in generations() { try? withWrite("prune \(name)") { try fileManager.removeItem(at: generationURL(name)) } }
             return
         }
         keep.insert(pointer.current)
@@ -968,7 +1014,7 @@ public struct FamilyGraphCompiledStore: Sendable {
         keep.formUnion(previousKeep.prefix(keepPrevious))
 
         for name in generations() where !keep.contains(name) {
-            try? fileManager.removeItem(at: generationURL(name))
+            try? withWrite("prune \(name)") { try fileManager.removeItem(at: generationURL(name)) }
         }
     }
 

@@ -382,7 +382,9 @@ struct FamilyTreeNoteCorrectionSensorTests {
         #expect(text.components(separatedBy: "CyberBrainWriter.correct(").count - 1 == 1)
         let path = try Self.body(of: "correctNote", in: text)
         #expect(path.contains("CyberBrainWriter.correct("))
-        #expect(path.contains("ViewerWriteGuard.check("))
+        // The read-only gate (2026-11-01) — viewer AND archive-absent; on a
+        // viewer it delegates to ViewerWriteGuard.check, unchanged.
+        #expect(path.contains("checkWrite(.note"))
         for verb in ["removeNote", "editNote", "moveNote"] {
             #expect(try Self.body(of: verb, in: text).contains("correctNote("), Comment(rawValue: verb))
         }

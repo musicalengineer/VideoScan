@@ -1106,6 +1106,22 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyGraphCompiledStoreWriteGuardTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyGraphCompiledStoreWriteGuardTests"
+      ],
+      "tests": [
+        "testAFalseGuardRefusesIngestAndWritesNothing",
+        "testARevocationBeforeArtifactWriteChangesNothing",
+        "testARevocationDuringVerificationPromotesNothing",
+        "testSourceChangeAndRevocationDuringVerificationRemoveNothing",
+        "testTheGuardIsReadAtTheWriteNotWhenTheStoreWasMade"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
       "stage": "unit",
       "suites": [
@@ -15426,6 +15442,150 @@
         "changedFileIsNotDescribed",
         "loadShowsAndLogs",
         "noTreeClears"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosingTests"
+      ],
+      "tests": [
+        "aCapturedRecorderRefusesAfterTheInjectedCentreIsRevoked",
+        "aCapturedRecorderRefusesAfterTheModelIsConfiguredUnavailable",
+        "aLivePhotoStoreRevokedMidChooseWritesNoPortrait",
+        "aLoadRevokedWhileItCompilesANewerPullPromotesNothing",
+        "aMergeRevokedBeforeItsBaseLoadCompilesNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing2Tests"
+      ],
+      "tests": [
+        "aCapturedRecorderRevokedWhileWaitingForRootLockWritesNothing",
+        "aLivePhotoChoiceRevokedAtImportClockChangesNothing",
+        "anOverlayRetirementRevokedBeforeSaveChangesNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing3Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing3Tests"
+      ],
+      "tests": [
+        "aDocumentRemovalHeldWhileTheModelGoesReadOnlyMovesNothing",
+        "aRefreshToolThatWritesAfterRevocationLandsNothingInTheRefreshRoot",
+        "theCrestPickersStoreRefusesOnceTheArchiveIsRevoked"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing4Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing4Tests"
+      ],
+      "tests": [
+        "aPullToolThatWritesAfterRevocationLandsNothingOutsideThePermit",
+        "anOpenAdjustSheetRefusesAfterOnlyItsModelIsRevoked"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing5Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing5Tests"
+      ],
+      "tests": [
+        "twoPullsNeverShareScratchAndBPublishesOnlyItsOwnBytes"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyIsolationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyIsolationTests",
+        "FamilyTreeReadOnlyScaleTests"
+      ],
+      "tests": [
+        "aCanonicalWalkInTheReadOnlyStateIsNotSaved",
+        "aReadOnlyLoadAndEveryActionLeaveTheFolderByteIdentical",
+        "personRefreshUndoRefusesInWordsAndWritesNothing",
+        "theRealSizedTreeLoadsReadOnlyWithinThePrewarmBudget"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyModeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyMatrixTests",
+        "FamilyTreeReadOnlyTruthTests",
+        "FamilyTreeReadOnlyTransitionTests"
+      ],
+      "tests": [
+        "aViewerShowsTheSameBannerAndDisablesTheSameWriters",
+        "accessTimesRoleResolvesToTheRuledMode",
+        "connectingTheArchiveReEnablesEveryWriterWithoutARelaunch",
+        "modelShowsReadOnlyFullOrRefused",
+        "refusalWordsNameTheWriterAndTheReason",
+        "theBannerTheDisabledWritersAndTheCardsComeFromTheModel",
+        "theProcessWideModeReadsTheViewerCenterAndThePublishedAccess"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyWriteSiteSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyWriteSiteSensorTests"
+      ],
+      "tests": [
+        "everyCompiledStoreHandedOutCarriesTheLiveGuard",
+        "everyWriteIsInsideTheWritePrimitive",
+        "identityCenterWritesOnlyThroughTheGatedStore",
+        "loaderReadOnlyBranchComesFirst",
+        "theModelNeverListsTheArchiveBeforeTheAccessCheck",
+        "theScannerFlagsAWriteOutsideThePrimitive",
+        "theScannerFlagsTheCodex196Shapes"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyRevocationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyDocumentTransitionTests",
+        "FamilyTreeReadOnlyInFlightTests",
+        "FamilyTreeReadOnlyPublishedAuthorityTests",
+        "FamilyTreeReadOnlyPullDateTests",
+        "FamilyTreeReadOnlyRulingsTests",
+        "FamilyTreeReadOnlySeamTests"
+      ],
+      "tests": [
+        "aDocumentRemovalRevokedBeforeItRunsMovesNothing",
+        "aFilingRevokedAfterItsChecksFilesNothing",
+        "aHeldListingReleasedAfterTheTransitionPublishesNothing",
+        "aLiveStoreRefusesOnceTheAuthorityIsRevokedAndCreatesNothing",
+        "aMergeRevokedAfterStagingNeverActivates",
+        "aPublishedRevocationRefusesTheNextWriteWithoutReappearing",
+        "aRecompileRevokedMidCompilePromotesNothing",
+        "aRefreshApplyRevokedBeforeTheOverlayWriteWritesNothing",
+        "aStandaloneRecompileRevokedMidCompilePromotesNothing",
+        "aViewerAppearanceNeverSearchesManifestSourceFolders",
+        "aViewerShowsNoRulingsAndNoBookmarks",
+        "aWrongUUIDVolumesRulingAndBookmarkNeverReachTheReadOnlyTree",
+        "anUnavailableArchiveIsNeverListedToResolveTheGEDCOMFolder",
+        "cancellingAMergeInTheReadOnlyStateRemovesNothing"
       ]
     },
     {
@@ -32946,6 +33106,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyGraphCompiledStoreWriteGuardTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -35506,7 +35670,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3180,
+      "expected_floor": 3226,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35816,6 +35980,23 @@
         "VideoScanTests/FamilyTreeNoteDraftOwnerTests",
         "VideoScanTests/FamilyTreePersonMetadataTests",
         "VideoScanTests/FamilyTreePullDatesTests",
+        "VideoScanTests/FamilyTreeReadOnlyClosingTests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing2Tests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing3Tests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing4Tests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing5Tests",
+        "VideoScanTests/FamilyTreeReadOnlyDocumentTransitionTests",
+        "VideoScanTests/FamilyTreeReadOnlyInFlightTests",
+        "VideoScanTests/FamilyTreeReadOnlyIsolationTests",
+        "VideoScanTests/FamilyTreeReadOnlyMatrixTests",
+        "VideoScanTests/FamilyTreeReadOnlyPublishedAuthorityTests",
+        "VideoScanTests/FamilyTreeReadOnlyPullDateTests",
+        "VideoScanTests/FamilyTreeReadOnlyRulingsTests",
+        "VideoScanTests/FamilyTreeReadOnlyScaleTests",
+        "VideoScanTests/FamilyTreeReadOnlySeamTests",
+        "VideoScanTests/FamilyTreeReadOnlyTransitionTests",
+        "VideoScanTests/FamilyTreeReadOnlyTruthTests",
+        "VideoScanTests/FamilyTreeReadOnlyWriteSiteSensorTests",
         "VideoScanTests/FamilyTreeResearchLinksIrishPlaceTests",
         "VideoScanTests/FamilyTreeResearchLinksTests",
         "VideoScanTests/FamilyTreeVerificationTests",

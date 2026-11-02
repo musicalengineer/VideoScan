@@ -23,6 +23,7 @@
 // script). FamilySearchPullCoordinator owns the lifecycle.
 
 import Foundation
+import VideoScanCore
 
 // MARK: - Request
 
@@ -271,6 +272,13 @@ struct FamilySearchPullCommand: Equatable {
 struct FamilySearchPullScript {
     let command: FamilySearchPullCommand
     let scriptURL: URL
+    /// Where the tool runs (codex #198 F1): the run's scratch folder, so
+    /// anything it writes beside itself lands there, never in Terminal's
+    /// home or a family-data folder. Nil = Terminal's own directory.
+    var workingDirectory: URL? = nil
+    private var changeDirectory: String {
+        workingDirectory.map { "cd \(FamilySearchPullCommand.quoted($0.path)) || exit 1\n" } ?? ""
+    }
 
     /// Note the deliberate pause. The user asked to see the command and
     /// approve it before anything runs (Rick 2026-08-25: "we see it we
@@ -299,7 +307,7 @@ struct FamilySearchPullScript {
         read -r confirm
         printf '\\n'
 
-        \(line)
+        \(changeDirectory)\(line)
         # NOT `status` — that name is read-only in zsh and the assignment
         # aborts the script before the tool ever runs.
         exit_status=$?
@@ -321,11 +329,14 @@ struct FamilySearchPullScript {
     func write(fileManager: FileManager = .default) throws -> URL {
         let directory = scriptURL.deletingLastPathComponent()
         do {
-            try fileManager.createDirectory(
-                at: directory, withIntermediateDirectories: true)
-            try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes(
-                [.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            // The caller's bound permit, asked at the write (codex #193).
+            try WritePermit.current.withWrite("pull script") {
+                try fileManager.createDirectory(
+                    at: directory, withIntermediateDirectories: true)
+                try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
+                try fileManager.setAttributes(
+                    [.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            }
         } catch {
             throw FamilySearchPullError.scriptWriteFailed(error.localizedDescription)
         }

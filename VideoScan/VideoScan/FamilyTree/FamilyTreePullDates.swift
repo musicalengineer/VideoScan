@@ -41,6 +41,9 @@ final class FamilyTreePullDates: ObservableObject {
     var log: @Sendable (String) -> Void = { appLog.write($0) }
     private let cache = GedcomPullHashCache()
     private var generation = 0
+    /// Test instrument: every set of folders a refresh is about to search
+    /// (and hash files under). Nil in production.
+    var searchRootsObserver: (@Sendable ([URL]) -> Void)?
 
     /// Describe the pulls behind `graph`. Called once per tree load. A
     /// newer call supersedes an older one still running.
@@ -53,8 +56,10 @@ final class FamilyTreePullDates: ObservableObject {
         }
         let cache = self.cache
         let log = self.log
+        let observe = searchRootsObserver
         let shown = await Task.detached(priority: .utility) {
-            let result = Self.describe(graph: graph, store: store, gedcomDirectory: gedcomDirectory, cache: cache)
+            let result = Self.describe(graph: graph, store: store, gedcomDirectory: gedcomDirectory, cache: cache,
+                                       observe: observe)
             for line in result.log { log(line) }
             return result.lines
         }.value
@@ -65,7 +70,8 @@ final class FamilyTreePullDates: ObservableObject {
     /// Pure apart from file reads: which pulls, found and hash-confirmed,
     /// grouped into pane lines, plus the log lines.
     nonisolated static func describe(graph: GedcomFamilyGraph, store: FamilyGraphCompiledStore?,
-                                     gedcomDirectory: URL, cache: GedcomPullHashCache)
+                                     gedcomDirectory: URL, cache: GedcomPullHashCache,
+                                     observe: (@Sendable ([URL]) -> Void)? = nil)
         -> (lines: [Shown], log: [String]) {
         let manifest = store?.manifest(describing: graph)
         // The GEDCOM folder (pulls/ included, the walk is recursive) plus the
@@ -76,6 +82,7 @@ final class FamilyTreePullDates: ObservableObject {
         }
         var seen = Set<String>()
         roots = roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+        observe?(roots)
 
         let sources = GedcomPullSource.describing(graph)
         guard !sources.isEmpty else {

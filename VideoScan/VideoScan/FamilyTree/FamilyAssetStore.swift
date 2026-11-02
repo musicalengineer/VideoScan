@@ -51,6 +51,17 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
         return loader.loadNewestOutcome()
     }
 
+    /// The GEDCOM folder WITHOUT looking inside anything when the archive
+    /// is `.unavailable` (codex #190 F1): an offline mount point must not be
+    /// listed and a wrong-UUID volume is not the archive. Otherwise the
+    /// same answer as `gedcomDirectory()`.
+    func resolvedGEDCOMDirectory(fileManager: FileManager = .default) -> URL {
+        guard access != .unavailable else {
+            return roots.assets.appendingPathComponent("GEDCOM", isDirectory: true)
+        }
+        return gedcomDirectory(fileManager: fileManager)
+    }
+
     /// Prefer the deployed assets/GEDCOM convention.  Older installations
     /// stored their only export in family-tree/originals; retain read access
     /// until they adopt a Master Archive, without copying or mutating it.
@@ -245,10 +256,15 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
                 entry = nil
                 return (base, nil)
             }
-            let overlaid = PersonRefreshOverlayReader.apply(
-                to: baseGraph, store: overlayStore,
-                discoveryDirectory: configuration.gedcomDirectory(),
-                canWrite: configuration.access == .readWrite, log: log)
+            // An overlay retirement is a write: the process authority is
+            // bound and asked at the save itself, never captured as a Bool
+            // (codex #192/#193 F3).
+            let overlaid = FamilyTreeWriteAuthority.process.whileReading(.personRefresh, path: "overlay retirement") {
+                PersonRefreshOverlayReader.apply(
+                    to: baseGraph, store: overlayStore,
+                    discoveryDirectory: configuration.gedcomDirectory(),
+                    canWrite: configuration.access == .readWrite, log: log)
+            }
             // ONE ruled query view (codex #1711): the rulings are applied to
             // the graph FIRST and the returned outcome is built from that
             // same value, so the Family Tree tab (which installs
@@ -373,7 +389,9 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
     private let lock = NSLock()
     private var value: FamilyAssetConfiguration
 
-    private init() {
+    /// `.shared` in the app; tests build their own so publishing a revoked
+    /// authority never reaches another suite.
+    init() {
         value = Self.configuration(
             masterArchiveRoot: nil,
             masterIsSafelyAvailable: true,
@@ -384,6 +402,20 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return value
+    }
+
+    /// A store for the current configuration that re-reads THIS centre at
+    /// every write (codex #190 F2): if the archive is revoked — or replaced
+    /// by another — after the store was made, its next write refuses.
+    func makeLiveStore() -> FamilyAssetStore {
+        let now = snapshot()
+        var store = now.makeStore()
+        let roots = now.roots
+        store.liveAccess = { [self] in
+            let current = self.snapshot()
+            return current.roots == roots ? current.access : .unavailable
+        }
+        return store
     }
 
     func publish(
@@ -679,6 +711,9 @@ struct FamilyAssetStore: @unchecked Sendable {
     /// Optional identity-aware attribution for group folders. Nil keeps the
     /// name-only rule (`groupFolderMatches(_:person:)`).
     var identity: FamilyAssetIdentityDirectory? = nil
+    /// The authority as it is NOW (FamilyAssetConfigurationCenter.makeLiveStore);
+    /// `requireWriteAccess` obeys the stricter of it and `access`. Nil = `access` only.
+    var liveAccess: (@Sendable () -> Access)? = nil
 
     /// One listing of `People/`, taken by `snapshotPeopleFolders()` and
     /// reused by every read through THIS store value. Nil (the default)
@@ -1090,7 +1125,7 @@ struct FamilyAssetStore: @unchecked Sendable {
             record.notedBy = notedBy ?? record.notedBy
             record.notedAt = date
             record.caption = caption ?? record.caption
-            try Self.publishExclusion(record, to: sidecar)
+            try withWrite("exclusion sidecar") { try Self.publishExclusion(record, to: sidecar) }
         }
         return sidecar
     }
@@ -1146,8 +1181,10 @@ struct FamilyAssetStore: @unchecked Sendable {
         do {
             // createIntermediates false: the photo's folder was just
             // verified; a folder that vanished is an error, not recreated.
-            try AtomicFilePublish.write(try encoder.encode(record), to: sidecar,
-                                        durability: .fullFsync, createIntermediates: false)
+            try WritePermit.current.withWrite("exclusion sidecar") {
+                try AtomicFilePublish.write(try encoder.encode(record), to: sidecar,
+                                            durability: .fullFsync, createIntermediates: false)
+            }
         } catch {
             // The caught error's own code — the global `errno` is stale by
             // now (temp-file cleanup ran after the failing syscall).
@@ -1311,10 +1348,10 @@ struct FamilyAssetStore: @unchecked Sendable {
               !fileManager.fileExists(atPath: destination.path) else {
             throw StoreError.crestAlreadyExists(destination)
         }
-        try fileManager.copyItem(at: source, to: destination)
+        try withWrite("crest") { try fileManager.copyItem(at: source, to: destination) }
         guard isVerifiedImage(destination),
               let imported = crestURL(surname: surname) else {
-            try? fileManager.removeItem(at: destination)
+            try? withWrite("crest cleanup") { try fileManager.removeItem(at: destination) }
             throw StoreError.sourceIsNotARegularImage(source)
         }
         return imported
@@ -1556,10 +1593,13 @@ struct FamilyAssetStore: @unchecked Sendable {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let sidecar = folder.appendingPathComponent(Self.chosenPhotoSidecarName, isDirectory: false)
-        do {
-            try encoder.encode(choice).write(to: sidecar, options: .atomic)
-        } catch {
-            throw StoreError.createFailed(sidecar.lastPathComponent, errno: errno)
+        // Asked AT the write, after validation and the clock read (#193 F4).
+        try withWrite("photo choice") {
+            do {
+                try encoder.encode(choice).write(to: sidecar, options: .atomic)
+            } catch {
+                throw StoreError.createFailed(sidecar.lastPathComponent, errno: errno)
+            }
         }
         PersonPhotoLog.chose(person: person, source: source, chosenAt: choice.chosenAt)
     }
@@ -1666,6 +1706,10 @@ struct FamilyAssetStore: @unchecked Sendable {
         }
         defer { Darwin.close(dirFD) }
 
+        // The check precedes the first byte (codex #192 F4/#193): validation,
+        // naming and the descriptor walk took time; nothing is created after
+        // a revocation.
+        return try withWrite("photo \(stem)") { () throws -> URL in
         // Only EEXIST advances the suffix (codex #675: a disk-full or
         // permission error must surface at once, not after 50 masks).
         for suffix in 1...50 {
@@ -1705,6 +1749,7 @@ struct FamilyAssetStore: @unchecked Sendable {
             return target.appendingPathComponent(name, isDirectory: false).standardizedFileURL
         }
         throw StoreError.createFailed(stem + "." + ext, errno: EEXIST)
+        }
     }
 
     /// Re-check a previously returned URL immediately before display/open.
@@ -1835,19 +1880,36 @@ struct FamilyAssetStore: @unchecked Sendable {
             }
             return
         }
-        try fileManager.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true)
+        // Asked at the creation itself (codex #192 F4/#193): never create a
+        // folder — least of all on an absent mount point — once revoked.
+        try withWrite("folder") {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
         guard isSafeDirectory(directory) else {
             throw StoreError.unsafeDirectory(directory)
         }
     }
 
+    /// THE store's write primitive (codex #193): ask the access NOW (a live
+    /// store: the published authority) and bind it as `WritePermit.current`
+    /// for the static helpers inside. Every write in this store is inside one.
+    func withWrite<T>(_ what: String, _ body: () throws -> T) throws -> T {
+        try requireWriteAccess()
+        let store = self
+        // The store's access AND whatever the caller bound (a model's
+        // authority), both CHECKED here and bound for the helpers inside
+        // (codex #196 F1: binding alone did not check the caller's permit).
+        let permit = WritePermit { _ in (try? store.requireWriteAccess()) != nil }.and(WritePermit.current)
+        return try WritePermit.$current.withValue(permit) { try permit.withWrite(what, body) }
+    }
+
     func requireWriteAccess() throws {
-        switch access {
-        case .readWrite: return
-        case .readOnly: throw StoreError.readOnly
-        case .unavailable: throw StoreError.sourceUnavailable
+        for current in [access, liveAccess?() ?? .readWrite] {
+            switch current {
+            case .readWrite: continue
+            case .readOnly: throw StoreError.readOnly
+            case .unavailable: throw StoreError.sourceUnavailable
+            }
         }
     }
 

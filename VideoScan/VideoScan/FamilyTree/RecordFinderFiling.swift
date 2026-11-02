@@ -193,6 +193,8 @@ struct RecordFinderFiler {
     let record: (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)?
     let log: @Sendable (String) -> Void
     let now: @Sendable () -> Date
+    /// The Family Tree's read-only state (2026-11-01). Tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
 
     init(assetStore: FamilyAssetStore, assetPerson: FamilyAssetPerson, researchStore: ResearchStore,
          subject: ResearchSubject, speakerName: String,
@@ -324,6 +326,13 @@ struct RecordFinderFiler {
     /// People/<…>/ directory — harmless, and the only side effect before the
     /// document itself).
     private func writeDocument(_ s: FoundRecordSubmission, _ pre: Prepared) -> Result<FiledDocument, Stop> {
+        // The checks (hashing, a PDF parse) took time: ask again at the
+        // first write (codex #190 F2). Nothing has been written yet.
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.document, path: "RecordFinderFiler.file (write)", mode: mode, log: log) {
+            return .failure(Stop(outcome: .refused(FamilyTreeWriteGate.refusalText(.document, mode: mode) ?? ""),
+                                 code: "read-only"))
+        }
         let folder: URL
         do {
             folder = try assetStore.folderForPhotoRequest(person: assetPerson)
@@ -337,8 +346,11 @@ struct RecordFinderFiler {
         }
         let document: PersonDocument
         do {
-            document = try assetStore.importPersonDocument(
-                from: s.file, kind: s.recordType.documentKind, note: pre.note, into: folder, for: assetPerson)
+            document = try FamilyTreeAccessMode.withWrite(.document, path: "RecordFinderFiler.file (import)",
+                                                          mode: writeMode) {
+                try assetStore.importPersonDocument(
+                    from: s.file, kind: s.recordType.documentKind, note: pre.note, into: folder, for: assetPerson)
+            }
         } catch let failure as FamilyAssetStore.DocumentImportFailure {
             // The document WAS written, then the import failed (codex review
             // #18 F4). Report what is on disk now, not what was hoped.
@@ -540,7 +552,7 @@ struct RecordFinderFiler {
         // Where it may be written.
         do {
             try assetStore.requireWriteAccess()
-            try ViewerWriteGuard.check("RecordFinderFiler.file")
+            try FamilyTreeWriteGate.check(.document, path: "RecordFinderFiler.file", mode: writeMode())
         } catch {
             return .failure(Refusal(code: "read-only", message: error.localizedDescription))
         }
@@ -742,7 +754,9 @@ struct RecordFinderFiler {
     private func undoDocument(_ document: PersonDocument, folder: URL, why: String) -> Undone {
         let trash = FamilyAssetStore.documentsTrashFolderName
         do {
-            try assetStore.removeDocument(document, from: folder, for: assetPerson)
+            try FamilyTreeAccessMode.withWrite(.document, path: "RecordFinderFiler.undo (to .trash)", mode: writeMode) {
+                try assetStore.removeDocument(document, from: folder, for: assetPerson)
+            }
             return Undone(outcome: .rolledBack("\(why). The file was moved to Documents/\(trash)/\(document.filename)."),
                           file: "Documents/\(trash)/\(document.filename)")
         } catch {

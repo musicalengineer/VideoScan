@@ -24,152 +24,6 @@ import AppKit
 import Combine
 import Foundation
 
-// MARK: - Display types
-
-/// Sex as the card draws it. GEDCOM records "M" / "F" / "" (or "U").
-enum FamilyTreeSex: Equatable {
-    case male, female, unknown
-
-    init(gedcom value: String) {
-        switch value.uppercased() {
-        case "M": self = .male
-        case "F": self = .female
-        default: self = .unknown
-        }
-    }
-
-    var glyph: String {
-        switch self {
-        case .male: return "♂"
-        case .female: return "♀"
-        case .unknown: return ""
-        }
-    }
-}
-
-/// One row in the sidebar / one person in the inspector. Only facts the
-/// GEDCOM actually records; nothing is invented.
-struct FamilyTreePersonSummary: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let surname: String?
-    let years: String?
-    let sex: FamilyTreeSex
-    /// The FamilySearch id, when the record has one. Shown on the card in
-    /// place of the surname (Rick, 2026-09-17: "where the last name is
-    /// currently in the person in FT view such as 'Doherty' we should have
-    /// FS ID since Doherty is already in view, why list it again in small
-    /// print under, put FSID?"). It is also the thing he searches by, the
-    /// key his People folders are named on, and the key his identity
-    /// rulings are recorded against.
-    var familySearchID: String? = nil
-    /// "I123" style GEDCOM pointer for live people, a short label for demo
-    /// people. Shown in monospace on the card's last line.
-    let reference: String
-}
-
-/// One card on the canvas, resolved from a layout node.
-struct FamilyTreeCard: Identifiable {
-    let id: String
-    let person: FamilyTreePersonSummary
-    let position: CGPoint
-    let isRoot: Bool
-    let photo: NSImage?
-    let assetPerson: FamilyAssetPerson?
-
-    init(id: String, person: FamilyTreePersonSummary, position: CGPoint,
-         isRoot: Bool, photo: NSImage?, assetPerson: FamilyAssetPerson? = nil) {
-        self.id = id
-        self.person = person
-        self.position = position
-        self.isRoot = isRoot
-        self.photo = photo
-        self.assetPerson = assetPerson
-    }
-}
-
-struct FamilyTreeScene {
-    var cards: [FamilyTreeCard] = []
-    var edges: [FamilyTreeLayout.Edge] = []
-    var size: CGSize = .zero
-
-    static let empty = FamilyTreeScene()
-}
-
-/// The people the inspector lists around the selected person.
-struct FamilyTreeRelatives: Equatable {
-    var parents: [FamilyTreePersonSummary] = []
-    var spouses: [FamilyTreePersonSummary] = []
-    var children: [FamilyTreePersonSummary] = []
-    var siblings: [FamilyTreePersonSummary] = []
-
-    var isEmpty: Bool {
-        parents.isEmpty && spouses.isEmpty && children.isEmpty && siblings.isEmpty
-    }
-}
-
-/// Someone a "Line to…" can end at: the tree root ("me") and the root's
-/// spouse(s). Built once at install; labels are the person's first given
-/// name, never a hard-coded "Rick"/"Donna".
-struct FamilyTreeAnchor: Identifiable, Equatable {
-    let id: String
-    let label: String
-    /// True for a home person of the tree (every root of a merged tree).
-    let isRoot: Bool
-    /// True only for the anchor that IS the reader: the pinned owner, or
-    /// the root of a single-root tree (the first-INDI assumption). Its
-    /// relation reads "your …"; every other anchor is named ("Donna's …").
-    ///
-    /// Separate from `isRoot` since 2026-09-27 (Tree Walk STEP 0, Rick:
-    /// "the joined trees can sometimes think someone is my ancestor even
-    /// though we're walking Donna's tree"). A merged tree has TWO roots;
-    /// with no owner pin both read "your", so Donna's grandmother appeared
-    /// as "your grandmother" in Donna's row. Two home people and no pin
-    /// means nobody is "you".
-    let readsAsYou: Bool
-
-    init(id: String, label: String, isRoot: Bool, readsAsYou: Bool? = nil) {
-        self.id = id
-        self.label = label
-        self.isRoot = isRoot
-        self.readsAsYou = readsAsYou ?? isRoot
-    }
-}
-
-/// One "Line to X" button for the selected person: the path when they are
-/// an ancestor of the anchor, nil (disabled) when not.
-struct FamilyTreeLineOption: Identifiable, Equatable {
-    var id: String { anchor.id }
-    let anchor: FamilyTreeAnchor
-    /// Generations from the selected person down to the anchor (1 =
-    /// parent); nil when they are not an ancestor. The path itself is
-    /// built only when the chain is shown — it can be thousands long.
-    let generations: Int?
-    /// "your great-great-grandmother" — nil when `generations` is nil.
-    let relation: String?
-    var isAvailable: Bool { generations != nil }
-}
-
-/// The vertical chain the canvas draws in place of the tree.
-struct FamilyTreeLineChain: Equatable {
-    struct Card: Identifiable, Equatable {
-        var id: String { person.id }
-        let person: FamilyTreePersonSummary
-        /// Recorded spouse names, as a caption ("⚭ Eileen Latta").
-        let spouseNames: [String]
-        /// 0 = the ancestor at the top.
-        let generation: Int
-        /// "Born 1615 (Plymouth…)" / "Died 1690, age 75 (…)" — the same
-        /// lines the inspector shows; carried so the exported line strip
-        /// can print places (2026-08-29). Empty when the GEDCOM has none.
-        var lifeLines: [String] = []
-    }
-    let anchor: FamilyTreeAnchor
-    let title: String
-    let cards: [Card]
-    var personIDs: Set<String> { Set(cards.map { $0.person.id }) }
-}
-
 // MARK: - Model
 
 /// `@MainActor` ≈ "every member runs on the UI thread"; `ObservableObject`
@@ -343,7 +197,91 @@ final class FamilyTreeLiveModel: ObservableObject {
     private var bookmarkSourceTransition = false
     /// People the reader marked to come back to (Rick, 2026-08-30).
     @Published private(set) var bookmarks: FamilyTreeBookmarks
-    private var sourceAccess: FamilyAssetStore.Access
+    private var sourceAccess: FamilyAssetStore.Access {
+        didSet { accessLatch.set(sourceAccess); refreshAccessMode() }
+    }
+    /// `sourceAccess`, readable from detached work (codex #190 F2).
+    private let accessLatch: FamilyTreeAccessLatch
+
+    /// May this model write NOW: its configured access, the PUBLISHED
+    /// archive authority and the CatalogSync role, strictest wins. Read at
+    /// the call (codex #190 F3) and handed to detached work, which reads it
+    /// again at the moment it writes (F2).
+    var writeAuthority: FamilyTreeWriteAuthority {
+        FamilyTreeWriteAuthority(latch: accessLatch, configuration: configurationCenter, viewer: viewerCenter)
+    }
+
+    // MARK: Read-only state (DECISIONS 2026-11-01)
+
+    /// Full, or read-only because the archive is absent / this Mac is a
+    /// viewer (FamilyTreeWriteGate.swift has the matrix). Derived from
+    /// `sourceAccess` and `viewerCenter`; refreshed whenever either can
+    /// have changed, so the archive coming back re-enables every writer
+    /// without a relaunch.
+    @Published private(set) var accessMode: FamilyTreeAccessMode = .full
+
+    /// The banner while the read-only state holds (nil otherwise, and nil
+    /// when there is no tree to show — the refusal banner says that).
+    var readOnlyBanner: String? {
+        guard accessMode.isReadOnly, loadState != .unavailable else { return nil }
+        return FamilyTreeWriteGate.bannerText
+    }
+
+    /// The writers the view must show disabled. Every one when read-only.
+    var disabledWriters: Set<FamilyTreeWriter> {
+        accessMode.isReadOnly ? Set(FamilyTreeWriter.allCases) : []
+    }
+
+    func isEnabled(_ writer: FamilyTreeWriter) -> Bool { !disabledWriters.contains(writer) }
+
+    /// Why the tab shows no tree (`loadState == .unavailable`): in read-only
+    /// mode, no compiled graph this build can read. Nil otherwise.
+    @Published private(set) var unavailableReason: String?
+
+    /// Where archive-absent refusals are logged (one line each). Viewer
+    /// refusals go through `viewerCenter`, as before. Tests capture it.
+    var writeRefusalLog: @Sendable (String) -> Void = { appLog.write($0) }
+
+    /// Recompute the mode from the authority. Any change drops document
+    /// reads in flight and the per-card counts (codex #190 F4); a read-only
+    /// mode holds no archive-derived state at all (F1).
+    private func refreshAccessMode() {
+        let next = writeAuthority.mode
+        if next != accessMode {
+            accessMode = next
+            clearDocumentsCache()
+        }
+        if next.isReadOnly { dropArchiveDerivedState() }
+    }
+
+    /// Read-only: rulings and bookmarks are EMPTY, full stop (codex #190 F1).
+    private func dropArchiveDerivedState() {
+        if !identityDecisions.isEmpty { identityDecisions = FamilyIdentityDecisions() }
+        identityRulingsUnsaved = false
+        if !bookmarks.ids.isEmpty {
+            bookmarks = FamilyTreeBookmarks()
+            bookmarkedPeopleInOrder = []
+            bookmarkedPeopleCount = 0
+        }
+    }
+
+    /// The only store the model hands out: guarded by its live authority at
+    /// every store write (codex #192 F2). Never hand out `compiledStore`.
+    private var liveCompiledStore: FamilyGraphCompiledStore? {
+        let authority = writeAuthority
+        return compiledStore?.guarded { authority.mode.allowsWrites }
+    }
+
+    /// The one call every model-level writer makes before touching disk.
+    private func checkWrite(_ writer: FamilyTreeWriter, _ path: String) throws {
+        refreshAccessMode()
+        try writeAuthority.check(writer, path: path, log: writeRefusalLog)
+    }
+
+    /// Non-throwing form: true = refused and logged.
+    private func refusesWrite(_ writer: FamilyTreeWriter, _ path: String) -> Bool {
+        do { try checkWrite(writer, path); return false } catch { return true }
+    }
     /// Where cyberbrain.json lives. Production = App Support/VideoScan/
     /// cyberbrain (the directory Hallie reads and telling mode writes);
     /// tests inject a temp directory.
@@ -353,7 +291,12 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// The role guard every CyberBrain write here checks. Production = the
     /// process-wide center; a test injects its own so it can play a viewer
     /// without flipping the whole test process into viewer mode.
-    var viewerCenter: ViewerModeCenter = .shared
+    /// Where the published archive authority is read from. Production =
+    /// the process-wide center; a test injects its own.
+    let configurationCenter: FamilyAssetConfigurationCenter
+    var viewerCenter: ViewerModeCenter = .shared {
+        didSet { refreshAccessMode() }
+    }
     /// Where note corrections write their START / OUTCOME lines. The app's
     /// one sink (appLog, videoscan.log); tests capture it.
     var correctionLog: (String) -> Void = { line in appLog.write(line) }
@@ -536,7 +479,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     // `nonisolated` ≈ "no actor lock needed": pure path math, usable as a
     // default argument before the main-actor instance exists.
     nonisolated static var productionOriginalsDirectory: URL {
-        FamilyAssetConfigurationCenter.shared.snapshot().gedcomDirectory()
+        FamilyAssetConfigurationCenter.shared.snapshot().resolvedGEDCOMDirectory()
     }
 
     /// Where the last focused person is remembered across relaunches
@@ -565,19 +508,29 @@ final class FamilyTreeLiveModel: ObservableObject {
          bookmarksFollowSource: Bool? = nil,
          photoProvider: @escaping (GedcomFamilyGraph.Person) -> NSImage? = { _ in nil },
          profilesProvider: (() -> [POIProfile])? = nil,
-         documentStoreProvider: (() -> FamilyAssetStore?)? = nil) {
-        let production = FamilyAssetConfigurationCenter.shared.snapshot()
+         documentStoreProvider: (() -> FamilyAssetStore?)? = nil,
+         sourceConfiguration: FamilyAssetConfiguration? = nil,
+         configurationCenter: FamilyAssetConfigurationCenter? = nil) {
+        // `sourceConfiguration` (tests): resolve the sources from THIS
+        // configuration exactly as production resolves them from the
+        // published snapshot, with everything else still isolated.
+        let center = configurationCenter ?? .shared
+        let production = sourceConfiguration ?? center.snapshot()
+        self.configurationCenter = center
+        // Production = nothing injected; any injection keeps the model off
+        // every real file and process-wide centre (isolation rule).
+        let isProduction = originalsDirectory == nil && sourceConfiguration == nil
         self.documentStoreProvider = documentStoreProvider
-            ?? (originalsDirectory == nil
-                ? { FamilyAssetConfigurationCenter.shared.snapshot().makeStore() }
+            ?? (isProduction
+                ? { center.makeLiveStore() }
                 : { nil })
         self.focusDefaults = focusDefaults
-            ?? (originalsDirectory == nil ? UserDefaults.standard : nil)
+            ?? (isProduction ? UserDefaults.standard : nil)
         self.rememberedFocusKey = self.focusDefaults?.string(forKey: Self.lastFocusDefaultsKey)
         // A test that injects an originals directory but no brain gets NO
         // brain, never the real one (isolation rule).
         self.cyberBrainRootURL = cyberBrainRootURL
-            ?? (originalsDirectory == nil ? FamilyTreeNotesStorage.productionRootURL : nil)
+            ?? (isProduction ? FamilyTreeNotesStorage.productionRootURL : nil)
         // Bookmarks live beside the GEDCOM, ON THE ARCHIVE — not in
         // Application Support like the brain, and not in UserDefaults.
         // Both of those are per-machine, and the point of a bookmark is
@@ -587,8 +540,14 @@ final class FamilyTreeLiveModel: ObservableObject {
         // bookmarks, never the real archive's.
         self.bookmarksFollowSource = bookmarksFollowSource
             ?? (originalsDirectory == nil && bookmarksDirectory == nil)
+        // No listing of an `.unavailable` archive (codex #190 F1).
+        let sourceDirectory = production.resolvedGEDCOMDirectory()
+        let initialAccess: FamilyAssetStore.Access = originalsDirectory == nil ? production.access : .readWrite
+        let startsReadOnly = FamilyTreeAccessMode.resolve(access: initialAccess, isViewer: ViewerModeCenter.shared.isViewer)
+            .strictest(.current(configuration: center)).isReadOnly
+        self.accessLatch = FamilyTreeAccessLatch(initialAccess)
         self.bookmarksDirectory = bookmarksDirectory
-            ?? (originalsDirectory == nil ? production.gedcomDirectory() : nil)
+            ?? (originalsDirectory == nil ? sourceDirectory : nil)
         // Load them HERE, from the directory this model actually resolved.
         // They used to be loaded only when `configure` saw the source
         // CHANGE — and on a normal launch it does not: init already set
@@ -596,16 +555,16 @@ final class FamilyTreeLiveModel: ObservableObject {
         // first configure compares it against itself and finds no change.
         // Rick hit exactly that: "searched for Mary O'Connor got 428,
         // that's the one should be hidden." The rulings were never read.
-        self.identityDecisions = FamilyIdentityDecisions.load(
-            from: originalsDirectory ?? production.gedcomDirectory(),
-            log: { appLog.write($0) })
-        self.bookmarks = self.bookmarksDirectory
-            .map { FamilyTreeBookmarks.load(from: $0) } ?? FamilyTreeBookmarks()
+        // Read-only from the start: nothing is read from the archive path.
+        self.identityDecisions = startsReadOnly ? FamilyIdentityDecisions()
+            : FamilyIdentityDecisions.load(from: originalsDirectory ?? sourceDirectory, log: { appLog.write($0) })
+        self.bookmarks = startsReadOnly ? FamilyTreeBookmarks()
+            : (self.bookmarksDirectory.map { FamilyTreeBookmarks.load(from: $0) } ?? FamilyTreeBookmarks())
         self.noteAuthor = noteAuthor
             ?? HallieTurnExecutor.Speakers.fromDefaults().ownerName
             ?? HallieTurnExecutor.Speakers.defaultOwnerName
         self.pronunciationFallback = pronunciationFallback
-            ?? (originalsDirectory == nil
+            ?? (isProduction
                 ? {
                     // The selected person's CyberBrain layer is supplied to
                     // `FamilyTreePronunciationChips.make` by the notes
@@ -616,27 +575,27 @@ final class FamilyTreeLiveModel: ObservableObject {
                         fileURL: pronunciationFileURL
                             ?? HalliePronunciationLexicon.defaultFileURL,
                         cyberBrainRootURL: nil,
-                        allowDefaultWrite: !ViewerModeCenter.shared.isViewer)
+                        // Read-only state (2026-11-01): never seed the file.
+                        allowDefaultWrite: FamilyTreeAccessMode.current().allowsWrites)
                 }
                 : { .shipped })
-        self.originalsDirectory = originalsDirectory
-            ?? production.gedcomDirectory()
+        self.originalsDirectory = originalsDirectory ?? sourceDirectory
         // Same isolation rule: an injected originals directory gets NO
         // production compiled store unless the test injects one.
         self.compiledStore = compiledStore
-            ?? (originalsDirectory == nil ? FamilyGraphCompiledStore.app : nil)
-        self.sourceAccess = originalsDirectory == nil ? production.access : .readWrite
+            ?? (isProduction ? FamilyGraphCompiledStore.app : nil)
+        self.sourceAccess = initialAccess
         self.ancestorGenerations = ancestorGenerations
         self.descendantGenerations = descendantGenerations
         self.photoProvider = photoProvider
         self.profilesProvider = profilesProvider
-            ?? (originalsDirectory == nil ? { POIProfile.cachedSnapshot() } : { [] })
-        self.kinshipCenter = originalsDirectory == nil ? KinshipDisplayCenter.shared : nil
-        self.usesSharedCache = originalsDirectory == nil && compiledStore == nil
+            ?? (isProduction ? { POIProfile.cachedSnapshot() } : { [] })
+        self.kinshipCenter = isProduction ? KinshipDisplayCenter.shared : nil
+        self.usesSharedCache = isProduction && compiledStore == nil
         // Hallie's "I can do that now" (live miss #8) recompiles through
         // THIS model when the tab exists, so the banner clears with it.
         // Injected models (tests) never register.
-        if originalsDirectory == nil && compiledStore == nil {
+        if isProduction && compiledStore == nil {
             FamilyTreeRecompileCenter.shared.register(self)
             // ONE subscription instead of a call at every writer (Rick's
             // 2026-09-14 rule). A tree card resolves its portrait against
@@ -655,6 +614,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                 .dropFirst()
                 .sink { [weak self] _ in self?.photoRevision &+= 1 }
         }
+        refreshAccessMode()
     }
 
     /// Keeps tree cards in step with photo writes made anywhere else.
@@ -779,13 +739,17 @@ final class FamilyTreeLiveModel: ObservableObject {
         diskLoadAttempts += 1
         loadGeneration &+= 1
         let generation = loadGeneration
-        guard sourceAccess != .unavailable else {
-            installUnavailable()
+        refreshAccessMode()
+        // ONE read-only load for both read-only reasons (codex #190 F1): the
+        // compiled tree only, no rulings, nothing on any archive path.
+        if accessMode.isReadOnly {
+            await performReadOnlyLoad(settings: settings, revision: revision, generation: generation)
             return
         }
         loadState = .loading
         let directory = originalsDirectory
-        let store = compiledStore
+        let store = liveCompiledStore
+        let authority = writeAuthority
         // `Task.detached` ≈ spawn on a worker thread; a first import parses
         // and compiles (seconds on a big pull) and must not block the UI.
         // Afterwards the promoted artifact decodes in ~10 ms.
@@ -829,7 +793,11 @@ final class FamilyTreeLiveModel: ObservableObject {
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = progress
-            var outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            // A load may promote a compile or retire an overlay: those nested
+            // writes ask the live authority at their own moment (#193 F3).
+            var outcome = authority.whileReading(.recompile, path: "FamilyTreeLiveModel.load") {
+                Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            }
             // The same ruled view the shared cache hands out (codex #1711),
             // before the bundle is built from it.
             if let raw = outcome.graph { outcome = outcome.replacingGraph(raw.applyingIdentityRulings(rulings)) }
@@ -860,12 +828,97 @@ final class FamilyTreeLiveModel: ObservableObject {
         refreshPullDates()
     }
 
+    // MARK: Read-only load (DECISIONS 2026-11-01)
+
+    /// The archive is absent: show the compiled graph, read-only. The load
+    /// reads ONLY App Support — the promoted generation under
+    /// family-tree/compiled/ and the person-refresh overlay — and writes
+    /// nothing: the store refuses every pointer/generation write, the
+    /// loader runs promoted-only (no .ged is opened, nothing is ingested),
+    /// and the overlay is applied without recording a retirement. Neither
+    /// the GEDCOM folder nor anything else on the archive path is read: an
+    /// offline mount point must not be touched, and a wrong-UUID volume is
+    /// not the archive. So no identity rulings or bookmarks are in force
+    /// here (they live on the archive), which `configure` already cleared.
+    ///
+    /// Worst-case memory: one decoded graph (~18 MB artifact → a 39k-person
+    /// graph of a few hundred MB) plus its launch bundle — the same as the
+    /// normal load, never two at once (the shared cache is not used).
+    private func performReadOnlyLoad(settings: FamilyTreeLaunchBundle.Settings,
+                                     revision: String?, generation: Int) async {
+        loadState = .loading
+        loadPhase = "Opening the compiled family tree (read-only)…"
+        let store = liveCompiledStore
+        let overlay = readOnlyOverlayStore
+        let loaded = await Task.detached(priority: .userInitiated) {
+            () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
+            let clock = ContinuousClock()
+            let mark = clock.now
+            let outcome = FamilyTreeReadOnlyLoad.outcome(store: store, overlay: overlay, log: { appLog.write($0) })
+            let people = outcome.graph?.people.count ?? 0
+            Self.logStep("load: decode (read-only)", took: clock.now - mark, people: people)
+            let bundle = outcome.graph.map { FamilyTreeLaunchBundle.build(graph: $0, settings: settings) }
+            return (outcome, bundle)
+        }.value
+        guard generation == loadGeneration else {
+            report("[family-tree] read-only load \(generation) superseded by \(loadGeneration); not installing")
+            return
+        }
+        loadPhase = nil
+        installReadOnly(loaded.0, bundle: loaded.1)
+        loadedAppearanceSettings = settings
+        if isLive, let revision { loadedRevision = revision }
+    }
+
+    /// Where the read-only load reads the person-refresh overlay from: the
+    /// production overlay for the production model, the injected one for a
+    /// test model (isolation rule — never the real file from a test).
+    private var readOnlyOverlayStore: PersonFactOverlayStore? {
+        usesSharedCache ? FamilyGraphSharedCache.shared.overlayStore : personRefreshOverlayStore
+    }
+
+
+    /// Install a read-only outcome: the graph when there is one, else the
+    /// refusal with its reason. Never installs the demo tree — an absent
+    /// archive is not "no GEDCOM yet".
+    private func installReadOnly(_ outcome: FamilyGraphFileLoader.Outcome, bundle: FamilyTreeLaunchBundle?) {
+        guard outcome.graph != nil else {
+            installUnavailable()
+            if accessMode == .readOnly(.viewer) {
+                unavailableReason = outcome.needsRecompile.isEmpty
+                    ? "The Family Tree can’t open: no compiled tree has been synced to this Mac yet — "
+                        + "sync again once \(viewerCenter.masterDisplayName) has one."
+                    : FamilyTreeViewerBanner.compiledElsewhereText(center: viewerCenter)
+            } else {
+                unavailableReason = outcome.needsRecompile.isEmpty
+                    ? "The Family Tree can’t open: there is no readable compiled tree on this Mac. "
+                        + "Connect the Master Archive to build it."
+                    : "The Family Tree can’t open: the compiled tree on this Mac was built by another version. "
+                        + "Connect the Master Archive to recompile it."
+            }
+            report("[family-tree] read-only: no compiled tree to show "
+                   + "(\(outcome.needsRecompile.isEmpty ? "missing or unreadable" : "another version")); tab refused")
+            return
+        }
+        // A recompile banner would offer a writer: in read-only mode the
+        // version-refused case is the refusal above, never this.
+        install(graph: outcome.graph, bundle: bundle)
+        needsRecompile = []
+        report("[family-tree] read-only: showing the compiled tree (\(peopleCount) people); "
+               + "photos, documents and every writer are off until the Master Archive is connected")
+        refreshPullDates()   // clears the lines: they would read the archive path
+    }
+
     /// Once per tree load: describe the pulls behind the installed tree
     /// (header dates, hash-confirmed) and log one line each. Runs after the
     /// install and never delays it; `Task {}` here ≈ posting to the main
     /// queue, the hashing itself is detached inside `refresh`.
     private func refreshPullDates() {
-        let pulls = pullDates, installed = graph, store = compiledStore, directory = originalsDirectory
+        // Read-only (archive absent OR a viewer, codex #190 F5): the pull
+        // files and the manifest's source folders are archive paths — show
+        // no dates rather than search or hash anything there.
+        let installed = accessMode.isReadOnly ? nil : graph
+        let pulls = pullDates, store = liveCompiledStore, directory = originalsDirectory
         Task { await pulls.refresh(graph: installed, store: store, gedcomDirectory: directory) }
     }
 
@@ -929,9 +982,14 @@ final class FamilyTreeLiveModel: ObservableObject {
         // Remote viewer (Phase 1): the tree is compiled on the master. The
         // banner never offers this button there, but the Hallie chip path
         // reaches here too — refuse, log, and say where it happens.
-        if ViewerWriteGuard.refuse("FamilyTreeLiveModel.recompile") {
-            reportNoGeneration("this machine is a viewer; the tree is compiled on the master",
-                               warning: "The family tree is compiled \(ViewerModeCenter.shared.masterOnlyHint); sync again after it updates.")
+        if refusesWrite(.recompile, "FamilyTreeLiveModel.recompile") {
+            if accessMode == .readOnly(.viewer) {
+                reportNoGeneration("this machine is a viewer; the tree is compiled on the master",
+                                   warning: "The family tree is compiled \(viewerCenter.masterOnlyHint); sync again after it updates.")
+            } else {
+                reportNoGeneration("read-only: the Master Archive is not connected",
+                                   warning: FamilyTreeWriteGate.refusalText(.recompile, mode: accessMode) ?? "")
+            }
             return
         }
 
@@ -955,16 +1013,25 @@ final class FamilyTreeLiveModel: ObservableObject {
         let captionGeneration = self.captionGeneration
         let directory = originalsDirectory
         let model = WeakRef(self)  // Swift 6: see loadFromDisk
+        // The compile parses for seconds before it writes: the store asks
+        // the authority again at the moment of every write (codex #190 F2).
+        let authority = writeAuthority, refusalLog = writeRefusalLog
+        let guarded = store.guarded {
+            !FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeLiveModel.recompile (ingest)",
+                                        mode: authority.mode, viewerCenter: authority.viewer, log: refusalLog)
+        }
         let promoted = await Task.detached(priority: .userInitiated) { () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
-            loader.compiledStore = store
+            loader.compiledStore = guarded
             loader.progress = { phase in
                 Task { @MainActor in
                     guard let self = model.object, self.captionGeneration == captionGeneration else { return }
                     self.loadPhase = phase
                 }
             }
-            return loader.recompile(sources: sources) != nil
+            return (try? authority.withWrite(.recompile, path: "FamilyTreeLiveModel.recompile", log: refusalLog) {
+                loader.recompile(sources: sources) != nil
+            }) ?? false
         }.value
 
         loadPhase = nil
@@ -1006,57 +1073,36 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadWarning = warning
     }
 
-    /// Everyone's sidebar summary in sidebar order — O(people), pure,
-    /// built in parallel chunks of rows (each slot written once; the
-    /// life-years line comes from the compiled index, so no date is
-    /// parsed here). Same rows as `sidebarOrder.map { summary($0) }`
-    /// (FamilyTreeLaunchBundleTests pins it).
-    nonisolated static func sidebarRows(of graph: GedcomFamilyGraph) -> [FamilyTreePersonSummary] {
-        let index = graph.index
-        let count = index.count
-        let chunk = 4096
-        let chunks = (count + chunk - 1) / chunk
-        return [FamilyTreePersonSummary](unsafeUninitializedCapacity: count) { buffer, initialized in
-            // Swift 6: the inout buffer pointer may not be captured by the concurrent closure; each
-            // chunk initializes only its disjoint [lo, hi) — no race (the FamilyTreeNameSearch shape).
-            nonisolated(unsafe) let slots = buffer
-            DispatchQueue.concurrentPerform(iterations: chunks) { c in
-                let lo = c * chunk, hi = min(count, lo + chunk)
-                for row in lo..<hi {
-                    let o = Int(index.sidebarOrder[row])
-                    let years = index.lifeYears[o]
-                    (slots.baseAddress! + row).initialize(
-                        to: summary(graph.people[index.ids[o]]!, years: years.isEmpty ? nil : years))
-                }
-            }
-            initialized = count
-        }
-    }
-
     /// Synchronous variant for tests and for callers that already have
     /// the file in hand.
     func loadNow() {
         loadGeneration &+= 1
-        guard sourceAccess != .unavailable else {
-            installUnavailable()
+        refreshAccessMode()
+        if accessMode.isReadOnly {
+            installReadOnly(FamilyTreeReadOnlyLoad.outcome(store: liveCompiledStore, overlay: readOnlyOverlayStore,
+                                                 log: { appLog.write($0) }),
+                            bundle: nil)
             return
         }
         loadState = .loading
         var loader = FamilyGraphFileLoader(originalsDirectory: originalsDirectory)
-        loader.compiledStore = compiledStore
-        install(outcome: Self.overlaid(loader.loadNewestOutcome(), store: personRefreshOverlayStore,
-                                       directory: originalsDirectory))
+        loader.compiledStore = liveCompiledStore
+        let overlayStore = personRefreshOverlayStore, directory = originalsDirectory
+        install(outcome: writeAuthority.whileReading(.recompile, path: "FamilyTreeLiveModel.loadNow") {
+            Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+        })
     }
+
 
     /// The injected-model twin of FamilyGraphSharedCache's overlay step:
     /// the same reader, applied after the loader returns (never before an
     /// ingest), so a test model sees exactly what production shows.
     nonisolated private static func overlaid(_ outcome: FamilyGraphFileLoader.Outcome,
                                              store: PersonFactOverlayStore?,
-                                             directory: URL) -> FamilyGraphFileLoader.Outcome {
+                                             directory: URL, canWrite: Bool = true) -> FamilyGraphFileLoader.Outcome {
         guard let store, let graph = outcome.graph else { return outcome }
         return outcome.replacingGraph(PersonRefreshOverlayReader.apply(
-            to: graph, store: store, discoveryDirectory: directory, canWrite: true,
+            to: graph, store: store, discoveryDirectory: directory, canWrite: canWrite,
             log: { appLog.write($0) }))
     }
 
@@ -1118,6 +1164,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // suppression at all; only the sidebar filter hid the rows.
         let newGraph = newGraph.map { $0.applyingIdentityRulings(identityDecisions) }
         loadWarning = nil
+        unavailableReason = nil
         let previousPerson = selectedID.flatMap { graph?.people[$0] }
         let sourceKey = newGraph.map(Self.sourceKey)
         let treeChanged = sourceKey != installedSourceKey
@@ -1134,7 +1181,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         graph = newGraph
         // Walk Tree decorations follow the tree (Rick 2026-09-27): a silent,
         // debounced re-walk when decorations.json is missing or stale.
-        if treeChanged, newGraph != nil { walkCenter?.treeDidChange(newGraph, reason: walkReason) }
+        // Not in the read-only state: an automatic re-walk SAVES decorations.json.
+        if treeChanged, newGraph != nil, accessMode.allowsWrites {
+            walkCenter?.treeDidChange(newGraph, reason: walkReason)
+        }
         bookmarkSourceTransition = false
         kinshipCenter?.install(graph: newGraph)
         // Everything O(people) lives in the bundle (rows, identity
@@ -1255,7 +1305,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     func configure(source: FamilyAssetConfiguration) {
-        let directory = source.gedcomDirectory()
+        // No listing of an `.unavailable` archive before the access check.
+        let directory = source.resolvedGEDCOMDirectory()
         let accessChanged = sourceAccess != source.access
         let sourceChanged = directory != originalsDirectory || accessChanged
         let bookmarksChanged = bookmarksFollowSource && (bookmarksDirectory != directory || accessChanged)
@@ -1270,15 +1321,16 @@ final class FamilyTreeLiveModel: ObservableObject {
             loadedRevision = nil
         }
         originalsDirectory = directory
-        sourceAccess = source.access
+        sourceAccess = source.access          // didSet → refreshAccessMode (drops RO state)
+        if sourceChanged { clearDocumentsCache() }   // reads in flight belong to the old source (F4)
+        let readOnly = accessMode.isReadOnly
         if bookmarksChanged {
             bookmarksDirectory = directory
-            bookmarks = source.access == .unavailable
-                ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
+            bookmarks = readOnly ? FamilyTreeBookmarks() : FamilyTreeBookmarks.load(from: directory)
         }
         if sourceChanged {
             identityRulingsUnsaved = false
-            identityDecisions = source.access == .unavailable
+            identityDecisions = readOnly
                 ? FamilyIdentityDecisions()
                 : FamilyIdentityDecisions.load(from: directory, log: { appLog.write($0) })
             if !identityDecisions.isEmpty {
@@ -1674,8 +1726,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// save time put John Robert Latta's passage on his father.
     func addNote(_ text: String, about personID: String,
                  kind: CyberBrainItem.Kind = .note, date: Date = Date()) throws {
-        // Remote viewer (Phase 1): the CyberBrain is the master's; synced, never written here.
-        try ViewerWriteGuard.check("FamilyTreeLiveModel.addNote", center: viewerCenter)
+        // Read-only state (viewer: the CyberBrain is the master's; archive
+        // absent: nothing is written anywhere).
+        try checkWrite(.note, "FamilyTreeLiveModel.addNote")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
@@ -1691,7 +1744,9 @@ final class FamilyTreeLiveModel: ObservableObject {
             date: date,
             origin: .familyTreeNote,
             gedcomPersonID: person.id)
-        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        let receipt = try writeAuthority.withWrite(.note, path: "FamilyTreeLiveModel.addNote", log: writeRefusalLog) {
+            try CyberBrainWriter.record(testimony, rootURL: root)
+        }
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
     }
@@ -1828,8 +1883,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         correctionLog("\(tag) START \(verb) \(subject)"
                       + (targetLabel.map { " → \($0)" } ?? ""))
         do {
-            // Remote viewer: the CyberBrain is the master's; never written here.
-            try ViewerWriteGuard.check("FamilyTreeLiveModel.\(verb)Note", center: viewerCenter)
+            // Read-only state: the CyberBrain is never written here.
+            try checkWrite(.note, "FamilyTreeLiveModel.\(verb)Note")
             guard let root = cyberBrainRootURL else {
                 throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
             }
@@ -1844,10 +1899,13 @@ final class FamilyTreeLiveModel: ObservableObject {
             if case .move(let target) = operation, target.gedcomPersonID.isEmpty {
                 throw CyberBrainWriter.CorrectionRefusal.targetMissing
             }
-            let receipt = try CyberBrainWriter.correct(
-                .init(itemID: note.id, viewedPersonID: note.cyberBrainPersonID,
-                      operation: operation, by: noteAuthor, date: date),
-                rootURL: root)
+            let correction = CyberBrainWriter.NoteCorrection(
+                itemID: note.id, viewedPersonID: note.cyberBrainPersonID,
+                operation: operation, by: noteAuthor, date: date)
+            let receipt = try writeAuthority.withWrite(.note, path: "FamilyTreeLiveModel.\(verb)Note",
+                                                       log: writeRefusalLog) {
+                try CyberBrainWriter.correct(correction, rootURL: root)
+            }
             let file = root.appendingPathComponent(CyberBrainLoader.defaultFilename).path
             correctionLog("\(tag) OUTCOME success \(verb) \(subject): "
                           + Self.correctionChange(receipt)
@@ -1866,31 +1924,12 @@ final class FamilyTreeLiveModel: ObservableObject {
         } catch let refusal as ViewerWriteGuard.RefusedError {
             correctionLog("\(tag) OUTCOME refused \(verb) \(subject): viewer mode; file unchanged")
             throw refusal
+        } catch let refusal as FamilyTreeWriteGate.Refused {
+            correctionLog("\(tag) OUTCOME refused \(verb) \(subject): read-only (the Master Archive is not connected); file unchanged")
+            throw refusal
         } catch {
             correctionLog("\(tag) OUTCOME failed \(verb) \(subject): \(error.localizedDescription); file unchanged")
             throw error
-        }
-    }
-
-    /// "status active → retracted (wrong person)" and friends, with quoted
-    /// text cut to 80 characters so a log line stays one line.
-    nonisolated static func correctionChange(_ receipt: CyberBrainWriter.CorrectionReceipt) -> String {
-        func quoted(_ text: String) -> String {
-            let flat = text.replacingOccurrences(of: "\n", with: " ")
-            return "\"" + (flat.count > 80 ? String(flat.prefix(79)) + "…" : flat) + "\""
-        }
-        let old = receipt.archive.people.lazy.flatMap(\.items).first { $0.id == receipt.itemID }
-        let why = old?.correction.map { FamilyTreeNoteCorrectionLine.reasonText($0) } ?? "?"
-        switch receipt.action {
-        case .removed:
-            return "status active → retracted (\(why)); text kept \(quoted(receipt.oldText))"
-        case .edited:
-            return "text \(quoted(receipt.oldText)) → \(quoted(receipt.newText ?? "")); "
-                + "\(receipt.itemID) superseded by \(receipt.newItemID ?? "?")"
-        case .moved:
-            return "person \(receipt.fromPersonID) → \(receipt.toPersonID ?? "?")"
-                + " (\(receipt.toPersonName ?? "?")\(receipt.createdTargetPerson ? ", new record" : ""));"
-                + " \(receipt.itemID) retracted, copy \(receipt.newItemID ?? "?"); text \(quoted(receipt.oldText))"
         }
     }
 
@@ -1906,11 +1945,14 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// refresh the notes pane, exactly as `addNote` does.
     @discardableResult
     func recordTestimony(_ testimony: CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt {
-        try ViewerWriteGuard.check("FamilyTreeLiveModel.recordTestimony")
+        try checkWrite(.note, "FamilyTreeLiveModel.recordTestimony")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
-        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        let receipt = try writeAuthority.withWrite(.note, path: "FamilyTreeLiveModel.recordTestimony",
+                                                   log: writeRefusalLog) {
+            try CyberBrainWriter.record(testimony, rootURL: root)
+        }
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
         return receipt
@@ -1923,9 +1965,15 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// the notes pane afterwards with `loadCyberBrain()`.
     func cyberBrainRecorder() -> (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)? {
         guard let root = cyberBrainRootURL else { return nil }
+        // The AUTHORITY is captured, never a mode, and asked at each record
+        // (codex #192 F3): the filer calls this later, off the main actor.
+        let authority = writeAuthority, log = writeRefusalLog
         return { testimony in
-            try ViewerWriteGuard.check("RecordFinderFiler.recordTestimony")
-            return try CyberBrainWriter.record(testimony, rootURL: root)
+            // Asked now AND, through the bound permit, under the CyberBrain
+            // root lock after any wait for it (codex #193 F1).
+            try authority.withWrite(.note, path: "RecordFinderFiler.recordTestimony", log: log) {
+                try CyberBrainWriter.record(testimony, rootURL: root)
+            }
         }
     }
 
@@ -2065,20 +2113,19 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// atomic writer as notes; the voice cache is dropped so the next
     /// utterance uses it.
     func setPronunciation(word: String, saidAs: String?) throws {
-        try ViewerWriteGuard.check("FamilyTreeLiveModel.setPronunciation")
+        try checkWrite(.pronunciation, "FamilyTreeLiveModel.setPronunciation")
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
         guard let graph, let id = selectedID, let person = graph.people[id] else {
             throw CyberBrainWriter.WriteError.emptySubject
         }
-        let receipt = try CyberBrainWriter.setPronunciation(
-            subjectName: person.name,
-            gedcomPersonID: person.id,
-            aliases: person.alternateNames,
-            token: word,
-            saidAs: saidAs,
-            rootURL: root)
+        let receipt = try writeAuthority.withWrite(.pronunciation, path: "FamilyTreeLiveModel.setPronunciation",
+                                                   log: writeRefusalLog) {
+            try CyberBrainWriter.setPronunciation(
+                subjectName: person.name, gedcomPersonID: person.id, aliases: person.alternateNames,
+                token: word, saidAs: saidAs, rootURL: root)
+        }
         PersonPronunciationCache.shared.invalidate()
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
@@ -2109,6 +2156,9 @@ final class FamilyTreeLiveModel: ObservableObject {
                 + "switching sources, so this id belongs to the outgoing tree")
             return bookmarks.contains(personID)
         }
+        // Read-only state (2026-11-01): refused outright — not even the
+        // in-memory flip, which would look like a bookmark that stuck.
+        if refusesWrite(.bookmark, "FamilyTreeLiveModel.toggleBookmark") { return bookmarks.contains(personID) }
 
         let nowMarked = bookmarks.toggle(personID)
         rebuildBookmarkedPeople()
@@ -2121,7 +2171,9 @@ final class FamilyTreeLiveModel: ObservableObject {
                 + "\(sourceAccess == .unavailable ? "unavailable" : "read-only")")
         } else if let bookmarksDirectory {
             do {
-                try bookmarks.save(to: bookmarksDirectory)
+                let marks = bookmarks
+                try writeAuthority.withWrite(.bookmark, path: "FamilyTreeLiveModel.toggleBookmark",
+                                             log: writeRefusalLog) { try marks.save(to: bookmarksDirectory) }
                 appLog.write("Family Tree: \(nowMarked ? "bookmarked" : "un-bookmarked") \(personID) "
                     + "(\(bookmarks.count) total) → \(bookmarksDirectory.lastPathComponent)")
             } catch {
@@ -2258,6 +2310,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     func setPhotoOverride(_ image: NSImage, for personID: String) {
+        // Read-only: no photos are shown, so none is put on a card either.
+        guard accessMode.allowsWrites else { return }
         photoOverrides[personID] = image
         photoOverrideSources[personID] = nil
         rebuildScene()
@@ -2268,6 +2322,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// without copying pixels, so the card and the Adjust sheet share one
     /// decode.
     func setPhotoOverride(_ image: CGImage, for personID: String) {
+        guard accessMode.allowsWrites else { return }
         photoOverrides[personID] = NSImage(cgImage: image, size: .zero)
         photoOverrideSources[personID] = image
         rebuildScene()
@@ -2319,6 +2374,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// onto a namesake is worse than a visible duplicate.
     @discardableResult
     func setRecordHidden(_ hidden: Bool, personID: String, note: String? = nil) -> Bool {
+        if refusesWrite(.identityRuling, "FamilyTreeLiveModel.setRecordHidden") { return false }
         guard let person = graph?.people[personID], let fsid = person.familySearchID else {
             appLog.write("Family Tree: cannot hide \(personID) — it has no FamilySearch id to key the ruling on")
             return false
@@ -2346,7 +2402,11 @@ final class FamilyTreeLiveModel: ObservableObject {
                 // Compare-and-swap: if the file changed since the tree
                 // loaded it, only this ruling is applied onto the current
                 // file; keep what was actually written, not the snapshot.
-                updated = try updated.save(to: directory, log: { appLog.write($0) })
+                let ruling = updated
+                updated = try writeAuthority.withWrite(.identityRuling, path: "FamilyTreeLiveModel.setRecordHidden",
+                                                       log: writeRefusalLog) {
+                    try ruling.save(to: directory, log: { appLog.write($0) })
+                }
                 identityRulingsUnsaved = false
                 appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
                     + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")
@@ -2420,7 +2480,8 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// read off the main actor, publishing only if the same person is still
     /// selected and nothing invalidated the read while it ran.
     private func refreshSelectedDocuments() {
-        guard isLive, let id = selectedID, let person = assetPerson(for: id) else {
+        // Read-only: documents live in the asset store, which is not read.
+        guard isLive, accessMode.allowsWrites, let id = selectedID, let person = assetPerson(for: id) else {
             publishSelectedDocuments([], loading: false)
             return
         }
@@ -2445,7 +2506,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             let rows = await Task.detached(priority: .userInitiated) {
                 Self.rows(listing(store, person, .selection), ownerID: id, owner: person)
             }.value
-            guard let self,
+            guard let self, self.accessMode.allowsWrites,
                   generation == self.documentsGeneration,
                   revision == self.documentRevision(for: id) else { return }
             self.remember(rows, for: id)
@@ -2480,7 +2541,8 @@ final class FamilyTreeLiveModel: ObservableObject {
             let counts = await Task.detached(priority: .utility) { () -> [(id: String, count: Int, revision: Int)] in
                 wanted.map { ($0.id, listing(store, $0.person, .cardCount).count, $0.revision) }
             }.value
-            guard let self, generation == self.documentsGeneration else { return }
+            // An access change since the read started drops it (codex #190 F4).
+            guard let self, generation == self.documentsGeneration, self.accessMode.allowsWrites else { return }
             for entry in counts
             where self.documentCounts[entry.id] == nil && entry.revision == self.documentRevision(for: entry.id) {
                 self.documentCounts[entry.id] = entry.count
@@ -2561,6 +2623,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// plain-words error for the inspector, nil on success.
     func removeDocument(_ row: PersonDocumentRow) async -> String? {
         let document = row.document
+        if refusesWrite(.document, "FamilyTreeLiveModel.removeDocument") {
+            return FamilyTreeWriteGate.refusalText(.document, mode: accessMode, viewerCenter: viewerCenter)
+        }
         if let refusal = validateDocumentRemoval(row) {
             PersonDocumentLog.shared.write(refusal.logLine(for: row, selectedID: selectedID),
                                            privateName: row.owner.name)
@@ -2577,12 +2642,19 @@ final class FamilyTreeLiveModel: ObservableObject {
             return refusal.message(for: row)
         }
         let owner = row.owner
+        let authority = writeAuthority, refusalLog = writeRefusalLog
         let outcome = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
             guard Self.isRegularFile(url) else {
                 return .failure(DocumentRemovalRefusal.missingOnDisk(url))
             }
             do {
-                try store.removeDocument(document, from: folder, for: owner)
+                // The MODEL's authority is bound through the store's wait
+                // (clock, sidecar lock) and asked at each mutation inside
+                // it (codex #190 F2, #196 F1).
+                try authority.withWrite(.document, path: "FamilyTreeLiveModel.removeDocument (move)",
+                                        log: refusalLog) {
+                    try store.removeDocument(document, from: folder, for: owner)
+                }
                 return .success(())
             } catch {
                 return .failure(error)
@@ -2621,67 +2693,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Create the originals folder if needed and show it in Finder so the
     /// user can drop a GEDCOM in.
     func revealOriginalsFolder() {
-        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        if refusesWrite(.revealFolder, "FamilyTreeLiveModel.revealOriginalsFolder") { return }
+        let store = configurationCenter.makeLiveStore()
         guard let folder = try? store.ensureGEDCOMDirectory(),
               folder == originalsDirectory.standardizedFileURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([folder])
-    }
-
-    // MARK: Summaries (pure; `nonisolated` so tests and other actors can
-    // call them without hopping to the main thread)
-
-    nonisolated static func summary(_ person: GedcomFamilyGraph.Person) -> FamilyTreePersonSummary {
-        summary(person, years: years(birth: person.birthDate, death: person.deathDate))
-    }
-
-    /// Same, with the life-dates line supplied (the compiled index carries
-    /// it per person, so the sidebar build parses no dates).
-    nonisolated static func summary(_ person: GedcomFamilyGraph.Person, years: String?) -> FamilyTreePersonSummary {
-        FamilyTreePersonSummary(
-            id: person.id,
-            name: person.name.isEmpty ? "(unnamed)" : person.name,
-            surname: person.surname,
-            years: years,
-            sex: FamilyTreeSex(gedcom: person.sex),
-            familySearchID: person.familySearchID,
-            reference: reference(for: person.id))
-    }
-
-    /// "@I123@" → "I123": the pointer with every leading and trailing "@"
-    /// removed (what `trimmingCharacters(in: "@")` did, without building
-    /// a CharacterSet per row).
-    nonisolated static func reference(for id: String) -> String {
-        var scalars = Substring(id).unicodeScalars[...]
-        while scalars.first == "@" { scalars.removeFirst() }
-        while scalars.last == "@" { scalars.removeLast() }
-        return String(scalars)
-    }
-
-    /// Life-dates line. Years when both dates carry one ("1929–2008");
-    /// otherwise the raw GEDCOM text, prefixed so "b."/"d." is explicit.
-    /// Never claims "Living" — absence of a death date is not evidence.
-    /// Lives in VideoScanCore (`GedcomFamilyGraph.lifeYearsLabel`) since
-    /// 2026-08-29 so the compiled index can carry it per person.
-    nonisolated static func years(birth: String?, death: String?) -> String? {
-        GedcomFamilyGraph.lifeYearsLabel(birth: birth, death: death)
-    }
-
-    /// First four-digit run in a raw GEDCOM date ("ABT 1944", "BET 1930
-    /// AND 1931" → 1930).
-    nonisolated static func year(in raw: String?) -> Int? {
-        GedcomFamilyGraph.year(in: raw)
-    }
-
-    /// Surname, then given name, then id. People with no surname go last.
-    nonisolated static func sorted(_ people: [GedcomFamilyGraph.Person]) -> [GedcomFamilyGraph.Person] {
-        people.sorted { lhs, rhs in
-            let ls = lhs.surname?.lowercased() ?? "\u{FFFF}"
-            let rs = rhs.surname?.lowercased() ?? "\u{FFFF}"
-            if ls != rs { return ls < rs }
-            let ln = lhs.name.lowercased(), rn = rhs.name.lowercased()
-            if ln != rn { return ln < rn }
-            return lhs.id < rhs.id
-        }
     }
 
     // MARK: Rebuild
@@ -2705,8 +2721,12 @@ final class FamilyTreeLiveModel: ObservableObject {
         bookmarkedPeopleCount = bookmarkedPeopleInOrder.count
     }
 
+    /// No rows when there is no tree to read. Since 2026-11-01 an absent
+    /// archive still shows the compiled tree (read-only), so its rows stay.
+    private var hasRowsToShow: Bool { isLive || sourceAccess != .unavailable }
+
     private func refilterNow() {
-        guard sourceAccess != .unavailable else {
+        guard hasRowsToShow else {
             filteredPeople = []
             return
         }
@@ -2854,6 +2874,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     }
 
     private func rebuildScene() {
+        let readOnly = accessMode.isReadOnly
         if let graph, let rootID = selectedID {
             let layout = FamilyTreeLayout.layout(
                 graph: graph, rootID: rootID,
@@ -2863,12 +2884,15 @@ final class FamilyTreeLiveModel: ObservableObject {
                 cards: layout.nodes.compactMap { node in
                     guard let person = graph.people[node.personID],
                           !isSuppressedRecord(node.personID) else { return nil }
+                    // Read-only: a "no photo" placeholder — the card never
+                    // reaches the asset store (no assetPerson, no photo).
+                    let showsPhotos = !readOnly
                     return FamilyTreeCard(id: node.id,
                                           person: Self.summary(person),
                                           position: node.position,
                                           isRoot: node.isRoot,
-                                          photo: photo(for: person.id),
-                                          assetPerson: FamilyAssetPerson(person))
+                                          photo: showsPhotos ? photo(for: person.id) : nil,
+                                          assetPerson: showsPhotos ? FamilyAssetPerson(person) : nil)
                 },
                 edges: layout.edges,
                 size: layout.size)

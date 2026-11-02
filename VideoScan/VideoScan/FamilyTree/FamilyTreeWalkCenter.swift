@@ -61,6 +61,10 @@ final class FamilyTreeWalkCenter: ObservableObject {
     /// Where decorations.json lives. Injected by tests; production is App
     /// Support/VideoScan/family-tree/decorations.json.
     var storeURL: URL? = TreeWalkStore.defaultURL()
+    /// The Family Tree's read-only state (DECISIONS 2026-11-01): in it no
+    /// walk is saved and no automatic re-walk runs. Read at each use, so the
+    /// archive coming back re-enables saving without a relaunch. Tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     /// Console + catalog.log writer (the catalog model's `log`). Set by the
     /// Family Tree view; nil in tests (then only videoscan.log is written).
     var consoleLog: ((String) -> Void)?
@@ -232,7 +236,9 @@ final class FamilyTreeWalkCenter: ObservableObject {
     /// across a burst.
     func treeDidChange(_ graph: GedcomFamilyGraph?, reason: String) {
         refreshTask?.cancel()
-        guard let graph else {
+        // Read-only (2026-11-01): an automatic refresh exists only to SAVE
+        // decorations.json, so none is scheduled; `save` refuses as well.
+        guard let graph, writeMode().allowsWrites else {
             pendingReasons = []
             refreshTask = nil
             return
@@ -312,8 +318,18 @@ final class FamilyTreeWalkCenter: ObservableObject {
         self.stored = stored
         self.status = nil
         guard let url = storeURL else { return "decorations not saved (no store location)" }
+        if FamilyTreeWriteGate.refuse(.walkDecorations, path: "FamilyTreeWalkCenter.save",
+                                      mode: writeMode(), log: { self.write($0) }) {
+            return "decorations not saved (read-only until the Master Archive is connected)"
+        }
+        let writeMode = self.writeMode
         let error: String? = await Task.detached(priority: .utility) {
-            do { try TreeWalkStore.save(result, to: url); return nil } catch { return error.localizedDescription }
+            // Again at the moment of the write (codex #190 F2).
+            do {
+                try FamilyTreeAccessMode.withWrite(.walkDecorations, path: "FamilyTreeWalkCenter.save (write)",
+                                                   mode: writeMode) { try TreeWalkStore.save(result, to: url) }
+                return nil
+            } catch { return error.localizedDescription }
         }.value
         if let error { return "decorations NOT saved: \(error)" }
         return "decorations saved"

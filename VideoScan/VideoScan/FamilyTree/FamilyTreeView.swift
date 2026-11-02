@@ -225,6 +225,9 @@ struct FamilyTreeView: View, Equatable {
         } else if model.loadState == .unavailable {
             unavailableBanner
         }
+        if let readOnly = model.readOnlyBanner {
+            readOnlyBanner(readOnly)
+        }
         if let phase = model.loadPhase, model.loadState == .loading {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -314,15 +317,18 @@ struct FamilyTreeView: View, Equatable {
     /// Right-click → Refresh from FamilySearch…: hand the person to the
     /// center, which writes the Terminal script and starts watching.
     private func startPersonRefresh(for personID: String) {
+        guard model.isEnabled(.personRefresh) else { return }
         guard let target = model.personRefreshTarget(for: personID) else { return }
         let model = self.model
         autoPresentedRefreshID = nil
+        let authority = model.writeAuthority
         refreshCenter.begin(target: target, installedFacts: {
             model.personFacts(familySearchID: target.familySearchID)
-        })
+        }, writeMode: { authority.mode })
     }
 
     private func undoPersonRefresh(_ target: PersonRefreshCoordinator.Target) {
+        guard model.isEnabled(.personRefresh) else { return }
         // Undo's overlay write runs off the main actor; reload only after it lands.
         Task {
             _ = await refreshCenter.undoLast(familySearchID: target.familySearchID, personName: target.personName)
@@ -484,8 +490,7 @@ struct FamilyTreeView: View, Equatable {
                         model.setPhotoOverride(cropped, for: source.personID)
                         appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
                         do {
-                            try source.store.recordPhotoChoice(
-                                url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
+                            try FamilyPhotoAdjustSheet.recordChoice(url, source: source)
                             model.notePhotoChoiceWritten()
                             adjustError = nil
                         } catch {
@@ -617,7 +622,9 @@ struct FamilyTreeView: View, Equatable {
     /// the tab reads from. A pull already in flight comes back as the SAME
     /// coordinator — the sheet reopens onto it.
     private func presentGetFamilyTree() {
-        pullCenter.begin(gedcomDirectory: model.originalsDirectory)
+        guard model.isEnabled(.familySearchPull) else { return }
+        let authority = model.writeAuthority
+        pullCenter.begin(gedcomDirectory: model.originalsDirectory, writeMode: { authority.mode })
         showPullSheet = true
     }
 
@@ -659,13 +666,31 @@ struct FamilyTreeView: View, Equatable {
         HStack(spacing: 10) {
             Image(systemName: "externaldrive.badge.exclamationmark")
                 .foregroundStyle(.orange)
-            Text("Family Tree is unavailable until the designated Master Archive is connected and its identity is verified.")
+            Text(model.unavailableReason
+                 ?? "Family Tree is unavailable until the designated Master Archive is connected and its identity is verified.")
                 .font(.system(size: 12))
             Spacer()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .background(Color.orange.opacity(0.12))
+    }
+
+    /// The read-only state (DECISIONS 2026-11-01): the tree is shown, every
+    /// writer is off. Same orange style as the refusal banner; the text is
+    /// the model's (`readOnlyBanner`), never composed here.
+    private func readOnlyBanner(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.system(size: 12))
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color.orange.opacity(0.12))
+        .accessibilityIdentifier("ft.readOnlyBanner")
     }
 
     private var sourceRevision: String {
@@ -767,12 +792,14 @@ struct FamilyTreeView: View, Equatable {
     }
 
     private func undoIdentityPin(_ banner: TreeIdentityCenter.Banner) {
+        guard model.isEnabled(.identityPin) else { return }
         guard let profile = profileNamed(banner.profileName) else { return }
         identityCenter.unpin(profile)
         identityCenter.dismissBanner()
     }
 
     private func changeIdentityPin(_ banner: TreeIdentityCenter.Banner) {
+        guard model.isEnabled(.identityPin) else { return }
         guard let profile = profileNamed(banner.profileName) else { return }
         identityPickTarget = TreeIdentityPickTarget(
             profile: profile, candidates: [banner.candidate], mode: .changePin, current: banner.candidate)
@@ -1269,7 +1296,8 @@ struct FamilyTreeView: View, Equatable {
                 },
                 familySearchRefreshSummary: refreshCenter.summary(for: card.person.familySearchID),
                 // One dictionary lookup on the model (#229) — never a resolve here.
-                birthFlag: model.birthFlag(for: card.person.id)
+                birthFlag: model.birthFlag(for: card.person.id),
+                writesEnabled: model.accessMode.allowsWrites
             )
     }
 
@@ -1522,7 +1550,7 @@ struct FamilyTreeView: View, Equatable {
 
                 if model.isLive, model.selectedPerson != nil {
                     archivistNotesPanel
-                    documentsPanel
+                    documentsPanelIfReadable
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -1535,11 +1563,7 @@ struct FamilyTreeView: View, Equatable {
                 .padding(14)
                 .background(panelBackground)
 
-                FamilyCrestsPane(
-                    store: FamilyAssetConfigurationCenter.shared
-                        .snapshot().makeStore())
-                    .padding(14)
-                    .background(panelBackground)
+                crestsPaneIfReadable
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Notes")
@@ -1597,9 +1621,10 @@ struct FamilyTreeView: View, Equatable {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(model.selectedNotes) { note in
-                    FamilyTreeNoteRow(note: note) { mode in
+                    // Read-only: no correction menu (nil hides it).
+                    FamilyTreeNoteRow(note: note, onCorrect: model.isEnabled(.note) ? { mode in
                         noteCorrectionTarget = FamilyTreeNoteCorrectionTarget(note: note, mode: mode)
-                    }
+                    } : nil)
                 }
             }
             // Rows computed once per selection by the model (only while the
@@ -1641,7 +1666,8 @@ struct FamilyTreeView: View, Equatable {
                     .masterOnly()
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || !model.isEnabled(.note))
             }
             Text("Saved to the family knowledge file as \(model.noteAuthor); Hallie can answer from it right away. Your GEDCOM is never changed.")
                 .font(.system(size: 10))
@@ -1726,7 +1752,7 @@ struct FamilyTreeView: View, Equatable {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 ForEach(model.selectedPronunciations) { chip in
-                    Button { beginEditingPronunciation(chip) } label: {
+                    Button { if model.isEnabled(.pronunciation) { beginEditingPronunciation(chip) } } label: {
                         HStack(spacing: 4) {
                             Text(chip.word)
                             if let said = chip.saidAs {
@@ -1865,6 +1891,7 @@ struct FamilyTreeView: View, Equatable {
     /// the pane (deceased tree record) and a refusal (living, no dates,
     /// demo tree). Nothing goes online until Run is pressed in the pane.
     private func presentResearch(for id: String) {
+        guard model.isEnabled(.research) else { return }
         switch ResearchEligibility.evaluate(model.treePerson(id: id)) {
         case .eligible(let subject):
             model.select(id)
@@ -2010,7 +2037,11 @@ struct FamilyTreeView: View, Equatable {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Pick, import or adjust this person's card photo (also right-click or double-click the card)")
+        // Read-only state: every item here writes.
+        .disabled(!model.accessMode.allowsWrites)
+        .help(model.accessMode.allowsWrites
+              ? "Pick, import or adjust this person's card photo (also right-click or double-click the card)"
+              : FamilyTreeWriteGate.bannerText)
     }
 
     /// "FS  G7XY-ABC" in monospace with a copy button — small on purpose;
@@ -2068,6 +2099,7 @@ struct FamilyTreeView: View, Equatable {
     // MARK: Photos
 
     private func pickPhotoFile(for personID: String) {
+        guard model.isEnabled(.photo) else { return }
         model.select(personID)
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -2100,18 +2132,23 @@ struct FamilyTreeView: View, Equatable {
     /// (read-only / offline archive, demo tree) keeps the override for the
     /// session and says so.
     private func persistPhotoChoice(_ image: CGImage, for personID: String, source: String) {
+        guard model.isEnabled(.photo) else { return }
         model.setPhotoOverride(image, for: personID)
         guard let assetPerson = model.assetPerson(for: personID) else { return }
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A LIVE store: every write re-reads the published authority, so a
+        // revocation while this runs refuses the write (codex #190 F2).
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
+        // The MODEL's authority, live, carried into the detached write (#198 F2).
+        let authority = model.writeAuthority
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
-                let store = configuration.makeStore()
                 guard let data = CropRenderer.jpegData(image, quality: 0.92) else {
                     return .failure(FamilyAssetStore.StoreError.sourceIsNotARegularImage(store.peopleDirectory))
                 }
                 do {
-                    return .success(try store.choosePhoto(
-                        data, fileExtension: "jpg", for: assetPerson, source: source))
+                    return .success(try authority.withWrite(.photo, path: "Pick a photo (choose)") {
+                        try store.choosePhoto(data, fileExtension: "jpg", for: assetPerson, source: source)
+                    })
                 } catch {
                     return .failure(error)
                 }
@@ -2131,11 +2168,13 @@ struct FamilyTreeView: View, Equatable {
     /// Decoding is bounded to 2048 px (≈ 16 MB) by ImageIO before any
     /// bitmap exists, and happens off the main actor. No NSImage, no TIFF.
     private func presentAdjustPhoto(for person: FamilyTreePersonSummary) {
+        guard model.isEnabled(.photo) else { return }
         guard let assetPerson = model.assetPerson(for: person.id) else {
             adjustError = "Adjust Photo works on people from your GEDCOM."
             return
         }
-        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        // Live: the Adjust sheet records its choice later, through this store.
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
         let originalURL = store.originalPhotoURL(for: assetPerson)
         let override = model.photoOverrideSource(for: person.id)
         Task {
@@ -2157,11 +2196,12 @@ struct FamilyTreeView: View, Equatable {
             adjustSource = FamilyPhotoAdjustSource(
                 personID: person.id, personName: person.name,
                 assetPerson: assetPerson, image: image, originalURL: originalURL,
-                store: store)
+                makeStore: { store }, writeAuthority: { [model = self.model] in model.writeAuthority })
         }
     }
 
     private func importApplePhoto(_ item: PhotosPickerItem?) {
+        guard model.isEnabled(.photo) else { return }
         guard let item, let targetID = model.selectedID else { return }
         Task {
             let data = try? await item.loadTransferable(type: Data.self)
@@ -2192,6 +2232,21 @@ struct FamilyTreeView: View, Equatable {
     /// for ONE person by the same privacy guard as Research Person… (a
     /// living person gets no Research line); the panel reads the dossier
     /// itself, off the main actor.
+    /// Read-only state: documents and crests live in the asset store, which
+    /// is not read (the banner says why) — the panels are left out.
+    @ViewBuilder private var documentsPanelIfReadable: some View {
+        if model.accessMode.allowsWrites { documentsPanel }
+    }
+
+    @ViewBuilder private var crestsPaneIfReadable: some View {
+        if model.accessMode.allowsWrites {
+            FamilyCrestsPane(makeStore: { FamilyCrestsPane.writerStore() },
+                             writeAuthority: { [model = self.model] in model.writeAuthority })
+                .padding(14)
+                .background(panelBackground)
+        }
+    }
+
     private var documentsPanel: some View {
         let researchKey: String? = model.selectedID.flatMap { id in
             if case .eligible(let subject) = ResearchEligibility.evaluate(model.treePerson(id: id)) {
@@ -2224,6 +2279,7 @@ struct FamilyTreeView: View, Equatable {
     private func documentAddSheet(_ target: FamilyDocumentAddTarget) -> some View {
         FamilyDocumentAddSheet(
             target: target,
+            writeAuthority: { [model = self.model] in model.writeAuthority },
             onAdded: { _ in
                 documentsError = nil
                 model.noteDocumentsChanged(for: target.id)
@@ -2241,6 +2297,7 @@ struct FamilyTreeView: View, Equatable {
         RecordFinderFoundSheet(
             target: target,
             speakerName: model.noteAuthor,
+            writeAuthority: { [model = self.model] in model.writeAuthority },
             record: model.cyberBrainRecorder(),
             onFiled: { outcome in
                 model.noteDocumentsChanged(for: target.id)
@@ -2251,6 +2308,7 @@ struct FamilyTreeView: View, Equatable {
     }
 
     private func presentFoundRecord(for personID: String) {
+        guard model.isEnabled(.document) else { return }
         model.select(personID)
         guard let person = model.treePerson(id: personID),
               let assetPerson = model.assetPerson(for: personID) else {
@@ -2266,6 +2324,7 @@ struct FamilyTreeView: View, Equatable {
     }
 
     private func presentAddDocument(for personID: String) {
+        guard model.isEnabled(.document) else { return }
         model.select(personID)
         guard let assetPerson = model.assetPerson(for: personID) else {
             documentsError = "Documents can be added to people from your GEDCOM."

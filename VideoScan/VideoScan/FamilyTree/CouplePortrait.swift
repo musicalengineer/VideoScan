@@ -72,12 +72,18 @@ enum CouplePortraitPreference {
         defaults.string(forKey: captionKey) ?? ""
     }
 
-    static func saveCaption(_ caption: String, to defaults: UserDefaults = .standard) {
+    /// Every write here is inside `FamilyTreeAccessMode.withWrite`, which
+    /// asks the LIVE mode at the write (codex #193); `mode` is a supplier,
+    /// never a captured value.
+    static func saveCaption(_ caption: String, to defaults: UserDefaults = .standard,
+                            mode: @escaping @Sendable () -> FamilyTreeAccessMode = { .current() }) {
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            defaults.removeObject(forKey: captionKey)
-        } else {
-            defaults.set(trimmed, forKey: captionKey)
+        try? FamilyTreeAccessMode.withWrite(.couplePortrait, path: "CouplePortrait.saveCaption", mode: mode) {
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: captionKey)
+            } else {
+                defaults.set(trimmed, forKey: captionKey)
+            }
         }
     }
 
@@ -87,24 +93,26 @@ enum CouplePortraitPreference {
     static func importPhoto(at source: URL,
                             into directory: URL? = nil,
                             defaults: UserDefaults = .standard,
-                            fileManager: FileManager = .default) throws -> URL {
+                            fileManager: FileManager = .default,
+                            mode: @escaping @Sendable () -> FamilyTreeAccessMode = { .current() }) throws -> URL {
+        try FamilyTreeWriteGate.check(.couplePortrait, path: "CouplePortrait.importPhoto", mode: mode())
         let dir = directory ?? defaultDirectory(fileManager: fileManager)
         guard let image = CropRenderer.boundedImage(at: source, maxPixels: storedMaxPixels)
         else { throw ImportError.notAnImage }
         guard let data = CropRenderer.jpegData(image, quality: 0.92)
         else { throw ImportError.encodeFailed }
-
-        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         let name = "portrait-\(UUID().uuidString).jpg"
         let destination = dir.appendingPathComponent(name, isDirectory: false)
-        try data.write(to: destination, options: .atomic)
-
         let previous = load(from: defaults, directory: dir, fileManager: fileManager)?.url
-        defaults.set(name, forKey: fileNameKey)
-        CouplePortraitImageCache.shared.invalidate()
-        if let previous, previous != destination {
-            try? fileManager.removeItem(at: previous)
+        try FamilyTreeAccessMode.withWrite(.couplePortrait, path: "CouplePortrait.importPhoto (write)", mode: mode) {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: destination, options: .atomic)
+            defaults.set(name, forKey: fileNameKey)
+            if let previous, previous != destination {
+                try? fileManager.removeItem(at: previous)
+            }
         }
+        CouplePortraitImageCache.shared.invalidate()
         return destination
     }
 
@@ -112,12 +120,14 @@ enum CouplePortraitPreference {
     /// cheap to re-type but annoying to lose.
     static func remove(from defaults: UserDefaults = .standard,
                        directory: URL? = nil,
-                       fileManager: FileManager = .default) {
+                       fileManager: FileManager = .default,
+                       mode: @escaping @Sendable () -> FamilyTreeAccessMode = { .current() }) {
         let dir = directory ?? defaultDirectory(fileManager: fileManager)
-        if let current = load(from: defaults, directory: dir, fileManager: fileManager)?.url {
-            try? fileManager.removeItem(at: current)
+        let current = load(from: defaults, directory: dir, fileManager: fileManager)?.url
+        try? FamilyTreeAccessMode.withWrite(.couplePortrait, path: "CouplePortrait.remove", mode: mode) {
+            if let current { try? fileManager.removeItem(at: current) }
+            defaults.removeObject(forKey: fileNameKey)
         }
-        defaults.removeObject(forKey: fileNameKey)
         CouplePortraitImageCache.shared.invalidate()
     }
 }

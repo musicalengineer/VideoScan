@@ -44,6 +44,8 @@ struct FamilyDocumentAddTarget: Identifiable {
 
 struct FamilyDocumentAddSheet: View {
     let target: FamilyDocumentAddTarget
+    /// The presenting model's authority (a supplier, codex #198 F2).
+    let writeAuthority: () -> FamilyTreeWriteAuthority
     let onAdded: (PersonDocument) -> Void
     let onCancel: () -> Void
 
@@ -148,14 +150,18 @@ struct FamilyDocumentAddSheet: View {
         let kind = kind
         let note = note
         let person = target.assetPerson
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A LIVE store: every write re-reads the published authority, so a
+        // revocation while this runs refuses the write (codex #190 F2).
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
+        let authority = writeAuthority()
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<PersonDocument, Error> in
-                let store = configuration.makeStore()
                 do {
-                    let folder = try store.folderForPhotoRequest(person: person)
-                    let document = try store.importPersonDocument(
-                        from: source, kind: kind, note: note, into: folder, for: person)
+                    let document = try authority.withWrite(.document, path: "Add document…") {
+                        let folder = try store.folderForPhotoRequest(person: person)
+                        return try store.importPersonDocument(
+                            from: source, kind: kind, note: note, into: folder, for: person)
+                    }
                     return .success(document)
                 } catch {
                     return .failure(error)

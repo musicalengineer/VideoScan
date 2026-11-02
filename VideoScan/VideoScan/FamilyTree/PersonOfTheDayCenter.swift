@@ -84,7 +84,7 @@ final class PersonOfTheDayCenter: ObservableObject {
         } else if TestEnvironment.isTestHost {
             chosen = PersonOfTheDayService(store: PersonOfTheDayMemoryStore())
         } else if let url = PersonOfTheDayFileStore.defaultURL() {
-            chosen = PersonOfTheDayService(store: PersonOfTheDayFileStore(url: url))
+            chosen = PersonOfTheDayService(store: PersonOfTheDayGatedStore(base: PersonOfTheDayFileStore(url: url)))
         } else {
             chosen = PersonOfTheDayService(store: PersonOfTheDayMemoryStore())
         }
@@ -217,6 +217,23 @@ final class PersonOfTheDayCenter: ObservableObject {
         case .portrait: return "portrait"
         case .story: return "notes"
         case .rotation: return "rotation"
+        }
+    }
+}
+
+/// person-of-the-day.json lives under App Support/family-tree/; in the Family
+/// Tree's read-only state (DECISIONS 2026-11-01) nothing there is written.
+/// `save` refuses (one log line) and the service keeps today's pick in memory
+/// — its existing "could not be saved" path. Reads are untouched.
+struct PersonOfTheDayGatedStore: PersonOfTheDayHistoryStore {
+    let base: any PersonOfTheDayHistoryStore
+    var mode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+
+    func load() -> PersonOfTheDay.History { base.load() }
+
+    func save(_ history: PersonOfTheDay.History) throws {
+        try FamilyTreeAccessMode.withWrite(.personOfTheDay, path: "PersonOfTheDay.save", mode: mode) {
+            try base.save(history)
         }
     }
 }

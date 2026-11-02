@@ -329,8 +329,12 @@ struct PersonRefreshCoordinatorTests {
         let coordinator = rig.coordinator()
         coordinator.launch()
         guard case .waiting(let output) = coordinator.phase else { Issue.record("\(coordinator.phase)"); return }
-        #expect(output.path.hasPrefix(rig.layout.refreshRoot.path))
-        #expect(FileManager.default.fileExists(atPath: output.deletingLastPathComponent()
+        // codex #196 F3: the spawned tool writes its answer in SCRATCH, never
+        // in the refresh root; the script stays in the run folder there.
+        #expect(!output.path.hasPrefix(rig.layout.refreshRoot.path))
+        let runFolder = try #require(coordinator.stagingFolder)
+        #expect(runFolder.path.hasPrefix(rig.layout.refreshRoot.path))
+        #expect(FileManager.default.fileExists(atPath: runFolder
             .appendingPathComponent(PersonRefreshPaths.scriptFileName).path))
 
         try answer(coordinator, with: AF.onePerson())

@@ -68,10 +68,20 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @Published private(set) var previewLine = ""
     /// This refresh's own folder (`<root>/<FSID>-<stamp>/`).
     private(set) var stagingFolder: URL?
+    /// Where the spawned tool writes its answer: a scratch folder OUTSIDE
+    /// every family-data location (codex #196 F3). The Terminal process
+    /// cannot be reached by the permit, so it never writes into the refresh
+    /// root; the coordinator PUBLISHES the answer there through the
+    /// primitive, at the moment it reads it — refused once revoked.
+    var answerScratchRoot: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("VideoScan-person-refresh", isDirectory: true)
 
     private let root: URL
     private let overlayStore: PersonFactOverlayStore
     private let journalDirectory: URL
+    /// The Family Tree's read-only state (2026-11-01): launch and apply are
+    /// refused in it. Read at each use; tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     private let installedFacts: @MainActor () -> PersonFacts?
     private let locator: FamilySearchToolLocator
     private let launcher: FamilySearchPullLauncher
@@ -159,12 +169,17 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                     isDirectory: true)
             suffix += 1
         }
-        let output = folder.appendingPathComponent(PersonRefreshPaths.outputFileName)
+        // The tool's -o: scratch, not the refresh root (#196 F3).
+        let output = answerScratchRoot.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+            .appendingPathComponent(PersonRefreshPaths.outputFileName)
         // The attempt is on record BEFORE anything can refuse it: a run that
         // could not start still reads `started` … `failed: could not start`.
         note(PersonRefreshAuditLines.started(answerFile: Self.relative(output)))
-        if ViewerWriteGuard.refuse("PersonRefresh.launch") {
-            let message = "Refresh from FamilySearch runs on the master Mac, not on a viewer."
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.launch", mode: mode) {
+            let message = mode == .readOnly(.viewer)
+                ? "Refresh from FamilySearch runs on the master Mac, not on a viewer."
+                : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
             phase = .failed(message: message)
             noteOutcome(PersonRefreshAuditLines.couldNotStart(message))
             return
@@ -175,14 +190,24 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                 toolURL: toolURL, familySearchID: target.familySearchID, outputURL: output)
             let script = FamilySearchPersonRefreshScript(
                 command: command, personName: target.personName,
-                scriptURL: folder.appendingPathComponent(PersonRefreshPaths.scriptFileName))
-            try script.write()
+                scriptURL: folder.appendingPathComponent(PersonRefreshPaths.scriptFileName),
+                workingDirectory: output.deletingLastPathComponent())
+            // The script, the scratch folder AND the spawn are inside the
+            // primitive; the spawned tool's only output path is `output`,
+            // in scratch (#196 F3).
+            let launcher = self.launcher
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.launch (script + spawn → \(output.lastPathComponent) in scratch)",
+                                               mode: writeMode) {
+                try FileManager.default.createDirectory(at: output.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                _ = try script.write()
+                launcher.open(script.scriptURL)
+            }
             stagingFolder = folder
             previewLine = command.displayLine
             launchDate = Date()
             startedAt = started
             quietSince = nil
-            launcher.open(script.scriptURL)
             phase = .waiting(output: output)
             startWatching(output: output)
         } catch {
@@ -213,6 +238,23 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             noteOutcome(PersonRefreshAuditLines.cancelled(pendingFields: pending, stage: stage))
         }
         phase = .idle
+    }
+
+    /// Copy the answer from scratch into `<run>/person.ged` under the refresh
+    /// root, inside the primitive. A run with no staging folder (not
+    /// launched here) reads the file where it is.
+    private func publishAnswer(_ scratch: URL) throws -> URL {
+        guard let folder = stagingFolder,
+              scratch.deletingLastPathComponent().standardizedFileURL != folder.standardizedFileURL else { return scratch }
+        let published = folder.appendingPathComponent(PersonRefreshPaths.outputFileName)
+        try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.answer (publish)", mode: writeMode) {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: published.path) {
+                throw FamilySearchPullError.scriptWriteFailed("\(published.lastPathComponent) already exists in \(folder.lastPathComponent)")
+            }
+            try FileManager.default.copyItem(at: scratch, to: published)
+        }
+        return published
     }
 
     /// `<FSID>-<stamp>/person.ged` — the answer file, relative to the root.
@@ -271,7 +313,20 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// it against what the tree shows now (overlay included, so a second
     /// refresh after an Apply reads "Already matches FamilySearch.").
     /// Internal so tests (and a future "use this file") can hand a file in.
-    func read(output: URL) {
+    func read(output scratch: URL) {
+        // Publish the tool's answer into the run folder — a write, so it is
+        // inside the primitive and asked NOW (#196 F3). Refused: nothing
+        // lands in the refresh root and the run fails in words.
+        let output: URL
+        do {
+            output = try publishAnswer(scratch)
+        } catch {
+            let message = FamilyTreeWriteGate.refusalText(.personRefresh, mode: writeMode())
+                ?? "Could not keep the answer file: \(error.localizedDescription). Nothing was changed."
+            phase = .failed(message: message)
+            noteOutcome(PersonRefreshAuditLines.failed(message))
+            return
+        }
         parseTask?.cancel()
         generation &+= 1
         let token = generation
@@ -328,6 +383,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         /// `keptAs` is where it was set aside (nil when even that failed).
         case unreadable(reason: String, keptAs: String?, setAsideError: String?)
         case failed(String)
+        /// The Family Tree's read-only state began before the write; nothing
+        /// was written or moved (codex #190 F2). The words for the strip.
+        case refused(String)
     }
 
     /// Load → mutate → fsync'd save, entirely OFF the main actor, and the
@@ -340,17 +398,29 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// closure (@Sendable — it captures only value types) and the result.
     nonisolated static func writeOverlay<T: Sendable>(
         _ store: PersonFactOverlayStore, now: Date,
+        mode: @escaping @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() },
         _ mutate: @escaping @Sendable (inout PersonFactOverlay) -> T?) async -> OverlayWrite<T> {
         await Task.detached(priority: .userInitiated) { () -> OverlayWrite<T> in
+            // Inside the primitive: the update and the set-aside ask the live
+            // mode at their own write (codex #190 F2, #193).
+            let refusal = { FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode()) ?? "" }
             do {
-                guard let result = try store.update(mutate) else { return .nothingToDo }
+                guard let result = try FamilyTreeAccessMode.withWrite(
+                    .personRefresh, path: "PersonRefresh.overlay (write)", mode: mode, { try store.update(mutate) })
+                else { return .nothingToDo }
                 return .written(result)
+            } catch is WritePermit.Refused {
+                return .refused(refusal())
             } catch let unreadable as PersonFactOverlayStore.UnreadableOverlay {
                 // Never saved over, never deleted: moved aside so the bytes
                 // survive and the NEXT apply can start a fresh record.
                 do {
-                    let kept = try store.setAsideUnreadable(at: now)
+                    let kept = try FamilyTreeAccessMode.withWrite(
+                        .personRefresh, path: "PersonRefresh.overlay (set aside)", mode: mode,
+                        { try store.setAsideUnreadable(at: now) })
                     return .unreadable(reason: unreadable.reason, keptAs: kept.lastPathComponent, setAsideError: nil)
+                } catch is WritePermit.Refused {
+                    return .refused(refusal())
                 } catch {
                     return .unreadable(reason: unreadable.reason, keptAs: nil,
                                        setAsideError: error.localizedDescription)
@@ -377,8 +447,11 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @discardableResult
     func apply(selectedFieldKeys: Set<String>) async -> Bool {
         guard case .ready(let diff) = phase, !isApplying else { return false }
-        if ViewerWriteGuard.refuse("PersonRefresh.apply") {
-            let message = "This Mac is a viewer; the tree is refreshed on the master."
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.apply", mode: mode) {
+            let message = mode == .readOnly(.viewer)
+                ? "This Mac is a viewer; the tree is refreshed on the master."
+                : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
             phase = .failed(message: message)
             noteOutcome(PersonRefreshAuditLines.failed(message))
             return false
@@ -392,7 +465,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         isApplying = true
         defer { isApplying = false }
         let fsid = target.familySearchID, name = target.personName, at = now()
-        let outcome = await Self.writeOverlay(overlayStore, now: at) { overlay -> Bool? in
+        let outcome = await Self.writeOverlay(overlayStore, now: at, mode: writeMode) { overlay -> Bool? in
             overlay.record(chosen, familySearchID: fsid, displayName: name, at: at)
             return true
         }
@@ -408,6 +481,10 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             phase = .failed(message: "Could not save the refreshed facts: \(message). Nothing was changed.")
             noteOutcome(PersonRefreshAuditLines.overlayWriteFailed(message))
             return false
+        case .refused(let message):
+            phase = .failed(message: message)
+            noteOutcome(PersonRefreshAuditLines.failed(message))
+            return false
         }
         let entry = PersonRefreshAudit.Entry(
             at: now(), action: .applied, familySearchID: fsid, person: name,
@@ -419,7 +496,13 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         // every before/after value.
         outcomeNoted = true
         for line in PersonRefreshAudit.lines(entry, overlayPath: overlayStore.fileURL.path) { sink.note(line) }
-        do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
+        do {
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.journal", mode: writeMode) {
+                try PersonRefreshAudit.append(entry, directory: journalDirectory)
+            }
+        } catch is WritePermit.Refused {
+            note(PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
+        } catch {
             note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
         phase = .applied(fields: chosen.count)
@@ -434,13 +517,18 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @discardableResult
     static func undoLast(familySearchID: String, personName: String,
                          overlayStore: PersonFactOverlayStore, journalDirectory: URL,
-                         sink: PersonRefreshNoteSink = .production(console: nil), now: Date = Date()) async -> String {
+                         sink: PersonRefreshNoteSink = .production(console: nil), now: Date = Date(),
+                         mode writeMode: @escaping @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() })
+        async -> String {
+        let mode = writeMode()
         let subject = PersonRefreshAuditLines.subject(person: personName, familySearchID: familySearchID)
-        if ViewerWriteGuard.refuse("PersonRefresh.undo") {
-            return "This Mac is a viewer; the tree is refreshed on the master."
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.undo", mode: mode) {
+            return mode == .readOnly(.viewer)
+                ? "This Mac is a viewer; the tree is refreshed on the master."
+                : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
         }
         typealias Popped = (undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?)
-        let outcome = await writeOverlay(overlayStore, now: now) { overlay -> Popped? in
+        let outcome = await writeOverlay(overlayStore, now: now, mode: writeMode) { overlay -> Popped? in
             overlay.undoLast(familySearchID: familySearchID).map { (undone: $0.before, restored: $0.after) }
         }
         let undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?
@@ -456,6 +544,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         case .failed(let message):
             sink.note(subject + "undo failed: \(message); nothing was changed")
             return "Could not undo: \(message)"
+        case .refused(let message):
+            sink.note(subject + "undo refused: \(message); nothing was changed")
+            return message
         }
         let sentence = restored == nil
             ? "Undid the FamilySearch refresh for \(personName); the tree shows the pulled facts again."
@@ -468,7 +559,13 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             tail: restored == nil ? "the tree shows the pulled facts again" : "the earlier refresh still applies") {
             sink.note(line)
         }
-        do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
+        do {
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.journal", mode: writeMode) {
+                try PersonRefreshAudit.append(entry, directory: journalDirectory)
+            }
+        } catch is WritePermit.Refused {
+            sink.note(subject + PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
+        } catch {
             sink.note(subject + PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
         return sentence
@@ -531,10 +628,13 @@ final class PersonRefreshCenter: ObservableObject {
     /// which is cancelled and logged).
     @discardableResult
     func begin(target: PersonRefreshCoordinator.Target,
-               installedFacts: @escaping @MainActor () -> PersonFacts?) -> PersonRefreshCoordinator {
+               installedFacts: @escaping @MainActor () -> PersonFacts?,
+               writeMode: (@Sendable () -> FamilyTreeAccessMode)? = nil) -> PersonRefreshCoordinator {
         coordinator?.cancel()
         notice = nil
         let fresh = makeCoordinator(target, installedFacts, sink)
+        // The presenting model's authority, when it gave one (#198 F2).
+        if let writeMode { fresh.writeMode = writeMode }
         coordinator = fresh
         phaseSubscription = fresh.$phase.sink { [weak self] _ in
             // `$phase` fires on willSet; defer the bump to after the set.

@@ -23,6 +23,7 @@
 // explicit flag has none of that.
 
 import Foundation
+import VideoScanCore
 
 /// Person IDs the reader has marked to come back to.
 ///
@@ -103,8 +104,10 @@ struct FamilyTreeBookmarks: Equatable, Sendable {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let ordered = entries.values.sorted { $0.personID < $1.personID }
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true)
-        try encoder.encode(ordered).write(to: Self.fileURL(in: directory), options: .atomic)
+        // The caller's bound permit, asked at the write (codex #193).
+        try WritePermit.current.withWrite("bookmarks") {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try encoder.encode(ordered).write(to: Self.fileURL(in: directory), options: .atomic)
+        }
     }
 }

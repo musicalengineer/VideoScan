@@ -17,6 +17,19 @@ extension FamilyGraphCompiledStore {
         let isViewer = ViewerModeCenter.shared.isViewer
         store.trustsManifestSources = isViewer
         store.refusesWrites = isViewer
+        // Every app store asks the Family Tree's process-wide authority at
+        // the moment of each write (codex #192 F2): a compile or load that
+        // started while the archive was connected promotes nothing after it
+        // goes. Hallie, the prewarm and the kinship centre use this store.
+        return store.guarded { FamilyTreeAccessMode.current().allowsWrites }
+    }
+
+    /// This store, refusing every write unless `allows()` says yes AT THE
+    /// WRITE — composed with any guard it already carries (both must allow).
+    func guarded(by allows: @escaping @Sendable () -> Bool) -> FamilyGraphCompiledStore {
+        var store = self
+        let earlier = store.writeGuard
+        store.writeGuard = { (earlier?() ?? true) && allows() }
         return store
     }
 }

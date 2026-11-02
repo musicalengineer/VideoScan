@@ -71,6 +71,10 @@ final class FamilySearchPullLifecycleTests: XCTestCase {
                     pollInterval: Self.pollInterval,
                     parseDelay: parseDelay)
                 coordinator.request.outputURL = outputURL
+                // The test plays the tool by writing the chosen output, so the
+                // tool's -o IS that file (production: a fresh scratch folder per
+                // launch, published through the permit — codex #198/#199).
+                coordinator.toolOutputLocation = { $0.outputURL }
                 return coordinator
             },
             notify: { [weak self] title, body in

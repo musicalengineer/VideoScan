@@ -146,6 +146,11 @@ struct FamilySearchPersonRefreshScript {
     let command: FamilySearchPersonRefreshCommand
     let personName: String
     let scriptURL: URL
+    /// Where the tool runs: the answer's scratch folder (codex #198 F1).
+    var workingDirectory: URL? = nil
+    private var changeDirectory: String {
+        workingDirectory.map { "cd \(FamilySearchPullCommand.quoted($0.path)) || exit 1\n" } ?? ""
+    }
 
     var contents: String {
         let line = command.displayLine
@@ -169,7 +174,7 @@ struct FamilySearchPersonRefreshScript {
         read -r confirm
         printf '\\n'
 
-        \(line)
+        \(changeDirectory)\(line)
         exit_status=$?
 
         printf '\\n'
@@ -185,10 +190,13 @@ struct FamilySearchPersonRefreshScript {
     @discardableResult
     func write(fileManager: FileManager = .default) throws -> URL {
         do {
-            try fileManager.createDirectory(at: scriptURL.deletingLastPathComponent(),
-                                            withIntermediateDirectories: true)
-            try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            // The caller's bound permit, asked at the write (codex #193).
+            try WritePermit.current.withWrite("refresh script") {
+                try fileManager.createDirectory(at: scriptURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+                try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
+                try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            }
         } catch {
             throw FamilySearchPullError.scriptWriteFailed(error.localizedDescription)
         }
@@ -206,8 +214,20 @@ enum PersonRefreshOverlayReader {
                                   discoveryDirectory: URL, canWrite: Bool,
                                   log: (String) -> Void) -> GedcomFamilyGraph {
         guard let store else { return graph }
+        return apply(to: graph, store: store,
+                     newestPullAt: PersonFactOverlayStore.newestPullDate(in: discoveryDirectory),
+                     canWrite: canWrite, log: log)
+    }
+
+    /// Same, with the newest pull's date supplied by the caller — the
+    /// Family Tree's read-only load (2026-11-01) takes it from the compiled
+    /// manifest, because the GEDCOM folder is on the absent archive.
+    nonisolated static func apply(to graph: GedcomFamilyGraph, store: PersonFactOverlayStore?,
+                                  newestPullAt: Date?, canWrite: Bool,
+                                  log: (String) -> Void) -> GedcomFamilyGraph {
+        guard let store else { return graph }
         let overlay = store.effective(
-            newestPullAt: PersonFactOverlayStore.newestPullDate(in: discoveryDirectory),
+            newestPullAt: newestPullAt,
             canWrite: canWrite && !ViewerModeCenter.shared.isViewer)
         guard !overlay.entries.isEmpty else { return graph }
         let (overlaid, report) = graph.applyingFactOverlay(overlay)
@@ -460,8 +480,10 @@ enum PersonRefreshAudit {
         encoder.outputFormatting = [.sortedKeys]
         var data = try encoder.encode(entry)
         data.append(0x0A)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try MediaLedger.appendDurable(data, to: directory.appendingPathComponent(PersonRefreshPaths.journalFileName))
+        try WritePermit.current.withWrite("refresh journal") {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try MediaLedger.appendDurable(data, to: directory.appendingPathComponent(PersonRefreshPaths.journalFileName))
+        }
     }
 
     /// Every readable journal line, oldest first. A missing journal is
