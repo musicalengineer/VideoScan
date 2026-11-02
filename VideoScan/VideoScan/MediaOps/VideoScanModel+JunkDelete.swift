@@ -169,6 +169,10 @@ extension VideoScanModel {
         /// Extra ledger detail for one file that left the disk (⌘⌫ names
         /// the recovered A/V pair a half moved with). nil = none.
         var ledgerDetail: (@MainActor (VideoRecord) -> [String: String])? = nil
+        /// May a Stop (task cancellation) take effect before this file's
+        /// turn? nil = always. ⌘⌫ says no between the halves of a recovered
+        /// A/V pair whose first half moved — Stop acts between pairs.
+        var mayCancelBefore: (@MainActor (VideoRecord) -> Bool)? = nil
 
         /// True when `refusal` is the one the waiver may lift for `rec`.
         /// Belt and braces: never for a path that runs through an archive
@@ -326,7 +330,7 @@ extension VideoScanModel {
         for (rec, decided) in zip(requested, pending) {
             if let decided {
                 outcomes.append(decided); turns.append(nil)
-            } else if Task.isCancelled {
+            } else if Task.isCancelled, fileGuard?.mayCancelBefore?(rec) ?? true {
                 outcomes.append(.cancelled); turns.append(nil)
             } else {
                 // Who this turn is about, frozen before the disk work (codex

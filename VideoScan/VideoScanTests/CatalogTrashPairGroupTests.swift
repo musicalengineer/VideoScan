@@ -312,7 +312,8 @@ struct CatalogTrashPairGroupTests {
         let r1 = await d.model.trashSelectedRecords([v, a], confirmed: confirmed)
         #expect(r1.succeeded == 0 && exists(v) && exists(a) && exists(x),
                 "the confirmed pair is never split: a, now unpaired, stays with v — \(r1.items.map(\.outcome))")
-        #expect(r1.refused.first { $0.record.id == a.id }?.reason.contains("test_cat.V.mxf did not move") == true,
+        // Held up front since Codex #191 F2: the plan sees the pair changed.
+        #expect(r1.refused.first { $0.record.id == a.id }?.reason.contains("the pair changed since you confirmed") == true,
                 "\(r1.refused.map(\.reason))")
 
         // Removed: the sibling purged after the alert — the rest is not the pair confirmed.
@@ -324,7 +325,7 @@ struct CatalogTrashPairGroupTests {
         b.purgedAt = Date()
         let r2 = await d.model.trashSelectedRecords([w, b], confirmed: confirmed2)
         #expect(r2.succeeded == 0 && exists(w) && exists(b), "\(r2.items.map(\.outcome))")
-        #expect(r2.refused.first { $0.record.id == w.id }?.reason.contains("its related half test_cat2.A.mxf changed in the catalog since you confirmed") == true,
+        #expect(r2.refused.first { $0.record.id == w.id }?.reason.contains("the pair changed since you confirmed") == true,
                 "\(r2.refused.map(\.reason))")
     }
 
@@ -461,6 +462,142 @@ struct CatalogTrashPairGroupTests {
         #expect(JunkDeletionReport(result).summary.contains { $0.contains("1 SPLIT") })
         #expect(await consoleLine(d.model, containing: "pair groups: moved 0 · held 0 · failed 0 · split 1") != nil)
         #expect(await consoleLine(d.model, containing: "SPLIT PAIR") != nil)
+    }
+
+    // MARK: Codex #191 — the seven P1 regressions (red first)
+
+    /// A non-Sendable reference handed into the @Sendable seams. (≈ a C++
+    /// raw pointer the test promises to touch only on the main thread.)
+    private final class Ref<T>: @unchecked Sendable { var value: T; init(_ v: T) { value = v } }
+
+    @Test("codex #191 F1: a stale selected sibling (same id, other path) never moves an unchecked file")
+    func staleSelectedSiblingNeverMoves() async throws {
+        let d = try disk("pgstale")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_st.V.mxf", seed: 81, .videoOnly)
+        let liveA = try file(d, "test_st.A.mxf", seed: 82, .audioOnly)
+        pair(v, liveA)
+        let staleURL = try MasterArchiveTestSupport.writeBlob(at: d.sb.sources.appendingPathComponent("test_st_old.A.mxf"), bytes: 1024, seed: 83)
+        let staleA = liveA.snapshotClone()
+        staleA.fullPath = staleURL.path
+        staleA.filename = staleURL.lastPathComponent
+        d.model.records = [v, liveA]
+        let confirmed = d.model.catalogTrashPlan(for: [v, staleA], isOffline: { _ in false })
+        let result = await d.model.trashSelectedRecords([v, staleA], confirmed: confirmed)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(exists(v) && exists(liveA) && FileManager.default.fileExists(atPath: staleURL.path))
+    }
+
+    @Test("codex #191 F2: a sibling that joined the pair after the confirmation holds the whole pair")
+    func unconfirmedMembershipHoldsTheGroup() async throws {
+        let d = try disk("pgjoin")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_jn.V.mxf", seed: 84, .videoOnly), a = try file(d, "test_jn.A.mxf", seed: 85, .audioOnly)
+        let x = try file(d, "test_jn.X.mxf", seed: 86, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a, x]
+        let confirmed = d.model.catalogTrashPlan(for: [v, a, x], isOffline: { _ in false })
+        try #require(confirmed.groups.map(\.members) == [[v.id, a.id]])
+        x.pairedWith = v   // linked to the pair while the alert was up
+        let result = await d.model.trashSelectedRecords([v, a, x], confirmed: confirmed)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(exists(v) && exists(a) && exists(x))
+    }
+
+    @Test("codex #191 F3: a relink after the first half moved never hides the SPLIT")
+    func relinkDoesNotHideASplit() async throws {
+        let d = try disk("pgrelink")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_rl.V.mxf", seed: 87, .videoOnly), a = try file(d, "test_rl.A.mxf", seed: 88, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.toTrash == [v.id, a.id])
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let vPath = v.fullPath, aPath = a.fullPath
+        let vRef = Ref(v)
+        struct NoTrash: Error {}
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p, fileOperation: { url in
+            if url.path == aPath { throw NoTrash() }
+            try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+            if url.path == vPath {
+                DispatchQueue.main.sync { MainActor.assumeIsolated { vRef.value.fullPath = "/Volumes/TestRelinked/test_rl.V.mxf" } }
+            }
+        })
+        #expect(result.succeeded == 1, "\(result.items.map(\.outcome))")
+        #expect(result.items.first { $0.record.id == v.id }?.outcome.isMoved == true, "the moved half's outcome is kept")
+        #expect(result.groupNotes.contains { $0.hasPrefix("Split pair: test_rl.V.mxf is in the Trash") }, "\(result.groupNotes)")
+        #expect(exists(a))
+    }
+
+    @Test("codex #191 F4: a later half another job holds reserved holds the first half too")
+    func reservedLaterHalfHoldsTheGroup() async throws {
+        let d = try disk("pgres")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_rs.V.mxf", seed: 89, .videoOnly), a = try file(d, "test_rs.A.mxf", seed: 90, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.toTrash == [v.id, a.id])
+        guard case .reserved(let key) = RemovalReservations.shared.reserve(a.fullPath) else {
+            Issue.record("fixture: could not reserve A"); return
+        }
+        defer { RemovalReservations.shared.release(key) }
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(exists(v) && exists(a))
+    }
+
+    @Test("codex #191 F5: a pending link on a half that also has an object link is followed in reverse")
+    func reversePendingLinkIsFollowed() {
+        let v = rec("/Volumes/X9/avid/test_pl.V.mxf", .videoOnly), a = rec("/Volumes/X9/avid/test_pl.A.mxf", .audioOnly)
+        let x = rec("/Volumes/X9/avid/test_pl.X.mxf", .videoOnly), y = rec("/Volumes/X9/avid/test_pl.Y.mxf", .audioOnly)
+        pair(v, a); pair(x, y)
+        x.pendingPairedWithID = v.id
+        let p = plan([v, a], catalog: [v, a, x, y])
+        #expect(p.toTrash.isEmpty && p.groups.isEmpty, "\(p.refused)")
+    }
+
+    @Test("codex #191 F6: a sibling missing on disk is no departed sibling — it holds the group")
+    func missingSiblingHoldsTheGroup() {
+        let v = rec("/Volumes/X9/avid/test_ms.V.mxf", .videoOnly)
+        let a1 = rec("/Volumes/X9/avid/test_ms.A1.mxf", .audioOnly), a2 = rec("/Volumes/X9/avid/test_ms.A2.mxf", .audioOnly)
+        pair(v, a1, a2)
+        VideoScanModel.stampRemoval(a2, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingOnDisk))
+        try? #require(a2.isPurged)
+        let p = plan([v, a1], catalog: [v, a1, a2])
+        #expect(p.toTrash.isEmpty && p.groups.isEmpty, "\(p.refused)")
+        #expect(p.refused.allSatisfy { $0.note?.contains("test_ms.A2.mxf") == true }, "\(p.refused.map(\.note))")
+    }
+
+    @Test("codex #191 F7: Stop between the halves of a pair never splits it — cancel takes effect between pairs")
+    func cancelBetweenHalvesNeverSplits() async throws {
+        let d = try disk("pgcancel")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_cn.V.mxf", seed: 91, .videoOnly), a = try file(d, "test_cn.A.mxf", seed: 92, .audioOnly)
+        let w = try file(d, "test_cn2.V.mxf", seed: 93, .videoOnly), b = try file(d, "test_cn2.A.mxf", seed: 94, .audioOnly)
+        pair(v, a); pair(w, b)
+        d.model.records = [v, a, w, b]
+        let p = d.model.catalogTrashPlan(for: [v, a, w, b], isOffline: { _ in false })
+        try #require(p.toTrash == [v.id, a.id, w.id, b.id])
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let vPath = v.fullPath
+        let handle = Ref<Task<Int, Never>?>(nil)
+        let model = d.model
+        let sel = Ref([v, a, w, b])
+        let task = Task { @MainActor in
+            await model.trashSelectedRecords(sel.value, confirmed: p, fileOperation: { url in
+                try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+                if url.path == vPath { handle.value?.cancel() }   // Stop pressed after the first half moved
+            }).succeeded
+        }
+        handle.value = task
+        let moved = await task.value
+        #expect(moved == 2, "the started pair completes; the next pair is not started")
+        #expect(!exists(v) && !exists(a), "never split")
+        #expect(exists(w) && exists(b))
     }
 
     // MARK: TRUTH — the sheet, the OUTCOME line, the ledger

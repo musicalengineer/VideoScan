@@ -56,6 +56,11 @@ final class CatalogTrashGroupTurns {
         if let why = stopped[gi] { return CatalogPairGroups.groupHeldNote(why) + " — nothing moved" }
         let g = groups[gi]
         guard let k = g.members.firstIndex(of: rec.id) else { return Self.notConfirmedAsGroupNote }
+        // The file this turn would move must be the one the plan proved
+        // (Codex #191 F1) — a stale row object never moves.
+        if rec.fullPath != g.paths[k] {
+            return stop(gi, "\(g.filenames[k]) is not the file you confirmed (its catalog row points elsewhere)")
+        }
         for j in 0..<k where !moved.contains(g.members[j]) {
             return stop(gi, "its related half \(g.filenames[j]) did not move")
         }
@@ -75,6 +80,21 @@ final class CatalogTrashGroupTurns {
     func laterMembers(after id: UUID) -> [UUID] {
         guard let g = group(of: id), let k = g.members.firstIndex(of: id) else { return [] }
         return Array(g.members[(k + 1)...])
+    }
+
+    /// Stop every confirmed group the plan now sees with other members
+    /// (Codex #191 F2): its halves are held at their turns, before any moves.
+    func holdGroups(notIn admitted: [CatalogPairGroups.Group], because why: String) {
+        let now = Set(admitted.map(\.members))
+        for (gi, g) in groups.enumerated() where !now.contains(g.members) { stopped[gi] = why }
+    }
+
+    /// May a Stop take effect before `id`'s turn? Not between the halves
+    /// of a pair whose first half already moved (Codex #191 F7): the pair
+    /// completes (or is reported SPLIT); Stop acts between pairs.
+    func mayCancel(before id: UUID) -> Bool {
+        guard let g = group(of: id), let k = g.members.firstIndex(of: id) else { return true }
+        return !g.members[..<k].contains(where: moved.contains)
     }
 
     /// Stop `id`'s group for `why`; the held note for `id`.
@@ -161,7 +181,7 @@ final class CatalogTrashGroupTurns {
         // from its members' outcomes.
         let confirmedIDs = Set(groups.flatMap(\.members))
         let planHeld = plan.heldGroups.filter { Set($0.ids).isDisjoint(with: confirmedIDs) }
-        var s = Summary(held: planHeld + alsoHeld.map {
+        var s = Summary(held: planHeld + alsoHeld.filter { Set($0.members).isDisjoint(with: confirmedIDs) }.map {
             CatalogPairGroups.HeldGroup(filenames: $0.filenames, reason: "the pair changed since you confirmed", ids: $0.members)
         })
         let outcome = Dictionary(result.items.map { ($0.record.id, $0.outcome) }, uniquingKeysWith: { first, _ in first })
@@ -235,6 +255,12 @@ struct CatalogTrashGroupDiskCheck: Sendable {
                 + " — nothing moved"
         }
         for e in entries.dropFirst() {
+            // Codex #191 F4: a later half another removal holds (leaving, or
+            // relied on as a survivor) would be held at its own turn.
+            if RemovalReservations.shared.isReserved(e.path) {
+                return CatalogPairGroups.groupHeldNote("its related half \(e.filename) is being removed or relied on by another job right now")
+                    + " — nothing moved"
+            }
             if let why = laterProofs.problemAhead(e.path) {
                 let bare = why.replacingOccurrences(of: " — nothing moved", with: "")
                 return CatalogPairGroups.groupHeldNote("its related half \(e.filename): \(bare)") + " — nothing moved"

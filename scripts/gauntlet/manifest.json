@@ -10850,6 +10850,7 @@
       ],
       "tests": [
         "aviPair",
+        "cancelBetweenHalvesNeverSplits",
         "combineOutputAmongHalves",
         "departedSibling",
         "fullGroupAdmitted",
@@ -10857,10 +10858,15 @@
         "hundredThousandRowsFiveThousandGroups",
         "laterHalfBecameOnlyCopyHoldsThePair",
         "laterHalfCopyNotProvenHoldsThePair",
+        "laterHalfOnReadOnlyDrive",
+        "missingSiblingHoldsTheGroup",
         "mixedSelection",
         "mxfPair",
         "oneMissingHoldsTheGroup",
         "outcomeAndLedger",
+        "relinkDoesNotHideASplit",
+        "reservedLaterHalfHoldsTheGroup",
+        "reversePendingLinkIsFollowed",
         "secondHalfFailsIsASplit",
         "selectRelatedHalves",
         "sheetWordsFromThePlan",
@@ -10869,7 +10875,9 @@
         "siblingOfflineAtTheTurn",
         "siblingOnFamilyArchive",
         "siblingRefusedAloneHoldsTheGroup",
+        "staleSelectedSiblingNeverMoves",
         "threeHalvesOneMissing",
+        "unconfirmedMembershipHoldsTheGroup",
         "unconfirmedPairNeverMoves",
         "unknownGroupsAreHeld"
       ]

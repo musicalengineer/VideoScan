@@ -258,6 +258,9 @@ extension VideoScanModel {
         let confirmedGroups = Set(confirmed.groups.map(\.members))
         let groupTurns = CatalogTrashGroupTurns(groups: confirmed.groups)
         let unconfirmedGroups = plan.groups.filter { !confirmedGroups.contains($0.members) }
+        // Codex #191 F2: a confirmed pair the plan now sees with other
+        // members (a half joined, left or changed) is held whole, up front.
+        groupTurns.holdGroups(notIn: plan.groups, because: "the pair changed since you confirmed")
         // G2: the auditor's record — START, a line + receipt row per file, OUTCOME.
         let audit = DeletionAudit(kind: .junk, verb: "Move to Trash", linePrefix: "[junk] ", sink: deletionAuditSink())
         audit.start(scope: "\(requested.count) selected in the Catalog", requested: requested.count,
@@ -312,13 +315,14 @@ extension VideoScanModel {
             audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id)
         }
         // The ledger event carries the pair (DECISIONS 2026-11-01).
+        fileGuard.mayCancelBefore = { rec in groupTurns.mayCancel(before: rec.id) }
         fileGuard.ledgerDetail = { rec in
             guard let g = groupTurns.group(of: rec.id) else { return [:] }
             return [CatalogTrashGroupTurns.ledgerPairGroup: g.key.uuidString,
                     CatalogTrashGroupTurns.ledgerPairFiles: g.filenames.joined(separator: " + ")]
         }
         let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, reason: .catalogTrash, guard: fileGuard)
-        let merged = mergedCatalogTrashResult(requested, plan: plan, routine: routine)
+        let merged = mergedCatalogTrashResult(requested, plan: plan, targets: targets, routine: routine)
         var result = merged.trashFailuresHeld()
         // "I don't wanna see it again" (Rick 2026-09-20): the content of
         // every row that actually left the disk goes on the ignore list
@@ -461,15 +465,19 @@ extension VideoScanModel {
     /// One outcome per selected row, in selection order: the routine's
     /// outcome for a row it was handed, else the plan's refusal as a named
     /// hold (or "offline" for a drive that isn't connected).
-    private func mergedCatalogTrashResult(_ requested: [VideoRecord], plan: CatalogTrashPlan,
+    /// The routine's items are matched to `targets` BY POSITION (one item
+    /// per target, in order) and keep the record the routine reported — a
+    /// row relinked mid-turn is reported through its frozen snapshot, so
+    /// matching by object would lose a moved outcome (Codex #191 F3).
+    private func mergedCatalogTrashResult(_ requested: [VideoRecord], plan: CatalogTrashPlan, targets: [VideoRecord],
                                           routine: JunkDeletionResult) -> JunkDeletionResult {
         let refusals = Dictionary(plan.refused.map { ($0.id, $0.reason) }, uniquingKeysWith: { first, _ in first })
         let notes = Dictionary(plan.refused.compactMap { r in r.note.map { (r.id, $0) } }, uniquingKeysWith: { first, _ in first })
-        let handled = Dictionary(routine.items.map { (ObjectIdentifier($0.record), $0.outcome) },
+        let handled = Dictionary(zip(targets, routine.items).map { (ObjectIdentifier($0), $1) },
                                  uniquingKeysWith: { first, _ in first })
         let archiveVolume = refusals.values.contains(.masterArchive) ? archiveVolumeProtection() : nil
         let items: [JunkDeletionResult.Item] = requested.map { rec in
-            if let outcome = handled[ObjectIdentifier(rec)] { return .init(record: rec, outcome: outcome) }
+            if let item = handled[ObjectIdentifier(rec)] { return item }
             let reason = refusals[rec.id] ?? .notActive
             return .init(record: rec, outcome: catalogTrashRefusalOutcome(reason, rec, note: notes[rec.id],
                                                                           archiveVolume: archiveVolume))

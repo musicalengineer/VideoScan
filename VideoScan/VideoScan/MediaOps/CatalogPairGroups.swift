@@ -73,7 +73,11 @@ enum CatalogPairGroups {
             for r in catalog where CatalogPairGroups.isHalf(r) {
                 if byID[r.id] == nil { byID[r.id] = r }
                 if let g = r.pairGroupID { byGroup[g, default: []].append(r) }
-                if let p = r.pairedWith?.id ?? r.pendingPairedWithID { pointingAt[p, default: []].append(r) }
+                // Both link kinds, each on its own (Codex #191 F5): a half
+                // can carry an object link AND a pending one.
+                for p in Set([r.pairedWith?.id, r.pendingPairedWithID].compactMap({ $0 })) {
+                    pointingAt[p, default: []].append(r)
+                }
             }
         }
     }
@@ -82,8 +86,12 @@ enum CatalogPairGroups {
     struct Resolution {
         /// The live halves, the start first, then in discovery order.
         var members: [VideoRecord] = []
-        /// Siblings already removed from the catalog (their file names).
+        /// Siblings deliberately removed (in the Trash, or removed from the
+        /// catalog by the person) — their file names.
         var departed: [String] = []
+        /// Siblings marked missing on disk (or gone with no removal marker):
+        /// never "departed" — they hold the group (Codex #191 F6).
+        var missingOnDisk: [String] = []
         /// A link could not be followed, or no sibling exists at all.
         var unknown = false
     }
@@ -96,11 +104,19 @@ enum CatalogPairGroups {
     nonisolated static func resolve(_ start: VideoRecord, in index: Index) -> Resolution {
         var out = Resolution()
         var seen: Set<UUID> = [start.id]
-        var queue: [VideoRecord] = [start]
+        // The catalog's own row for the start when it has one (a selected
+        // row may be a stale copy — Codex #191 F1).
+        var queue: [VideoRecord] = [index.byID[start.id] ?? start]
         var head = 0
         while head < queue.count {
             let r = queue[head]; head += 1
-            if r.isPurged { out.departed.append(r.filename); continue }
+            if r.isPurged {
+                switch r.removal?.state {
+                case .inTrash?, .removedFromCatalog?: out.departed.append(r.filename)
+                default: out.missingOnDisk.append(r.filename)
+                }
+                continue
+            }
             out.members.append(r)
             var next: [VideoRecord] = []
             if let g = r.pairGroupID { next += index.byGroup[g] ?? [] }
@@ -113,6 +129,7 @@ enum CatalogPairGroups {
             if queue.count > maxMembers { out.unknown = true; break }
         }
         if out.members.count == 1, out.departed.isEmpty { out.unknown = true }   // no sibling known
+        if !out.members.contains(where: { $0.id == start.id }) { out.unknown = true }   // the start itself is gone
         return out
     }
 
@@ -168,6 +185,7 @@ enum CatalogPairGroups {
                                  identity: (VideoRecord) -> PairHalfIdentity?) -> GateResult {
         var out = GateResult()
         let order = Dictionary(selection.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let selected = Dictionary(selection.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var done: Set<UUID> = []
         for half in selection where isHalf(half) && !half.isPurged && !done.contains(half.id) {
             let res = resolve(half, in: index)
@@ -182,6 +200,18 @@ enum CatalogPairGroups {
             if res.unknown {
                 let why = "the catalog can't find every related half of it"
                 holdAll({ _ in .pairMember(Self.pairMemberNote(why)) }, reason: why)
+                continue
+            }
+            if !res.missingOnDisk.isEmpty {
+                let why = "its related half \(Self.list(res.missingOnDisk)) is missing — not found on its drive"
+                holdAll({ _ in .pairMember(Self.pairMemberNote(why)) }, reason: why)
+                continue
+            }
+            // Codex #191 F1: the row the person selected must be the row
+            // the catalog holds now (same path) — never move a stale copy.
+            if let stale = picked.first(where: { m in selected[m.id].map { $0.fullPath != m.fullPath } ?? false }) {
+                let why = "\(stale.filename) changed in the catalog since you selected it"
+                holdAll({ _ in .groupHeld(Self.groupHeldNote(why)) }, reason: why)
                 continue
             }
             let missing = res.members.filter { order[$0.id] == nil }.map(\.filename)
