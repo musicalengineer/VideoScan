@@ -415,9 +415,12 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         // The real Trash move (test host); the hook runs right before A's move.
         let result = await d.model.trashSelectedRecords([v, a], confirmed: p, beforeEachMove: { path in
             guard path == aPath else { return }
-            DispatchQueue.main.sync {
+            // The other action's stamp must really land (nil = written),
+            // or the test would prove nothing about a kept marker.
+            let refused = DispatchQueue.main.sync {
                 MainActor.assumeIsolated { VideoScanModel.stampRemoval(aRef.value, .removedFromCatalog(at: Date(), reason: .junk)) }
             }
+            #expect(refused == nil, "the concurrent stamp was refused: \(refused ?? "")")
         })
         #expect(a.removal?.state == .removedFromCatalog, "the concurrent marker is kept")
         let aMoved = try #require(result.items.first { $0.record.id == a.id })
@@ -448,9 +451,12 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         let oRef = Ref(o)
         let result = await d.model.trashSelectedRecords([o], confirmed: p, beforeEachMove: { path in
             guard path == oPath else { return }
-            DispatchQueue.main.sync {
+            // The other action's stamp must really land (nil = written),
+            // or the test would prove nothing about a kept marker.
+            let refused = DispatchQueue.main.sync {
                 MainActor.assumeIsolated { VideoScanModel.stampRemoval(oRef.value, .removedFromCatalog(at: Date(), reason: .junk)) }
             }
+            #expect(refused == nil, "the concurrent stamp was refused: \(refused ?? "")")
         })
         guard case .moved(_, let trashPath?)? = result.items.first?.outcome else {
             Issue.record("O moved through the real Trash: \(result.items.map(\.outcome))"); return
