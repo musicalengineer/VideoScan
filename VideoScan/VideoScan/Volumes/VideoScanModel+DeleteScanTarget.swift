@@ -164,51 +164,106 @@ struct TargetRemovalScope: Sendable {
     }
 
     /// `isUnderRoot` for a record: its current path, and its evidenced
-    /// volume must not be a different known volume (#401).
+    /// volume must AGREE with the target's (#401, strict 2026-11-02:
+    /// `VolumeIdentity.agree` — a record that names another disk, or a
+    /// target that cannot name its own while the record can, is out).
     func isUnderRoot(_ rec: VideoRecord) -> Bool {
-        VolumeIdentity.mayBeSameVolume(rec.evidencedVolumeUUID, volumeUUID) && isUnderRoot(rec.fullPath)
+        VolumeIdentity.agree(rec.evidencedVolumeUUID, volumeUUID) && isUnderRoot(rec.fullPath)
     }
 
     /// `claims` for a record — the removal planner's question (#401).
-    /// Another target covers the record only when it may be on the
-    /// record's volume too (codex #184: same rule as the Delete count).
+    /// Another target covers the record only when its volume agrees with
+    /// the record's too (codex #184: same rule as the Delete count).
     func claims(_ rec: VideoRecord) -> Bool {
         let volume = rec.evidencedVolumeUUID
         let p = PathScope.normalize(rec.fullPath)
-        guard VolumeIdentity.mayBeSameVolume(volume, volumeUUID), root.containsNormalized(p) else { return false }
+        guard VolumeIdentity.agree(volume, volumeUUID), root.containsNormalized(p) else { return false }
         return !otherRoots.indices.contains {
-            VolumeIdentity.mayBeSameVolume(volume, otherVolumes[$0]) && otherRoots[$0].containsNormalized(p)
+            VolumeIdentity.agree(volume, otherVolumes[$0]) && otherRoots[$0].containsNormalized(p)
         }
     }
 
+    /// PATH-ONLY form, for tests of the path rule: equals `claims(rec)`
+    /// only while no volume is known on either side. Production callers
+    /// ask by record.
     func claims(_ path: String) -> Bool {
         claimsNormalized(PathScope.normalize(path))
     }
 
-    /// `claims` for an already-normalized path (see
-    /// `PathScope.Root.containsNormalized`) — the per-target projection
-    /// normalizes each record path once for all targets.
+    /// `claims(path)` for an already-normalized path (see
+    /// `PathScope.Root.containsNormalized`).
     func claimsNormalized(_ p: String) -> Bool {
         guard root.containsNormalized(p) else { return false }
         return !otherRoots.contains { $0.containsNormalized(p) }
     }
 }
 
-/// The volume a scan target's path is mounted on, by persistent UUID (#401).
-/// nil when the path is not reachable or is a network share (a hung share
-/// would block the caller, #189; a share's path already names it). nil
-/// means "unknown": the path rule decides, as before #401.
+/// Which volume a scan target IS, by persistent UUID (#401) — the ONE
+/// identity `VolumeIdentity`, `ScanContext.volumeUUID` and the catalog's
+/// `volumes` table share. A target is told by, in order:
+///
+///   1. its mount, when the path is reachable and local
+///      (`VolumeIdentity.uuid(forPath:)`, one getattrlist per target);
+///   2. the volume it was last seen mounted on
+///      (`CatalogScanTarget.volumeUUID`, remembered by
+///      `rememberScanTargetVolumes`) — an offline drive keeps its identity;
+///   3. its rows, for a legacy entry never seen mounted on this build: the
+///      ONE volume every record whose CURRENT path is under the root is
+///      evidenced on — the rule `RetireGate` already uses to know an
+///      offline drive (`recordedVolumeUUID`), read off the freshest
+///      evidence (`evidencedVolumeUUID`). Rows that disagree (two disks
+///      were catalogued at this path) or carry no evidence tell nothing.
+///
+/// Absent is "unknown". Under `VolumeIdentity.agree` an unknown target
+/// owns only records that are equally unknown — never, by path, a file
+/// that names another disk (the P0: a location showing the M4's files). A
+/// network share is unknown by its mount (a hung share would block the
+/// caller, #189) and known by its rows if they carry a UUID.
 enum ScanTargetVolume {
+    /// What `resolve` needs of a target: its id, path and remembered volume.
+    typealias Target = (id: UUID, searchPath: String, remembered: String?)
+
+    /// Tier 1 — the mounted volume. nil when unreachable or a network share.
     static func uuid(forPath path: String) -> String? {
         guard !path.isEmpty, VolumeReachability.isReachable(path: path),
               !VolumeReachability.isNetworkVolume(path: path) else { return nil }
         return VolumeIdentity.uuid(forPath: path)
     }
 
-    /// `uuid(forPath:)` for every target that has one, keyed by target id.
-    static func resolve(_ targets: [(id: UUID, searchPath: String)]) -> [UUID: String] {
+    /// All three tiers for every target, keyed by target id; absent =
+    /// unknown. One pass over `records` for the targets neither the mount
+    /// nor memory named, O(records × such targets), allocation-free per
+    /// record. Worst-case memory: a few words per target, nothing per record.
+    static func resolve(_ targets: [Target], records: [VideoRecord]) -> [UUID: String] {
         var out: [UUID: String] = [:]
-        for t in targets { out[t.id] = uuid(forPath: t.searchPath) }
+        out.reserveCapacity(targets.count)
+        // Targets neither the mount nor memory named, with prepared roots.
+        var pending: [(id: UUID, root: PathScope.Root)] = []
+        for t in targets {
+            if let v = uuid(forPath: t.searchPath) ?? t.remembered.flatMap(VolumeIdentity.normalized) {
+                out[t.id] = v
+            } else {
+                pending.append((t.id, PathScope.Root(t.searchPath)))
+            }
+        }
+        guard !pending.isEmpty else { return out }
+        // `found[i]`: the one volume seen so far; `conflict[i]`: two seen.
+        var found = [String?](repeating: nil, count: pending.count)
+        var conflict = [Bool](repeating: false, count: pending.count)
+        for rec in records {
+            let p = PathScope.normalize(rec.fullPath)
+            var evidence: String?
+            var read = false   // the evidence is read at most once per record
+            for i in pending.indices where !conflict[i] && pending[i].root.containsNormalized(p) {
+                if !read { evidence = rec.evidencedVolumeUUID; read = true }
+                guard let v = evidence else { break }   // no evidence: says nothing
+                if let f = found[i] { if f != v { conflict[i] = true } }
+                else { found[i] = v }
+            }
+        }
+        for i in pending.indices where !conflict[i] {
+            if let v = found[i] { out[pending[i].id] = v }
+        }
         return out
     }
 }
@@ -297,13 +352,22 @@ extension VideoScanModel {
     /// bookkeeping; the scope is decided by `root` and the CURRENT
     /// `scanTargets` roots.
     func planTargetRemoval(targetID: UUID = UUID(), root: String) -> TargetRemovalPlan {
-        // The same scope the Delete menu counts with (codex #1393).
-        // Every target's volume, so "covered by another target" asks the
-        // same volume question as the Delete count (codex #184).
+        // The same scope the Delete menu counts with (codex #1393), and
+        // the same volume resolution the volume table shows (#401):
+        // every target's volume plus the root's, mount first, then the
+        // rows — so "covered by another target" asks the same volume
+        // question as the Delete count (codex #184), and an offline
+        // target removes only the rows evidenced on its own disk.
+        var ask: [ScanTargetVolume.Target] = scanTargets.map { ($0.id, $0.searchPath, $0.volumeUUID) }
+        // The root as its own entry: a registered target's memory applies
+        // to it; a bare legacy root is told by its mount or its rows.
+        let rootKey = UUID()
+        ask.append((rootKey, root, scanTargets.first { $0.searchPath == root }?.volumeUUID))
+        let volumes = ScanTargetVolume.resolve(ask, records: records)
         let scope = TargetRemovalScope(
             root: root,
-            allTargets: scanTargets.map { ($0.searchPath, ScanTargetVolume.uuid(forPath: $0.searchPath)) },
-            volumeUUID: ScanTargetVolume.uuid(forPath: root))
+            allTargets: scanTargets.map { ($0.searchPath, volumes[$0.id]) },
+            volumeUUID: volumes[rootKey])
         var doomed = Set<UUID>()
         var kept = 0
         // #401: by record, so a file on another volume at the same path is

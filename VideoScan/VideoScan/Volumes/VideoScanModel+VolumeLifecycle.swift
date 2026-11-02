@@ -112,15 +112,38 @@ extension VideoScanModel {
         notificationObservers.add(probeChange, to: NotificationCenter.default)
     }
 
-    /// Re-check whether each scan target's path is currently mounted.
+    /// Re-check whether each scan target's path is currently mounted, and
+    /// remember which volume a mounted path is on (#401).
     func refreshTargetReachability() {
         for t in scanTargets {
             let r = VolumeReachability.isReachable(path: t.searchPath)
             if t.isReachable != r { t.isReachable = r }
         }
+        rememberScanTargetVolumes()
         // The Triage tab no longer observes the model (2026-10-03): tell
         // its snapshot a drive came or went. A no-op while it is off screen.
         noteTriageReachabilityChanged()
+    }
+
+    /// Each reachable local target learns its volume from its mount (one
+    /// getattrlist per target — `ScanTargetVolume.uuid(forPath:)`) and
+    /// keeps it while the drive is away, so an offline location still
+    /// knows which disk it is (#401). Persisted only when something
+    /// changed; a drive swapped under the same mount name re-learns.
+    /// Returns the number of targets whose remembered volume changed.
+    @discardableResult
+    func rememberScanTargetVolumes() -> Int {
+        var changed = 0
+        for t in scanTargets where t.isReachable {
+            guard let v = ScanTargetVolume.uuid(forPath: t.searchPath), v != t.volumeUUID else { continue }
+            if let old = t.volumeUUID {
+                log("Scan location \(VolumeReachability.displayLabel(forPath: t.searchPath)) is now on volume \(v) (was \(old)).")
+            }
+            t.volumeUUID = v
+            changed += 1
+        }
+        if changed > 0 { persistScanDates() }
+        return changed
     }
 
     /// Attempt to wake/access an offline volume. For network shares this may trigger

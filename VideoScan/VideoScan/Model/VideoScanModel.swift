@@ -1060,6 +1060,9 @@ final class VideoScanModel: ObservableObject {
     // an entry (when it was marked, and the volume's UUID then) is the
     // marked-or-not signal. Additive: absent = every volume allows changes.
     static let savedReadOnlyKey = "VideoScan.scanTargetReadOnly"
+    // #401 (2026-11-02) — the volume UUID last seen mounted at each path,
+    // keyed by searchPath. Additive: absent = never seen on this build.
+    static let savedVolumeUUIDKey = "VideoScan.scanTargetVolumeUUID"
 
     // `internal var` (not `private let`) so tests can swap in a per-test
     // CatalogStore(directory:) instance — necessary because the shared

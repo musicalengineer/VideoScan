@@ -3514,8 +3514,8 @@
         "emptyOrZeroEvidenceFallsThrough",
         "fixityStampOutranksAStaleScanVolume",
         "noEvidenceIsUnknown",
-        "sameVolumeRuleRefusesOnlyKnownAndDifferent",
-        "scanContextAloneIsUsedAndNormalized"
+        "scanContextAloneIsUsedAndNormalized",
+        "volumesAgreeOnlyWhenBothSayTheSameOrNeitherSpeaks"
       ]
     },
     {
@@ -13817,8 +13817,12 @@
       ],
       "tests": [
         "affectedSubsetIncludesTransitiveBucketNeighbors",
+        "affectedSubsetOffMainAgreesWithTheSynchronousRule",
+        "affectedSubsetProjectionAt100kIsInsideItsMainActorBudget",
+        "affectedSubsetProjectionComputesNoStemOnTheMainActor",
         "analyzeAllIsInstantNoOpWhenEverythingIsStamped",
         "analyzeDuplicatesKeepsMainThreadResponsiveAtScale",
+        "analyzeDuplicatesScopesItsDeltaOffTheMainActor",
         "analyzeSelectedForcesReanalysisOfThatSubset",
         "analyzeStampsEveryExaminedRecordIncludingUniques",
         "cachedChromeFlagsUpdateOnCatalogRefresh",
@@ -27100,17 +27104,34 @@
       "path": "VideoScan/VideoScanTests/ScanLocationVolumeTests.swift",
       "stage": "regression",
       "suites": [
+        "ScanLocationVolumeModelTests",
+        "ScanLocationVolumeSensorTests",
         "ScanLocationVolumeTests"
       ],
       "tests": [
         "deleteMenuCountIsZeroForAnotherVolumesFiles",
         "filesOnAnotherVolumeAreNotCountedUnderTheSamePath",
         "hundredThousandRowsTwentyTargetsWithinBudget",
+        "knownLocationNeverShowsAFileWithoutEvidence",
+        "legacyOfflineLocationIsToldByUnanimousRows",
+        "legacyOfflineLocationWithDisagreeingRowsIsUnknown",
+        "mountedLocationIsToldByItsMount",
         "movedFileWithStaleScanVolumeStaysOnItsNewDrive",
         "nestedDifferentVolumesMatchRemovalCount",
+        "noEvidenceAnywhereKeepsThePathRule",
+        "offlineLocationIsToldByItsMemory",
+        "offlineLocationShowsItsHistoryByUUID",
+        "refreshRemembersTheMountedVolume",
+        "rememberedVolumeRoundTripsThroughUserDefaults",
+        "removalPlanForALegacyLocationWithDisagreeingRowsRemovesNothing",
+        "removalPlanForALegacyLocationWithUnanimousRowsRemovesThem",
+        "removalPlanForAnOfflineLocationRemovesOnlyItsOwnDisk",
         "removalScopeNeverClaimsAnotherVolumesFiles",
         "sameVolumeFilesAreUnchanged",
-        "unknownVolumeFallsBackToThePath"
+        "signatureCoverageReadsTheProjection",
+        "theLenientRuleIsGone",
+        "thePaneAndThePlannerResolveThroughTheOneFunction",
+        "unknownLocationNeverShowsAFileThatNamesAnotherDisk"
       ]
     },
     {
@@ -36580,7 +36601,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 364,
+      "expected_floor": 379,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [
@@ -36718,6 +36739,8 @@
         "VideoScanTests/CatalogVolumePillRegressionTests",
         "VideoScanTests/CatalogVolumePillSensorTests",
         "VideoScanTests/ScanLocationVolumeTests",
+        "VideoScanTests/ScanLocationVolumeModelTests",
+        "VideoScanTests/ScanLocationVolumeSensorTests",
         "VideoScanTests/CaptionDegenerateRefusalTests",
         "VideoScanTests/CatalogStatusDegenerateOCRTests",
         "VideoScanTests/CaptionDegenerateReaderRouteTests",

@@ -52,9 +52,11 @@ enum VolumeMediaTally {
     /// One pass over `records`, bucketed per target id. A record is LIVE
     /// on a target when the footer counts it (`isCounted`, asked once per
     /// record) and its current path is under the target's root.
-    /// `targetVolumes`: each target's mounted volume UUID where known
-    /// (#401). A record whose evidenced volume is known and different is
-    /// not ON the target, whatever its path says.
+    /// `targetVolumes`: each target's volume UUID where known (#401,
+    /// `ScanTargetVolume.resolve`: its mount, else its rows). A record is
+    /// ON a target only when `VolumeIdentity.agree` says so — a record
+    /// evidenced on another disk, or on any disk when the target cannot
+    /// name its own, is not on the target whatever its path says.
     static func compute(
         _ records: [VideoRecord],
         targets: [(id: UUID, searchPath: String)],
@@ -71,10 +73,12 @@ enum VolumeMediaTally {
             let isError = r.streamType == .ffprobeFailed
             let volume = r.evidencedVolumeUUID
             for t in roots {
-                // #401: a record evidenced on another known volume is not
-                // on this target NOW, whatever its current path says. The
-                // origin path is history and keeps the path rule.
-                let onNow = VolumeIdentity.mayBeSameVolume(volume, targetVolumes[t.id])
+                // #401: the record's volume and the target's must agree
+                // for the record to be on this target NOW, whatever its
+                // current path says. The origin path is history (where
+                // the file came FROM, no volume evidence) and keeps the
+                // path rule.
+                let onNow = VolumeIdentity.agree(volume, targetVolumes[t.id])
                     && t.root.containsNormalized(current)
                 guard onNow || (origin.map(t.root.containsNormalized) ?? false) else { continue }
                 out[t.id, default: Bucket()].add(r, live: counted && onNow, isError: isError)

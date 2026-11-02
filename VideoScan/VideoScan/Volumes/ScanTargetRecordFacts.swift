@@ -68,8 +68,9 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
     /// Empty `targets` → empty dictionary; a target with no records
     /// still gets an entry (zeroed), so a body lookup distinguishes
     /// "no records" from "cache not built yet" (`nil`).
-    /// `targetVolumes`: as `VolumeMediaTally.compute` (#401) — a record on
-    /// another known volume is never under a target, for either count.
+    /// `targetVolumes`: as `VolumeMediaTally.compute` (#401) — the record's
+    /// volume and the target's must agree (`VolumeIdentity.agree`) for
+    /// either count.
     nonisolated static func project(
         _ records: [VideoRecord],
         targets: [Target],
@@ -115,10 +116,10 @@ struct ScanTargetRecordFacts: Equatable, Sendable {
             var firstGroup = -1
             var severalGroups = false
             for i in prefixes.indices {
-                // #401: the CURRENT path counts only on the record's own
-                // volume (unknown either side: the path decides). The
-                // origin path is history and keeps the path rule.
-                let sameVolume = VolumeIdentity.mayBeSameVolume(volume, targetVolumeList[i])
+                // #401: the CURRENT path counts only when the volumes
+                // agree (both the same, or neither known). The origin
+                // path is history and keeps the path rule.
+                let sameVolume = VolumeIdentity.agree(volume, targetVolumeList[i])
                 if sameVolume && roots[i].containsNormalized(normPath) {
                     containing.append(i)
                     if firstGroup < 0 { firstGroup = group[i] }
