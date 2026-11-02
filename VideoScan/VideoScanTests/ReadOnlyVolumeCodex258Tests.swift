@@ -313,9 +313,12 @@ struct ReadOnlyVolumeCodex258Tests {
         // file, and junkTurn reads the Read-only marks afresh before that
         // file's disk half, which asks them at the removal.
         let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
-        let loop = try #require(junk.range(of: "for (rec, decided) in zip(requested, pending) {"))
-        #expect(junk[loop.upperBound...].contains("await junkTurn(rec, guard: fileGuard, disk: disk)"),
+        // 2026-11-01 (Codex #195): the loop walks turns — one file, or one
+        // unit of files that leave together; each still gets its own turn gate.
+        let loop = try #require(junk.range(of: "while i < requested.count {"))
+        #expect(junk[loop.upperBound...].contains("await junkTurn(recs[0], guard: fileGuard, disk: disk)"),
                 "the per-file turn left the loop")
+        #expect(junk[loop.upperBound...].contains("await junkUnitTurn(recs, guard: fileGuard, disk: disk)"))
         let turn = try #require(junk.range(of: "private func junkTurn("))
         let hop = try #require(junk.range(of: "disk.run(path: path, protections: protections, catalogBytes: catalogBytes)",
                                           range: turn.upperBound..<junk.endIndex))

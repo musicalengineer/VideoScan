@@ -84,11 +84,26 @@ final class RemovalReservations: @unchecked Sendable {
         }
     }
 
-    /// Is `path` leaving (another removal holds it) right now? Such a file
-    /// cannot be pinned as a surviving copy (`pin`).
-    func isLeaving(_ path: String) -> Bool {
-        let k = Self.key(path)
-        return lock.withLock { leaving[k] != nil }
+    enum BatchReservation { case reserved(keys: [String]), held(index: Int, note: String) }
+
+    /// Reserve EVERY one of `paths` as leaving, or none (one lock: two
+    /// batches cannot interleave — the first takes all its files or nothing,
+    /// and a second batch sharing any file is held whole). Held at the first
+    /// file that is already leaving, relied on as a survivor, or the same
+    /// physical file as an earlier one in the batch. Release each key with
+    /// `release` when the batch's turn ends.
+    func reserveAll(_ paths: [String]) -> BatchReservation {
+        let keys = paths.map(Self.key)
+        return lock.withLock {
+            var inBatch = Set<String>()
+            for (i, k) in keys.enumerated() {
+                if !inBatch.insert(k).inserted { return .held(index: i, note: Self.sameFileNote) }
+                if leaving[k] != nil { return .held(index: i, note: Self.busyNote) }
+                if (reliedOn[k] ?? 0) > 0 { return .held(index: i, note: Self.reliedOnNote) }
+            }
+            for k in keys { leaving[k] = [] }
+            return .reserved(keys: keys)
+        }
     }
 
     /// Is `path` leaving or relied on right now?
@@ -111,6 +126,8 @@ final class RemovalReservations: @unchecked Sendable {
         }
     }
 
+    /// The hold for a batch naming one physical file twice.
+    static let sameFileNote = "is the same file on disk as another one being moved with it — nothing moved"
     /// The hold for a file another turn is removing right now.
     static let busyNote = "is being removed by another job right now — nothing moved"
     /// The hold for a file another removal relies on as the copy that stays.

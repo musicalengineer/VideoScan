@@ -68,6 +68,15 @@ enum CatalogPairGroups {
         fileprivate var byGroup: [UUID: [VideoRecord]] = [:]
         /// Halves whose `pairedWith` / `pendingPairedWithID` names the key.
         fileprivate var pointingAt: [UUID: [VideoRecord]] = [:]
+        /// Ids a LIVE half links to — such a row is in a group even when it
+        /// carries no pair field itself (Codex #195 F1).
+        fileprivate var linkedFromLive: Set<UUID> = []
+
+        /// Does `r` belong to a recovered pair group in any link direction?
+        /// Every such row meets the pair gate; none is ever "ordinary".
+        nonisolated func isGroupMember(_ r: VideoRecord) -> Bool {
+            CatalogPairGroups.isHalf(r) || linkedFromLive.contains(r.id)
+        }
 
         nonisolated init(catalog: [VideoRecord]) {
             for r in catalog where CatalogPairGroups.isHalf(r) {
@@ -77,6 +86,7 @@ enum CatalogPairGroups {
                 // can carry an object link AND a pending one.
                 for p in Set([r.pairedWith?.id, r.pendingPairedWithID].compactMap({ $0 })) {
                     pointingAt[p, default: []].append(r)
+                    if !r.isPurged { linkedFromLive.insert(p) }
                 }
             }
         }
@@ -89,6 +99,7 @@ enum CatalogPairGroups {
         /// Siblings deliberately removed (in the Trash, or removed from the
         /// catalog by the person) — their file names.
         var departed: [String] = []
+        var departedIDs: [UUID] = []
         /// Siblings marked missing on disk (or gone with no removal marker):
         /// never "departed" — they hold the group (Codex #191 F6).
         var missingOnDisk: [String] = []
@@ -112,11 +123,14 @@ enum CatalogPairGroups {
             let r = queue[head]; head += 1
             if r.isPurged {
                 switch r.removal?.state {
-                case .inTrash?, .removedFromCatalog?: out.departed.append(r.filename)
+                case .inTrash?, .removedFromCatalog?: out.departed.append(r.filename); out.departedIDs.append(r.id)
                 default: out.missingOnDisk.append(r.filename)
                 }
                 continue
             }
+            // A live row reached by a link that carries no pair field of
+            // its own: one-sided linkage — the group is not known.
+            if !isHalf(r) { out.unknown = true }
             out.members.append(r)
             var next: [VideoRecord] = []
             if let g = r.pairGroupID { next += index.byGroup[g] ?? [] }
@@ -149,6 +163,9 @@ enum CatalogPairGroups {
         let identities: [PairHalfIdentity]
         /// Siblings already removed from the catalog.
         let departed: [String]
+        /// Their ids — a member's lingering link to one is not a change
+        /// (Codex #195 F4).
+        var departedIDs: [UUID] = []
         /// Members other than the first — "its N related halves".
         var relatedCount: Int { members.count - 1 }
     }
@@ -175,6 +192,8 @@ enum CatalogPairGroups {
         /// Per selected half that is held; a member refused on its own
         /// (archive, offline, inactive) keeps that refusal and is absent here.
         var holds: [UUID: HalfHold] = [:]
+        /// Every selected row the gate treated as a group member.
+        var seen: Set<UUID> = []
     }
 
     /// The gate over the selection's halves. `alone[id]` is the person's
@@ -187,7 +206,9 @@ enum CatalogPairGroups {
         let order = Dictionary(selection.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         let selected = Dictionary(selection.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var done: Set<UUID> = []
-        for half in selection where isHalf(half) && !half.isPurged && !done.contains(half.id) {
+        // Every row in a group in ANY link direction meets the gate.
+        for half in selection where index.isGroupMember(half) && !half.isPurged && !done.contains(half.id) {
+            out.seen.insert(half.id)
             let res = resolve(half, in: index)
             let picked = res.members.filter { order[$0.id] != nil }
                 .sorted { (order[$0.id] ?? .max) < (order[$1.id] ?? .max) }
@@ -234,7 +255,7 @@ enum CatalogPairGroups {
             out.admitted.append(Group(
                 key: half.pairGroupID ?? half.id, members: picked.map(\.id), filenames: names,
                 paths: picked.map(\.fullPath), pairGroupIDs: picked.map(\.pairGroupID),
-                identities: ids.compactMap { $0 }, departed: res.departed))
+                identities: ids.compactMap { $0 }, departed: res.departed, departedIDs: res.departedIDs))
         }
         return out
     }

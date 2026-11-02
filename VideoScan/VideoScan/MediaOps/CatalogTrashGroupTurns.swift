@@ -1,26 +1,20 @@
 // CatalogTrashGroupTurns.swift
 // Keeps a recovered audio/video pair whole at the move (DECISIONS
 // 2026-11-01). The plan admits a group only when every half is selected and
-// passes every gate (CatalogPairGroups.gate); this is that rule again at
-// each half's TURN in the one Trash routine, so the group is never split by
-// anything that changed after the confirmation:
-//
-//   catalog half (main actor, `problem`) — for the half whose turn it is:
-//     * it belongs to a group the person confirmed (else: held);
-//     * every member BEFORE it in the group actually moved (else: held — a
-//       member that was held, offline or failed keeps the rest);
-//     * it and every member AFTER it is still the row the plan saw: active,
-//       same path, same pairGroupID, links only inside the group, and (for
-//       the later ones) its drive is connected.
-//   disk half (off-main, `CatalogTrashGroupDiskCheck.problem`) — immediately
-//     before this half's own move, inside the routine's reservation: it and
-//     every later member still has the device + inode + size + mtime the
-//     plan saw (identity before and after).
-// The first half of a group therefore checks the whole group before
-// anything of it moves (refuse before mutating). What cannot be ruled out
-// is a later half failing at its own move (the Trash refuses it, or a
-// check flips in the microseconds between) after an earlier one moved:
-// that is reported as SPLIT — never success — naming where each file is.
+// passes every gate (CatalogPairGroups.gate). At the move a confirmed pair
+// is ONE unit of the one Trash routine (`JunkDeletionGuard.units`,
+// `junkUnitTurn`; Codex #195 — no simulated look-ahead):
+//   phase 1 — for EVERY half, its real turn: offline, this gate
+//     (`problem`: confirmed whole, the very file the plan proved, its row
+//     unchanged), the only-copy question, the turn's refusal list; then,
+//     off-main, every half's real reservation at once (`reserveAll`), its
+//     identity check (`CatalogTrashGroupDiskCheck`), its copy proof with
+//     real pins, the archive / Read-only last words. Any refusal: nothing
+//     moves, every reservation is released, the pair is held with that
+//     reason.
+//   phase 2 — the moves, in order, each re-checked (identity) under its own
+//     reservation. A refusal or failure after the first move is the one
+//     honest SPLIT: reported, never success, naming where each file is.
 //
 // Memory: O(selected group members) for the batch.
 // (A `final class` ≈ a C++ object handed by pointer into the per-file
@@ -33,7 +27,6 @@ import VideoScanCore
 final class CatalogTrashGroupTurns {
     let groups: [CatalogPairGroups.Group]
     private var groupOf: [UUID: Int] = [:]
-    private var moved: Set<UUID> = []
     private var stopped: [Int: String] = [:]
 
     init(groups: [CatalogPairGroups.Group]) {
@@ -44,14 +37,10 @@ final class CatalogTrashGroupTurns {
     /// The members of `id`'s group, if it is in one.
     func group(of id: UUID) -> CatalogPairGroups.Group? { groupOf[id].map { groups[$0] } }
 
-    /// The routine settled `id` (every turn, in order).
-    func settled(_ id: UUID, moved didMove: Bool) {
-        if didMove { moved.insert(id) }
-    }
 
-    /// The catalog half of a group member's turn. nil = go on.
-    func problem(_ rec: VideoRecord, model: VideoScanModel,
-                 isOffline: (VideoRecord) -> Bool) -> String? {
+    /// The catalog half of a group member's turn in phase 1 of its unit
+    /// (the routine runs it for EVERY member before any moves). nil = go on.
+    func problem(_ rec: VideoRecord, model: VideoScanModel) -> String? {
         guard let gi = groupOf[rec.id] else { return Self.notConfirmedAsGroupNote }
         if let why = stopped[gi] { return CatalogPairGroups.groupHeldNote(why) + " — nothing moved" }
         let g = groups[gi]
@@ -61,25 +50,10 @@ final class CatalogTrashGroupTurns {
         if rec.fullPath != g.paths[k] {
             return stop(gi, "\(g.filenames[k]) is not the file you confirmed (its catalog row points elsewhere)")
         }
-        for j in 0..<k where !moved.contains(g.members[j]) {
-            return stop(gi, "its related half \(g.filenames[j]) did not move")
-        }
-        let members = Set(g.members)
-        for j in k..<g.members.count {
-            guard let live = model.record(forID: g.members[j]), Self.stillAsPlanned(live, g, j, members) else {
-                return stop(gi, "its related half \(g.filenames[j]) changed in the catalog since you confirmed")
-            }
-            if j > k, isOffline(live) {
-                return stop(gi, "the drive of its related half \(g.filenames[j]) is not connected")
-            }
+        guard let live = model.record(forID: rec.id), Self.stillAsPlanned(live, g, k) else {
+            return stop(gi, "\(g.filenames[k]) changed in the catalog since you confirmed")
         }
         return nil
-    }
-
-    /// The members after `id` in its group (empty when it is in none).
-    func laterMembers(after id: UUID) -> [UUID] {
-        guard let g = group(of: id), let k = g.members.firstIndex(of: id) else { return [] }
-        return Array(g.members[(k + 1)...])
     }
 
     /// Stop every confirmed group the plan now sees with other members
@@ -89,18 +63,10 @@ final class CatalogTrashGroupTurns {
         for (gi, g) in groups.enumerated() where !now.contains(g.members) { stopped[gi] = why }
     }
 
-    /// May a Stop take effect before `id`'s turn? Not between the halves
-    /// of a pair whose first half already moved (Codex #191 F7): the pair
-    /// completes (or is reported SPLIT); Stop acts between pairs.
-    func mayCancel(before id: UUID) -> Bool {
-        guard let g = group(of: id), let k = g.members.firstIndex(of: id) else { return true }
-        return !g.members[..<k].contains(where: moved.contains)
-    }
-
-    /// Stop `id`'s group for `why`; the held note for `id`.
-    func hold(_ id: UUID, because why: String) -> String {
-        guard let gi = groupOf[id] else { return Self.notConfirmedAsGroupNote }
-        return stop(gi, why)
+    /// The confirmed groups still to be moved as units (a stopped group's
+    /// halves are held one by one at their turns).
+    var activeGroups: [CatalogPairGroups.Group] {
+        groups.indices.filter { stopped[$0] == nil }.map { groups[$0] }
     }
 
     private func stop(_ gi: Int, _ why: String) -> String {
@@ -108,14 +74,15 @@ final class CatalogTrashGroupTurns {
         return CatalogPairGroups.groupHeldNote(why) + " — nothing moved"
     }
 
-    /// The live row is still the half the plan admitted.
-    private static func stillAsPlanned(_ live: VideoRecord, _ g: CatalogPairGroups.Group, _ j: Int,
-                                       _ members: Set<UUID>) -> Bool {
+    /// The live row is still the half the plan admitted. Its links may name
+    /// only members — or a sibling that departed (Codex #195 F4).
+    private static func stillAsPlanned(_ live: VideoRecord, _ g: CatalogPairGroups.Group, _ j: Int) -> Bool {
         guard !live.isPurged, !live.isSetAside, !live.isSuperseded,
               live.combinedFromPairID == nil,
               live.fullPath == g.paths[j], live.pairGroupID == g.pairGroupIDs[j] else { return false }
-        if let p = live.pairedWith?.id, !members.contains(p) { return false }
-        if let p = live.pendingPairedWithID, !members.contains(p) { return false }
+        let allowed = Set(g.members).union(g.departedIDs)
+        if let p = live.pairedWith?.id, !allowed.contains(p) { return false }
+        if let p = live.pendingPairedWithID, !allowed.contains(p) { return false }
         return true
     }
 
@@ -126,12 +93,8 @@ final class CatalogTrashGroupTurns {
     nonisolated static let notConfirmedAsGroupNote =
         "is half of a recovered audio/video pair, which Combine still needs — it was not part of a whole pair you confirmed, so nothing moved"
 
-    /// The disk half's checks, as one Sendable value for the worker.
-    /// `laterProofs` holds what the later halves must prove (filled by
-    /// `catalogTrashLaterHalvesProblem` at the same turn).
-    func diskCheck(laterProofs: CatalogTrashMoveProofs) -> CatalogTrashGroupDiskCheck {
-        CatalogTrashGroupDiskCheck(groups: groups, laterProofs: laterProofs)
-    }
+    /// The disk half's identity check, as one Sendable value for the worker.
+    var diskCheck: CatalogTrashGroupDiskCheck { CatalogTrashGroupDiskCheck(groups: groups) }
 
     // MARK: - The groups' outcome (OUTCOME line, alert)
 
@@ -236,49 +199,23 @@ final class CatalogTrashGroupTurns {
     }
 }
 
-/// The disk half of a group member's turn (off the main actor): this half
-/// and every later member still has the identity the plan recorded, and
-/// every later member's surviving-copy proof (when it has one) holds now.
-/// Keyed by path; a path that is no group member is not this check's business.
+/// A group member's identity check (off the main actor, under its
+/// reservation): the file at `path` still has the device + inode + size +
+/// mtime the plan saw. Asked in phase 1 and again right before the move.
+/// A path that is no group member is not this check's business.
 struct CatalogTrashGroupDiskCheck: Sendable {
-    struct Entry: Sendable {
-        let filename: String
-        let path: String
-        let identity: PairHalfIdentity
-    }
-    private let fromHere: [String: [Entry]]
-    private let laterProofs: CatalogTrashMoveProofs
+    private let identities: [String: (filename: String, identity: PairHalfIdentity)]
 
-    init(groups: [CatalogPairGroups.Group], laterProofs: CatalogTrashMoveProofs) {
-        self.laterProofs = laterProofs
-        var map: [String: [Entry]] = [:]
-        for g in groups {
-            let entries = g.members.indices.map { Entry(filename: g.filenames[$0], path: g.paths[$0], identity: g.identities[$0]) }
-            for k in entries.indices { map[entries[k].path] = Array(entries[k...]) }
-        }
-        fromHere = map
+    init(groups: [CatalogPairGroups.Group]) {
+        var map: [String: (filename: String, identity: PairHalfIdentity)] = [:]
+        for g in groups { for k in g.members.indices { map[g.paths[k]] = (g.filenames[k], g.identities[k]) } }
+        identities = map
     }
 
-    /// nil = every member from this one on is the file the plan saw.
+    /// nil = this is the file the plan saw.
     func problem(_ path: String) -> String? {
-        guard let entries = fromHere[path] else { return nil }
-        for e in entries where PairHalfIdentity.capture(path: e.path) != e.identity {
-            let who = e.path == path ? "it" : "its related half \(e.filename)"
-            return CatalogPairGroups.groupHeldNote("\(who) changed or went away on disk since you confirmed (device, inode, size or date)")
-                + " — nothing moved"
-        }
-        for e in entries.dropFirst() {
-            // Codex #191 F4: a later half another removal holds (leaving, or
-            // relied on as a survivor) would be held at its own turn.
-            if RemovalReservations.shared.isReserved(e.path) {
-                return CatalogPairGroups.groupHeldNote("its related half \(e.filename) is being removed or relied on by another job right now")
-                    + " — nothing moved"
-            }
-            if let why = laterProofs.problemAhead(e.path) {
-                let bare = why.replacingOccurrences(of: " — nothing moved", with: "")
-                return CatalogPairGroups.groupHeldNote("its related half \(e.filename): \(bare)") + " — nothing moved"
-            }
-        }
-        return nil
+        guard let e = identities[path], PairHalfIdentity.capture(path: path) != e.identity else { return nil }
+        return CatalogPairGroups.groupHeldNote("\(e.filename) changed or went away on disk since you confirmed (device, inode, size or date)")
+            + " — nothing moved"
     }
 }

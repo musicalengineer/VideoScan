@@ -10834,11 +10834,11 @@
         "CatalogTrashPairGroupSensorTests"
       ],
       "tests": [
-        "lookAheadUsesTheTurnsRefusalList",
         "noFileWorkOfTheirOwn",
         "noNewModelExtension",
         "selectRelatedHalvesIsWired",
-        "turnGateIsWired"
+        "turnGateIsWired",
+        "unitRunsTheRealTurn"
       ]
     },
     {
@@ -10851,17 +10851,21 @@
       ],
       "tests": [
         "aviPair",
+        "batchReservationIsAllOrNothing",
         "cancelBetweenHalvesNeverSplits",
         "combineOutputAmongHalves",
         "departedSibling",
+        "departedSiblingRemainderMoves",
         "fullGroupAdmitted",
         "fullGroupMoves",
         "hundredThousandRowsFiveThousandGroups",
+        "laterHalfAliasSurvivorHoldsThePair",
         "laterHalfBecameOnlyCopyHoldsThePair",
         "laterHalfCopyNotProvenHoldsThePair",
         "laterHalfMarkerRefusalHoldsTheGroup",
         "laterHalfOnReadOnlyDrive",
         "laterHalfReservedSurvivorHoldsThePair",
+        "laterHalvesNeverVouchForEachOther",
         "missingSiblingHoldsTheGroup",
         "mixedSelection",
         "mxfPair",
@@ -10870,6 +10874,7 @@
         "relinkDoesNotHideASplit",
         "relinkedLaterHalfReportsItsCurrentLocation",
         "reservedLaterHalfHoldsTheGroup",
+        "reverseOnlySiblingNeverMoves",
         "reversePendingLinkIsFollowed",
         "secondHalfFailsIsASplit",
         "selectRelatedHalves",

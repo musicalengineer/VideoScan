@@ -169,10 +169,21 @@ extension VideoScanModel {
         /// Extra ledger detail for one file that left the disk (⌘⌫ names
         /// the recovered A/V pair a half moved with). nil = none.
         var ledgerDetail: (@MainActor (VideoRecord) -> [String: String])? = nil
-        /// May a Stop (task cancellation) take effect before this file's
-        /// turn? nil = always. ⌘⌫ says no between the halves of a recovered
-        /// A/V pair whose first half moved — Stop acts between pairs.
-        var mayCancelBefore: (@MainActor (VideoRecord) -> Bool)? = nil
+        /// Files that leave TOGETHER or not at all (⌘⌫'s recovered A/V
+        /// pairs): each unit is its members' ids, in order, contiguous in
+        /// the request. A unit is ONE turn (`junkUnitTurn`): every member's
+        /// real gate and real reservation first, then the moves. Empty for
+        /// every other door.
+        var units: [[UUID]] = []
+        /// The words for a member held because ANOTHER member of its unit
+        /// was refused (given that member's name and reason).
+        var unitHeldNote: @Sendable (String) -> String = JunkDeletionGuard.defaultUnitHeldNote
+        nonisolated static let defaultUnitHeldNote: @Sendable (String) -> String = {
+            "stays with the files it moves with — \($0) — nothing moved"
+        }
+        /// Asked off-main immediately before EACH unit member's move (after
+        /// the earlier members moved), under its own reservation: nil = move.
+        var atTheMove: (@Sendable (String) -> String?)? = nil
 
         /// True when `refusal` is the one the waiver may lift for `rec`.
         /// Belt and braces: never for a path that runs through an archive
@@ -327,20 +338,37 @@ extension VideoScanModel {
         var turns: [JunkTurnIdentity?] = []
         outcomes.reserveCapacity(requested.count)
         turns.reserveCapacity(requested.count)
-        for (rec, decided) in zip(requested, pending) {
-            if let decided {
-                outcomes.append(decided); turns.append(nil)
-            } else if Task.isCancelled, fileGuard?.mayCancelBefore?(rec) ?? true {
-                outcomes.append(.cancelled); turns.append(nil)
+        let units = JunkTurnUnits(fileGuard?.units ?? [])
+        var i = 0
+        while i < requested.count {
+            let span = units.span(at: i, in: requested)
+            let recs = Array(requested[i..<(i + span.count)])
+            let decided = Array(pending[i..<(i + span.count)])
+            var unitOutcomes: [JunkFileOutcome]
+            var unitTurns: [JunkTurnIdentity?] = Array(repeating: nil, count: recs.count)
+            if let note = span.broken {
+                // A unit member out of place: never moved alone.
+                unitOutcomes = decided.map { $0 ?? .held(note) }
+            } else if decided.contains(where: { $0 != nil }) {
+                unitOutcomes = Self.unitHeld(recs, decided, note: fileGuard?.unitHeldNote)
+            } else if Task.isCancelled {
+                // Stop acts between turns, and a unit is one turn.
+                unitOutcomes = Array(repeating: .cancelled, count: recs.count)
             } else {
-                // Who this turn is about, frozen before the disk work (codex
+                // Who each turn is about, frozen before the disk work (codex
                 // round 1 F3): the row may be relinked while it runs.
-                turns.append(JunkTurnIdentity(rec))
-                outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
+                unitTurns = recs.map { JunkTurnIdentity($0) }
+                unitOutcomes = recs.count == 1 && !span.isUnit
+                    ? [await junkTurn(recs[0], guard: fileGuard, disk: disk)]
+                    : await junkUnitTurn(recs, guard: fileGuard, disk: disk)
             }
-            // Reported on the record that still describes the file this
-            // turn was about (codex round 2 P2), never a row relinked meanwhile.
-            if let last = outcomes.last { fileGuard?.settled?(reportedRecord(rec, turn: turns.last.flatMap { $0 }), last) }
+            for (k, rec) in recs.enumerated() {
+                outcomes.append(unitOutcomes[k]); turns.append(unitTurns[k])
+                // Reported on the record that still describes the file this
+                // turn was about (codex round 2 P2), never a row relinked meanwhile.
+                fileGuard?.settled?(reportedRecord(rec, turn: unitTurns[k]), unitOutcomes[k])
+            }
+            i += recs.count
         }
         return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason,
                                  ledgerDetail: fileGuard?.ledgerDetail)
@@ -368,6 +396,58 @@ extension VideoScanModel {
         }.value
     }
 
+    /// A UNIT's turn (files that leave together or not at all). Phase 1 —
+    /// every member's REAL gate, in order: offline, the caller's
+    /// authorization, the turn's refusal list (main actor); then, off-main
+    /// in one synchronous stretch, every member's REAL reservation at once
+    /// (`reserveAll`), its `beforeRemoval` proof (the copy pins), the
+    /// archive / Read-only last words and existence. Any refusal anywhere:
+    /// nothing moves, every reservation is released, the whole unit is held
+    /// with that reason. Phase 2 — only when every member is reserved and
+    /// passed: the moves, in order, each re-checked (`atTheMove`) under its
+    /// own reservation. A refusal or failure after the first move is the one
+    /// honest SPLIT (the caller reports it).
+    private func junkUnitTurn(_ recs: [VideoRecord], guard fileGuard: JunkDeletionGuard?,
+                              disk: JunkDiskTurn) async -> [JunkFileOutcome] {
+        var protections: [JunkTurnProtections] = []
+        for (i, rec) in recs.enumerated() {
+            var refused: JunkFileOutcome?
+            if let offline = junkTurnOfflineRefusal(rec.fullPath) {
+                refused = offline
+            } else if let fileGuard, let why = fileGuard.authorize(rec) {
+                refused = .held(why)
+            } else {
+                switch junkTurnVerdict(rec, guard: fileGuard) {
+                case .refused(let outcome): refused = outcome
+                case .clear(let p): protections.append(p)
+                }
+            }
+            if let refused {
+                var decided = [JunkFileOutcome?](repeating: nil, count: recs.count)
+                decided[i] = refused
+                return Self.unitHeld(recs, decided, note: fileGuard?.unitHeldNote)
+            }
+        }
+        let members = recs.map { JunkDiskTurn.Member(path: $0.fullPath, filename: $0.filename, catalogBytes: $0.sizeBytes) }
+        let note = fileGuard?.unitHeldNote ?? JunkDeletionGuard.defaultUnitHeldNote
+        let atTheMove = fileGuard?.atTheMove
+        return await Task.detached(priority: .userInitiated) {
+            disk.runUnit(members, protections: protections, heldNote: note, atTheMove: atTheMove)
+        }.value
+    }
+
+    /// One unit member refused (`decided`): it keeps its outcome, every
+    /// other member is held, naming it and why.
+    nonisolated static func unitHeld(_ recs: [VideoRecord], _ decided: [JunkFileOutcome?],
+                                     note: (@Sendable (String) -> String)?) -> [JunkFileOutcome] {
+        let note = note ?? JunkDeletionGuard.defaultUnitHeldNote
+        guard let i = decided.firstIndex(where: { $0 != nil }), let first = decided[i] else {
+            return recs.map { _ in .held(note("one of them was refused")) }
+        }
+        let why = "\(recs[i].filename) \(JunkDeletionReport.reason(first) ?? "was refused")"
+        return decided.map { $0 ?? .held(note(why)) }
+    }
+
     /// Offline-volume check: only /Volumes/<X>/... paths can be offline
     /// (drive unmounted); internal paths live on the boot volume. The 5 s
     /// VolumeReachability cache makes this near-free. The record is NOT
@@ -378,28 +458,6 @@ extension VideoScanModel {
 
     /// The turn's catalog-side verdict after the caller's authorization.
     enum JunkTurnVerdict { case refused(JunkFileOutcome), clear(JunkTurnProtections) }
-
-    /// Would THIS file's own turn refuse it, before its disk half? THE one
-    /// list (offline, then `junkTurnVerdict`) — the turn runs these same two
-    /// functions, and ⌘⌫ asks this for every later half of a recovered A/V
-    /// pair before the first half moves (Codex #194 F2; a sensor pins that
-    /// both use the same functions). nil = it would go on to the disk half.
-    func junkTurnWouldRefuse(_ rec: VideoRecord, guard fileGuard: JunkDeletionGuard?) -> String? {
-        let outcome: JunkFileOutcome?
-        if let offline = junkTurnOfflineRefusal(rec.fullPath) {
-            outcome = offline
-        } else if case .refused(let refused) = junkTurnVerdict(rec, guard: fileGuard) {
-            outcome = refused
-        } else {
-            outcome = nil
-        }
-        switch outcome {
-        case nil: return nil
-        case .held(let why)?: return why
-        case .offline?: return "is on a drive that is not connected"
-        case let other?: return JunkDeletionReport.reason(other) ?? "would not be moved"
-        }
-    }
 
     /// The turn's refusals after authorization, in order — the Master
     /// Archive, the removal-marker save, the drives marked Read only — and,
@@ -561,6 +619,34 @@ extension VideoScanModel {
     }
 }
 
+// MARK: - Units: files that leave together or not at all
+
+/// The caller's units, looked up by position in the request. Main actor.
+struct JunkTurnUnits {
+    struct Span { let count: Int; let isUnit: Bool; let broken: String? }
+    private let byID: [UUID: [UUID]]
+
+    init(_ units: [[UUID]]) {
+        var map: [UUID: [UUID]] = [:]
+        for u in units where !u.isEmpty { for id in u { map[id] = u } }
+        byID = map
+    }
+
+    /// The turn starting at `i`: a single file, a whole unit (its members
+    /// contiguous, in order, from `i`), or a unit member out of place —
+    /// held with a reason, never moved alone.
+    @MainActor
+    func span(at i: Int, in requested: [VideoRecord]) -> Span {
+        guard let unit = byID[requested[i].id] else { return Span(count: 1, isUnit: false, broken: nil) }
+        let end = i + unit.count
+        if unit.first == requested[i].id, end <= requested.count, requested[i..<end].map(\.id) == unit {
+            return Span(count: unit.count, isUnit: true, broken: nil)
+        }
+        return Span(count: 1, isUnit: true,
+                    broken: "its files were not handed over together, so it was not moved alone — nothing moved")
+    }
+}
+
 // MARK: - Who a turn is about
 
 /// The row's id, its path and a detached copy, frozen at the start of a
@@ -601,6 +687,66 @@ struct JunkDiskTurn: Sendable {
     let uuidProbe: @Sendable (String) -> String?
     let beforeRemoval: (@Sendable (String) -> String?)?
     let remove: (@Sendable (URL) throws -> Void)?
+
+    /// One member of a unit, as the worker needs it (Sendable).
+    struct Member: Sendable {
+        let path: String
+        let filename: String
+        let catalogBytes: Int64
+    }
+
+    /// A unit's disk half — one synchronous stretch, nothing awaited.
+    /// Phase 1b: every member reserved at once, then each one's proof, last
+    /// words and existence; any refusal → nothing moved, all held. Phase 2:
+    /// the moves in order, each re-checked first (`atTheMove`); a refusal or
+    /// failure after a move leaves the rest held (the caller's SPLIT).
+    /// Every reservation (and the copy pins taken under it) is released when
+    /// the stretch ends.
+    func runUnit(_ members: [Member], protections: [JunkTurnProtections],
+                 heldNote: @Sendable (String) -> String,
+                 atTheMove: (@Sendable (String) -> String?)?) -> [VideoScanModel.JunkFileOutcome] {
+        func held(_ i: Int, _ outcome: VideoScanModel.JunkFileOutcome) -> [VideoScanModel.JunkFileOutcome] {
+            let why = "\(members[i].filename) \(JunkDeletionReport.reason(outcome) ?? "was refused")"
+            return members.indices.map { $0 == i ? outcome : .held(heldNote(why)) }
+        }
+        let keys: [String]
+        switch RemovalReservations.shared.reserveAll(members.map(\.path)) {
+        case .held(let i, let note): return held(i, .held(note))
+        case .reserved(let k): keys = k
+        }
+        defer { for k in keys { RemovalReservations.shared.release(k) } }
+        // Phase 1b: the REAL disk-side gates of every member, nothing moved.
+        for (i, m) in members.enumerated() {
+            if let beforeRemoval, let why = beforeRemoval(m.path) { return held(i, .held(why)) }
+            if let why = protectionRefusal(path: m.path, protections: protections[i]) { return held(i, .held(why)) }
+            guard !m.path.isEmpty, FileManager.default.fileExists(atPath: m.path) else {
+                return held(i, .held("is not on disk at its path any more — nothing moved"))
+            }
+        }
+        // Phase 2: every member reserved and passed — the moves, in order.
+        var out: [VideoScanModel.JunkFileOutcome] = []
+        for (i, m) in members.enumerated() {
+            var stop: VideoScanModel.JunkFileOutcome?
+            if let atTheMove, let why = atTheMove(m.path) {
+                stop = .held(why)
+            } else {
+                let bytes = FileIdentityStamp.capture(path: m.path)?.size ?? m.catalogBytes
+                do {
+                    out.append(.moved(bytes: bytes, trashPath: try perform(URL(fileURLWithPath: m.path))))
+                } catch {
+                    // Never a fallback to another kind of removal: the file stays.
+                    stop = .failed(error)
+                }
+            }
+            if let stop {
+                out.append(stop)
+                let why = "\(m.filename) \(JunkDeletionReport.reason(stop) ?? "did not move")"
+                out += members[(i + 1)...].map { _ in .held(heldNote(why)) }
+                break
+            }
+        }
+        return out
+    }
 
     /// The caller's proof, the archive and read-only last words, existence,
     /// then the file operation — one synchronous stretch, nothing awaited.

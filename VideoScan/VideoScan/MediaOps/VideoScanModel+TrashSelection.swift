@@ -102,7 +102,8 @@ extension VideoScanModel {
             var placed: Set<UUID> = []
             for rec in records {
                 guard placed.insert(rec.id).inserted else { continue }
-                switch Self.verdict(rec, alone: alone[rec.id], hold: gate.holds[rec.id], group: groupAt[rec.id]) {
+                switch Self.verdict(rec, alone: alone[rec.id], hold: gate.holds[rec.id], group: groupAt[rec.id],
+                                    member: gate.seen.contains(rec.id)) {
                 case .refused(let r): refused.append(r)
                 case .move: toTrash.append(rec.id)
                 case .group(let gi):
@@ -113,7 +114,7 @@ extension VideoScanModel {
         }
 
         nonisolated static func verdict(_ rec: VideoRecord, alone: Refusal?, hold: CatalogPairGroups.HalfHold?,
-                                        group: Int?) -> Verdict {
+                                        group: Int?, member: Bool = false) -> Verdict {
             if let alone { return .refused(Refused(id: rec.id, filename: rec.filename, reason: alone)) }
             switch hold {
             case .pairMember(let note)?:
@@ -125,7 +126,8 @@ extension VideoScanModel {
             if let group { return .group(group) }
             // A half the gate neither admitted nor held cannot happen by
             // construction; refuse rather than guess.
-            return CatalogPairGroups.isHalf(rec) ? .refused(Refused(id: rec.id, filename: rec.filename, reason: .pairMember)) : .move
+            return member || CatalogPairGroups.isHalf(rec)
+                ? .refused(Refused(id: rec.id, filename: rec.filename, reason: .pairMember)) : .move
         }
 
         func refusedCount(_ reason: Refusal) -> Int {
@@ -151,10 +153,11 @@ extension VideoScanModel {
             alone[rec.id] = CatalogTrashPlan.Refusal.alone(rec, isMasterArchive: isMasterArchive, isOffline: isOffline)
         }
         // 2. The pair gate: a group goes whole or not at all.
-        let gate = records.contains(where: CatalogPairGroups.isHalf)
-            ? CatalogPairGroups.gate(records, index: CatalogPairGroups.Index(catalog: catalog ?? records),
-                                     alone: alone.mapValues { CatalogTrashConfirmation.words($0) }, identity: identity)
-            : CatalogPairGroups.GateResult()
+        // Always indexed (O(catalog)): a row only its sibling links to is
+        // a group member too (Codex #195 F1).
+        let index = CatalogPairGroups.Index(catalog: catalog ?? records)
+        let gate = CatalogPairGroups.gate(records, index: index,
+                                          alone: alone.mapValues { CatalogTrashConfirmation.words($0) }, identity: identity)
         // 3. Assemble, in selection order; a group's halves at its first.
         return CatalogTrashPlan(assembling: records, alone: alone, gate: gate)
     }
@@ -283,39 +286,35 @@ extension VideoScanModel {
         // #150 F3: whole-file SHA-256 on a live file stat'd at the moment
         // of removal).
         let proofs = CatalogTrashMoveProofs()
-        // What a pair's later halves must prove, asked at the EARLIER half's
-        // turn (dry: nothing is pinned or consumed by their own turns).
-        let laterProofs = CatalogTrashMoveProofs()
+        // A confirmed pair is ONE unit of the routine (Codex #195): every
+        // half's real gate and real reservation first, then the moves — no
+        // simulated look-ahead. Its identity check (device + inode + size +
+        // mtime the plan saw) runs before the copy proof, and again right
+        // before each half's move.
+        let groupDisk = groupTurns.diskCheck
         var fileGuard = JunkDeletionGuard(
             authorize: { [weak self] rec in
                 guard let self else { return "the catalog went away — nothing moved" }
-                var problem = self.catalogTrashTurnProblem(rec, confirmed: confirmedIDs,
+                let problem = self.catalogTrashTurnProblem(rec, confirmed: confirmedIDs,
                                                            warnedOnlyCopy: warned, copies: copies, proofs: proofs,
                                                            groups: groupTurns)
-                // A pair's half asks every LATER half's own gates now, so a
-                // half that would be held at its turn holds the pair before
-                // anything of it moves (refuse before mutating).
-                if problem == nil {
-                    problem = self.catalogTrashLaterHalvesProblem(rec, groups: groupTurns, confirmed: confirmedIDs,
-                                                                 warnedOnlyCopy: warned, copies: copies, proofs: laterProofs)
-                }
                 // Passed: from now on it counts as gone for the turns after
-                // it (the catalog marks the batch only at its end).
+                // it (the catalog marks the batch only at its end) — for a
+                // pair, for its own later halves too.
                 if problem == nil { copies.handedOn(rec.id) }
                 return problem
             },
-            // The pair's identity proof first (this half and every later
-            // one is still the file the plan saw), then the copy proof.
-            beforeRemoval: { [groupDisk = groupTurns.diskCheck(laterProofs: laterProofs)] path in
+            beforeRemoval: { path in
                 groupDisk.problem(path) ?? proofs.problemAtTheMove(path)
             },
             remove: fileOperation)
+        fileGuard.units = groupTurns.activeGroups.map(\.members)
+        fileGuard.unitHeldNote = { why in CatalogPairGroups.groupHeldNote("its related half \(why)") + " — nothing moved" }
+        fileGuard.atTheMove = { path in groupDisk.problem(path) }
         fileGuard.settled = { rec, outcome in
-            groupTurns.settled(rec.id, moved: outcome.isMoved)
             audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id)
         }
         // The ledger event carries the pair (DECISIONS 2026-11-01).
-        fileGuard.mayCancelBefore = { rec in groupTurns.mayCancel(before: rec.id) }
         fileGuard.ledgerDetail = { rec in
             guard let g = groupTurns.group(of: rec.id) else { return [:] }
             return [CatalogTrashGroupTurns.ledgerPairGroup: g.key.uuidString,
@@ -360,22 +359,16 @@ extension VideoScanModel {
     /// for a warned row, else the source's and the copies' SHA-256 claims.
     /// `groups` = the pairs the person confirmed whole; a half outside them
     /// (or with no `groups` at all) is held, as before 2026-11-01.
-    /// `pairGate: false` = asked for a later half of a pair whose gate the
-    /// caller already ran (`catalogTrashLaterHalvesProblem`).
     func catalogTrashTurnProblem(_ rec: VideoRecord, confirmed: Set<UUID>,
                                  warnedOnlyCopy: Set<UUID>, copies: CatalogTrashTurnCopies,
                                  proofs: CatalogTrashMoveProofs? = nil,
-                                 groups: CatalogTrashGroupTurns? = nil,
-                                 pairGate: Bool = true,
-                                 isOffline: (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume) -> String? {
+                                 groups: CatalogTrashGroupTurns? = nil) -> String? {
         if rec.isPurged || rec.isSetAside || rec.isSuperseded {
             return "was removed, set aside or replaced by a repair since you chose it — nothing moved"
         }
-        if !pairGate {
-            // The pair gate was asked for the whole group by the caller.
-        } else if let groups, groups.group(of: rec.id) != nil {
+        if let groups, groups.group(of: rec.id) != nil {
             // A member of a pair the person confirmed whole.
-            if let why = groups.problem(rec, model: self, isOffline: isOffline) { return why }
+            if let why = groups.problem(rec, model: self) { return why }
         } else if CatalogScopePolicy.isPairProtected(rec) {
             return groups == nil ? Self.pairMemberHeldNote : CatalogTrashGroupTurns.notConfirmedAsGroupNote
         }
@@ -417,35 +410,6 @@ extension VideoScanModel {
         if warnedNow > 0 {
             log("Move to Trash: \(warnedNow) file(s) are the only copy the catalog knows of — moving them as you confirmed after the warning (recoverable from the Trash until it is emptied).")
         }
-    }
-
-    /// At a pair half's turn: the catalog gates of every LATER half of its
-    /// pair (confirmed, still active, the only-copy question), asked now;
-    /// their disk proofs go to `proofs` for this half's disk turn
-    /// (CatalogTrashGroupDiskCheck). A later half that would be held stops
-    /// the pair here, before this half moves. O(group) per turn.
-    func catalogTrashLaterHalvesProblem(_ rec: VideoRecord, groups: CatalogTrashGroupTurns, confirmed: Set<UUID>,
-                                        warnedOnlyCopy: Set<UUID>, copies: CatalogTrashTurnCopies,
-                                        proofs: CatalogTrashMoveProofs) -> String? {
-        for id in groups.laterMembers(after: rec.id) {
-            guard let live = record(forID: id) else {
-                return groups.hold(rec.id, because: "a related half is no longer in the catalog")
-            }
-            // Every refusal the later half's OWN turn could raise before its
-            // disk half — the very same list (`junkTurnWouldRefuse`: offline,
-            // Master Archive / Read only, the removal-marker save; Codex
-            // #194 F2), asked of the live row. ⌘⌫'s guard has no waiver.
-            if let why = junkTurnWouldRefuse(live, guard: nil) {
-                let bare = why.replacingOccurrences(of: " — nothing moved", with: "")
-                return groups.hold(rec.id, because: "its related half \(live.filename) \(bare)")
-            }
-            if let why = catalogTrashTurnProblem(live, confirmed: confirmed, warnedOnlyCopy: warnedOnlyCopy,
-                                                 copies: copies, proofs: proofs, pairGate: false) {
-                let bare = why.replacingOccurrences(of: " — nothing moved", with: "")
-                return groups.hold(rec.id, because: "its related half \(live.filename) \(bare)")
-            }
-        }
-        return nil
     }
 
     /// A row the confirmation held back (or never showed) that is movable
@@ -602,23 +566,6 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
     private var entries: [String: Entry] = [:]
 
     func record(_ entry: Entry, for path: String) { lock.withLock { entries[path] = entry } }
-
-    /// A pair's LATER half, asked at an earlier half's disk turn: the same
-    /// verdict as `problemAtTheMove`, read once, without pinning (the later
-    /// half's own turn pins and proves again). nil = it would move.
-    func problemAhead(_ path: String) -> String? {
-        let entry = lock.withLock { entries.removeValue(forKey: path) }
-        switch entry {
-        case .warned?: return nil
-        case let .claims(source, copies)?:
-            // The same survivor rule as the move's own proof (Codex #194
-            // F1): a copy another removal is taking cannot be pinned.
-            let staying = copies.filter { !RemovalReservations.shared.isLeaving($0.path) }
-            if staying.isEmpty, !copies.isEmpty { return RemovalReservations.survivorLeavingNote }
-            return ContentCopyProof.proven(source: source, copies: staying) ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
-        case nil: return VideoScanModel.copyNotProvenAtTheMoveNote
-        }
-    }
 
     /// The disk half's verdict for `path`, read ONCE: nil = move it.
     /// No entry → refuse (nothing proved it).

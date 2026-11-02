@@ -47,7 +47,8 @@ struct CatalogTrashPairGroupSensorTests {
         let plan = try SourceTree.appCode(named: "VideoScanModel+TrashSelection.swift")
         #expect(plan.contains("CatalogPairGroups.gate("), "the plan's pair gate")
         #expect(plan.contains("CatalogTrashGroupTurns(groups: confirmed.groups)"), "the turn gate is built from what was confirmed")
-        #expect(plan.contains("groupTurns.settled(rec.id, moved: outcome.isMoved)"))
+        #expect(plan.contains("fileGuard.units = groupTurns.activeGroups.map(\\.members)"), "a confirmed pair is one unit of the routine")
+        #expect(plan.contains("fileGuard.atTheMove = { path in groupDisk.problem(path) }"), "identity re-checked before each move")
         #expect(plan.contains("groupDisk.problem(path) ?? proofs.problemAtTheMove(path)"), "identity proof before the copy proof")
         #expect(plan.contains("groups: groupTurns"))
         #expect(plan.contains("audit.finish(result, note:"), "OUTCOME carries the pairs")
@@ -56,25 +57,35 @@ struct CatalogTrashPairGroupSensorTests {
         #expect(plan.contains("CatalogScopePolicy.isPairProtected("))
     }
 
-    @Test("sensor: the pair look-ahead asks a later half the SAME refusal list its own turn runs (Codex #194 F2)")
-    func lookAheadUsesTheTurnsRefusalList() throws {
+    @Test("sensor: a unit runs every member's REAL turn — the same functions as one file's turn — and no simulated look-ahead (Codex #195)")
+    func unitRunsTheRealTurn() throws {
         let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
         let turnStart = try #require(engine.range(of: "private func junkTurn("))
-        let turnEnd = try #require(engine.range(of: "func junkTurnOfflineRefusal(", range: turnStart.upperBound..<engine.endIndex))
+        let turnEnd = try #require(engine.range(of: "private func junkUnitTurn(", range: turnStart.upperBound..<engine.endIndex))
         let turn = engine[turnStart.upperBound..<turnEnd.lowerBound]
-        #expect(turn.contains("junkTurnOfflineRefusal(path)"), "the turn's offline refusal")
-        #expect(turn.contains("junkTurnVerdict(rec, guard: fileGuard)"), "the turn's archive / marker / Read-only refusals")
-        #expect(!turn.contains("CatalogMarkerRelay.saveRefusal"), "no refusal asked outside the shared list")
-        #expect(!turn.contains("bulkDeleteRefusal("), "no refusal asked outside the shared list")
-        let wouldStart = try #require(engine.range(of: "func junkTurnWouldRefuse("))
-        let wouldEnd = try #require(engine.range(of: "func junkTurnVerdict(", range: wouldStart.upperBound..<engine.endIndex))
-        let would = engine[wouldStart.upperBound..<wouldEnd.lowerBound]
-        #expect(would.contains("junkTurnOfflineRefusal(rec.fullPath)") && would.contains("junkTurnVerdict(rec, guard: fileGuard)"))
+        #expect(turn.contains("junkTurnOfflineRefusal(path)") && turn.contains("fileGuard.authorize(rec)")
+                && turn.contains("junkTurnVerdict(rec, guard: fileGuard)"), "one file's turn")
+        #expect(!turn.contains("CatalogMarkerRelay.saveRefusal") && !turn.contains("bulkDeleteRefusal("),
+                "no refusal asked outside the shared list")
+        let unitEnd = try #require(engine.range(of: "nonisolated static func unitHeld(", range: turnEnd.upperBound..<engine.endIndex))
+        let unit = engine[turnEnd.upperBound..<unitEnd.lowerBound]
+        #expect(unit.contains("junkTurnOfflineRefusal(rec.fullPath)") && unit.contains("fileGuard.authorize(rec)")
+                && unit.contains("junkTurnVerdict(rec, guard: fileGuard)"), "a unit asks each member the very same gates")
+        #expect(unit.contains("disk.runUnit("))
+        let diskStart = try #require(engine.range(of: "func runUnit("))
+        let diskEnd = try #require(engine.range(of: "func run(path: String", range: diskStart.upperBound..<engine.endIndex))
+        let disk = engine[diskStart.upperBound..<diskEnd.lowerBound]
+        #expect(disk.contains("RemovalReservations.shared.reserveAll("), "every member's real reservation, at once")
+        #expect(disk.contains("beforeRemoval(m.path)") && disk.contains("protectionRefusal(path: m.path"), "each member's real proof and last words")
+        #expect(disk.contains("try perform(URL(fileURLWithPath: m.path))"), "the moves go through the one file operation")
         let plan = try SourceTree.appCode(named: "VideoScanModel+TrashSelection.swift")
-        let aheadStart = try #require(plan.range(of: "func catalogTrashLaterHalvesProblem("))
-        let ahead = plan[aheadStart.upperBound...].prefix(2_000)
-        #expect(ahead.contains("junkTurnWouldRefuse(live, guard: nil)"), "the look-ahead asks the shared list")
-        #expect(plan.contains("RemovalReservations.shared.isLeaving($0.path)"), "the look-ahead's survivor rule matches the move's pin")
+        for gone in ["LaterHalves", "problemAhead", "isLeaving", "junkTurnWouldRefuse"] {
+            #expect(!plan.contains(gone) && !engine.contains(gone), "no simulated look-ahead: \(gone)")
+        }
+        // Codex #195 F1: every row in a group in ANY link direction meets the gate.
+        let groups = try SourceTree.appCode(named: "CatalogPairGroups.swift")
+        #expect(groups.contains("for half in selection where index.isGroupMember(half)"))
+        #expect(plan.contains("member: gate.seen.contains(rec.id)"), "a member the gate saw never falls through to ordinary")
     }
 
     @Test("sensor: the row menu offers Select Related Halves for a half, through the shared rule")

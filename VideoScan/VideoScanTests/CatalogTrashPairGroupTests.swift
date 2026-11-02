@@ -254,22 +254,18 @@ struct CatalogTrashPairGroupTests {
 
     // MARK: ISOLATION — real files through the one routine
 
-    @Test("isolation: a sibling's drive goes away before the move → the group is held, nothing moved")
-    func siblingOfflineAtTheTurn() throws {
+    @Test("isolation: a unit member on a drive that is not connected holds the whole unit in the routine — nothing moved")
+    func siblingOfflineAtTheTurn() async throws {
         let d = try disk("pgoff")
         defer { d.sb.cleanup() }
-        let v = try file(d, "test_off.V.mxf", seed: 11, .videoOnly), a = try file(d, "test_off.A.mxf", seed: 12, .audioOnly)
-        pair(v, a)
+        let v = try file(d, "test_off.V.mxf", seed: 11, .videoOnly)
+        let a = MasterArchiveTestSupport.makeRecord(path: "/Volumes/TestPGNotMounted/avid/test_off.A.mxf", streamType: .audioOnly)
         d.model.records = [v, a]
-        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
-        try #require(p.groups.count == 1)
-        let turns = CatalogTrashGroupTurns(groups: p.groups)
-        let why = turns.problem(v, model: d.model, isOffline: { $0.id == a.id })
-        #expect(why?.contains("the drive of its related half test_off.A.mxf is not connected") == true, "\(String(describing: why))")
-        turns.settled(v.id, moved: false)
-        #expect(turns.problem(a, model: d.model, isOffline: { _ in false })?.contains("a pair moves whole or not at all") == true,
-                "once a group is stopped, its later halves stay too")
-        #expect(exists(v) && exists(a))
+        var g = VideoScanModel.JunkDeletionGuard(authorize: { _ in nil }, beforeRemoval: { _ in nil })
+        g.units = [[v.id, a.id]]
+        let result = await d.model.deleteConfirmedJunk([v, a], mode: .toTrash, reason: .catalogTrash, guard: g)
+        #expect(result.succeeded == 0 && exists(v), "\(result.items.map(\.outcome))")
+        #expect(result.items.map(\.outcome.kind) == [.held, .offline])
     }
 
     @Test("isolation: a sibling rewritten on disk after the confirmation → both halves stay")
@@ -289,7 +285,8 @@ struct CatalogTrashPairGroupTests {
         #expect(!v.isPurged && !a.isPurged)
         #expect(result.refused.first { $0.record.id == v.id }?.reason.contains("test_chg.A.mxf changed or went away on disk") == true,
                 "\(result.refused.map(\.reason))")
-        #expect(result.refused.first { $0.record.id == a.id }?.reason.contains("test_chg.V.mxf did not move") == true)
+        #expect(result.refused.first { $0.record.id == a.id }?.reason.contains("changed or went away on disk") == true,
+                "A's own real check refuses it; the unit holds V with it")
         #expect(await consoleLine(d.model, containing: "pair groups: moved 0 · held 1 · failed 0 · split 0") != nil)
         await d.model.mediaLedger.waitForPendingWrites()
         #expect(d.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }.isEmpty)
@@ -397,8 +394,8 @@ struct CatalogTrashPairGroupTests {
         #expect(result.groupNotes.allSatisfy { !$0.hasPrefix("Split pair") })
     }
 
-    @Test("isolation: a later half's drive marked Read only after the confirmation holds the pair at the first half's turn")
-    func laterHalfOnReadOnlyDrive() throws {
+    @Test("isolation: a unit member on a drive marked Read only holds the whole unit — the member's own turn refuses, nothing moved")
+    func laterHalfOnReadOnlyDrive() async throws {
         let d = try disk("pgro")
         defer { d.sb.cleanup() }
         let roDir = d.sb.sources.appendingPathComponent("ro", isDirectory: true)
@@ -406,24 +403,40 @@ struct CatalogTrashPairGroupTests {
         let v = try file(d, "test_ro.V.mxf", seed: 73, .videoOnly)
         let a = try file(d, "test_ro.A.mxf", seed: 74, .audioOnly, in: roDir)
         pair(v, a)
-        let m = d.model
-        m.records = [v, a]
-        let p = m.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
         try #require(p.groups.count == 1)
-        let turns = CatalogTrashGroupTurns(groups: p.groups)
-        let args = (confirmed: Set(p.toTrash), warned: Set(p.toTrash))
-        #expect(m.catalogTrashLaterHalvesProblem(v, groups: turns, confirmed: args.confirmed, warnedOnlyCopy: args.warned,
-                                                 copies: CatalogTrashTurnCopies(batch: [v, a]), proofs: CatalogTrashMoveProofs()) == nil)
         let ro = CatalogScanTarget(searchPath: roDir.path)
         ro.role = .workspace
         ro.isReachable = true
         ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
-        m.scanTargets = [ro]
-        let why = m.catalogTrashLaterHalvesProblem(v, groups: turns, confirmed: args.confirmed, warnedOnlyCopy: args.warned,
-                                                   copies: CatalogTrashTurnCopies(batch: [v, a]), proofs: CatalogTrashMoveProofs())
-        #expect(why?.contains("its related half test_ro.A.mxf") == true && why?.contains("Read only") == true, "\(String(describing: why))")
-        turns.settled(v.id, moved: false)
-        #expect(turns.problem(a, model: m, isOffline: { _ in false }) != nil, "the stopped pair keeps its later half too")
+        d.model.scanTargets = [ro]                       // marked after the confirmation
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p)
+        #expect(result.succeeded == 0 && exists(v) && exists(a), "\(result.items.map(\.outcome))")
+    }
+
+    @Test("isolation: reserveAll takes every file of a batch or none — two batches sharing a file never interleave")
+    func batchReservationIsAllOrNothing() throws {
+        let d = try disk("pgbatch")
+        defer { d.sb.cleanup() }
+        let x = try file(d, "test_bt.X.mxf", seed: 75, .videoOnly), y = try file(d, "test_bt.Y.mxf", seed: 76, .audioOnly)
+        let z = try file(d, "test_bt.Z.mxf", seed: 77, .audioOnly)
+        let table = RemovalReservations.shared
+        guard case .reserved(let first) = table.reserveAll([x.fullPath, y.fullPath]) else {
+            Issue.record("the first batch is taken whole"); return
+        }
+        defer { first.forEach(table.release) }
+        guard case .held(let index, _) = table.reserveAll([z.fullPath, y.fullPath]) else {
+            Issue.record("a second batch sharing Y must be held whole"); return
+        }
+        #expect(index == 1)
+        #expect(!table.isReserved(z.fullPath), "nothing of the held batch stays reserved")
+        let link = d.sb.sources.appendingPathComponent("test_bt.Z link.mxf")
+        try FileManager.default.linkItem(atPath: z.fullPath, toPath: link.path)
+        guard case .held = table.reserveAll([z.fullPath, link.path]) else {
+            Issue.record("one physical file twice in a batch is held"); return
+        }
+        #expect(!table.isReserved(z.fullPath))
     }
 
     @Test("isolation: a sibling on FamilyArchive is refused — nothing of the group moves, the archive file is untouched")
@@ -681,6 +694,82 @@ struct CatalogTrashPairGroupTests {
         #expect(!FileManager.default.fileExists(atPath: oldA))
         #expect(!split.contains("stayed at \(oldA)"), "\(split)")
         #expect(split.contains(newA) && split.contains("relinked from \(oldA)"), "\(split)")
+    }
+
+    // MARK: Codex #195 — fourth-pass regressions (red first)
+
+    @Test("codex #195 F1: a half linked only from its sibling (reverse-only) never moves outside the pair gate")
+    func reverseOnlySiblingNeverMoves() async throws {
+        let d = try disk("pgrev")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_ro1.V.mxf", seed: 101, .videoOnly), a = try file(d, "test_ro1.A.mxf", seed: 102, .audioOnly)
+        a.pairedWith = v              // A still points at V …
+        a.pairGroupID = UUID()        // … V carries no pair field at all
+        d.model.records = [v, a]
+        let both = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        #expect(both.toTrash.isEmpty, "\(both.refused)")
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: both)
+        #expect(result.succeeded == 0 && exists(v) && exists(a))
+        let alone = d.model.catalogTrashPlan(for: [v], isOffline: { _ in false })
+        #expect(alone.toTrash.isEmpty, "V alone is held while A links to it: \(alone.refused)")
+        let r2 = await d.model.trashSelectedRecords([v], confirmed: alone)
+        #expect(r2.succeeded == 0 && exists(v))
+    }
+
+    @Test("codex #195 F2: a later half whose only survivor is a hard link to itself holds the first half too")
+    func laterHalfAliasSurvivorHoldsThePair() async throws {
+        let d = try disk("pgalias")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_al.V.mxf", seed: 103, .videoOnly)
+        let aBytes = Data((0..<2_048).map { UInt8(truncatingIfNeeded: $0 &* 19 &+ 11) })
+        let aURL = d.sb.sources.appendingPathComponent("test_al.A.mxf")
+        try aBytes.write(to: aURL)
+        let cURL = d.sb.sources.appendingPathComponent("test_al.A link.mxf")
+        try FileManager.default.linkItem(at: aURL, to: cURL)      // the alias exists before A's fixity
+        let a = try fileWithFixity(d, "test_al.A.mxf", bytes: aBytes, .audioOnly)
+        let c = MasterArchiveTestSupport.makeRecord(path: cURL.path, streamType: .audioOnly)
+        c.sizeBytes = Int64(aBytes.count)
+        let digest = SHA256.hash(data: aBytes).map { String(format: "%02x", $0) }.joined()
+        c.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: Int64(aBytes.count))
+        pair(v, a)
+        d.model.records = [v, a, c]
+        let confirmed = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(confirmed.onlyCopy == [v.id], "fixture: A's alias counts as its copy in the catalog")
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: confirmed)
+        #expect(result.succeeded == 0 && exists(v) && exists(a), "never split: \(result.items.map(\.outcome))")
+    }
+
+    @Test("codex #195 F3: later halves never vouch for each other — the outside copy gone holds the whole group")
+    func laterHalvesNeverVouchForEachOther() async throws {
+        let d = try disk("pgvouch")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_vc.V.mxf", seed: 104, .videoOnly)
+        let bytes = Data((0..<2_048).map { UInt8(truncatingIfNeeded: $0 &* 17 &+ 13) })
+        let a1 = try fileWithFixity(d, "test_vc.A1.mxf", bytes: bytes, .audioOnly)
+        let a2 = try fileWithFixity(d, "test_vc.A2.mxf", bytes: bytes, .audioOnly)
+        let outside = try fileWithFixity(d, "test_vc.A copy.mxf", bytes: bytes, .audioOnly)
+        pair(v, a1, a2)
+        d.model.records = [v, a1, a2, outside]
+        let confirmed = d.model.catalogTrashPlan(for: [v, a1, a2], isOffline: { _ in false })
+        try #require(confirmed.toTrash == [v.id, a1.id, a2.id] && confirmed.onlyCopy == [v.id])
+        outside.purgedAt = Date()       // the outside copy left while the alert was up
+        let result = await d.model.trashSelectedRecords([v, a1, a2], confirmed: confirmed)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(exists(v) && exists(a1) && exists(a2))
+    }
+
+    @Test("codex #195 F4: a departed sibling's lingering link never refuses the admitted remainder")
+    func departedSiblingRemainderMoves() async throws {
+        let d = try disk("pgdep")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_dp.V.mxf", seed: 105, .videoOnly), a = try file(d, "test_dp.A.mxf", seed: 106, .audioOnly)
+        pair(v, a)
+        a.purgedAt = Date()             // removed from the catalog (its link stays on V)
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [v], isOffline: { _ in false })
+        try #require(p.toTrash == [v.id] && p.groups.first?.departed == ["test_dp.A.mxf"])
+        let result = await d.model.trashSelectedRecords([v], confirmed: p)
+        #expect(result.succeeded == 1 && !exists(v), "\(result.items.map(\.outcome))")
     }
 
     // MARK: TRUTH — the sheet, the OUTCOME line, the ledger
