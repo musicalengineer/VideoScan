@@ -352,17 +352,59 @@ extension VideoScanModel {
     private func junkTurn(_ rec: VideoRecord, guard fileGuard: JunkDeletionGuard?,
                           disk: JunkDiskTurn) async -> JunkFileOutcome {
         let path = rec.fullPath
-        // Offline-volume check: only /Volumes/<X>/... paths can be offline
-        // (drive unmounted); internal paths live on the boot volume. The
-        // 5 s VolumeReachability cache makes this near-free. The record is
-        // NOT stamped: the user remounts and re-runs.
-        if Self.isExternalVolumePath(path), !VolumeReachability.isReachable(path: path) {
-            return .offline
-        }
+        if let offline = junkTurnOfflineRefusal(path) { return offline }
         // The caller's live-catalog authorization, for THIS file, now.
         if let fileGuard, let why = fileGuard.authorize(rec) {
             return .held(why)
         }
+        let protections: JunkTurnProtections
+        switch junkTurnVerdict(rec, guard: fileGuard) {
+        case .refused(let outcome): return outcome
+        case .clear(let p): protections = p
+        }
+        let catalogBytes = rec.sizeBytes
+        return await Task.detached(priority: .userInitiated) {
+            disk.run(path: path, protections: protections, catalogBytes: catalogBytes)
+        }.value
+    }
+
+    /// Offline-volume check: only /Volumes/<X>/... paths can be offline
+    /// (drive unmounted); internal paths live on the boot volume. The 5 s
+    /// VolumeReachability cache makes this near-free. The record is NOT
+    /// stamped: the user remounts and re-runs.
+    func junkTurnOfflineRefusal(_ path: String) -> JunkFileOutcome? {
+        Self.isExternalVolumePath(path) && !VolumeReachability.isReachable(path: path) ? .offline : nil
+    }
+
+    /// The turn's catalog-side verdict after the caller's authorization.
+    enum JunkTurnVerdict { case refused(JunkFileOutcome), clear(JunkTurnProtections) }
+
+    /// Would THIS file's own turn refuse it, before its disk half? THE one
+    /// list (offline, then `junkTurnVerdict`) — the turn runs these same two
+    /// functions, and ⌘⌫ asks this for every later half of a recovered A/V
+    /// pair before the first half moves (Codex #194 F2; a sensor pins that
+    /// both use the same functions). nil = it would go on to the disk half.
+    func junkTurnWouldRefuse(_ rec: VideoRecord, guard fileGuard: JunkDeletionGuard?) -> String? {
+        let outcome: JunkFileOutcome?
+        if let offline = junkTurnOfflineRefusal(rec.fullPath) {
+            outcome = offline
+        } else if case .refused(let refused) = junkTurnVerdict(rec, guard: fileGuard) {
+            outcome = refused
+        } else {
+            outcome = nil
+        }
+        switch outcome {
+        case nil: return nil
+        case .held(let why)?: return why
+        case .offline?: return "is on a drive that is not connected"
+        case let other?: return JunkDeletionReport.reason(other) ?? "would not be moved"
+        }
+    }
+
+    /// The turn's refusals after authorization, in order — the Master
+    /// Archive, the removal-marker save, the drives marked Read only — and,
+    /// when none refuses, the protections the disk half asks again.
+    func junkTurnVerdict(_ rec: VideoRecord, guard fileGuard: JunkDeletionGuard?) -> JunkTurnVerdict {
         // The Master Archive, as the model is at THIS file's turn (codex
         // delete-engines F3): an archive designated while the batch runs
         // protects every file not yet moved — its tree and its volume here,
@@ -371,24 +413,20 @@ extension VideoScanModel {
         let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)
         let waived = archiveJunkWaiverApplies(rec, refusal: refusal, guard: fileGuard)
         if let refusal, !waived {
-            return .held(heldNote(rec, refusal: refusal, label: archiveVolume?.label ?? "the archive volume", guard: fileGuard)
-                         + " — nothing moved")
+            return .refused(.held(heldNote(rec, refusal: refusal, label: archiveVolume?.label ?? "the archive volume", guard: fileGuard)
+                                  + " — nothing moved"))
         }
         // Cutover B2.3: the catalog must be able to record the move — asked
         // HERE, before any disk work, so a held or read-only catalog.sqlite
         // refuses the file instead of leaving it in the Trash with a live row.
         if let why = CatalogMarkerRelay.saveRefusal(for: rec) {
-            return .held(Self.markerRefusal(rec, verb: "move <name> to the Trash", why) + " — nothing moved")
+            return .refused(.held(Self.markerRefusal(rec, verb: "move <name> to the Trash", why) + " — nothing moved"))
         }
         // The volumes the person marked Read only (2026-10-03), as the model
         // is at THIS file's turn (codex #258 F5): a drive marked Read only
         // while the batch runs protects every file not yet moved.
-        let protections = JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection(),
-                                              archiveVolumeWaived: waived)
-        let catalogBytes = rec.sizeBytes
-        return await Task.detached(priority: .userInitiated) {
-            disk.run(path: path, protections: protections, catalogBytes: catalogBytes)
-        }.value
+        return .clear(JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection(),
+                                          archiveVolumeWaived: waived))
     }
 
     /// Back on main: stamp the catalog for the files that left (or were

@@ -84,6 +84,13 @@ final class RemovalReservations: @unchecked Sendable {
         }
     }
 
+    /// Is `path` leaving (another removal holds it) right now? Such a file
+    /// cannot be pinned as a surviving copy (`pin`).
+    func isLeaving(_ path: String) -> Bool {
+        let k = Self.key(path)
+        return lock.withLock { leaving[k] != nil }
+    }
+
     /// Is `path` leaving or relied on right now?
     func isReserved(_ path: String) -> Bool {
         let k = Self.key(path)

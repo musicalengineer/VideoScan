@@ -175,8 +175,11 @@ final class CatalogTrashGroupTurns {
     /// against the run's per-file outcomes.
     /// `alsoHeld`: groups admitted now that the person did not confirm as
     /// such (they changed in between) — held at their turns.
+    /// `currentPath`: each member's catalog path NOW (a SPLIT names where a
+    /// half that stayed is at report time — Codex #194 F3).
     func summary(plan: VideoScanModel.CatalogTrashPlan, alsoHeld: [CatalogPairGroups.Group] = [],
-                 result: VideoScanModel.JunkDeletionResult) -> Summary {
+                 result: VideoScanModel.JunkDeletionResult,
+                 currentPath: (UUID) -> String? = { _ in nil }) -> Summary {
         // A confirmed pair the plan now holds is summarised once, below,
         // from its members' outcomes.
         let confirmedIDs = Set(groups.flatMap(\.members))
@@ -203,12 +206,22 @@ final class CatalogTrashGroupTurns {
                 return "\(g.filenames[i]) is in the Trash"
             }
             let stayed = outs.indices.filter { outs[$0]?.isMoved != true }.map { i in
-                "\(g.filenames[i]) stayed at \(g.paths[i]) (\(outs[i].map { Self.words($0) } ?? "not reached"))"
+                "\(g.filenames[i]) \(Self.location(planned: g.paths[i], now: currentPath(g.members[i]))) (\(outs[i].map { Self.words($0) } ?? "not reached"))"
             }
             s.split.append((movedText + stayed).joined(separator: "; ")
                            + " — put the moved half back (Show Removed ▸ Restore) or move the rest again.")
         }
         return s
+    }
+
+    /// Where a half that did not move is, as evidenced now: its current
+    /// catalog path, "(relinked from …)" when that changed, and a plain
+    /// "not found there now" when no file is at it.
+    static func location(planned: String, now: String?) -> String {
+        let path = now ?? planned
+        var words = path == planned ? "stayed at \(path)" : "is at \(path) (relinked from \(planned))"
+        if PairHalfIdentity.capture(path: path) == nil { words += " — not found there now" }
+        return words
     }
 
     private static func words(_ o: VideoScanModel.JunkFileOutcome) -> String {

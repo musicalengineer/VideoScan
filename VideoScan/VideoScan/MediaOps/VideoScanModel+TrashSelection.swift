@@ -339,7 +339,8 @@ extension VideoScanModel {
         logJunkLaneOutcome(result, verb: "Move to Trash")
         // From the outcomes before Trash failures become holds, so a pair
         // the Trash refused is counted as failed, not held.
-        let pairs = groupTurns.summary(plan: plan, alsoHeld: unconfirmedGroups, result: merged)
+        let pairs = groupTurns.summary(plan: plan, alsoHeld: unconfirmedGroups, result: merged,
+                                       currentPath: { [weak self] in self?.record(forID: $0)?.fullPath })
         for line in pairs.lines { log(line) }
         result.groupNotes = pairs.alertNotes
         // The plan's refusals, then OUTCOME (+ the pairs' counts) + the receipt.
@@ -426,16 +427,17 @@ extension VideoScanModel {
     func catalogTrashLaterHalvesProblem(_ rec: VideoRecord, groups: CatalogTrashGroupTurns, confirmed: Set<UUID>,
                                         warnedOnlyCopy: Set<UUID>, copies: CatalogTrashTurnCopies,
                                         proofs: CatalogTrashMoveProofs) -> String? {
-        let later = groups.laterMembers(after: rec.id)
-        // The protections as they are NOW (an archive designated or a drive
-        // marked Read only while the batch runs), one snapshot per turn.
-        let archiveVolume = later.isEmpty ? nil : archiveVolumeProtection()
-        for id in later {
+        for id in groups.laterMembers(after: rec.id) {
             guard let live = record(forID: id) else {
                 return groups.hold(rec.id, because: "a related half is no longer in the catalog")
             }
-            if bulkDeleteRefusal(live, volume: archiveVolume) != nil {
-                return groups.hold(rec.id, because: "its related half \(live.filename) is in the Master Archive or on a protected drive")
+            // Every refusal the later half's OWN turn could raise before its
+            // disk half — the very same list (`junkTurnWouldRefuse`: offline,
+            // Master Archive / Read only, the removal-marker save; Codex
+            // #194 F2), asked of the live row. ⌘⌫'s guard has no waiver.
+            if let why = junkTurnWouldRefuse(live, guard: nil) {
+                let bare = why.replacingOccurrences(of: " — nothing moved", with: "")
+                return groups.hold(rec.id, because: "its related half \(live.filename) \(bare)")
             }
             if let why = catalogTrashTurnProblem(live, confirmed: confirmed, warnedOnlyCopy: warnedOnlyCopy,
                                                  copies: copies, proofs: proofs, pairGate: false) {
@@ -609,7 +611,11 @@ final class CatalogTrashMoveProofs: @unchecked Sendable {
         switch entry {
         case .warned?: return nil
         case let .claims(source, copies)?:
-            return ContentCopyProof.proven(source: source, copies: copies) ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
+            // The same survivor rule as the move's own proof (Codex #194
+            // F1): a copy another removal is taking cannot be pinned.
+            let staying = copies.filter { !RemovalReservations.shared.isLeaving($0.path) }
+            if staying.isEmpty, !copies.isEmpty { return RemovalReservations.survivorLeavingNote }
+            return ContentCopyProof.proven(source: source, copies: staying) ? nil : VideoScanModel.copyNotProvenAtTheMoveNote
         case nil: return VideoScanModel.copyNotProvenAtTheMoveNote
         }
     }

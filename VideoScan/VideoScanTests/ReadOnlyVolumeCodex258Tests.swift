@@ -321,9 +321,15 @@ struct ReadOnlyVolumeCodex258Tests {
                                           range: turn.upperBound..<junk.endIndex))
         // The archive too, since codex delete-engines F3 (2026-10-09).
         let perTurn = String(junk[turn.upperBound..<hop.lowerBound])
-        #expect(perTurn.contains("readOnlyVolumes: readOnlyVolumeProtection()"),
+        // 2026-11-01 (Codex #194 F2): the turn's refusals live in ONE list,
+        // `junkTurnVerdict`, which the turn calls for THIS file — the marks
+        // are still read there, per turn, never once for the batch.
+        #expect(perTurn.contains("junkTurnVerdict(rec, guard: fileGuard)"), "the turn asks its refusal list per file")
+        let verdictStart = try #require(junk.range(of: "func junkTurnVerdict("))
+        let verdict = String(junk[verdictStart.upperBound...].prefix(3_000))
+        #expect(verdict.contains("readOnlyVolumes: readOnlyVolumeProtection()"),
                 "the Read-only marks are read once for the whole batch again")
-        #expect(perTurn.contains("let archiveVolume = archiveVolumeProtection()"),
+        #expect(verdict.contains("let archiveVolume = archiveVolumeProtection()"),
                 "the Master Archive is read once for the whole batch again")
         #expect(junk.contains("readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"))
         #expect(try SourceTree.appSource(named: "VideoScanModel+TrashSelection.swift").contains("deleteConfirmedJunk("),

@@ -56,6 +56,27 @@ struct CatalogTrashPairGroupSensorTests {
         #expect(plan.contains("CatalogScopePolicy.isPairProtected("))
     }
 
+    @Test("sensor: the pair look-ahead asks a later half the SAME refusal list its own turn runs (Codex #194 F2)")
+    func lookAheadUsesTheTurnsRefusalList() throws {
+        let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
+        let turnStart = try #require(engine.range(of: "private func junkTurn("))
+        let turnEnd = try #require(engine.range(of: "func junkTurnOfflineRefusal(", range: turnStart.upperBound..<engine.endIndex))
+        let turn = engine[turnStart.upperBound..<turnEnd.lowerBound]
+        #expect(turn.contains("junkTurnOfflineRefusal(path)"), "the turn's offline refusal")
+        #expect(turn.contains("junkTurnVerdict(rec, guard: fileGuard)"), "the turn's archive / marker / Read-only refusals")
+        #expect(!turn.contains("CatalogMarkerRelay.saveRefusal"), "no refusal asked outside the shared list")
+        #expect(!turn.contains("bulkDeleteRefusal("), "no refusal asked outside the shared list")
+        let wouldStart = try #require(engine.range(of: "func junkTurnWouldRefuse("))
+        let wouldEnd = try #require(engine.range(of: "func junkTurnVerdict(", range: wouldStart.upperBound..<engine.endIndex))
+        let would = engine[wouldStart.upperBound..<wouldEnd.lowerBound]
+        #expect(would.contains("junkTurnOfflineRefusal(rec.fullPath)") && would.contains("junkTurnVerdict(rec, guard: fileGuard)"))
+        let plan = try SourceTree.appCode(named: "VideoScanModel+TrashSelection.swift")
+        let aheadStart = try #require(plan.range(of: "func catalogTrashLaterHalvesProblem("))
+        let ahead = plan[aheadStart.upperBound...].prefix(2_000)
+        #expect(ahead.contains("junkTurnWouldRefuse(live, guard: nil)"), "the look-ahead asks the shared list")
+        #expect(plan.contains("RemovalReservations.shared.isLeaving($0.path)"), "the look-ahead's survivor rule matches the move's pin")
+    }
+
     @Test("sensor: the row menu offers Select Related Halves for a half, through the shared rule")
     func selectRelatedHalvesIsWired() throws {
         let menu = try SourceTree.appCode(named: "CatalogRowContextMenu+FileOps.swift")

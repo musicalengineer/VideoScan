@@ -398,25 +398,30 @@ struct CatalogTrashPairGroupTests {
     }
 
     @Test("isolation: a later half's drive marked Read only after the confirmation holds the pair at the first half's turn")
-    func laterHalfOnReadOnlyDrive() {
-        let v = rec("/Volumes/TestPGRW/avid/test_ro.V.mxf", .videoOnly), a = rec("/Volumes/TestPGRO/avid/test_ro.A.mxf", .audioOnly)
+    func laterHalfOnReadOnlyDrive() throws {
+        let d = try disk("pgro")
+        defer { d.sb.cleanup() }
+        let roDir = d.sb.sources.appendingPathComponent("ro", isDirectory: true)
+        try FileManager.default.createDirectory(at: roDir, withIntermediateDirectories: true)
+        let v = try file(d, "test_ro.V.mxf", seed: 73, .videoOnly)
+        let a = try file(d, "test_ro.A.mxf", seed: 74, .audioOnly, in: roDir)
         pair(v, a)
-        let m = VideoScanModel()
+        let m = d.model
         m.records = [v, a]
-        let p = plan([v, a], catalog: [v, a])
-        try? #require(p.groups.count == 1)
+        let p = m.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.groups.count == 1)
         let turns = CatalogTrashGroupTurns(groups: p.groups)
         let args = (confirmed: Set(p.toTrash), warned: Set(p.toTrash))
         #expect(m.catalogTrashLaterHalvesProblem(v, groups: turns, confirmed: args.confirmed, warnedOnlyCopy: args.warned,
                                                  copies: CatalogTrashTurnCopies(batch: [v, a]), proofs: CatalogTrashMoveProofs()) == nil)
-        let ro = CatalogScanTarget(searchPath: "/Volumes/TestPGRO")
+        let ro = CatalogScanTarget(searchPath: roDir.path)
         ro.role = .workspace
         ro.isReachable = true
         ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
         m.scanTargets = [ro]
         let why = m.catalogTrashLaterHalvesProblem(v, groups: turns, confirmed: args.confirmed, warnedOnlyCopy: args.warned,
                                                    copies: CatalogTrashTurnCopies(batch: [v, a]), proofs: CatalogTrashMoveProofs())
-        #expect(why?.contains("its related half test_ro.A.mxf is in the Master Archive or on a protected drive") == true, "\(String(describing: why))")
+        #expect(why?.contains("its related half test_ro.A.mxf") == true && why?.contains("Read only") == true, "\(String(describing: why))")
         turns.settled(v.id, moved: false)
         #expect(turns.problem(a, model: m, isOffline: { _ in false }) != nil, "the stopped pair keeps its later half too")
     }
@@ -598,6 +603,84 @@ struct CatalogTrashPairGroupTests {
         #expect(moved == 2, "the started pair completes; the next pair is not started")
         #expect(!exists(v) && !exists(a), "never split")
         #expect(exists(w) && exists(b))
+    }
+
+    // MARK: Codex #194 — closing-pass regressions (red first)
+
+    @Test("codex #194 F1: a later half's surviving copy another job is removing holds the first half too")
+    func laterHalfReservedSurvivorHoldsThePair() async throws {
+        let d = try disk("pgsurv")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_sv.V.mxf", seed: 95, .videoOnly)
+        let aBytes = Data((0..<2_048).map { UInt8(truncatingIfNeeded: $0 &* 23 &+ 7) })
+        let a = try fileWithFixity(d, "test_sv.A.mxf", bytes: aBytes, .audioOnly)
+        let aCopy = try fileWithFixity(d, "test_sv.A copy.mxf", bytes: aBytes, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a, aCopy]
+        let confirmed = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(confirmed.onlyCopy == [v.id], "A has a known copy: only V is warned")
+        guard case .reserved(let key) = RemovalReservations.shared.reserve(aCopy.fullPath) else {
+            Issue.record("fixture: could not reserve A's copy"); return
+        }
+        defer { RemovalReservations.shared.release(key) }
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: confirmed)
+        #expect(result.succeeded == 0 && exists(v) && exists(a), "never split: \(result.items.map(\.outcome))")
+        #expect(result.groupNotes.allSatisfy { !$0.hasPrefix("Split pair") })
+    }
+
+    @Test("codex #194 F2: a later half whose removal marker the catalog would refuse holds the first half too")
+    func laterHalfMarkerRefusalHoldsTheGroup() async throws {
+        let scene = try CutoverScene.make("pg_marker_hold"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let vURL = try MasterArchiveTestSupport.writeBlob(at: scene.folder.appendingPathComponent("test_mk.V.mxf"), bytes: 1024, seed: 96)
+        let aURL = try MasterArchiveTestSupport.writeBlob(at: scene.folder.appendingPathComponent("test_mk.A.mxf"), bytes: 1024, seed: 97)
+        let v = try scene.freshCopy(of: .healthy, path: vURL.path)
+        let a = try scene.freshCopy(of: .healthy, path: aURL.path)
+        for (r, st) in [(v, StreamType.videoOnly), (a, StreamType.audioOnly)] {
+            r.streamTypeRaw = st.rawValue; r.sizeBytes = 1024; r.ext = "mxf"
+        }
+        pair(v, a)
+        scene.model.records += [v, a]
+        #expect(scene.model.saveCatalogNow())
+        let vClone = v.snapshotClone()   // same id, path and pair metadata; not the session's live row
+        let confirmed = scene.model.catalogTrashPlan(for: [vClone, a], isOffline: { _ in false })
+        try #require(confirmed.toTrash == [v.id, a.id], "\(confirmed.refused)")
+        await scene.hold()
+        defer { scene.release() }
+        #expect(CatalogMarkerRelay.saveRefusal(for: vClone) == nil, "fixture: the clone's own marker gate says go")
+        #expect(CatalogMarkerRelay.saveRefusal(for: a) != nil, "fixture: live A's marker gate refuses under the hold")
+        let result = await scene.model.trashSelectedRecords([vClone, a], confirmed: confirmed)
+        #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
+        #expect(FileManager.default.fileExists(atPath: vURL.path) && FileManager.default.fileExists(atPath: aURL.path))
+    }
+
+    @Test("codex #194 F3: a SPLIT names a relinked half's current location, never its obsolete path")
+    func relinkedLaterHalfReportsItsCurrentLocation() async throws {
+        let d = try disk("pgrelocate")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_rc.V.mxf", seed: 98, .videoOnly), a = try file(d, "test_rc.A.mxf", seed: 99, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.toTrash == [v.id, a.id])
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        let moved = d.sb.root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: moved, withIntermediateDirectories: true)
+        let vPath = v.fullPath, oldA = a.fullPath
+        let newA = moved.appendingPathComponent("test_rc.A.mxf").path
+        let aRef = Ref(a)
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p, fileOperation: { url in
+            try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+            if url.path == vPath {
+                try FileManager.default.moveItem(atPath: oldA, toPath: newA)
+                DispatchQueue.main.sync { MainActor.assumeIsolated { aRef.value.fullPath = newA } }
+            }
+        })
+        let split = try #require(result.groupNotes.first { $0.hasPrefix("Split pair:") }, "\(result.groupNotes)")
+        #expect(!FileManager.default.fileExists(atPath: oldA))
+        #expect(!split.contains("stayed at \(oldA)"), "\(split)")
+        #expect(split.contains(newA) && split.contains("relinked from \(oldA)"), "\(split)")
     }
 
     // MARK: TRUTH — the sheet, the OUTCOME line, the ledger
