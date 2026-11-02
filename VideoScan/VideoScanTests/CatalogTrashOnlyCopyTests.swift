@@ -21,7 +21,7 @@ import VideoScanCore
 @MainActor
 struct CatalogTrashOnlyCopyTests {
     /// The brief's never-touches line and time class (11/01), second in every detail.
-    static let never = "Never touches Master Archive files, either half of a recovered audio/video pair, or files on drives that are not connected. Instant."
+    static let never = "Never touches Master Archive files, files on drives that are not connected, or half of a recovered audio/video pair unless every half is selected. Instant."
 
     /// A row; a non-empty `md5` also gives it a usable whole-file SHA-256
     /// fixity derived from it (since Codex #150 F3 a copy is known only by

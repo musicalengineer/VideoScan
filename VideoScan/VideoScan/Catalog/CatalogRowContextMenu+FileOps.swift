@@ -72,6 +72,18 @@ extension CatalogContent {
     /// Their code is in the repo's .trash/ and in git history.)
     @ViewBuilder
     func matchItems(rec: VideoRecord) -> some View {
+        // Select Related Halves (DECISIONS 2026-11-01): every half of this
+        // recovered audio/video clip, in one gesture, so Delete Selected
+        // Files… can move the pair whole. Rows on screen only; a hidden
+        // half is named on the console line (CatalogContent+RelatedHalves).
+        if CatalogPairGroups.isHalf(rec) {
+            Button("Select Related Halves") {
+                selectRelatedHalves(of: rec)
+            }
+            .help("Select every half of this recovered audio/video clip, so Delete Selected Files… can move them together.")
+            .accessibilityIdentifier("catalog.row.selectRelatedHalves")
+        }
+
         // Find Matching Audio — Rick 2026-06-14 (renamed
         // from "Repair Audio" with GH #116, which freed
         // the repair/fix verb space for Balance Audio).

@@ -42,7 +42,7 @@ struct CatalogTrashConfirmationSensorTests {
 @MainActor
 struct CatalogTrashConfirmationTests {
     /// The brief's never-touches line and time class (11/01), second in every detail.
-    static let never = "Never touches Master Archive files, either half of a recovered audio/video pair, or files on drives that are not connected. Instant."
+    static let never = "Never touches Master Archive files, files on drives that are not connected, or half of a recovered audio/video pair unless every half is selected. Instant."
 
     private func rec(_ size: Int64) -> VideoRecord {
         let r = VideoRecord()
@@ -62,7 +62,7 @@ struct CatalogTrashConfirmationTests {
         let size = ByteCountFormatter.string(fromByteCount: 6_000_000, countStyle: .file)
         #expect(c.title == "Move 3 files (\(size)) to the Trash?")
         #expect(c.detail == "They move to the Finder Trash; you can put them back until you empty it.\n" + Self.never + "\n\n"
-                + "2 will be held back: half of a recovered audio/video pair (1), drive not connected (1).")
+                + "2 will be held back: half of a recovered audio/video pair not selected whole (1), drive not connected (1).")
         #expect(CatalogTrashConfirmation.moveButton == "Move to Trash")
     }
 

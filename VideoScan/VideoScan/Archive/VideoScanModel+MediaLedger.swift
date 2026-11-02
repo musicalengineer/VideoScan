@@ -119,9 +119,12 @@ extension VideoScanModel {
     @discardableResult
     func ledgerCopyRemoved(_ recs: [VideoRecord], permanent: Bool, by: MediaLedgerEvent.Actor,
                            at: Date = Date(), batchID: String? = nil,
-                           extraDetail: [String: String] = [:]) -> Task<Void, Never>? {
+                           extraDetail: [String: String] = [:],
+                           detailFor: ((VideoRecord) -> [String: String])? = nil) -> Task<Void, Never>? {
         ledgerAppend(recs.map {
             var detail = extraDetail
+            // Per-file detail (⌘⌫'s A/V pair) never overrides the keys below.
+            if let detailFor { detail.merge(detailFor($0)) { _, new in new } }
             detail[MediaLedgerEvent.Detail.volume] = $0.volumeName
             detail[MediaLedgerEvent.Detail.mode] = permanent ? "permanent" : "trash"
             return ledgerEvent(permanent ? .copyDeleted : .copyTrashed, for: $0, by: by, at: at, batchID: batchID,

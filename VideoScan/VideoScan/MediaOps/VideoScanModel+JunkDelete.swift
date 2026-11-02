@@ -81,6 +81,10 @@ extension VideoScanModel {
         /// The lane's per-run receipt (G2), once written; nil from the bare
         /// engine.
         var receipt: URL?
+        /// Lines a door adds about groups of files (⌘⌫'s recovered A/V
+        /// pairs: how many moved whole, and any SPLIT pair with where each
+        /// half is). Shown in the result alert; empty from the bare engine.
+        var groupNotes: [String] = []
 
         init(items: [Item], receipt: URL? = nil) {
             self.items = items
@@ -162,6 +166,9 @@ extension VideoScanModel {
         /// every other check still hold. Empty (the default) for every door
         /// but Cleanup's junk lane.
         var archiveVolumeJunkWaiver: Set<UUID> = []
+        /// Extra ledger detail for one file that left the disk (⌘⌫ names
+        /// the recovered A/V pair a half moved with). nil = none.
+        var ledgerDetail: (@MainActor (VideoRecord) -> [String: String])? = nil
 
         /// True when `refusal` is the one the waiver may lift for `rec`.
         /// Belt and braces: never for a path that runs through an archive
@@ -331,7 +338,8 @@ extension VideoScanModel {
             // turn was about (codex round 2 P2), never a row relinked meanwhile.
             if let last = outcomes.last { fileGuard?.settled?(reportedRecord(rec, turn: turns.last.flatMap { $0 }), last) }
         }
-        return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason)
+        return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason,
+                                 ledgerDetail: fileGuard?.ledgerDetail)
     }
 
     /// One file's turn. The catalog half, here on the main actor, as late
@@ -388,7 +396,8 @@ extension VideoScanModel {
     /// (Deleted through the test seam) for both moved and missing rows.
     private func applyJunkOutcomes(_ records: [VideoRecord], _ outcomes: [JunkFileOutcome],
                                    turns: [JunkTurnIdentity?],
-                                   mode: JunkDeletionMode, reason: RemovalReason) -> JunkDeletionResult {
+                                   mode: JunkDeletionMode, reason: RemovalReason,
+                                   ledgerDetail: (@MainActor (VideoRecord) -> [String: String])? = nil) -> JunkDeletionResult {
         let now = Date()
         let stage: LifecycleStage = mode.isOutrightRemoval ? .deletedPermanently : .trashed
         var removedFromDisk: [VideoRecord] = []
@@ -421,7 +430,7 @@ extension VideoScanModel {
         // Media Ledger (stage 2): one copyTrashed / copyDeleted line per file
         // that actually left the disk.
         ledgerCopyRemoved(removedFromDisk, permanent: mode.isOutrightRemoval, by: .rick, at: now,
-                          batchID: "junk-\(UUID().uuidString.prefix(8))")
+                          batchID: "junk-\(UUID().uuidString.prefix(8))", detailFor: ledgerDetail)
 
         let refused = result.refused.count, cancelled = result.cancelled
         log("\(reason.doorVerb): attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")

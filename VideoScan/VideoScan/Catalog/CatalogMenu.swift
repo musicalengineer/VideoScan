@@ -136,7 +136,7 @@ struct CatalogActionBrief: Sendable, Equatable {
 
     static let deleteSelectedFiles = CatalogActionBrief(
         touches: "Moves the highlighted files to the Finder Trash; you can put them back until you empty it.",
-        neverTouches: "Never touches Master Archive files, either half of a recovered audio/video pair, or files on drives that are not connected.",
+        neverTouches: "Never touches Master Archive files, files on drives that are not connected, or half of a recovered audio/video pair unless every half is selected.",
         time: .instant)
 
     static let contentAnalysis = CatalogActionBrief(

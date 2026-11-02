@@ -184,14 +184,16 @@ final class DeletionAudit {
     }
 
     /// "[junk] OUTCOME Move to Trash — moved 2 (8 KB) · held 1 · … · receipt: /…/x.csv"
+    /// `note`: what a door adds to its OUTCOME (⌘⌫: "pair groups: moved 1 · held 0 · …").
     @discardableResult
-    func finish() -> String {
+    func finish(note: String? = nil) -> String {
         let written = receipt.finish()
         let size = ByteCountFormatter.string(fromByteCount: bytesMoved, countStyle: .file)
         var parts = ["moved \(counts[.moved, default: 0]) (\(size))"]
         for outcome in DeletionAuditOutcome.allCases where outcome != .moved {
             parts.append("\(outcome.rawValue) \(counts[outcome, default: 0])")
         }
+        if let note { parts.append(note) }
         let line = "\(linePrefix)OUTCOME \(verb) — " + parts.joined(separator: " · ")
             + " · receipt: \(receipt.url.path)" + (written ? "" : " (could not be completed — the rows written so far are there)")
         sink(line)
@@ -215,10 +217,10 @@ extension DeletionAudit {
     /// the plan before any disk work, or decided before the loop), then the
     /// OUTCOME line. One row per requested file.
     @discardableResult
-    func finish(_ result: VideoScanModel.JunkDeletionResult) -> String {
+    func finish(_ result: VideoScanModel.JunkDeletionResult, note: String? = nil) -> String {
         for item in result.items {
             record(VideoScanModel.JunkDeletionResult.auditRow(item.record, item.outcome), id: item.record.id)
         }
-        return finish()
+        return finish(note: note)
     }
 }

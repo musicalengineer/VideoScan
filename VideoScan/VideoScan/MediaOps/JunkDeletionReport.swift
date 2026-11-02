@@ -25,7 +25,9 @@ struct JunkDeletionReport {
     let summary: [String]
     /// EVERY file that did not move, in request order — never truncated.
     let lines: [Line]
-    var hasNotes: Bool { !lines.isEmpty }
+    /// A SPLIT pair is a note even when every listed file "moved".
+    var hasNotes: Bool { !lines.isEmpty || splitPair }
+    private let splitPair: Bool
 
     init(_ result: VideoScanModel.JunkDeletionResult) {
         var lines: [Line] = []
@@ -37,6 +39,7 @@ struct JunkDeletionReport {
         self.movedCount = result.succeeded
         self.bytesMoved = result.bytesMoved
         self.summary = Self.summary(result)
+        self.splitPair = result.groupNotes.contains { $0.hasPrefix("Split pair:") }
     }
 
     /// Why one file did not move; nil when it moved.
@@ -63,7 +66,7 @@ struct JunkDeletionReport {
         if r.skippedOffline > 0 { out.append("\(files(r.skippedOffline)) skipped \u{2014} drive not connected") }
         if r.cancelled > 0 { out.append("\(files(r.cancelled)) not reached \u{2014} stopped") }
         if out.isEmpty { out.append("Nothing was selected") }
-        return out
+        return out + r.groupNotes
     }
 
     /// The whole list as plain text, one file per line (the Catalog

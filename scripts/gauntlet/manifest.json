@@ -10827,6 +10827,54 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashPairGroupSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashPairGroupSensorTests"
+      ],
+      "tests": [
+        "noFileWorkOfTheirOwn",
+        "noNewModelExtension",
+        "selectRelatedHalvesIsWired",
+        "turnGateIsWired"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashPairGroupTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashPairGroupTests"
+      ],
+      "tests": [
+        "aviPair",
+        "combineOutputAmongHalves",
+        "departedSibling",
+        "fullGroupAdmitted",
+        "fullGroupMoves",
+        "hundredThousandRowsFiveThousandGroups",
+        "laterHalfBecameOnlyCopyHoldsThePair",
+        "laterHalfCopyNotProvenHoldsThePair",
+        "mixedSelection",
+        "mxfPair",
+        "oneMissingHoldsTheGroup",
+        "outcomeAndLedger",
+        "secondHalfFailsIsASplit",
+        "selectRelatedHalves",
+        "sheetWordsFromThePlan",
+        "siblingChangedInTheCatalog",
+        "siblingChangedOnDisk",
+        "siblingOfflineAtTheTurn",
+        "siblingOnFamilyArchive",
+        "siblingRefusedAloneHoldsTheGroup",
+        "threeHalvesOneMissing",
+        "unconfirmedPairNeverMoves",
+        "unknownGroupsAreHeld"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",
@@ -33625,6 +33673,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/CatalogTrashPairGroupTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -35337,7 +35389,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3160,
+      "expected_floor": 3164,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35555,6 +35607,7 @@
         "VideoScanTests/CatalogTidySensorTests",
         "VideoScanTests/CatalogTidyTests",
         "VideoScanTests/CatalogTrashConsistencyTests",
+        "VideoScanTests/CatalogTrashPairGroupSensorTests",
         "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogVolumePaneHeightTests",
         "VideoScanTests/CatalogWideMetadataCandidatesTests",
