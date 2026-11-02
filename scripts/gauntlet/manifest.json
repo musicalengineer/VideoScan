@@ -8594,6 +8594,24 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogMasterSettingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogMasterSettingTests",
+        "CatalogMasterSettingsSensorTests"
+      ],
+      "tests": [
+        "builtInDefault",
+        "placementAndSetter",
+        "poisonedKey",
+        "role",
+        "saveAndClear",
+        "store",
+        "words"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CICanaryTests.swift",
@@ -35746,7 +35764,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3244,
+      "expected_floor": 3251,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35915,6 +35933,8 @@
         "VideoScanTests/CatalogFreshnessSnapshotTests",
         "VideoScanTests/CatalogJSONReadSensorTests",
         "VideoScanTests/CatalogLockRobustnessTests",
+        "VideoScanTests/CatalogMasterSettingsSensorTests",
+        "VideoScanTests/CatalogMasterSettingTests",
         "VideoScanTests/CatalogMenuSensorTests",
         "VideoScanTests/CatalogMenuTests",
         "VideoScanTests/CatalogNoCatalogDoorsTests",

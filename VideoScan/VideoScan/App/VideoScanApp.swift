@@ -581,6 +581,9 @@ struct VideoScanApp: App {
     /// setter for VideoScan Background — register/unregister, launchd's
     /// status, the helper's job line, and the era job enqueued when work is
     /// left. Built once; attached to the model at launch (below).
+    /// Settings ▸ Catalog Master (2026-11-02): the one defaults key the
+    /// launch read a moment ago, and what this Mac is because of it.
+    @StateObject private var catalogMaster = CatalogMasterStore.production(log: { appLog.write("[catalog-master] " + $0) })
     @StateObject private var backgroundService = BackgroundServiceStore.production(
         catalogURL: { nil }, isViewer: { false }, log: { appLog.write($0) })
     // The two run markers (fullhash-backfill.json, catalog-audit.json) are
@@ -1064,6 +1067,7 @@ struct VideoScanApp: App {
                 ),
                 isFindTagHelperRunning: { catalogModel.isFindTagHelperRunning },
                 backgroundService: backgroundService,
+                catalogMaster: catalogMaster,
                 isViewer: catalogModel.isReadOnly,
                 fileOpsForwarder: fileOpsCenter.windowForwarder
             )

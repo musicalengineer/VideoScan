@@ -27,6 +27,8 @@ struct SettingsTabView: View {
     /// launchd's status and its job line — Content Analysis, first row of
     /// the Background section. The store is the one setter.
     @ObservedObject var backgroundService: BackgroundServiceStore
+    /// Settings ▸ Catalog Master (2026-11-02): the one key the launch reads.
+    @ObservedObject var catalogMaster: CatalogMasterStore
     /// A viewer Mac: the Content Analysis checkbox is disabled with a reason.
     let isViewer: Bool
     /// "Show Media File Operations when a job starts" (2026-09-21).
@@ -53,6 +55,12 @@ struct SettingsTabView: View {
 
                 // Header
                 settingsHeader
+
+                Divider()
+
+                // Catalog Master (Rick 2026-11-02): first, above the model
+                // pane — which Mac writes the catalog, and what this Mac is.
+                CatalogMasterSettingsRows(store: catalogMaster)
 
                 Divider()
 
