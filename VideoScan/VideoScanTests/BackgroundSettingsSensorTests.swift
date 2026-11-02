@@ -55,10 +55,10 @@ struct BackgroundSettingsSensorTests {
         #expect(app.contains("backgroundService: backgroundService,"))
     }
 
-    @Test("the Archivist pane is titled Archivist LLM Configuration")
+    @Test("the Archivist pane is titled Model Configuration (Rick 11/02)")
     func archivistTitle() throws {
         let s = try Self.source("Hallie/LLM/ArchivistEndpointSettings.swift")
-        #expect(s.contains("Text(\"Archivist LLM Configuration\")"))
+        #expect(s.contains("Text(\"Model Configuration\")"))
         #expect(!s.contains("Text(\"Archivist Brain\")"))
     }
 }

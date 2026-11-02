@@ -142,10 +142,10 @@ struct ArchivistEndpointSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // "Archivist LLM Configuration" (Rick 2026-11-02; was "Archivist
-            // Brain"): the pane keeps the model settings and the background
-            // helpers get their own section below.
-            Text("Archivist LLM Configuration")
+            // "Model Configuration" (Rick 2026-11-02; was "Archivist Brain"):
+            // the pane keeps the model settings and the background helpers
+            // get their own Settings section.
+            Text("Model Configuration")
                 .font(.headline)
             Text("Tried in order, top first. Use a name for a machine on "
                  + "your network, or a full https:// address for a cloud server.")
