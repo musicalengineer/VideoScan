@@ -254,9 +254,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         if next.isReadOnly { dropArchiveDerivedState() }
     }
 
-    /// In the read-only state identity rulings and bookmarks are EMPTY, full
-    /// stop (codex #190 F1): they live on the archive, and an offline or
-    /// wrong-UUID volume — or a viewer's copy — is not the archive's word.
+    /// Read-only: rulings and bookmarks are EMPTY, full stop (codex #190 F1).
     private func dropArchiveDerivedState() {
         if !identityDecisions.isEmpty { identityDecisions = FamilyIdentityDecisions() }
         identityRulingsUnsaved = false
@@ -265,6 +263,13 @@ final class FamilyTreeLiveModel: ObservableObject {
             bookmarkedPeopleInOrder = []
             bookmarkedPeopleCount = 0
         }
+    }
+
+    /// The only store the model hands out: guarded by its live authority at
+    /// every store write (codex #192 F2). Never hand out `compiledStore`.
+    private var liveCompiledStore: FamilyGraphCompiledStore? {
+        let authority = writeAuthority
+        return compiledStore?.guarded { authority.mode.allowsWrites }
     }
 
     /// The one call every model-level writer makes before touching disk.
@@ -743,7 +748,8 @@ final class FamilyTreeLiveModel: ObservableObject {
         }
         loadState = .loading
         let directory = originalsDirectory
-        let store = compiledStore
+        let store = liveCompiledStore
+        let authority = writeAuthority
         // `Task.detached` ≈ spawn on a worker thread; a first import parses
         // and compiles (seconds on a big pull) and must not block the UI.
         // Afterwards the promoted artifact decodes in ~10 ms.
@@ -787,7 +793,8 @@ final class FamilyTreeLiveModel: ObservableObject {
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = progress
-            var outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            var outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory,
+                                        canWrite: authority.mode.allowsWrites)
             // The same ruled view the shared cache hands out (codex #1711),
             // before the bundle is built from it.
             if let raw = outcome.graph { outcome = outcome.replacingGraph(raw.applyingIdentityRulings(rulings)) }
@@ -838,7 +845,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                                      revision: String?, generation: Int) async {
         loadState = .loading
         loadPhase = "Opening the compiled family tree (read-only)…"
-        let store = compiledStore
+        let store = liveCompiledStore
         let overlay = readOnlyOverlayStore
         let loaded = await Task.detached(priority: .userInitiated) {
             () -> (FamilyGraphFileLoader.Outcome, FamilyTreeLaunchBundle?) in
@@ -908,7 +915,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // files and the manifest's source folders are archive paths — show
         // no dates rather than search or hash anything there.
         let installed = accessMode.isReadOnly ? nil : graph
-        let pulls = pullDates, store = compiledStore, directory = originalsDirectory
+        let pulls = pullDates, store = liveCompiledStore, directory = originalsDirectory
         Task { await pulls.refresh(graph: installed, store: store, gedcomDirectory: directory) }
     }
 
@@ -1006,8 +1013,7 @@ final class FamilyTreeLiveModel: ObservableObject {
         // The compile parses for seconds before it writes: the store asks
         // the authority again at the moment of every write (codex #190 F2).
         let authority = writeAuthority, refusalLog = writeRefusalLog
-        var guarded = store
-        guarded.writeGuard = {
+        let guarded = store.guarded {
             !FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeLiveModel.recompile (ingest)",
                                         mode: authority.mode, viewerCenter: authority.viewer, log: refusalLog)
         }
@@ -1095,16 +1101,17 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadGeneration &+= 1
         refreshAccessMode()
         if accessMode.isReadOnly {
-            installReadOnly(FamilyTreeReadOnlyLoad.outcome(store: compiledStore, overlay: readOnlyOverlayStore,
+            installReadOnly(FamilyTreeReadOnlyLoad.outcome(store: liveCompiledStore, overlay: readOnlyOverlayStore,
                                                  log: { appLog.write($0) }),
                             bundle: nil)
             return
         }
         loadState = .loading
         var loader = FamilyGraphFileLoader(originalsDirectory: originalsDirectory)
-        loader.compiledStore = compiledStore
-        install(outcome: Self.overlaid(loader.loadNewestOutcome(), store: personRefreshOverlayStore,
-                                       directory: originalsDirectory))
+        loader.compiledStore = liveCompiledStore
+        let outcome = loader.loadNewestOutcome()
+        install(outcome: Self.overlaid(outcome, store: personRefreshOverlayStore,
+                                       directory: originalsDirectory, canWrite: writeAuthority.mode.allowsWrites))
     }
 
 
@@ -1993,15 +2000,11 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// the notes pane afterwards with `loadCyberBrain()`.
     func cyberBrainRecorder() -> (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)? {
         guard let root = cyberBrainRootURL else { return nil }
-        refreshAccessMode()
-        // The mode is captured now AND re-read at the call: the filer runs
-        // later, off the main actor, and the archive may have gone since.
-        let mode = accessMode, center = viewerCenter, log = writeRefusalLog
+        // The AUTHORITY is captured, never a mode, and asked at each record
+        // (codex #192 F3): the filer calls this later, off the main actor.
+        let authority = writeAuthority, log = writeRefusalLog
         return { testimony in
-            try FamilyTreeWriteGate.check(.note, path: "RecordFinderFiler.recordTestimony",
-                                          mode: mode, viewerCenter: center, log: log)
-            try FamilyTreeWriteGate.check(.note, path: "RecordFinderFiler.recordTestimony",
-                                          mode: .current(viewer: center), viewerCenter: center, log: log)
+            try authority.check(.note, path: "RecordFinderFiler.recordTestimony", log: log)
             return try CyberBrainWriter.record(testimony, rootURL: root)
         }
     }

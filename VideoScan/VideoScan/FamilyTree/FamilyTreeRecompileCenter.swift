@@ -102,7 +102,8 @@ final class FamilyTreeRecompileCenter {
                                         isViewer: ViewerModeCenter.shared.isViewer).strictest(writeMode())) {
             return .failed
         }
-        let store = store ?? FamilyGraphCompiledStore.app
+        // Even the pending-sources read may promote: guarded (codex #192 F2).
+        let store = (store ?? FamilyGraphCompiledStore.app).guarded { writeMode().allowsWrites }
         let sources = cache.needsRecompile(for: configuration, store: store)
         guard !sources.isEmpty else {
             store.log("[family-tree] recompile: nothing is pending "

@@ -782,6 +782,12 @@ public struct FamilyGraphCompiledStore: Sendable {
                 try? fileManager.removeItem(at: generationURL(generation))
                 return nil
             }
+            // PROMOTION-TIME GUARD (codex #192 F1): the compile and verify
+            // took time; ask again before anything durable — manifest,
+            // sidecars, pointer, prune. A refusal leaves the root exactly
+            // as it was at this moment (the half-built generation stays,
+            // unreferenced, for the next allowed prune).
+            if refusedAtPromotion(generation, step: "manifest") { return nil }
             let manifest = Manifest(
                 schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
                 index: GedcomFamilyGraph.TreeIndex.formatVersion, generation: generation,
@@ -795,7 +801,7 @@ public struct FamilyGraphCompiledStore: Sendable {
             guard problems.isEmpty else {
                 log("[family-tree] compiled generation \(generation) FAILED verification, not promoted: "
                     + problems.joined(separator: "; "))
-                prune(keeping: readPointer())
+                if !refusedAtPromotion(generation, step: "prune") { prune(keeping: readPointer()) }
                 return nil
             }
             // INTEGRITY AUDIT (2026-09-16). Verification above proves the
@@ -811,22 +817,9 @@ public struct FamilyGraphCompiledStore: Sendable {
             // deliberate ("Replace family tree" with a shorter pull), and
             // trading a silent loss for a silent block would be no better.
             // The rollback the store has always had is the remedy.
-            let previousManifest = readPointer().flatMap { readManifest($0.current) }
-            let integrity = TreeIntegrityCheck.compare(incoming: manifest, against: previousManifest)
-            for finding in integrity {
-                let tag: String
-                switch finding.severity {
-                case .note:    tag = "tree integrity"
-                case .warning: tag = "tree integrity WARNING"
-                case .alarm:   tag = "tree integrity ALARM"
-                }
-                log("[family-tree] \(tag): \(finding.message)")
-            }
-            if TreeIntegrityCheck.hasAlarm(integrity) {
-                log("[family-tree] generation \(generation) is being promoted DESPITE the alarm above. "
-                    + "If this was not intended, roll back to \(previousManifest?.generation ?? "the previous generation").")
-            }
+            logIntegrityAudit(of: manifest, generation: generation)
 
+            if refusedAtPromotion(generation, step: "sidecars + pointer") { return nil }
             try writeSidecars(sourceRecords)
             let old = readPointer()
             let pointer = Pointer(schema: Self.schemaVersion, codec: GedcomCompiledTree.codecVersion,
@@ -841,10 +834,43 @@ public struct FamilyGraphCompiledStore: Sendable {
             return decoded
         } catch {
             log("[family-tree] compile of generation \(generation) failed: \(error)")
-            try? fileManager.removeItem(at: generationURL(generation))
+            // A refusal (writePointer's guard) changes nothing more.
+            if !writesRefused { try? fileManager.removeItem(at: generationURL(generation)) }
             return nil
         }
     }
+
+    /// The integrity audit written before every promotion (2026-09-16): a
+    /// note when the tree grew, an alarm when a source or a tenth of the
+    /// people went missing. Reports, never refuses (see ingestLocked).
+    private func logIntegrityAudit(of manifest: Manifest, generation: String) {
+        let previousManifest = readPointer().flatMap { readManifest($0.current) }
+        let integrity = TreeIntegrityCheck.compare(incoming: manifest, against: previousManifest)
+        for finding in integrity {
+            let tag: String
+            switch finding.severity {
+            case .note:    tag = "tree integrity"
+            case .warning: tag = "tree integrity WARNING"
+            case .alarm:   tag = "tree integrity ALARM"
+            }
+            log("[family-tree] \(tag): \(finding.message)")
+        }
+        if TreeIntegrityCheck.hasAlarm(integrity) {
+            log("[family-tree] generation \(generation) is being promoted DESPITE the alarm above. "
+                + "If this was not intended, roll back to \(previousManifest?.generation ?? "the previous generation").")
+        }
+    }
+
+    /// True (and logged) when writes are refused right now, at `step` of
+    /// promoting `generation`.
+    private func refusedAtPromotion(_ generation: String, step: String) -> Bool {
+        guard writesRefused else { return false }
+        log("\(Self.refusedWritePrefix) promote \(generation) at \(step) — refused after the compile; nothing promoted")
+        return true
+    }
+
+    /// The pointer writers' refusal (thrown under the lock).
+    struct WriteRefused: Error {}
 
     /// Swap current and previous. False when there is no previous, when
     /// the previous manifest did not verify clean, or when the previous
@@ -903,6 +929,12 @@ public struct FamilyGraphCompiledStore: Sendable {
     // MARK: Private
 
     private func writePointer(_ pointer: Pointer) throws {
+        // Every pointer write — ingest, rollback, repoint, adopt — asks the
+        // guard at the write, after any wait for the lock (codex #192 F1).
+        if writesRefused {
+            log("\(Self.refusedWritePrefix) pointer write — refused at the write")
+            throw WriteRefused()
+        }
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         // `.atomic` = write a temp file then rename over the old pointer, so
         // a reader sees the old or the new pointer, never a torn one.

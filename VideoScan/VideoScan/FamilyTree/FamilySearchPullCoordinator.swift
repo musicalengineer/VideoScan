@@ -596,7 +596,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     private func currentTreeLoader(promoting: Bool = true,
                                    usingStore: Bool = true) -> FamilyGraphFileLoader {
         var loader = FamilyGraphFileLoader(originalsDirectory: gedcomDirectory)
-        loader.compiledStore = usingStore ? compiledStore() : nil
+        // Guarded: a promoting base load asks the authority at each store
+        // write, so a merge revoked before it yields promotes nothing (#192 F2).
+        let mode = writeMode
+        loader.compiledStore = usingStore ? compiledStore()?.guarded { mode().allowsWrites } : nil
         loader.readOnly = !promoting && usingStore
         // The production store's logger is a no-op, so anything the loader
         // says while compiling would vanish (codex, 2026-09-17).
@@ -609,7 +612,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// the wrong store in tests and absent on a read-only viewer, and a
     /// guard nobody can exercise is a guard nobody can trust — which is
     /// the whole reason this P1 shipped in the first place.
-    var compiledStore: @Sendable () -> FamilyGraphCompiledStore? = { .production }
+    var compiledStore: @Sendable () -> FamilyGraphCompiledStore? = { .app }
 
     /// "Add to current tree": build a DERIVED merge artifact from the
     /// verified export and the tree the loader reads today, keyed by

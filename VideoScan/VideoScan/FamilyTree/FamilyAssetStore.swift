@@ -259,7 +259,10 @@ final class FamilyGraphSharedCache: @unchecked Sendable {
             let overlaid = PersonRefreshOverlayReader.apply(
                 to: baseGraph, store: overlayStore,
                 discoveryDirectory: configuration.gedcomDirectory(),
-                canWrite: configuration.access == .readWrite, log: log)
+                // Live at the write (codex #192 F2): an overlay retirement
+                // is a write.
+                canWrite: configuration.access == .readWrite && FamilyTreeAccessMode.current().allowsWrites,
+                log: log)
             // ONE ruled query view (codex #1711): the rulings are applied to
             // the graph FIRST and the returned outcome is built from that
             // same value, so the Family Tree tab (which installs
@@ -1696,6 +1699,10 @@ struct FamilyAssetStore: @unchecked Sendable {
         }
         defer { Darwin.close(dirFD) }
 
+        // The check precedes the first byte (codex #192 F4): validation,
+        // naming and the descriptor walk took time and a live store's
+        // authority may have been revoked; nothing is created after that.
+        try requireWriteAccess()
         // Only EEXIST advances the suffix (codex #675: a disk-full or
         // permission error must surface at once, not after 50 masks).
         for suffix in 1...50 {
@@ -1865,6 +1872,9 @@ struct FamilyAssetStore: @unchecked Sendable {
             }
             return
         }
+        // Asked again at the creation itself (codex #192 F4): never create
+        // a folder — least of all on an absent mount point — once revoked.
+        try requireWriteAccess()
         try fileManager.createDirectory(
             at: directory,
             withIntermediateDirectories: true)

@@ -49,4 +49,32 @@ final class FamilyGraphCompiledStoreWriteGuardTests: XCTestCase {
         XCTAssertFalse(store.rollback())
         XCTAssertEqual(listing(box.compiled), before, "a refused store changed its root")
     }
+
+    /// codex #192 F1: the guard must be asked at PROMOTION, after the
+    /// compile — not only at entry. Revoked while verifying: nothing is
+    /// promoted, and nothing changes under the root from that moment on.
+    func testARevocationDuringVerificationPromotesNothing() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let ged = try box.write(GedcomSyntheticPedigree.gedcom(people: 30, generations: 3), as: "a.ged")
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: ged))
+        let flag = Flag()
+        var store = box.store()
+        store.writeGuard = { flag.allows }
+        XCTAssertNotNil(store.ingest(graph: graph, sources: [ged]), "a first generation while allowed")
+        let promoted = store.readPointer()
+        let second = try box.write(GedcomSyntheticPedigree.gedcom(people: 40, generations: 3), as: "b.ged")
+        let graph2 = try XCTUnwrap(GedcomFamilyGraph(fileURL: second))
+        let verify = store.verify
+        final class Snap: @unchecked Sendable { var at: [String] = [] }
+        let snap = Snap()
+        let root = box.compiled
+        store.verify = { decoded, source in
+            flag.revoke()
+            snap.at = (FileManager.default.enumerator(atPath: root.path)?.allObjects as? [String] ?? []).sorted()
+            return verify(decoded, source)
+        }
+        XCTAssertNil(store.ingest(graph: graph2, sources: [second]), "promoted after revocation")
+        XCTAssertEqual(store.readPointer(), promoted, "the pointer moved")
+        XCTAssertEqual(listing(box.compiled), snap.at, "the root changed after the revocation")
+    }
 }

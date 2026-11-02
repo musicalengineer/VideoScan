@@ -58,7 +58,7 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
     ]
 
     static let gateTokens = ["checkWrite(", "refusesWrite(", "FamilyTreeWriteGate.", "requireWriteAccess()",
-                             "gatedStore"]
+                             "gatedStore", "authority.check("]
 
     /// Every write site in FamilyTree/, by (file, member function).
     static let inventory: [String: Rule] = [
@@ -242,8 +242,11 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
     /// AGAIN at the moment it writes, not only at its entry. Each pair is
     /// (member, the in-flight re-check it must contain).
     static let inFlightRechecks: [(String, String)] = [
-        ("FamilyTreeLiveModel.swift:recompile", "guarded.writeGuard"),
+        ("FamilyTreeLiveModel.swift:recompile", "store.guarded {"),
         ("FamilyTreeLiveModel.swift:removeDocument", "authority.check(.document"),
+        ("FamilyTreeLiveModel.swift:cyberBrainRecorder", "try authority.check(.note"),
+        ("FamilyAssetStore.swift:writePersonPhotoData", "try requireWriteAccess()"),
+        ("FamilyAssetStore.swift:ensureSafeDirectory", "try requireWriteAccess()"),
         ("FamilyTreeRecompileCenter.swift:recompile", "guarded.writeGuard"),
         ("FamilyTreeWalkCenter.swift:save", "FamilyTreeWriteGate.check(.walkDecorations"),
         ("FamilySearchPersonRefreshCoordinator.swift:writeOverlay", "FamilyTreeWriteGate.refuse(.personRefresh"),
@@ -281,6 +284,57 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
             let body = try #require(try Self.body(of: member, in: files))
             #expect(!body.contains(".gedcomDirectory()"), "\(member) lists the archive before the access check")
         }
+    }
+
+    /// codex #192 F2: every compiled store handed to a loader or to the
+    /// shared graph cache from app code carries the LIVE guard. These are
+    /// all the hand-outs there are; a new one fails until it is guarded and
+    /// listed. `.app` itself is guarded; nothing in FamilyTree/ builds a raw
+    /// store (`FamilyGraphCompiledStore(root:` / `.production`).
+    static let storeHandOuts: [String: [String]] = [
+        // Pass-through: its callers (the shared cache) are listed below.
+        "FamilyAssetStore.swift": ["loader.compiledStore = compiledStore"],
+        "FamilySearchPullCoordinator.swift": ["loader.compiledStore = usingStore ? compiledStore()?.guarded"],
+        "FamilyTreeRecompileCenter.swift": ["loader.compiledStore = guarded",
+                                            "cache.needsRecompile(for: configuration, store: store)"],
+        "FamilyTreeLiveModel.swift": ["loader.compiledStore = store", "loader.compiledStore = guarded",
+                                      "loader.compiledStore = liveCompiledStore",
+                                      "FamilyGraphSharedCache.shared.outcome(for: configuration, store: store"],
+        "FamilyTreeReadOnlyLoad.swift": ["loader.compiledStore = store"],
+        "FamilyTreeLaunchBundle.swift": ["FamilyGraphSharedCache.shared.load(for: configuration, store: .app)"],
+        "KinshipDisplayCenter.swift": ["store: .app)"],
+    ]
+
+    @Test func everyCompiledStoreHandedOutCarriesTheLiveGuard() throws {
+        let files = try Self.familyTreeSources()
+        let handOut = try NSRegularExpression(pattern:
+            #"loader\.compiledStore\s*=|SharedCache\.shared\.(outcome|load)\(|\.needsRecompile\(for:|store: \.app\)"#)
+        var problems: [String] = []
+        for (name, text) in files where name != "FamilyGraphCompiledStore+App.swift" {
+            let code = Self.scan(text).lines
+            for (i, line) in code.enumerated() where Self.matches(handOut, line) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let next = i + 1 < code.count ? code[i + 1].trimmingCharacters(in: .whitespaces) : ""
+                let allowed = Self.storeHandOuts[name] ?? []
+                if !allowed.contains(where: { trimmed.contains($0) || (trimmed + " " + next).contains($0) }) {
+                    problems.append("\(name) line \(i + 1): unlisted store hand-out `\(trimmed)` — guard it and list it")
+                }
+            }
+            for (i, line) in code.enumerated()
+            where line.contains("FamilyGraphCompiledStore(root:") || line.contains(".production") && line.contains("compiledStore") {
+                problems.append("\(name) line \(i + 1): a raw compiled store in app code `\(line.trimmingCharacters(in: .whitespaces))`")
+            }
+        }
+        let app = try #require(try Self.body(of: "FamilyGraphCompiledStore+App.swift:var app", in: files))
+        if !app.contains(".guarded") { problems.append("FamilyGraphCompiledStore.app is not guarded") }
+        let model = try #require(files.first { $0.0 == "FamilyTreeLiveModel.swift" }?.1)
+        let modelCode = Self.scan(model).lines.joined(separator: "\n")
+        if modelCode.range(of: #"(?<!guard )let store = compiledStore\b"#, options: .regularExpression) != nil
+            || modelCode.contains(", store = compiledStore") {
+            problems.append("the model hands out its raw compiledStore (use liveCompiledStore)")
+        }
+        if !modelCode.contains("compiledStore?.guarded") { problems.append("liveCompiledStore is not guarded") }
+        #expect(problems.isEmpty, "\(problems.count) problem(s):\n\(problems.joined(separator: "\n"))")
     }
 
     /// parseAndPromote's exemption rests on this ordering.

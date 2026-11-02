@@ -1113,6 +1113,7 @@
       ],
       "tests": [
         "testAFalseGuardRefusesIngestAndWritesNothing",
+        "testARevocationDuringVerificationPromotesNothing",
         "testTheGuardIsReadAtTheWriteNotWhenTheStoreWasMade"
       ]
     },
@@ -15339,6 +15340,21 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosingTests"
+      ],
+      "tests": [
+        "aCapturedRecorderRefusesAfterTheInjectedCentreIsRevoked",
+        "aCapturedRecorderRefusesAfterTheModelIsConfiguredUnavailable",
+        "aLivePhotoStoreRevokedMidChooseWritesNoPortrait",
+        "aLoadRevokedWhileItCompilesANewerPullPromotesNothing",
+        "aMergeRevokedBeforeItsBaseLoadCompilesNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyIsolationTests.swift",
       "stage": "unit",
       "suites": [
@@ -15380,6 +15396,7 @@
       ],
       "tests": [
         "everyAsyncWriterRechecksAtTheMomentOfTheWrite",
+        "everyCompiledStoreHandedOutCarriesTheLiveGuard",
         "everyWriteSiteInFamilyTreeChecksTheAccessState",
         "identityCenterWritesOnlyThroughTheGatedStore",
         "loaderReadOnlyBranchComesFirst",
@@ -35432,7 +35449,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3190,
+      "expected_floor": 3196,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35741,6 +35758,7 @@
         "VideoScanTests/FamilyTreeNoteDraftOwnerTests",
         "VideoScanTests/FamilyTreePersonMetadataTests",
         "VideoScanTests/FamilyTreePullDatesTests",
+        "VideoScanTests/FamilyTreeReadOnlyClosingTests",
         "VideoScanTests/FamilyTreeReadOnlyDocumentTransitionTests",
         "VideoScanTests/FamilyTreeReadOnlyInFlightTests",
         "VideoScanTests/FamilyTreeReadOnlyIsolationTests",
