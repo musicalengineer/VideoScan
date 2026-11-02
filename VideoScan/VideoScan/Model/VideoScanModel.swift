@@ -1882,7 +1882,8 @@ final class VideoScanModel: ObservableObject {
         // catalog.pre-target-removal snapshot first (or degrades to
         // no-removal). The bare removeAll that used to live here is the
         // hole QA flagged after the 2,720-record folder-target loss.
-        removeCatalogRecords(underTargetRoot: target.searchPath, action: "reset")
+        removeCatalogRecords(underTargetRoot: target.searchPath, action: "reset",
+                             remembered: target.volumeUUID)
     }
 
     // MARK: - Probe-cache count (memoized)

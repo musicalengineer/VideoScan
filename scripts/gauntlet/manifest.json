@@ -27109,7 +27109,9 @@
         "ScanLocationVolumeTests"
       ],
       "tests": [
+        "browseToAnotherDiskDropsTheOldPathsMemory",
         "deleteMenuCountIsZeroForAnotherVolumesFiles",
+        "duplicatePathPlannerUsesSelectedTargetsVolume",
         "filesOnAnotherVolumeAreNotCountedUnderTheSamePath",
         "hundredThousandRowsTwentyTargetsWithinBudget",
         "knownLocationNeverShowsAFileWithoutEvidence",
@@ -27131,7 +27133,8 @@
         "signatureCoverageReadsTheProjection",
         "theLenientRuleIsGone",
         "thePaneAndThePlannerResolveThroughTheOneFunction",
-        "unknownLocationNeverShowsAFileThatNamesAnotherDisk"
+        "unknownLocationNeverShowsAFileThatNamesAnotherDisk",
+        "volumeLearningInvalidatesConfirmedRemoval"
       ]
     },
     {
@@ -36601,7 +36604,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 379,
+      "expected_floor": 382,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [

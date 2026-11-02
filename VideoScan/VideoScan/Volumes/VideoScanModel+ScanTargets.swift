@@ -138,7 +138,14 @@ extension VideoScanModel {
         guard !CatalogScanTarget.isScratchVolumePath(path) else { return false }
         guard target.searchPath != path else { return true }
         target.searchPath = path
+        // A new path is a new place: the old path's remembered disk does
+        // not travel with it (codex #209 F2). Learn the new mount now if
+        // it is up; an offline new path stays unknown until it mounts
+        // (its rows may say — ScanTargetVolume).
+        target.isReachable = VolumeReachability.isReachable(path: path)
+        target.volumeUUID = target.isReachable ? ScanTargetVolume.uuid(forPath: path) : nil
         persistScanTargets()
+        persistScanDates()
         notifyTargetsChanged()
         return true
     }

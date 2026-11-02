@@ -269,6 +269,15 @@ struct ScanLocationVolumeModelTests {
         return (model, tmp)
     }
 
+    /// A real, existing folder under `tmp`: reachable by rule (not under
+    /// /Volumes) and present on disk, so `ScanTargetVolume.uuid(forPath:)`
+    /// reaches `VolumeIdentity.uuid`, which the task-local seam answers.
+    private func mounted(_ tmp: URL, _ name: String) throws -> String {
+        let dir = tmp.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.path
+    }
+
     /// Brief test (1), the data-risk half on the model: the removal plan
     /// for a location on volume B removes nothing of volume A's, even when
     /// the location is offline and only its memory names B.
@@ -322,6 +331,101 @@ struct ScanLocationVolumeModelTests {
         let plan = model.planTargetRemoval(for: target)
         #expect(plan.count == 9)
         #expect(plan.recordIDs == Set(model.records.prefix(9).map(\.id)))
+    }
+
+    // MARK: Codex 2026-11-02 (cycle #209), three P1s on the planner and the memory
+
+    /// Codex F1: two registrations of one path, each remembering a different
+    /// disk. The plan for the SECOND must use ITS memory, not the first's —
+    /// and equal the Delete menu's count for it.
+    @Test func duplicatePathPlannerUsesSelectedTargetsVolume() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let path = offlinePath()
+        let first = CatalogScanTarget(searchPath: path), second = CatalogScanTarget(searchPath: path)
+        first.volumeUUID = m4
+        second.volumeUUID = ultra
+        model.scanTargets = [first, second]
+        let theirs = m4Movies(path), mine = ultraMovies(path)
+        model.records = theirs + mine
+
+        let plan = model.planTargetRemoval(for: second)
+        #expect(plan.recordIDs == Set(mine.map(\.id)), "the second registration removes only the Ultra's rows")
+        #expect(model.planTargetRemoval(for: first).recordIDs == Set(theirs.map(\.id)))
+        let volumes = ScanTargetVolume.resolve(model.scanTargets.map { ($0.id, $0.searchPath, $0.volumeUUID) },
+                                               records: model.records)
+        let facts = ScanTargetRecordFacts.project(model.records,
+                                                  targets: model.scanTargets.map { ($0.id, $0.searchPath) },
+                                                  targetVolumes: volumes)
+        #expect(facts[second.id]?.records == plan.count, "shown count == planned count")
+    }
+
+    /// Codex F2: Browse… to a folder on another disk must not carry the old
+    /// path's memory along. The new mount is learned at the repoint; an
+    /// offline new path leaves the location unknown, so mixed rows under
+    /// it are never removed on the strength of the old disk's identity.
+    @Test func browseToAnotherDiskDropsTheOldPathsMemory() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // Real folders under the test's temp dir: reachable (not /Volumes)
+        // and existing, so the mount tier answers through the seam.
+        let moviesDir = try mounted(tmp, "Movies"), picturesDir = try mounted(tmp, "Pictures")
+        let target = CatalogScanTarget(searchPath: moviesDir)
+        target.volumeUUID = m4
+        model.scanTargets = [target]
+
+        // Mounted new path on disk B: learned at the repoint.
+        let moved = VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) {
+            model.repointScanTarget(target, to: picturesDir)
+        }
+        #expect(moved)
+        #expect(target.volumeUUID == ultra, "the new mount is learned, the old memory dropped")
+
+        // Offline new path: nothing known; the rows decide, and mixed rows
+        // leave the location unknown — the plan removes nothing.
+        let offline = offlinePath()
+        #expect(model.repointScanTarget(target, to: offline))
+        #expect(target.volumeUUID == nil, "an offline new path keeps no memory of the old one")
+        model.records = m4Movies(offline) + ultraMovies(offline)
+        #expect(model.planTargetRemoval(for: target).recordIDs.isEmpty)
+    }
+
+    /// Codex F3: learning a different disk between the confirmation and
+    /// the apply must invalidate the confirmed plan — the revision moves,
+    /// the apply refuses with a fresh plan, nothing is removed.
+    @Test func volumeLearningInvalidatesConfirmedRemoval() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let moviesDir = try mounted(tmp, "Movies")
+        let target = CatalogScanTarget(searchPath: moviesDir)
+        model.scanTargets = [target]
+        let aRows = m4Movies(moviesDir), bRows = ultraMovies(moviesDir)
+        model.records = aRows + bRows
+
+        // The mount says disk A: the plan is A's nine rows.
+        let plan = VolumeIdentity.$resolverOverride.withValue({ _ in m4 }) {
+            model.planTargetRemoval(for: target)
+        }
+        #expect(plan.recordIDs == Set(aRows.map(\.id)))
+
+        // The drive is swapped under the same path; a reachability refresh
+        // (the probe callback's path, no mount notification) learns disk B.
+        let before = model.catalogMutationRevision
+        VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) {
+            model.refreshTargetReachability()
+        }
+        #expect(target.volumeUUID == ultra)
+        #expect(model.catalogMutationRevision != before, "learning a disk is a catalog-shape change")
+
+        let result = VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) {
+            model.deleteCatalogForTarget(target, plan: plan)
+        }
+        guard case .refusedStale(let current) = result else {
+            Issue.record("expected .refusedStale, got \(result)")
+            return
+        }
+        #expect(current.recordIDs == Set(bRows.map(\.id)), "the fresh plan is disk B's rows")
+        #expect(model.records.count == 12, "nothing removed")
     }
 
     /// The refresh learns a mounted location's volume from its mount,

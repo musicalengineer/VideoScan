@@ -343,15 +343,21 @@ extension VideoScanModel {
     /// a view body; the non-destructive row labels read the cached
     /// `ScanTargetRecordFacts` projection instead.
     func planTargetRemoval(for target: CatalogScanTarget) -> TargetRemovalPlan {
-        planTargetRemoval(targetID: target.id, root: target.searchPath)
+        // THIS target's memory (codex #209 F1: two registrations of one
+        // path may remember different disks; the first's must never
+        // plan the second's removal).
+        planTargetRemoval(targetID: target.id, root: target.searchPath, remembered: target.volumeUUID)
     }
 
     /// `planTargetRemoval(for:)` for a root that may not belong to a
     /// registered target (the legacy `removeCatalogRecords(underTargetRoot:)`
     /// callers pass a bare path). `targetID` is only carried for
     /// bookkeeping; the scope is decided by `root` and the CURRENT
-    /// `scanTargets` roots.
-    func planTargetRemoval(targetID: UUID = UUID(), root: String) -> TargetRemovalPlan {
+    /// `scanTargets` roots. `remembered` is the root's last-seen volume
+    /// when the caller holds the target; a bare root takes the memory the
+    /// registrations of that path agree on, and none when they disagree
+    /// (then its mount or its rows decide — never a borrowed identity).
+    func planTargetRemoval(targetID: UUID = UUID(), root: String, remembered: String? = nil) -> TargetRemovalPlan {
         // The same scope the Delete menu counts with (codex #1393), and
         // the same volume resolution the volume table shows (#401):
         // every target's volume plus the root's, mount first, then the
@@ -359,10 +365,8 @@ extension VideoScanModel {
         // question as the Delete count (codex #184), and an offline
         // target removes only the rows evidenced on its own disk.
         var ask: [ScanTargetVolume.Target] = scanTargets.map { ($0.id, $0.searchPath, $0.volumeUUID) }
-        // The root as its own entry: a registered target's memory applies
-        // to it; a bare legacy root is told by its mount or its rows.
         let rootKey = UUID()
-        ask.append((rootKey, root, scanTargets.first { $0.searchPath == root }?.volumeUUID))
+        ask.append((rootKey, root, remembered ?? Self.agreedMemory(forRoot: root, in: scanTargets)))
         let volumes = ScanTargetVolume.resolve(ask, records: records)
         let scope = TargetRemovalScope(
             root: root,
@@ -386,16 +390,32 @@ extension VideoScanModel {
                                  revision: catalogMutationRevision)
     }
 
+    /// The one volume every registration of `root` remembers, or nil when
+    /// none does or they disagree (codex #209 F1: never borrow the first
+    /// registration's identity for a bare root).
+    static func agreedMemory(forRoot root: String, in targets: [CatalogScanTarget]) -> String? {
+        let r = PathScope.normalize(root)
+        var agreed: String?
+        for t in targets where PathScope.normalize(t.searchPath) == r {
+            guard let v = t.volumeUUID else { continue }
+            if let a = agreed, a != v { return nil }
+            agreed = v
+        }
+        return agreed
+    }
+
     // MARK: Execute
 
     /// Remove catalog records under `root`, honoring the coverage check,
     /// snapshot tripwire, and fail-safe degrade described above.
     /// `action` names the caller for the log trail ("reset",
     /// "delete catalog", …). Plan-then-execute in one call; the plan is
-    /// never seen by a user, so there is nothing to carry.
+    /// never seen by a user, so there is nothing to carry. `remembered`:
+    /// the root's last-seen volume when the caller holds the target.
     @discardableResult
-    func removeCatalogRecords(underTargetRoot root: String, action: String) -> TargetRecordRemovalOutcome {
-        removeCatalogRecords(plan: planTargetRemoval(root: root), action: action)
+    func removeCatalogRecords(underTargetRoot root: String, action: String,
+                              remembered: String? = nil) -> TargetRecordRemovalOutcome {
+        removeCatalogRecords(plan: planTargetRemoval(root: root, remembered: remembered), action: action)
     }
 
     /// Remove EXACTLY `plan.recordIDs` — the ids that are still present;

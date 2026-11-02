@@ -128,8 +128,11 @@ extension VideoScanModel {
     /// Each reachable local target learns its volume from its mount (one
     /// getattrlist per target — `ScanTargetVolume.uuid(forPath:)`) and
     /// keeps it while the drive is away, so an offline location still
-    /// knows which disk it is (#401). Persisted only when something
-    /// changed; a drive swapped under the same mount name re-learns.
+    /// knows which disk it is (#401). A drive swapped under the same mount
+    /// name re-learns. When something changed it is persisted AND the
+    /// catalog revision moves (codex #209 F3): which records a location
+    /// owns just changed, so a removal plan confirmed against the old disk
+    /// is stale and the volume table's cached counts must be rebuilt.
     /// Returns the number of targets whose remembered volume changed.
     @discardableResult
     func rememberScanTargetVolumes() -> Int {
@@ -142,7 +145,10 @@ extension VideoScanModel {
             t.volumeUUID = v
             changed += 1
         }
-        if changed > 0 { persistScanDates() }
+        if changed > 0 {
+            persistScanDates()
+            notifyVolumeAggregatesStale()
+        }
         return changed
     }
 
@@ -233,7 +239,8 @@ extension VideoScanModel {
         // resetTarget. "Delete Catalog" is explicit, but the multi-select
         // path bypasses the confirmation dialog, and records nested under
         // ANOTHER registered target's root are not this target's to delete.
-        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog")
+        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog",
+                                           remembered: target.volumeUUID)
         finishDeleteCatalog(for: target, volName: volName, removed: outcome.removed)
     }
 
