@@ -113,7 +113,7 @@ struct CatalogStatusWindow: View {
 
     private func lineRow(_ line: CatalogStatusLine) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Circle().fill(line.colour.tint).frame(width: 12, height: 12)
+            Circle().fill(line.state.tint).frame(width: 12, height: 12)
             Text(line.kind.title)
                 .font(.headline)
                 .frame(width: 80, alignment: .leading)
@@ -142,7 +142,7 @@ struct CatalogStatusWindow: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(line.colour.tint.opacity(line.colour == .green ? 0.06 : 0.12)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(line.state.tint.opacity(line.state == .green ? 0.06 : 0.12)))
     }
 
     // MARK: Restore (only when it applies)
@@ -160,5 +160,18 @@ struct CatalogStatusWindow: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
         .accessibilityIdentifier("catalogStatus.restore")
+    }
+}
+
+extension CatalogStatusLineState {
+    /// The dot: the band's colours, and blue for "in progress".
+    var tint: Color {
+        switch self {
+        case .grey: return .secondary
+        case .green: return .green
+        case .inProgress: return .blue
+        case .yellow: return .yellow
+        case .red: return .red
+        }
     }
 }

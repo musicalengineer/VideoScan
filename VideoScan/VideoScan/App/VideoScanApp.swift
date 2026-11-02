@@ -573,6 +573,10 @@ struct VideoScanApp: App {
     /// Split Duplicate Groups by Full Hash when Full Hashes reaches 100 %.
     /// Told by the MFO center at each job's end (AnalyzerRuns.swift).
     @State private var analyzerFollowUp = AnalyzerRunFollowUp()
+    /// Is the background helper on the content work? Catalog Status's
+    /// Content line reads it ("in progress" vs yellow; Rick 2026-11-01
+    /// evening). Asks over XPC only when the service is enabled.
+    @State private var backgroundActivity = BackgroundServiceActivity()
     // The two run markers (fullhash-backfill.json, catalog-audit.json) are
     // MODEL-OWNED since 2026-10-16 (`catalogModel.fullHashResumeMarker`,
     // `catalogModel.catalogAuditRunMarker`) so the Catalog menu, the
@@ -676,6 +680,9 @@ struct VideoScanApp: App {
                         // first computed state (announceAtLaunch).
                         catalogModel.catalogFreshness.observeRunning(in: fileOpsCenter)
                         analyzerFollowUp.attach(center: fileOpsCenter, model: catalogModel)
+                        backgroundActivity.start { [weak catalogModel] active in
+                            catalogModel?.catalogFreshness.setBackgroundServiceActive(active)
+                        }
                         // … and the dossier engine (Captions / OCR /
                         // Transcribe), so a running pass is "running" here
                         // too (codex cycle #80). The model's own engine

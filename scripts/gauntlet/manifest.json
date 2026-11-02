@@ -32613,16 +32613,20 @@
       "suites": [
         "CatalogStatusLinesLogicTests",
         "CatalogStatusLinesTruthTests",
+        "BackgroundServiceActivityTests",
         "CatalogStatusWindowSensorTests"
       ],
       "tests": [
         "builtOnce",
         "content",
+        "contentThreeStates",
         "databaseLineAndFactsAgree",
         "databaseOnTheBoundary",
         "databaseOtherStates",
         "files",
         "filesLineAndSnapshot",
+        "isActive",
+        "pollerFeedsTheSnapshot",
         "theWindow",
         "worstAndTitle"
       ]
@@ -35332,7 +35336,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3156,
+      "expected_floor": 3159,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35474,6 +35478,7 @@
         "VideoScanTests/ArchivistSelectionDateQuestionTests",
         "VideoScanTests/ArchivistTemporalExecutorTests",
         "VideoScanTests/AwaitingConfirmationWorklistTests",
+        "VideoScanTests/BackgroundServiceActivityTests",
         "VideoScanTests/BackgroundServiceRegistrarTests",
         "VideoScanTests/BackgroundServiceSensorTests",
         "VideoScanTests/BalanceAudioClassifierTests",

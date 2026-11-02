@@ -16,7 +16,11 @@
 //                missing is reality: it never colours the line (10/20 ruling).
 //   ● Content    is the analysis current? The coverage report's per-analyzer
 //                "not yet analyzed on a connected drive" counts — the cycler
-//                stamps the Content Analysis rows read.
+//                stamps the Content Analysis rows read. GREEN = nothing left;
+//                IN PROGRESS (blue) = work left and a counted analyzer or the
+//                background helper is on it; YELLOW = work left and nothing
+//                will do it (Rick 2026-11-01 evening). The title names only
+//                yellow and red lines.
 //
 // The menu title names the worst line: "Catalog Status — Files needs
 // attention…", or "Catalog Status — Green…" when all three are green
@@ -45,9 +49,30 @@ enum CatalogStatusLineKind: String, CaseIterable, Sendable {
     }
 }
 
+/// A line's state. Four are the band's colours; `inProgress` is the
+/// Content line's own (Rick 2026-11-01 evening): work is left AND an
+/// analyzer or the background service is on it — not "you must act".
+enum CatalogStatusLineState: Int, Sendable, Equatable, Comparable {
+    case grey, green, inProgress, yellow, red
+
+    init(_ c: FreshnessColour) {
+        switch c {
+        case .grey: self = .grey
+        case .green: self = .green
+        case .yellow: self = .yellow
+        case .red: self = .red
+        }
+    }
+
+    /// Yellow and red ask a person to act; the menu title names only those.
+    var needsAttention: Bool { self == .yellow || self == .red }
+
+    static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+}
+
 struct CatalogStatusLine: Sendable, Equatable {
     var kind: CatalogStatusLineKind
-    var colour: FreshnessColour
+    var state: CatalogStatusLineState
     /// The verdict in words, with its date where it has one.
     var words: String
     /// Further lines under it (what is unsettled, what is not counted).
@@ -63,14 +88,14 @@ struct CatalogStatusLines: Sendable, Equatable {
 
     /// The worst non-green line (red over yellow; ties in display order); nil = all green.
     var worst: CatalogStatusLine? {
-        let bad = all.filter { $0.colour == .red || $0.colour == .yellow }
-        guard let top = bad.map(\.colour).max() else { return nil }
-        return bad.first { $0.colour == top }
+        let bad = all.filter(\.state.needsAttention)
+        guard let top = bad.map(\.state).max() else { return nil }
+        return bad.first { $0.state == top }
     }
 
     /// Catalog ▸ "Catalog Status — Files needs attention…" / "— Green…".
     static func menuTitle(_ lines: CatalogStatusLines?) -> String {
-        guard let lines, lines.all.allSatisfy({ $0.colour != .grey }) else { return "Catalog Status…" }
+        guard let lines, lines.all.allSatisfy({ $0.state != .grey }) else { return "Catalog Status…" }
         guard let worst = lines.worst else { return "Catalog Status — Green…" }
         return "Catalog Status — \(worst.kind.title) needs attention…"
     }
@@ -86,11 +111,18 @@ enum CatalogStatusLinesPolicy {
     static let contentAnalyzers: [AnalyzeCycler] = [.fullHashes, .soundPrints, .duplicates, .sceneCaptions,
                                                      .ocr, .transcribe, .fileSignatures]
 
-    static func lines(facts: CatalogFreshnessFacts, report: AnalyzeCoverageReport, now: Date,
+    static func lines(facts: CatalogFreshnessFacts, report: AnalyzeCoverageReport, now: Date, working: Bool = false,
                       date: (Date) -> String = Self.date) -> CatalogStatusLines {
         CatalogStatusLines(database: database(facts.integrity, now: now, date: date),
                            files: files(facts, missing: report.missingCopies, now: now, date: date),
-                           content: content(report, soundStoreProblem: facts.soundStoreProblem))
+                           content: content(report, soundStoreProblem: facts.soundStoreProblem, working: working))
+    }
+
+    /// Something is on the content work right now: an analyzer the Content
+    /// line counts is running (MFO job, engine flag or the dossier engine —
+    /// the snapshot's `running` set), or the background helper has a job.
+    static func contentIsWorking(running: Set<AnalyzeCycler>, backgroundActive: Bool) -> Bool {
+        backgroundActive || !running.isDisjoint(with: contentAnalyzers)
     }
 
     static func date(_ d: Date) -> String { d.formatted(date: .abbreviated, time: .shortened) }
@@ -107,7 +139,7 @@ enum CatalogStatusLinesPolicy {
 
     static func database(_ f: IntegrityReportFacts, now: Date, date: (Date) -> String) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
-            CatalogStatusLine(kind: .database, colour: c, words: w, detail: d)
+            CatalogStatusLine(kind: .database, state: CatalogStatusLineState(c), words: w, detail: d)
         }
         if let problem = f.problem { return line(.red, "The last integrity check's report can't be read — \(problem)") }
         if f.predatesSwitch { return line(.yellow, "Not checked since the switch to SQLite — Check Now… runs Validate Catalog") }
@@ -142,7 +174,7 @@ enum CatalogStatusLinesPolicy {
     static func files(_ facts: CatalogFreshnessFacts, missing: MissingCopyCounts, now: Date,
                       date: (Date) -> String) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
-            CatalogStatusLine(kind: .files, colour: c, words: w, detail: d)
+            CatalogStatusLine(kind: .files, state: CatalogStatusLineState(c), words: w, detail: d)
         }
         let markedMissing = missing.noOtherCopy + missing.otherCopyPresent + missing.possibleCopyNotProven
         let missingWords = "\(markedMissing.formatted()) missing"
@@ -175,9 +207,9 @@ enum CatalogStatusLinesPolicy {
 
     // MARK: Content
 
-    static func content(_ report: AnalyzeCoverageReport, soundStoreProblem: String?) -> CatalogStatusLine {
+    static func content(_ report: AnalyzeCoverageReport, soundStoreProblem: String?, working: Bool = false) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
-            CatalogStatusLine(kind: .content, colour: c, words: w, detail: d)
+            CatalogStatusLine(kind: .content, state: CatalogStatusLineState(c), words: w, detail: d)
         }
         guard report.computedAt.timeIntervalSince1970 > 0 else { return line(.grey, "Counting…") }
         let notCounted = "Embedded Dates and Inferred Dates are not counted: a file with none can never be marked as looked at."
@@ -193,6 +225,12 @@ enum CatalogStatusLinesPolicy {
         if offline > 0 { detail.append("files on drives not connected are not counted (\(offline.formatted()) analyzer-file pairs)") }
         detail.append(notCounted)
         if left.isEmpty { return line(.green, "Every file on a connected drive is analyzed", detail) }
-        return line(.yellow, "Not yet analyzed: " + left.joined(separator: " · "), detail)
+        // Rick 2026-11-01 evening: work left is "in progress" while something
+        // is on it, and yellow ("you must act") only when nothing will do it.
+        if working {
+            return CatalogStatusLine(kind: .content, state: .inProgress,
+                                     words: "In progress — not yet analyzed: " + left.joined(separator: " · "), detail: detail)
+        }
+        return line(.yellow, "Not yet analyzed: " + left.joined(separator: " · ") + " — nothing is running it", detail)
     }
 }

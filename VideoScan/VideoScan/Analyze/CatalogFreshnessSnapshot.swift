@@ -280,6 +280,16 @@ final class CatalogFreshnessSnapshot: ObservableObject {
 
     init() {}
 
+    /// The background helper has a job running or queued (BackgroundServiceActivity;
+    /// false when it is off or does not answer). Content "in progress" reads it.
+    private var backgroundServiceActive = false
+
+    func setBackgroundServiceActive(_ active: Bool) {
+        guard active != backgroundServiceActive else { return }
+        backgroundServiceActive = active
+        rejudge()
+    }
+
     /// From MachineEraStore after a refresh (equality-gated here too).
     func setMachineEraConvergence(_ c: MachineEraConvergence?) {
         guard c != machineEra else { return }
@@ -428,7 +438,9 @@ final class CatalogFreshnessSnapshot: ObservableObject {
                                                         backgroundJournal: backgroundJournal, machineEra: machineEra)
         var new = CatalogFreshnessState.judged(rows: rows, reality: reality, now: now)
         // The three lines read the SAME facts and report the band just used.
-        new.lines = CatalogStatusLinesPolicy.lines(facts: facts, report: report, now: now)
+        new.lines = CatalogStatusLinesPolicy.lines(facts: facts, report: report, now: now,
+                                                   working: CatalogStatusLinesPolicy.contentIsWorking(running: running,
+                                                                                                      backgroundActive: backgroundServiceActive))
         guard new != state else { return }
         publishCount += 1
         state = new
