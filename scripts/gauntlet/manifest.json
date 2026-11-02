@@ -32601,6 +32601,7 @@
         "helpIsTheBrief",
         "noNewModelExtension",
         "oneEnginePerVerb",
+        "onlyTheMenuIsCalledTidy",
         "theListAndOrderWithNothingToTidy",
         "theMenuIsTheValue",
         "tidyShowsItsTotal"
@@ -35336,7 +35337,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3159,
+      "expected_floor": 3160,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [

@@ -33,7 +33,7 @@ struct TidyCatalogSheet: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 18))
                     .foregroundColor(.purple)
-                Text("Tidy Catalog")
+                Text(SetAsideWording.buttonTitle)
                     .font(.title2.weight(.semibold))
             }
 
@@ -140,8 +140,8 @@ struct TidyCatalogSheet: View {
     private func exportCSV(_ plan: VideoScanModel.TidyCatalogPlan) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "TidyCatalog_dry_run.csv"
-        panel.title = "Save Tidy Catalog List"
+        panel.nameFieldStringValue = "SetAsidePhotosMusic_dry_run.csv"
+        panel.title = "Save Set Aside Photos & Music List"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try VideoScanModel.tidyPlanCSV(plan).write(to: url, atomically: true, encoding: .utf8)

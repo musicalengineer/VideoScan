@@ -145,6 +145,22 @@ struct CatalogMenuSensorTests {
         #expect(try Self.code("CatalogTrashConfirmation.swift").contains("CatalogActionBrief.deleteSelectedFiles.neverTouches"))
     }
 
+    @Test("SENSOR (Rick 2026-11-01 evening): the set-aside button is \"Set Aside Photos & Music\"; the menu's Tidy Catalog… is the only thing the app calls Tidy")
+    func onlyTheMenuIsCalledTidy() throws {
+        let pane = try Self.code("CatalogView+ScanTargetsPane.swift")
+        #expect(pane.contains("Label(SetAsideWording.buttonTitle, systemImage: \"sparkles\")"))
+        #expect(SetAsideWording.buttonTitle == "Set Aside Photos & Music")
+        #expect(try Self.code("TidyCatalogSheet.swift").contains("Text(SetAsideWording.buttonTitle)"))
+        let allowed: Set<String> = ["CatalogMenu.swift", "CatalogTidy.swift", "CatalogConstraints.swift"]
+        for source in SourceTree.appSources where !allowed.contains((source.relative as NSString).lastPathComponent) {
+            let text = SourceTree.strippingComments(try String(contentsOf: source.url, encoding: .utf8))
+            for shown in ["\"Tidy Catalog", "Tidy Catalog:", "Tidy Catalog undo", "Tidy Catalog applied", "Section(\"Tidy\")",
+                          "files Tidy Catalog set aside", "Tidy → "] where text.contains(shown) {
+                Issue.record("\(source.relative) still shows \(shown)")
+            }
+        }
+    }
+
     @Test("SENSOR: the new Catalog menu files add no `extension VideoScanModel` (rule 12)")
     func noNewModelExtension() throws {
         for file in ["CatalogMenu.swift", "ValidateCatalogMenuItem.swift", "CatalogTrashCommand.swift"] {

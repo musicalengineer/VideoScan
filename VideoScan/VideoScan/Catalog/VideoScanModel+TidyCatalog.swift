@@ -291,7 +291,7 @@ extension VideoScanModel {
         // 2026-09-22: "For now we won't Remove anything from
         // FamilyArchive") — asked once for the whole plan, logged once.
         let allowed = Set(excludingMasterArchiveFiles(plan.rows.compactMap { record(forID: $0.id) },
-                                                      verb: "Tidy Catalog", effect: .catalogRemoval).map(\.id))
+                                                      verb: SetAsideWording.buttonTitle, effect: .catalogRemoval).map(\.id))
         for row in plan.rows where allowed.contains(row.id) {
             guard let rec = record(forID: row.id),
                   !rec.isPurged,
@@ -323,8 +323,8 @@ extension VideoScanModel {
         // What was ACTUALLY set aside — rows the archive rule (or an
         // apply-time re-check) left alone are not counted.
         let done = Self.tidyAppliedCounts(plan, changed: changedIDs)
-        log("Tidy Catalog: set aside \(changed.count) file(s) — \(done.still) photos, \(done.music) music, \(done.unlinkedAudio) audio with no matching video, \(done.livePhoto) Live Photo halves, \(done.editorCache) editor render caches, \(done.cameBack) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
-        appLog.write("Tidy Catalog applied: \(changed.count) record(s) set aside (stills \(done.still), music \(done.music), unlinked audio \(done.unlinkedAudio), live photo \(done.livePhoto), editor caches \(done.editorCache), came back \(done.cameBack)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
+        log("Set Aside Photos & Music: set aside \(changed.count) file(s) — \(done.still) photos, \(done.music) music, \(done.unlinkedAudio) audio with no matching video, \(done.livePhoto) Live Photo halves, \(done.editorCache) editor render caches, \(done.cameBack) that came back after being set aside. Nothing was deleted; flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Catalog Options ▸ Ignored content… to put back).")
+        appLog.write("Set Aside Photos & Music applied: \(changed.count) record(s) set aside (stills \(done.still), music \(done.music), unlinked audio \(done.unlinkedAudio), live photo \(done.livePhoto), editor caches \(done.editorCache), came back \(done.cameBack)); \(remembered) new ignore-list entr\(remembered == 1 ? "y" : "ies"); records untouched on disk")
         tidyCatalogLog.info("Tidy applied: setAside=\(changed.count) of planned \(plan.rows.count) remembered=\(remembered)")
         return changed.count
     }
@@ -385,7 +385,7 @@ extension VideoScanModel {
         noteCatalogRecordsMutated()
         ledgerSetAside(changed.compactMap { record(forID: $0) },
                        reason: CatalogScopePolicy.SetAsideReason.removedByUser.rawValue, by: .rick, at: now)
-        log("Removed \(changed.count) file(s) from the catalog (files untouched). Flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Tidy → Ignored content to put back).")
+        log("Removed \(changed.count) file(s) from the catalog (files untouched). Flip “Show set-aside files” to browse or put any of them back. A rescan will not bring them back (Catalog Options ▸ Ignored content… to put back).")
         return changed.count
     }
 
@@ -411,8 +411,8 @@ extension VideoScanModel {
         saveCatalogDebounced()
         if forgotten > 0 { scheduleIgnoredContentSave() }
         ledgerPutBack(restoredRecs, by: .rick)
-        log("Tidy Catalog: undo — put \(restored) file(s) back in the catalog.")
-        appLog.write("Tidy Catalog undo: restored \(restored) set-aside record(s); \(forgotten) ignore-list entr\(forgotten == 1 ? "y" : "ies") removed")
+        log("Set Aside Photos & Music: undo — put \(restored) file(s) back in the catalog.")
+        appLog.write("Set Aside Photos & Music undo: restored \(restored) set-aside record(s); \(forgotten) ignore-list entr\(forgotten == 1 ? "y" : "ies") removed")
         return true
     }
 

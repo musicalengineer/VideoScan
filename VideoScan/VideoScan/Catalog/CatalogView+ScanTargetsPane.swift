@@ -769,7 +769,7 @@ extension CatalogView {
                     // for everything Tidy / Remove from Catalog remembered.
                     // O(1) count; the model's @Published
                     // `ignoredContentRevision` re-renders this label.
-                    Section("Tidy") {
+                    Section("Set Aside") {
                         Button {
                             showIgnoredContentSheet = true
                         } label: {
@@ -835,7 +835,7 @@ extension CatalogView {
                 Button {
                     showTidySheet = true
                 } label: {
-                    Label("Tidy Catalog", systemImage: "sparkles")
+                    Label(SetAsideWording.buttonTitle, systemImage: "sparkles")
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.records.isEmpty || model.isScanning)

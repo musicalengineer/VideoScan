@@ -28,7 +28,7 @@ extension VideoScanModel {
             let loaded = await self.ignoredContentStore.load()
             self.ignoredContentRevision &+= 1
             if loaded {
-                appLog.write("Ignored content: \(self.ignoredContentStore.count) entr\(self.ignoredContentStore.count == 1 ? "y" : "ies") loaded — content set aside before will not be cataloged again (Tidy → Ignored content to put back)")
+                appLog.write("Ignored content: \(self.ignoredContentStore.count) entr\(self.ignoredContentStore.count == 1 ? "y" : "ies") loaded — content set aside before will not be cataloged again (Catalog Options ▸ Ignored content… to put back)")
             }
         }
     }
@@ -143,14 +143,14 @@ extension VideoScanModel {
             if let reason = ignoredContentStore.reason(partialMD5: rec.partialMD5, sizeBytes: rec.sizeBytes,
                                                        filename: rec.filename) {
                 outcome.ignored += 1
-                appLog.write("NOT CATALOGED — previously set aside (\(reason); Tidy → Ignored content to put back): \(rec.fullPath)")
+                appLog.write("NOT CATALOGED — previously set aside (\(reason); Catalog Options ▸ Ignored content… to put back): \(rec.fullPath)")
                 continue
             }
             outcome.admitted.append(rec)
         }
         if outcome.ignored > 0 {
             // ONE summary line per scan.
-            log("  IGNORED \(outcome.ignored) file\(outcome.ignored == 1 ? "" : "s") previously set aside (Tidy → Ignored content to put back)")
+            log("  IGNORED \(outcome.ignored) file\(outcome.ignored == 1 ? "" : "s") previously set aside (Catalog Options ▸ Ignored content… to put back)")
             ignoredContentLog.info("Ignore gate \(volName, privacy: .public): ignored=\(outcome.ignored) admitted=\(outcome.admitted.count)")
         }
         return outcome

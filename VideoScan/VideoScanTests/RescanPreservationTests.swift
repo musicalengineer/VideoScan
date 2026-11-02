@@ -1348,7 +1348,7 @@ struct RescanPreservationTests {
         // a later scan start clears the console.
         try? await Task.sleep(nanoseconds: 400_000_000)
         let console = model.dashboard.consoleLines.joined(separator: "\n")
-        #expect(console.contains("IGNORED 1 file previously set aside (Tidy → Ignored content to put back)"),
+        #expect(console.contains("IGNORED 1 file previously set aside (Catalog Options ▸ Ignored content… to put back)"),
                 "console: \(console.suffix(800))")
         #expect(console.components(separatedBy: "IGNORED 1 file").count == 2, "exactly one line, once")
 

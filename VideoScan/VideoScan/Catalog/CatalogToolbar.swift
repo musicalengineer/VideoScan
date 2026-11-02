@@ -435,7 +435,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                     }
                     .help(showSetAside
                           ? "Set-aside files are visible — italic + purple. Right-click one to put it back. Click to hide."
-                          : "Click to show the files Tidy Catalog set aside (photos, music, audio with no matching video).")
+                          : "Click to show the files Set Aside Photos & Music set aside (photos, music, audio with no matching video).")
 
                     Toggle(isOn: $showSuperseded) {
                         Label("Superseded originals", systemImage: "arrow.triangle.swap")

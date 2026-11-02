@@ -238,13 +238,13 @@ extension VideoScanModel {
         // every row that actually left the disk goes on the ignore list
         // Tidy and Remove from Catalog use, so a rescan — or another copy
         // of the same clip on another drive — never catalogs it again.
-        // Put Back in Tidy → Ignored content reverses it.
+        // Put Back in Catalog Options ▸ Ignored content… reverses it.
         let gone = targets.filter { $0.isPurged }
         var remembered = 0
         for rec in gone where noteIgnoredContent(rec, reason: "trashed-by-user") { remembered += 1 }
         if remembered > 0 {
             scheduleIgnoredContentSave()
-            log("Move to Trash: remembered \(remembered) file(s) as ignored content — a rescan will not catalog them again (Tidy → Ignored content to put back).")
+            log("Move to Trash: remembered \(remembered) file(s) as ignored content — a rescan will not catalog them again (Catalog Options ▸ Ignored content… to put back).")
         }
         logJunkLaneOutcome(result, verb: "Move to Trash")
         audit.finish(result)   // the plan's refusals, then OUTCOME + the receipt

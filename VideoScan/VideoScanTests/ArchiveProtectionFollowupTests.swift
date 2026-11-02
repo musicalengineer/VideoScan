@@ -342,7 +342,7 @@ struct CatalogRemovalArchiveVolumeTests {
         #expect(vol.setAsideReason == nil && vol.purgedAt == nil, "the MoviesExpansion still is untouched")
         #expect(other.setAsideReason != nil, "the still on another volume is set aside")
         let text = await consoleText(model)
-        #expect(text.contains("Tidy Catalog: left 1 file(s) alone — they live on FamilyArchive, the Master Archive volume"),
+        #expect(text.contains("Set Aside Photos & Music: left 1 file(s) alone — they live on FamilyArchive, the Master Archive volume"),
                 "\(text)")
     }
 }
@@ -634,7 +634,7 @@ struct CatalogRemovalUnprovableQATests {
         other2.setAsideReason = "removed-by-user"
         #expect(model.applyTidyCatalog(plan) == 1)
         let text = await consoleText(model)
-        #expect(text.contains("Tidy Catalog: set aside 1 file(s) — 1 photos,"), "\(text)")
+        #expect(text.contains("Set Aside Photos & Music: set aside 1 file(s) — 1 photos,"), "\(text)")
     }
 }
 

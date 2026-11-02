@@ -218,6 +218,13 @@ struct CatalogTidySheet: View {
     }
 }
 
+/// The toolbar verb that sets photos, music and unmatched audio aside —
+/// renamed from "Tidy Catalog" (Rick 2026-11-01 evening) so the Catalog
+/// menu's Tidy Catalog… is the only thing called Tidy.
+enum SetAsideWording {
+    static let buttonTitle = "Set Aside Photos & Music"
+}
+
 enum CatalogTidyWords {
     /// One line under the rows after a split (the engine's own log lines
     /// carry the detail).

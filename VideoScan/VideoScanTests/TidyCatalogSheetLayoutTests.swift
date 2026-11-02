@@ -43,7 +43,7 @@ struct TidyCatalogSheetLayoutTests {
     private static func renderedWidth(_ plan: VideoScanModel.TidyCatalogPlan) -> CGFloat {
         let measured = Measured()
         let root = VStack(alignment: .leading, spacing: 18) {
-            Text("Tidy Catalog").font(.title2.weight(.semibold))
+            Text(SetAsideWording.buttonTitle).font(.title2.weight(.semibold))
             TidyCatalogCountsGrid(plan: plan)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measured.width = $0 }
             Divider()
