@@ -23,6 +23,12 @@ struct SettingsTabView: View {
     /// same shape as the preview helper's.
     @Binding var findTagEnabled: Bool
     let isFindTagHelperRunning: () -> Bool
+    /// VideoScan Background (2026-11-02): the launchd helper's checkbox,
+    /// launchd's status and its job line — Content Analysis, first row of
+    /// the Background section. The store is the one setter.
+    @ObservedObject var backgroundService: BackgroundServiceStore
+    /// A viewer Mac: the Content Analysis checkbox is disabled with a reason.
+    let isViewer: Bool
     /// "Show Media File Operations when a job starts" (2026-09-21).
     /// `@ObservedObject` ≈ "re-draw this view when that object's
     /// @Published fields change"; the object is owned by the Center.
@@ -168,15 +174,22 @@ struct SettingsTabView: View {
 
                 Divider()
 
-                // Previews section (background sweep, 2026-07-27)
+                // Background section (Rick 2026-11-02): ONE pane for every
+                // helper that keeps working after the app quits — Content
+                // Analysis (VideoScan Background, the launchd agent) first,
+                // then the preview sweep (2026-07-27) and Find and Tag
+                // (2026-08-06) helpers that lived under "Previews" until today.
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Previews", systemImage: "photo.on.rectangle.angled")
+                    Label("Background", systemImage: "gearshape.arrow.triangle.2.circlepath")
                         .font(.headline)
                         .foregroundColor(.purple)
+
+                    ContentAnalysisSettingsRows(store: backgroundService, isViewer: isViewer)
 
                     Toggle("Keep previews fresh in the background", isOn: $sweepEnabled)
                         .toggleStyle(.checkbox)
                         .accessibilityIdentifier("settings.previewSweep.enabled")
+                        .padding(.top, 6)
                     Text("Quietly prepares a preview for every video in the catalog (and filmstrips for formats the player can't show) so browsing rarely waits. The background helper can continue after VideoScan closes and stops when the cache is fresh.")
                         .font(.footnote).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

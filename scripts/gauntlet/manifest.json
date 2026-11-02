@@ -8174,6 +8174,44 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundServiceStoreTests"
+      ],
+      "tests": [
+        "activeJobBlocks",
+        "foregroundRunFromCheckpoints",
+        "helperLineTruth",
+        "jobLineOrder",
+        "notAnswering",
+        "oneKey",
+        "refusalShownAndLogged",
+        "requiresApprovalAsksNothing",
+        "sameValueIsNoOp",
+        "shouldEnqueueTable",
+        "staleCountNeverEnqueues",
+        "toggleOff",
+        "toggleOn",
+        "viewerRefuses"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundSettingsSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundSettingsSensorTests"
+      ],
+      "tests": [
+        "archivistTitle",
+        "oneBackgroundSection",
+        "theOneSetter",
+        "wiredOnce"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/BackupAttestationJournalTests.swift",
@@ -35704,7 +35742,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3226,
+      "expected_floor": 3244,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35849,6 +35887,8 @@
         "VideoScanTests/BackgroundServiceActivityTests",
         "VideoScanTests/BackgroundServiceRegistrarTests",
         "VideoScanTests/BackgroundServiceSensorTests",
+        "VideoScanTests/BackgroundServiceStoreTests",
+        "VideoScanTests/BackgroundSettingsSensorTests",
         "VideoScanTests/BalanceAudioClassifierTests",
         "VideoScanTests/BalanceFromDiagnosisTests",
         "VideoScanTests/CatalogAllVolumesDefaultTests",

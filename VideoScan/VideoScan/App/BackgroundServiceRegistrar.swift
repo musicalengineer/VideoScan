@@ -14,9 +14,9 @@
 //     test can prove that a disabled launch makes NO ServiceManagement call.
 //
 //   • `BackgroundServiceClient` — an NSXPCConnection to the Mach service;
-//     `status()` is the one call step 0 needs. The MFO row that draws a
-//     service job, and Settings ▸ Background, are Rick's UI step and are
-//     not here.
+//     `status()` (step 0) and `enqueue()` (Settings ▸ Background, 11/02).
+//     The MFO row that draws a service job is still to come; the Settings
+//     pane is `BackgroundServiceStore` + `ContentAnalysisSettingsRows`.
 //
 // C++ reading: the client is a proxy object over an IPC channel; every
 // call is async and comes back as a value or a refusal in words.
@@ -86,6 +86,8 @@ enum BackgroundServiceRegistrar {
 }
 
 /// XPC client to the running service (launchd starts it on the first message).
+/// Two verbs today: `status` (step 0) and `enqueue` (Settings ▸ Background,
+/// 2026-11-02: the app queues the era job when work is left).
 final class BackgroundServiceClient: @unchecked Sendable {
     private let connection: NSXPCConnection
 
@@ -98,7 +100,33 @@ final class BackgroundServiceClient: @unchecked Sendable {
     deinit { connection.invalidate() }
 
     func status() async -> Result<ServiceStatus, Refusal> {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Result<ServiceStatus, Refusal>, Never>) in
+        await call { proxy, once in
+            proxy.status { data in once.resume(Self.decode(ServiceStatus.self, data)) }
+        }
+    }
+
+    /// `JobRequest` → accepted with its id, or refused in the helper's words.
+    func enqueue(_ request: JobRequest) async -> Result<EnqueueReply, Refusal> {
+        guard let data = try? BackgroundPayloadCodec.encode(request) else {
+            return .failure(Refusal("could not encode the request"))
+        }
+        return await call { proxy, once in
+            proxy.enqueue(data) { reply in once.resume(Self.decode(EnqueueReply.self, reply)) }
+        }
+    }
+
+    private static func decode<T: Codable>(_ type: T.Type, _ data: Data) -> Result<T, Refusal> {
+        do {
+            return .success(try BackgroundPayloadCodec.decode(type, from: data))
+        } catch {
+            return .failure((error as? Refusal) ?? Refusal(String(describing: error)))
+        }
+    }
+
+    /// One round trip: the proxy's reply or its error handler, whichever
+    /// lands first; the other is dropped.
+    private func call<T: Sendable>(_ body: (BackgroundServiceXPC, OnceResume<T>) -> Void) async -> Result<T, Refusal> {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Result<T, Refusal>, Never>) in
             let once = OnceResume(continuation)
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
                 once.resume(.failure(Refusal("VideoScan Background did not answer: \(error.localizedDescription)")))
@@ -106,22 +134,15 @@ final class BackgroundServiceClient: @unchecked Sendable {
                 once.resume(.failure(Refusal("could not make the XPC proxy")))
                 return
             }
-            proxy.status { data in
-                do {
-                    once.resume(.success(try BackgroundPayloadCodec.decode(ServiceStatus.self, from: data)))
-                } catch {
-                    once.resume(.failure((error as? Refusal) ?? Refusal(String(describing: error))))
-                }
-            }
+            body(proxy, once)
         }
     }
 
-    /// The reply or the error handler, whichever lands first; the other is dropped.
-    private final class OnceResume: @unchecked Sendable {
+    private final class OnceResume<T: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
-        private var continuation: CheckedContinuation<Result<ServiceStatus, Refusal>, Never>?
-        init(_ c: CheckedContinuation<Result<ServiceStatus, Refusal>, Never>) { continuation = c }
-        func resume(_ result: Result<ServiceStatus, Refusal>) {
+        private var continuation: CheckedContinuation<Result<T, Refusal>, Never>?
+        init(_ c: CheckedContinuation<Result<T, Refusal>, Never>) { continuation = c }
+        func resume(_ result: Result<T, Refusal>) {
             lock.lock()
             let c = continuation
             continuation = nil

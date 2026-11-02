@@ -577,11 +577,31 @@ struct VideoScanApp: App {
     /// Content line reads it ("in progress" vs yellow; Rick 2026-11-01
     /// evening). Asks over XPC only when the service is enabled.
     @State private var backgroundActivity = BackgroundServiceActivity()
+    /// Settings ▸ Background's Content Analysis rows (2026-11-02): the one
+    /// setter for VideoScan Background — register/unregister, launchd's
+    /// status, the helper's job line, and the era job enqueued when work is
+    /// left. Built once; attached to the model at launch (below).
+    @StateObject private var backgroundService = BackgroundServiceStore.production(
+        catalogURL: { nil }, isViewer: { false }, log: { appLog.write($0) })
     // The two run markers (fullhash-backfill.json, catalog-audit.json) are
     // MODEL-OWNED since 2026-10-16 (`catalogModel.fullHashResumeMarker`,
     // `catalogModel.catalogAuditRunMarker`) so the Catalog menu, the
     // Analyze panel and the Catalog Status band all hand the SAME marker
     // to the job they start. Read at launch below.
+
+    /// Settings ▸ Background's store counts against THIS catalog, logs
+    /// through the model and the app log, and refuses the toggle on a
+    /// viewer; one recounting refresh now, then every 10 minutes while on.
+    private func wireBackgroundService() {
+        backgroundService.log = { [weak catalogModel] line in
+            catalogModel?.log(line)
+            appLog.write("[background-service] " + line)
+        }
+        backgroundService.countWork = BackgroundServiceStore.productionCountWork(
+            catalogURL: { [weak catalogModel] in catalogModel.map { URL(fileURLWithPath: $0.catalogStore.fileLocation) } })
+        backgroundService.isViewer = { [weak catalogModel] in catalogModel?.isReadOnly ?? true }
+        if !TestEnvironment.isTestHost { backgroundService.start() }
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -683,6 +703,7 @@ struct VideoScanApp: App {
                         backgroundActivity.start { [weak catalogModel] active in
                             catalogModel?.catalogFreshness.setBackgroundServiceActive(active)
                         }
+                        wireBackgroundService()
                         // … and the dossier engine (Captions / OCR /
                         // Transcribe), so a running pass is "running" here
                         // too (codex cycle #80). The model's own engine
@@ -1042,6 +1063,8 @@ struct VideoScanApp: App {
                     set: { catalogModel.setFindTagBackgroundEnabled($0) }
                 ),
                 isFindTagHelperRunning: { catalogModel.isFindTagHelperRunning },
+                backgroundService: backgroundService,
+                isViewer: catalogModel.isReadOnly,
                 fileOpsForwarder: fileOpsCenter.windowForwarder
             )
             .frame(minWidth: 500, idealWidth: 620, minHeight: 400, idealHeight: 620)

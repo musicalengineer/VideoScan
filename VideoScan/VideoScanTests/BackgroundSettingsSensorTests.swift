@@ -1,0 +1,64 @@
+// BackgroundSettingsSensorTests.swift — Settings ▸ Background (Rick
+// 2026-11-02): the Content Analysis rows are first in ONE "Background"
+// section, the checkbox writes only through the store's setter, the
+// Archivist pane carries its new title. Reads source (SENSOR lane).
+
+import Foundation
+import Testing
+@testable import VideoScan
+
+@Suite("Settings ▸ Background — SENSOR: one section, one setter, one key")
+struct BackgroundSettingsSensorTests {
+
+    static let appRoot: URL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()        // VideoScanTests/
+        .deletingLastPathComponent()        // VideoScan/ (project dir)
+        .appendingPathComponent("VideoScan", isDirectory: true)
+
+    static func source(_ relative: String) throws -> String {
+        try String(contentsOf: appRoot.appendingPathComponent(relative), encoding: .utf8)
+    }
+
+    @Test("SettingsView has a Background section holding Content Analysis first, then the sweep and Find People toggles; no Previews header")
+    func oneBackgroundSection() throws {
+        let s = try Self.source("App/SettingsView.swift")
+        #expect(s.contains("Label(\"Background\""))
+        #expect(!s.contains("Label(\"Previews\""), "the two helper toggles moved under Background")
+        let section = try #require(s.range(of: "Label(\"Background\"")).lowerBound
+        let rows = try #require(s.range(of: "ContentAnalysisSettingsRows(")).lowerBound
+        let sweep = try #require(s.range(of: "settings.previewSweep.enabled")).lowerBound
+        let people = try #require(s.range(of: "settings.findTagHelper.enabled")).lowerBound
+        #expect(section < rows && rows < sweep && sweep < people, "order: Content Analysis, Previews, Find People")
+    }
+
+    @Test("the checkbox writes through BackgroundServiceStore.setEnabled, never a defaults key or @AppStorage")
+    func theOneSetter() throws {
+        let rows = try Self.source("App/ContentAnalysisSettingsRows.swift")
+        #expect(rows.contains("store.setEnabled($0)"))
+        #expect(!rows.contains("UserDefaults") && !rows.contains("@AppStorage"))
+        #expect(rows.contains("settings.backgroundService.enabled"))
+        #expect(rows.contains("settings.backgroundService.status"))
+        #expect(rows.contains("settings.backgroundService.job"))
+        #expect(rows.contains("\"Keep analyzing content in the background\""), "Rick's wording")
+        #expect(rows.contains("Login Items") && rows.contains("Full Disk Access"), "the footnote names both one-time prompts")
+        let store = try Self.source("App/BackgroundServiceStore.swift")
+        #expect(store.contains("registerIfEnabled(") && store.contains("unregister("),
+                "the store drives ServiceManagement through the registrar — one code path with the launch")
+    }
+
+    @Test("the app owns one store, starts it at launch under the test-host guard, and hands it to Settings")
+    func wiredOnce() throws {
+        let app = try Self.source("App/VideoScanApp.swift")
+        #expect(app.components(separatedBy: "BackgroundServiceStore.production(").count == 2, "built once")
+        #expect(app.contains("if !TestEnvironment.isTestHost { backgroundService.start() }"))
+        #expect(app.contains("wireBackgroundService()"), "the launch calls the one wiring function")
+        #expect(app.contains("backgroundService: backgroundService,"))
+    }
+
+    @Test("the Archivist pane is titled Archivist LLM Configuration")
+    func archivistTitle() throws {
+        let s = try Self.source("Hallie/LLM/ArchivistEndpointSettings.swift")
+        #expect(s.contains("Text(\"Archivist LLM Configuration\")"))
+        #expect(!s.contains("Text(\"Archivist Brain\")"))
+    }
+}

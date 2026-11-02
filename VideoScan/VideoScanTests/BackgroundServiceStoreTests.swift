@@ -1,0 +1,301 @@
+// BackgroundServiceStoreTests.swift — Settings ▸ Background's Content
+// Analysis rows (BackgroundServiceStore + BackgroundServicePresentation).
+//
+// Dimensions: LOGIC (the toggle's two paths, the enqueue rule, one enqueue
+// per recount, refusals shown and logged), TRUTH (no line says "running"
+// without an answer; the hand-started run is read from its checkpoint's
+// updatedAt), ISOLATION (a torn checkpoint is skipped; a viewer refuses the
+// toggle). Scale: the count is EraPlanner.plan — its 100k-row budget is
+// pinned in VideoScanCore's EraJob scale tests. No real SMAppService, no
+// XPC, no defaults: every seam is a closure.
+
+import Foundation
+import ServiceManagement
+import Testing
+import VideoScanCore
+@testable import VideoScan
+
+@MainActor
+@Suite("BackgroundServiceStore — the one setter for VideoScan Background")
+struct BackgroundServiceStoreTests {
+
+    final class FakeAgent: BackgroundAgentService {
+        var registerCalls = 0
+        var unregisterCalls = 0
+        var status: SMAppService.Status
+        init(_ status: SMAppService.Status) { self.status = status }
+        func register() throws { registerCalls += 1; if status == .notRegistered { status = .enabled } }
+        func unregister() throws { unregisterCalls += 1; status = .notRegistered }
+    }
+
+    /// Everything the store said and asked, for the assertions.
+    @MainActor
+    final class Recorder {
+        var persisted: [Bool] = []
+        var lines: [String] = []
+        var statusAsks = 0
+        var enqueued: [JobRequest] = []
+        var counts = 0
+    }
+
+    static func serviceStatus(jobs: [JobProgressSnapshot] = []) -> ServiceStatus {
+        ServiceStatus(processIdentifier: 4242, startedAt: Date(), backoff: .trickle, jobs: jobs, idleSeconds: 12)
+    }
+
+    static func eraJob(_ state: JobRunState, done: Int = 100, total: Int = 4_709) -> JobProgressSnapshot {
+        JobProgressSnapshot(id: JobID(), kind: .era, lane: "model", title: "Machine era (8B)", subtitle: "",
+                            completedUnits: done, totalUnits: total, skippedUnits: 0, failedUnits: 0,
+                            state: state, startedAt: Date(), finishedAt: nil)
+    }
+
+    static func make(enabled: Bool, agent: FakeAgent, status: Result<ServiceStatus, Refusal> = .success(serviceStatus()),
+                     work: Result<BackgroundWorkCount, Refusal> = .success(BackgroundWorkCount(filesLeft: 3_878, foregroundRun: nil)),
+                     reply: Result<EnqueueReply, Refusal> = .success(.accepted(JobID(rawValue: "JOB-1"))),
+                     readOnly: Bool = false) -> (BackgroundServiceStore, Recorder) {
+        let r = Recorder()
+        let store = BackgroundServiceStore(
+            enabled: enabled,
+            agent: { agent },
+            askStatus: { r.statusAsks += 1; return status },
+            enqueueRequest: { r.enqueued.append($0); return reply },
+            countWork: { _ in r.counts += 1; return work },
+            makeRequest: { EraJob.request(limit: nil, repoPath: "/tmp/repo", requestedBy: "app") },
+            persist: { r.persisted.append($0) },
+            isViewer: { readOnly },
+            log: { r.lines.append($0) })
+        return (store, r)
+    }
+
+    // MARK: The toggle
+
+    @Test("on: register once, persist true, one log line with launchd's word, then a recount that enqueues the era job")
+    func toggleOn() async throws {
+        let agent = FakeAgent(.notRegistered)
+        let (store, r) = Self.make(enabled: false, agent: agent)
+        store.setEnabled(true)
+        #expect(store.enabled)
+        #expect(agent.registerCalls == 1)
+        #expect(r.persisted == [true])
+        #expect(r.lines.count == 1 && r.lines[0].contains("registered") && r.lines[0].contains("enabled"), "\(r.lines)")
+        #expect(store.launchdStatus == .enabled)
+        // The recounting refresh runs as a Task; wait for it.
+        try await Self.settle { store.enqueueCount == 1 }
+        #expect(r.counts == 1)
+        #expect(r.enqueued.count == 1)
+        #expect(r.enqueued.first?.kind == .era)
+        #expect(r.enqueued.first?.requestedBy == "app")
+        #expect(store.lastNote == "queued era JOB-1")
+        #expect(r.lines.last?.contains("enqueued era JOB-1 — 3,878 files left") == true, "\(r.lines)")
+    }
+
+    @Test("off: unregister once, persist false, the helper's words are cleared")
+    func toggleOff() async {
+        let agent = FakeAgent(.enabled)
+        let (store, r) = Self.make(enabled: true, agent: agent)
+        await store.refresh(recount: false)
+        #expect(store.service != nil)
+        store.setEnabled(false)
+        #expect(!store.enabled)
+        #expect(agent.unregisterCalls == 1)
+        #expect(r.persisted == [false])
+        #expect(store.service == nil)
+        #expect(store.launchdStatus == .notRegistered)
+        #expect(r.lines.contains { $0.contains("unregistered") }, "\(r.lines)")
+    }
+
+    @Test("a viewer Mac: the toggle is refused — nothing registered, nothing persisted, a reason shown")
+    func viewerRefuses() {
+        let agent = FakeAgent(.notRegistered)
+        let (store, r) = Self.make(enabled: false, agent: agent, readOnly: true)
+        store.setEnabled(true)
+        #expect(!store.enabled)
+        #expect(agent.registerCalls == 0)
+        #expect(r.persisted.isEmpty)
+        #expect(store.lastNote?.contains("viewer") == true)
+    }
+
+    @Test("setting the value it already has is a no-op")
+    func sameValueIsNoOp() {
+        let agent = FakeAgent(.enabled)
+        let (store, r) = Self.make(enabled: true, agent: agent)
+        store.setEnabled(true)
+        #expect(agent.registerCalls == 0 && r.persisted.isEmpty && r.lines.isEmpty)
+    }
+
+    // MARK: The enqueue rule
+
+    @Test("the pure rule: every condition must hold")
+    func shouldEnqueueTable() {
+        let idle = Self.serviceStatus()
+        let busy = Self.serviceStatus(jobs: [Self.eraJob(.running)])
+        let finished = Self.serviceStatus(jobs: [Self.eraJob(.finished)])
+        let left = BackgroundWorkCount(filesLeft: 10, foregroundRun: nil)
+        let none = BackgroundWorkCount(filesLeft: 0, foregroundRun: nil)
+        let hand = BackgroundWorkCount(filesLeft: 10, foregroundRun: JobCheckpoint(jobID: JobID(), totalUnits: 5))
+        typealias R = BackgroundServiceStore
+        #expect(R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: left))
+        #expect(R.shouldEnqueue(enabled: true, launchd: .enabled, service: finished, work: left), "a finished job is not active")
+        #expect(!R.shouldEnqueue(enabled: false, launchd: .enabled, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .requiresApproval, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .notRegistered, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: nil, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: nil, work: left), "no answer, no enqueue")
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: busy, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: none))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: nil))
+        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: hand), "a hand-started run holds the lane")
+    }
+
+    @Test("launchd waiting for approval: the helper is never asked (asking would start it) and nothing is queued")
+    func requiresApprovalAsksNothing() async {
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.requiresApproval))
+        await store.refresh(recount: true)
+        #expect(r.statusAsks == 0)
+        #expect(r.enqueued.isEmpty)
+        #expect(store.service == nil)
+        #expect(r.counts == 1, "the count still runs so the line can say how much is left")
+    }
+
+    @Test("a refresh without a recount never enqueues, even with work left")
+    func staleCountNeverEnqueues() async {
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled))
+        await store.refresh(recount: true)
+        #expect(r.enqueued.count == 1)
+        for _ in 0..<5 { await store.refresh(recount: false) }
+        #expect(r.enqueued.count == 1, "the 5 s visible poll is read-only")
+        #expect(r.counts == 1)
+    }
+
+    @Test("an active era job in the helper's answer: nothing more is queued")
+    func activeJobBlocks() async {
+        let busy = Self.serviceStatus(jobs: [Self.eraJob(.paused(reason: "thermal"))])
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled), status: .success(busy))
+        await store.refresh(recount: true)
+        #expect(r.enqueued.isEmpty)
+    }
+
+    @Test("the helper refuses: its words are shown on the job line and logged once")
+    func refusalShownAndLogged() async {
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled),
+                                   reply: .success(.refused(Refusal("the 8B weights are not on this Mac"))))
+        await store.refresh(recount: true)
+        #expect(store.lastNote == "the 8B weights are not on this Mac")
+        #expect(r.lines.filter { $0.contains("era refused — the 8B weights") }.count == 1, "\(r.lines)")
+    }
+
+    @Test("the helper does not answer: the problem is kept in words, the count still runs, nothing is queued")
+    func notAnswering() async {
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled),
+                                   status: .failure(Refusal("VideoScan Background did not answer: connection invalid")))
+        await store.refresh(recount: true)
+        #expect(store.service == nil)
+        #expect(store.serviceProblem?.contains("did not answer") == true)
+        #expect(r.counts == 1)
+        #expect(r.enqueued.isEmpty)
+    }
+
+    // MARK: The hand-started run (checkpoint files)
+
+    @Test("a checkpoint touched within 15 minutes that the helper does not list is a hand-started run; the helper's own and stale ones are not; a torn file is skipped")
+    func foregroundRunFromCheckpoints() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bg-store-\(UUID().uuidString)", isDirectory: true)
+        let folder = root.appendingPathComponent("checkpoints", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCheckpointStore(directory: folder)
+        let now = Date()
+
+        let hand = JobID(rawValue: "HAND")
+        var c = JobCheckpoint(jobID: hand, totalUnits: 4_709, startedAt: now.addingTimeInterval(-3_600))
+        c.completedUnits = 831
+        c.updatedAt = now.addingTimeInterval(-120)
+        try store.save(c)
+        let helpers = JobID(rawValue: "HELPER")
+        var h = JobCheckpoint(jobID: helpers, totalUnits: 10, startedAt: now)
+        h.updatedAt = now
+        try store.save(h)
+        let stale = JobID(rawValue: "STALE")
+        var s = JobCheckpoint(jobID: stale, totalUnits: 10, startedAt: now.addingTimeInterval(-7_200))
+        s.updatedAt = now.addingTimeInterval(-20 * 60)
+        try store.save(s)
+        try Data("{not json".utf8).write(to: folder.appendingPathComponent("TORN.json"))
+
+        let found = BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [helpers], now: now)
+        #expect(found?.jobID == hand)
+        #expect(found?.completedUnits == 831)
+        #expect(BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [helpers, hand], now: now) == nil)
+        #expect(BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [], now: now.addingTimeInterval(16 * 60)) == nil,
+                "sixteen minutes later every checkpoint is stale")
+        #expect(BackgroundServiceStore.foregroundRun(stateRoot: root.appendingPathComponent("missing"), knownJobs: [], now: now) == nil)
+    }
+
+    // MARK: The words (truth)
+
+    static func lines(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus? = nil, problem: String? = nil,
+                      work: BackgroundWorkCount? = nil, workProblem: String? = nil, note: String? = nil) -> BackgroundServicePresentation.Lines {
+        BackgroundServicePresentation.lines(enabled: enabled, launchd: launchd, service: service, serviceProblem: problem,
+                                            work: work, workProblem: workProblem, lastNote: note, time: { _ in "16:16" })
+    }
+
+    @Test("the helper line never says running without the helper's answer")
+    func helperLineTruth() {
+        let up = Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus())
+        #expect(up.helper == "VideoScan Background: running · pid 4242 · trickle · idle 12 s")
+        #expect(up.helperIsUp)
+        let silent = Self.lines(enabled: true, launchd: .enabled, problem: "connection invalid")
+        #expect(silent.helper == "VideoScan Background: enabled · not answering (connection invalid)")
+        #expect(!silent.helperIsUp && !silent.helper.contains("running"))
+        let asking = Self.lines(enabled: true, launchd: .enabled)
+        #expect(asking.helper == "VideoScan Background: enabled · asking…")
+        let off = Self.lines(enabled: false, launchd: .notRegistered)
+        #expect(off.helper == "VideoScan Background: off" && !off.helperIsUp && !off.needsApproval)
+        let offButListed = Self.lines(enabled: false, launchd: .enabled)
+        #expect(offButListed.helper.contains("still listed in System Settings"))
+        let approval = Self.lines(enabled: true, launchd: .requiresApproval)
+        #expect(approval.needsApproval)
+        #expect(approval.helper == "VideoScan Background: waiting for your approval in System Settings ▸ General ▸ Login Items")
+        let unregistered = Self.lines(enabled: true, launchd: .notRegistered)
+        #expect(unregistered.helper.contains("Fix: turn the checkbox off and on"))
+        #expect(Self.lines(enabled: true, launchd: nil).helper == "VideoScan Background: asking launchd…")
+    }
+
+    @Test("the job line: a hand-started run first, then the helper's era job, then the count")
+    func jobLineOrder() {
+        var hand = JobCheckpoint(jobID: JobID(), totalUnits: 4_709)
+        hand.completedUnits = 831
+        let handRun = Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(jobs: [Self.eraJob(.running)]),
+                                 work: BackgroundWorkCount(filesLeft: 3_878, foregroundRun: hand))
+        #expect(handRun.job == "Machine era (8B): 831 of 4,709 · running outside the service (started by hand; last unit 16:16)")
+        let helperJob = Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(jobs: [Self.eraJob(.paused(reason: "thermal"), done: 12)]),
+                                   work: BackgroundWorkCount(filesLeft: 3_878, foregroundRun: nil))
+        #expect(helperJob.job == "Machine era (8B): 12 of 4,709 · paused (thermal)")
+        #expect(Self.lines(enabled: true, launchd: .enabled).job == "Content analysis: counting…")
+        #expect(Self.lines(enabled: true, launchd: .enabled, work: BackgroundWorkCount(filesLeft: 0, foregroundRun: nil)).job
+                == "Content analysis: nothing left to analyze")
+        #expect(Self.lines(enabled: false, launchd: .notRegistered, work: BackgroundWorkCount(filesLeft: 3_878, foregroundRun: nil)).job
+                == "Content analysis: 3,878 files to analyze — turn the checkbox on to analyze them")
+        #expect(Self.lines(enabled: true, launchd: .enabled, work: BackgroundWorkCount(filesLeft: 3_878, foregroundRun: nil)).job
+                == "Content analysis: 3,878 files to analyze · queued on the next check")
+        #expect(Self.lines(enabled: true, launchd: .enabled, work: BackgroundWorkCount(filesLeft: 3_878, foregroundRun: nil), note: "queued era X").job
+                == "Content analysis: 3,878 files to analyze · queued era X")
+        #expect(Self.lines(enabled: true, launchd: .enabled, workProblem: "no catalog is open").job
+                == "Content analysis: could not count — no catalog is open")
+    }
+
+    @Test("the defaults key is the registrar's — the launch and the pane read one flag")
+    func oneKey() {
+        #expect(BackgroundServiceStore.defaultsKey == BackgroundServiceRegistrar.enabledDefaultsKey)
+        #expect(BackgroundServiceStore.defaultsKey == "background.service.enabled")
+    }
+
+    // MARK: -
+
+    /// Poll a condition on the main actor for up to two seconds.
+    static func settle(_ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<200 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(condition(), "did not settle in 2 s")
+    }
+}
