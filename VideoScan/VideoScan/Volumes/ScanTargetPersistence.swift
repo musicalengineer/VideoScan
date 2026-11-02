@@ -83,7 +83,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredAtKey: String,
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String,
-        savedReadOnlyKey: String? = nil
+        savedReadOnlyKey: String? = nil,
+        savedVolumeUUIDKey: String? = nil
     ) -> [CatalogScanTarget] {
         restoreReporting(
             existing: existing, savedTargetsKey: savedTargetsKey, savedDatesKey: savedDatesKey,
@@ -93,7 +94,7 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             savedNotesKey: savedNotesKey, savedRetiredAtKey: savedRetiredAtKey,
             savedRetiredReasonKey: savedRetiredReasonKey,
             savedRetiredWitnessesKey: savedRetiredWitnessesKey,
-            savedReadOnlyKey: savedReadOnlyKey).targets
+            savedReadOnlyKey: savedReadOnlyKey, savedVolumeUUIDKey: savedVolumeUUIDKey).targets
     }
 
     // MARK: - "Read only" marks (2026-10-03)
@@ -137,6 +138,17 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         UserDefaults.standard.set(map, forKey: key)
     }
 
+    /// #401 — one dictionary keyed by searchPath: the volume UUID last
+    /// seen mounted there. Only locations that have one get an entry.
+    static func persistVolumeUUIDs(_ targets: [CatalogScanTarget], key: String?) {
+        guard let key else { return }
+        var map: [String: String] = [:]
+        for t in targets {
+            if let v = t.volumeUUID { map[t.searchPath] = v }
+        }
+        UserDefaults.standard.set(map, forKey: key)
+    }
+
     /// `restore` plus the legacy-role count (see `RestoreReport`).
     static func restoreReporting(
         existing: [CatalogScanTarget],
@@ -153,7 +165,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredAtKey: String,
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String,
-        savedReadOnlyKey: String? = nil
+        savedReadOnlyKey: String? = nil,
+        savedVolumeUUIDKey: String? = nil
     ) -> RestoreReport {
         var report = RestoreReport()
         let paths = UserDefaults.standard.stringArray(forKey: savedTargetsKey) ?? []
@@ -174,6 +187,11 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         // "Read only" marks — absent key (every install before 2026-10-03)
         // = no volume is marked.
         let readOnly = readOnlyMarks(forKey: savedReadOnlyKey)
+        // #401 — the volume last seen mounted at each path; absent key
+        // (every install before 2026-11-02) = no location knows its disk
+        // yet; the mount or the rows tell it (ScanTargetVolume).
+        let volumeUUIDs = savedVolumeUUIDKey.flatMap {
+            UserDefaults.standard.dictionary(forKey: $0) as? [String: String] } ?? [:]
 
         var result: [CatalogScanTarget] = []
         // Restore-time screen + heal: pre-fix builds could persist the
@@ -209,6 +227,7 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
                 t.retiredReason = retiredReason[p]
                 t.retiredWitnesses = retiredWitnesses[p]
                 t.readOnlyMark = readOnly[p]
+                t.volumeUUID = volumeUUIDs[p].flatMap(VolumeIdentity.normalized)
                 // Role last: legacy-aware (may stamp retiredAt — see above).
                 if let raw = roles[p] {
                     let d = applyPersistedRole(raw, to: t)
@@ -241,9 +260,11 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredAtKey: String,
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String,
-        savedReadOnlyKey: String? = nil
+        savedReadOnlyKey: String? = nil,
+        savedVolumeUUIDKey: String? = nil
     ) {
         persistReadOnlyMarks(targets, key: savedReadOnlyKey)
+        persistVolumeUUIDs(targets, key: savedVolumeUUIDKey)
         var dates: [String: Date] = [:]
         var phases: [String: String] = [:]
         var roles: [String: String] = [:]

@@ -109,21 +109,17 @@ extension CatalogView {
     /// Signature coverage for one volume: how many of its catalogued
     /// files already carry a file signature.
     ///
-    /// Computed on demand from a CONTEXT MENU, which only builds when
-    /// the user right-clicks — so this O(records) pass runs on an
-    /// explicit gesture, not on every render. (The Catalog Options
-    /// menu's per-volume counts used to make the same bet inside the
-    /// view builder; they now read `scanTargetFacts` — codex #1368.)
+    /// Read from the cached per-target projection (`scanTargetFacts`,
+    /// codex #1368) — the same volume-aware scope the Catalog Options
+    /// menu's "One Volume…" rows show (#401: the context menu used to
+    /// walk `model.records` by path prefix alone, so the Ultra's ~/Movies
+    /// offered to sign the M4's files). A cold cache reads as no files
+    /// until the next recompute fills it, like the menu rows.
     func signatureCoverage(for target: CatalogScanTarget)
         -> (signed: Int, missing: Int, total: Int) {
-        var signed = 0, missing = 0
-        for rec in model.records {
-            guard rec.purgedAt == nil, !rec.isSetAside, !rec.isSuperseded else { continue }
-            guard rec.sizeBytes > 0 else { continue }
-            guard VideoScanModel.isUnder(rec, prefix: target.searchPath) else { continue }
-            if rec.hasContentSignature { signed += 1 } else { missing += 1 }
-        }
-        return (signed, missing, signed + missing)
+        let plan = scanTargetFacts[target.id]?.signaturePlan
+            ?? VideoScanModel.ContentHashBackfillPlan()
+        return (plan.alreadyHashed, plan.candidates, plan.alreadyHashed + plan.candidates)
     }
 
     /// Walk the catalog once and bucket records into each volume's
@@ -181,10 +177,13 @@ extension CatalogView {
         // The Delete count is the GUARDED removal's own count
         // (TargetRemovalScope, codex #1393), not the raw-prefix `files`
         // figure the Volumes table shows.
-        // #401: each reachable local target's volume, read once per pass
-        // (one getattrlist per target, never per record).
+        // #401: each target's volume, once per pass — its mount (one
+        // getattrlist per target, never per record), else the volume it
+        // was last seen on, else the one its rows are evidenced on
+        // (ScanTargetVolume). An unknown target shows nothing that names
+        // another disk.
         let targetVolumes = ScanTargetVolume.resolve(
-            targets.filter(\.isReachable).map { ($0.id, $0.searchPath) })
+            targets.map { ($0.id, $0.searchPath, $0.volumeUUID) }, records: model.records)
         scanTargetFacts = ScanTargetRecordFacts.project(
             model.records,
             targets: targets.map { ($0.id, $0.searchPath) },

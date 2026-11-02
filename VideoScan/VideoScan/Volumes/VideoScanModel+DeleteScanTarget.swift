@@ -164,51 +164,128 @@ struct TargetRemovalScope: Sendable {
     }
 
     /// `isUnderRoot` for a record: its current path, and its evidenced
-    /// volume must not be a different known volume (#401).
+    /// volume must AGREE with the target's (#401, strict 2026-11-02:
+    /// `VolumeIdentity.agree` — a record that names another disk, or a
+    /// target that cannot name its own while the record can, is out).
     func isUnderRoot(_ rec: VideoRecord) -> Bool {
-        VolumeIdentity.mayBeSameVolume(rec.evidencedVolumeUUID, volumeUUID) && isUnderRoot(rec.fullPath)
+        VolumeIdentity.agree(rec.evidencedVolumeUUID, volumeUUID) && isUnderRoot(rec.fullPath)
     }
 
     /// `claims` for a record — the removal planner's question (#401).
-    /// Another target covers the record only when it may be on the
-    /// record's volume too (codex #184: same rule as the Delete count).
+    /// Another target covers the record only when its volume agrees with
+    /// the record's too (codex #184: same rule as the Delete count).
     func claims(_ rec: VideoRecord) -> Bool {
         let volume = rec.evidencedVolumeUUID
         let p = PathScope.normalize(rec.fullPath)
-        guard VolumeIdentity.mayBeSameVolume(volume, volumeUUID), root.containsNormalized(p) else { return false }
+        guard VolumeIdentity.agree(volume, volumeUUID), root.containsNormalized(p) else { return false }
         return !otherRoots.indices.contains {
-            VolumeIdentity.mayBeSameVolume(volume, otherVolumes[$0]) && otherRoots[$0].containsNormalized(p)
+            VolumeIdentity.agree(volume, otherVolumes[$0]) && otherRoots[$0].containsNormalized(p)
         }
     }
 
+    /// PATH-ONLY form, for tests of the path rule: equals `claims(rec)`
+    /// only while no volume is known on either side. Production callers
+    /// ask by record.
     func claims(_ path: String) -> Bool {
         claimsNormalized(PathScope.normalize(path))
     }
 
-    /// `claims` for an already-normalized path (see
-    /// `PathScope.Root.containsNormalized`) — the per-target projection
-    /// normalizes each record path once for all targets.
+    /// `claims(path)` for an already-normalized path (see
+    /// `PathScope.Root.containsNormalized`).
     func claimsNormalized(_ p: String) -> Bool {
         guard root.containsNormalized(p) else { return false }
         return !otherRoots.contains { $0.containsNormalized(p) }
     }
 }
 
-/// The volume a scan target's path is mounted on, by persistent UUID (#401).
-/// nil when the path is not reachable or is a network share (a hung share
-/// would block the caller, #189; a share's path already names it). nil
-/// means "unknown": the path rule decides, as before #401.
+/// Which volume a scan target IS, by persistent UUID (#401) — the ONE
+/// identity `VolumeIdentity`, `ScanContext.volumeUUID` and the catalog's
+/// `volumes` table share. A target is told by, in order:
+///
+///   1. its mount, when the path is reachable and local
+///      (`VolumeIdentity.uuid(forPath:)`, one getattrlist per target);
+///   2. the volume it was last seen mounted on
+///      (`CatalogScanTarget.volumeUUID`, remembered by
+///      `rememberScanTargetVolumes`) — an offline drive keeps its identity;
+///   3. its rows, for a legacy entry never seen mounted on this build: the
+///      ONE volume every record whose CURRENT path is under the root is
+///      evidenced on — the rule `RetireGate` already uses to know an
+///      offline drive (`recordedVolumeUUID`), read off the freshest
+///      evidence (`evidencedVolumeUUID`). Rows that disagree (two disks
+///      were catalogued at this path) or carry no evidence tell nothing.
+///
+/// Absent is "unknown". Under `VolumeIdentity.agree` an unknown target
+/// owns only records that are equally unknown — never, by path, a file
+/// that names another disk (the P0: a location showing the M4's files). A
+/// network share is unknown by its mount (a hung share would block the
+/// caller, #189) and known by its rows if they carry a UUID.
 enum ScanTargetVolume {
+    /// What `resolve` needs of a target: its id, path and remembered volume.
+    typealias Target = (id: UUID, searchPath: String, remembered: String?)
+
+    /// Tier 1 — the mounted volume. nil when unreachable or not on a LOCAL
+    /// mount. Runs on the main actor (reachability refresh, Browse…), so
+    /// local-vs-network comes from the in-kernel mount table
+    /// (`getmntinfo` MNT_NOWAIT — no statfs, no round-trip; codex #210 F3:
+    /// a statfs guard would itself block on a hung share before refusing it).
     static func uuid(forPath path: String) -> String? {
         guard !path.isEmpty, VolumeReachability.isReachable(path: path),
-              !VolumeReachability.isNetworkVolume(path: path) else { return nil }
+              isOnLocalMount(path, mounted: VolumeReachability.currentMountedRoots(),
+                             local: VolumeReachability.currentLocalMountedRoots()) else { return nil }
         return VolumeIdentity.uuid(forPath: path)
     }
 
-    /// `uuid(forPath:)` for every target that has one, keyed by target id.
-    static func resolve(_ targets: [(id: UUID, searchPath: String)]) -> [UUID: String] {
+    /// Is `path` on a LOCAL filesystem? The deepest mount point containing
+    /// the path (component boundary) decides: local iff it is in `local`.
+    /// Pure, so the rule is tested with injected tables (a share mounted
+    /// under /Volumes, one mounted inside the home folder, "/" itself).
+    nonisolated static func isOnLocalMount(_ path: String, mounted: Set<String>, local: Set<String>) -> Bool {
+        let p = PathScope.normalize(path)
+        var deepest: String?
+        for root in mounted {
+            let r = PathScope.normalize(root)
+            let contains = r == "/" ? p.hasPrefix("/") : PathScope.Root(r).containsNormalized(p)
+            guard contains, r.count > (deepest?.count ?? -1) else { continue }
+            deepest = r
+        }
+        guard let deepest else { return false }
+        return local.contains(where: { PathScope.normalize($0) == deepest })
+    }
+
+    /// All three tiers for every target, keyed by target id; absent =
+    /// unknown. One pass over `records` for the targets neither the mount
+    /// nor memory named, O(records × such targets), allocation-free per
+    /// record. Worst-case memory: a few words per target, nothing per record.
+    static func resolve(_ targets: [Target], records: [VideoRecord]) -> [UUID: String] {
         var out: [UUID: String] = [:]
-        for t in targets { out[t.id] = uuid(forPath: t.searchPath) }
+        out.reserveCapacity(targets.count)
+        // Targets neither the mount nor memory named, with prepared roots.
+        var pending: [(id: UUID, root: PathScope.Root)] = []
+        for t in targets {
+            if let v = uuid(forPath: t.searchPath) ?? t.remembered.flatMap(VolumeIdentity.normalized) {
+                out[t.id] = v
+            } else {
+                pending.append((t.id, PathScope.Root(t.searchPath)))
+            }
+        }
+        guard !pending.isEmpty else { return out }
+        // `found[i]`: the one volume seen so far; `conflict[i]`: two seen.
+        var found = [String?](repeating: nil, count: pending.count)
+        var conflict = [Bool](repeating: false, count: pending.count)
+        for rec in records {
+            let p = PathScope.normalize(rec.fullPath)
+            var evidence: String?
+            var read = false   // the evidence is read at most once per record
+            for i in pending.indices where !conflict[i] && pending[i].root.containsNormalized(p) {
+                if !read { evidence = rec.evidencedVolumeUUID; read = true }
+                guard let v = evidence else { break }   // no evidence: says nothing
+                if let f = found[i] { if f != v { conflict[i] = true } }
+                else { found[i] = v }
+            }
+        }
+        for i in pending.indices where !conflict[i] {
+            if let v = found[i] { out[pending[i].id] = v }
+        }
         return out
     }
 }
@@ -237,15 +314,20 @@ struct TargetRemovalPlan: Equatable, Sendable {
     /// that could change the set has happened; unequal ⇒ re-plan and
     /// compare.
     let revision: UInt64
+    /// The disk the location resolved to at plan time (#401; codex #210
+    /// F2). A confirmation made for one disk never applies to another,
+    /// even when both plans happen to name the same ids (both empty).
+    var volumeUUID: String? = nil
 
     var count: Int { recordIDs.count }
 
-    /// Same target, same root, same ids — the shown count is still exact.
-    /// (Two plans at different revisions can still be equivalent: a
-    /// debounced save of an unrelated in-place edit bumps the revision
-    /// without moving a single path.)
+    /// Same target, same root, same disk, same ids — the shown count is
+    /// still exact. (Two plans at different revisions can still be
+    /// equivalent: a debounced save of an unrelated in-place edit bumps
+    /// the revision without moving a single path.)
     func removesSameRecords(as other: TargetRemovalPlan) -> Bool {
-        targetID == other.targetID && root == other.root && recordIDs == other.recordIDs
+        targetID == other.targetID && root == other.root
+            && volumeUUID == other.volumeUUID && recordIDs == other.recordIDs
     }
 }
 
@@ -288,22 +370,51 @@ extension VideoScanModel {
     /// a view body; the non-destructive row labels read the cached
     /// `ScanTargetRecordFacts` projection instead.
     func planTargetRemoval(for target: CatalogScanTarget) -> TargetRemovalPlan {
-        planTargetRemoval(targetID: target.id, root: target.searchPath)
+        // THIS target's memory, unknown included (codex #209 F1, #210 F1:
+        // two registrations of one path may remember different disks, or
+        // one may know none; another's memory never plans this one's
+        // removal).
+        planTargetRemoval(targetID: target.id, root: target.searchPath, identity: .own(target.volumeUUID))
+    }
+
+    /// Whose memory names the root of a removal plan (codex #210 F1).
+    enum RootIdentity {
+        /// The selected target's own remembered volume — nil means the
+        /// target does not know its disk, and nobody else's memory is
+        /// borrowed for it (its mount or its rows may still say).
+        case own(String?)
+        /// A bare path with no target in hand (legacy callers): the memory
+        /// every registration of that path agrees on, none when they
+        /// disagree or none has one.
+        case bareRoot
     }
 
     /// `planTargetRemoval(for:)` for a root that may not belong to a
     /// registered target (the legacy `removeCatalogRecords(underTargetRoot:)`
     /// callers pass a bare path). `targetID` is only carried for
     /// bookkeeping; the scope is decided by `root` and the CURRENT
-    /// `scanTargets` roots.
-    func planTargetRemoval(targetID: UUID = UUID(), root: String) -> TargetRemovalPlan {
-        // The same scope the Delete menu counts with (codex #1393).
-        // Every target's volume, so "covered by another target" asks the
-        // same volume question as the Delete count (codex #184).
+    /// `scanTargets` roots; `identity` says whose memory the root carries.
+    func planTargetRemoval(targetID: UUID = UUID(), root: String,
+                           identity: RootIdentity = .bareRoot) -> TargetRemovalPlan {
+        // The same scope the Delete menu counts with (codex #1393), and
+        // the same volume resolution the volume table shows (#401):
+        // every target's volume plus the root's, mount first, then the
+        // rows — so "covered by another target" asks the same volume
+        // question as the Delete count (codex #184), and an offline
+        // target removes only the rows evidenced on its own disk.
+        var ask: [ScanTargetVolume.Target] = scanTargets.map { ($0.id, $0.searchPath, $0.volumeUUID) }
+        let rootKey = UUID()
+        let remembered: String?
+        switch identity {
+        case .own(let v): remembered = v
+        case .bareRoot:   remembered = Self.agreedMemory(forRoot: root, in: scanTargets)
+        }
+        ask.append((rootKey, root, remembered))
+        let volumes = ScanTargetVolume.resolve(ask, records: records)
         let scope = TargetRemovalScope(
             root: root,
-            allTargets: scanTargets.map { ($0.searchPath, ScanTargetVolume.uuid(forPath: $0.searchPath)) },
-            volumeUUID: ScanTargetVolume.uuid(forPath: root))
+            allTargets: scanTargets.map { ($0.searchPath, volumes[$0.id]) },
+            volumeUUID: volumes[rootKey])
         var doomed = Set<UUID>()
         var kept = 0
         // #401: by record, so a file on another volume at the same path is
@@ -319,7 +430,22 @@ extension VideoScanModel {
                                  root: root,
                                  recordIDs: doomed,
                                  keptCoveredByOtherTargets: kept,
-                                 revision: catalogMutationRevision)
+                                 revision: catalogMutationRevision,
+                                 volumeUUID: volumes[rootKey])
+    }
+
+    /// The one volume every registration of `root` remembers, or nil when
+    /// none does or they disagree (codex #209 F1: never borrow the first
+    /// registration's identity for a bare root).
+    static func agreedMemory(forRoot root: String, in targets: [CatalogScanTarget]) -> String? {
+        let r = PathScope.normalize(root)
+        var agreed: String?
+        for t in targets where PathScope.normalize(t.searchPath) == r {
+            guard let v = t.volumeUUID else { continue }
+            if let a = agreed, a != v { return nil }
+            agreed = v
+        }
+        return agreed
     }
 
     // MARK: Execute
@@ -328,10 +454,12 @@ extension VideoScanModel {
     /// snapshot tripwire, and fail-safe degrade described above.
     /// `action` names the caller for the log trail ("reset",
     /// "delete catalog", …). Plan-then-execute in one call; the plan is
-    /// never seen by a user, so there is nothing to carry.
+    /// never seen by a user, so there is nothing to carry. `identity`:
+    /// the target's own memory when the caller holds the target.
     @discardableResult
-    func removeCatalogRecords(underTargetRoot root: String, action: String) -> TargetRecordRemovalOutcome {
-        removeCatalogRecords(plan: planTargetRemoval(root: root), action: action)
+    func removeCatalogRecords(underTargetRoot root: String, action: String,
+                              identity: RootIdentity = .bareRoot) -> TargetRecordRemovalOutcome {
+        removeCatalogRecords(plan: planTargetRemoval(root: root, identity: identity), action: action)
     }
 
     /// Remove EXACTLY `plan.recordIDs` — the ids that are still present;
@@ -418,13 +546,17 @@ extension VideoScanModel {
             log("Target \(action) (\(plan.root)): \(reason)")
             return .cancelledTargetGone(reason: reason)
         }
-        let rootMoved = target.searchPath != plan.root
-        if rootMoved || plan.revision != catalogMutationRevision {
-            let current = planTargetRemoval(for: target)
-            if rootMoved || !current.removesSameRecords(as: plan) {
-                log("Target \(action) (\(plan.root)): refused — catalog changed since the confirmation was shown (planned \(plan.count) record(s), now \(current.count) under \(current.root)). Nothing removed; confirm again.")
-                return .refusedStale(currentPlan: current)
-            }
+        // ALWAYS re-plan at the apply (codex #211): the revision is not
+        // the only thing that can move the set. The disk under the path
+        // can change before the queued mount notification refreshes
+        // memory and revision, and the plan carries the disk it was made
+        // for. One O(records) pass on an explicit destructive gesture is
+        // the price of never trusting a fast path here. Same target, same
+        // root, same disk, same ids ⇒ the shown count is still exact.
+        let current = planTargetRemoval(for: target)
+        if target.searchPath != plan.root || !current.removesSameRecords(as: plan) {
+            log("Target \(action) (\(plan.root)): refused — the catalog or the location's disk changed since the confirmation was shown (planned \(plan.count) record(s), now \(current.count) under \(current.root)). Nothing removed; confirm again.")
+            return .refusedStale(currentPlan: current)
         }
         let outcome = removeCatalogRecords(plan: plan, action: action)
         if outcome.degradedNoSnapshot {

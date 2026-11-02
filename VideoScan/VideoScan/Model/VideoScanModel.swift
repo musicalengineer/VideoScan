@@ -1060,6 +1060,9 @@ final class VideoScanModel: ObservableObject {
     // an entry (when it was marked, and the volume's UUID then) is the
     // marked-or-not signal. Additive: absent = every volume allows changes.
     static let savedReadOnlyKey = "VideoScan.scanTargetReadOnly"
+    // #401 (2026-11-02) — the volume UUID last seen mounted at each path,
+    // keyed by searchPath. Additive: absent = never seen on this build.
+    static let savedVolumeUUIDKey = "VideoScan.scanTargetVolumeUUID"
 
     // `internal var` (not `private let`) so tests can swap in a per-test
     // CatalogStore(directory:) instance — necessary because the shared
@@ -1879,7 +1882,8 @@ final class VideoScanModel: ObservableObject {
         // catalog.pre-target-removal snapshot first (or degrades to
         // no-removal). The bare removeAll that used to live here is the
         // hole QA flagged after the 2,720-record folder-target loss.
-        removeCatalogRecords(underTargetRoot: target.searchPath, action: "reset")
+        removeCatalogRecords(underTargetRoot: target.searchPath, action: "reset",
+                             identity: .own(target.volumeUUID))
     }
 
     // MARK: - Probe-cache count (memoized)

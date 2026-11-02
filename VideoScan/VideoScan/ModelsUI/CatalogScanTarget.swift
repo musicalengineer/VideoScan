@@ -112,6 +112,17 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// Archive's volume is read-only by rule and carries no mark.
     @Published var readOnlyMark: VolumeReadOnlyMark?
 
+    /// The persistent UUID of the volume last seen mounted at `searchPath`
+    /// (#401, 2026-11-02) — `VolumeIdentity.uuid(forPath:)`, the one
+    /// identity `ScanContext.volumeUUID` and the catalog's `volumes` table
+    /// use. Remembered by `refreshTargetReachability` whenever the path is
+    /// reachable and local, kept while the drive is away, so an offline
+    /// location still knows which disk it is and shows only that disk's
+    /// files. nil = never seen mounted on this build (legacy entry); then
+    /// its rows may say (`ScanTargetVolume.resolve`). Not `@Published`:
+    /// nothing draws it, and the refresh already flips `isReachable`.
+    var volumeUUID: String?
+
     /// ONE definition of "retired" (codex #385 / docs/volume_taxonomy_proposal.md
     /// — retirement used to have two owners: this stamp AND a `.retired`
     /// VolumeRole case). The taxonomy cleanup (2026-08-16) removed the

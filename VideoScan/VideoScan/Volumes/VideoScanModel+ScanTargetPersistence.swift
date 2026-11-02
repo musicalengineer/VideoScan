@@ -46,7 +46,8 @@ extension VideoScanModel {
             savedRetiredAtKey: Self.savedRetiredAtKey,
             savedRetiredReasonKey: Self.savedRetiredReasonKey,
             savedRetiredWitnessesKey: Self.savedRetiredWitnessesKey,
-            savedReadOnlyKey: Self.savedReadOnlyKey
+            savedReadOnlyKey: Self.savedReadOnlyKey,
+            savedVolumeUUIDKey: Self.savedVolumeUUIDKey
         )
         scanTargets.append(contentsOf: report.targets)
         // Legacy role strings (taxonomy 2026-08-16) were decoded — persist
@@ -89,7 +90,8 @@ extension VideoScanModel {
             savedRetiredAtKey: Self.savedRetiredAtKey,
             savedRetiredReasonKey: Self.savedRetiredReasonKey,
             savedRetiredWitnessesKey: Self.savedRetiredWitnessesKey,
-            savedReadOnlyKey: Self.savedReadOnlyKey
+            savedReadOnlyKey: Self.savedReadOnlyKey,
+            savedVolumeUUIDKey: Self.savedVolumeUUIDKey
         )
     }
 

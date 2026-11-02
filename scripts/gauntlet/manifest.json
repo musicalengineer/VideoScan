@@ -3514,8 +3514,8 @@
         "emptyOrZeroEvidenceFallsThrough",
         "fixityStampOutranksAStaleScanVolume",
         "noEvidenceIsUnknown",
-        "sameVolumeRuleRefusesOnlyKnownAndDifferent",
-        "scanContextAloneIsUsedAndNormalized"
+        "scanContextAloneIsUsedAndNormalized",
+        "volumesAgreeOnlyWhenBothSayTheSameOrNeitherSpeaks"
       ]
     },
     {
@@ -27104,17 +27104,43 @@
       "path": "VideoScan/VideoScanTests/ScanLocationVolumeTests.swift",
       "stage": "regression",
       "suites": [
+        "ScanLocationVolumeModelTests",
+        "ScanLocationVolumeSensorTests",
         "ScanLocationVolumeTests"
       ],
       "tests": [
+        "browseToAnotherDiskDropsTheOldPathsMemory",
         "deleteMenuCountIsZeroForAnotherVolumesFiles",
+        "duplicatePathPlannerUsesSelectedTargetsVolume",
         "filesOnAnotherVolumeAreNotCountedUnderTheSamePath",
         "hundredThousandRowsTwentyTargetsWithinBudget",
+        "identityChangeIsRefusedEvenWithAnEmptyPlan",
+        "knownLocationNeverShowsAFileWithoutEvidence",
+        "legacyOfflineLocationIsToldByUnanimousRows",
+        "legacyOfflineLocationWithDisagreeingRowsIsUnknown",
+        "localityIsDecidedByTheDeepestMountPoint",
+        "mountChangeWithoutRefreshIsRefusedOnApply",
+        "mountedLocationIsToldByItsMount",
+        "mountedVolumeLookupNeverTouchesStatfs",
         "movedFileWithStaleScanVolumeStaysOnItsNewDrive",
         "nestedDifferentVolumesMatchRemovalCount",
+        "noEvidenceAnywhereKeepsThePathRule",
+        "offlineLocationIsToldByItsMemory",
+        "offlineLocationShowsItsHistoryByUUID",
+        "refreshRemembersTheMountedVolume",
+        "rememberedVolumeRoundTripsThroughUserDefaults",
+        "removalPlanForALegacyLocationWithDisagreeingRowsRemovesNothing",
+        "removalPlanForALegacyLocationWithUnanimousRowsRemovesThem",
+        "removalPlanForAnOfflineLocationRemovesOnlyItsOwnDisk",
         "removalScopeNeverClaimsAnotherVolumesFiles",
+        "retiredCleanupConfirmationNeverDeletesAReplacementDisk",
         "sameVolumeFilesAreUnchanged",
-        "unknownVolumeFallsBackToThePath"
+        "selectedTargetWithUnknownMemoryNeverBorrowsAnother",
+        "signatureCoverageReadsTheProjection",
+        "theLenientRuleIsGone",
+        "thePaneAndThePlannerResolveThroughTheOneFunction",
+        "unknownLocationNeverShowsAFileThatNamesAnotherDisk",
+        "volumeLearningInvalidatesConfirmedRemoval"
       ]
     },
     {
@@ -36588,7 +36614,7 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
-      "expected_floor": 364,
+      "expected_floor": 388,
       "name": "regression",
       "package_expected_floor": 286,
       "package_selectors": [
@@ -36726,6 +36752,8 @@
         "VideoScanTests/CatalogVolumePillRegressionTests",
         "VideoScanTests/CatalogVolumePillSensorTests",
         "VideoScanTests/ScanLocationVolumeTests",
+        "VideoScanTests/ScanLocationVolumeModelTests",
+        "VideoScanTests/ScanLocationVolumeSensorTests",
         "VideoScanTests/CaptionDegenerateRefusalTests",
         "VideoScanTests/CatalogStatusDegenerateOCRTests",
         "VideoScanTests/CaptionDegenerateReaderRouteTests",

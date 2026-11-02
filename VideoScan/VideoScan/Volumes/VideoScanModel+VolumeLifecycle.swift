@@ -112,15 +112,44 @@ extension VideoScanModel {
         notificationObservers.add(probeChange, to: NotificationCenter.default)
     }
 
-    /// Re-check whether each scan target's path is currently mounted.
+    /// Re-check whether each scan target's path is currently mounted, and
+    /// remember which volume a mounted path is on (#401).
     func refreshTargetReachability() {
         for t in scanTargets {
             let r = VolumeReachability.isReachable(path: t.searchPath)
             if t.isReachable != r { t.isReachable = r }
         }
+        rememberScanTargetVolumes()
         // The Triage tab no longer observes the model (2026-10-03): tell
         // its snapshot a drive came or went. A no-op while it is off screen.
         noteTriageReachabilityChanged()
+    }
+
+    /// Each reachable local target learns its volume from its mount (one
+    /// getattrlist per target — `ScanTargetVolume.uuid(forPath:)`) and
+    /// keeps it while the drive is away, so an offline location still
+    /// knows which disk it is (#401). A drive swapped under the same mount
+    /// name re-learns. When something changed it is persisted AND the
+    /// catalog revision moves (codex #209 F3): which records a location
+    /// owns just changed, so a removal plan confirmed against the old disk
+    /// is stale and the volume table's cached counts must be rebuilt.
+    /// Returns the number of targets whose remembered volume changed.
+    @discardableResult
+    func rememberScanTargetVolumes() -> Int {
+        var changed = 0
+        for t in scanTargets where t.isReachable {
+            guard let v = ScanTargetVolume.uuid(forPath: t.searchPath), v != t.volumeUUID else { continue }
+            if let old = t.volumeUUID {
+                log("Scan location \(VolumeReachability.displayLabel(forPath: t.searchPath)) is now on volume \(v) (was \(old)).")
+            }
+            t.volumeUUID = v
+            changed += 1
+        }
+        if changed > 0 {
+            persistScanDates()
+            notifyVolumeAggregatesStale()
+        }
+        return changed
     }
 
     /// Attempt to wake/access an offline volume. For network shares this may trigger
@@ -210,7 +239,8 @@ extension VideoScanModel {
         // resetTarget. "Delete Catalog" is explicit, but the multi-select
         // path bypasses the confirmation dialog, and records nested under
         // ANOTHER registered target's root are not this target's to delete.
-        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog")
+        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog",
+                                           identity: .own(target.volumeUUID))
         finishDeleteCatalog(for: target, volName: volName, removed: outcome.removed)
     }
 
@@ -333,10 +363,23 @@ extension VideoScanModel {
     // is already caring for the catalog — and the prompt PERFORMS the
     // deletion (nag-button pattern: the badge does the fix).
 
-    /// Retired targets that still hold catalog records. One pass over
-    /// `records` regardless of target count (checklist: no O(records ×
-    /// targets) scans).
-    func retiredCatalogCleanupCandidates() -> [(target: CatalogScanTarget, recordCount: Int)] {
+    /// One retired volume the cleanup dialog offers: the target and the
+    /// EXACT removal plan it would apply (codex #212), so the count shown
+    /// is the count removed, and a disk that changed under the path while
+    /// the dialog was up refuses instead of removing the newcomer's rows.
+    struct RetiredCleanupCandidate {
+        let target: CatalogScanTarget
+        let plan: TargetRemovalPlan
+        var recordCount: Int { plan.count }
+    }
+
+    /// Retired targets that still hold catalog records, each with the plan
+    /// the guarded removal would apply right now (`planTargetRemoval(for:)`:
+    /// the same volume-aware, component-boundary scope as every other
+    /// removal — the old raw `hasPrefix` count credited "/Volumes/X2" and
+    /// other disks' rows to X). O(records × targets) per retired target;
+    /// a handful of retired drives at backup time, never a view body.
+    func retiredCatalogCleanupCandidates() -> [RetiredCleanupCandidate] {
         // Retirement has ONE owner — `retiredAt` (taxonomy cleanup
         // 2026-08-16; the `.retired` role case is gone and legacy role
         // strings are converted to a stamp at decode time). Rick's
@@ -345,18 +388,25 @@ extension VideoScanModel {
         let retired = scanTargets.filter { $0.isRetired
                                            && $0.phase != .noCatalog
                                            && !$0.searchPath.isEmpty }
-        guard !retired.isEmpty else { return [] }
-        var counts: [ObjectIdentifier: Int] = [:]
-        for r in records {
-            for t in retired where r.fullPath.hasPrefix(t.searchPath) {
-                counts[ObjectIdentifier(t), default: 0] += 1
-                break
-            }
-        }
         return retired.compactMap { t in
-            guard let n = counts[ObjectIdentifier(t)], n > 0 else { return nil }
-            return (t, n)
+            let plan = planTargetRemoval(for: t)
+            return plan.recordIDs.isEmpty ? nil : RetiredCleanupCandidate(target: t, plan: plan)
         }
+    }
+
+    /// The dialog's confirm: apply exactly the plans that were shown.
+    /// Returns how many volumes were cleaned and how many refused (the
+    /// catalog or the disk changed while the dialog was up; the model
+    /// logged why — the nag returns at the next backup).
+    @discardableResult
+    func applyRetiredCatalogCleanup(_ chosen: [RetiredCleanupCandidate]) -> (removed: Int, refused: Int) {
+        var removed = 0, refused = 0
+        for c in chosen {
+            // The guarded, plan-carrying apply (codex #1417 / #212): exactly
+            // the shown plan, or a refusal with the reason logged.
+            if case .applied = deleteCatalogForTarget(c.target, plan: c.plan) { removed += 1 } else { refused += 1 }
+        }
+        return (removed, refused)
     }
 
     /// Post-backup nag: list retired volumes still carrying records and
@@ -434,10 +484,9 @@ extension VideoScanModel {
         alert.addButton(withTitle: "Remove Catalogs")
         if alert.runModal() == .alertSecondButtonReturn {
             let chosen = zip(candidates, checks).filter { $0.1.state == .on }.map(\.0)
-            for c in chosen {
-                deleteCatalogForTarget(c.target)
-            }
-            log("Retired-volume cleanup: removed catalogs for \(chosen.count) of \(candidates.count) volume(s) at prompt.")
+            let done = applyRetiredCatalogCleanup(chosen)
+            log("Retired-volume cleanup: removed catalogs for \(done.removed) of \(candidates.count) volume(s) at prompt"
+                + (done.refused > 0 ? "; \(done.refused) refused — changed while the prompt was up, ask again at the next backup." : "."))
         } else {
             log("Retired-volume cleanup deferred — will ask again at next backup (\(candidates.count) volume(s) pending).")
         }

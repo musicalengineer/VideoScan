@@ -52,11 +52,16 @@ struct RecordVolumeEvidenceTests {
         #expect(r.evidencedVolumeUUID == m4)
     }
 
-    @Test func sameVolumeRuleRefusesOnlyKnownAndDifferent() {
-        #expect(VolumeIdentity.mayBeSameVolume(m4, ultra) == false)
-        #expect(VolumeIdentity.mayBeSameVolume(m4, m4.lowercased()))
-        #expect(VolumeIdentity.mayBeSameVolume(nil, ultra))
-        #expect(VolumeIdentity.mayBeSameVolume(m4, nil))
-        #expect(VolumeIdentity.mayBeSameVolume("", ultra))
+    /// 2026-11-02 (#401 strict): a side that names its volume is never
+    /// matched to a side that cannot. Only "both the same" and "neither
+    /// knows" agree.
+    @Test func volumesAgreeOnlyWhenBothSayTheSameOrNeitherSpeaks() {
+        #expect(VolumeIdentity.agree(m4, ultra) == false)
+        #expect(VolumeIdentity.agree(m4, m4.lowercased()))
+        #expect(VolumeIdentity.agree(nil, nil))
+        #expect(VolumeIdentity.agree("", "00000000-0000-0000-0000-000000000000"))
+        #expect(VolumeIdentity.agree(nil, ultra) == false, "an unknown location never shows a file that names another disk")
+        #expect(VolumeIdentity.agree(m4, nil) == false, "a known location never shows a file with no volume evidence")
+        #expect(VolumeIdentity.agree("", ultra) == false)
     }
 }
