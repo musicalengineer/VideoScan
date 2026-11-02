@@ -1,12 +1,19 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-01 (Sunday morning edition, written overnight 10/31). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-02 (Monday morning edition, written overnight). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
-1. **Nothing was deleted overnight.** The cleanup proposal is `docs/design/cleanup_proposal_2026_10_31.md` (≈ 118 GB reclaimable if every DELETE is accepted; you rule, then `.trash/` first).
-2. **Docs were reorganized**: `docs/README.md` is now the one entry point; `docs/design/models.md` is THE list of models (what, where, why, status); seven model/LLM research and review docs moved to `docs/archive/` with one-line stubs; `docs/design/data_organization_2026_10_31.md` is your file-locations map, filled in (your text kept, generated tables between markers), with the two-page diagram at `docs/design/data_organization_2026_10_31.html` and the PDF in `~/Downloads`. "Rick to rule" docs are listed in BACKLOG.
-3. **The background service runs its first real job.** Step 1 (the 8B era/OCR job, schema v14, the journal and the applier, the inspector and Status lines, era words in search) merged 11/01 (`0656aee6`); 320 files analyzed in Rick's lunch window; first convergence reading 51 % close enough, 88 % inside the range. The helper is still started by hand (`--run era` / `--enqueue era`); no Settings toggle or Analyze-tab button yet (BACKLOG).
-4. **Verdicts from the day:** seat the 8B as the era/OCR expert; the 32B is parked (worse on all 72 Rick-dated clips at 4.7× the cost); the model stays a pixels-only witness and the file's facts enter as deterministic bounds (telling it the codec moved a 1965 film to 1975–1985); "close enough" = midpoint within 5 y AND range ≤ 10 y wide; your 25 dates all stood in the review.
+1. **Main is `d2db6b8e`, pushed, checkout clean; nothing red on main.** Merged overnight after their Codex closings: **Delete Selected Files takes a whole recovered A/V pair group** (two-phase unit, live membership, every Trash door renders the settlement warnings; 13 Codex passes, final verdict merge) and the **Analyze Duplicates main-actor hop fix** (the 02:00 nightly's one real failure; worst hop 0.26 → 0.11 s Debug; Release proof is tonight's nightly). The Family Tree read-only (viewers) and the Catalog menu regroup merged last evening.
+2. **Both 02:00 nightlies, main `336199bb`:** Core 2,224 / 0 on both · App 12,78x / **2** on both (the same two: a wording pin and the hop — both fixed on main now) · **Hallie strict 56 / 56 on the Ultra** (advisory 626 / 826, voice ok) · **Hallie on the M4 did not run**: "catalog.sqlite is read-only and its schema is not current" — the M4 is a viewer at schema 13; one launch of the app on the M4 pulls the Ultra's sealed v14 copy (published 20:50 last night) and the lane comes back. Say "do it" and I run that pull by hand instead.
+3. **Monday is docs-prune day** (your PROCESS note): 30 live docs (the ceiling), the seven-plus-fourteen overnight Codex transcripts are already in the archive with index rows; `tools/codex_review.py` still writes new transcripts to `docs/reviews/codex/` (#410).
+4. **Rulings waiting on you** (all safe defaults in place): viewers show no synced rulings/bookmarks in the read-only tree; a filing interrupted by a revocation still runs its undo; Prune's detail row stays green for a re-marked copy (warning in its help); the Workbench discard sheet opens only on a warning, not when files stayed; "Content Analyzer" as its own menu after a few days' use.
+
+## Spot tests for Rick (Debug, main `d2db6b8e`)
+- **Catalog menu**: seven items in three groups; every "…" item opens with its brief; Tidy Catalog… hidden at zero.
+- **Catalog Status window**: Database green (last night's check), Files, Content (green · in progress · yellow); Schema 14 bold, "64 tables · matches this build", journal counts; the menu title names only a yellow/red line. Toolbar: "Set Aside Photos & Music".
+- **Delete Selected Files… on an Avid MXF half**: with every half selected, the sheet reads "Move this clip and its N related halves to the Trash"; with one missing, the refusal names the sibling; context menu "Select Related Halves" on any half.
+- **On the M4** (pull main, Debug): Family Tree shows the graph with the orange banner; every write refuses in words. Get Family Tree on the Ultra never overwrites an earlier export (`<name>-2.ged`).
+- **Era observations**: inspector "Machine era" line on a 1960s film; search "60s" / "1960s"; Catalog Status convergence line ("31 of 60 (51 %)" at last reading; more as the corpus runs in your windows).
 
 ## Testbeds overnight (all against main unless said)
 | Lane | Result |
@@ -65,6 +72,8 @@
 - Worktrees under `VideoScan-wt/`: all landed except `attended-model-review` (Codex pilot, dirty) and `process-modes` (draft); `bench-a2/.scratch/` holds the bench runs and Rick's verdicts (KEEP). Prune per the cleanup proposal, after Rick's word.
 
 ## To file
+- `scripts/warning_ratchet.py` prints "N compiled file(s)" but N counts files WITH warnings, so an incremental lane that compiled nothing and a clean compile both read 0 — two workers were misled (11/02); print the compiled-file count `compiled_files()` already computes.
+- `CheckCopies.checkCopiesRegroupScope` still calls the synchronous `DuplicateDetector.affectedSubset` on the main actor (same cost the hop fix removed from Analyze Duplicates); move it to `affectedSubsetOffMain`.
 - `scripts/run_catalog_tests.sh` prints CATALOG TESTS RED on today's main although every test passes: the Core lane runs 403 tests against a floor of 409 (tests renamed or merged since the floor was set); re-baseline the floor from the manifest or make the script count by manifest, not by a hard number (seen 11/01 evening on two branches).
 - Era job re-analyzes a file that produced no `era.fused` line (12 of batch 1 were not "cached" in batch 2's plan — every window refused or empty); the caching rule (§0.7) says a digest the signer has seen is never recomputed: the plan should treat any journal/catalog row by that signer as seen, and a file with zero valid windows should get a `era.none` observation so it is not retried every run.
 - Three Python tests red on main, pre-existing (11/01): `test_codeql_extraction_floor::test_sensor_real_repo_scope_is_app_plus_core`, `test_docs_links::test_tracked_docs_references_exist` (#404), `test_gauntlet_runner::test_poisoned_home_and_roots_replaced_in_child_and_xctestrun`.
