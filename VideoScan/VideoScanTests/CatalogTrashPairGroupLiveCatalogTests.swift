@@ -317,4 +317,74 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         #expect(result.succeeded == 0, "\(result.items.map(\.outcome))")
         #expect(exists(o) && FileManager.default.fileExists(atPath: old.path))
     }
+
+    // MARK: Codex #202 — one fingerprint for phase 1 and the settlement (red first)
+
+    /// Runs V+A through the routine with `mutate` called on the main actor
+    /// inside V's move seam — after phase 1, before the first move.
+    private func runWithMutation(_ label: String, extra: Int = 0,
+                                 _ mutate: @escaping @MainActor (VideoRecord, VideoRecord, [VideoRecord], VideoScanModel) -> Void)
+        async throws -> (VideoScanModel.JunkDeletionResult, Disk) {
+        let d = try disk(label)
+        let v = try file(d, "test_\(label).V.mxf", seed: 141, .videoOnly), a = try file(d, "test_\(label).A.mxf", seed: 142, .audioOnly)
+        var others: [VideoRecord] = []
+        for i in 0..<extra { others.append(try file(d, "test_\(label).X\(i).mxf", seed: 150 + UInt64(i), .audioOnly)) }
+        pair(v, a)
+        d.model.records = [v, a] + others
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.groups.count == 1)
+        let bin = d.sb.root.appendingPathComponent("seam-trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let vPath = v.fullPath
+        let refs = Ref((v: v, a: a, others: others, model: d.model))
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p, fileOperation: { url in
+            if url.path == vPath {
+                DispatchQueue.main.sync {
+                    MainActor.assumeIsolated { mutate(refs.value.v, refs.value.a, refs.value.others, refs.value.model) }
+                }
+            }
+            try FileManager.default.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
+        })
+        return (result, d)
+    }
+
+    @Test("codex #202 F1: a late-linked group too large for the walk still warns; the cap only limits the names listed")
+    func oversizedLateLinkedGroupIsReported() async throws {
+        let (result, d) = try await runWithMutation("pgcap", extra: 20) { v, _, others, _ in
+            for x in others { x.pairedWith = v }
+        }
+        defer { d.sb.cleanup() }
+        #expect(result.succeeded == 2)
+        #expect(result.groupNeedsAttention, "\(result.groupNotes)")
+        #expect(result.groupNotes.contains { $0.contains("changed during the move") }, "\(result.groupNotes)")
+        #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+    }
+
+    @Test("codex #202 F2: a removal marker stamped during the move is never overwritten and is reported")
+    func markerChangedDuringMoveIsReported() async throws {
+        let (result, d) = try await runWithMutation("pgmark") { _, a, _, _ in
+            VideoScanModel.stampRemoval(a, .removedFromCatalog(at: Date(), reason: .junk))
+        }
+        defer { d.sb.cleanup() }
+        let a = try #require(d.model.records.first { $0.filename == "test_pgmark.A.mxf" })
+        #expect(a.removal?.state == .removedFromCatalog, "the concurrent marker is not overwritten")
+        #expect(result.groupNeedsAttention, "\(result.groupNotes)")
+        #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+    }
+
+    @Test("codex #202 F3: a member set aside or superseded during the move is reported", arguments: ["setAside", "superseded"])
+    func memberEligibilityChangedDuringMoveIsReported(_ change: String) async throws {
+        let (result, d) = try await runWithMutation("pgelig\(change)") { _, a, _, _ in
+            if change == "setAside" {
+                a.setAsideReason = CatalogScopePolicy.SetAsideReason.unlinkedAudio.rawValue
+            } else {
+                a.supersededByID = UUID()
+            }
+        }
+        defer { d.sb.cleanup() }
+        #expect(result.groupNeedsAttention, "\(result.groupNotes)")
+        #expect(result.groupNotes.contains { $0.contains("changed during the move") }, "\(result.groupNotes)")
+        #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+    }
+
 }

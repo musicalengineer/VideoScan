@@ -114,6 +114,8 @@ enum CatalogPairGroups {
         var missingOnDisk: [String] = []
         /// A link could not be followed, or no sibling exists at all.
         var unknown = false
+        /// The walk stopped at `maxMembers` (corrupt or runaway linkage).
+        var capped = false
     }
 
     /// Bound on a group's size: the correlator makes pairs; a "group" of
@@ -152,7 +154,7 @@ enum CatalogPairGroups {
                 next.append(row)
             }
             for n in next where seen.insert(n.id).inserted { queue.append(n) }
-            if queue.count > maxMembers { out.unknown = true; break }
+            if queue.count > maxMembers { out.unknown = true; out.capped = true; break }
         }
         if out.members.count == 1, out.departed.isEmpty { out.unknown = true }   // no sibling known
         if !out.members.contains(where: { $0.id == start.id }) { out.unknown = true }   // the start itself is gone

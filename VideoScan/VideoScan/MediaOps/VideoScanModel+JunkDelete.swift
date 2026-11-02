@@ -514,9 +514,17 @@ extension VideoScanModel {
                 continue
             }
             let target = settlementTarget(rec, turn: turns[i])
+            if outcome.isMoved { removedFromDisk.append(target) }
+            // Detect, then write — never overwrite (Codex #202 F2): a marker
+            // another door wrote to this row while its file was moving is
+            // kept, and said; the file's move is still a fact (ledger).
+            if let turn = turns[i], target !== turn.snapshot, target.removalRevision != turn.snapshot.removalRevision {
+                log("  \(target.filename): its catalog row was changed by another action while the file moved to the Trash — "
+                    + "the row is left as that action set it, not overwritten")
+                continue
+            }
             // The file already left: a disk fact (B2.3).
             recordFileLeft(target, marker, stage: stage, whereNow: outcome.isMoved ? "is in the Trash" : "was already gone")
-            if outcome.isMoved { removedFromDisk.append(target) }
         }
         // The items name the file each outcome was about (codex round 2 P2):
         // a row relinked mid-turn is reported through its frozen snapshot.

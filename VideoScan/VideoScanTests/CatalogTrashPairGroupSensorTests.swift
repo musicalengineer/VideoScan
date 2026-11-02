@@ -89,7 +89,7 @@ struct CatalogTrashPairGroupSensorTests {
         let probStart = try #require(turns.range(of: "func problem(_ rec: VideoRecord, model: VideoScanModel)"))
         let probEnd = try #require(turns.range(of: "func holdGroups(", range: probStart.upperBound..<turns.endIndex))
         let problem = turns[probStart.upperBound..<probEnd.lowerBound]
-        #expect(problem.contains("model.record(forID: rec.id)") && problem.contains("resolve(live, in: liveIndex(model))"),
+        #expect(problem.contains("model.record(forID: rec.id)") && problem.contains("let index = liveIndex(model)") && problem.contains("resolve(live, in: index)"),
                 "membership is resolved again from the live row and the live index")
         #expect(problem.contains("nowIDs != confirmedIDs"), "the live set must equal the confirmed set")
         for field in ["rec.pairGroupID", "rec.pairedWith", "rec.pendingPairedWithID", "rec.removal", "rec.isPurged", "rec.combinedFromPairID"] {
@@ -97,9 +97,22 @@ struct CatalogTrashPairGroupSensorTests {
         }
         let groups = try SourceTree.appCode(named: "CatalogPairGroups.swift")
         // Codex #201 F1: the settlement walks with THE SAME function phase 1 uses.
-        #expect(turns.contains("CatalogPairGroups.resolve(live, in: liveIndex(model))"), "phase 1's walk")
-        #expect(turns.contains("CatalogPairGroups.resolve(first, in: index, treatAsLive: Set(g.members))"), "the settlement's walk")
-        #expect(turns.components(separatedBy: "CatalogPairGroups.resolve(").count - 1 == 2, "no third walk")
+        #expect(turns.contains("CatalogPairGroups.resolve(live, in: index)"), "phase 1's membership walk")
+        let fingerprint = try SourceTree.appCode(named: "PairMemberFingerprint.swift")
+        #expect(fingerprint.contains("CatalogPairGroups.resolve(first, in: index, treatAsLive: treatAsLive)"), "the fingerprint's walk")
+        #expect(turns.components(separatedBy: "CatalogPairGroups.resolve(").count - 1 == 1, "no other walk in the turn gate")
+        // Codex #202: ONE fingerprint — phase 1 snapshots with it, the settlement compares with it.
+        #expect(turns.contains("snapshots[gi] = PairGroupFingerprint.of(g, model: model, index: index)"), "phase 1's snapshot")
+        #expect(turns.contains("let now = PairGroupFingerprint.of(g, model: model, index: index, treatAsLive: Set(g.members))"),
+                "the settlement's comparison")
+        #expect(turns.contains("now.differences(from: expected)"))
+        // The gate reads a member only through the fingerprint (its inputs enumerated once).
+        let gateStart = try #require(turns.range(of: "func problem(_ rec: VideoRecord, model: VideoScanModel)"))
+        let gateEnd = try #require(turns.range(of: "nonisolated static let ledgerPairGroup", range: gateStart.upperBound..<turns.endIndex))
+        let gate = String(turns[gateStart.upperBound..<gateEnd.lowerBound])
+        let liveReads = gate.components(separatedBy: "live.").count - 1
+        #expect(liveReads == 0, "the gate reads no live-row field directly (\(liveReads) found) — only the fingerprint")
+        #expect(gate.contains("PairMemberFingerprint.of(live, model: model"))
         #expect(plan.contains("groupTurns.changesDuringMove(g, moved: moved, model: self, index: afterMoves)"))
         #expect(!plan.contains("linkedOutside") && !groups.contains("linkedOutside"), "the old one-sided settlement walk is gone")
         // Codex #195 F1: every row in a group in ANY link direction meets the gate.

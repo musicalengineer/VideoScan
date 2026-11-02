@@ -81,12 +81,16 @@ final class CatalogTrashGroupTurns {
         guard let live = model.record(forID: rec.id) else {
             return stop(gi, "\(g.filenames[k]) is no longer in the catalog")
         }
+        // Everything the gate reads about the member, through THE one
+        // fingerprint (Codex #202) — the settlement compares the same value.
+        let fp = PairMemberFingerprint.of(live, model: model, archiveVolume: model.archiveVolumeProtection())
         // The file this turn would move must be the one the plan proved
         // (Codex #191 F1) — a stale row object never moves.
-        if rec.fullPath != g.paths[k] || live.fullPath != g.paths[k] {
+        if rec.fullPath != g.paths[k] || fp.path != g.paths[k] {
             return stop(gi, "\(g.filenames[k]) is not the file you confirmed (its catalog row points elsewhere)")
         }
-        let now = CatalogPairGroups.resolve(live, in: liveIndex(model))
+        let index = liveIndex(model)
+        let now = CatalogPairGroups.resolve(live, in: index)
         if now.unknown || !now.missingOnDisk.isEmpty {
             return stop(gi, "the catalog can't account for every related half of \(g.filenames[k]) now")
         }
@@ -97,9 +101,12 @@ final class CatalogTrashGroupTurns {
                 : "\(CatalogPairGroups.list(joined)) joined the pair since you confirmed"
             return stop(gi, why)
         }
-        guard Self.stillAsPlanned(live, g, k, departed: now.departedIDs) else {
+        guard Self.stillAsPlanned(fp, g, k, departed: now.departedIDs) else {
             return stop(gi, "\(g.filenames[k]) changed in the catalog since you confirmed")
         }
+        // Phase 1 of the unit starts with its first member: snapshot the
+        // whole group's fingerprint now (the settlement compares it).
+        if k == 0 { snapshots[gi] = PairGroupFingerprint.of(g, model: model, index: index) }
         return nil
     }
 
@@ -116,50 +123,24 @@ final class CatalogTrashGroupTurns {
         groups.indices.filter { stopped[$0] == nil }.map { groups[$0] }
     }
 
+    /// Phase 1's fingerprint of each confirmed group (by group index).
+    private var snapshots: [Int: PairGroupFingerprint] = [:]
+
     /// What changed in the catalog about `g` while its off-main disk work
     /// ran (DECISIONS 2026-11-01 contract) — the settlement's question,
-    /// asked after the moves. Every member's FULL live state against the
-    /// confirmed snapshot (path, pairGroupID, object and pending links, the
-    /// removal marker the move should have left), then THE SAME walk phase 1
-    /// uses (`CatalogPairGroups.resolve`, every link direction, the moved
-    /// rows counted as members) to find a sibling linked, restored or added.
-    /// Empty = nothing changed. Sentences, for the alert.
+    /// asked after the moves: the group's fingerprint NOW (THE same builder
+    /// phase 1 used, the moved rows counted as members) against phase 1's
+    /// snapshot, the moved members expected In the Trash. Any difference —
+    /// a member field, an eligibility input, a sibling joined, a capped or
+    /// one-sided walk — is a sentence for the alert. Empty = unchanged.
     func changesDuringMove(_ g: CatalogPairGroups.Group, moved: Set<UUID>, model: VideoScanModel,
                            index: CatalogPairGroups.Index) -> [String] {
-        var out: [String] = []
-        var first: VideoRecord?
-        for k in g.members.indices {
-            let name = g.filenames[k]
-            guard let live = model.record(forID: g.members[k]) else { out.append("\(name) left the catalog"); continue }
-            if first == nil { first = live }
-            out += Self.drift(of: live, from: g, at: k, moved: moved.contains(g.members[k]))
+        guard let gi = groups.firstIndex(of: g), var expected = snapshots[gi] else {
+            return ["the pair's state before the move was not recorded"]
         }
-        if let first {
-            let now = CatalogPairGroups.resolve(first, in: index, treatAsLive: Set(g.members))
-            let joined = now.members.filter { !g.members.contains($0.id) }.map(\.filename)
-            for j in joined { out.append("\(j) was linked during the move") }
-            if !now.missingOnDisk.isEmpty { out.append("\(CatalogPairGroups.list(now.missingOnDisk)) was linked during the move") }
-            if now.unknown && joined.isEmpty && now.members.count > 1 {
-                out.append("a link the catalog can't follow was added")
-            }
-        }
-        return out
-    }
-
-    /// One member's live state against the confirmed snapshot: its path,
-    /// its pair links, and the removal marker the move should have left.
-    /// Sentences for what differs; empty = unchanged.
-    nonisolated static func drift(of live: VideoRecord, from g: CatalogPairGroups.Group, at k: Int,
-                                  moved: Bool) -> [String] {
-        let name = g.filenames[k]
-        var out: [String] = []
-        if live.fullPath != g.paths[k] { out.append("\(name) was relinked to another path") }
-        let links = (live.pairGroupID, live.pairedWith?.id, live.pendingPairedWithID)
-        let confirmed = (g.pairGroupIDs[k], k < g.pairedWithIDs.count ? g.pairedWithIDs[k] : links.1,
-                         k < g.pendingIDs.count ? g.pendingIDs[k] : links.2)
-        if links != confirmed { out.append("\(name)'s pair link was changed") }
-        if live.removal?.state != (moved ? .inTrash : nil) { out.append("\(name)'s catalog state was changed") }
-        return out
+        for id in moved { expected.members[id]?.removalState = .inTrash }
+        let now = PairGroupFingerprint.of(g, model: model, index: index, treatAsLive: Set(g.members))
+        return now.differences(from: expected)
     }
 
     private func stop(_ gi: Int, _ why: String) -> String {
@@ -169,14 +150,12 @@ final class CatalogTrashGroupTurns {
 
     /// The live row is still the half the plan admitted. Its links may name
     /// only members — or a sibling that is departed NOW (Codex #195 F4, #197 F4).
-    private static func stillAsPlanned(_ live: VideoRecord, _ g: CatalogPairGroups.Group, _ j: Int,
+    private static func stillAsPlanned(_ fp: PairMemberFingerprint, _ g: CatalogPairGroups.Group, _ j: Int,
                                        departed: [UUID]) -> Bool {
-        guard !live.isPurged, !live.isSetAside, !live.isSuperseded,
-              live.combinedFromPairID == nil,
-              live.fullPath == g.paths[j], live.pairGroupID == g.pairGroupIDs[j] else { return false }
+        guard fp.isActive, fp.path == g.paths[j], fp.pairGroupID == g.pairGroupIDs[j] else { return false }
         let allowed = Set(g.members).union(departed)
-        if let p = live.pairedWith?.id, !allowed.contains(p) { return false }
-        if let p = live.pendingPairedWithID, !allowed.contains(p) { return false }
+        if let p = fp.pairedWithID, !allowed.contains(p) { return false }
+        if let p = fp.pendingPairedWithID, !allowed.contains(p) { return false }
         return true
     }
 
