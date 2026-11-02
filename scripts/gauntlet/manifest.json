@@ -1106,6 +1106,19 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyGraphCompiledStoreWriteGuardTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyGraphCompiledStoreWriteGuardTests"
+      ],
+      "tests": [
+        "testAFalseGuardRefusesIngestAndWritesNothing",
+        "testTheGuardIsReadAtTheWriteNotWhenTheStoreWasMade"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
       "stage": "unit",
       "suites": [
@@ -15366,10 +15379,40 @@
         "FamilyTreeReadOnlyWriteSiteSensorTests"
       ],
       "tests": [
+        "everyAsyncWriterRechecksAtTheMomentOfTheWrite",
         "everyWriteSiteInFamilyTreeChecksTheAccessState",
         "identityCenterWritesOnlyThroughTheGatedStore",
         "loaderReadOnlyBranchComesFirst",
         "theScannerFlagsAnUngatedWriter"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyRevocationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyDocumentTransitionTests",
+        "FamilyTreeReadOnlyInFlightTests",
+        "FamilyTreeReadOnlyPublishedAuthorityTests",
+        "FamilyTreeReadOnlyPullDateTests",
+        "FamilyTreeReadOnlyRulingsTests",
+        "FamilyTreeReadOnlySeamTests"
+      ],
+      "tests": [
+        "aDocumentRemovalRevokedBeforeItRunsMovesNothing",
+        "aFilingRevokedAfterItsChecksFilesNothing",
+        "aHeldListingReleasedAfterTheTransitionPublishesNothing",
+        "aLiveStoreRefusesOnceTheAuthorityIsRevokedAndCreatesNothing",
+        "aMergeRevokedAfterStagingNeverActivates",
+        "aPublishedRevocationRefusesTheNextWriteWithoutReappearing",
+        "aRecompileRevokedMidCompilePromotesNothing",
+        "aRefreshApplyRevokedBeforeTheOverlayWriteWritesNothing",
+        "aStandaloneRecompileRevokedMidCompilePromotesNothing",
+        "aViewerAppearanceNeverSearchesManifestSourceFolders",
+        "aViewerShowsNoRulingsAndNoBookmarks",
+        "aWrongUUIDVolumesRulingAndBookmarkNeverReachTheReadOnlyTree",
+        "anUnavailableArchiveIsNeverListedToResolveTheGEDCOMFolder",
+        "cancellingAMergeInTheReadOnlyStateRemovesNothing"
       ]
     },
     {
@@ -32845,6 +32888,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyGraphCompiledStoreWriteGuardTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -35385,7 +35432,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3175,
+      "expected_floor": 3190,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35694,9 +35741,15 @@
         "VideoScanTests/FamilyTreeNoteDraftOwnerTests",
         "VideoScanTests/FamilyTreePersonMetadataTests",
         "VideoScanTests/FamilyTreePullDatesTests",
+        "VideoScanTests/FamilyTreeReadOnlyDocumentTransitionTests",
+        "VideoScanTests/FamilyTreeReadOnlyInFlightTests",
         "VideoScanTests/FamilyTreeReadOnlyIsolationTests",
         "VideoScanTests/FamilyTreeReadOnlyMatrixTests",
+        "VideoScanTests/FamilyTreeReadOnlyPublishedAuthorityTests",
+        "VideoScanTests/FamilyTreeReadOnlyPullDateTests",
+        "VideoScanTests/FamilyTreeReadOnlyRulingsTests",
         "VideoScanTests/FamilyTreeReadOnlyScaleTests",
+        "VideoScanTests/FamilyTreeReadOnlySeamTests",
         "VideoScanTests/FamilyTreeReadOnlyTransitionTests",
         "VideoScanTests/FamilyTreeReadOnlyTruthTests",
         "VideoScanTests/FamilyTreeReadOnlyWriteSiteSensorTests",

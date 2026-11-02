@@ -110,6 +110,14 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// the root, and say so in the log. The app sets it from
     /// ViewerModeCenter; a CLI never sets it.
     public var refusesWrites = false
+    /// Asked at the MOMENT of every write (ingest, rollback, repoint,
+    /// adopt) — false refuses it exactly as `refusesWrites` does. The app's
+    /// Family Tree read-only state (2026-11-01, codex #190 F2) sets it so a
+    /// compile that was allowed when it started cannot promote after the
+    /// archive went away while it parsed. Nil = no extra check.
+    public var writeGuard: (@Sendable () -> Bool)? = nil
+    /// `refusesWrites`, or the guard saying no right now.
+    var writesRefused: Bool { refusesWrites || writeGuard?() == false }
     /// The log line every refused write starts with (test sensor).
     public static let refusedWritePrefix = "[family-tree] refused write on a viewer:"
 
@@ -544,7 +552,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// since (rule 3b re-review, finding 1). Returning early there handed the
     /// caller a stale graph while the pointer on disk said otherwise.
     public func adopt(_ found: RecoveryCandidate) -> Adoption {
-        guard !refusesWrites else {
+        guard !writesRefused else {
             log("\(Self.refusedWritePrefix) adopt \(found.generation) — pointer untouched")
             return .adopted(found.graph)
         }
@@ -658,7 +666,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// the pointer on disk is still the one we based the decision on (an
     /// ingest may have promoted a fresh generation meanwhile).
     private func repoint(from seen: Pointer, current: String, sourceKeys: [String]) {
-        if refusesWrites {
+        if writesRefused {
             log("\(Self.refusedWritePrefix) repoint to \(current) — pointer untouched")
             return
         }
@@ -701,7 +709,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// as `previous`, and prune never deletes a freshly promoted sibling.
     public func ingest(graph: GedcomFamilyGraph, sources: [URL], mergeReport: String? = nil,
                        progress: (String) -> Void = { _ in }) -> GedcomFamilyGraph? {
-        if refusesWrites {
+        if writesRefused {
             log("\(Self.refusedWritePrefix) ingest (\(sources.count) sources) — the tree is compiled on the master")
             return nil
         }
@@ -844,7 +852,7 @@ public struct FamilyGraphCompiledStore: Sendable {
     /// untouched in every false case.
     @discardableResult
     public func rollback() -> Bool {
-        if refusesWrites {
+        if writesRefused {
             log("\(Self.refusedWritePrefix) rollback — pointer untouched")
             return false
         }

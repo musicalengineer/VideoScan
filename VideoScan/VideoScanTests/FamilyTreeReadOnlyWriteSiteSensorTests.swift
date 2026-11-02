@@ -115,16 +115,17 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         "FamilySearchPull.swift:write": .via([
             ("FamilySearchPullCoordinator.swift:launch", "script.write("),
         ], exhaustive: false),
-        "FamilySearchPullCoordinator.swift:cancel": .exempt(
-            "removes only this coordinator's own staging folder, which exists only after a gated "
-            + "launch / install"),
+        // codex #190 F2: no longer exempt — removing staging is a write too.
+        "FamilySearchPullCoordinator.swift:cancel": .gated,
         "FamilySearchPullCoordinator.swift:install": .gated,
         "FamilySearchPullCoordinator.swift:performMerge": .via([
             ("FamilySearchPullCoordinator.swift:installMerged", "performMerge("),
         ], exhaustive: true),
         "FamilySearchPullCoordinator.swift:sha256Sidecar": .via([
-            ("FamilySearchPullCoordinator.swift:performMerge", "sha256Sidecar("),
+            ("FamilySearchPullCoordinator.swift:stageMerge", "sha256Sidecar("),
         ], exhaustive: true),
+        // Staging re-asks the authority before its first byte (codex #190 F2).
+        "FamilySearchPullCoordinator.swift:stageMerge": .gated,
         // Bookmarks (beside the GEDCOM, on the archive).
         "FamilyTreeBookmarks.swift:save": .via([
             ("FamilyTreeLiveModel.swift:toggleBookmark", "bookmarks.save(to"),
@@ -235,6 +236,51 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
             }
         }
         #expect(failures.isEmpty, "\(failures.count) problem(s):\n\(failures.joined(separator: "\n"))")
+    }
+
+    /// codex #190 F2: a writer that does async work asks the authority
+    /// AGAIN at the moment it writes, not only at its entry. Each pair is
+    /// (member, the in-flight re-check it must contain).
+    static let inFlightRechecks: [(String, String)] = [
+        ("FamilyTreeLiveModel.swift:recompile", "guarded.writeGuard"),
+        ("FamilyTreeLiveModel.swift:removeDocument", "authority.check(.document"),
+        ("FamilyTreeRecompileCenter.swift:recompile", "guarded.writeGuard"),
+        ("FamilyTreeWalkCenter.swift:save", "FamilyTreeWriteGate.check(.walkDecorations"),
+        ("FamilySearchPersonRefreshCoordinator.swift:writeOverlay", "FamilyTreeWriteGate.refuse(.personRefresh"),
+        ("FamilySearchPersonRefreshCoordinator.swift:apply", "\"PersonRefresh.journal\""),
+        ("FamilySearchPersonRefreshCoordinator.swift:undoLast", "\"PersonRefresh.journal\""),
+        ("FamilySearchPullCoordinator.swift:stageMerge", "\"FamilySearchPull.merge (sidecars + staging)\""),
+        ("FamilySearchPullCoordinator.swift:abandonIfRevoked", "\"FamilySearchPull.activate\""),
+        ("FamilySearchPullCoordinator.swift:performMerge", "abandonIfRevoked(staged"),
+        ("RecordFinderFiling.swift:writeDocument", "\"RecordFinderFiler.file (write)\""),
+        // Asset-store writers started from the view: a LIVE store re-reads
+        // the published authority inside every write.
+        ("FamilyTreeView.swift:persistPhotoChoice", "makeLiveStore()"),
+        ("FamilyTreeView.swift:presentAdjustPhoto", "makeLiveStore()"),
+        ("FamilyTreeDocumentsUI.swift:add", "makeLiveStore()"),
+        ("RecordFinderFoundSheet.swift:file", "makeLiveStore()"),
+        ("FamilyTreeLiveModel.swift:revealOriginalsFolder", "makeLiveStore()"),
+    ]
+
+    @Test func everyAsyncWriterRechecksAtTheMomentOfTheWrite() throws {
+        let files = try Self.familyTreeSources()
+        for (member, token) in Self.inFlightRechecks {
+            let raw = try #require(files.first { $0.0 == member.split(separator: ":")[0].description }?.1)
+            // String tokens are matched in the raw member text (the lexer
+            // blanks string contents); code tokens in the code-only text.
+            let scanned = Self.scan(raw)
+            let name = String(member.split(separator: ":")[1])
+            let rows = scanned.lines.indices.filter { scanned.owner[$0] == name }
+            let rawLines = raw.components(separatedBy: "\n")
+            let body = rows.map { rawLines[$0] }.joined(separator: "\n")
+            #expect(!rows.isEmpty, "\(member) not found")
+            #expect(body.contains(token), "\(member) has no in-flight re-check `\(token)`")
+        }
+        // F1: the model never lists the archive to resolve its sources.
+        for member in ["FamilyTreeLiveModel.swift:configure", "FamilyTreeLiveModel.swift:init"] {
+            let body = try #require(try Self.body(of: member, in: files))
+            #expect(!body.contains(".gedcomDirectory()"), "\(member) lists the archive before the access check")
+        }
     }
 
     /// parseAndPromote's exemption rests on this ordering.

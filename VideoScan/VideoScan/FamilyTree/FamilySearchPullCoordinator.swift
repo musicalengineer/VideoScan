@@ -78,7 +78,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// The Family Tree's read-only state (2026-11-01): every download,
     /// install and merge is refused in it — the GEDCOM folder is on the
     /// absent archive. Read at each use; tests inject.
-    var writeMode: () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     /// Where a merge is written BEFORE it is activated. Injected so tests
     /// stage under their own temp root; production: App Support
     /// family-tree/staging/. Nothing here is ever read by the loader.
@@ -244,9 +244,17 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         phase = .idle
         // A merge still writing to staging finds its generation stale
         // after the write and cleans up itself; a finished-but-unactivated
-        // one is dropped here.
+        // one is dropped here — except in the read-only state, where nothing
+        // is removed either (codex #190 F2): the staged file stays for the
+        // next session and the log says where.
         if let staging = stagingInFlight {
-            try? fileManager.removeItem(at: staging)
+            if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.cancel (remove staging)",
+                                          mode: writeMode()) {
+                appLog.write("Family Tree: cancelled merge left its staging in place (read-only): "
+                    + staging.lastPathComponent)
+            } else {
+                try? fileManager.removeItem(at: staging)
+            }
             stagingInFlight = nil
         }
     }
@@ -668,9 +676,6 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let stamp = Self.timestampFormatter.string(from: Date())
         let verb = policy == .refreshFromNewer ? "refreshed" : "merged"
         let fileName = "familysearch-\(verb)-\(stamp).ged"
-        // Two-case outcome (C++: a tagged union), because the failure is
-        // a sentence for the sheet, not an `Error`.
-        enum Staged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
         let loader = currentTreeLoader()
         // THE BASELINE IS READ BEFORE THE LOAD (codex, 2026-09-17).
         // `loadNewestOutcome` below may itself compile and promote a
@@ -686,7 +691,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // source missing, `loadCurrent()` returned nil and the guard was
         // skipped; the manifest still reports every source.
         let baselineGeneration = self.compiledStore()?.loadCurrentManifest()
-        let staged = await Task.detached(priority: .userInitiated) { () -> Staged in
+        let writeMode = self.writeMode
+        let staged = await Task.detached(priority: .userInitiated) { () -> MergeStaged in
             let fileManager = FileManager.default
             guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
@@ -723,27 +729,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                     + "\(baseSources.count) could be loaded as the base. Merging now would "
                     + "silently drop the others. Recompile the family tree first, then try again.")
             }
-            // Sidecars beside the raw sources (never touching the sources);
-            // the hashes are also the merge's source fingerprints.
-            let currentSHA = Self.sha256Sidecar(for: currentURL, fileManager: fileManager)
-            let newSHA = Self.sha256Sidecar(for: output, fileManager: fileManager)
-            current.sourceFingerprint = currentSHA
-            new.sourceFingerprint = newSHA
-            let merge = current.merge(with: new, policy: policy)
-            let provenance = Self.provenanceNote(
-                stamp: stamp, merge: merge,
-                current: (currentURL, current.people.count, currentSHA),
-                added: (output, new.people.count, newSHA))
-            let text = merge.graph.gedcomText(provenance: provenance)
-            let stagedFile = staging.appendingPathComponent(fileName)
-            do {
-                try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-                try text.write(to: stagedFile, atomically: true, encoding: .utf8)
-            } catch {
-                try? fileManager.removeItem(at: staging)
-                return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
-            }
-            return .written(stagedFile, merge.graph.people.count, merge)
+            return Self.stageMerge(current: current, at: currentURL, new: new, from: output, policy: policy,
+                                   stamp: stamp, fileName: fileName, staging: staging, writeMode: writeMode)
         }.value
 
         if parseDelay > .zero {
@@ -751,6 +738,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             // the staged write and the activation check.
             try? await Task.sleep(for: parseDelay)
         }
+        if abandonIfRevoked(staged, staging: staging) { return }
         // Validate AFTER the write: Keep current / Forget / a newer parse
         // since we started means this artifact is nobody's — drop it.
         var stillReady = false
@@ -789,6 +777,70 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 phase = .failed(message: FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
             }
         }
+    }
+
+    /// Two-case outcome of staging a merge (C++: a tagged union), because
+    /// the failure is a sentence for the sheet, not an `Error`.
+    enum MergeStaged { case written(URL, Int, GedcomFamilyGraph.MergeOutcome), failed(String) }
+
+    /// The staging step of a merge, off the main actor: sidecars beside the
+    /// raw sources, the merged text under `staging/`. The parse before it
+    /// took a while, so the authority is asked again first (codex #190 F2):
+    /// a revoked archive gets no sidecar and no staging.
+    nonisolated static func stageMerge(current: GedcomFamilyGraph, at currentURL: URL,
+                                       new: GedcomFamilyGraph, from output: URL,
+                                       policy: GedcomFamilyGraph.MergePolicy, stamp: String, fileName: String,
+                                       staging: URL,
+                                       writeMode: @Sendable () -> FamilyTreeAccessMode) -> MergeStaged {
+        var current = current, new = new
+        let fileManager = FileManager.default
+        // The parse took a while: the archive may have gone since the
+        // click. Ask again before the first byte (codex #190 F2).
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.merge (sidecars + staging)",
+                                      mode: mode) {
+            return .failed(FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode) ?? "")
+        }
+        // Sidecars beside the raw sources (never touching the sources);
+        // the hashes are also the merge's source fingerprints.
+        let currentSHA = Self.sha256Sidecar(for: currentURL, fileManager: fileManager)
+        let newSHA = Self.sha256Sidecar(for: output, fileManager: fileManager)
+        current.sourceFingerprint = currentSHA
+        new.sourceFingerprint = newSHA
+        let merge = current.merge(with: new, policy: policy)
+        let provenance = Self.provenanceNote(
+            stamp: stamp, merge: merge,
+            current: (currentURL, current.people.count, currentSHA),
+            added: (output, new.people.count, newSHA))
+        let text = merge.graph.gedcomText(provenance: provenance)
+        let stagedFile = staging.appendingPathComponent(fileName)
+        do {
+            try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+            try text.write(to: stagedFile, atomically: true, encoding: .utf8)
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
+        }
+        return .written(stagedFile, merge.graph.people.count, merge)
+    }
+
+    /// Revoked while staging (codex #190 F2): activate nothing, remove
+    /// nothing, never recreate an absent archive folder. The staged file
+    /// stays where it is and the log names it. True = abandoned.
+    private func abandonIfRevoked(_ staged: MergeStaged, staging: URL) -> Bool {
+        let mode = writeMode()
+        guard FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.activate", mode: mode) else {
+            return false
+        }
+        if case .written(let stagedFile, _, _) = staged {
+            appLog.write("Family Tree: merge NOT activated (read-only); staged copy left at "
+                + stagedFile.deletingLastPathComponent().lastPathComponent + "/" + stagedFile.lastPathComponent)
+        }
+        if stagingInFlight == staging { stagingInFlight = nil }
+        if case .ready = phase {
+            phase = .failed(message: FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode) ?? "")
+        }
+        return true
     }
 
     /// The HEAD NOTE of a merge artifact: what it is (derived, lossy),

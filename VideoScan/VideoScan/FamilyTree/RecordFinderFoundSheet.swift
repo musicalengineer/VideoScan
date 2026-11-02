@@ -226,10 +226,11 @@ struct RecordFinderFoundSheet: View {
         let person = target.assetPerson
         let speaker = speakerName
         let record = self.record
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A LIVE store: every write re-reads the published authority, so a
+        // revocation while this runs refuses the write (codex #190 F2).
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> RecordFilingOutcome in
-                let store = configuration.makeStore()
                 let filer = RecordFinderFiler(
                     assetStore: store, assetPerson: person,
                     researchStore: ResearchStore(peopleRoot: store.peopleDirectory),

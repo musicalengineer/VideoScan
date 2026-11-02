@@ -326,6 +326,13 @@ struct RecordFinderFiler {
     /// People/<…>/ directory — harmless, and the only side effect before the
     /// document itself).
     private func writeDocument(_ s: FoundRecordSubmission, _ pre: Prepared) -> Result<FiledDocument, Stop> {
+        // The checks (hashing, a PDF parse) took time: ask again at the
+        // first write (codex #190 F2). Nothing has been written yet.
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.document, path: "RecordFinderFiler.file (write)", mode: mode, log: log) {
+            return .failure(Stop(outcome: .refused(FamilyTreeWriteGate.refusalText(.document, mode: mode) ?? ""),
+                                 code: "read-only"))
+        }
         let folder: URL
         do {
             folder = try assetStore.folderForPhotoRequest(person: assetPerson)

@@ -2134,10 +2134,11 @@ struct FamilyTreeView: View, Equatable {
         guard model.isEnabled(.photo) else { return }
         model.setPhotoOverride(image, for: personID)
         guard let assetPerson = model.assetPerson(for: personID) else { return }
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A LIVE store: every write re-reads the published authority, so a
+        // revocation while this runs refuses the write (codex #190 F2).
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
-                let store = configuration.makeStore()
                 guard let data = CropRenderer.jpegData(image, quality: 0.92) else {
                     return .failure(FamilyAssetStore.StoreError.sourceIsNotARegularImage(store.peopleDirectory))
                 }
@@ -2168,7 +2169,8 @@ struct FamilyTreeView: View, Equatable {
             adjustError = "Adjust Photo works on people from your GEDCOM."
             return
         }
-        let store = FamilyAssetConfigurationCenter.shared.snapshot().makeStore()
+        // Live: the Adjust sheet records its choice later, through this store.
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
         let originalURL = store.originalPhotoURL(for: assetPerson)
         let override = model.photoOverrideSource(for: person.id)
         Task {

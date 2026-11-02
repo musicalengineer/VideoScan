@@ -51,6 +51,17 @@ struct FamilyAssetConfiguration: Sendable, Equatable {
         return loader.loadNewestOutcome()
     }
 
+    /// The GEDCOM folder WITHOUT looking inside anything when the archive
+    /// is `.unavailable` (codex #190 F1): an offline mount point must not be
+    /// listed and a wrong-UUID volume is not the archive. Otherwise the
+    /// same answer as `gedcomDirectory()`.
+    func resolvedGEDCOMDirectory(fileManager: FileManager = .default) -> URL {
+        guard access != .unavailable else {
+            return roots.assets.appendingPathComponent("GEDCOM", isDirectory: true)
+        }
+        return gedcomDirectory(fileManager: fileManager)
+    }
+
     /// Prefer the deployed assets/GEDCOM convention.  Older installations
     /// stored their only export in family-tree/originals; retain read access
     /// until they adopt a Master Archive, without copying or mutating it.
@@ -373,7 +384,9 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
     private let lock = NSLock()
     private var value: FamilyAssetConfiguration
 
-    private init() {
+    /// `.shared` in the app; tests build their own so publishing a revoked
+    /// authority never reaches another suite.
+    init() {
         value = Self.configuration(
             masterArchiveRoot: nil,
             masterIsSafelyAvailable: true,
@@ -384,6 +397,20 @@ final class FamilyAssetConfigurationCenter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return value
+    }
+
+    /// A store for the current configuration that re-reads THIS centre at
+    /// every write (codex #190 F2): if the archive is revoked — or replaced
+    /// by another — after the store was made, its next write refuses.
+    func makeLiveStore() -> FamilyAssetStore {
+        let now = snapshot()
+        var store = now.makeStore()
+        let roots = now.roots
+        store.liveAccess = { [self] in
+            let current = self.snapshot()
+            return current.roots == roots ? current.access : .unavailable
+        }
+        return store
     }
 
     func publish(
@@ -679,6 +706,9 @@ struct FamilyAssetStore: @unchecked Sendable {
     /// Optional identity-aware attribution for group folders. Nil keeps the
     /// name-only rule (`groupFolderMatches(_:person:)`).
     var identity: FamilyAssetIdentityDirectory? = nil
+    /// The authority as it is NOW (FamilyAssetConfigurationCenter.makeLiveStore);
+    /// `requireWriteAccess` obeys the stricter of it and `access`. Nil = `access` only.
+    var liveAccess: (@Sendable () -> Access)? = nil
 
     /// One listing of `People/`, taken by `snapshotPeopleFolders()` and
     /// reused by every read through THIS store value. Nil (the default)
@@ -1844,10 +1874,12 @@ struct FamilyAssetStore: @unchecked Sendable {
     }
 
     func requireWriteAccess() throws {
-        switch access {
-        case .readWrite: return
-        case .readOnly: throw StoreError.readOnly
-        case .unavailable: throw StoreError.sourceUnavailable
+        for current in [access, liveAccess?() ?? .readWrite] {
+            switch current {
+            case .readWrite: continue
+            case .readOnly: throw StoreError.readOnly
+            case .unavailable: throw StoreError.sourceUnavailable
+            }
         }
     }
 

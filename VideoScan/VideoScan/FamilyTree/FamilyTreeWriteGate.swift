@@ -73,6 +73,50 @@ enum FamilyTreeAccessMode: Equatable, Sendable {
     }
 }
 
+extension FamilyTreeAccessMode {
+    /// The stricter of two answers: viewer › archive absent › full. A writer
+    /// that has two sources of authority (its own cached access and the
+    /// published one) obeys whichever says less.
+    func strictest(_ other: FamilyTreeAccessMode) -> FamilyTreeAccessMode {
+        if self == .readOnly(.viewer) || other == .readOnly(.viewer) { return .readOnly(.viewer) }
+        if isReadOnly || other.isReadOnly { return .readOnly(.archiveUnavailable) }
+        return .full
+    }
+}
+
+/// A model's own source access, readable from any thread, so detached work
+/// re-reads it at the moment it writes (codex #190 F2/F3). C++: a mutex-
+/// guarded value.
+final class FamilyTreeAccessLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var access: FamilyAssetStore.Access
+    init(_ access: FamilyAssetStore.Access) { self.access = access }
+    var value: FamilyAssetStore.Access { lock.withLock { access } }
+    func set(_ next: FamilyAssetStore.Access) { lock.withLock { access = next } }
+}
+
+/// "May the Family Tree write NOW?" — the published archive authority
+/// (FamilyAssetConfigurationCenter), the CatalogSync role (ViewerModeCenter)
+/// and, for a tree model, its own configured access; the strictest wins.
+/// Evaluated at each call: a value to hand to detached work, never a
+/// snapshot of the answer.
+struct FamilyTreeWriteAuthority: Sendable {
+    var latch: FamilyTreeAccessLatch?
+    var configuration: FamilyAssetConfigurationCenter = .shared
+    var viewer: ViewerModeCenter = .shared
+
+    var mode: FamilyTreeAccessMode {
+        let published = FamilyTreeAccessMode.current(configuration: configuration, viewer: viewer)
+        guard let latch else { return published }
+        return FamilyTreeAccessMode.resolve(access: latch.value, isViewer: viewer.isViewer).strictest(published)
+    }
+
+    func check(_ writer: FamilyTreeWriter, path: String,
+               log: (String) -> Void = { appLog.write($0) }) throws {
+        try FamilyTreeWriteGate.check(writer, path: path, mode: mode, viewerCenter: viewer, log: log)
+    }
+}
+
 /// One case per write the Family Tree can make. The view disables the
 /// matching control from `FamilyTreeLiveModel.isEnabled(_:)`; the write path
 /// itself refuses through `FamilyTreeWriteGate` (model level, not view level).

@@ -64,7 +64,7 @@ final class FamilyTreeWalkCenter: ObservableObject {
     /// The Family Tree's read-only state (DECISIONS 2026-11-01): in it no
     /// walk is saved and no automatic re-walk runs. Read at each use, so the
     /// archive coming back re-enables saving without a relaunch. Tests inject.
-    var writeMode: () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     /// Console + catalog.log writer (the catalog model's `log`). Set by the
     /// Family Tree view; nil in tests (then only videoscan.log is written).
     var consoleLog: ((String) -> Void)?
@@ -322,8 +322,15 @@ final class FamilyTreeWalkCenter: ObservableObject {
                                       mode: writeMode(), log: { self.write($0) }) {
             return "decorations not saved (read-only until the Master Archive is connected)"
         }
+        let writeMode = self.writeMode
         let error: String? = await Task.detached(priority: .utility) {
-            do { try TreeWalkStore.save(result, to: url); return nil } catch { return error.localizedDescription }
+            // Again at the moment of the write (codex #190 F2).
+            do {
+                try FamilyTreeWriteGate.check(.walkDecorations, path: "FamilyTreeWalkCenter.save (write)",
+                                              mode: writeMode())
+                try TreeWalkStore.save(result, to: url)
+                return nil
+            } catch { return error.localizedDescription }
         }.value
         if let error { return "decorations NOT saved: \(error)" }
         return "decorations saved"

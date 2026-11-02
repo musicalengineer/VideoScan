@@ -214,7 +214,7 @@ struct FamilyTreeReadOnlyIsolationTests {
         let words = await PersonRefreshCoordinator.undoLast(
             familySearchID: "KWZQ-123", personName: "Anyone", overlayStore: fx.overlayStore,
             journalDirectory: fx.overlayDirectory, sink: .init(videoscanLog: { _ in }),
-            mode: .readOnly(.archiveUnavailable))
+            mode: { .readOnly(.archiveUnavailable) })
         #expect(words.contains("until the Master Archive is connected"), "\(words)")
         #expect(try fx.snapshot() == before)
     }

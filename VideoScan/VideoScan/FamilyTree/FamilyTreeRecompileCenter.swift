@@ -40,6 +40,9 @@ final class FamilyTreeRecompileCenter {
     private weak var liveModel: FamilyTreeLiveModel?
     private(set) var isRunning = false
 
+    /// The access state the standalone path writes under. Tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+
     init() {}
 
     /// The production Family Tree tab model registers itself so the
@@ -92,10 +95,11 @@ final class FamilyTreeRecompileCenter {
         // production) store. Off the main actor; captions hop back.
         let configuration = configuration ?? FamilyAssetConfigurationCenter.shared.snapshot()
         // Read-only state (2026-11-01): a compile writes the store.
+        let writeMode = self.writeMode
         if FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeRecompileCenter.recompile",
                                       mode: FamilyTreeAccessMode.resolve(
                                         access: configuration.access,
-                                        isViewer: ViewerModeCenter.shared.isViewer)) {
+                                        isViewer: ViewerModeCenter.shared.isViewer).strictest(writeMode())) {
             return .failed
         }
         let store = store ?? FamilyGraphCompiledStore.app
@@ -108,9 +112,15 @@ final class FamilyTreeRecompileCenter {
         store.log("\(FamilyTreeLiveModel.recompileStartedPrefix) \(sources.count) sources: "
                   + sources.map(\.lastPathComponent).joined(separator: ", ") + " (standalone path)")
         let directory = configuration.gedcomDirectory()
+        // Asked again at the moment of every store write (codex #190 F2).
+        var guarded = store
+        guarded.writeGuard = {
+            !FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeRecompileCenter.recompile (ingest)",
+                                        mode: writeMode())
+        }
         let promoted = await Task.detached(priority: .userInitiated) { () -> Bool in
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
-            loader.compiledStore = store
+            loader.compiledStore = guarded
             loader.progress = { phase in
                 Task { @MainActor in progress(phase) }
             }

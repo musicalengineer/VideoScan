@@ -74,7 +74,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     private let journalDirectory: URL
     /// The Family Tree's read-only state (2026-11-01): launch and apply are
     /// refused in it. Read at each use; tests inject.
-    var writeMode: () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     private let installedFacts: @MainActor () -> PersonFacts?
     private let locator: FamilySearchToolLocator
     private let launcher: FamilySearchPullLauncher
@@ -334,6 +334,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         /// `keptAs` is where it was set aside (nil when even that failed).
         case unreadable(reason: String, keptAs: String?, setAsideError: String?)
         case failed(String)
+        /// The Family Tree's read-only state began before the write; nothing
+        /// was written or moved (codex #190 F2). The words for the strip.
+        case refused(String)
     }
 
     /// Load → mutate → fsync'd save, entirely OFF the main actor, and the
@@ -346,8 +349,15 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     /// closure (@Sendable — it captures only value types) and the result.
     nonisolated static func writeOverlay<T: Sendable>(
         _ store: PersonFactOverlayStore, now: Date,
+        mode: @escaping @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() },
         _ mutate: @escaping @Sendable (inout PersonFactOverlay) -> T?) async -> OverlayWrite<T> {
         await Task.detached(priority: .userInitiated) { () -> OverlayWrite<T> in
+            // At the moment of the write — the update and the set-aside
+            // alike — not only at the click (codex #190 F2).
+            let current = mode()
+            if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.overlay (write)", mode: current) {
+                return .refused(FamilyTreeWriteGate.refusalText(.personRefresh, mode: current) ?? "")
+            }
             do {
                 guard let result = try store.update(mutate) else { return .nothingToDo }
                 return .written(result)
@@ -401,7 +411,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         isApplying = true
         defer { isApplying = false }
         let fsid = target.familySearchID, name = target.personName, at = now()
-        let outcome = await Self.writeOverlay(overlayStore, now: at) { overlay -> Bool? in
+        let outcome = await Self.writeOverlay(overlayStore, now: at, mode: writeMode) { overlay -> Bool? in
             overlay.record(chosen, familySearchID: fsid, displayName: name, at: at)
             return true
         }
@@ -417,6 +427,10 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             phase = .failed(message: "Could not save the refreshed facts: \(message). Nothing was changed.")
             noteOutcome(PersonRefreshAuditLines.overlayWriteFailed(message))
             return false
+        case .refused(let message):
+            phase = .failed(message: message)
+            noteOutcome(PersonRefreshAuditLines.failed(message))
+            return false
         }
         let entry = PersonRefreshAudit.Entry(
             at: now(), action: .applied, familySearchID: fsid, person: name,
@@ -428,8 +442,12 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         // every before/after value.
         outcomeNoted = true
         for line in PersonRefreshAudit.lines(entry, overlayPath: overlayStore.fileURL.path) { sink.note(line) }
-        do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
-            note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.journal", mode: writeMode()) {
+            note(PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
+        } else {
+            do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
+                note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+            }
         }
         phase = .applied(fields: chosen.count)
         return true
@@ -444,7 +462,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     static func undoLast(familySearchID: String, personName: String,
                          overlayStore: PersonFactOverlayStore, journalDirectory: URL,
                          sink: PersonRefreshNoteSink = .production(console: nil), now: Date = Date(),
-                         mode: FamilyTreeAccessMode = .current()) async -> String {
+                         mode writeMode: @escaping @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() })
+        async -> String {
+        let mode = writeMode()
         let subject = PersonRefreshAuditLines.subject(person: personName, familySearchID: familySearchID)
         if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.undo", mode: mode) {
             return mode == .readOnly(.viewer)
@@ -452,7 +472,7 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                 : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
         }
         typealias Popped = (undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?)
-        let outcome = await writeOverlay(overlayStore, now: now) { overlay -> Popped? in
+        let outcome = await writeOverlay(overlayStore, now: now, mode: writeMode) { overlay -> Popped? in
             overlay.undoLast(familySearchID: familySearchID).map { (undone: $0.before, restored: $0.after) }
         }
         let undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?
@@ -468,6 +488,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         case .failed(let message):
             sink.note(subject + "undo failed: \(message); nothing was changed")
             return "Could not undo: \(message)"
+        case .refused(let message):
+            sink.note(subject + "undo refused: \(message); nothing was changed")
+            return message
         }
         let sentence = restored == nil
             ? "Undid the FamilySearch refresh for \(personName); the tree shows the pulled facts again."
@@ -480,8 +503,12 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             tail: restored == nil ? "the tree shows the pulled facts again" : "the earlier refresh still applies") {
             sink.note(line)
         }
-        do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
-            sink.note(subject + PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.journal", mode: writeMode()) {
+            sink.note(subject + PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
+        } else {
+            do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
+                sink.note(subject + PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+            }
         }
         return sentence
     }

@@ -148,10 +148,11 @@ struct FamilyDocumentAddSheet: View {
         let kind = kind
         let note = note
         let person = target.assetPerson
-        let configuration = FamilyAssetConfigurationCenter.shared.snapshot()
+        // A LIVE store: every write re-reads the published authority, so a
+        // revocation while this runs refuses the write (codex #190 F2).
+        let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<PersonDocument, Error> in
-                let store = configuration.makeStore()
                 do {
                     let folder = try store.folderForPhotoRequest(person: person)
                     let document = try store.importPersonDocument(
