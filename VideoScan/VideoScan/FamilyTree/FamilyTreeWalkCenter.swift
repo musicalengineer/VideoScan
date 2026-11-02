@@ -326,9 +326,8 @@ final class FamilyTreeWalkCenter: ObservableObject {
         let error: String? = await Task.detached(priority: .utility) {
             // Again at the moment of the write (codex #190 F2).
             do {
-                try FamilyTreeWriteGate.check(.walkDecorations, path: "FamilyTreeWalkCenter.save (write)",
-                                              mode: writeMode())
-                try TreeWalkStore.save(result, to: url)
+                try FamilyTreeAccessMode.withWrite(.walkDecorations, path: "FamilyTreeWalkCenter.save (write)",
+                                                   mode: writeMode) { try TreeWalkStore.save(result, to: url) }
                 return nil
             } catch { return error.localizedDescription }
         }.value

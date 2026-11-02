@@ -23,6 +23,7 @@
 // script). FamilySearchPullCoordinator owns the lifecycle.
 
 import Foundation
+import VideoScanCore
 
 // MARK: - Request
 
@@ -321,11 +322,14 @@ struct FamilySearchPullScript {
     func write(fileManager: FileManager = .default) throws -> URL {
         let directory = scriptURL.deletingLastPathComponent()
         do {
-            try fileManager.createDirectory(
-                at: directory, withIntermediateDirectories: true)
-            try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes(
-                [.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            // The caller's bound permit, asked at the write (codex #193).
+            try WritePermit.current.withWrite("pull script") {
+                try fileManager.createDirectory(
+                    at: directory, withIntermediateDirectories: true)
+                try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
+                try fileManager.setAttributes(
+                    [.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            }
         } catch {
             throw FamilySearchPullError.scriptWriteFailed(error.localizedDescription)
         }

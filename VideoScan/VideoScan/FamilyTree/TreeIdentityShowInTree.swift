@@ -188,7 +188,10 @@ enum TreeIdentityPinning {
         let key = HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey
         let current = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
         guard current != familySearchID else { return }
-        defaults.set(familySearchID, forKey: key)
+        // Bound by TreeIdentityCenter around the pin (codex #193).
+        guard (try? WritePermit.current.withWrite("owner FamilySearch ID") {
+            defaults.set(familySearchID, forKey: key)
+        }) != nil else { return }
         appLog.write("[people] owner FamilySearch ID \(current.isEmpty ? "set" : "changed from \(current)") to \(familySearchID) (mirrored from \(profile.name)'s pin)")
     }
 }

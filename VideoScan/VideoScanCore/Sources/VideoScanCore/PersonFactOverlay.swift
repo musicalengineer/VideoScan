@@ -379,7 +379,10 @@ public struct PersonFactOverlayStore: Sendable {
     /// check is one read + decode of a small JSON file.
     public func save(_ overlay: PersonFactOverlay) throws {
         _ = try loadForUpdate()
-        try AtomicFilePublish.write(try overlay.encoded(), to: fileURL, durability: .fullFsync)
+        // The caller's bound permit, asked at the write (codex #193 F3).
+        try WritePermit.current.withWrite("overlay save") {
+            try AtomicFilePublish.write(try overlay.encoded(), to: fileURL, durability: .fullFsync)
+        }
     }
 
     /// Read-modify-write in one call: load (refusing an unreadable file),
@@ -389,7 +392,9 @@ public struct PersonFactOverlayStore: Sendable {
     public func update<T>(_ mutate: (inout PersonFactOverlay) throws -> T?) throws -> T? {
         var overlay = try loadForUpdate()
         guard let result = try mutate(&overlay) else { return nil }
-        try AtomicFilePublish.write(try overlay.encoded(), to: fileURL, durability: .fullFsync)
+        try WritePermit.current.withWrite("overlay update") {
+            try AtomicFilePublish.write(try overlay.encoded(), to: fileURL, durability: .fullFsync)
+        }
         return result
     }
 
@@ -410,7 +415,7 @@ public struct PersonFactOverlayStore: Sendable {
             target = directory.appendingPathComponent("\(base)-\(n)")
             n += 1
         }
-        try fileManager.moveItem(at: fileURL, to: target)
+        try WritePermit.current.withWrite("overlay set-aside") { try fileManager.moveItem(at: fileURL, to: target) }
         return target
     }
 

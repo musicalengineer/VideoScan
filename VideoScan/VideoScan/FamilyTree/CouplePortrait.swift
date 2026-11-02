@@ -72,15 +72,18 @@ enum CouplePortraitPreference {
         defaults.string(forKey: captionKey) ?? ""
     }
 
+    /// Every write here is inside `FamilyTreeAccessMode.withWrite`, which
+    /// asks the LIVE mode at the write (codex #193); `mode` is a supplier,
+    /// never a captured value.
     static func saveCaption(_ caption: String, to defaults: UserDefaults = .standard,
-                            mode: FamilyTreeAccessMode = .current()) {
-        // Read-only state (2026-11-01): nothing is written anywhere.
-        if FamilyTreeWriteGate.refuse(.couplePortrait, path: "CouplePortrait.saveCaption", mode: mode) { return }
+                            mode: @escaping @Sendable () -> FamilyTreeAccessMode = { .current() }) {
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            defaults.removeObject(forKey: captionKey)
-        } else {
-            defaults.set(trimmed, forKey: captionKey)
+        try? FamilyTreeAccessMode.withWrite(.couplePortrait, path: "CouplePortrait.saveCaption", mode: mode) {
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: captionKey)
+            } else {
+                defaults.set(trimmed, forKey: captionKey)
+            }
         }
     }
 
@@ -91,25 +94,25 @@ enum CouplePortraitPreference {
                             into directory: URL? = nil,
                             defaults: UserDefaults = .standard,
                             fileManager: FileManager = .default,
-                            mode: FamilyTreeAccessMode = .current()) throws -> URL {
-        try FamilyTreeWriteGate.check(.couplePortrait, path: "CouplePortrait.importPhoto", mode: mode)
+                            mode: @escaping @Sendable () -> FamilyTreeAccessMode = { .current() }) throws -> URL {
+        try FamilyTreeWriteGate.check(.couplePortrait, path: "CouplePortrait.importPhoto", mode: mode())
         let dir = directory ?? defaultDirectory(fileManager: fileManager)
         guard let image = CropRenderer.boundedImage(at: source, maxPixels: storedMaxPixels)
         else { throw ImportError.notAnImage }
         guard let data = CropRenderer.jpegData(image, quality: 0.92)
         else { throw ImportError.encodeFailed }
-
-        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         let name = "portrait-\(UUID().uuidString).jpg"
         let destination = dir.appendingPathComponent(name, isDirectory: false)
-        try data.write(to: destination, options: .atomic)
-
         let previous = load(from: defaults, directory: dir, fileManager: fileManager)?.url
-        defaults.set(name, forKey: fileNameKey)
-        CouplePortraitImageCache.shared.invalidate()
-        if let previous, previous != destination {
-            try? fileManager.removeItem(at: previous)
+        try FamilyTreeAccessMode.withWrite(.couplePortrait, path: "CouplePortrait.importPhoto (write)", mode: mode) {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: destination, options: .atomic)
+            defaults.set(name, forKey: fileNameKey)
+            if let previous, previous != destination {
+                try? fileManager.removeItem(at: previous)
+            }
         }
+        CouplePortraitImageCache.shared.invalidate()
         return destination
     }
 
@@ -118,13 +121,13 @@ enum CouplePortraitPreference {
     static func remove(from defaults: UserDefaults = .standard,
                        directory: URL? = nil,
                        fileManager: FileManager = .default,
-                       mode: FamilyTreeAccessMode = .current()) {
-        if FamilyTreeWriteGate.refuse(.couplePortrait, path: "CouplePortrait.remove", mode: mode) { return }
+                       mode: @escaping @Sendable () -> FamilyTreeAccessMode = { .current() }) {
         let dir = directory ?? defaultDirectory(fileManager: fileManager)
-        if let current = load(from: defaults, directory: dir, fileManager: fileManager)?.url {
-            try? fileManager.removeItem(at: current)
+        let current = load(from: defaults, directory: dir, fileManager: fileManager)?.url
+        try? FamilyTreeAccessMode.withWrite(.couplePortrait, path: "CouplePortrait.remove", mode: mode) {
+            if let current { try? fileManager.removeItem(at: current) }
+            defaults.removeObject(forKey: fileNameKey)
         }
-        defaults.removeObject(forKey: fileNameKey)
         CouplePortraitImageCache.shared.invalidate()
     }
 }

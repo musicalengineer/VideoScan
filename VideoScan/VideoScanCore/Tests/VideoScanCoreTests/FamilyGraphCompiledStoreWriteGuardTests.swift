@@ -77,4 +77,49 @@ final class FamilyGraphCompiledStoreWriteGuardTests: XCTestCase {
         XCTAssertEqual(store.readPointer(), promoted, "the pointer moved")
         XCTAssertEqual(listing(box.compiled), snap.at, "the root changed after the revocation")
     }
+
+    /// codex #193 F2a: revoked as the compile starts — the artifact must
+    /// not be written afterwards.
+    func testARevocationBeforeArtifactWriteChangesNothing() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let ged = try box.write(GedcomSyntheticPedigree.gedcom(people: 30, generations: 3), as: "a.ged")
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: ged))
+        let flag = Flag()
+        var store = box.store()
+        store.writeGuard = { flag.allows }
+        final class Snap: @unchecked Sendable { var at: [String]? }
+        let snap = Snap()
+        let root = box.compiled
+        XCTAssertNil(store.ingest(graph: graph, sources: [ged], progress: { phase in
+            if phase.hasPrefix("Compiling family tree"), snap.at == nil {
+                flag.revoke()
+                snap.at = (FileManager.default.enumerator(atPath: root.path)?.allObjects as? [String] ?? []).sorted()
+            }
+        }))
+        XCTAssertNotNil(snap.at, "the compile never reported — the test did not revoke")
+        XCTAssertEqual(listing(box.compiled), snap.at, "the root changed after the revocation")
+    }
+
+    /// codex #193 F2b: a source change AND a revocation during verify — the
+    /// changed-source cleanup must not remove the staged generation either.
+    func testSourceChangeAndRevocationDuringVerificationRemoveNothing() throws {
+        let box = try StoreBox(); defer { box.tearDown() }
+        let ged = try box.write(GedcomSyntheticPedigree.gedcom(people: 30, generations: 3), as: "a.ged")
+        let graph = try XCTUnwrap(GedcomFamilyGraph(fileURL: ged))
+        let flag = Flag()
+        var store = box.store()
+        store.writeGuard = { flag.allows }
+        let verify = store.verify
+        final class Snap: @unchecked Sendable { var at: [String]? }
+        let snap = Snap()
+        let root = box.compiled
+        store.verify = { decoded, source in
+            try? "0 HEAD\n0 TRLR\n".write(to: ged, atomically: true, encoding: .utf8)
+            flag.revoke()
+            snap.at = (FileManager.default.enumerator(atPath: root.path)?.allObjects as? [String] ?? []).sorted()
+            return verify(decoded, source)
+        }
+        XCTAssertNil(store.ingest(graph: graph, sources: [ged]))
+        XCTAssertEqual(listing(box.compiled), snap.at, "the cleanup removed bytes after the revocation")
+    }
 }

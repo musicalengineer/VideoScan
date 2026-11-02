@@ -10,8 +10,13 @@ extension CyberBrainWriter {
         let fileManager = FileManager.default
         if !fileManager.fileExists(atPath: root.path) {
             do {
-                try fileManager.createDirectory(
-                    at: root, withIntermediateDirectories: true)
+                // Under the root lock: the caller's bound permit is asked
+                // here, after the wait (codex #193 F1).
+                try WritePermit.current.withWrite("CyberBrain root") {
+                    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+                }
+            } catch let refused as WritePermit.Refused {
+                throw refused
             } catch {
                 throw WriteError.ioFailure(error.localizedDescription)
             }
@@ -117,6 +122,16 @@ extension CyberBrainWriter {
     @discardableResult
     static func save(_ archive: CyberBrainArchive, root: URL,
                      hadExisting: Bool) throws -> URL? {
+        // Every durable writer calls this UNDER the root lock: the caller's
+        // bound permit is asked here, after the wait, before the first byte
+        // (codex #193 F1). Unbound = always allowed (CLIs, tests).
+        try WritePermit.current.withWrite("CyberBrain save") {
+            try saveAllowed(archive, root: root, hadExisting: hadExisting)
+        }
+    }
+
+    private static func saveAllowed(_ archive: CyberBrainArchive, root: URL,
+                                    hadExisting: Bool) throws -> URL? {
         let data = try encode(archive)
         let finalURL = root.appendingPathComponent(
             CyberBrainLoader.defaultFilename, isDirectory: false)

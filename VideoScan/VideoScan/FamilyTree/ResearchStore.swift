@@ -108,7 +108,8 @@ struct ResearchStore: Sendable {
         let url = try dossierURL(key: dossier.subject.key)
         do {
             let data = try Self.encoder.encode(dossier)
-            try Self.writeAtomically(data, to: url)
+            try FamilyTreeAccessMode.withWrite(.research, path: "ResearchStore.saveDossier (write)",
+                                               mode: writeMode) { try Self.writeAtomically(data, to: url) }
         } catch let error as StoreError {
             throw error
         } catch {
@@ -157,10 +158,13 @@ struct ResearchStore: Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let trash = try researchDirectory(key: key).appendingPathComponent(".trash", isDirectory: true)
         do {
-            try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-            try FileManager.default.moveItem(
-                at: url, to: trash.appendingPathComponent("dossier-\(stamp)-\(UUID().uuidString.prefix(8)).json"))
+            try FamilyTreeAccessMode.withWrite(.research, path: "ResearchStore.retireDossierFile (move)",
+                                               mode: writeMode) {
+                try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(
+                    at: url, to: trash.appendingPathComponent("dossier-\(stamp)-\(UUID().uuidString.prefix(8)).json"))
+            }
         } catch {
             throw StoreError.ioFailure(error.localizedDescription)
         }
@@ -203,7 +207,9 @@ struct ResearchStore: Sendable {
             : page
         let url = try cacheURL(key: key, pageURL: page.url)
         do {
-            try Self.writeAtomically(try Self.encoder.encode(capped), to: url)
+            let data = try Self.encoder.encode(capped)
+            try FamilyTreeAccessMode.withWrite(.research, path: "ResearchStore.cache (write)",
+                                               mode: writeMode) { try Self.writeAtomically(data, to: url) }
         } catch let error as StoreError {
             throw error
         } catch {
@@ -254,7 +260,9 @@ struct ResearchStore: Sendable {
         let directory = url.deletingLastPathComponent()
         let fm = FileManager.default
         do {
-            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try WritePermit.current.withWrite("research folder") {
+                try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
         } catch {
             throw StoreError.ioFailure(error.localizedDescription)
         }
@@ -263,7 +271,9 @@ struct ResearchStore: Sendable {
             throw StoreError.ioFailure("research directory is not a plain directory: \(directory.path)")
         }
         do {
-            try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
+            try WritePermit.current.withWrite("research file") {
+                try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
+            }
         } catch {
             throw StoreError.ioFailure(error.localizedDescription)
         }

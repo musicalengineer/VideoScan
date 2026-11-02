@@ -39,6 +39,7 @@
 // payload; `static func` ≈ a free function in a namespace.)
 
 import Foundation
+import VideoScanCore
 
 /// What the Family Tree tab may do right now.
 enum FamilyTreeAccessMode: Equatable, Sendable {
@@ -114,6 +115,65 @@ struct FamilyTreeWriteAuthority: Sendable {
     func check(_ writer: FamilyTreeWriter, path: String,
                log: (String) -> Void = { appLog.write($0) }) throws {
         try FamilyTreeWriteGate.check(writer, path: path, mode: mode, viewerCenter: viewer, log: log)
+    }
+
+    /// The process-wide authority (no model): published configuration + role.
+    static var process: FamilyTreeWriteAuthority { FamilyTreeWriteAuthority(latch: nil) }
+
+    /// This authority as a Core `WritePermit`: asked — and logging its own
+    /// refusal — at each nested write.
+    func permit(_ writer: FamilyTreeWriter, path: String,
+                log: @escaping @Sendable (String) -> Void = { appLog.write($0) }) -> WritePermit {
+        let authority = self
+        return WritePermit { what in
+            !FamilyTreeWriteGate.refuse(writer, path: "\(path) [\(what)]", mode: authority.mode,
+                                        viewerCenter: authority.viewer, log: log)
+        }
+    }
+
+    /// THE Family Tree write primitive (codex #193). Asks the live authority
+    /// NOW — call it after every lock and await, wrapping the bytes — and
+    /// binds it as `WritePermit.current`, so a Core writer inside `body` that
+    /// waits for its own lock (CyberBrain, the compiled store, the overlay)
+    /// asks again after that wait, before its first byte. Every write in
+    /// FamilyTree/ is lexically inside one of these (the sensor proves it).
+    func withWrite<T>(_ writer: FamilyTreeWriter, path: String,
+                      log: @escaping @Sendable (String) -> Void = { appLog.write($0) },
+                      _ body: () throws -> T) throws -> T {
+        // The check NOW, in the gate's own words and error types; then the
+        // same authority bound for every nested write.
+        try FamilyTreeWriteGate.check(writer, path: path, mode: mode, viewerCenter: viewer, log: log)
+        return try WritePermit.$current.withValue(permit(writer, path: path, log: log)) { try body() }
+    }
+
+    /// For a READ that may write as a side effect (a load that can promote a
+    /// compile or retire an overlay): no check now — the nested writes ask
+    /// at their own moment, through the bound permit.
+    func whileReading<T>(_ writer: FamilyTreeWriter, path: String,
+                         log: @escaping @Sendable (String) -> Void = { appLog.write($0) },
+                         _ body: () throws -> T) rethrows -> T {
+        try WritePermit.$current.withValue(permit(writer, path: path, log: log), operation: body)
+    }
+}
+
+extension FamilyTreeAccessMode {
+    /// A mode supplier as a primitive authority (coordinators that carry a
+    /// `writeMode` closure): same `withWrite`, same binding.
+    static func withWrite<T>(_ writer: FamilyTreeWriter, path: String,
+                             mode: @escaping @Sendable () -> FamilyTreeAccessMode,
+                             log: @escaping @Sendable (String) -> Void = { appLog.write($0) },
+                             _ body: () throws -> T) throws -> T {
+        try FamilyTreeWriteGate.check(writer, path: path, mode: mode(), log: log)
+        return try WritePermit.$current.withValue(permit(writer, path: path, mode: mode, log: log)) { try body() }
+    }
+
+    /// A mode supplier as a Core permit (asked at each nested write).
+    static func permit(_ writer: FamilyTreeWriter, path: String,
+                       mode: @escaping @Sendable () -> FamilyTreeAccessMode,
+                       log: @escaping @Sendable (String) -> Void = { appLog.write($0) }) -> WritePermit {
+        WritePermit { what in
+            !FamilyTreeWriteGate.refuse(writer, path: "\(path) [\(what)]", mode: mode(), log: log)
+        }
     }
 }
 

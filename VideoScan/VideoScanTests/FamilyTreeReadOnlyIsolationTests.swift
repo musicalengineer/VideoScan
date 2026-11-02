@@ -162,10 +162,10 @@ struct FamilyTreeReadOnlyIsolationTests {
         let image = fx.root.appendingPathComponent("portrait-source.png")
         #expect(throws: FamilyTreeWriteGate.Refused.self) {
             try CouplePortraitPreference.importPhoto(at: image, into: fx.portraitDirectory,
-                                                     defaults: defaults, mode: sideMode)
+                                                     defaults: defaults, mode: { sideMode })
         }
-        CouplePortraitPreference.remove(from: defaults, directory: fx.portraitDirectory, mode: sideMode)
-        CouplePortraitPreference.saveCaption("Rick & Donna", to: defaults, mode: sideMode)
+        CouplePortraitPreference.remove(from: defaults, directory: fx.portraitDirectory, mode: { sideMode })
+        CouplePortraitPreference.saveCaption("Rick & Donna", to: defaults, mode: { sideMode })
         #expect(defaults.string(forKey: CouplePortraitPreference.captionKey) == nil)
 
         // Identity pins: the store closure is never reached.

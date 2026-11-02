@@ -182,7 +182,8 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             let script = FamilySearchPersonRefreshScript(
                 command: command, personName: target.personName,
                 scriptURL: folder.appendingPathComponent(PersonRefreshPaths.scriptFileName))
-            try script.write()
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.launch (script)",
+                                               mode: writeMode) { _ = try script.write() }
             stagingFolder = folder
             previewLine = command.displayLine
             launchDate = Date()
@@ -352,21 +353,26 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         mode: @escaping @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() },
         _ mutate: @escaping @Sendable (inout PersonFactOverlay) -> T?) async -> OverlayWrite<T> {
         await Task.detached(priority: .userInitiated) { () -> OverlayWrite<T> in
-            // At the moment of the write — the update and the set-aside
-            // alike — not only at the click (codex #190 F2).
-            let current = mode()
-            if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.overlay (write)", mode: current) {
-                return .refused(FamilyTreeWriteGate.refusalText(.personRefresh, mode: current) ?? "")
-            }
+            // Inside the primitive: the update and the set-aside ask the live
+            // mode at their own write (codex #190 F2, #193).
+            let refusal = { FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode()) ?? "" }
             do {
-                guard let result = try store.update(mutate) else { return .nothingToDo }
+                guard let result = try FamilyTreeAccessMode.withWrite(
+                    .personRefresh, path: "PersonRefresh.overlay (write)", mode: mode, { try store.update(mutate) })
+                else { return .nothingToDo }
                 return .written(result)
+            } catch is WritePermit.Refused {
+                return .refused(refusal())
             } catch let unreadable as PersonFactOverlayStore.UnreadableOverlay {
                 // Never saved over, never deleted: moved aside so the bytes
                 // survive and the NEXT apply can start a fresh record.
                 do {
-                    let kept = try store.setAsideUnreadable(at: now)
+                    let kept = try FamilyTreeAccessMode.withWrite(
+                        .personRefresh, path: "PersonRefresh.overlay (set aside)", mode: mode,
+                        { try store.setAsideUnreadable(at: now) })
                     return .unreadable(reason: unreadable.reason, keptAs: kept.lastPathComponent, setAsideError: nil)
+                } catch is WritePermit.Refused {
+                    return .refused(refusal())
                 } catch {
                     return .unreadable(reason: unreadable.reason, keptAs: nil,
                                        setAsideError: error.localizedDescription)
@@ -442,12 +448,14 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         // every before/after value.
         outcomeNoted = true
         for line in PersonRefreshAudit.lines(entry, overlayPath: overlayStore.fileURL.path) { sink.note(line) }
-        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.journal", mode: writeMode()) {
-            note(PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
-        } else {
-            do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
-                note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+        do {
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.journal", mode: writeMode) {
+                try PersonRefreshAudit.append(entry, directory: journalDirectory)
             }
+        } catch is WritePermit.Refused {
+            note(PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
+        } catch {
+            note(PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
         phase = .applied(fields: chosen.count)
         return true
@@ -503,12 +511,14 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
             tail: restored == nil ? "the tree shows the pulled facts again" : "the earlier refresh still applies") {
             sink.note(line)
         }
-        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.journal", mode: writeMode()) {
-            sink.note(subject + PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
-        } else {
-            do { try PersonRefreshAudit.append(entry, directory: journalDirectory) } catch {
-                sink.note(subject + PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
+        do {
+            try FamilyTreeAccessMode.withWrite(.personRefresh, path: "PersonRefresh.journal", mode: writeMode) {
+                try PersonRefreshAudit.append(entry, directory: journalDirectory)
             }
+        } catch is WritePermit.Refused {
+            sink.note(subject + PersonRefreshAuditLines.journalNotWritten("read-only until the Master Archive is connected"))
+        } catch {
+            sink.note(subject + PersonRefreshAuditLines.journalNotWritten(error.localizedDescription))
         }
         return sentence
     }

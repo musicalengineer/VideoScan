@@ -232,7 +232,8 @@ struct PersonOfTheDayGatedStore: PersonOfTheDayHistoryStore {
     func load() -> PersonOfTheDay.History { base.load() }
 
     func save(_ history: PersonOfTheDay.History) throws {
-        try FamilyTreeWriteGate.check(.personOfTheDay, path: "PersonOfTheDay.save", mode: mode())
-        try base.save(history)
+        try FamilyTreeAccessMode.withWrite(.personOfTheDay, path: "PersonOfTheDay.save", mode: mode) {
+            try base.save(history)
+        }
     }
 }

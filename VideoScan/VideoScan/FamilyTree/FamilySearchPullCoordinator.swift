@@ -217,7 +217,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
 
             previewLine = command.displayLine
             let script = FamilySearchPullScript(command: command, scriptURL: scriptURL)
-            try script.write(fileManager: fileManager)
+            try FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.launch (script)",
+                                               mode: writeMode) { _ = try script.write(fileManager: fileManager) }
 
             launchDate = Date()
             startedAt = launchDate
@@ -248,12 +249,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         // is removed either (codex #190 F2): the staged file stays for the
         // next session and the log says where.
         if let staging = stagingInFlight {
-            if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.cancel (remove staging)",
-                                          mode: writeMode()) {
+            do {
+                try FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.cancel (remove staging)",
+                                                   mode: writeMode) {
+                    try? fileManager.removeItem(at: staging)
+                }
+            } catch {
                 appLog.write("Family Tree: cancelled merge left its staging in place (read-only): "
                     + staging.lastPathComponent)
-            } else {
-                try? fileManager.removeItem(at: staging)
             }
             stagingInFlight = nil
         }
@@ -546,6 +549,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         guard case .ready(let output, let new, _, _) = phase, !isInstalling else { return }
         let people = new.people
         do {
+            try FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.install (write)", mode: writeMode) {
             try fileManager.createDirectory(
                 at: gedcomDirectory, withIntermediateDirectories: true)
             let stamp = Self.timestampFormatter.string(from: Date())
@@ -559,6 +563,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             }
             try fileManager.copyItem(at: output, to: destination)
             phase = .installed(installed: destination, people: people)
+            }
         } catch {
             phase = .failed(message:
                 FamilySearchPullError.installFailed(error.localizedDescription)
@@ -747,7 +752,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         var stillReady = false
         if case .ready = phase { stillReady = true }
         guard generation == parseGeneration, stillReady else {
-            try? fileManager.removeItem(at: staging)
+            try? FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.drop staging",
+                                                mode: writeMode) { try? fileManager.removeItem(at: staging) }
             if stagingInFlight == staging { stagingInFlight = nil }
             return
         }
@@ -757,6 +763,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             phase = .failed(message: message)
         case .written(let stagedFile, let people, let merge):
             do {
+                // The activation's bytes, asked at the write (codex #193).
+                let destination = try FamilyTreeAccessMode.withWrite(
+                    .familySearchPull, path: "FamilySearchPull.activate (write)", mode: writeMode) { () throws -> URL in
                 try fileManager.createDirectory(at: gedcomDirectory, withIntermediateDirectories: true)
                 var destination = gedcomDirectory.appendingPathComponent(fileName)
                 var suffix = 2
@@ -771,11 +780,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 try fileManager.moveItem(at: stagedFile, to: partial)
                 try fileManager.moveItem(at: partial, to: destination)
                 try? fileManager.removeItem(at: staging)
+                return destination
+                }
                 stagingInFlight = nil
                 appLog.write("Family Tree: merge artifact \(destination.lastPathComponent): \(merge.sharedPeopleCount) shared + \(merge.addedPeopleCount) added people; \(merge.conflicts.count) conflicts kept for review")
                 phase = .installed(installed: destination, people: people)
             } catch {
-                try? fileManager.removeItem(at: staging)
+                try? FamilyTreeAccessMode.withWrite(.familySearchPull, path: "FamilySearchPull.activate cleanup",
+                                                    mode: writeMode) { try? fileManager.removeItem(at: staging) }
                 stagingInFlight = nil
                 phase = .failed(message: FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
             }
@@ -794,16 +806,29 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                                        new: GedcomFamilyGraph, from output: URL,
                                        policy: GedcomFamilyGraph.MergePolicy, stamp: String, fileName: String,
                                        staging: URL,
-                                       writeMode: @Sendable () -> FamilyTreeAccessMode) -> MergeStaged {
+                                       writeMode: @escaping @Sendable () -> FamilyTreeAccessMode) -> MergeStaged {
+        // The parse took a while: every byte below is inside the primitive,
+        // which asks the live mode at the write (codex #190/#193).
+        do {
+            return try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                                      path: "FamilySearchPull.merge (sidecars + staging)",
+                                                      mode: writeMode) {
+                try stageMergeAllowed(current: current, at: currentURL, new: new, from: output, policy: policy,
+                                      stamp: stamp, fileName: fileName, staging: staging)
+            }
+        } catch {
+            let mode = writeMode()
+            return .failed(FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode)
+                           ?? error.localizedDescription)
+        }
+    }
+
+    nonisolated private static func stageMergeAllowed(current: GedcomFamilyGraph, at currentURL: URL,
+                                                      new: GedcomFamilyGraph, from output: URL,
+                                                      policy: GedcomFamilyGraph.MergePolicy, stamp: String,
+                                                      fileName: String, staging: URL) throws -> MergeStaged {
         var current = current, new = new
         let fileManager = FileManager.default
-        // The parse took a while: the archive may have gone since the
-        // click. Ask again before the first byte (codex #190 F2).
-        let mode = writeMode()
-        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.merge (sidecars + staging)",
-                                      mode: mode) {
-            return .failed(FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode) ?? "")
-        }
         // Sidecars beside the raw sources (never touching the sources);
         // the hashes are also the merge's source fingerprints.
         let currentSHA = Self.sha256Sidecar(for: currentURL, fileManager: fileManager)
@@ -818,10 +843,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let text = merge.graph.gedcomText(provenance: provenance)
         let stagedFile = staging.appendingPathComponent(fileName)
         do {
-            try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-            try text.write(to: stagedFile, atomically: true, encoding: .utf8)
+            try WritePermit.current.withWrite("merge staging") {
+                try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+                try text.write(to: stagedFile, atomically: true, encoding: .utf8)
+            }
+        } catch let refused as WritePermit.Refused {
+            throw refused
         } catch {
-            try? fileManager.removeItem(at: staging)
+            try? WritePermit.current.withWrite("merge staging cleanup") { try fileManager.removeItem(at: staging) }
             return .failed(FamilySearchPullError.installFailed(error.localizedDescription).localizedDescription)
         }
         return .written(stagedFile, merge.graph.people.count, merge)
@@ -908,7 +937,9 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let line = "\(hex)  \(url.lastPathComponent)\n"
         // Only write when the sidecar is missing or disagrees with the bytes.
         if (try? String(contentsOf: sidecar, encoding: .utf8)) != line {
-            try? line.write(to: sidecar, atomically: true, encoding: .utf8)
+            try? WritePermit.current.withWrite(".sha256 sidecar") {
+                try line.write(to: sidecar, atomically: true, encoding: .utf8)
+            }
         }
         return hex
     }

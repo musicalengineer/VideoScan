@@ -125,7 +125,9 @@ final class FamilyTreeRecompileCenter {
             loader.progress = { phase in
                 Task { @MainActor in progress(phase) }
             }
-            return loader.recompile(sources: sources) != nil
+            return (try? FamilyTreeAccessMode.withWrite(.recompile, path: "FamilyTreeRecompileCenter.recompile",
+                                                        mode: writeMode) { loader.recompile(sources: sources) != nil })
+                ?? false
         }.value
         cache.invalidate()
         guard promoted else { return .failed }

@@ -631,7 +631,9 @@ extension FamilyAssetStore {
             }
             if let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
                values.isRegularFile == true, values.isSymbolicLink != true {
-                try Self.moveToTrash(file, in: documentsDir, fileManager: fileManager, at: when)
+                try withWrite("document to .trash") {
+                    try Self.moveToTrash(file, in: documentsDir, fileManager: fileManager, at: when)
+                }
             }
             // A file already gone is still an entry to drop.
             entries.remove(at: index)
@@ -722,8 +724,10 @@ extension FamilyAssetStore {
             // fullFsync: a certificate list is exactly the sidecar "you
             // would hate to lose"; createIntermediates false so a folder
             // that vanished under us is an error, not silently recreated.
-            try AtomicFilePublish.write(try encoder.encode(entries), to: sidecar,
-                                        durability: .fullFsync, createIntermediates: false)
+            try withWrite("documents.json") {
+                try AtomicFilePublish.write(try encoder.encode(entries), to: sidecar,
+                                            durability: .fullFsync, createIntermediates: false)
+            }
         } catch {
             throw StoreError.createFailed(Self.documentsSidecarName, errno: errno)
         }
@@ -737,7 +741,9 @@ extension FamilyAssetStore {
     private func rollBackWrittenDocument(_ written: URL, in documentsDir: URL, at when: Date,
                                          because error: any Error, logWhy: String) -> DocumentImportFailure {
         do {
-            let trashed = try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            let trashed = try withWrite("import rollback") {
+                try Self.moveToTrash(written, in: documentsDir, fileManager: fileManager, at: when)
+            }
             return DocumentImportFailure(filename: written.lastPathComponent, rollback: .movedToTrash(trashed),
                                          underlying: error)
         } catch let trashError {
@@ -766,7 +772,9 @@ extension FamilyAssetStore {
                 throw StoreError.unsafeDirectory(trash)
             }
         } else {
-            try fileManager.createDirectory(at: trash, withIntermediateDirectories: false)
+            try WritePermit.current.withWrite(".trash folder") {
+                try fileManager.createDirectory(at: trash, withIntermediateDirectories: false)
+            }
         }
         let stem = file.deletingPathExtension().lastPathComponent
         let ext = file.pathExtension
@@ -778,7 +786,7 @@ extension FamilyAssetStore {
             destination = trash.appendingPathComponent(name, isDirectory: false)
             guard suffix < 100 else { throw StoreError.createFailed(name, errno: EEXIST) }
         }
-        try fileManager.moveItem(at: file, to: destination)
+        try WritePermit.current.withWrite("move to .trash") { try fileManager.moveItem(at: file, to: destination) }
         return destination
     }
 

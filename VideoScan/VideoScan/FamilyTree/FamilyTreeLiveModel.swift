@@ -793,8 +793,11 @@ final class FamilyTreeLiveModel: ObservableObject {
             var loader = FamilyGraphFileLoader(originalsDirectory: directory)
             loader.compiledStore = store
             loader.progress = progress
-            var outcome = Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory,
-                                        canWrite: authority.mode.allowsWrites)
+            // A load may promote a compile or retire an overlay: those nested
+            // writes ask the live authority at their own moment (#193 F3).
+            var outcome = authority.whileReading(.recompile, path: "FamilyTreeLiveModel.load") {
+                Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+            }
             // The same ruled view the shared cache hands out (codex #1711),
             // before the bundle is built from it.
             if let raw = outcome.graph { outcome = outcome.replacingGraph(raw.applyingIdentityRulings(rulings)) }
@@ -1026,7 +1029,9 @@ final class FamilyTreeLiveModel: ObservableObject {
                     self.loadPhase = phase
                 }
             }
-            return loader.recompile(sources: sources) != nil
+            return (try? authority.withWrite(.recompile, path: "FamilyTreeLiveModel.recompile", log: refusalLog) {
+                loader.recompile(sources: sources) != nil
+            }) ?? false
         }.value
 
         loadPhase = nil
@@ -1109,9 +1114,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         loadState = .loading
         var loader = FamilyGraphFileLoader(originalsDirectory: originalsDirectory)
         loader.compiledStore = liveCompiledStore
-        let outcome = loader.loadNewestOutcome()
-        install(outcome: Self.overlaid(outcome, store: personRefreshOverlayStore,
-                                       directory: originalsDirectory, canWrite: writeAuthority.mode.allowsWrites))
+        let overlayStore = personRefreshOverlayStore, directory = originalsDirectory
+        install(outcome: writeAuthority.whileReading(.recompile, path: "FamilyTreeLiveModel.loadNow") {
+            Self.overlaid(loader.loadNewestOutcome(), store: overlayStore, directory: directory)
+        })
     }
 
 
@@ -1765,7 +1771,9 @@ final class FamilyTreeLiveModel: ObservableObject {
             date: date,
             origin: .familyTreeNote,
             gedcomPersonID: person.id)
-        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        let receipt = try writeAuthority.withWrite(.note, path: "FamilyTreeLiveModel.addNote", log: writeRefusalLog) {
+            try CyberBrainWriter.record(testimony, rootURL: root)
+        }
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
     }
@@ -1918,10 +1926,13 @@ final class FamilyTreeLiveModel: ObservableObject {
             if case .move(let target) = operation, target.gedcomPersonID.isEmpty {
                 throw CyberBrainWriter.CorrectionRefusal.targetMissing
             }
-            let receipt = try CyberBrainWriter.correct(
-                .init(itemID: note.id, viewedPersonID: note.cyberBrainPersonID,
-                      operation: operation, by: noteAuthor, date: date),
-                rootURL: root)
+            let correction = CyberBrainWriter.NoteCorrection(
+                itemID: note.id, viewedPersonID: note.cyberBrainPersonID,
+                operation: operation, by: noteAuthor, date: date)
+            let receipt = try writeAuthority.withWrite(.note, path: "FamilyTreeLiveModel.\(verb)Note",
+                                                       log: writeRefusalLog) {
+                try CyberBrainWriter.correct(correction, rootURL: root)
+            }
             let file = root.appendingPathComponent(CyberBrainLoader.defaultFilename).path
             correctionLog("\(tag) OUTCOME success \(verb) \(subject): "
                           + Self.correctionChange(receipt)
@@ -1987,7 +1998,10 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard let root = cyberBrainRootURL else {
             throw CyberBrainWriter.WriteError.unsafeRoot("no CyberBrain directory configured")
         }
-        let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
+        let receipt = try writeAuthority.withWrite(.note, path: "FamilyTreeLiveModel.recordTestimony",
+                                                   log: writeRefusalLog) {
+            try CyberBrainWriter.record(testimony, rootURL: root)
+        }
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
         return receipt
@@ -2004,8 +2018,11 @@ final class FamilyTreeLiveModel: ObservableObject {
         // (codex #192 F3): the filer calls this later, off the main actor.
         let authority = writeAuthority, log = writeRefusalLog
         return { testimony in
-            try authority.check(.note, path: "RecordFinderFiler.recordTestimony", log: log)
-            return try CyberBrainWriter.record(testimony, rootURL: root)
+            // Asked now AND, through the bound permit, under the CyberBrain
+            // root lock after any wait for it (codex #193 F1).
+            try authority.withWrite(.note, path: "RecordFinderFiler.recordTestimony", log: log) {
+                try CyberBrainWriter.record(testimony, rootURL: root)
+            }
         }
     }
 
@@ -2152,13 +2169,12 @@ final class FamilyTreeLiveModel: ObservableObject {
         guard let graph, let id = selectedID, let person = graph.people[id] else {
             throw CyberBrainWriter.WriteError.emptySubject
         }
-        let receipt = try CyberBrainWriter.setPronunciation(
-            subjectName: person.name,
-            gedcomPersonID: person.id,
-            aliases: person.alternateNames,
-            token: word,
-            saidAs: saidAs,
-            rootURL: root)
+        let receipt = try writeAuthority.withWrite(.pronunciation, path: "FamilyTreeLiveModel.setPronunciation",
+                                                   log: writeRefusalLog) {
+            try CyberBrainWriter.setPronunciation(
+                subjectName: person.name, gedcomPersonID: person.id, aliases: person.alternateNames,
+                token: word, saidAs: saidAs, rootURL: root)
+        }
         PersonPronunciationCache.shared.invalidate()
         notesGeneration &+= 1
         applyBrain(index: try CyberBrainIndex(archive: receipt.archive), status: nil)
@@ -2204,7 +2220,9 @@ final class FamilyTreeLiveModel: ObservableObject {
                 + "\(sourceAccess == .unavailable ? "unavailable" : "read-only")")
         } else if let bookmarksDirectory {
             do {
-                try bookmarks.save(to: bookmarksDirectory)
+                let marks = bookmarks
+                try writeAuthority.withWrite(.bookmark, path: "FamilyTreeLiveModel.toggleBookmark",
+                                             log: writeRefusalLog) { try marks.save(to: bookmarksDirectory) }
                 appLog.write("Family Tree: \(nowMarked ? "bookmarked" : "un-bookmarked") \(personID) "
                     + "(\(bookmarks.count) total) → \(bookmarksDirectory.lastPathComponent)")
             } catch {
@@ -2433,7 +2451,11 @@ final class FamilyTreeLiveModel: ObservableObject {
                 // Compare-and-swap: if the file changed since the tree
                 // loaded it, only this ruling is applied onto the current
                 // file; keep what was actually written, not the snapshot.
-                updated = try updated.save(to: directory, log: { appLog.write($0) })
+                let ruling = updated
+                updated = try writeAuthority.withWrite(.identityRuling, path: "FamilyTreeLiveModel.setRecordHidden",
+                                                       log: writeRefusalLog) {
+                    try ruling.save(to: directory, log: { appLog.write($0) })
+                }
                 identityRulingsUnsaved = false
                 appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
                     + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")
