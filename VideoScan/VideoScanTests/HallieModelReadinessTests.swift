@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import VideoScan
 
-/// The Archivist Brain pane's three new honesty features (Rick, 2026-09-06):
+/// The Model Configuration pane's three new honesty features (Rick, 2026-09-06):
 /// what the model costs, whether it is ready HERE, and whether two servers
 /// serving one tag are serving the same bytes.
 @Suite("Model readiness, memory and identity")

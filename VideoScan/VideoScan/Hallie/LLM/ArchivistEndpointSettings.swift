@@ -142,7 +142,7 @@ struct ArchivistEndpointSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Archivist Brain")
+            Text("Model Configuration")
                 .font(.headline)
             Text("Tried in order, top first. Use a name for a machine on "
                  + "your network, or a full https:// address for a cloud server.")
