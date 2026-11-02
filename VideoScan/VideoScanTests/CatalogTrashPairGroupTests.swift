@@ -246,6 +246,12 @@ struct CatalogTrashPairGroupTests: PairGroupFixtures {
         #expect(trashed.allSatisfy { $0.detail[CatalogTrashGroupTurns.ledgerPairGroup] == gid.uuidString })
         #expect(trashed.allSatisfy { $0.detail[CatalogTrashGroupTurns.ledgerPairFiles] == "test_tr.V.mxf + test_tr.A.mxf" })
         #expect(trashed.allSatisfy { $0.detail[MediaLedgerEvent.Detail.mode] == "trash" && $0.by == .rick })
+        // Codex #203 F1: every copyTrashed event carries where the file went.
+        for item in result.items {
+            guard case .moved(_, let trashPath?) = item.outcome else { continue }
+            let event = try #require(trashed.first { $0.recordID == item.record.id })
+            #expect(event.detail[MediaLedgerEvent.Detail.trashPath] == trashPath, "\(event.detail)")
+        }
     }
 
     // MARK: MEDIA MATRIX — the formats recovered pairs come in

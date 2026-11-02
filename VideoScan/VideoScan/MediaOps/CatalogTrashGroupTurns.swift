@@ -133,12 +133,19 @@ final class CatalogTrashGroupTurns {
     /// snapshot, the moved members expected In the Trash. Any difference —
     /// a member field, an eligibility input, a sibling joined, a capped or
     /// one-sided walk — is a sentence for the alert. Empty = unchanged.
-    func changesDuringMove(_ g: CatalogPairGroups.Group, moved: Set<UUID>, model: VideoScanModel,
+    /// `moved`: each moved member's Trash path (nil through a test seam) —
+    /// the routine's own stamp is In the Trash, one revision later, at that
+    /// path; anything else is another action's marker.
+    func changesDuringMove(_ g: CatalogPairGroups.Group, moved: [UUID: String?], model: VideoScanModel,
                            index: CatalogPairGroups.Index) -> [String] {
         guard let gi = groups.firstIndex(of: g), var expected = snapshots[gi] else {
             return ["the pair's state before the move was not recorded"]
         }
-        for id in moved { expected.members[id]?.removalState = .inTrash }
+        for (id, landed) in moved {
+            expected.members[id]?.removalState = .inTrash
+            expected.members[id]?.markerRevision += 1
+            expected.members[id]?.trashPath = landed
+        }
         let now = PairGroupFingerprint.of(g, model: model, index: index, treatAsLive: Set(g.members))
         return now.differences(from: expected)
     }
@@ -226,7 +233,7 @@ final class CatalogTrashGroupTurns {
     func summary(plan: VideoScanModel.CatalogTrashPlan, alsoHeld: [CatalogPairGroups.Group] = [],
                  result: VideoScanModel.JunkDeletionResult,
                  currentPath: (UUID) -> String? = { _ in nil },
-                 changes: (CatalogPairGroups.Group, Set<UUID>) -> [String] = { _, _ in [] }) -> Summary {
+                 changes: (CatalogPairGroups.Group, [UUID: String?]) -> [String] = { _, _ in [] }) -> Summary {
         // A confirmed pair the plan now holds is summarised once, below,
         // from its members' outcomes.
         let confirmedIDs = Set(groups.flatMap(\.members))
@@ -236,50 +243,77 @@ final class CatalogTrashGroupTurns {
         })
         let outcome = Dictionary(result.items.map { ($0.record.id, $0.outcome) }, uniquingKeysWith: { first, _ in first })
         for g in groups {
-            let outs = g.members.map { outcome[$0] }
-            let movedIdx = outs.indices.filter { outs[$0]?.isMoved == true }
-            let late = movedIdx.isEmpty ? [] : changes(g, Set(movedIdx.map { g.members[$0] }))
-            if movedIdx.count == g.members.count {
+            let unit = UnitOutcome(g, outcomes: g.members.map { outcome[$0] })
+            let late = unit.moved.isEmpty ? [] : changes(g, unit.landed)
+            if unit.movedWhole {
                 if late.isEmpty { s.moved.append(g.filenames); continue }
                 s.lateLinked.append("\(CatalogPairGroups.list(g.filenames)) moved to the Trash, but the catalog changed during the move: "
                                     + late.joined(separator: "; ")
                                     + " — a linked file keeps its pair protection; check it (Show Removed ▸ Restore puts the pair back)")
-                continue
+            } else if unit.moved.isEmpty {
+                let group = CatalogPairGroups.HeldGroup(filenames: g.filenames, reason: unit.firstStayReason, ids: g.members)
+                if unit.anyFailed { s.failed.append(group) } else { s.held.append(group) }
+            } else {
+                s.split.append(unit.splitLine(currentPath: currentPath, late: late))
             }
-            guard let firstStay = outs.indices.first(where: { outs[$0]?.isMoved != true }) else { continue }
-            let why = outs[firstStay].map { Self.words($0) } ?? "it was not reached"
-            if movedIdx.isEmpty {
-                let failed = outs.contains { $0?.kind == .failed }
-                let group = CatalogPairGroups.HeldGroup(filenames: g.filenames, reason: "\(g.filenames[firstStay]) \(why)",
-                                                        ids: g.members)
-                if failed { s.failed.append(group) } else { s.held.append(group) }
-                continue
-            }
-            let movedText = movedIdx.map { i -> String in
+        }
+        return s
+    }
+
+    /// One confirmed unit's per-member outcomes, as the summary reads them.
+    struct UnitOutcome {
+        let g: CatalogPairGroups.Group
+        let outs: [VideoScanModel.JunkFileOutcome?]
+        /// Indices of the members that moved.
+        let moved: [Int]
+        /// Each moved member's Trash path (nil through a test seam).
+        let landed: [UUID: String?]
+
+        init(_ g: CatalogPairGroups.Group, outcomes outs: [VideoScanModel.JunkFileOutcome?]) {
+            self.g = g
+            self.outs = outs
+            moved = outs.indices.filter { outs[$0]?.isMoved == true }
+            var landed: [UUID: String?] = [:]
+            for i in moved { if case .moved(_, let path)? = outs[i] { landed[g.members[i]] = path } }
+            self.landed = landed
+        }
+
+        var movedWhole: Bool { moved.count == g.members.count }
+        var anyFailed: Bool { outs.contains { $0?.kind == .failed } }
+
+        /// "<first member that stayed> <why>".
+        var firstStayReason: String {
+            guard let i = outs.indices.first(where: { outs[$0]?.isMoved != true }) else { return "it was not reached" }
+            return "\(g.filenames[i]) \(outs[i].map { CatalogTrashGroupTurns.words($0) } ?? "it was not reached")"
+        }
+
+        /// The SPLIT sentence: where each file is now, and what changed.
+        func splitLine(currentPath: (UUID) -> String?, late: [String]) -> String {
+            let movedText = moved.map { i -> String in
                 if case .moved(_, let trash)? = outs[i], let trash { return "\(g.filenames[i]) is in the Trash (\(trash))" }
                 return "\(g.filenames[i]) is in the Trash"
             }
             let stayed = outs.indices.filter { outs[$0]?.isMoved != true }.map { i in
-                "\(g.filenames[i]) \(Self.location(planned: g.paths[i], now: currentPath(g.members[i]))) (\(outs[i].map { Self.words($0) } ?? "not reached"))"
+                "\(g.filenames[i]) \(CatalogTrashGroupTurns.location(planned: g.paths[i], now: currentPath(g.members[i]))) "
+                    + "(\(outs[i].map { CatalogTrashGroupTurns.words($0) } ?? "not reached"))"
             }
             let lateNote = late.isEmpty ? "" : "; the catalog changed during the move: " + late.joined(separator: "; ")
-            s.split.append((movedText + stayed).joined(separator: "; ") + lateNote
-                           + " — put the moved half back (Show Removed ▸ Restore) or move the rest again.")
+            return (movedText + stayed).joined(separator: "; ") + lateNote
+                + " — put the moved half back (Show Removed ▸ Restore) or move the rest again."
         }
-        return s
     }
 
     /// Where a half that did not move is, as evidenced now: its current
     /// catalog path, "(relinked from …)" when that changed, and a plain
     /// "not found there now" when no file is at it.
-    static func location(planned: String, now: String?) -> String {
+    nonisolated static func location(planned: String, now: String?) -> String {
         let path = now ?? planned
         var words = path == planned ? "stayed at \(path)" : "is at \(path) (relinked from \(planned))"
         if PairHalfIdentity.capture(path: path) == nil { words += " — not found there now" }
         return words
     }
 
-    private static func words(_ o: VideoScanModel.JunkFileOutcome) -> String {
+    nonisolated static func words(_ o: VideoScanModel.JunkFileOutcome) -> String {
         switch o {
         case .moved: return "moved"
         case .held(let why): return why

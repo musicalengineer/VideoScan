@@ -119,6 +119,8 @@ public struct MediaLedgerEvent: Codable, Equatable, Sendable {
         public static let files = "files"
         public static let action = "action"
         public static let mode = "mode"
+        /// Where a trashed file went (the path the Trash returned).
+        public static let trashPath = "trashPath"
         public static let protection = "protection"
         /// Angel attention: the score the file was proposed at.
         public static let score = "score"

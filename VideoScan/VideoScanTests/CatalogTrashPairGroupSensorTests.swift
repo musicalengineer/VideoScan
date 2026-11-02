@@ -48,7 +48,7 @@ struct CatalogTrashPairGroupSensorTests {
         #expect(plan.contains("CatalogPairGroups.gate("), "the plan's pair gate")
         #expect(plan.contains("CatalogTrashGroupTurns(groups: confirmed.groups)"), "the turn gate is built from what was confirmed")
         #expect(plan.contains("fileGuard.units = groupTurns.activeGroups.map(\\.members)"), "a confirmed pair is one unit of the routine")
-        #expect(plan.contains("fileGuard.atTheMove = { path in groupDisk.problem(path) }"), "identity re-checked before each move")
+        #expect(plan.contains("fileGuard.atTheMove = { path in beforeEachMove?(path); return groupDisk.problem(path) }"), "identity re-checked before each move")
         #expect(plan.contains("groupDisk.problem(path) ?? proofs.problemAtTheMove(path)"), "identity proof before the copy proof")
         #expect(plan.contains("groups: groupTurns"))
         #expect(plan.contains("audit.finish(result, note:"), "OUTCOME carries the pairs")

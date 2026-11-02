@@ -33,6 +33,11 @@ struct PairMemberFingerprint: Equatable, Sendable {
     let pendingPairedWithID: UUID?
     let combinedFromPairID: UUID?
     var removalState: RemovalMarker.State?
+    /// The marker's write counter and Trash path — so a marker another
+    /// action wrote (even In the Trash) never passes for the routine's own
+    /// stamp (Codex #203 F2).
+    var markerRevision: Int
+    var trashPath: String?
     let setAsideReason: String?
     let supersededByID: UUID?
     let protected: Bool
@@ -47,7 +52,8 @@ struct PairMemberFingerprint: Equatable, Sendable {
             id: r.id, filename: r.filename, path: r.fullPath,
             pairGroupID: r.pairGroupID, pairedWithID: r.pairedWith?.id,
             pendingPairedWithID: r.pendingPairedWithID, combinedFromPairID: r.combinedFromPairID,
-            removalState: r.removal?.state, setAsideReason: r.setAsideReason, supersededByID: r.supersededByID,
+            removalState: r.removal?.state, markerRevision: r.removalRevision, trashPath: r.removal?.trashPath,
+            setAsideReason: r.setAsideReason, supersededByID: r.supersededByID,
             protected: model.bulkDeleteRefusal(r, volume: archiveVolume) != nil,
             offline: VideoScanModel.isRecordOnOfflineVolume(r),
             onlyCopyEvidence: ContentCopyProof.digest(r).map { "\($0.digest)|\($0.byteCount)" })
@@ -65,7 +71,9 @@ struct PairMemberFingerprint: Equatable, Sendable {
             || pendingPairedWithID != other.pendingPairedWithID || combinedFromPairID != other.combinedFromPairID {
             out.append("\(filename)'s pair link was changed")
         }
-        if removalState != other.removalState { out.append("\(filename)'s removal state was changed") }
+        if removalState != other.removalState || markerRevision != other.markerRevision || trashPath != other.trashPath {
+            out.append("\(filename)'s removal state was changed by another action")
+        }
         if setAsideReason != other.setAsideReason { out.append("\(filename) was set aside or put back") }
         if supersededByID != other.supersededByID { out.append("\(filename) was replaced by a repair") }
         if protected != other.protected { out.append("\(filename)'s drive protection was changed") }

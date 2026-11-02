@@ -10908,7 +10908,9 @@
       ],
       "tests": [
         "bothSelectedClonesHonorMarkerWriteHold",
+        "concurrentTrashMarkerRequiresAttention",
         "departedSiblingRemainderMoves",
+        "keptMarkerLedgerCarriesTheRealTrashPath",
         "lateLinkedSiblingIsReported",
         "laterHalfAliasSurvivorHoldsThePair",
         "laterHalvesNeverVouchForEachOther",

@@ -88,6 +88,9 @@ extension VideoScanModel {
         /// A group note the person must see even when every file moved (a
         /// SPLIT, a change during the move) — the alert is never skipped.
         var groupNeedsAttention = false
+        /// Rows whose marker another action changed while their file moved:
+        /// kept as that action set it, not overwritten (Codex #202 F2).
+        var markerKept: Set<UUID> = []
 
         init(items: [Item], receipt: URL? = nil) {
             self.items = items
@@ -504,6 +507,10 @@ extension VideoScanModel {
         let now = Date()
         let stage: LifecycleStage = mode.isOutrightRemoval ? .deletedPermanently : .trashed
         var removedFromDisk: [VideoRecord] = []
+        // Where each moved file went, by row id — the ledger carries it
+        // whatever the row's marker says (Codex #203 F1).
+        var trashPaths: [UUID: String] = [:]
+        var markerKept: Set<UUID> = []
 
         for (i, (rec, outcome)) in zip(records, outcomes).enumerated() {
             guard let marker = Self.removalMarker(for: outcome, outright: mode.isOutrightRemoval,
@@ -515,12 +522,17 @@ extension VideoScanModel {
             }
             let target = settlementTarget(rec, turn: turns[i])
             if outcome.isMoved { removedFromDisk.append(target) }
+            if case .moved(_, let landed?) = outcome { trashPaths[target.id] = landed }
             // Detect, then write — never overwrite (Codex #202 F2): a marker
             // another door wrote to this row while its file was moving is
-            // kept, and said; the file's move is still a fact (ledger).
+            // kept, and said; the file's move is still a fact (ledger, with
+            // its Trash path — Codex #203 F1).
             if let turn = turns[i], target !== turn.snapshot, target.removalRevision != turn.snapshot.removalRevision {
-                log("  \(target.filename): its catalog row was changed by another action while the file moved to the Trash — "
-                    + "the row is left as that action set it, not overwritten")
+                markerKept.insert(target.id)
+                let kept = target.removal.map { "\($0.state.rawValue)" } ?? "live"
+                log("  \(target.filename): its catalog row was changed by another action while the file moved to the Trash "
+                    + "(the row keeps that action's marker: \(kept)); the file is in the Trash at "
+                    + "\(trashPaths[target.id] ?? "an unrecorded place") — the row was not overwritten")
                 continue
             }
             // The file already left: a disk fact (B2.3).
@@ -528,9 +540,10 @@ extension VideoScanModel {
         }
         // The items name the file each outcome was about (codex round 2 P2):
         // a row relinked mid-turn is reported through its frozen snapshot.
-        let result = JunkDeletionResult(items: zip(records, outcomes).enumerated().map { i, pair in
+        var result = JunkDeletionResult(items: zip(records, outcomes).enumerated().map { i, pair in
             .init(record: reportedRecord(pair.0, turn: turns[i]), outcome: pair.1)
         })
+        result.markerKept = markerKept
 
         // Single batched persist (a per-record save would saturate the
         // debouncer and could leave a half-written catalog on a crash).
@@ -541,7 +554,12 @@ extension VideoScanModel {
         // Media Ledger (stage 2): one copyTrashed / copyDeleted line per file
         // that actually left the disk.
         ledgerCopyRemoved(removedFromDisk, permanent: mode.isOutrightRemoval, by: .rick, at: now,
-                          batchID: "junk-\(UUID().uuidString.prefix(8))", detailFor: ledgerDetail)
+                          batchID: "junk-\(UUID().uuidString.prefix(8))",
+                          detailFor: { rec in
+                              var detail = ledgerDetail?(rec) ?? [:]
+                              if let landed = trashPaths[rec.id] { detail[MediaLedgerEvent.Detail.trashPath] = landed }
+                              return detail
+                          })
 
         let refused = result.refused.count, cancelled = result.cancelled
         log("\(reason.doorVerb): attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")

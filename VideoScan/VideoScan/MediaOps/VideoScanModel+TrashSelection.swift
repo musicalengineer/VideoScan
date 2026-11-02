@@ -256,7 +256,8 @@ extension VideoScanModel {
     @discardableResult
     func trashSelectedRecords(_ selected: [VideoRecord],
                               confirmed: CatalogTrashPlan,
-                              fileOperation: (@Sendable (URL) throws -> Void)? = nil) async -> JunkDeletionResult {
+                              fileOperation: (@Sendable (URL) throws -> Void)? = nil,
+                              beforeEachMove: (@Sendable (String) -> Void)? = nil) async -> JunkDeletionResult {
         // The selection names intent; the LIVE catalog decides (Codex #197):
         // every row is the catalog's own row by id, so pair fields, markers
         // and the marker-save gate are the live rows'.
@@ -325,7 +326,8 @@ extension VideoScanModel {
             remove: fileOperation)
         fileGuard.units = groupTurns.activeGroups.map(\.members)
         fileGuard.unitHeldNote = { why in CatalogPairGroups.groupHeldNote("its related half \(why)") + " — nothing moved" }
-        fileGuard.atTheMove = { path in groupDisk.problem(path) }
+        // `beforeEachMove`: the tests' hook into the off-main window (nil in production).
+        fileGuard.atTheMove = { path in beforeEachMove?(path); return groupDisk.problem(path) }
         fileGuard.settled = { rec, outcome in
             audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id)
         }

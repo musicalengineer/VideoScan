@@ -387,4 +387,50 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
     }
 
+
+    // MARK: Codex #203 — a kept concurrent marker (red first)
+
+    @Test("codex #203 F2: a concurrent In-the-Trash marker kept on a member is never \"moved whole\"")
+    func concurrentTrashMarkerRequiresAttention() async throws {
+        let (result, d) = try await runWithMutation("pgmarkerlocation") { _, a, _, _ in
+            VideoScanModel.stampRemoval(a, .inTrash(movedAt: Date(), trashPath: "/another-trash/A.mxf", reason: .junk))
+        }
+        defer { d.sb.cleanup() }
+        #expect(result.groupNeedsAttention, "\(result.groupNotes)")
+        #expect(!result.groupNotes.contains { $0.contains("1 moved whole") }, "\(result.groupNotes)")
+        #expect(JunkDeletionReport(result).hasNotes)
+    }
+
+    @Test("codex #203 F1: with a concurrent marker kept, the ledger still carries the Trash path the file went to")
+    func keptMarkerLedgerCarriesTheRealTrashPath() async throws {
+        let d = try disk("pgkeptledger")
+        defer { d.sb.cleanup() }
+        let v = try file(d, "test_kl.V.mxf", seed: 161, .videoOnly), a = try file(d, "test_kl.A.mxf", seed: 162, .audioOnly)
+        pair(v, a)
+        d.model.records = [v, a]
+        let p = d.model.catalogTrashPlan(for: [v, a], isOffline: { _ in false })
+        try #require(p.groups.count == 1)
+        let aPath = a.fullPath
+        let aRef = Ref(a)
+        // The real Trash move (test host); the hook runs right before A's move.
+        let result = await d.model.trashSelectedRecords([v, a], confirmed: p, beforeEachMove: { path in
+            guard path == aPath else { return }
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated { VideoScanModel.stampRemoval(aRef.value, .removedFromCatalog(at: Date(), reason: .junk)) }
+            }
+        })
+        #expect(a.removal?.state == .removedFromCatalog, "the concurrent marker is kept")
+        let aMoved = try #require(result.items.first { $0.record.id == a.id })
+        guard case .moved(_, let trashPath?) = aMoved.outcome else { Issue.record("A moved: \(aMoved.outcome)"); return }
+        await d.model.mediaLedger.waitForPendingWrites()
+        let event = try #require(d.model.mediaLedger.allEvents().first { $0.event == .copyTrashed && $0.recordID == a.id })
+        #expect(event.detail[MediaLedgerEvent.Detail.trashPath] == trashPath, "\(event.detail)")
+        #expect(await consoleLine(d.model, containing: trashPath) != nil, "the console names the Trash path")
+        #expect(result.groupNeedsAttention)
+        try? FileManager.default.removeItem(atPath: trashPath)
+        if case .moved(_, let vTrash?)? = result.items.first(where: { $0.record.id == v.id })?.outcome {
+            try? FileManager.default.removeItem(atPath: vTrash)
+        }
+    }
+
 }
