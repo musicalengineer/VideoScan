@@ -96,5 +96,7 @@ def test_sensor_real_repo_scope_is_app_plus_core():
     tracked = cf.tracked_swift_files(REPO)
     scope = [p for p in tracked if cf.in_scope(p)]
     assert len(scope) > 800
-    assert all(p.startswith(("VideoScan/VideoScan/", "VideoScan/VideoScanCore/")) for p in scope)
+    # Three product targets since 2026-10-31: the app, Core, and the background helper (step 0).
+    assert all(p.startswith(("VideoScan/VideoScan/", "VideoScan/VideoScanCore/",
+                             "VideoScan/VideoScanBackground/")) for p in scope)
     assert not any("/VideoScanTests/" in p or "/Tests/" in p for p in scope)

@@ -161,6 +161,7 @@ paths:
   - VideoScan/VideoScan/FamilyTree/CouplePortrait.swift
   - VideoScan/VideoScan/FamilyTree/FamilyTreeNotes.swift
   - VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift
+  - VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel+Summaries.swift
   - VideoScan/VideoScan/FamilyTree/FamilyTreeBookmarks.swift
   - VideoScan/VideoScan/FamilyTree/FamilyTreeLineExport.swift
   - VideoScan/VideoScan/FamilyTree/FamilyTreePronunciation.swift

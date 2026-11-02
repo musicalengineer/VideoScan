@@ -1,4 +1,5 @@
 # Retired 2026-10-23 (context reset). One repo path per line; recover with: git show pre-reset-2026-10-23:<path>
+# Read by tests/test_docs_links.py. Lived at docs/archive/RETIRED.txt until the 2026-11-02 prune (tag pre-prune-2026-11-02).
 docs/archive/2026-Q2/Ideas.md
 docs/archive/2026-Q2/gh_issue_61874_safety_critical_mode.md
 docs/archive/2026-Q2/issue-01-mp4-compilation-fix.md
