@@ -516,8 +516,10 @@ struct FamilyTreeReadOnlyPullDateTests {
 
 // MARK: - F1/F2 seams: the probe and the live store
 
-/// Counts every directory listing (C++: a mock FileSystem).
-final class ListingSpy: FileManager, @unchecked Sendable {
+/// Counts every directory listing (C++: a mock FileSystem). Deliberately
+/// NOT Sendable: FileManager's Sendable conformance is unavailable, and the
+/// spy is only ever used on the calling thread (its lock guards `paths`).
+final class ListingSpy: FileManager {
     private let lock = NSLock()
     private var paths: [String] = []
     var listed: [String] { lock.withLock { paths } }

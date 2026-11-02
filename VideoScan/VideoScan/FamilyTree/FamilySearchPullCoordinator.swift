@@ -766,12 +766,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
         let baselineGeneration = self.compiledStore()?.loadCurrentManifest()
         let writeMode = self.writeMode
         let staged = await Task.detached(priority: .userInitiated) { () -> MergeStaged in
-            let fileManager = FileManager.default
-            guard var new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
+            guard let new = GedcomFamilyGraph(fileURL: output), !new.people.isEmpty else {
                 return .failed(FamilySearchPullError.downloadedFileUnreadable(output).localizedDescription)
             }
             let outcome = loader.loadNewestOutcome()
-            guard var current = outcome.graph, let currentURL = outcome.selectedURL else {
+            guard let current = outcome.graph, let currentURL = outcome.selectedURL else {
                 return .failed("There is no current tree to add to — use Install family tree instead.")
             }
             // WHAT WE ARE REBASING ONTO — say it before a byte moves, so a

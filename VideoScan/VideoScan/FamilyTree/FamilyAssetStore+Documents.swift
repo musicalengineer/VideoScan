@@ -631,7 +631,7 @@ extension FamilyAssetStore {
             }
             if let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
                values.isRegularFile == true, values.isSymbolicLink != true {
-                try withWrite("document to .trash") {
+                _ = try withWrite("document to .trash") {
                     try Self.moveToTrash(file, in: documentsDir, fileManager: fileManager, at: when)
                 }
             }
