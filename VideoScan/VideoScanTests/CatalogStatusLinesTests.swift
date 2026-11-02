@@ -42,16 +42,64 @@ struct CatalogStatusLinesLogicTests {
         #expect(exactly.state == .green, "24 h exactly is still within 24 hours")
         let late = CatalogStatusLinesPolicy.database(Self.passed(at: now.addingTimeInterval(-(24 * hour + 60))), now: now, date: d)
         #expect(late.state == .yellow)
-        #expect(late.words.hasSuffix("— older than 24 hours; Check Now… runs it again"))
+        #expect(late.words.hasPrefix("Yellow: the last integrity check passed") && late.words.hasSuffix("— older than 24 hours. Fix: Check Now… runs it again"),
+                Comment(rawValue: late.words))
+        // RED 2026-11-02 (flipped): a decision count alone never colours the
+        // line — 19 measured-silence files have no clearing verb (DECISIONS
+        // 2026-10-20 "N to review never changes the colour", restored).
         var found = Self.passed(at: now.addingTimeInterval(-hour))
-        found.needsDecision = 3
-        found.decisionWords = "3 rows share a path"
-        let red = CatalogStatusLinesPolicy.database(found, now: now, date: d)
-        #expect(red.state == .red)
-        #expect(red.words.contains("found 3 things to look at") && red.detail == ["3 rows share a path"])
+        found.needsDecision = 19
+        found.decisionWords = "19 headers say sound the print never heard"
+        let notRed = CatalogStatusLinesPolicy.database(found, now: now, date: d)
+        #expect(notRed.state == .green, "needsDecision > 0 and no break: green when fresh (got \(notRed.state))")
+        #expect(!notRed.words.contains("headers") && !notRed.words.contains("to look at") && notRed.detail.isEmpty, Comment(rawValue: notRed.words))
+        found.lastCompleted = now.addingTimeInterval(-(24 * hour + 60))
+        #expect(CatalogStatusLinesPolicy.database(found, now: now, date: d).state == .yellow, "…and yellow only when stale")
         var broke = Self.passed(at: now.addingTimeInterval(-hour))
         broke.reality.breaks = [CatalogRealityCount(count: 1, words: "1 duplicate group holds different digests")]
-        #expect(CatalogStatusLinesPolicy.database(broke, now: now, date: d).state == .red, "an integrity break is something found")
+        #expect(CatalogStatusLinesPolicy.database(broke, now: now, date: d).state == .red, "an integrity break is red")
+    }
+
+    @Test("RED 2026-11-02: a tier-5 constraint break is red and the line says why and how — 'Red: <cause> — checked …' then 'Fix: <verb>'; several breaks count and list each 'Why:'; the verb is the rule's own")
+    func databaseRedNamesTheBreakAndItsFix() {
+        var one = Self.passed(at: now.addingTimeInterval(-hour))
+        let matt = "event \"Matt\": a member points at a row that no longer exists (id:0D3F5A2B-1C4E-4F6A-9B8C)"
+        one.reality.breaks = [CatalogRealityCount(count: 1, words: CatalogConstraints.Rule.eventMembersExist.words(count: 1),
+                                                  fix: CatalogConstraints.Rule.eventMembersExist.fix)]
+        one.reality.breakDetails = [matt]
+        let red = CatalogStatusLinesPolicy.database(one, now: now, date: d)
+        #expect(red.state == .red)
+        #expect(red.words == "Red: \(matt) — checked D\(Int(now.timeIntervalSince1970 - hour)) (1 h ago)", Comment(rawValue: red.words))
+        #expect(red.detail == ["Fix: \(CatalogConstraints.Rule.eventMembersExist.fix)"], Comment(rawValue: red.detail.joined(separator: " | ")))
+        #expect(red.detail[0].hasPrefix("Fix: no verb yet — the folder lists only members whose row exists"), "honest: no door reaches a member whose row is gone")
+        #expect(red.detail[0].hasSuffix("then Check Now…"), "Check Now… closes every fix")
+        // Two rules, three findings: the words count the rules; each kept finding is a Why; one Fix per rule.
+        var several = one
+        several.reality.breaks = [CatalogRealityCount(count: 2, words: CatalogConstraints.Rule.oneLiveRowPerPath.words(count: 2),
+                                                      fix: CatalogConstraints.Rule.oneLiveRowPerPath.fix),
+                                  CatalogRealityCount(count: 1, words: CatalogConstraints.Rule.eventMembersExist.words(count: 1),
+                                                      fix: CatalogConstraints.Rule.eventMembersExist.fix)]
+        several.reality.breakDetails = ["a.mov: 2 rows share the path /a.mov", "b.mov: 2 rows share the path /a.mov", matt]
+        let many = CatalogStatusLinesPolicy.database(several, now: now, date: d)
+        #expect(many.state == .red)
+        #expect(many.words.hasPrefix("Red: 2 paths have more than one live row · 1 event members point at nothing — checked D"), Comment(rawValue: many.words))
+        #expect(many.detail == ["Why: a.mov: 2 rows share the path /a.mov", "Why: b.mov: 2 rows share the path /a.mov", "Why: \(matt)",
+                                "Fix: \(CatalogConstraints.Rule.oneLiveRowPerPath.fix)", "Fix: \(CatalogConstraints.Rule.eventMembersExist.fix)"],
+                Comment(rawValue: many.detail.joined(separator: " | ")))
+        // A break with no fix named still gets the generic verb, never a bare count.
+        var bare = one
+        bare.reality.breaks = [CatalogRealityCount(count: 1, words: "catalog.json changed without a new generation")]
+        bare.reality.breakDetails = []
+        #expect(CatalogStatusLinesPolicy.database(bare, now: now, date: d).detail == ["Fix: \(CatalogConstraints.Rule.defaultFix)"])
+        // Every coloured state reads "<Colour>: <cause>. Fix: <verb>" — one verb, the same one on every yellow.
+        for facts in [IntegrityReportFacts(outcome: .partial), IntegrityReportFacts(), IntegrityReportFacts(predatesSwitch: true)] {
+            let y = CatalogStatusLinesPolicy.database(facts, now: now, date: d)
+            #expect(y.state == .yellow && y.words.hasPrefix("Yellow: ") && y.words.contains("Fix: Check Now…"), Comment(rawValue: y.words))
+        }
+        let failed = CatalogStatusLinesPolicy.database(IntegrityReportFacts(outcome: .failed), now: now, date: d)
+        #expect(failed.words == "Red: the last integrity check failed. Fix: Check Now… runs it again")
+        let unreadable = CatalogStatusLinesPolicy.database(IntegrityReportFacts(problem: "integrity-latest.json can't be read: damaged"), now: now, date: d)
+        #expect(unreadable.words.hasPrefix("Red: ") && unreadable.words.contains("Fix: Check Now…"), Comment(rawValue: unreadable.words))
     }
 
     @Test("Database: stopped / never / before the switch → yellow; failed / unreadable → red; unverified gaps are said, not coloured")
@@ -240,6 +288,105 @@ struct CatalogStatusLinesTruthTests {
         try Data("not json".utf8).write(to: dir.appendingPathComponent(IntegrityReportStore.latestFileName))
         (line, row) = Self.both(dir)
         #expect(line.state == .red && row.hasPrefix("unknown — ") && line.words.contains("can't be read"))
+    }
+
+    /// Rick's live catalog, 2026-11-02 10:41: 19 tier-3 measured-silence
+    /// findings (written as decisions by the build of the day) and one
+    /// tier-5 event member pointing at nothing — the line was red "found 20
+    /// things to look at" and could never go green. Through the REAL
+    /// report store and facts reader, a poisoned report of that shape.
+    @Test("RED 2026-11-02 TRUTH: 19 silence findings + 1 event member with NO row → the Database line is red for the member alone, names the event and the verb; the same member REMOVED on purpose (history) → green when fresh with the facts listed under it, yellow when stale; the facts' Last Validate row never counts the silence; the chip and the Analyze menu's first row follow")
+    func silenceNeverColoursTheDatabaseLine() throws {
+        let dir = try Self.folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        let catalog = dir.appendingPathComponent("catalog.json")
+        let recent = now.addingTimeInterval(-hour)
+        let matt = "event \"Matt\": a member points at a row that no longer exists (id:0D3F5A2B-1C4E-4F6A-9B8C)"
+        let history = "event \"Matt\": a member points at a file removed from the catalog (696791735db208e3390a35c6) — kept as history"
+        // The file check's record beside it (completed, clean), so the band's one Validate outcome is "completed".
+        let marker = CatalogAuditRunMarker()
+        marker.attach(catalogFile: catalog.path)
+        marker.noteStarted(at: recent.addingTimeInterval(-60))
+        var totals = CatalogAuditTotals()
+        totals.planned = 6
+        totals.add(.present, rows: 6)
+        marker.noteFinished(.completed, totals: totals, marked: 0, partial: false, catalogGeneration: nil, at: recent)
+        func band(_ facts: CatalogFreshnessFacts) -> CatalogFreshnessState {
+            CatalogFreshnessState.judged(rows: [], reality: CatalogRealityFactsBuilder.inputs(facts: facts, missing: MissingCopyCounts()), now: now)
+        }
+        func poisoned(at date: Date, member: Bool, removed: Bool = false) -> IntegrityReport {
+            var r = Self.report(.completed, at: date)
+            // The old shape: tier 3 counted the 19 as decisions, and so did each finding.
+            var silence = (0..<19).map { i in
+                IntegrityFinding(tier: 3, rule: VerifyCatalogTiers.silentPrintRule, recordID: UUID(), filename: "clip\(i).mov",
+                                 words: "the header says Video+Audio, but the sound print heard nothing (silent)", needsDecision: true)
+            }
+            // …and the new shape too (information): both read the same.
+            silence[0].needsDecision = false
+            var t3 = r.tiers[2]; t3.result = .needsDecision(18); t3.needsDecision = 18; t3.summary = "18 headers say sound the print never heard"
+            r.tiers[2] = t3
+            r.findings = silence
+            if member {
+                var t5 = r.tiers[4]
+                if removed {
+                    t5.result = .couldNotCheck(1); t5.couldNotCheck = 1; t5.catalogFileUnchecked = 0
+                    t5.summary = "1 event members point at files removed from the catalog — kept as history · every other relation holds (10 rows)"
+                } else {
+                    t5.result = .needsDecision(1); t5.needsDecision = 1; t5.summary = "1 event members point at nothing"
+                }
+                r.tiers[4] = t5
+                r.findings.append(IntegrityFinding(tier: 5, rule: CatalogConstraints.Rule.eventMembersExist.rawValue, recordID: nil,
+                                                   filename: nil, words: removed ? history : matt, needsDecision: !removed))
+            }
+            r.findingsTotal = r.findings.count
+            return r
+        }
+        // A member with no row and no tombstone: a real break — red, cause and verb.
+        try IntegrityReportStore.write(poisoned(at: recent, member: true), besideCatalogAt: catalog, now: recent)
+        var (line, row) = Self.both(dir)
+        #expect(line.state == .red)
+        #expect(line.words == "Red: \(matt) — checked \(d(recent)) (1 h ago)", Comment(rawValue: line.words))
+        #expect(line.detail == ["Fix: \(CatalogConstraints.Rule.eventMembersExist.fix)"], Comment(rawValue: line.detail.joined(separator: " | ")))
+        #expect(!line.words.contains("headers") && !line.words.contains("to look at") && !line.detail.joined().contains("silen"),
+                "the silence never colours the line nor rides in its red words")
+        #expect(row == "completed \(d(recent)) · 1 needs a decision", "the facts row counts the member, never the silence: \(row)")
+        var facts = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
+        #expect(facts.integrity.reality.review.contains(CatalogReviewItem(kind: .audioTracksButNoSound, count: 19)), "the 19 are a review item, not a colour")
+        func l(_ k: CatalogStatusLineKind, _ c: CatalogStatusLineState) -> CatalogStatusLine { CatalogStatusLine(kind: k, state: c, words: "") }
+        #expect(CatalogStatusLines.menuTitle(CatalogStatusLines(database: line, files: l(.files, .green), content: l(.content, .green)))
+                == "Catalog Status — Database needs attention…")
+        var state = band(facts)
+        #expect(state.summary.colour == .red && CatalogStatusWords.chipWords(state) == "Needs attention…", "the chip relays the same break")
+        #expect(CatalogAnalyzeMenu.summaryTitle(state).hasPrefix("Needs attention: 1 event members point at nothing"), Comment(rawValue: CatalogAnalyzeMenu.summaryTitle(state)))
+
+        // Rick's actual catalog (11/02): the member was REMOVED on purpose — history. Green, the facts listed under it.
+        try IntegrityReportStore.write(poisoned(at: recent, member: true, removed: true), besideCatalogAt: catalog, now: recent)
+        (line, row) = Self.both(dir)
+        #expect(line.state == .green, Comment(rawValue: line.words))
+        #expect(line.words == "Integrity check passed \(d(recent)) (1 h ago)")
+        // Tier 5's could-not-check (its informational findings) is the facts' "unverified" line, as before;
+        // then the facts the check recorded, in their own words — said, never coloured.
+        #expect(line.detail == ["not verified: tier 5 Relations and constraints: 1 event members point at files removed from the catalog — kept as history · every other relation holds (10 rows)",
+                                "19 files have a silent audio track (measured)",
+                                "1 event members point at files removed from the catalog — kept as history"],
+                Comment(rawValue: line.detail.joined(separator: " | ")))
+        #expect(row == "completed \(d(recent)) · 1 unverified", Comment(rawValue: row))
+        facts = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
+        state = band(facts)
+        #expect(state.summary.colour == .green && CatalogStatusWords.chipWords(state) == "Reconciled",
+                "the chip goes green with the line: \(state.summary.colour) / \(state.reality.reasons)")
+        #expect(CatalogAnalyzeMenu.summaryTitle(state) == "The catalog is reconciled")
+        #expect(state.reality.information.contains("1 event members point at files removed from the catalog — kept as history"))
+        #expect(CatalogStatusLines.menuTitle(CatalogStatusLines(database: line, files: l(.files, .green), content: l(.content, .green)))
+                == "Catalog Status — Green…")
+
+        // Yellow when stale, naming the one verb; the facts still listed.
+        let old = now.addingTimeInterval(-(24 * hour + 60))
+        try IntegrityReportStore.write(poisoned(at: old, member: true, removed: true), besideCatalogAt: catalog, now: old)
+        (line, _) = Self.both(dir)
+        #expect(line.state == .yellow)
+        #expect(line.words == "Yellow: the last integrity check passed \(d(old)) (24 h ago) — older than 24 hours. Fix: Check Now… runs it again",
+                Comment(rawValue: line.words))
+        #expect(line.detail.contains("19 files have a silent audio track (measured)"), Comment(rawValue: line.detail.joined(separator: " | ")))
     }
 
     @Test("TRUTH: the Files line counts are the real marker's; the snapshot publishes lines built from exactly its facts and report")

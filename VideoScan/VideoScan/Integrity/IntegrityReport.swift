@@ -251,7 +251,11 @@ struct IntegrityReport: Codable, Equatable, Sendable {
     /// The band's words: the tiers with decisions pending, worst first,
     /// each in its own summary ("3 rows share a path · 519 headers say
     /// sound the print never heard"). nil when nothing is pending.
-    var decisionWords: String? {
+    var decisionWords: String? { Self.decisionWords(tiers) }
+
+    /// The same over a chosen set of tiers (Catalog Status reads the built
+    /// tiers without tier 3 — IntegrityReportFacts).
+    static func decisionWords(_ tiers: [IntegrityTier]) -> String? {
         let pending = tiers.filter { $0.needsDecision > 0 }.sorted { $0.needsDecision > $1.needsDecision }
         guard !pending.isEmpty else { return nil }
         return pending.map(\.summary).joined(separator: " · ")
@@ -372,7 +376,10 @@ struct IntegrityReportFacts: Sendable, Equatable {
     /// the run completed.
     var lastCompleted: Date?
     var outcome: FreshnessRow.Outcome = .neverRan
-    /// The sum of needs-a-decision counts across the built tiers.
+    /// The sum of needs-a-decision counts across the built tiers EXCEPT
+    /// tier 3 (review, never a colour). Said in the Database facts' "Last
+    /// Validate Catalog" row; the Database line's colour reads
+    /// `reality.breaks`, never this (DECISIONS 2026-11-02).
     var needsDecision = 0
     /// Rows some built tier could not verify — the largest single gap (a
     /// tier not run counts every live row); 0 when every built tier is ok.
@@ -429,7 +436,16 @@ struct IntegrityReportFacts: Sendable, Equatable {
 
     static func from(report r: IntegrityReport) -> IntegrityReportFacts {
         let built = r.builtTiers
-        var f = IntegrityReportFacts(needsDecision: built.reduce(0) { $0 + $1.needsDecision }, decisionWords: r.decisionWords)
+        // Tier 3 (the header against the sound print) is REVIEW for Catalog
+        // Status — "Audio Tracks, But No Sound" under the band, never a
+        // colour (DECISIONS 2026-10-20, restored 2026-11-02): its count
+        // stays in the report and in the Validate detail, not here. A
+        // report written before 11/02 counted measured silence as a tier-3
+        // decision; this read ignores that too, so the line is right before
+        // Check Now… rewrites the report.
+        let decided = built.filter { $0.tier != 3 }
+        var f = IntegrityReportFacts(needsDecision: decided.reduce(0) { $0 + $1.needsDecision },
+                                     decisionWords: IntegrityReport.decisionWords(decided))
         f.note = note(for: r)
         f.reality = IntegrityRealityFacts.from(report: r)
         switch r.outcome {

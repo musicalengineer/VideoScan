@@ -57,10 +57,15 @@ public enum CatalogValidation: Sendable, Equatable {
 public struct CatalogRealityCount: Sendable, Equatable {
     public var count: Int
     public var words: String
+    /// The verb that clears it, for a break (Rick 2026-11-02: a coloured
+    /// line says exactly why and exactly how to fix it); nil for a count
+    /// that is not a break, or when no verb is known (the words say so).
+    public var fix: String?
 
-    public init(count: Int, words: String) {
+    public init(count: Int, words: String, fix: String? = nil) {
         self.count = count
         self.words = words
+        self.fix = fix
     }
 }
 

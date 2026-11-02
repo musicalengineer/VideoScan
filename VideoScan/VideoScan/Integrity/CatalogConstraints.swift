@@ -253,6 +253,7 @@ enum CatalogConstraints {
         /// replacement is a loss signal).
         private static let unverifiedWords: [Rule: String] = [
             .lineageTargetsExist: "lineage links point at rows removed from the catalog — kept as history",
+            .eventMembersExist: "event members point at files removed from the catalog — kept as history",
         ]
 
         var title: String { Self.words[self]?.title ?? rawValue }
@@ -263,6 +264,21 @@ enum CatalogConstraints {
             let phrase = decided ? nil : Self.unverifiedWords[self]
             return "\(n.formatted()) \(phrase ?? Self.words[self]?.counted ?? "findings")"
         }
+
+        /// The verb that clears a rule's decided findings — the Catalog
+        /// Status Database line's "Fix:" (Rick 2026-11-02: a coloured line
+        /// says exactly why and exactly how to fix it). DATA, like `words`.
+        /// A rule with no door in the app says so honestly ("no verb yet")
+        /// rather than naming one that cannot reach the finding: the folder
+        /// view lists only members whose row exists, so "Remove from
+        /// <Folder>" can never reach a member whose row is gone.
+        private static let fixes: [Rule: String] = [
+            .eventMembersExist: "no verb yet — the folder lists only members whose row exists, so Remove from Folder cannot reach a member whose row is gone; when a door lands, use it, then Check Now…",
+        ]
+
+        static let defaultFix = "no verb yet — the Validate Catalog detail (Media File Operations) lists each one; fix it by hand, then Check Now…"
+
+        var fix: String { Self.fixes[self] ?? Self.defaultFix }
     }
 
     struct Finding: Sendable, Equatable {
@@ -318,6 +334,17 @@ enum CatalogConstraints {
         var pairGroups: Set<UUID> = []
         /// Lowercase whole-file digests any row carries.
         var fullDigests: Set<String> = []
+        /// The same three, LIVE rows only (no removal marker) — an event
+        /// member that resolves here is in the catalog; one that resolves
+        /// only above points at a removed row (2026-11-02). Worst case
+        /// memory: a second copy of the three sets, ≈ 10 MB at 100k rows.
+        var liveIDs: Set<UUID> = []
+        var livePairGroups: Set<UUID> = []
+        var liveDigests: Set<String> = []
+        /// The purged tombstones' keys ("id:<UUID>", lowercased digest) —
+        /// rows the loader skips but a relation may still name
+        /// (VerifyCatalogSnapshot.purgedKeys).
+        var purgedKeys: Set<String> = []
         /// catalog.sqlite's footage likeness pairs (schema v1.11), handed in
         /// by `check` — the one input that is not a row.
         var likeness: [IntegrityLikenessFact] = []
@@ -341,6 +368,11 @@ enum CatalogConstraints {
             if let by = r.supersededByID { idx.supersededBy[r.id] = by }
             if let p = r.pairGroupID { idx.pairGroups.insert(p) }
             if let d = r.fullDigest { idx.fullDigests.insert(d.lowercased()) }
+            if r.isLive {
+                idx.liveIDs.insert(r.id)
+                if let p = r.pairGroupID { idx.livePairGroups.insert(p) }
+                if let d = r.fullDigest { idx.liveDigests.insert(d.lowercased()) }
+            }
         }
         idx.duplicatedIDs = seen.filter { $0.value > 1 }
         idx.sharedLivePaths = byPath.filter { $0.value.count > 1 }
@@ -378,9 +410,10 @@ enum CatalogConstraints {
     /// Run every rule. Findings come out in rule order, then row order;
     /// the likeness pairs (schema v1.11) last.
     static func check(rows: [IntegrityRow], events: [IntegrityEventFact],
-                      likeness: [IntegrityLikenessFact] = []) -> [Finding] {
+                      likeness: [IntegrityLikenessFact] = [], purgedKeys: Set<String> = []) -> [Finding] {
         var idx = index(rows)
         idx.likeness = likeness
+        idx.purgedKeys = purgedKeys
         var out: [Finding] = []
         for rule in rules { out += rule(rows, idx, events) }
         return out
@@ -517,22 +550,61 @@ enum CatalogConstraints {
     }
 
     /// FK: every confirmed event member resolves to a row — by id, by A/V
-    /// pair group, or by whole-file digest.
+    /// pair group, or by whole-file digest. Two meanings (Rick 2026-11-02,
+    /// the "Matt" event whose one member he had removed on purpose): rows
+    /// are never deleted, so a member whose row carries a removal marker,
+    /// or whose row was purged (a tombstone the loader skips —
+    /// `purgedKeys`), is HISTORY — truthful and intact, informational,
+    /// worded like the lineage rule. A member no row and no tombstone
+    /// answers to is a real break: a DECISION, with the rule's verb.
     static func eventMembersExist(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
         var out: [Finding] = []
         for e in events {
-            for key in e.memberKeys where !memberResolves(key, in: idx) {
-                out.append(Finding(.eventMembersExist, recordID: nil,
-                                   words: "event \"\(e.name)\": a member points at a row that no longer exists (\(key.prefix(24)))"))
+            for key in e.memberKeys {
+                switch memberState(key, in: idx) {
+                case .live:
+                    continue
+                case .removed:
+                    out.append(Finding(.eventMembersExist, recordID: nil,
+                                       words: "event \"\(e.name)\": a member points at a file removed from the catalog (\(key.prefix(24))) — kept as history",
+                                       needsDecision: false))
+                case .gone:
+                    out.append(Finding(.eventMembersExist, recordID: nil,
+                                       words: "event \"\(e.name)\": a member points at a row that no longer exists (\(key.prefix(24)))"))
+                }
             }
         }
         return out
     }
 
-    static func memberResolves(_ key: String, in idx: Index) -> Bool {
-        if key.hasPrefix("id:") { return UUID(uuidString: String(key.dropFirst(3))).map(idx.ids.contains) ?? false }
-        if key.hasPrefix("pair:") { return UUID(uuidString: String(key.dropFirst(5))).map(idx.pairGroups.contains) ?? false }
-        return idx.fullDigests.contains(key.lowercased())
+    enum MemberState: Equatable { case live, removed, gone }
+
+    /// Where a member key lands: a live row; a row with a removal marker or
+    /// a purged tombstone; or nothing at all.
+    static func memberState(_ key: String, in idx: Index) -> MemberState {
+        if memberResolves(key, in: idx, live: true) { return .live }
+        if memberResolves(key, in: idx, live: false) || idx.purgedKeys.contains(canonicalMemberKey(key)) { return .removed }
+        return .gone
+    }
+
+    /// The key as `purgedKeys` stores it: "id:" + the UUID's canonical
+    /// (uppercase) spelling, "pair:" likewise, a digest lowercased.
+    static func canonicalMemberKey(_ key: String) -> String {
+        for prefix in ["id:", "pair:"] where key.hasPrefix(prefix) {
+            return prefix + (UUID(uuidString: String(key.dropFirst(prefix.count)))?.uuidString ?? String(key.dropFirst(prefix.count)))
+        }
+        return key.lowercased()
+    }
+
+    /// Any row (`live: false`) or live rows only.
+    static func memberResolves(_ key: String, in idx: Index, live: Bool = false) -> Bool {
+        if key.hasPrefix("id:") {
+            return UUID(uuidString: String(key.dropFirst(3))).map((live ? idx.liveIDs : idx.ids).contains) ?? false
+        }
+        if key.hasPrefix("pair:") {
+            return UUID(uuidString: String(key.dropFirst(5))).map((live ? idx.livePairGroups : idx.pairGroups).contains) ?? false
+        }
+        return (live ? idx.liveDigests : idx.fullDigests).contains(key.lowercased())
     }
 
     /// Unique, case-folded: two live rows whose paths differ only by case

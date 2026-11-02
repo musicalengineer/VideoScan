@@ -65,6 +65,14 @@ public enum CatalogLoad {
         public var pending: [CatalogRow.PendingRow] = []
         /// Rows skipped because they carry the purge marker (B2.1 gap 3).
         public var purged = 0
+        /// The purged rows' ids and whole-file digests (lowercased) — the
+        /// tombstones a relation may still point at. Rows are never deleted
+        /// (CLAUDE.md rule 2), so Verify Catalog tells "points at a file
+        /// removed from the catalog — kept as history" from "points at
+        /// nothing" by these (2026-11-02). Worst case memory: one UUID and
+        /// one 64-byte string per purged row (≈ 1 MB at 10,000 purged).
+        public var purgedIDs: Set<UUID> = []
+        public var purgedDigests: Set<String> = []
     }
 
     /// Display pass, then one snapshot of every row.
@@ -82,13 +90,24 @@ public enum CatalogLoad {
             return try await repository.read { reader in
                 var rows: [CatalogLoadedRow] = []
                 var purged = 0
+                var purgedIDs = Set<UUID>()
+                var purgedDigests = Set<String>()
                 try reader.loadedRows { row in
-                    if CatalogCommitWords.isPurged(row.file) { purged += 1 } else { rows.append(row) }
+                    if CatalogCommitWords.isPurged(row.file) {
+                        purged += 1
+                        if let id = UUID(uuidString: row.file.id) { purgedIDs.insert(id) }
+                        if let digest = row.file.contentDigest { purgedDigests.insert(digest.lowercased()) }
+                    } else {
+                        rows.append(row)
+                    }
                 }
                 var pending: [CatalogRow.PendingRow] = []
                 try reader.pendingRows { pending.append($0) }
-                return Snapshot(rows: rows, counts: try reader.loadCounts(), displayPass: pass, generation: reader.generation,
-                                pending: pending, purged: purged)
+                var snapshot = Snapshot(rows: rows, counts: try reader.loadCounts(), displayPass: pass, generation: reader.generation,
+                                        pending: pending, purged: purged)
+                snapshot.purgedIDs = purgedIDs
+                snapshot.purgedDigests = purgedDigests
+                return snapshot
             }
         } catch {
             throw Failure.readFailed(String(describing: error))

@@ -5,9 +5,14 @@
 //                integrity-latest.json (IntegrityReportFacts — the same strict
 //                read the Integrity row and the Database facts' "Last
 //                Validate Catalog" row take). GREEN = it completed, found
-//                nothing, within 24 hours (CatalogRealityPolicy.freshFor);
-//                YELLOW = older, stopped, or never ran here; RED = it found
-//                something, failed, or its report cannot be read.
+//                no break, within 24 hours (CatalogRealityPolicy.freshFor);
+//                YELLOW = older, stopped, or never ran here; RED = it failed,
+//                its report cannot be read, or it found a structural BREAK
+//                (reality.breaks — a tier 4 / 5 decision), named with its
+//                verb. Findings no verb can clear never colour it (Rick
+//                2026-11-02; DECISIONS 2026-10-20 "N to review never changes
+//                the colour"). Every coloured line reads "<Colour>: <cause>.
+//                Fix: <verb>".
 //   ● Files      is every file where the catalog says? The last file check's
 //                record (catalog-audit.json → CatalogAuditPresenceFacts and the
 //                band's PresenceTally) for present / unsettled / not checked,
@@ -137,36 +142,69 @@ enum CatalogStatusLinesPolicy {
 
     // MARK: Database
 
+    /// Rick 2026-11-02 (DECISIONS 2026-11-02): a coloured line says 1. exactly
+    /// why it is that colour and 2. exactly how to fix it — "Red: <cause>.
+    /// Fix: <verb>", "Yellow: <cause>. Fix: Check Now…". RED only for a
+    /// check that failed or cannot be read, or a structural BREAK —
+    /// `reality.breaks`: a decided tier 4 / 5 constraint finding such as an
+    /// event member pointing at nothing — each named with its verb (or "no
+    /// verb yet", honestly). A finding no verb can clear (tier 3's measured
+    /// silence) is information: it never colours this line, so the decision
+    /// counts (`needsDecision`) are not read here at all. YELLOW = older
+    /// than 24 h, stopped part way, or never ran. GREEN = completed within
+    /// 24 h and found no break.
     static func database(_ f: IntegrityReportFacts, now: Date, date: (Date) -> String) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
             CatalogStatusLine(kind: .database, state: CatalogStatusLineState(c), words: w, detail: d)
         }
-        if let problem = f.problem { return line(.red, "The last integrity check's report can't be read — \(problem)") }
-        if f.predatesSwitch { return line(.yellow, "Not checked since the switch to SQLite — Check Now… runs Validate Catalog") }
-        let breaks = f.reality.breaks.filter { $0.count >= 1 }
-        let found = f.needsDecision + breaks.reduce(0) { $0 + $1.count }
+        let checkNow = "Fix: Check Now… runs Validate Catalog"
+        if let problem = f.problem {
+            return line(.red, "Red: the last integrity check's report can't be read — \(problem). \(checkNow) and writes a new report")
+        }
+        if f.predatesSwitch { return line(.yellow, "Yellow: not checked since the switch to SQLite. \(checkNow)") }
         let when = f.lastCompleted.map { " \(date($0)) (\(age($0, now: now)))" } ?? ""
         switch f.outcome {
         case .neverRan:
-            return line(.yellow, "Not checked yet — Check Now… runs Validate Catalog")
+            return line(.yellow, "Yellow: not checked yet. \(checkNow)")
         case .failed:
-            return line(.red, "The last integrity check failed — run it again")
+            return line(.red, "Red: the last integrity check failed. Fix: Check Now… runs it again")
         case .partial:
-            return line(.yellow, "The last integrity check stopped part way\(when) — not a full check")
+            return line(.yellow, "Yellow: the last integrity check stopped part way\(when) — not a full check. Fix: Check Now… runs it again")
         case .ok:
             break
         }
-        if found > 0 {
-            let words = f.decisionWords ?? breaks.map(\.words).joined(separator: " · ")
-            return line(.red, "Checked\(when): found \(found.formatted()) thing\(found == 1 ? "" : "s") to look at", words.isEmpty ? [] : [words])
-        }
+        let breaks = f.reality.breaks.filter { $0.count >= 1 }
+        if !breaks.isEmpty { return line(.red, breakWords(breaks, details: f.reality.breakDetails, when: when), breakDetail(breaks, details: f.reality.breakDetails)) }
         var detail: [String] = []
         if f.unverified > 0, let gaps = f.unverifiedWords { detail.append("not verified: \(gaps)") }
-        guard let at = f.lastCompleted else { return line(.yellow, "Not checked yet — Check Now… runs Validate Catalog") }
+        // Facts the check recorded that nothing needs to clear — said, never coloured.
+        if f.reality.measuredSilence > 0 { detail.append(VerifyCatalogTiers.measuredSilenceWords(f.reality.measuredSilence)) }
+        detail += f.reality.information
+        guard let at = f.lastCompleted else { return line(.yellow, "Yellow: not checked yet. \(checkNow)") }
         if now.timeIntervalSince(at) <= CatalogRealityPolicy.freshFor {
             return line(.green, "Integrity check passed\(when)", detail)
         }
-        return line(.yellow, "Integrity check passed\(when) — older than 24 hours; Check Now… runs it again", detail)
+        return line(.yellow, "Yellow: the last integrity check passed\(when) — older than 24 hours. Fix: Check Now… runs it again", detail)
+    }
+
+    /// "Red: event "Matt": a member points at a row that no longer exists
+    /// (id:…) — checked 2 Nov 10:41 (1 h ago)" when the one break is one
+    /// finding the report kept; otherwise the counted rules ("Red: 2 event
+    /// members point at nothing · 1 paths have more than one live row — …").
+    static func breakWords(_ breaks: [CatalogRealityCount], details: [String], when: String) -> String {
+        let found = breaks.reduce(0) { $0 + $1.count }
+        let cause = (found == 1 && details.count == 1) ? details[0] : breaks.map(\.words).joined(separator: " · ")
+        return "Red: \(cause) — checked\(when)"
+    }
+
+    /// Under the words: each kept finding ("Why: …") when the words counted
+    /// rather than named, then one "Fix: …" per broken rule.
+    static func breakDetail(_ breaks: [CatalogRealityCount], details: [String]) -> [String] {
+        let found = breaks.reduce(0) { $0 + $1.count }
+        var out: [String] = []
+        if !(found == 1 && details.count == 1) { out += details.map { "Why: \($0)" } }
+        out += breaks.map { "Fix: \($0.fix ?? CatalogConstraints.Rule.defaultFix)" }
+        return out
     }
 
     // MARK: Files

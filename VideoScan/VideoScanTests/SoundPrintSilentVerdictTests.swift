@@ -63,7 +63,7 @@ struct SoundPrintSilentVerdictTier3Tests {
                 Comment(rawValue: out.tier.summary))
     }
 
-    @Test("group A (rule-4 measured silence) still needs a decision with the same words; a print with landmarks passes; a real no-sound stamp the header contradicts still needs a decision")
+    @Test("group A (rule-4 measured silence) still fires with the same words — as information since 2026-11-02; a print with landmarks passes; a real no-sound stamp the header contradicts still needs a decision")
     func groupAStillFires() {
         let a = vaRow("Fog 02.dv", codec: "pcm_s16le", stamp(version: 4, landmarks: 0, seconds: 3))
         let heard = vaRow("00085b.MTS", codec: "ac3", stamp(version: 2, landmarks: 40))
@@ -72,8 +72,11 @@ struct SoundPrintSilentVerdictTier3Tests {
         #expect(out.findings.map(\.recordID) == [a.id, contradicted.id])
         #expect(out.findings.first?.words == "the header says Video+Audio, but the sound print heard nothing (silent)")
         #expect(out.findings.first?.rule == VerifyCatalogTiers.silentPrintRule)
+        #expect(out.findings.first?.needsDecision == false, "RED 2026-11-02: measured silence is a fact about the file, never a decision")
         #expect(out.findings.last?.words == "the header says Video+Audio, but the sound print recorded no audio — Fingerprint Sound again")
+        #expect(out.findings.last?.needsDecision == true)
         #expect(out.tier.checked == 3 && out.tier.couldNotCheck == 0)
+        #expect(out.tier.result == .needsDecision(1) && out.tier.needsDecision == 1 && out.tier.passed == 2)
     }
 
     @Test("the reason words come from the hearing, never from the landmark count: notEvidence and heardSound have none")
@@ -100,15 +103,20 @@ struct SoundPrintSilentVerdictTier3Tests {
         #expect(out.tier.summary.contains("1 \(VerifyCatalogTiers.livePhotoSilentWords)"), Comment(rawValue: out.tier.summary))
     }
 
-    @Test("QA P3c: when there ARE decisions, the summary still names what could not be checked")
+    @Test("QA P3c: when there ARE findings, the summary still names what could not be checked — measured silence worded as information (2026-11-02), a no-audio-track decision first")
     func summaryKeepsCouldNotCheckBesideDecisions() {
         let a = vaRow("Fog 02.dv", codec: "pcm_s16le", stamp(version: 4, landmarks: 0, seconds: 3))
         let b = vaRow("00085.MTS", codec: "ac3", stamp(version: 2, landmarks: 0, seconds: 1.504))
         let none = vaRow("none.mov", codec: "aac", nil)
         let out = tier3([a, b, none])
-        #expect(out.tier.result == .needsDecision(1) && out.tier.couldNotCheck == 2)
-        #expect(out.tier.summary == "1 headers say sound the print never heard · 1 Video+Audio files have no current sound print yet — Fingerprint Sound · 1 sound prints could not tell sound from silence (a failed decode, or made before silence was measured) — Fingerprint Sound looks again",
+        #expect(out.tier.result == .couldNotCheck(2) && out.tier.couldNotCheck == 2 && out.tier.needsDecision == 0, "\(out.tier.result)")
+        #expect(out.tier.summary == "1 file has a silent audio track (measured) · 1 Video+Audio files have no current sound print yet — Fingerprint Sound · 1 sound prints could not tell sound from silence (a failed decode, or made before silence was measured) — Fingerprint Sound looks again",
                 Comment(rawValue: out.tier.summary))
+        let contradicted = vaRow("no_codec.mov", codec: "", stamp(version: 3, .noAudio, landmarks: 0))
+        let decided = tier3([a, contradicted, none])
+        #expect(decided.tier.result == .needsDecision(1))
+        #expect(decided.tier.summary == "1 headers say sound the print never heard · 1 file has a silent audio track (measured) · 1 Video+Audio files have no current sound print yet — Fingerprint Sound",
+                Comment(rawValue: decided.tier.summary))
     }
 }
 
@@ -126,9 +134,9 @@ struct SoundPrintSilentVerdictSurfaceTests {
         return r
     }
 
-    @Test("Stream column: '· silent' only for rule-4 measured silence; a pre-4 zero-landmark print and a v2 decode-failure stamp show the header alone")
+    @Test("Stream column: '· silent (measured)' only for rule-4 measured silence — a fact, not a defect (2026-11-02); a pre-4 zero-landmark print and a v2 decode-failure stamp show the header alone")
     func streamColumn() {
-        #expect(CatalogFileFacts.stream(record(stamp(version: 4, landmarks: 0), codec: "pcm_s16le")).value == "Video+Audio · silent")
+        #expect(CatalogFileFacts.stream(record(stamp(version: 4, landmarks: 0), codec: "pcm_s16le")).value == "Video+Audio · silent (measured)")
         let b = CatalogFileFacts.stream(record(stamp(version: 2, landmarks: 0), codec: "ac3"))
         #expect(b.value == "Video+Audio" && !CatalogFileFacts.isSilent(b))
         let c = CatalogFileFacts.stream(record(stamp(version: 2, .noAudio, landmarks: 0), codec: "aac"))

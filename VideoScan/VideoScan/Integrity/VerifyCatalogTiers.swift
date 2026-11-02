@@ -67,6 +67,12 @@ struct VerifyCatalogSnapshot: Sendable {
     /// a connected drive is one Fill In Full Hashes away; one on a drive
     /// that is not connected is not.
     var mountedVolumeRoots: Set<String>
+    /// The purged rows' keys in event-member form ("id:<UUID>" and the
+    /// lowercased whole-file digest) — the loader skips purged rows, but a
+    /// relation may still name one; tier 5 reads these to say "removed from
+    /// the catalog — kept as history" rather than "points at nothing"
+    /// (2026-11-02). Empty for a catalog.json snapshot.
+    var purgedKeys: Set<String> = []
     var liveCount: Int
 
     init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String, catalogGeneration: Int = 0,
@@ -301,35 +307,58 @@ enum VerifyCatalogTiers {
     /// decode failure (0 samples; 6 rows on 10/20), or a pre-4 zero-landmark
     /// print (8 AVCHD clips with real sound read as "silent") — is counted
     /// under could-not-check, never as a decision.
+    ///
+    /// MEASURED SILENCE IS INFORMATION, NOT A DECISION (Rick 2026-11-02;
+    /// DECISIONS 2026-11-02): a file whose print measured silence is a fact
+    /// about the file — no verb in the app can clear it ("Fingerprint Sound
+    /// again" measures the same silence), so it never colours a Status line.
+    /// The finding is kept (same rule id, `needsDecision == false`) so the
+    /// report and the inspector still say it; the tier counts it apart
+    /// ("19 files have a silent audio track (measured)"). The other hearing
+    /// under this rule — the header says audio, the print recorded NO audio
+    /// track — keeps its decision: Fingerprint Sound again is its verb.
     static func sound(_ input: TierInput) -> TierOutcome {
         var tally = SoundTally()
         for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
             tally.judge(r)
         }
         let findings = tally.findings
+        let decided = findings.reduce(0) { $0 + ($1.needsDecision ? 1 : 0) }
+        let silent = findings.count - decided
         let couldNotCheck = tally.unstamped + tally.referenced + tally.notEvidence
         var t = IntegrityTier(tier: 3, name: name(3), verifiedAt: input.now, runID: input.runID, result: .ok,
-                              checked: tally.stamped, passed: tally.stamped - findings.count, needsDecision: findings.count,
+                              checked: tally.stamped, passed: tally.stamped - decided, needsDecision: decided,
                               couldNotCheck: couldNotCheck, summary: "")
         var parts: [String] = []
-        if !findings.isEmpty {
-            t.result = .needsDecision(findings.count)
-            parts.append("\(findings.count.formatted()) headers say sound the print never heard")
-            // What it could not check stays visible beside the decisions (QA P3c).
-            if couldNotCheck > 0 {
-                parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced, notEvidence: tally.notEvidence))
-            }
+        if decided > 0 {
+            t.result = .needsDecision(decided)
+            parts.append("\(decided.formatted()) headers say sound the print never heard")
         } else if couldNotCheck > 0 {
             t.result = .couldNotCheck(couldNotCheck)
+        }
+        if silent > 0 { parts.append(measuredSilenceWords(silent)) }
+        // What it could not check stays visible beside the decisions (QA P3c).
+        if couldNotCheck > 0 {
             parts.append(soundGapWords(unstamped: tally.unstamped, referenced: tally.referenced, notEvidence: tally.notEvidence))
-        } else if tally.livePhoto + tally.checkedByPerson == 0 {
-            parts.append("every Video+Audio file's print heard sound (\(tally.stamped.formatted()))")
-        } else {
-            parts.append("every Video+Audio file's print heard sound or is silent for a known reason (\(tally.stamped.formatted()))")
+        }
+        let heard = tally.stamped - silent
+        if decided == 0, couldNotCheck == 0, silent == 0 || heard > 0 {
+            let other = silent > 0 ? "other " : ""
+            if tally.livePhoto + tally.checkedByPerson == 0 {
+                parts.append("every \(other)Video+Audio file's print heard sound (\(heard.formatted()))")
+            } else {
+                parts.append("every \(other)Video+Audio file's print heard sound or is silent for a known reason (\(heard.formatted()))")
+            }
         }
         if let expected = expectedSilenceWords(livePhoto: tally.livePhoto, checked: tally.checkedByPerson) { parts.append(expected) }
         t.summary = parts.joined(separator: " · ")
         return TierOutcome(tier: t, findings: findings)
+    }
+
+    /// "19 files have a silent audio track (measured)" — information, never
+    /// a decision (Rick 2026-11-02).
+    static func measuredSilenceWords(_ n: Int) -> String {
+        "\(n.formatted()) file\(n == 1 ? " has" : "s have") a silent audio track (measured)"
     }
 
     /// Tier 3's running count — one row at a time (≈ a fold's accumulator).
@@ -370,8 +399,11 @@ enum VerifyCatalogTiers {
             }
             stamped += 1
             guard let why else { return }
+            // Measured silence is a fact about the file (information); only
+            // a print that recorded no audio track at all is a decision.
             findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
-                                             words: "the header says Video+Audio, \(why)", needsDecision: true))
+                                             words: "the header says Video+Audio, \(why)",
+                                             needsDecision: hearing != .measuredSilence))
         }
     }
 
@@ -439,7 +471,8 @@ enum VerifyCatalogTiers {
     // MARK: Tier 4 — derived knowledge (and the constraints pass, once)
 
     static func derivedKnowledge(_ input: TierInput) -> TierOutcome {
-        let all = CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
+        let all = CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness,
+                                     purgedKeys: input.snapshot.purgedKeys)
         let stale = all.filter { $0.rule.tier == 4 }
         let stamped = input.snapshot.rows.reduce(0) { $0 + ($1.audioFingerprint == nil ? 0 : 1) }
         var t = IntegrityTier(tier: 4, name: name(4), verifiedAt: input.now, runID: input.runID, result: .ok,
@@ -463,7 +496,8 @@ enum VerifyCatalogTiers {
     static func constraints(_ input: TierInput) -> TierOutcome {
         if input.snapshot.store == .sqlite { return databaseConstraints(input) }
         let all = input.constraintFindings
-            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
+            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness,
+                                     purgedKeys: input.snapshot.purgedKeys)
         let found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
         let decided = found.filter(\.needsDecision)
         let couldNotCheck = found.count - decided.count
@@ -492,7 +526,8 @@ enum VerifyCatalogTiers {
     /// checked.
     static func databaseConstraints(_ input: TierInput) -> TierOutcome {
         let all = input.constraintFindings
-            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness)
+            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events, likeness: input.snapshot.likeness,
+                                     purgedKeys: input.snapshot.purgedKeys)
         let found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
         let decided = found.filter(\.needsDecision)
         let rows = input.snapshot.rows.count

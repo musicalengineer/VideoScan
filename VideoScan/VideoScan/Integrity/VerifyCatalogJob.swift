@@ -364,11 +364,11 @@ extension VideoScanModel {
     func verifyCatalogSnapshot(database: URL, repository: any CatalogRepository,
                                events: [IntegrityEventFact]?) async -> Result<VerifyCatalogSnapshot, VerifyCatalogSnapshotRefusal> {
         let eventFacts = events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot())
-        let read: Result<(generation: Int, rows: [IntegrityRow], likeness: [IntegrityLikenessFact]), Error> =
+        let read: Result<(generation: Int, rows: [IntegrityRow], purgedKeys: Set<String>, likeness: [IntegrityLikenessFact]), Error> =
             await Task.detached(priority: .userInitiated) {
                 do {
                     let got = try await Self.databaseRows(repository)
-                    return .success((got.generation, got.rows, try await Self.databaseLikeness(repository)))
+                    return .success((got.generation, got.rows, got.purgedKeys, try await Self.databaseLikeness(repository)))
                 } catch { return .failure(error) }
             }.value
         switch read {
@@ -379,6 +379,7 @@ extension VideoScanModel {
                                                  catalogGeneration: got.generation, mountedVolumeRoots: Self.mountedVolumeRootsNow(),
                                                  store: .sqlite)
             snapshot.likeness = got.likeness
+            snapshot.purgedKeys = got.purgedKeys
             return .success(snapshot)
         }
     }
@@ -399,7 +400,8 @@ extension VideoScanModel {
     /// catalog.sqlite's rows (and its held `pending_rows`) as IntegrityRows,
     /// with the generation they were read at. A held payload that does not
     /// decode is a refusal, never skipped in silence.
-    nonisolated static func databaseRows(_ repository: any CatalogRepository) async throws -> (generation: Int, rows: [IntegrityRow]) {
+    nonisolated static func databaseRows(_ repository: any CatalogRepository) async throws
+        -> (generation: Int, rows: [IntegrityRow], purgedKeys: Set<String>) {
         let snapshot = try await CatalogLoad.rows(repository)
         let formatter = VideoRecord.makeRowDateFormatter()
         var rows: [IntegrityRow] = []
@@ -414,7 +416,10 @@ extension VideoScanModel {
             let row = IntegrityRow(record: try CatalogPendingRecord.record(held.json))
             if seen.insert(row.id).inserted { rows.append(row) }
         }
-        return (snapshot.generation, rows)
+        // The purged tombstones, in event-member key form (tier 5's "kept as history").
+        var purgedKeys = snapshot.purgedDigests
+        for id in snapshot.purgedIDs { purgedKeys.insert("id:" + id.uuidString) }
+        return (snapshot.generation, rows, purgedKeys)
     }
 
     /// What tier 1 calls "connected": ONE readdir of /Volumes at snapshot

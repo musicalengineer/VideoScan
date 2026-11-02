@@ -14,7 +14,9 @@
 //                the report could not keep under its findings cap
 //                (`unkeptDecisions`, QA P1).
 //   review       tier 3's `headerSaysSoundPrintHeardNone` findings, as the
-//                report states them → "Audio Tracks, But No Sound"; tier 3's
+//                report states them (decided or not — measured silence is
+//                information since 2026-11-02) → "Audio Tracks, But No
+//                Sound"; tier 3's
 //                "could not check" (no current print, a print that could
 //                not tell sound from silence) → "Sound prints to hear
 //                again" (Fingerprint Sound looks again — the catalog's
@@ -46,12 +48,30 @@ import Foundation
 import VideoScanCore
 
 struct IntegrityRealityFacts: Sendable, Equatable {
+    /// Each break carries its `fix` — the rule's verb (CatalogConstraints.Rule.fix).
     var breaks: [CatalogRealityCount] = []
+    /// The first few break findings in the report's own words, with the
+    /// filename where there is one ("event \"Matt\": a member points at a
+    /// row that no longer exists (id:…)") — so the Database line can say
+    /// exactly why it is red (Rick 2026-11-02). At most `breakDetailsKept`;
+    /// worst case memory: five short strings.
+    var breakDetails: [String] = []
     var unsettled: [CatalogRealityCount] = []
     var review: [CatalogReviewItem] = []
     var information: [String] = []
+    /// Files whose header says audio and whose print MEASURED silence — a
+    /// fact about the file, said under the Database line, never a colour
+    /// (Rick 2026-11-02). Counted from the kept tier-3 findings: the
+    /// informational ones (this build) and, in a report written before
+    /// 11/02, the decided ones whose words end "(silent)" — the other
+    /// hearing under the same rule ("recorded no audio") is a decision.
+    var measuredSilence = 0
     /// The report kept fewer findings than it found (the counts are low).
     var findingsCapped = false
+
+    static let breakDetailsKept = 5
+    /// The fix for decisions a tier counted but the report could not keep.
+    static let unkeptFix = "Check Now… runs the check again; its Validate Catalog detail lists what fits"
 
     /// Where one finding goes.
     enum Bucket: Equatable {
@@ -69,6 +89,8 @@ struct IntegrityRealityFacts: Sendable, Equatable {
         CatalogConstraints.Rule.referenceMovie.rawValue: .review(.possibleReferenceMovies),
         CatalogConstraints.Rule.possibleSameFootage.rawValue: .review(.possibleSameFootage),
         CatalogConstraints.Rule.lineageTargetsExist.rawValue: .information,
+        // An event member whose file was removed from the catalog on purpose (2026-11-02).
+        CatalogConstraints.Rule.eventMembersExist.rawValue: .information,
     ]
 
     static func bucket(_ f: IntegrityFinding) -> Bucket {
@@ -86,6 +108,8 @@ struct IntegrityRealityFacts: Sendable, Equatable {
         if unkept.silent > 0 { tally.review[.audioTracksButNoSound, default: 0] += unkept.silent }
         var out = IntegrityRealityFacts()
         out.breaks = tally.words(tally.breaks, decided: true) + unkept.breaks
+        out.breakDetails = tally.breakDetails
+        out.measuredSilence = tally.measuredSilence
         out.unsettled = tally.words(tally.unsettled, decided: false) + gaps(r)
         out.review = tally.review.map { CatalogReviewItem(kind: $0.key, count: $0.value) }
         out.information = tally.information.sorted { $0.key < $1.key }
@@ -97,13 +121,20 @@ struct IntegrityRealityFacts: Sendable, Equatable {
     /// Per-bucket counts by rule (≈ a fold's accumulator).
     struct Tally {
         var breaks: [String: Int] = [:]
+        var breakDetails: [String] = []
         var unsettled: [String: Int] = [:]
         var review: [CatalogReviewItem.Kind: Int] = [:]
         var information: [String: Int] = [:]
+        var measuredSilence = 0
 
         mutating func add(_ f: IntegrityFinding) {
+            if f.rule == VerifyCatalogTiers.silentPrintRule, !f.needsDecision || f.words.hasSuffix("(silent)") { measuredSilence += 1 }
             switch IntegrityRealityFacts.bucket(f) {
-            case .breakRule: breaks[f.rule, default: 0] += 1
+            case .breakRule:
+                breaks[f.rule, default: 0] += 1
+                if breakDetails.count < IntegrityRealityFacts.breakDetailsKept {
+                    breakDetails.append(f.filename.map { "\($0): \(f.words)" } ?? f.words)
+                }
             case .unsettled: unsettled[f.rule, default: 0] += 1
             case .review(let kind): review[kind, default: 0] += 1
             case .information: information[f.rule, default: 0] += 1
@@ -111,11 +142,19 @@ struct IntegrityRealityFacts: Sendable, Equatable {
             }
         }
 
-        /// Largest first, then by rule name — stable words for the band.
+        /// Largest first, then by rule name — stable words for the band. A
+        /// decided count (a break) carries its rule's fix.
         func words(_ counts: [String: Int], decided: Bool) -> [CatalogRealityCount] {
             counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
-                .map { CatalogRealityCount(count: $0.value, words: VerifyCatalogTiers.ruleWords($0.key, count: $0.value, decided: decided)) }
+                .map { CatalogRealityCount(count: $0.value, words: VerifyCatalogTiers.ruleWords($0.key, count: $0.value, decided: decided),
+                                           fix: decided ? IntegrityRealityFacts.fix(for: $0.key) : nil) }
         }
+    }
+
+    /// The rule's verb; a rule this build does not know (the retired
+    /// catalog.json hash rule) gets the generic one.
+    static func fix(for rule: String) -> String {
+        CatalogConstraints.Rule(rawValue: rule)?.fix ?? CatalogConstraints.Rule.defaultFix
     }
 
     /// Decisions a tier COUNTED that the report could not KEEP (QA
@@ -142,7 +181,8 @@ struct IntegrityRealityFacts: Sendable, Equatable {
             let unkept = t.tier == 3 ? 0 : t.needsDecision - (keptDecided[t.tier] ?? 0)
             if unkept > 0 {
                 breaks.append(CatalogRealityCount(count: unkept,
-                                                  words: "\(t.label): \(unkept.formatted()) more decisions the report could not keep"))
+                                                  words: "\(t.label): \(unkept.formatted()) more decisions the report could not keep",
+                                                  fix: unkeptFix))
             }
         }
         return (breaks, silent)

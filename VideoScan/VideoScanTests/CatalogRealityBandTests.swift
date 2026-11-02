@@ -73,6 +73,9 @@ struct CatalogRealityBucketTests {
         #expect(IntegrityRealityFacts.bucket(finding(5, R.referenceMovie.rawValue, decided: false)) == .review(.possibleReferenceMovies))
         #expect(IntegrityRealityFacts.bucket(finding(5, R.possibleSameFootage.rawValue, decided: false)) == .review(.possibleSameFootage))
         #expect(IntegrityRealityFacts.bucket(finding(5, R.lineageTargetsExist.rawValue, decided: false)) == .information)
+        #expect(IntegrityRealityFacts.bucket(finding(5, R.eventMembersExist.rawValue, decided: false)) == .information,
+                "RED 2026-11-02: an event member whose file was removed on purpose is history, never a colour")
+        #expect(IntegrityRealityFacts.bucket(finding(5, R.eventMembersExist.rawValue, decided: true)) == .breakRule, "…a member with no row at all is a break")
         #expect(IntegrityRealityFacts.bucket(finding(5, "someFutureRule", decided: false)) == .unsettled)
     }
 
@@ -96,7 +99,9 @@ struct CatalogRealityBucketTests {
                            + Array(repeating: finding(5, R.referenceMovie.rawValue, decided: false), count: 29)
                            + Array(repeating: finding(5, R.lineageTargetsExist.rawValue, decided: false), count: 128))
         let f = IntegrityRealityFacts.from(report: r)
-        #expect(f.breaks == [CatalogRealityCount(count: 2, words: "2 paths have more than one live row")])
+        // 2026-11-02: a break carries its rule's verb (the Database line's "Fix:").
+        #expect(f.breaks == [CatalogRealityCount(count: 2, words: "2 paths have more than one live row", fix: CatalogConstraints.Rule.oneLiveRowPerPath.fix)],
+                Comment(rawValue: f.breaks.map { "\($0.words) / \($0.fix ?? "nil")" }.joined(separator: " | ")))
         #expect(Set(f.review) == [CatalogReviewItem(kind: .possibleSameFootage, count: 1_312), CatalogReviewItem(kind: .possibleReferenceMovies, count: 29)])
         #expect(f.information == ["128 lineage links point at rows removed from the catalog — kept as history"])
         #expect(f.unsettled == [CatalogRealityCount(count: 660, words: "tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")])

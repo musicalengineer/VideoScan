@@ -94,6 +94,8 @@ enum CatalogFileFacts {
     /// (an engine-2 one may be a failed decode) — both say nothing here.
     static func silenceWords(_ stamp: AudioFingerprintStamp) -> String? {
         // Only reached for an audio header (see `stream`), so headerHasAudio.
-        stamp.hearing(headerHasAudio: true) == .measuredSilence ? "silent" : nil
+        // "(measured)": a fact about the file, not a defect to clear (Rick
+        // 2026-11-02 — the Status line never colours for it).
+        stamp.hearing(headerHasAudio: true) == .measuredSilence ? "silent (measured)" : nil
     }
 }

@@ -172,8 +172,44 @@ struct VerifyCatalogConstraintTests {
         #expect(findings(rows, events: [good], rule: .eventMembersExist).isEmpty)
         let red = findings(rows, events: [good, bad], rule: .eventMembersExist)
         #expect(red.count == 3)
-        #expect(red.allSatisfy { $0.words.hasPrefix("event \"Lost one\"") })
+        #expect(red.allSatisfy { $0.words.hasPrefix("event \"Lost one\"") && $0.needsDecision })
         #expect(red.allSatisfy { $0.recordID == nil })
+    }
+
+    /// Rick 2026-11-02: event "Matt" had one member, MattWobbleHead.mov,
+    /// which he had removed from the catalog on purpose (both copies purged
+    /// — tombstones the loader skips). Rows are never deleted, so a member
+    /// pointing at a removed row is history, not a break; only a member
+    /// with no row and no tombstone is.
+    @Test("RED 2026-11-02: an event member whose row carries a removal marker, or whose row was purged, is HISTORY (informational, 'kept as history'); a member with no row at all is still a decision")
+    func eventMemberRemovedIsHistory() {
+        var removed = row("/Volumes/LaCie/MattWobbleHead.mov")
+        removed.fullDigest = sha
+        removed.removal = RemovalMarker.removedFromCatalog(at: now, reason: .purged)
+        let purgedID = UUID()
+        let purgedDigest = String(repeating: "cd", count: 32)
+        let matt = IntegrityEventFact(name: "Matt", memberKeys: [sha, "id:" + removed.id.uuidString, "id:" + purgedID.uuidString, purgedDigest.uppercased()])
+        let lost = IntegrityEventFact(name: "Lost one", memberKeys: ["id:" + UUID().uuidString])
+        let found = CatalogConstraints.check(rows: [removed, row()], events: [matt, lost],
+                                             purgedKeys: ["id:" + purgedID.uuidString, purgedDigest]).filter { $0.rule == .eventMembersExist }
+        let history = found.filter { !$0.needsDecision }
+        #expect(history.count == 4, "digest and id of a row with a removal marker, id and digest of a purged tombstone: \(found.map(\.words))")
+        #expect(history.allSatisfy { $0.words.hasPrefix("event \"Matt\": a member points at a file removed from the catalog (") && $0.words.hasSuffix("— kept as history") },
+                Comment(rawValue: history.map(\.words).joined(separator: " | ")))
+        let gone = found.filter(\.needsDecision)
+        #expect(gone.map(\.words) .allSatisfy { $0.hasPrefix("event \"Lost one\": a member points at a row that no longer exists") } && gone.count == 1)
+        #expect(CatalogConstraints.Rule.eventMembersExist.words(count: 1, decided: false) == "1 event members point at files removed from the catalog — kept as history")
+        // Live wins: the same digest on a live row and a removed row is in the catalog.
+        var live = row("/Volumes/LaCie/copy.mov"); live.fullDigest = sha
+        #expect(findings([removed, live], events: [IntegrityEventFact(name: "Matt", memberKeys: [sha])], rule: .eventMembersExist).isEmpty)
+        // Through tier 5: history is could-not-check, never a decision; the summary words it.
+        var snapshot = VerifyCatalogSnapshot(rows: [removed, row()], events: [matt], catalogFile: "/nowhere/catalog.json")
+        snapshot.purgedKeys = ["id:" + purgedID.uuidString, purgedDigest]
+        let five = VerifyCatalogTiers.evaluate(5, input: VerifyCatalogTiers.TierInput(snapshot: snapshot, previous: nil, constraintFindings: nil,
+                                                                                      runID: UUID(), now: now))
+        #expect(five.tier.needsDecision == 0 && five.tier.couldNotCheck == 4, "\(five.tier.result)")
+        #expect(five.tier.summary.hasPrefix("4 event members point at files removed from the catalog — kept as history · every other relation holds"),
+                Comment(rawValue: five.tier.summary))
     }
 
     @Test("derived stamps match the content (tier 4): a print keyed on another SHA-256, another sampled hash or another size is stale; a matching one, or a row whose digest is unknown, is not")
@@ -437,7 +473,7 @@ struct VerifyCatalogTierTests {
         #expect(none.summary == "1 files still have only a sampled hash — all on drives not connected")
     }
 
-    @Test("tier 3: a Video+Audio row whose print is silent or says noAudio needs a decision; a print that heard sound passes; rows without a print could not be checked")
+    @Test("tier 3: a Video+Audio row whose print says noAudio needs a decision; measured silence is information (2026-11-02); a print that heard sound passes; rows without a print could not be checked")
     func soundAgainstTheHeader() {
         let va = StreamType.videoAndAudio.rawValue
         var silent = row("/silent.m4v"); silent.streamTypeRaw = va; silent.audioFingerprint = print(landmarks: 0)
@@ -446,15 +482,43 @@ struct VerifyCatalogTierTests {
         var unprinted = row("/none.mov"); unprinted.streamTypeRaw = va
         var videoOnly = row("/v.mxf"); videoOnly.streamTypeRaw = StreamType.videoOnly.rawValue; videoOnly.audioFingerprint = print(landmarks: 0)
         let out = VerifyCatalogTiers.evaluate(3, input: input([silent, noStream, heard, unprinted, videoOnly]))
-        #expect(out.tier.result == .needsDecision(2))
+        #expect(out.tier.result == .needsDecision(1), "only the no-audio-track print is a decision (got \(out.tier.result))")
         #expect(out.tier.checked == 3)
         #expect(out.tier.couldNotCheck == 1)
         #expect(out.findings.map(\.recordID) == [silent.id, noStream.id])
         #expect(out.findings.first?.words == "the header says Video+Audio, but the sound print heard nothing (silent)")
+        #expect(out.findings.first?.needsDecision == false, "RED 2026-11-02: measured silence is a fact, not a decision")
         #expect(out.findings.last?.words == "the header says Video+Audio, but the sound print recorded no audio — Fingerprint Sound again")
+        #expect(out.findings.last?.needsDecision == true)
         #expect(out.findings.first?.filename == "silent.m4v")
-        #expect(out.tier.summary == "2 headers say sound the print never heard · 1 Video+Audio files have no current sound print yet — Fingerprint Sound",
-                "the could-not-check rows stay named beside the decisions (QA P3c, 2026-10-20)")
+        #expect(out.tier.summary == "1 headers say sound the print never heard · 1 file has a silent audio track (measured) · 1 Video+Audio files have no current sound print yet — Fingerprint Sound",
+                Comment(rawValue: out.tier.summary))
+    }
+
+    /// Rick's live catalog, 2026-11-02: 19 files whose header says
+    /// Video+Audio and whose print MEASURED silence kept the Database line
+    /// red — "Fingerprint Sound again" measures the same silence, so no verb
+    /// could clear it. Measured silence is information: counted and worded
+    /// in the tier summary and kept in the report, never a decision.
+    @Test("RED 2026-11-02: measured silence is an informational finding — needsDecision false, tier 3 ok with the count worded '(measured)'; the Catalog Status facts count no tier-3 decision at all; the other tier-3 rules are untouched")
+    func measuredSilenceIsInformation() {
+        let va = StreamType.videoAndAudio.rawValue
+        var a = row("/a.dv"); a.streamTypeRaw = va; a.audioFingerprint = print(landmarks: 0)
+        var b = row("/b.dv"); b.streamTypeRaw = va; b.audioFingerprint = print(landmarks: 0)
+        var heard = row("/heard.mov"); heard.streamTypeRaw = va; heard.audioFingerprint = print()
+        let out = VerifyCatalogTiers.evaluate(3, input: input([a, b, heard]))
+        #expect(out.findings.count == 2 && out.findings.allSatisfy { !$0.needsDecision && $0.rule == VerifyCatalogTiers.silentPrintRule })
+        #expect(out.tier.result == .ok, "nothing to decide (got \(out.tier.result))")
+        #expect(out.tier.needsDecision == 0 && out.tier.checked == 3 && out.tier.passed == 3 && out.tier.couldNotCheck == 0)
+        #expect(out.tier.summary == "2 files have a silent audio track (measured) · every other Video+Audio file's print heard sound (1)", Comment(rawValue: out.tier.summary))
+        #expect(VerifyCatalogTiers.evaluate(3, input: input([a])).tier.summary == "1 file has a silent audio track (measured)", "no 'every other … (0)'")
+        // Untouched: the no-audio-track decision, the Live Photo clip.
+        var noStream = row("/nostream.mov"); noStream.streamTypeRaw = va; noStream.audioFingerprint = print(outcome: .noAudio, seconds: 0, landmarks: 0)
+        #expect(VerifyCatalogTiers.evaluate(3, input: input([noStream])).tier.result == .needsDecision(1))
+        var live = row("/Volumes/X/Photos Library.photoslibrary/originals/A/live.mov"); live.streamTypeRaw = va; live.durationSeconds = 2.5
+        live.audioFingerprint = print(landmarks: 0)
+        let settled = VerifyCatalogTiers.evaluate(3, input: input([live]))
+        #expect(settled.findings.isEmpty && settled.tier.summary.contains(VerifyCatalogTiers.livePhotoSilentWords), Comment(rawValue: settled.tier.summary))
     }
 
     /// RED 2026-10-18: 25 of Rick's 131 tier-3 decisions were iMovie
@@ -491,10 +555,11 @@ struct VerifyCatalogTierTests {
 
         let mixed = VerifyCatalogTiers.evaluate(3, input: input([noAudio, silent, realNoAudio]))
         #expect(mixed.findings.map(\.recordID) == [silent.id, realNoAudio.id])
-        #expect(mixed.tier.result == .needsDecision(2))
+        #expect(mixed.tier.result == .needsDecision(1), "the silent reference movie is information (2026-11-02); the real no-audio file is the decision")
         #expect(mixed.tier.couldNotCheck == 1)
         #expect(mixed.tier.checked == 2)
-        #expect(mixed.tier.summary == "2 headers say sound the print never heard · 1 possible reference movies — their sound lives in other files; Verify Media decides")
+        #expect(mixed.tier.summary == "1 headers say sound the print never heard · 1 file has a silent audio track (measured) · 1 possible reference movies — their sound lives in other files; Verify Media decides",
+                Comment(rawValue: mixed.tier.summary))
     }
 
     @Test("tier 4 computes the constraints once and hands them to tier 5; tier 5 names the worst rule first and carries the filename")
@@ -578,7 +643,8 @@ struct VerifyCatalogTierTests {
         currentSilent.audioFingerprint = print(landmarks: 0)        // made from digest A, which IS the row's
         let three = VerifyCatalogTiers.evaluate(3, input: input([staleSilent, currentSilent]))
         #expect(three.findings.map(\.recordID) == [currentSilent.id])
-        #expect(three.tier.result == .needsDecision(1))
+        #expect(three.findings.first?.needsDecision == false, "measured silence is information (2026-11-02)")
+        #expect(three.tier.result == .couldNotCheck(1), "the stale row could not be checked; the silent one is no decision (got \(three.tier.result))")
         #expect(three.tier.couldNotCheck == 1)
         #expect(three.tier.checked == 1)
         let four = VerifyCatalogTiers.evaluate(4, input: input([staleSilent, currentSilent]))
@@ -686,8 +752,10 @@ struct VerifyCatalogReportTests {
         let done = IntegrityReportFacts.from(.report(sampleReport()))
         #expect(done.outcome == .ok)
         #expect(done.lastCompleted == now)
-        #expect(done.needsDecision == 522)
-        #expect(done.decisionWords?.hasPrefix("519 headers") == true)
+        // 2026-11-02: tier 3 (519 silent headers) is review, never a Catalog Status decision; tier 5's 3 remain.
+        #expect(done.needsDecision == 3, "got \(done.needsDecision)")
+        #expect(done.decisionWords == "3 rows share a path", Comment(rawValue: done.decisionWords ?? "nil"))
+        #expect(sampleReport().needsDecisionTotal == 522, "the report's own total still counts every tier")
         #expect(IntegrityReportFacts.from(.report(sampleReport(outcome: .stopped))).outcome == .partial)
         #expect(IntegrityReportFacts.from(.report(sampleReport(outcome: .stopped))).lastCompleted == nil)
         #expect(IntegrityReportFacts.from(.report(sampleReport(outcome: .failed))).outcome == .failed)
@@ -872,13 +940,17 @@ struct VerifyCatalogJobTests {
         #expect(job.findingsTotal == 5, "\(job.findings)")
         #expect(job.findingsByTier[3]?.map(\.filename) == ["silent.m4v"])
         #expect(job.findingsByTier[5]?.map(\.filename) == ["twin.mov", "dangling.mov", "archive_copy.mov", "Christmas-c1990s.flv"])
-        let everyOneButTheLineageLinkIsADecision = job.findings.allSatisfy { $0.needsDecision != ($0.rule == "lineageTargetsExist") }
-        #expect(everyOneButTheLineageLinkIsADecision)
+        // Every finding is a decision but the lineage link (history) and the measured silence (information, 2026-11-02).
+        let everyOneButHistoryAndSilenceIsADecision = job.findings.allSatisfy {
+            $0.needsDecision != ($0.rule == "lineageTargetsExist" || $0.rule == VerifyCatalogTiers.silentPrintRule)
+        }
+        #expect(everyOneButHistoryAndSilenceIsADecision)
         let report = try #require(job.report)
-        #expect(report.needsDecisionTotal == 4)
+        #expect(report.needsDecisionTotal == 3)
         #expect(report.tier(5)?.couldNotCheck == 1, "the purged lineage target is unverified, not a decision")
-        // Tier 5 (3 decisions) before tier 3 (1); inside tier 5 equal counts sort by rule key; the unverified link follows.
-        #expect(report.decisionWords == "1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history · 1 headers say sound the print never heard")
+        #expect(report.tier(3)?.summary == "1 file has a silent audio track (measured)", Comment(rawValue: report.tier(3)?.summary ?? "nil"))
+        // Tier 5 (3 decisions); inside tier 5 equal counts sort by rule key; the unverified link follows. Tier 3 has none.
+        #expect(report.decisionWords == "1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history")
         // Catalog Status: the Integrity row is red with those words.
         let facts = CatalogFreshnessFactsReader.read(catalogFile: sb.model.catalogStore.fileLocation)
         let coverage = AnalyzeCoverageCalculator.compute(inputs: AnalyzeCoverageCalculator.project(sb.model.records), volumes: [],
@@ -890,8 +962,16 @@ struct VerifyCatalogJobTests {
                                                  now: Date())
         let verdict = try #require(state.verdict(.integrity))
         #expect(verdict.colour == .red)
-        #expect(verdict.words == "4 findings — 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history · 1 headers say sound the print never heard · tiers 2 and 6 not built")
+        #expect(verdict.words == "3 findings — 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history · tiers 2 and 6 not built",
+                Comment(rawValue: verdict.words))
         #expect(state.summary.colour == .red)
+        // The Database line (2026-11-02): red for the breaks, each with its verb; the silence is a review item under the band.
+        let database = CatalogStatusLinesPolicy.database(facts.integrity, now: Date(), date: { _ in "D" })
+        #expect(database.state == .red && database.words.hasPrefix("Red: 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole — checked D"),
+                Comment(rawValue: database.words))
+        #expect(database.detail.filter { $0.hasPrefix("Fix: ") }.count == 3 && database.detail.filter { $0.hasPrefix("Why: ") }.count == 3,
+                Comment(rawValue: database.detail.joined(separator: " | ")))
+        #expect(state.reality.review.contains(CatalogReviewItem(kind: .audioTracksButNoSound, count: 1)))
         #expect(CatalogStatusDoor.door(for: verdict.reason, cycler: .integrity) == .verifyAgain)
         // And every row is as it was: no marker, no save of the catalog.
         #expect(sb.model.records.allSatisfy { $0.removal == nil })
@@ -1151,12 +1231,13 @@ struct VerifyCatalogStatusTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let catalog = dir.appendingPathComponent("catalog.json")
-        var sound = okTier(3, at: now.addingTimeInterval(-60))
-        sound.result = .needsDecision(131)
-        sound.needsDecision = 131
-        sound.summary = "131 headers say sound the print never heard"
-        var red = completed([okTier(0, at: now.addingTimeInterval(-60)), okTier(1, at: now.addingTimeInterval(-60)), sound,
-                             okTier(4, at: now.addingTimeInterval(-60)), okTier(5, at: now.addingTimeInterval(-60))] + notBuilt)
+        // 2026-11-02: the red is a tier-5 decision (tier 3 never counts for Catalog Status).
+        var relations = okTier(5, at: now.addingTimeInterval(-60))
+        relations.result = .needsDecision(131)
+        relations.needsDecision = 131
+        relations.summary = "131 paths have more than one live row"
+        var red = completed([okTier(0, at: now.addingTimeInterval(-60)), okTier(1, at: now.addingTimeInterval(-60)), okTier(3, at: now.addingTimeInterval(-60)),
+                             okTier(4, at: now.addingTimeInterval(-60)), relations] + notBuilt)
         red.startedAt = now.addingTimeInterval(-61)
         red.verifiedAt = now.addingTimeInterval(-60)
         try IntegrityReportStore.write(red, besideCatalogAt: catalog, now: now)
@@ -1212,13 +1293,26 @@ struct VerifyCatalogStatusTests {
         let notRun = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([noAudit, okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
         #expect(notRun.colour == .yellow)
         #expect(notRun.words.contains("tier 0 File presence: not run — the files on disk have not been checked"), Comment(rawValue: notRun.words))
+        var relations = okTier(5)
+        relations.result = .needsDecision(2)
+        relations.needsDecision = 2
+        relations.summary = "2 paths have more than one live row"
+        let red = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0), hashes, okTier(3), okTier(4), relations] + notBuilt))), now: now, wording: wording)
+        #expect(red.colour == .red)
+        #expect(red.reason == .needsDecision(2))
+        // 2026-11-02: a tier-3 decision never colours the Integrity row (review, not a decision for Catalog Status).
         var sound = okTier(3)
         sound.result = .needsDecision(2)
         sound.needsDecision = 2
         sound.summary = "2 headers say sound the print never heard"
-        let red = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0), hashes, sound, okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
-        #expect(red.colour == .red)
-        #expect(red.reason == .needsDecision(2))
+        let reviewFacts = IntegrityReportFacts.from(report: completed([okTier(0), okTier(1), sound, okTier(4), okTier(5)] + notBuilt))
+        #expect(reviewFacts.needsDecision == 0 && reviewFacts.decisionWords == nil, "an old report that counted 19 silent files still reads as no decision")
+        let review = FreshnessPolicy.judge(rowFor(reviewFacts), now: now, wording: wording)
+        #expect(review.colour == .green, "tier 3 is review, never red (got \(review.colour): \(review.words))")
+        var old = sound
+        old.result = .needsDecision(19); old.needsDecision = 19; old.summary = "19 headers say sound the print never heard"
+        let both = IntegrityReportFacts.from(report: completed([okTier(0), okTier(1), old, okTier(4), relations] + notBuilt))
+        #expect(both.needsDecision == 2 && both.decisionWords == "2 paths have more than one live row", "tier 5 counts; tier 3 does not: \(both.needsDecision) / \(both.decisionWords ?? "nil")")
         let overdue = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0, at: now.addingTimeInterval(-3 * 86_400)), okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
         #expect(overdue.colour == .yellow)
         #expect(overdue.words.contains("tier 0 File presence"), Comment(rawValue: overdue.words))
