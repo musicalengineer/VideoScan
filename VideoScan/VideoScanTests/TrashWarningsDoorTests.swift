@@ -36,6 +36,16 @@ nonisolated private func remarkOnMain(_ ref: RowRef) {
     }
 }
 
+/// A main-actor action run from Prune's off-main file operation.
+private final class StopOnMain: @unchecked Sendable {
+    let action: @MainActor () -> Void
+    init(_ action: @escaping @MainActor () -> Void) { self.action = action }
+    nonisolated func runAndWait() { DispatchQueue.main.sync { MainActor.assumeIsolated { action() } } }
+}
+
+@MainActor
+private final class PruneJobBox { var job: PruneApplyJob? }
+
 @Suite("Trash warnings reach every door (Codex #205)", .serialized)
 @MainActor
 struct TrashWarningsDoorTests {
@@ -152,6 +162,35 @@ struct TrashWarningsDoorTests {
         #expect(outcome.summary.contains("catalog changed during the move"), "\(outcome.summary)")
         #expect(outcome.warnings.contains { $0.contains(f.copy.filename) && $0.contains("kept another action's marker") },
                 "\(outcome.warnings)")
+    }
+
+    @Test("codex #207: Prune stopped (or quit) after a kept marker — the stopped result still names it",
+          arguments: [false, true])
+    func pruneStoppedResultCarriesKeptMarker(quit: Bool) async throws {
+        let f = try await PruneApplyTests.fixture(quit ? "keptquit" : "keptstop")
+        defer { f.sb.cleanup() }
+        let mover = PruneApplyTests.Mover(trash: f.trashDir)
+        let box = PruneJobBox()
+        let stop = StopOnMain {
+            _ = VideoScanModel.stampRemoval(f.copy, .removedFromCatalog(at: Date(), reason: .junk))
+            if quit { box.job?.stopForQuit() } else { box.job?.cancel() }
+        }
+        var hooks = PruneApplyTests.hooks(mover)
+        hooks.removeFile = { url in
+            stop.runAndWait()
+            try mover.move(url)
+        }
+        let shown = await f.model.prunePlan(batch: f.batch).shown()
+        let job = PruneApplyJob(model: f.model, shown: shown, selected: [f.copy.id], batch: f.batch,
+                                batchID: "test-keptstop", hooks: hooks)
+        box.job = job
+        job.start()
+        await job.task?.value
+        #expect(mover.paths == [f.copy.fullPath], "the copy really moved")
+        #expect(f.copy.removal?.state == .removedFromCatalog, "the concurrent marker is kept")
+        #expect(job.state == .cancelled, "\(job.state)")
+        #expect(job.subtitle.contains("catalog changed during the move"), "subtitle: \(job.subtitle)")
+        #expect(job.subtitle.contains(f.copy.filename), "subtitle: \(job.subtitle)")
     }
 
     // MARK: Delete Duplicates — the sibling engine, the same rule

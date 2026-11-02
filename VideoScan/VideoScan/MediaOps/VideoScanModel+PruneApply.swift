@@ -55,7 +55,12 @@ extension VideoScanModel {
         /// copy another action re-marked while it moved — Codex #205).
         var warnings: [String] = []
 
-        var summary: String {
+        /// The batch's line with every settlement warning (the log, the sheet).
+        var summary: String { TrashWarnings(keptMarkerNotes: warnings).appended(to: countsLine) }
+
+        /// The counts alone — a job renders the warnings onto it at its
+        /// terminal line (`PruneApplyJob.presented`).
+        var countsLine: String {
             var parts = ["Moved \(trashed) cop\(trashed == 1 ? "y" : "ies") to the Trash (\(MediaBytes.display(trashedBytes)))"]
             if movedByEarlierBatch > 0 { parts.append("\(movedByEarlierBatch) already moved by the batch before") }
             if verified > 0 { parts.append("\(verified) read in full and matched the archive") }
@@ -64,7 +69,6 @@ extension VideoScanModel {
             if skippedOffline > 0 { parts.append("\(skippedOffline) on a drive that isn't connected") }
             if !held.isEmpty { parts.append("\(held.count) held back") }
             if !failed.isEmpty { parts.append("\(failed.count) could not be moved") }
-            if let changed = TrashWarnings(keptMarkerNotes: warnings).inlineClause() { parts.append(changed) }
             return parts.joined(separator: " · ")
         }
 

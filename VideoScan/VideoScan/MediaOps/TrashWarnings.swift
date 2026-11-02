@@ -69,6 +69,12 @@ struct TrashWarnings: Equatable, Sendable {
         return "the catalog changed during the move for \(n) file\(n == 1 ? "" : "s"): " + Self.listing(keptMarkerNotes, listed)
     }
 
+    /// `line` with the inline clause appended (` · `), unchanged when clean —
+    /// the terminal line of a job row (finished, stopped, suspended, failed).
+    func appended(to line: String) -> String {
+        [line, inlineClause()].compactMap { $0 }.joined(separator: " \u{00B7} ")
+    }
+
     /// The OUTCOME line's addition, nil when clean: the count and each
     /// row's sentence (which names the Trash path). Long runs list the
     /// first `listed` and say how many more the log names.

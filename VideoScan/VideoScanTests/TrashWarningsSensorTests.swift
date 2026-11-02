@@ -54,6 +54,45 @@ struct TrashWarningsSensorTests {
         #expect(found == Self.callers, "the door list is stale: found \(found.sorted()), listed \(Self.callers.sorted())")
     }
 
+    /// The MFO jobs that run the routine (or, Delete Duplicates, its own
+    /// settlement) and the terminal functions that may set a terminal state
+    /// WITHOUT the renderer — each only where nothing has run yet.
+    static let jobs: [(file: String, exempt: Set<String>)] = [
+        ("PruneApplyJob.swift", ["dropFromLine"]),          // a queued batch never started
+        ("CleanupTrashJob.swift", ["refuseToStart"]),       // refused before anything ran
+        ("DeleteDuplicatesJob.swift", []),
+    ]
+
+    /// Each function's name and body (to the next function), in order.
+    static func functions(_ code: String) -> [(name: String, body: Substring)] {
+        let decl = #/\n[ \t]*(?:@\w+[ \t]+)*(?:(?:private|fileprivate|nonisolated|static|public|internal|override)[ \t]+)*func[ \t]+(\w+)/#
+        let hits = code.matches(of: decl)
+        return hits.enumerated().map { i, m in
+            let end = i + 1 < hits.count ? hits[i + 1].range.lowerBound : code.endIndex
+            return (String(m.output.1), code[m.range.lowerBound..<end])
+        }
+    }
+
+    @Test("sensor (Codex #207): every terminal function of every Trash MFO job renders the settlement warnings through presented(…)")
+    func everyTerminalPathRendersTheWarnings() throws {
+        let terminal = #/state = \.(finished|cancelled|failed)/#
+        for job in Self.jobs {
+            let funcs = Self.functions(try SourceTree.appCode(named: job.file))
+            let renderer = funcs.filter { $0.name == "presented" }
+            #expect(renderer.count == 1 && (renderer[0].body.contains("TrashWarnings(") || renderer[0].body.contains("warnings.summaryClause")),
+                    "\(job.file): the one renderer `presented(_:)` must render through TrashWarnings")
+            var terminals: [String] = []
+            for f in funcs where f.body.contains(terminal) {
+                terminals.append(f.name)
+                if job.exempt.contains(f.name) { continue }
+                #expect(f.body.contains("presented("),
+                        "\(job.file): \(f.name) sets a terminal state without rendering the warnings (Codex #207)")
+            }
+            #expect(terminals.count >= 2, "\(job.file): found no terminal functions — the sensor reads nothing")
+            for name in job.exempt { #expect(terminals.contains(name), "\(job.file): stale exemption \(name)") }
+        }
+    }
+
     @Test("sensor: the shared result sheet renders the routine's warnings through TrashWarnings")
     func reportUsesTheOnePresenter() throws {
         let report = try SourceTree.appCode(named: "JunkDeletionReport.swift")

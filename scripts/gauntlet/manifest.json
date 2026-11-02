@@ -28244,6 +28244,7 @@
         "deleteDuplicatesSummaryCarriesKeptMarkers",
         "deleteJunkKeptMarkerOnOutcome",
         "pruneKeptMarkerInSummary",
+        "pruneStoppedResultCarriesKeptMarker",
         "workbenchKeptMarkerOnOutcome"
       ]
     },
@@ -28256,6 +28257,7 @@
       ],
       "tests": [
         "everyCallerRendersTheWarnings",
+        "everyTerminalPathRendersTheWarnings",
         "reportUsesTheOnePresenter"
       ]
     },
@@ -35504,7 +35506,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3178,
+      "expected_floor": 3180,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [

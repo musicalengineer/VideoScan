@@ -569,14 +569,14 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
         model.log("Archived — what next?: " + outcome.summary)
         pruneApplyLog.notice("prune DONE trashed=\(self.outcome.trashed, privacy: .public) bytes=\(self.outcome.trashedBytes, privacy: .public) movedEarlier=\(self.outcome.movedByEarlierBatch, privacy: .public) held=\(self.outcome.held.count, privacy: .public) failed=\(self.outcome.failed.count, privacy: .public) stopped=\(self.stopRequested, privacy: .public)")
         if !errorLines.isEmpty {
-            let message = Self.errorMessage(errorLines, summary: outcome.summary)
+            let message = Self.errorMessage(errorLines, summary: outcome.countsLine)
             errorMessage = message
             appLog.write("trash copies: \(title) — ended in error: \(message)")
             pruneApplyLog.error("prune FAILED errors=\(errorLines.count, privacy: .public) — the line behind it is dropped")
         }
         if stopRequested { finishCancelled() }
         else if let errorMessage { finish(failed: errorMessage) }
-        else { finish(success: outcome.summary) }
+        else { finish(success: outcome.countsLine) }
     }
 
     /// The failed batch's message — also the "(the batch before failed: …)"
@@ -613,8 +613,17 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
 
     // MARK: Terminal transitions
 
-    private func finish(success summary: String) {
+    /// Every terminal line through the one renderer (Codex #207): the
+    /// copies another action re-marked while they moved, recorded on
+    /// `outcome.warnings` as each copy settled — finished, failed, stopped
+    /// or quit alike. TrashWarningsSensorTests pins every terminal function.
+    private func presented(_ line: String) -> String {
+        TrashWarnings(keptMarkerNotes: outcome.warnings).appended(to: line)
+    }
+
+    private func finish(success base: String) {
         guard state.isActive else { return }
+        let summary = presented(base)
         state = .finished(summary: summary)
         subtitleText = summary
         fractionValue = 1
@@ -625,6 +634,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     private func finish(failed message: String) {
         guard state.isActive else { return }
         if state.cancelWasRequested { finishCancelled(); return }
+        let message = presented(message)
         state = .failed(message: message)
         subtitleText = message
         isIndeterminateValue = false
@@ -634,7 +644,7 @@ final class PruneApplyJob: @MainActor MediaFileOperationJob {
     private func finishCancelled() {
         guard state.isActive else { return }
         state = .cancelled
-        subtitleText = "Stopped — \(outcome.trashed) moved to Trash, the rest left alone"
+        subtitleText = presented("Stopped — \(outcome.trashed) moved to Trash, the rest left alone")
         isIndeterminateValue = false
         isPausedValue = false
     }

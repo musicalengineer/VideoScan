@@ -802,9 +802,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         mutatePlan { $0.log.append(note) }
     }
 
-    /// A terminal line with every kept marker so far appended.
-    private func withKeptMarkers(_ line: String) -> String {
-        Self.summaryLine([line], keptMarkerNotes: keptMarkerNotes)
+    /// A terminal line with every kept marker so far appended — the one
+    /// renderer every terminal function uses (TrashWarningsSensorTests).
+    private func presented(_ line: String) -> String {
+        TrashWarnings(keptMarkerNotes: keptMarkerNotes).appended(to: line)
     }
     /// Stop (default): put the pair in flight back, keep the plan
     /// resumable and offer it at once.
@@ -1467,11 +1468,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         // the copies never taken because the Archive Angel is using them.
         var summaryParts = [report.line]
         if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
-        let summary = Self.summaryLine(summaryParts, keptMarkerNotes: keptMarkerNotes)
+        // The kept markers are rendered at the terminal line (`presented`).
+        let summary = summaryParts.joined(separator: " · ")
         logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
             // finish(failed:) appends the kept markers itself.
-            finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summaryParts.joined(separator: " · ")))")
+            finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summary))")
         } else if state.cancelWasRequested || Task.isCancelled {
             finishCancelled()
         } else {
@@ -2774,8 +2776,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
     // MARK: Terminal transitions
 
-    private func finish(success summary: String) {
+    private func finish(success base: String) {
         guard state.isActive else { return }
+        let summary = presented(base)
         state = .finished(summary: summary)
         subtitleText = summary
         fractionValue = 1
@@ -2787,7 +2790,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finish(failed message: String) {
         guard state.isActive else { return }
         if state.cancelWasRequested { finishCancelled(); return }
-        let message = withKeptMarkers(message)
+        let message = presented(message)
         state = .failed(message: message)
         subtitleText = message
         isIndeterminateValue = false
@@ -2798,7 +2801,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finishCancelled() {
         guard state.isActive else { return }
         state = .cancelled
-        subtitleText = withKeptMarkers("Stopped — \(result.deleted) moved to the Trash, the rest left alone")
+        subtitleText = presented("Stopped — \(result.deleted) moved to the Trash, the rest left alone")
         isIndeterminateValue = false
         isPausedValue = false
         pauseRequested = false
@@ -2807,7 +2810,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finishSuspended(remaining: Int, quit: Bool) {
         guard state.isActive else { return }
         state = .cancelled
-        subtitleText = withKeptMarkers(quit
+        subtitleText = presented(quit
             ? "Suspended for quit — \(result.deleted) moved to the Trash; \(remaining) remaining will be offered to resume at the next launch"
             : "Stopped — \(result.deleted) moved to the Trash; \(remaining) remaining kept for later (Resume in Media File Operations)")
         isIndeterminateValue = false

@@ -573,21 +573,29 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// state lands (codex r1 P2-4).
     private func conclude(model: VideoScanModel, audit: DeletionAudit) async {
         audit.finish(note: warnings.outcomeNote())
-        let line = [totals.line, warnings.summaryClause].compactMap { $0 }.joined(separator: " · ")
+        let line = totals.line
         fractionValue = 1
         isPausedValue = false
         if saveFailed {
             finish(failed: "Stopped — a catalog save was not confirmed. " + line)
         } else if stopRequested || state == .cancelling {
-            subtitleText = "Stopped — " + line
+            subtitleText = presented("Stopped — " + line)
             state = .cancelled
         } else {
-            subtitleText = line
-            state = .finished(summary: line)
+            subtitleText = presented(line)
+            state = .finished(summary: subtitleText)
         }
     }
 
-    private func finish(failed message: String) {
+    /// Every terminal line through the one renderer (Codex #207): the
+    /// run's settlement warnings, folded in as each file settled.
+    /// TrashWarningsSensorTests pins every terminal function.
+    private func presented(_ line: String) -> String {
+        [line, warnings.summaryClause].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func finish(failed base: String) {
+        let message = presented(base)
         subtitleText = message
         isPausedValue = false
         if state.cancelWasRequested {
