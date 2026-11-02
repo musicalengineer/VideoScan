@@ -499,6 +499,36 @@ struct ScanLocationVolumeModelTests {
         #expect(target.phase == .cataloged, "a refused plan leaves target state untouched")
     }
 
+    /// Codex #211 (second closing pass): the disk can change between the
+    /// confirmation and the apply BEFORE any refresh has run (the mount
+    /// notification is queued behind the click). The revision is unmoved,
+    /// so the apply must re-resolve the disk itself — never trust the
+    /// revision alone.
+    @Test func mountChangeWithoutRefreshIsRefusedOnApply() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let moviesDir = try mounted(tmp, "Movies")
+        let target = CatalogScanTarget(searchPath: moviesDir)
+        model.scanTargets = [target]
+        let aRows = m4Movies(moviesDir), bRows = ultraMovies(moviesDir)
+        model.records = aRows + bRows
+
+        let plan = VolumeIdentity.$resolverOverride.withValue({ _ in m4 }) { model.planTargetRemoval(for: target) }
+        #expect(plan.recordIDs == Set(aRows.map(\.id)))
+        #expect(plan.revision == model.catalogMutationRevision, "precondition: nothing refreshed, revision unmoved")
+
+        // The drive under the path is now B; no refresh has run.
+        let result = VolumeIdentity.$resolverOverride.withValue({ _ in ultra }) {
+            model.deleteCatalogForTarget(target, plan: plan)
+        }
+        guard case .refusedStale(let current) = result else {
+            Issue.record("expected .refusedStale, got \(result)")
+            return
+        }
+        #expect(current.recordIDs == Set(bRows.map(\.id)), "the fresh plan is disk B's rows")
+        #expect(model.records.count == 12, "nothing removed")
+    }
+
     /// The refresh learns a mounted location's volume from its mount,
     /// re-learns a swapped drive, and leaves an offline location's memory
     /// alone.

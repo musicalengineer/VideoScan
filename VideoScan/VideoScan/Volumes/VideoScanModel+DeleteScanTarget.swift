@@ -546,13 +546,17 @@ extension VideoScanModel {
             log("Target \(action) (\(plan.root)): \(reason)")
             return .cancelledTargetGone(reason: reason)
         }
-        let rootMoved = target.searchPath != plan.root
-        if rootMoved || plan.revision != catalogMutationRevision {
-            let current = planTargetRemoval(for: target)
-            if rootMoved || !current.removesSameRecords(as: plan) {
-                log("Target \(action) (\(plan.root)): refused — catalog changed since the confirmation was shown (planned \(plan.count) record(s), now \(current.count) under \(current.root)). Nothing removed; confirm again.")
-                return .refusedStale(currentPlan: current)
-            }
+        // ALWAYS re-plan at the apply (codex #211): the revision is not
+        // the only thing that can move the set. The disk under the path
+        // can change before the queued mount notification refreshes
+        // memory and revision, and the plan carries the disk it was made
+        // for. One O(records) pass on an explicit destructive gesture is
+        // the price of never trusting a fast path here. Same target, same
+        // root, same disk, same ids ⇒ the shown count is still exact.
+        let current = planTargetRemoval(for: target)
+        if target.searchPath != plan.root || !current.removesSameRecords(as: plan) {
+            log("Target \(action) (\(plan.root)): refused — the catalog or the location's disk changed since the confirmation was shown (planned \(plan.count) record(s), now \(current.count) under \(current.root)). Nothing removed; confirm again.")
+            return .refusedStale(currentPlan: current)
         }
         let outcome = removeCatalogRecords(plan: plan, action: action)
         if outcome.degradedNoSnapshot {
