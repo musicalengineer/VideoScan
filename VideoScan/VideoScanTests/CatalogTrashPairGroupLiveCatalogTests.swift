@@ -433,4 +433,35 @@ struct CatalogTrashPairGroupLiveCatalogTests: PairGroupFixtures {
         }
     }
 
+
+    // MARK: Codex #204 — a kept marker on an ORDINARY row (red first)
+
+    @Test("codex #204: an ordinary row whose marker another action changed during its real Trash move is surfaced, never silent")
+    func ordinaryKeptMarkerRequiresAttention() async throws {
+        let d = try disk("pgordkept")
+        defer { d.sb.cleanup() }
+        let o = try file(d, "test_ok.O.mov", seed: 171, .videoAndAudio)
+        d.model.records = [o]
+        let p = d.model.catalogTrashPlan(for: [o], isOffline: { _ in false })
+        try #require(p.toTrash == [o.id])
+        let oPath = o.fullPath
+        let oRef = Ref(o)
+        let result = await d.model.trashSelectedRecords([o], confirmed: p, beforeEachMove: { path in
+            guard path == oPath else { return }
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated { VideoScanModel.stampRemoval(oRef.value, .removedFromCatalog(at: Date(), reason: .junk)) }
+            }
+        })
+        guard case .moved(_, let trashPath?)? = result.items.first?.outcome else {
+            Issue.record("O moved through the real Trash: \(result.items.map(\.outcome))"); return
+        }
+        defer { try? FileManager.default.removeItem(atPath: trashPath) }
+        #expect(o.removal?.state == .removedFromCatalog, "the concurrent marker is kept")
+        let report = JunkDeletionReport(result)
+        #expect(report.hasNotes, "the alert is shown")
+        #expect(report.summary.contains { $0.contains("test_ok.O.mov kept another action's marker") && $0.contains(trashPath) },
+                "\(report.summary)")
+        #expect(await consoleLine(d.model, containing: "kept another action's marker 1") != nil, "the OUTCOME count")
+    }
+
 }

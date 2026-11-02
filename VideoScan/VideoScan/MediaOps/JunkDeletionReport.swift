@@ -29,10 +29,12 @@ struct JunkDeletionReport {
     /// Every settlement warning is surfaced, whatever the headline (Codex
     /// #201 F3): a SPLIT or a change during the move shows the alert even
     /// when every file moved.
-    var hasNotes: Bool { !lines.isEmpty || groupNeedsAttention }
+    var hasNotes: Bool { !lines.isEmpty || groupNeedsAttention || keptMarker }
+    /// A kept concurrent marker on any row (Codex #204) — every door.
+    private let keptMarker: Bool
     /// The alert's title — from the result, never the reverse.
     var headline: String {
-        lines.isEmpty && groupNeedsAttention
+        lines.isEmpty && (groupNeedsAttention || keptMarker)
             ? "Move to Trash \u{2014} the catalog changed during the move"
             : "Move to Trash \u{2014} some files stayed"
     }
@@ -49,6 +51,7 @@ struct JunkDeletionReport {
         self.bytesMoved = result.bytesMoved
         self.summary = Self.summary(result)
         self.groupNeedsAttention = result.groupNeedsAttention
+        self.keptMarker = !result.keptMarkerNotes.isEmpty
     }
 
     /// Why one file did not move; nil when it moved.
@@ -75,7 +78,7 @@ struct JunkDeletionReport {
         if r.skippedOffline > 0 { out.append("\(files(r.skippedOffline)) skipped \u{2014} drive not connected") }
         if r.cancelled > 0 { out.append("\(files(r.cancelled)) not reached \u{2014} stopped") }
         if out.isEmpty { out.append("Nothing was selected") }
-        return out + r.groupNotes
+        return out + r.groupNotes + r.keptMarkerNotes
     }
 
     /// The whole list as plain text, one file per line (the Catalog

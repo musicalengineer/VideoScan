@@ -10917,6 +10917,7 @@
         "liveIndexFollowsADecodedReload",
         "markerChangedDuringMoveIsReported",
         "memberEligibilityChangedDuringMoveIsReported",
+        "ordinaryKeptMarkerRequiresAttention",
         "outwardLinkToUnpairedRowIsReported",
         "oversizedLateLinkedGroupIsReported",
         "restoredDepartedSiblingHoldsRemainder",

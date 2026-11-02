@@ -215,6 +215,13 @@ final class CatalogTrashGroupTurns {
         /// The OUTCOME line's addition (nil when no pair was involved).
         var outcomeNote: String? { isEmpty ? nil : counts }
 
+        /// The OUTCOME addition with the kept-marker count for every row
+        /// (Codex #204): "… · kept another action's marker N".
+        func outcomeNote(keptMarkers n: Int) -> String? {
+            let notes = [outcomeNote, n == 0 ? nil : "kept another action's marker \(n)"].compactMap { $0 }
+            return notes.isEmpty ? nil : notes.joined(separator: " · ")
+        }
+
         /// One console line per group that did not move whole.
         var lines: [String] {
             held.map { "Move to Trash: kept the pair \(CatalogPairGroups.list($0.filenames)) — \($0.reason)." }
@@ -336,6 +343,15 @@ struct CatalogTrashGroupDiskCheck: Sendable {
         var map: [String: (filename: String, identity: PairHalfIdentity)] = [:]
         for g in groups { for k in g.members.indices { map[g.paths[k]] = (g.filenames[k], g.identities[k]) } }
         identities = map
+    }
+
+    /// Is `path` a confirmed unit member's file?
+    func isMember(_ path: String) -> Bool { identities[path] != nil }
+
+    /// The tests' hook for a single file's turn (a unit member's runs at
+    /// `atTheMove`, between the unit's moves). nil in production.
+    func singleFileTestHook(_ path: String, _ hook: (@Sendable (String) -> Void)?) {
+        if !isMember(path) { hook?(path) }
     }
 
     /// nil = this is the file the plan saw.

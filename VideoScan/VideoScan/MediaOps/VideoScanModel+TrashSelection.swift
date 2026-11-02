@@ -321,7 +321,10 @@ extension VideoScanModel {
                 return problem
             },
             beforeRemoval: { path in
-                groupDisk.problem(path) ?? proofs.problemAtTheMove(path)
+                // The tests' hook for a single file's turn (a unit member's
+                // runs at `atTheMove`, between the unit's moves). nil in production.
+                groupDisk.singleFileTestHook(path, beforeEachMove)
+                return groupDisk.problem(path) ?? proofs.problemAtTheMove(path)
             },
             remove: fileOperation)
         fileGuard.units = groupTurns.activeGroups.map(\.members)
@@ -369,7 +372,8 @@ extension VideoScanModel {
         result.groupNotes = pairs.alertNotes
         result.groupNeedsAttention = pairs.needsAttention
         // The plan's refusals, then OUTCOME (+ the pairs' counts) + the receipt.
-        audit.finish(result, note: pairs.outcomeNote)
+        // The OUTCOME line counts kept markers for every row (Codex #204).
+        audit.finish(result, note: pairs.outcomeNote(keptMarkers: result.markerKept.count))
         result.receipt = audit.receipt.url
         return result
     }
@@ -497,7 +501,8 @@ extension VideoScanModel {
             return .init(record: rec, outcome: catalogTrashRefusalOutcome(reason, rec, note: notes[rec.id],
                                                                           archiveVolume: archiveVolume))
         }
-        return JunkDeletionResult(items: items)
+        // The routine's settlement warnings survive the merge (Codex #204).
+        return routine.carryingWarnings(to: JunkDeletionResult(items: items))
     }
 
     /// A plan refusal as the row's outcome, in the person's words.

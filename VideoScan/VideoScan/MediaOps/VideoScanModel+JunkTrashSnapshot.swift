@@ -182,10 +182,10 @@ extension VideoScanModel.JunkDeletionResult {
     /// drive and the reason, not an error that invites "try harder".
     /// Every other outcome passes through unchanged.
     func trashFailuresHeld() -> Self {
-        Self(items: items.map { item in
+        carryingWarnings(to: Self(items: items.map { item in
             guard case .failed(let error) = item.outcome else { return item }
             return .init(record: item.record, outcome: .held(Self.trashFailureNote(item.record, error)))
-        })
+        }, receipt: receipt))
     }
 
     /// One junk file's outcome as the audit and the receipt say it (a

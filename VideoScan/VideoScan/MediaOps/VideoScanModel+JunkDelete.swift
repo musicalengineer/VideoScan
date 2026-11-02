@@ -91,6 +91,21 @@ extension VideoScanModel {
         /// Rows whose marker another action changed while their file moved:
         /// kept as that action set it, not overwritten (Codex #202 F2).
         var markerKept: Set<UUID> = []
+        /// One sentence per such row, for every door's result alert (Codex
+        /// #204): "<file> kept another action's marker (…) — it is in the
+        /// Trash at <path>".
+        var keptMarkerNotes: [String] = []
+
+        /// This result's settlement warnings carried onto `other` (the
+        /// result transforms keep them — Codex #204).
+        func carryingWarnings(to other: JunkDeletionResult) -> JunkDeletionResult {
+            var r = other
+            r.markerKept = markerKept
+            r.keptMarkerNotes = keptMarkerNotes
+            r.groupNotes = groupNotes
+            r.groupNeedsAttention = groupNeedsAttention
+            return r
+        }
 
         init(items: [Item], receipt: URL? = nil) {
             self.items = items
@@ -511,6 +526,7 @@ extension VideoScanModel {
         // whatever the row's marker says (Codex #203 F1).
         var trashPaths: [UUID: String] = [:]
         var markerKept: Set<UUID> = []
+        var keptNotes: [String] = []
 
         for (i, (rec, outcome)) in zip(records, outcomes).enumerated() {
             guard let marker = Self.removalMarker(for: outcome, outright: mode.isOutrightRemoval,
@@ -530,6 +546,8 @@ extension VideoScanModel {
             if let turn = turns[i], target !== turn.snapshot, target.removalRevision != turn.snapshot.removalRevision {
                 markerKept.insert(target.id)
                 let kept = target.removal.map { "\($0.state.rawValue)" } ?? "live"
+                keptNotes.append("\(target.filename) kept another action's marker (\(kept)) — it is in the Trash at "
+                                 + "\(trashPaths[target.id] ?? "an unrecorded place"); its catalog row was not overwritten")
                 log("  \(target.filename): its catalog row was changed by another action while the file moved to the Trash "
                     + "(the row keeps that action's marker: \(kept)); the file is in the Trash at "
                     + "\(trashPaths[target.id] ?? "an unrecorded place") — the row was not overwritten")
@@ -544,6 +562,7 @@ extension VideoScanModel {
             .init(record: reportedRecord(pair.0, turn: turns[i]), outcome: pair.1)
         })
         result.markerKept = markerKept
+        result.keptMarkerNotes = keptNotes
 
         // Single batched persist (a per-record save would saturate the
         // debouncer and could leave a half-written catalog on a crash).
