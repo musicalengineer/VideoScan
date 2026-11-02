@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - The model selector writes the key every asking path reads
 //
-// Rick, 2026-09-01: "we already have settings for Archivist Brain so let's
+// Rick, 2026-09-01: "we already have settings for Model Configuration so let's
 // put the selector in there." Until now the tag lived in five source files
 // and a `defaults write` — which, as the host list above it says, "is not a
 // setting so much as a rumour."

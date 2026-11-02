@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-/// The Restart button in Archivist Brain settings (Rick, 2026-09-06).
+/// The Restart button in Model Configuration settings (Rick, 2026-09-06).
 ///
 /// The failure it exists for: Homebrew ollama ships without
 /// `libollama_xgrammar.dylib`, so its MLX runner answers every
@@ -13,7 +13,7 @@ import Testing
 /// not help, because VideoScan had already stopped asking. Relaunching the
 /// app was the only cure. These pin the pieces that make a button the cure
 /// instead.
-@Suite("Restarting the brain")
+@Suite("Restarting the model")
 struct HallieRestartBrainTests {
 
     // MARK: forgetting the latch
