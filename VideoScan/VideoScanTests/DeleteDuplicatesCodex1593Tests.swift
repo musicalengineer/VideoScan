@@ -693,7 +693,80 @@ struct DeleteDuplicatesJobCodex1593Tests {
         #expect(model.pendingDeleteDuplicatesResume == nil, "nothing left to offer")
         #expect(DeleteDuplicatesPlanStore.unfinishedPlans(root: root, log: { _ in }).isEmpty)
     }
+
+    // MARK: Codex #206 F2 — a kept marker survives Stop and suspend (red first)
+
+    /// The trash operation for these tests: the FIRST copy's row is
+    /// re-marked by another action on the main actor while its file moves
+    /// (then `after` runs there too); the file goes to a sandbox Trash.
+    private func keptMarkerHooks(_ rig: Rig, trash: URL,
+                                 after: @escaping @MainActor () -> Void = {}) -> SignatureVerification.Hooks {
+        let firstPath = rig.copies[0].fullPath
+        let row = KeptRowRef(rig.copies[0], after: after)
+        var hooks = SignatureVerification.Hooks(shouldCancel: { Task.isCancelled })
+        hooks.trashItem = { url in
+            if url.path == firstPath { row.remarkAndWait() }
+            let landed = trash.appendingPathComponent(UUID().uuidString + "_" + url.lastPathComponent)
+            try FileManager.default.moveItem(at: url, to: landed)
+            return landed
+        }
+        return hooks
+    }
+
+    @Test func deleteDuplicatesStoppedResultCarriesKeptMarker() async throws {
+        let rig = makeRig("keptstop"); defer { rig.cleanup() }
+        let trash = rig.dir.appendingPathComponent("FakeTrash", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: keptMarkerHooks(rig, trash: trash),
+                                      planRoot: rig.root)
+        job.testHookBeforeFinalSave = { [weak job] in job?.cancel(discardingRemaining: true) }
+        job.start()
+        await job.task?.value
+        #expect(rig.copies[0].removal?.state == .removedFromCatalog, "the concurrent marker is kept")
+        #expect(job.state == .cancelled, "\(job.state)")
+        #expect(job.subtitle.contains("catalog changed during the move"), "subtitle: \(job.subtitle)")
+        #expect(job.subtitle.contains(trash.path), "the Trash path: \(job.subtitle)")
+        let console = await consoleText(rig.model)
+        #expect(console.contains("kept another action's marker 1:"), "OUTCOME:\n\(console)")
+    }
+
+    @Test func deleteDuplicatesSuspendedResultCarriesKeptMarker() async throws {
+        let rig = makeRig("keptsuspend"); defer { rig.cleanup() }
+        let trash = rig.dir.appendingPathComponent("FakeTrash", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let box = JobBox()
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
+                                      hooks: keptMarkerHooks(rig, trash: trash, after: { box.job?.cancel(discardingRemaining: false) }),
+                                      planRoot: rig.root)
+        box.job = job
+        job.start()
+        await job.task?.value
+        #expect(rig.copies[0].removal?.state == .removedFromCatalog, "the concurrent marker is kept")
+        #expect(job.subtitle.contains("catalog changed during the move"), "subtitle: \(job.subtitle)")
+        #expect(job.subtitle.contains(trash.path), "the Trash path: \(job.subtitle)")
+        let plan = try #require(job.plan)
+        #expect(plan.log.contains { $0.contains("kept another action's marker") }, "the suspended plan keeps it for the resume: \(plan.log)")
+    }
 }
+
+/// The row a test re-marks from the off-main trash hook (touched only on
+/// the main actor).
+private final class KeptRowRef: @unchecked Sendable {
+    let row: VideoRecord
+    let after: @MainActor () -> Void
+    init(_ row: VideoRecord, after: @escaping @MainActor () -> Void) { self.row = row; self.after = after }
+    nonisolated func remarkAndWait() {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                _ = VideoScanModel.stampRemoval(row, .removedFromCatalog(at: Date(), reason: .junk))
+                after()
+            }
+        }
+    }
+}
+
+@MainActor
+private final class JobBox { var job: DeleteDuplicatesJob? }
 
 // MARK: - 7. Fixity invalidation
 

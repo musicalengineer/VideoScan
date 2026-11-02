@@ -406,6 +406,9 @@ extension VideoScanModel {
         if let fileGuard, let why = fileGuard.authorize(rec) {
             return .held(why)
         }
+        // The routine's own live-row rule (Codex #206): after the door's
+        // friendlier words, before any protection or disk work — the floor.
+        if let changed = junkTurnLiveRowRefusal(rec) { return changed }
         let protections: JunkTurnProtections
         switch junkTurnVerdict(rec, guard: fileGuard) {
         case .refused(let outcome): return outcome
@@ -437,6 +440,8 @@ extension VideoScanModel {
                 refused = offline
             } else if let fileGuard, let why = fileGuard.authorize(rec) {
                 refused = .held(why)
+            } else if let changed = junkTurnLiveRowRefusal(rec) {
+                refused = changed
             } else {
                 switch junkTurnVerdict(rec, guard: fileGuard) {
                 case .refused(let outcome): refused = outcome
@@ -467,6 +472,18 @@ extension VideoScanModel {
         }
         let why = "\(recs[i].filename) \(JunkDeletionReport.reason(first) ?? "was refused")"
         return decided.map { $0 ?? .held(note(why)) }
+    }
+
+    /// THE LIVE-ROW RULE, inside the routine so no door can bypass it
+    /// (Codex #206 F1), asked right after the door's own authorization (whose
+    /// words, when it refuses, are the friendlier ones) and before the
+    /// protections and any disk work: at a file's turn the target must be the catalog's
+    /// own row for its id — a copy, a detached snapshot or a row replaced
+    /// while an earlier file moved is held, named, and its file is never
+    /// touched. Doors keep their own earlier checks as the friendlier
+    /// refusal; this is the floor. O(1) (the model's id index).
+    func junkTurnLiveRowRefusal(_ rec: VideoRecord) -> JunkFileOutcome? {
+        record(forID: rec.id) === rec ? nil : .held(Self.changedInCatalogHeldNote)
     }
 
     /// Offline-volume check: only /Volumes/<X>/... paths can be offline

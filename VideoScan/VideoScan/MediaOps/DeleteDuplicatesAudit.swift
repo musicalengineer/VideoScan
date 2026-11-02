@@ -84,7 +84,8 @@ extension DeleteDuplicatesJob {
             auditedRows.insert(e.id)
             audit.record(e.auditRow)
         }
-        audit.finish()
+        // Every kept marker so far — a stopped or suspended run too (Codex #206 F2).
+        audit.finish(note: TrashWarnings(keptMarkerNotes: keptMarkerNotes).outcomeNote())
         receiptURL = audit.receipt.url
         self.audit = nil
     }

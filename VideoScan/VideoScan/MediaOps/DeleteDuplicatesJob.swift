@@ -793,6 +793,19 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// action set it, never overwritten, and named in the summary (the
     /// Trash routine's rule — Codex #205 sibling).
     private(set) var keptMarkerNotes: [String] = []
+
+    /// Recorded the moment the pair settles (Codex #206 F2): on the job for
+    /// every terminal line — finished, stopped, suspended, failed — and in
+    /// the plan's log, so a suspended plan carries it to its resume.
+    private func noteKeptMarker(_ note: String) {
+        keptMarkerNotes.append(note)
+        mutatePlan { $0.log.append(note) }
+    }
+
+    /// A terminal line with every kept marker so far appended.
+    private func withKeptMarkers(_ line: String) -> String {
+        Self.summaryLine([line], keptMarkerNotes: keptMarkerNotes)
+    }
     /// Stop (default): put the pair in flight back, keep the plan
     /// resumable and offer it at once.
     private(set) var stopKeepingPlan = false
@@ -1457,7 +1470,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let summary = Self.summaryLine(summaryParts, keptMarkerNotes: keptMarkerNotes)
         logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
-            finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summary))")
+            // finish(failed:) appends the kept markers itself.
+            finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summaryParts.joined(separator: " · ")))")
         } else if state.cancelWasRequested || Task.isCancelled {
             finishCancelled()
         } else {
@@ -1925,7 +1939,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             keeperMatchedByStoredFixity: !proof.keeperReadInFull,
             tier: tier, remainingVerifiedCopies: decision?.remainingVerifiedCopies,
             trashVolume: trashVolume, tierReason: decision?.reason, trashPath: trashPath,
-            keptMarker: { [weak self] note in self?.keptMarkerNotes.append(note) })
+            keptMarker: { [weak self] note in self?.noteKeptMarker(note) })
         tally.catalogMutated = tally.catalogMutated || mutated
     }
 
@@ -2773,6 +2787,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finish(failed message: String) {
         guard state.isActive else { return }
         if state.cancelWasRequested { finishCancelled(); return }
+        let message = withKeptMarkers(message)
         state = .failed(message: message)
         subtitleText = message
         isIndeterminateValue = false
@@ -2783,7 +2798,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finishCancelled() {
         guard state.isActive else { return }
         state = .cancelled
-        subtitleText = "Stopped — \(result.deleted) moved to the Trash, the rest left alone"
+        subtitleText = withKeptMarkers("Stopped — \(result.deleted) moved to the Trash, the rest left alone")
         isIndeterminateValue = false
         isPausedValue = false
         pauseRequested = false
@@ -2792,9 +2807,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finishSuspended(remaining: Int, quit: Bool) {
         guard state.isActive else { return }
         state = .cancelled
-        subtitleText = quit
+        subtitleText = withKeptMarkers(quit
             ? "Suspended for quit — \(result.deleted) moved to the Trash; \(remaining) remaining will be offered to resume at the next launch"
-            : "Stopped — \(result.deleted) moved to the Trash; \(remaining) remaining kept for later (Resume in Media File Operations)"
+            : "Stopped — \(result.deleted) moved to the Trash; \(remaining) remaining kept for later (Resume in Media File Operations)")
         isIndeterminateValue = false
         isPausedValue = false
         pauseRequested = false
