@@ -2,6 +2,12 @@
 
 The allowlist records exact (source, target) exceptions with a reason; it never
 exempts a whole file. Git-history URLs remain historical rather than local links.
+
+Two data files beside this test keep history honest without keeping the files:
+tests/docs_retired.txt (the 2026-10-23 reset) and tests/docs_moved.txt (the 2026-11-01
+consolidation). Anything under docs/archive/ was deleted on 2026-11-02 (git tag
+pre-prune-2026-11-02 holds the last tree with it), so a citation into docs/archive/
+is a history pointer, accepted the way the retired list is.
 """
 from __future__ import annotations
 
@@ -14,6 +20,9 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = ROOT / "tests/docs_links_allowlist.json"
+# Deleted 2026-11-02; `git ls-tree -r --name-only pre-prune-2026-11-02 docs/archive` lists
+# what was there and `git show pre-prune-2026-11-02:<path>` prints one. Not re-created.
+ARCHIVE_PRUNED = "docs/archive"
 SUFFIXES = {".md", ".py", ".sh", ".swift", ".yml", ".yaml", ".plist"}
 DOC_PATH = re.compile(r"(?<![\w-])docs/[^\s`\"'()\[\],;:#|\\]+")
 URL = re.compile(r"(?:https?|file|app|plugin)://[^\s<>]+")
@@ -57,14 +66,21 @@ def references(source: str, text: str, written_at: str | None = None) -> list[tu
     return result
 
 
-# Sources whose text may not be edited to follow a move: DECISIONS is append-only, STATUS
-# belongs to the main session, and archived documents are kept as written (2026-11-01).
+# Sources whose text may not be edited to follow a move: DECISIONS is append-only and STATUS
+# belongs to the main session (2026-11-01). Archived documents were kept as written too,
+# until the 2026-11-02 prune deleted them.
 UNEDITABLE = ("docs/DECISIONS.md", "docs/STATUS.md")
+MOVED_FILE, RETIRED_FILE = "tests/docs_moved.txt", "tests/docs_retired.txt"
+
+
+def historical(target: str) -> bool:
+    """A citation into the pruned docs/archive/ tree (tag pre-prune-2026-11-02)."""
+    return target == ARCHIVE_PRUNED or target.startswith(ARCHIVE_PRUNED + "/")
 
 
 def moved_paths(root: Path) -> dict[str, str]:
-    """docs/archive/MOVED.txt: `old path -> where it is now`, one per line (2026-11-01)."""
-    moved_file = root / "docs/archive/MOVED.txt"
+    """tests/docs_moved.txt: `old path -> where it went`, one per line (2026-11-01)."""
+    moved_file = root / MOVED_FILE
     if not moved_file.exists():
         return {}
     pairs = (l.split(" -> ", 1) for l in moved_file.read_text().splitlines()
@@ -85,7 +101,7 @@ def follow_move(target: str, moved: dict[str, str]) -> str | None:
 
 def missing_references(root: Path, files: list[str], exceptions: dict) -> list[str]:
     missing = []
-    retired_file = root / "docs/archive/RETIRED.txt"
+    retired_file = root / RETIRED_FILE
     retired = set(l.strip() for l in retired_file.read_text().splitlines()
                   if l.strip() and not l.startswith("#")) if retired_file.exists() else set()
     moved = moved_paths(root)
@@ -97,16 +113,18 @@ def missing_references(root: Path, files: list[str], exceptions: dict) -> list[s
         if not path.exists():
             missing.append(f"{source}: tracked file is missing")
             continue
-        kept_as_written = source in UNEDITABLE or source.startswith("docs/archive/")
+        kept_as_written = source in UNEDITABLE or source.startswith(ARCHIVE_PRUNED + "/")
         origin = written_at.get(source) if kept_as_written else None
         for line, citation, target in references(source, path.read_text(), origin):
             if (root / target).exists():
                 continue
             if target in retired:
                 continue  # retired 2026-10-23: in git history (tag pre-reset-2026-10-23); code comments keep old paths
+            if historical(target):
+                continue  # docs/archive/ pruned 2026-11-02: in git history (tag pre-prune-2026-11-02)
             now_at = follow_move(target, moved) if kept_as_written else None
-            if now_at and (root / now_at).exists():
-                continue  # moved 2026-11-01; the index is docs/archive/README.md
+            if now_at and ((root / now_at).exists() or historical(now_at)):
+                continue  # moved 2026-11-01 (tests/docs_moved.txt), then pruned with the archive
             if exceptions.get(source, {}).get(citation):
                 continue
             missing.append(f"{source}:{line}: {citation} -> {target}")
@@ -161,27 +179,27 @@ def test_templates_still_require_the_current_output_directory(tmp_path):
     assert len(missing) == 1 and "old-reviews" in missing[0]
 
 
-# ---- docs moved by the 2026-11-01 consolidation (the MOVED.txt in docs' archive) ----
-# Fixture paths are built from D so this file's own text cites nothing.
-D = "docs"
+# ---- docs moved by the 2026-11-01 consolidation (tests/docs_moved.txt) ----
+# Fixture paths are built from D and A so this file's own text cites nothing.
+D, A = "docs", "docs/" + "archive"
 
 
 def _moved_tree(tmp_path):
-    (tmp_path / D / "archive/design").mkdir(parents=True)
+    """A move into a still-present folder (kept/) and one into the pruned archive."""
+    (tmp_path / D / "kept/design").mkdir(parents=True)
     (tmp_path / D / "design").mkdir(parents=True)
-    (tmp_path / D / "archive/design/old.md").write_text("[sibling](live.md) [gone](nowhere.md)\n")
+    (tmp_path / D / "kept/design/old.md").write_text("[sibling](live.md) [gone](nowhere.md)\n")
     (tmp_path / D / "design/live.md").write_text("live\n")
-    (tmp_path / D / "archive/MOVED.txt").write_text(
-        "# old path -> where it is now\n"
-        f"{D}/design/old.md -> {D}/archive/design/old.md\n"
-        f"{D}/practices/invariants -> {D}/archive/practices/invariants\n")
-    (tmp_path / D / "archive/practices/invariants").mkdir(parents=True)
-    (tmp_path / D / "archive/practices/invariants/Archive.md").write_text("x\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / MOVED_FILE).write_text(
+        "# old path -> where it went\n"
+        f"{D}/design/old.md -> {D}/kept/design/old.md\n"
+        f"{D}/practices/invariants -> {A}/practices/invariants\n")
 
 
 def test_moved_paths_resolve_only_in_sources_that_may_not_be_edited(tmp_path):
-    """DECISIONS (append-only), STATUS (the main session's) and archived text keep the
-    paths they were written with; every other source must cite the new path."""
+    """DECISIONS (append-only) and STATUS (the main session's) keep the paths they were
+    written with; every other source must cite the new path."""
     _moved_tree(tmp_path)
     sources = [f"{D}/DECISIONS.md", f"{D}/STATUS.md", f"{D}/README.md", "tool.py"]
     for source in sources:
@@ -192,15 +210,32 @@ def test_moved_paths_resolve_only_in_sources_that_may_not_be_edited(tmp_path):
     assert len(missing) == 6
 
 
-def test_archived_relative_links_resolve_against_where_they_were_written(tmp_path):
-    _moved_tree(tmp_path)
-    missing = missing_references(tmp_path, [f"{D}/archive/design/old.md"], {})
-    assert len(missing) == 1 and "nowhere.md" in missing[0]
-
-
 def test_a_moved_entry_whose_destination_is_missing_still_fails(tmp_path):
     _moved_tree(tmp_path)
-    (tmp_path / D / "archive/MOVED.txt").write_text(
-        f"{D}/design/old.md -> {D}/archive/design/absent.md\n")
+    (tmp_path / MOVED_FILE).write_text(f"{D}/design/old.md -> {D}/kept/design/absent.md\n")
     (tmp_path / D / "DECISIONS.md").write_text(f"{D}/design/old.md\n")
     assert len(missing_references(tmp_path, [f"{D}/DECISIONS.md"], {})) == 1
+
+
+# ---- docs/archive/ pruned 2026-11-02 (tag pre-prune-2026-11-02) ----
+
+def test_citations_into_the_pruned_archive_are_historical_in_every_source_type(tmp_path):
+    """A path under the pruned archive is accepted as a history pointer — bare paths in
+    code and Markdown links in docs alike — while a sibling miss is still reported."""
+    (tmp_path / D / "guides").mkdir(parents=True)
+    (tmp_path / "tool.py").write_text(f"See {A}/design/old.md and {D}/absent.md\n")
+    (tmp_path / D / "guides/g.md").write_text(
+        f"[old](../archive/reviews/x.md) [idx](../archive/README.md) `{A}` [gone](../absent.md)\n")
+    missing = missing_references(tmp_path, ["tool.py", f"{D}/guides/g.md"], {})
+    assert len(missing) == 2 and all("absent.md" in m for m in missing)
+    # The prefix is the folder, not a spelling: an "archives" sibling is a real miss.
+    (tmp_path / "other.py").write_text(f"{A}s/old.md {A}d.md\n")
+    assert len(missing_references(tmp_path, ["other.py"], {})) == 2
+
+
+def test_a_moved_entry_into_the_pruned_archive_is_historical(tmp_path):
+    """DECISIONS cites the pre-consolidation path; MOVED sends it into the archive, which
+    the prune deleted: still historical, not a miss."""
+    _moved_tree(tmp_path)
+    (tmp_path / D / "DECISIONS.md").write_text(f"{D}/practices/invariants/Archive.md\n")
+    assert missing_references(tmp_path, [f"{D}/DECISIONS.md"], {}) == []

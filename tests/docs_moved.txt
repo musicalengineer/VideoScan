@@ -1,7 +1,8 @@
 # Moved 2026-11-01 (docs consolidation, DECISIONS 2026-11-01). One line per move:
-# `old path -> where the file is now`. The docs-links guard follows these only for
-# text that may not be edited (DECISIONS, STATUS, and archived documents);
-# every other citation names the new path. Index with reasons: README.md here.
+# `old path -> where the file went`. Read by tests/test_docs_links.py, which follows
+# these only for text that may not be edited (DECISIONS and STATUS); every other
+# citation names the new path. Lived at docs/archive/MOVED.txt until the 2026-11-02
+# prune deleted docs/archive/ (git tag pre-prune-2026-11-02 keeps it, with the index).
 docs/practices/invariants -> docs/archive/practices/invariants
 docs/ops -> docs/archive/ops
 docs/reviews/codex/codex-review-383-editor-caches-2026-10-25.md -> docs/archive/reviews/codex/codex-review-383-editor-caches-2026-10-25.md
@@ -32,6 +33,7 @@ docs/reviews/codex/codex-review-store-open-387-386-closing-2026-10-26.md -> docs
 docs/reviews/codex/codex-review-swift-6-stage-5-7-data-risk-isolation-edits-2026-10-25.md -> docs/archive/reviews/codex/codex-review-swift-6-stage-5-7-data-risk-isolation-edits-2026-10-25.md
 docs/reviews/codex/codex-review-swift-6-stage-8-flip-2026-10-25.md -> docs/archive/reviews/codex/codex-review-swift-6-stage-8-flip-2026-10-25.md
 docs/reviews/codex/codex-review-timingbudget-tier-aware-busy-rule-2026-10-27.md -> docs/archive/reviews/codex/codex-review-timingbudget-tier-aware-busy-rule-2026-10-27.md
+docs/reviews/codex/codex-review-docs-new-engineer-2026-11-01.md -> docs/archive/reviews/codex/codex-review-docs-new-engineer-2026-11-01.md
 docs/reviews/codex/test-host-icon-guard.md -> docs/archive/reviews/codex/test-host-icon-guard.md
 docs/reviews/BRIEF_TEMPLATE.md -> docs/archive/reviews/BRIEF_TEMPLATE.md
 docs/reviews/adversarial/2026-10-18-open-findings.md -> docs/archive/reviews/adversarial/2026-10-18-open-findings.md

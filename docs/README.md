@@ -1,6 +1,6 @@
 # VideoScan documentation — start here
 
-One page, the map. About 25 live files (DECISIONS 2026-11-01): six read-first documents, one design doc per subsystem, five guides, two practices, and evidence overwritten in place. Everything retired is under [`archive/`](archive/README.md), never deleted. A rule lives in one place; the others link to it.
+One page, the map. About 25 live files (DECISIONS 2026-11-01): six read-first documents, one design doc per subsystem, five guides, two practices, and evidence overwritten in place. Everything retired is deleted from the tree and kept by git (see **Retired documents** below). A rule lives in one place; the others link to it.
 
 ## Read first (about an hour)
 
@@ -41,10 +41,10 @@ Each opens with a one-paragraph summary and a `Status: built | in flight | parke
 
 ## Reviews and evidence (`reviews/`)
 
-Live evidence, overwritten in place, one file per area: [`codex.md`](reviews/codex.md) (the standing Codex verdict per area, and the brief template), [`video_llm_benchmarks.md`](reviews/video_llm_benchmarks.md) (the model ladder's numbers; written by `tools/video-llm-bench/bench.py`), [`household_roster_feasibility.md`](reviews/household_roster_feasibility.md) (the roster as a filter, not a namer; written by `tools/household-roster/roster.py`). Hallie's benchmarks are a section of `design/hallie.md`. `reviews/cloud/LEDGER.md` is the cloud-session ledger, live until the credits expire on 2026-11-05. `tools/codex_review.py` writes new pass transcripts to `reviews/codex/`, and `tools/adversarial_nightly.py` puts triaged nights in `reviews/adversarial/`; fold each closed pass into `codex.md` and move the transcript to the archive.
+Live evidence, overwritten in place, one file per area: [`codex.md`](reviews/codex.md) (the standing Codex verdict per area, and the brief template), [`video_llm_benchmarks.md`](reviews/video_llm_benchmarks.md) (the model ladder's numbers; written by `tools/video-llm-bench/bench.py`), [`household_roster_feasibility.md`](reviews/household_roster_feasibility.md) (the roster as a filter, not a namer; written by `tools/household-roster/roster.py`). Hallie's benchmarks are a section of `design/hallie.md`. `reviews/cloud/LEDGER.md` is the cloud-session ledger, live until the credits expire on 2026-11-05. `tools/codex_review.py` writes new pass transcripts to `reviews/codex/`, and `tools/adversarial_nightly.py` puts triaged nights in `reviews/adversarial/`; fold each closed pass into `codex.md`, then delete the transcript (git keeps it).
 
-Records kept for the rulings and tests that cite them, now in [`archive/reviews/`](archive/reviews/) (summaries, 2026-11-01):
-- **Codex transcripts, 10/25 → 11/01** (28): one row each in `codex.md`.
+Records the rulings and tests cite, summarised 2026-11-01 and deleted with the archive on 2026-11-02 (each lived under `docs/archive/reviews/` at tag `pre-prune-2026-11-02`):
+- **Codex transcripts, 10/25 → 11/01** (28, `codex/`): one row each in `codex.md`.
 - **Adversarial review 2026-10-18** (`adversarial/2026-10-18-open-findings.md`): ten findings on `93c72a704..64ea21ac6`; #1 #2 #3 #9 #10 confirmed and fixed, #8 tests added, #4–#7 deferred to the Import code removal.
 - **NDSA self-assessment 2026-10-02** (`qa/ndsa_self_score_2026-10-02.md`): highest level fully met Storage 0 · Integrity 0 · Control 1 · Metadata 2 · Content 1; the software is ahead of the storage (every copy in one building).
 - **Reading guide 2026-10-18** (`swift-expert/2026-10-18-reading-guide-best-vs-worst.md`): the module to copy is Core `Commit` + the Store seam (grade A); the one to fix was PrunePlan (rebuilt simple on 10/22).
@@ -55,12 +55,12 @@ Records kept for the rulings and tests that cite them, now in [`archive/reviews/
 
 ## Research
 
-Research notes live in `.scratch/` while they are being written (CLAUDE.md) and are archived when a design has taken what is still true. The whole former top-level research folder moved to [`archive/research/`](archive/research/) on 2026-11-01: the Record Finder sources (FamilySearch API notes and its production-key blocker, the Irish records design, the UK and Scotland survey) are summarised in [`design/people_events.md`](design/people_events.md); the two provenance studies in [`design/provenance.md`](design/provenance.md); the model and LLM studies in [`design/machine_intelligence.md`](design/machine_intelligence.md) (since 10/31).
+Research notes live in `.scratch/` while they are being written (CLAUDE.md); once a design has taken what is still true they are deleted (git keeps anything that was committed). The former top-level research folder was summarised on 2026-11-01 and deleted on 2026-11-02 (it is `docs/archive/research/` at tag `pre-prune-2026-11-02`): the Record Finder sources (FamilySearch API notes and its production-key blocker, the Irish records design, the UK and Scotland survey) are summarised in [`design/people_events.md`](design/people_events.md); the two provenance studies in [`design/provenance.md`](design/provenance.md); the model and LLM studies in [`design/machine_intelligence.md`](design/machine_intelligence.md) (since 10/31).
 
 ## Also in this folder
 
-`briefs/cloud/` (the nightly cloud-session brief and its standing rules; Rick's evening line names `docs/briefs/cloud/NIGHTLY.md`, so they stay live until the credits expire on 2026-11-05, then archive) · `hallie_tools.schema.json` (Hallie's tool schema, read by `scripts/hallie_e1/`) · `poi-cycles/metrics.jsonl` (machine data for the POI sensor replay) · `index.html` (the published metrics page, written by `tools/publish_metrics.py`).
+`briefs/cloud/` (the nightly cloud-session brief and its standing rules; Rick's evening line names `docs/briefs/cloud/NIGHTLY.md`, so they stay live until the credits expire on 2026-11-05, then are deleted) · `hallie_tools.schema.json` (Hallie's tool schema, read by `scripts/hallie_e1/`) · `poi-cycles/metrics.jsonl` (machine data for the POI sensor replay) · `index.html` (the published metrics page, written by `tools/publish_metrics.py`).
 
-## Archive (`archive/`)
+## Retired documents
 
-Retired documents, never deleted: [`archive/README.md`](archive/README.md) names every file there, what it was and where its surviving content went; [`archive/MOVED.txt`](archive/MOVED.txt) is the `old -> now` list of the 2026-11-01 consolidation (the docs-links guard follows it only for DECISIONS, STATUS and archived text, which are kept as written); [`archive/INDEX-2026-10-reset.md`](archive/INDEX-2026-10-reset.md) lists the 2026-10-23 reset (`git show pre-reset-2026-10-23:<path>` prints any of them) and `archive/RETIRED.txt` is its machine-readable list.
+Live in git only (Rick, 2026-11-02: "delete anything we don't need anymore … we can always bring them back by git"). A design, review transcript or research note that is superseded or wholly built is deleted; a `pre-prune-<date>` tag marks the last commit before each prune. The 2026-11-02 prune removed `docs/archive/` (137 files with its index `README.md`; only the two guard data files moved to `tests/`): list them with `git ls-tree -r --name-only pre-prune-2026-11-02 docs/archive`, read one with `git show pre-prune-2026-11-02:docs/archive/<path>`. The 2026-10-23 reset is at tag `pre-reset-2026-10-23` (`git show pre-reset-2026-10-23:<path>`). Citations of those paths in DECISIONS, STATUS, code comments and older design text are history pointers; `tests/test_docs_links.py` accepts them (its data: `tests/docs_moved.txt`, the 2026-11-01 `old -> now` list, and `tests/docs_retired.txt`, the 2026-10-23 list).

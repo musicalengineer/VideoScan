@@ -172,6 +172,12 @@
   "VideoScan/VideoScanCore/Sources/VideoScanCore/VolumeStatusEnums.swift": {
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
+  "VideoScan/VideoScanTests/AdvReview20261026Tests.swift": {
+    "docs/reviews/adversarial/2026-10-26.md": "The 2026-10-26 nightly adversarial review was never committed (tools/adversarial_nightly.py writes it on the nightly host; its findings P2 F1/F2 are pinned by this test). Historical citation, kept as written."
+  },
+  "VideoScan/VideoScanTests/AdvReview20261026TrashTests.swift": {
+    "docs/reviews/adversarial/2026-10-26.md": "The 2026-10-26 nightly adversarial review was never committed (tools/adversarial_nightly.py writes it on the nightly host; its findings P2 F1/F2 are pinned by this test). Historical citation, kept as written."
+  },
   "VideoScan/VideoScanTests/ArchiveTimelineModelTests.swift": {
     "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
@@ -204,43 +210,6 @@
   },
   "VideoScan/VideoScanTests/VolumeRoleTests.swift": {
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/archive/design/nightly_adversarial_review_design_2026-10-01.md": {
-    "docs/reviews/adversarial/declined.jsonl": "Planned generated ledger in the proposed nightly adversarial design; no implementation exists yet."
-  },
-  "docs/archive/guides/facial-recognition.md": {
-    "docs/catalog-aided-face-detection.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/donna-gallery-report-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/donna-recipe-smoke-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/family_media_training_model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/hardening_audit_2026-06-20.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/immich_reassessment_2026-06-20.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/issue-02-face-detection-accuracy.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/issue-03-dlib-rt-window.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/issue-04-hybrid-fd-mode.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/issue-06-custom-face-model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/issue-07-multi-engine-simultaneous.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/issue-09-additional-fd-algorithms.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/morning_briefing_2026_04_23.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/person-eval-handoff-2026-07-11.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/person-recognition-evaluator.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/poi-cycles/cycle-01-aggregation.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/poi-cycles/cycle-02-refs-threshold.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/poi-cycles/cycle-03-minimum-hits.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/poi-cycles/cycle-04-donna-classifier.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/poi-cycles/cycle-05-embedding-quality.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/poi-cycles/ledger.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/research/immich-photoprism-face-audit-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/research/person-id-deep-research-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/session_handoff_2026_04_24.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/synthetic_person_benchmark.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/tagging_people.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
-    "docs/test_gap_face_pipeline_2026-06-20.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "docs/guides/media-archive.md": {
     "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",

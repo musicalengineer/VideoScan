@@ -30894,9 +30894,10 @@
         "test_docs_links.py"
       ],
       "tests": [
+        "test_a_moved_entry_into_the_pruned_archive_is_historical",
         "test_a_moved_entry_whose_destination_is_missing_still_fails",
         "test_allowlist_is_specific_to_source_and_citation",
-        "test_archived_relative_links_resolve_against_where_they_were_written",
+        "test_citations_into_the_pruned_archive_are_historical_in_every_source_type",
         "test_missing_paths_in_all_required_source_types_are_reported",
         "test_moved_paths_resolve_only_in_sources_that_may_not_be_edited",
         "test_relative_links_images_and_reference_links_are_checked",
@@ -30914,12 +30915,11 @@
       ],
       "tests": [
         "test_a_design_doc_without_status_or_with_it_too_late_is_reported",
-        "test_archive_index_names_every_archived_file",
         "test_every_design_doc_carries_a_status_line",
+        "test_ignored_files_are_neither_counted_nor_listed",
         "test_live_docs_stay_under_the_ceiling",
-        "test_the_archive_index_must_name_each_file_but_not_itself_or_ignored_ones",
         "test_the_ceiling_counts_live_markdown_only_and_names_every_file",
-        "test_the_guards_scale_to_ten_thousand_archived_files"
+        "test_the_guards_scale_to_ten_thousand_files"
       ]
     },
     {

@@ -1,18 +1,21 @@
 """The shape of docs/ after the 2026-11-01 consolidation (DECISIONS 2026-11-01:
 "Docs are consolidated to about 25 live files, about five per major area").
 
-Three guards, each a sensor on the real tree plus unit tests on a poisoned one:
+Two guards, each a sensor on the real tree plus unit tests on a poisoned one:
   (a) every docs/design/*.md carries a `Status:` line in its first 15 lines;
-  (b) the live Markdown count under docs/ (everything but docs/archive/) is at most
-      30 — a ceiling with headroom over ~25, so a new doc is a decision, not drift;
-  (c) docs/archive/README.md names every file under docs/archive/ (its path relative
-      to that folder), so nothing archived is unexplained.
+  (b) the live Markdown count under docs/ is at most 30 — a ceiling with headroom
+      over ~25, so a new doc is a decision, not drift.
+
+A third guard (the docs/archive/ index) went with the archive on 2026-11-02: retired
+documents are deleted, not kept in the tree; git has them (tag pre-prune-2026-11-02,
+and pre-reset-2026-10-23 for the first reset). docs/archive/ is still excluded from
+the count in case a file lands there again, so the ceiling cannot be dodged by
+re-creating it.
 
 "Live" counts Markdown only: the .sql schema, the .html renders, the .json/.jsonl data
 files and .gitkeep placeholders are artefacts tools read or write, not documents.
 Files are listed with git (tracked plus untracked-but-not-ignored), so a git-ignored
-convenience copy (the 2026-10-23 zip in Rick's checkout) is neither counted nor
-required in the index. Stdlib only.
+convenience copy is neither counted nor reported. Stdlib only.
 """
 from __future__ import annotations
 
@@ -25,8 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CEILING = 30
 STATUS_WITHIN = 15
 STATUS_LINE = re.compile(r"^\*{0,2}Status:\*{0,2}\s")
-DOCS, ARCHIVE = "docs/", "docs/archive/"
-INDEX = ARCHIVE + "README.md"
+DOCS, ARCHIVE = "docs/", "docs/archive/"  # ARCHIVE: pruned 2026-11-02, still not "live"
 
 
 def listed(root: Path) -> list[str]:
@@ -52,14 +54,6 @@ def design_docs_without_status(root: Path, files: list[str]) -> list[str]:
     return missing
 
 
-def archive_files_not_indexed(root: Path, files: list[str]) -> list[str]:
-    index = root / INDEX
-    text = index.read_text(encoding="utf-8") if index.is_file() else ""
-    # Named = its path relative to docs/archive/, in backticks (so `a.md` never counts for `xa.md`).
-    return [f for f in files
-            if f.startswith(ARCHIVE) and f != INDEX and f"`{f[len(ARCHIVE):]}`" not in text]
-
-
 # ---- sensors on the real tree ----
 
 def test_every_design_doc_carries_a_status_line():
@@ -75,15 +69,7 @@ def test_live_docs_stay_under_the_ceiling():
     assert len(live) >= 6, f"only {len(live)} live docs — the read-first set alone is six"
     assert len(live) <= CEILING, (
         f"{len(live)} live docs under docs/ (ceiling {CEILING}; DECISIONS 2026-11-01). Merge into the "
-        "subsystem's doc or archive with an index line instead of adding a file:\n  " + "\n  ".join(live))
-
-
-def test_archive_index_names_every_archived_file():
-    files = listed(ROOT)
-    assert sum(f.startswith(ARCHIVE) for f in files) >= 100, "the archive looks empty — has it moved?"
-    missing = archive_files_not_indexed(ROOT, files)
-    assert not missing, ("files under docs/archive/ that docs/archive/README.md does not name "
-                         "(add one line: what it was, where its content went):\n  " + "\n  ".join(missing))
+        "subsystem's doc, or delete it (git keeps it), instead of adding a file:\n  " + "\n  ".join(live))
 
 
 # ---- the guards themselves, on a poisoned tree ----
@@ -124,27 +110,23 @@ def test_the_ceiling_counts_live_markdown_only_and_names_every_file(tmp_path):
     assert len(live_docs(listed(root))) == CEILING
 
 
-def test_the_archive_index_must_name_each_file_but_not_itself_or_ignored_ones(tmp_path):
-    root = _repo(tmp_path, {
-        INDEX: "| `design/named.md` | was | what | went |\n",
-        f"{D}/archive/design/named.md": "x",
-        f"{D}/archive/design/unnamed.md": "x",
-        f"{D}/archive/copy.zip": "x",
-    }, ignore=f"{D}/archive/*.zip\n")
-    assert archive_files_not_indexed(root, listed(root)) == [f"{D}/archive/design/unnamed.md"]
-    (root / INDEX).unlink()
-    assert len(archive_files_not_indexed(root, listed(root))) == 2
+def test_ignored_files_are_neither_counted_nor_listed(tmp_path):
+    root = _repo(tmp_path, {f"{D}/design/a.md": "Status: built\n", f"{D}/design/copy.md.zip": "x",
+                            f"{D}/notes/scratch.md": "x"}, ignore=f"{D}/notes/\n")
+    assert live_docs(listed(root)) == [f"{D}/design/a.md"]
 
 
-def test_the_guards_scale_to_ten_thousand_archived_files(tmp_path):
-    names = [f"design/f{n:05}.md" for n in range(10_000)]
-    files = {ARCHIVE + n: "" for n in names}
-    files[INDEX] = "\n".join(f"| `{n}` |" for n in names[:-1])
+def test_the_guards_scale_to_ten_thousand_files(tmp_path):
+    """Scale: 10,000 design docs (one with a late Status line) and 10,000 non-live files
+    in the same tree, both guards inside the budget."""
+    files = {f"{D}/design/f{n:05}.md": "Status: built\n" for n in range(10_000)}
+    files[f"{D}/design/f09999.md"] = "x\n" * STATUS_WITHIN + "Status: built\n"
+    files.update({f"{D}/design/renders/r{n:05}.html": "" for n in range(10_000)})
     root = _repo(tmp_path, files)
     listing = listed(root)
     start = time.monotonic()
-    missing = archive_files_not_indexed(root, listing)
     live = live_docs(listing)
+    missing = design_docs_without_status(root, listing)
     elapsed = time.monotonic() - start
-    assert missing == [ARCHIVE + names[-1]] and live == []
-    assert elapsed < 5.0, f"{elapsed:.2f} s for 10,000 files (budget 5 s)"
+    assert len(live) == 10_000 and missing == [f"{D}/design/f09999.md"]
+    assert elapsed < 5.0, f"{elapsed:.2f} s for 20,000 files (budget 5 s)"
