@@ -543,9 +543,7 @@ struct RemoteViewerReadOnlySensorTests {
         "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),
         "Catalog/CatalogWriteError.swift": (1, nil, nil),
         "FamilyTree/CouplePortrait.swift": (2, nil, nil), "FamilyTree/FamilyAssetStore.swift": (1, nil, nil),
-        // +1 (codex #198): publishing a finished pull drops its own stale
-        // `.partial` before the copy, inside the read-only write primitive.
-        "FamilyTree/FamilySearchPullCoordinator.swift": (7, nil, nil),
+        "FamilyTree/FamilySearchPullCoordinator.swift": (6, nil, nil),
         "Hallie/HalliePhotoImport.swift": (1, nil, nil), "Hallie/Voice/HallieNeuralSpeech.swift": (7, nil, nil),
         "Hallie/Voice/HalliePronunciationLexicon.swift": (1, nil, nil),
         "Hallie/Web/HallieWebPoster.swift": (3, nil, nil), "Hallie/Web/HallieWebProxy.swift": (3, nil, nil),

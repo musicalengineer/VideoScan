@@ -434,23 +434,25 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// primitive. Same place (a test simulating the tool there) = nothing to
     /// publish.
     private func publishPull(_ scratch: URL) throws -> URL {
-        let destination = request.outputURL
+        let chosen = request.outputURL
         guard scratch.standardizedFileURL.resolvingSymlinksInPath()
-                != destination.standardizedFileURL.resolvingSymlinksInPath() else { return scratch }
+                != chosen.standardizedFileURL.resolvingSymlinksInPath() else { return scratch }
         let fm = fileManager
-        try FamilyTreeAccessMode.withWrite(.familySearchPull,
-                                           path: "FamilySearchPull.publish (\(destination.lastPathComponent))",
-                                           mode: writeMode) {
-            let partial = destination.appendingPathExtension("partial")
-            try? fm.removeItem(at: partial)
-            try fm.copyItem(at: scratch, to: partial)
-            if fm.fileExists(atPath: destination.path) {
-                _ = try fm.replaceItemAt(destination, withItemAt: partial)
-            } else {
-                try fm.moveItem(at: partial, to: destination)
+        return try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                                  path: "FamilySearchPull.publish (\(chosen.lastPathComponent))",
+                                                  mode: writeMode) { () throws -> URL in
+            // No-clobber: an earlier export at the chosen name is kept and
+            // this one gets the next free name beside it (never overwrite).
+            var destination = chosen
+            var suffix = 2
+            while fm.fileExists(atPath: destination.path) {
+                destination = chosen.deletingLastPathComponent().appendingPathComponent(
+                    chosen.deletingPathExtension().lastPathComponent + "-\(suffix)." + chosen.pathExtension)
+                suffix += 1
             }
+            try fm.copyItem(at: scratch, to: destination)
+            return destination
         }
-        return destination
     }
 
     private func beginParse(output: URL) {
