@@ -10851,51 +10851,75 @@
       ],
       "tests": [
         "aviPair",
-        "batchReservationIsAllOrNothing",
-        "bothSelectedClonesHonorMarkerWriteHold",
-        "cancelBetweenHalvesNeverSplits",
         "combineOutputAmongHalves",
         "departedSibling",
-        "departedSiblingRemainderMoves",
         "fullGroupAdmitted",
         "fullGroupMoves",
         "hundredThousandRowsFiveThousandGroups",
-        "lateLinkedSiblingIsReported",
-        "laterHalfAliasSurvivorHoldsThePair",
+        "mixedSelection",
+        "mxfPair",
+        "oneMissingHoldsTheGroup",
+        "outcomeAndLedger",
+        "selectRelatedHalves",
+        "sheetWordsFromThePlan",
+        "siblingRefusedAloneHoldsTheGroup",
+        "threeHalvesOneMissing",
+        "unknownGroupsAreHeld"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashPairGroupIsolationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashPairGroupIsolationTests"
+      ],
+      "tests": [
+        "batchReservationIsAllOrNothing",
+        "cancelBetweenHalvesNeverSplits",
         "laterHalfBecameOnlyCopyHoldsThePair",
         "laterHalfCopyNotProvenHoldsThePair",
         "laterHalfMarkerRefusalHoldsTheGroup",
         "laterHalfOnReadOnlyDrive",
         "laterHalfReservedSurvivorHoldsThePair",
-        "laterHalvesNeverVouchForEachOther",
-        "liveIndexFollowsADecodedReload",
         "missingSiblingHoldsTheGroup",
-        "mixedSelection",
-        "mxfPair",
-        "oneMissingHoldsTheGroup",
-        "outcomeAndLedger",
         "relinkDoesNotHideASplit",
         "relinkedLaterHalfReportsItsCurrentLocation",
         "reservedLaterHalfHoldsTheGroup",
-        "restoredDepartedSiblingHoldsRemainder",
-        "reverseLinkAddedBeforeTurnHoldsHalf",
-        "reverseOnlySiblingNeverMoves",
         "reversePendingLinkIsFollowed",
         "secondHalfFailsIsASplit",
-        "selectRelatedHalves",
-        "sheetWordsFromThePlan",
         "siblingChangedInTheCatalog",
         "siblingChangedOnDisk",
         "siblingOfflineAtTheTurn",
         "siblingOnFamilyArchive",
-        "siblingRefusedAloneHoldsTheGroup",
-        "staleOrdinaryCopyIsHeld",
         "staleSelectedSiblingNeverMoves",
-        "staleUnpairedSelectionNeverMoves",
-        "threeHalvesOneMissing",
         "unconfirmedMembershipHoldsTheGroup",
-        "unconfirmedPairNeverMoves",
-        "unknownGroupsAreHeld"
+        "unconfirmedPairNeverMoves"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashPairGroupLiveCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashPairGroupLiveCatalogTests"
+      ],
+      "tests": [
+        "bothSelectedClonesHonorMarkerWriteHold",
+        "departedSiblingRemainderMoves",
+        "lateLinkedSiblingIsReported",
+        "laterHalfAliasSurvivorHoldsThePair",
+        "laterHalvesNeverVouchForEachOther",
+        "liveIndexFollowsADecodedReload",
+        "outwardLinkToUnpairedRowIsReported",
+        "restoredDepartedSiblingHoldsRemainder",
+        "reverseLinkAddedBeforeTurnHoldsHalf",
+        "reverseOnlySiblingNeverMoves",
+        "staleOrdinaryCopyIsHeld",
+        "staleUnpairedSelectionNeverMoves",
+        "unpairedDuringMoveIsReported"
       ]
     },
     {
@@ -33698,6 +33722,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogTrashPairGroupTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogTrashPairGroupIsolationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogTrashPairGroupLiveCatalogTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

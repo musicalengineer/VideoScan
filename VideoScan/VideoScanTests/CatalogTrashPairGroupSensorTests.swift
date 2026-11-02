@@ -95,8 +95,14 @@ struct CatalogTrashPairGroupSensorTests {
         for field in ["rec.pairGroupID", "rec.pairedWith", "rec.pendingPairedWithID", "rec.removal", "rec.isPurged", "rec.combinedFromPairID"] {
             #expect(!problem.contains(field), "the turn never reads \(field) from the selection's row")
         }
-        // Codex #195 F1: every row in a group in ANY link direction meets the gate.
         let groups = try SourceTree.appCode(named: "CatalogPairGroups.swift")
+        // Codex #201 F1: the settlement walks with THE SAME function phase 1 uses.
+        #expect(turns.contains("CatalogPairGroups.resolve(live, in: liveIndex(model))"), "phase 1's walk")
+        #expect(turns.contains("CatalogPairGroups.resolve(first, in: index, treatAsLive: Set(g.members))"), "the settlement's walk")
+        #expect(turns.components(separatedBy: "CatalogPairGroups.resolve(").count - 1 == 2, "no third walk")
+        #expect(plan.contains("groupTurns.changesDuringMove(g, moved: moved, model: self, index: afterMoves)"))
+        #expect(!plan.contains("linkedOutside") && !groups.contains("linkedOutside"), "the old one-sided settlement walk is gone")
+        // Codex #195 F1: every row in a group in ANY link direction meets the gate.
         #expect(groups.contains("for half in selection where index.isGroupMember(half)"))
         #expect(plan.contains("member: gate.seen.contains(rec.id)"), "a member the gate saw never falls through to ordinary")
     }

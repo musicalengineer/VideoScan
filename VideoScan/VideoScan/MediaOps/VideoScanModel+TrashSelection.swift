@@ -359,11 +359,13 @@ extension VideoScanModel {
         let afterMoves = groupTurns.groups.isEmpty ? nil : CatalogPairGroups.Index(catalog: self.records)
         let pairs = groupTurns.summary(plan: plan, alsoHeld: unconfirmedGroups, result: merged,
                                        currentPath: { [weak self] in self?.record(forID: $0)?.fullPath },
-                                       lateSiblings: { g in
-                                           afterMoves.map { CatalogPairGroups.linkedOutside(g, in: $0).map(\.filename) } ?? []
+                                       changes: { [weak self] g, moved in
+                                           guard let self, let afterMoves else { return [] }
+                                           return groupTurns.changesDuringMove(g, moved: moved, model: self, index: afterMoves)
                                        })
         for line in pairs.lines { log(line) }
         result.groupNotes = pairs.alertNotes
+        result.groupNeedsAttention = pairs.needsAttention
         // The plan's refusals, then OUTCOME (+ the pairs' counts) + the receipt.
         audit.finish(result, note: pairs.outcomeNote)
         result.receipt = audit.receipt.url

@@ -79,7 +79,9 @@ enum CatalogPairGroups {
         }
 
         nonisolated init(catalog: [VideoRecord]) {
+            var wanted: Set<UUID> = []
             for r in catalog where CatalogPairGroups.isHalf(r) {
+                for p in [r.pairedWith?.id, r.pendingPairedWithID].compactMap({ $0 }) { wanted.insert(p) }
                 if byID[r.id] == nil { byID[r.id] = r }
                 if let g = r.pairGroupID { byGroup[g, default: []].append(r) }
                 // Both link kinds, each on its own (Codex #191 F5): a half
@@ -88,6 +90,13 @@ enum CatalogPairGroups {
                     pointingAt[p, default: []].append(r)
                     if !r.isPurged { linkedFromLive.insert(p) }
                 }
+            }
+            // A row a half links to is found by the walk even with no pair
+            // field of its own (it then makes the group one-sided: unknown) —
+            // so an outward link names its target (Codex #201 F1).
+            wanted.subtract(byID.keys)
+            if !wanted.isEmpty {
+                for r in catalog where wanted.contains(r.id) && byID[r.id] == nil { byID[r.id] = r }
             }
         }
     }
@@ -112,7 +121,10 @@ enum CatalogPairGroups {
     nonisolated static let maxMembers = 16
 
     /// Follow every link from `start` to a fixed point (breadth first).
-    nonisolated static func resolve(_ start: VideoRecord, in index: Index) -> Resolution {
+    /// `treatAsLive`: rows counted as members even when removed now (the
+    /// settlement walks a moved pair from its own, now In-the-Trash, rows).
+    nonisolated static func resolve(_ start: VideoRecord, in index: Index,
+                                    treatAsLive: Set<UUID> = []) -> Resolution {
         var out = Resolution()
         var seen: Set<UUID> = [start.id]
         // The catalog's own row for the start when it has one (a selected
@@ -121,7 +133,7 @@ enum CatalogPairGroups {
         var head = 0
         while head < queue.count {
             let r = queue[head]; head += 1
-            if r.isPurged {
+            if r.isPurged && !treatAsLive.contains(r.id) {
                 switch r.removal?.state {
                 case .inTrash?, .removedFromCatalog?: out.departed.append(r.filename); out.departedIDs.append(r.id)
                 default: out.missingOnDisk.append(r.filename)
@@ -161,6 +173,10 @@ enum CatalogPairGroups {
         let pairGroupIDs: [UUID?]
         /// Each member's device + inode + size + mtime at plan time.
         let identities: [PairHalfIdentity]
+        /// Each member's object and pending links at plan time — the
+        /// settlement compares them with the live rows (Codex #201 F2).
+        var pairedWithIDs: [UUID?] = []
+        var pendingIDs: [UUID?] = []
         /// Siblings already removed from the catalog.
         let departed: [String]
         /// Their ids — a member's lingering link to one is not a change
@@ -255,28 +271,11 @@ enum CatalogPairGroups {
             out.admitted.append(Group(
                 key: half.pairGroupID ?? half.id, members: picked.map(\.id), filenames: names,
                 paths: picked.map(\.fullPath), pairGroupIDs: picked.map(\.pairGroupID),
-                identities: ids.compactMap { $0 }, departed: res.departed, departedIDs: res.departedIDs))
+                identities: ids.compactMap { $0 },
+                pairedWithIDs: picked.map { $0.pairedWith?.id }, pendingIDs: picked.map(\.pendingPairedWithID),
+                departed: res.departed, departedIDs: res.departedIDs))
         }
         return out
-    }
-
-    /// Live rows linked to `g` from OUTSIDE its members, in any direction
-    /// (same pairGroupID, a link to a member, a member's link to it) — after
-    /// the unit's moves, a sibling linked, restored or added while its
-    /// off-main disk work ran (DECISIONS 2026-11-01 contract). O(group).
-    nonisolated static func linkedOutside(_ g: Group, in index: Index) -> [VideoRecord] {
-        let members = Set(g.members)
-        var found: [UUID: VideoRecord] = [:]
-        var candidates = g.members.flatMap { index.pointingAt[$0] ?? [] }
-        candidates += g.pairGroupIDs.compactMap { $0 }.flatMap { index.byGroup[$0] ?? [] }
-        for m in g.members {
-            guard let row = index.byID[m] else { continue }
-            for link in [row.pairedWith?.id, row.pendingPairedWithID].compactMap({ $0 }) {
-                if let r = index.byID[link] { candidates.append(r) }
-            }
-        }
-        for r in candidates where !members.contains(r.id) && !r.isPurged { found[r.id] = r }
-        return found.values.sorted { $0.filename < $1.filename }
     }
 
     /// "a.mxf" · "a.mxf and b.mxf" · "a.mxf, b.mxf and c.mxf".

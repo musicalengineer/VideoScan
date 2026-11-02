@@ -26,8 +26,17 @@ struct JunkDeletionReport {
     /// EVERY file that did not move, in request order — never truncated.
     let lines: [Line]
     /// A SPLIT pair is a note even when every listed file "moved".
-    var hasNotes: Bool { !lines.isEmpty || splitPair }
-    private let splitPair: Bool
+    /// Every settlement warning is surfaced, whatever the headline (Codex
+    /// #201 F3): a SPLIT or a change during the move shows the alert even
+    /// when every file moved.
+    var hasNotes: Bool { !lines.isEmpty || groupNeedsAttention }
+    /// The alert's title — from the result, never the reverse.
+    var headline: String {
+        lines.isEmpty && groupNeedsAttention
+            ? "Move to Trash \u{2014} the catalog changed during the move"
+            : "Move to Trash \u{2014} some files stayed"
+    }
+    private let groupNeedsAttention: Bool
 
     init(_ result: VideoScanModel.JunkDeletionResult) {
         var lines: [Line] = []
@@ -39,7 +48,7 @@ struct JunkDeletionReport {
         self.movedCount = result.succeeded
         self.bytesMoved = result.bytesMoved
         self.summary = Self.summary(result)
-        self.splitPair = result.groupNotes.contains { $0.hasPrefix("Split pair:") }
+        self.groupNeedsAttention = result.groupNeedsAttention
     }
 
     /// Why one file did not move; nil when it moved.

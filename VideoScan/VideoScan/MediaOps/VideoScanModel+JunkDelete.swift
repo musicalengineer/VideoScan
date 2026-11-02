@@ -85,6 +85,9 @@ extension VideoScanModel {
         /// pairs: how many moved whole, and any SPLIT pair with where each
         /// half is). Shown in the result alert; empty from the bare engine.
         var groupNotes: [String] = []
+        /// A group note the person must see even when every file moved (a
+        /// SPLIT, a change during the move) — the alert is never skipped.
+        var groupNeedsAttention = false
 
         init(items: [Item], receipt: URL? = nil) {
             self.items = items

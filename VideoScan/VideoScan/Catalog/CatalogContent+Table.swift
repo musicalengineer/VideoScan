@@ -625,7 +625,7 @@ extension CatalogContent {
         let report = JunkDeletionReport(result)
         guard report.hasNotes else { return }
         let alert = NSAlert()
-        alert.messageText = "Move to Trash \u{2014} some files stayed"
+        alert.messageText = report.headline
         alert.informativeText = report.summary.joined(separator: "\n")
         alert.alertStyle = result.failed.isEmpty ? .informational : .warning
         alert.accessoryView = Self.reportListView(report.linesText)

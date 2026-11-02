@@ -116,6 +116,52 @@ final class CatalogTrashGroupTurns {
         groups.indices.filter { stopped[$0] == nil }.map { groups[$0] }
     }
 
+    /// What changed in the catalog about `g` while its off-main disk work
+    /// ran (DECISIONS 2026-11-01 contract) — the settlement's question,
+    /// asked after the moves. Every member's FULL live state against the
+    /// confirmed snapshot (path, pairGroupID, object and pending links, the
+    /// removal marker the move should have left), then THE SAME walk phase 1
+    /// uses (`CatalogPairGroups.resolve`, every link direction, the moved
+    /// rows counted as members) to find a sibling linked, restored or added.
+    /// Empty = nothing changed. Sentences, for the alert.
+    func changesDuringMove(_ g: CatalogPairGroups.Group, moved: Set<UUID>, model: VideoScanModel,
+                           index: CatalogPairGroups.Index) -> [String] {
+        var out: [String] = []
+        var first: VideoRecord?
+        for k in g.members.indices {
+            let name = g.filenames[k]
+            guard let live = model.record(forID: g.members[k]) else { out.append("\(name) left the catalog"); continue }
+            if first == nil { first = live }
+            out += Self.drift(of: live, from: g, at: k, moved: moved.contains(g.members[k]))
+        }
+        if let first {
+            let now = CatalogPairGroups.resolve(first, in: index, treatAsLive: Set(g.members))
+            let joined = now.members.filter { !g.members.contains($0.id) }.map(\.filename)
+            for j in joined { out.append("\(j) was linked during the move") }
+            if !now.missingOnDisk.isEmpty { out.append("\(CatalogPairGroups.list(now.missingOnDisk)) was linked during the move") }
+            if now.unknown && joined.isEmpty && now.members.count > 1 {
+                out.append("a link the catalog can't follow was added")
+            }
+        }
+        return out
+    }
+
+    /// One member's live state against the confirmed snapshot: its path,
+    /// its pair links, and the removal marker the move should have left.
+    /// Sentences for what differs; empty = unchanged.
+    nonisolated static func drift(of live: VideoRecord, from g: CatalogPairGroups.Group, at k: Int,
+                                  moved: Bool) -> [String] {
+        let name = g.filenames[k]
+        var out: [String] = []
+        if live.fullPath != g.paths[k] { out.append("\(name) was relinked to another path") }
+        let links = (live.pairGroupID, live.pairedWith?.id, live.pendingPairedWithID)
+        let confirmed = (g.pairGroupIDs[k], k < g.pairedWithIDs.count ? g.pairedWithIDs[k] : links.1,
+                         k < g.pendingIDs.count ? g.pendingIDs[k] : links.2)
+        if links != confirmed { out.append("\(name)'s pair link was changed") }
+        if live.removal?.state != (moved ? .inTrash : nil) { out.append("\(name)'s catalog state was changed") }
+        return out
+    }
+
     private func stop(_ gi: Int, _ why: String) -> String {
         stopped[gi] = why
         return CatalogPairGroups.groupHeldNote(why) + " — nothing moved"
@@ -152,15 +198,17 @@ final class CatalogTrashGroupTurns {
         var failed: [CatalogPairGroups.HeldGroup] = []
         /// Some halves moved, some did not: each line says where each file is.
         var split: [String] = []
-        /// Moved, but a sibling was linked, restored or added while the
-        /// unit's disk work ran (DECISIONS 2026-11-01): never plain success.
+        /// Moved, but the catalog changed about the pair while the unit's
+        /// disk work ran (DECISIONS 2026-11-01): never plain success.
         var lateLinked: [String] = []
+        /// Anything the person must look at (a SPLIT or a change during the move).
+        var needsAttention: Bool { !split.isEmpty || !lateLinked.isEmpty }
         var isEmpty: Bool { moved.isEmpty && held.isEmpty && failed.isEmpty && split.isEmpty && lateLinked.isEmpty }
 
         /// "pair groups: moved 1 · held 1 · failed 0 · split 0 · linked during the move 0"
         var counts: String {
             "pair groups: moved \(moved.count) · held \(held.count) · failed \(failed.count) · split \(split.count)"
-                + " · linked during the move \(lateLinked.count)"
+                + " · changed during the move \(lateLinked.count)"
         }
 
         /// The result alert's line: "Recovered A/V pairs: 1 moved whole, 1 kept."
@@ -169,13 +217,13 @@ final class CatalogTrashGroupTurns {
             if !held.isEmpty { parts.append("\(held.count) kept") }
             if !failed.isEmpty { parts.append("\(failed.count) could not be moved") }
             if !split.isEmpty { parts.append("\(split.count) SPLIT — see below") }
-            if !lateLinked.isEmpty { parts.append("\(lateLinked.count) moved while a half was linked to it — see below") }
+            if !lateLinked.isEmpty { parts.append("\(lateLinked.count) moved while the catalog changed about it — see below") }
             return "Recovered A/V pairs: " + parts.joined(separator: ", ") + "."
         }
 
         /// The result alert's lines (empty when no pair was involved).
         var alertNotes: [String] {
-            isEmpty ? [] : [alertCounts] + split.map { "Split pair: " + $0 } + lateLinked.map { "Linked during the move: " + $0 }
+            isEmpty ? [] : [alertCounts] + split.map { "Split pair: " + $0 } + lateLinked.map { "Changed during the move: " + $0 }
         }
 
         /// The OUTCOME line's addition (nil when no pair was involved).
@@ -199,7 +247,7 @@ final class CatalogTrashGroupTurns {
     func summary(plan: VideoScanModel.CatalogTrashPlan, alsoHeld: [CatalogPairGroups.Group] = [],
                  result: VideoScanModel.JunkDeletionResult,
                  currentPath: (UUID) -> String? = { _ in nil },
-                 lateSiblings: (CatalogPairGroups.Group) -> [String] = { _ in [] }) -> Summary {
+                 changes: (CatalogPairGroups.Group, Set<UUID>) -> [String] = { _, _ in [] }) -> Summary {
         // A confirmed pair the plan now holds is summarised once, below,
         // from its members' outcomes.
         let confirmedIDs = Set(groups.flatMap(\.members))
@@ -211,11 +259,12 @@ final class CatalogTrashGroupTurns {
         for g in groups {
             let outs = g.members.map { outcome[$0] }
             let movedIdx = outs.indices.filter { outs[$0]?.isMoved == true }
-            let late = movedIdx.isEmpty ? [] : lateSiblings(g)
+            let late = movedIdx.isEmpty ? [] : changes(g, Set(movedIdx.map { g.members[$0] }))
             if movedIdx.count == g.members.count {
                 if late.isEmpty { s.moved.append(g.filenames); continue }
-                s.lateLinked.append("\(CatalogPairGroups.list(g.filenames)) moved to the Trash, but \(CatalogPairGroups.list(late)) "
-                                    + "was linked during the move — it keeps its pair protection; check it (Show Removed ▸ Restore puts the pair back)")
+                s.lateLinked.append("\(CatalogPairGroups.list(g.filenames)) moved to the Trash, but the catalog changed during the move: "
+                                    + late.joined(separator: "; ")
+                                    + " — a linked file keeps its pair protection; check it (Show Removed ▸ Restore puts the pair back)")
                 continue
             }
             guard let firstStay = outs.indices.first(where: { outs[$0]?.isMoved != true }) else { continue }
@@ -234,7 +283,7 @@ final class CatalogTrashGroupTurns {
             let stayed = outs.indices.filter { outs[$0]?.isMoved != true }.map { i in
                 "\(g.filenames[i]) \(Self.location(planned: g.paths[i], now: currentPath(g.members[i]))) (\(outs[i].map { Self.words($0) } ?? "not reached"))"
             }
-            let lateNote = late.isEmpty ? "" : "; \(CatalogPairGroups.list(late)) was linked during the move and keeps its pair protection"
+            let lateNote = late.isEmpty ? "" : "; the catalog changed during the move: " + late.joined(separator: "; ")
             s.split.append((movedText + stayed).joined(separator: "; ") + lateNote
                            + " — put the moved half back (Show Removed ▸ Restore) or move the rest again.")
         }
