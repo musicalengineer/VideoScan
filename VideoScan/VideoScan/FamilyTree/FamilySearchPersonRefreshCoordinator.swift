@@ -190,7 +190,8 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
                 toolURL: toolURL, familySearchID: target.familySearchID, outputURL: output)
             let script = FamilySearchPersonRefreshScript(
                 command: command, personName: target.personName,
-                scriptURL: folder.appendingPathComponent(PersonRefreshPaths.scriptFileName))
+                scriptURL: folder.appendingPathComponent(PersonRefreshPaths.scriptFileName),
+                workingDirectory: output.deletingLastPathComponent())
             // The script, the scratch folder AND the spawn are inside the
             // primitive; the spawned tool's only output path is `output`,
             // in scratch (#196 F3).
@@ -627,10 +628,13 @@ final class PersonRefreshCenter: ObservableObject {
     /// which is cancelled and logged).
     @discardableResult
     func begin(target: PersonRefreshCoordinator.Target,
-               installedFacts: @escaping @MainActor () -> PersonFacts?) -> PersonRefreshCoordinator {
+               installedFacts: @escaping @MainActor () -> PersonFacts?,
+               writeMode: (@Sendable () -> FamilyTreeAccessMode)? = nil) -> PersonRefreshCoordinator {
         coordinator?.cancel()
         notice = nil
         let fresh = makeCoordinator(target, installedFacts, sink)
+        // The presenting model's authority, when it gave one (#198 F2).
+        if let writeMode { fresh.writeMode = writeMode }
         coordinator = fresh
         phaseSubscription = fresh.$phase.sink { [weak self] _ in
             // `$phase` fires on willSet; defer the bump to after the set.

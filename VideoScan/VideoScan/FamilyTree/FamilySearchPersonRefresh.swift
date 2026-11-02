@@ -146,6 +146,11 @@ struct FamilySearchPersonRefreshScript {
     let command: FamilySearchPersonRefreshCommand
     let personName: String
     let scriptURL: URL
+    /// Where the tool runs: the answer's scratch folder (codex #198 F1).
+    var workingDirectory: URL? = nil
+    private var changeDirectory: String {
+        workingDirectory.map { "cd \(FamilySearchPullCommand.quoted($0.path)) || exit 1\n" } ?? ""
+    }
 
     var contents: String {
         let line = command.displayLine
@@ -169,7 +174,7 @@ struct FamilySearchPersonRefreshScript {
         read -r confirm
         printf '\\n'
 
-        \(line)
+        \(changeDirectory)\(line)
         exit_status=$?
 
         printf '\\n'

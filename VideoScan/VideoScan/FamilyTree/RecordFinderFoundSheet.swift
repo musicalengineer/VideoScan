@@ -31,6 +31,8 @@ struct RecordFinderFoundTarget: Identifiable {
 struct RecordFinderFoundSheet: View {
     let target: RecordFinderFoundTarget
     let speakerName: String
+    /// The presenting model's authority (a supplier, codex #198 F2).
+    let writeAuthority: () -> FamilyTreeWriteAuthority
     let record: (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)?
     let onFiled: (RecordFilingOutcome) -> Void
     let onCancel: () -> Void
@@ -229,12 +231,16 @@ struct RecordFinderFoundSheet: View {
         // A LIVE store: every write re-reads the published authority, so a
         // revocation while this runs refuses the write (codex #190 F2).
         let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
+        let authority = writeAuthority()
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> RecordFilingOutcome in
-                let filer = RecordFinderFiler(
+                var research = ResearchStore(peopleRoot: store.peopleDirectory)
+                research.writeMode = { authority.mode }
+                var filer = RecordFinderFiler(
                     assetStore: store, assetPerson: person,
-                    researchStore: ResearchStore(peopleRoot: store.peopleDirectory),
+                    researchStore: research,
                     subject: subject, speakerName: speaker, record: record)
+                filer.writeMode = { authority.mode }
                 return await filer.file(submission)
             }.value
             isFiling = false

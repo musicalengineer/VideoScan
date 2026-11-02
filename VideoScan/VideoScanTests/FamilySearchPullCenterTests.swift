@@ -71,6 +71,10 @@ final class FamilySearchPullCenterTests: XCTestCase {
                     launcher: SilentLauncher(),
                     pollInterval: .milliseconds(30))
                 coordinator.request.outputURL = sandbox.outputURL
+                // The test plays the tool by writing the chosen output, so
+                // the scratch IS that folder (codex #198: production scratch
+                // is the system temp folder, published through the permit).
+                coordinator.answerScratchRoot = sandbox.outputURL.deletingLastPathComponent()
                 return coordinator
             },
             notify: { [weak self] title, body in

@@ -71,6 +71,10 @@ final class FamilySearchPullLifecycleTests: XCTestCase {
                     pollInterval: Self.pollInterval,
                     parseDelay: parseDelay)
                 coordinator.request.outputURL = outputURL
+                // The test plays the tool by writing the chosen output, so
+                // the scratch IS that folder (codex #198: production scratch
+                // is the system temp folder, published through the permit).
+                coordinator.answerScratchRoot = outputURL.deletingLastPathComponent()
                 return coordinator
             },
             notify: { [weak self] title, body in

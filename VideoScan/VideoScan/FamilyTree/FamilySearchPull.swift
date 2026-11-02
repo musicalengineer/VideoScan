@@ -272,6 +272,13 @@ struct FamilySearchPullCommand: Equatable {
 struct FamilySearchPullScript {
     let command: FamilySearchPullCommand
     let scriptURL: URL
+    /// Where the tool runs (codex #198 F1): the run's scratch folder, so
+    /// anything it writes beside itself lands there, never in Terminal's
+    /// home or a family-data folder. Nil = Terminal's own directory.
+    var workingDirectory: URL? = nil
+    private var changeDirectory: String {
+        workingDirectory.map { "cd \(FamilySearchPullCommand.quoted($0.path)) || exit 1\n" } ?? ""
+    }
 
     /// Note the deliberate pause. The user asked to see the command and
     /// approve it before anything runs (Rick 2026-08-25: "we see it we
@@ -300,7 +307,7 @@ struct FamilySearchPullScript {
         read -r confirm
         printf '\\n'
 
-        \(line)
+        \(changeDirectory)\(line)
         # NOT `status` — that name is read-only in zsh and the assignment
         # aborts the script before the tool ever runs.
         exit_status=$?

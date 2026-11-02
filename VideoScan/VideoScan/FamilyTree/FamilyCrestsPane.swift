@@ -13,6 +13,8 @@ struct FamilyCrestsPane: View {
     /// A SUPPLIER, never a stored store (codex #196 F2): each use takes the
     /// store as it is now.
     let makeStore: () -> FamilyAssetStore
+    /// The presenting model's authority (a supplier, codex #198 F2).
+    let writeAuthority: () -> FamilyTreeWriteAuthority
     private var store: FamilyAssetStore { makeStore() }
 
     /// The store the tab hands this pane (the writer behind Add crest). A
@@ -95,7 +97,7 @@ struct FamilyCrestsPane: View {
         do {
             // After the modal picker: asked now, with a LIVE store (#196 F2).
             let store = makeStore()
-            _ = try FamilyTreeWriteAuthority.process.withWrite(.crest, path: "FamilyCrestsPane.importCrest") {
+            _ = try writeAuthority().withWrite(.crest, path: "FamilyCrestsPane.importCrest") {
                 try store.importCrest(from: source, surname: surname)
             }
             surname = ""

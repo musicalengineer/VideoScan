@@ -94,14 +94,32 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         return out
     }
 
-    /// Rules (a), (b), (c) of codex #196, per file.
+    /// codex #198 F2: the ONLY places a process-level authority may open a
+    /// write — every save a Family Tree view starts runs under the
+    /// presenting MODEL's `writeAuthority`. Each entry names why.
+    static let processAuthoritySites: [String: String] = [
+        "FamilyAssetStore.swift:outcome": "the shared graph cache (Hallie, the launch prewarm, the People tab): no model owns it",
+        "CouplePortrait.swift:saveCaption": "the couple portrait is a per-user preference shown outside the tree tab too; no model",
+        "CouplePortrait.swift:importPhoto": "the couple portrait is a per-user preference shown outside the tree tab too; no model",
+        "CouplePortrait.swift:remove": "the couple portrait is a per-user preference shown outside the tree tab too; no model",
+    ]
+
+    /// Rules (a), (b), (c) of codex #196 and (d) of #198, per file.
     static func structuralViolations(name: String, scanned: Scanned, delegated: NSRegularExpression,
                                      spawn: NSRegularExpression) -> [String] {
         var out: [String] = []
         let isStoreFile = name.hasPrefix("FamilyAssetStore")
+        let declaresView = scanned.lines.contains { $0.range(of: #"\bstruct\s+\w+[^{]*:\s*[^{]*\bView\b"#, options: .regularExpression) != nil }
         for (i, line) in scanned.lines.enumerated() where !line.contains("func ") {
             let key = "\(name):\(scanned.owner[i])"
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // (d) codex #198: a view's write must bind the MODEL's authority.
+            let processLevel = line.contains("FamilyTreeWriteAuthority.process")
+                || (declaresView && line.contains("FamilyTreeAccessMode.withWrite("))
+            if processLevel, name != "FamilyTreeWriteGate.swift", processAuthoritySites[key] == nil {
+                out.append("\(key) line \(i + 1): `\(trimmed)` opens a write on a process-level authority — "
+                           + "pass the presenting model's writeAuthority (or list the site with its reason)")
+            }
             if scanned.inWrite[i], line.range(of: #"\bawait\b"#, options: .regularExpression) != nil {
                 out.append("\(key) line \(i + 1): `await` inside withWrite — the authority must be asked after the wait")
             }
@@ -299,13 +317,22 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
                 }
             }
         }
+        """#
+        let pane = #"""
         struct PlantedPane: View {
             let store: FamilyAssetStore
             let makeStore: () -> FamilyAssetStore
+            let writeAuthority: () -> FamilyTreeWriteAuthority
             var body: some View { EmptyView() }
+            func saveOnProcess() throws {
+                try FamilyTreeWriteAuthority.process.withWrite(.photo, path: "p") { try data.write(to: url) }
+            }
+            func saveOnModel() throws {
+                try writeAuthority().withWrite(.photo, path: "p") { try data.write(to: url) }
+            }
         }
         """#
-        let problems = try Self.violations(in: [("Planted.swift", planted)], exempt: [:])
+        let problems = try Self.violations(in: [("Planted.swift", planted), ("PlantedPane.swift", pane)], exempt: [:])
         #expect(problems.contains { $0.hasPrefix("Planted.swift:awaitInside") && $0.contains("await") }, "\(problems)")
         #expect(problems.contains { $0.hasPrefix("Planted.swift:checkThenDelegate") }, "\(problems)")
         #expect(!problems.contains { $0.hasPrefix("Planted.swift:delegateInside") }, "\(problems)")
@@ -313,6 +340,9 @@ struct FamilyTreeReadOnlyWriteSiteSensorTests {
         #expect(!problems.contains { $0.hasPrefix("Planted.swift:spawnDeclared") }, "\(problems)")
         #expect(problems.contains { $0.contains("let store: FamilyAssetStore") }, "\(problems)")
         #expect(!problems.contains { $0.contains("makeStore") }, "\(problems)")
+        #expect(problems.contains { $0.hasPrefix("PlantedPane.swift:saveOnProcess") && $0.contains("process-level") },
+                "\(problems)")
+        #expect(!problems.contains { $0.hasPrefix("PlantedPane.swift:saveOnModel") }, "\(problems)")
     }
 
     // MARK: Scanner

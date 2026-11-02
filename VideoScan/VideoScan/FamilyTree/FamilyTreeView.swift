@@ -321,9 +321,10 @@ struct FamilyTreeView: View, Equatable {
         guard let target = model.personRefreshTarget(for: personID) else { return }
         let model = self.model
         autoPresentedRefreshID = nil
+        let authority = model.writeAuthority
         refreshCenter.begin(target: target, installedFacts: {
             model.personFacts(familySearchID: target.familySearchID)
-        })
+        }, writeMode: { authority.mode })
     }
 
     private func undoPersonRefresh(_ target: PersonRefreshCoordinator.Target) {
@@ -489,10 +490,7 @@ struct FamilyTreeView: View, Equatable {
                         model.setPhotoOverride(cropped, for: source.personID)
                         appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
                         do {
-                            try FamilyTreeWriteAuthority.process.withWrite(.photo, path: "Adjust Photo (record choice)") {
-                                try source.store.recordPhotoChoice(
-                                    url, for: source.assetPerson, source: PersonPhotoChoiceSource.treeAdjust)
-                            }
+                            try FamilyPhotoAdjustSheet.recordChoice(url, source: source)
                             model.notePhotoChoiceWritten()
                             adjustError = nil
                         } catch {
@@ -625,7 +623,8 @@ struct FamilyTreeView: View, Equatable {
     /// coordinator — the sheet reopens onto it.
     private func presentGetFamilyTree() {
         guard model.isEnabled(.familySearchPull) else { return }
-        pullCenter.begin(gedcomDirectory: model.originalsDirectory)
+        let authority = model.writeAuthority
+        pullCenter.begin(gedcomDirectory: model.originalsDirectory, writeMode: { authority.mode })
         showPullSheet = true
     }
 
@@ -2139,13 +2138,15 @@ struct FamilyTreeView: View, Equatable {
         // A LIVE store: every write re-reads the published authority, so a
         // revocation while this runs refuses the write (codex #190 F2).
         let store = FamilyAssetConfigurationCenter.shared.makeLiveStore()
+        // The MODEL's authority, live, carried into the detached write (#198 F2).
+        let authority = model.writeAuthority
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
                 guard let data = CropRenderer.jpegData(image, quality: 0.92) else {
                     return .failure(FamilyAssetStore.StoreError.sourceIsNotARegularImage(store.peopleDirectory))
                 }
                 do {
-                    return .success(try FamilyTreeWriteAuthority.process.withWrite(.photo, path: "Pick a photo (choose)") {
+                    return .success(try authority.withWrite(.photo, path: "Pick a photo (choose)") {
                         try store.choosePhoto(data, fileExtension: "jpg", for: assetPerson, source: source)
                     })
                 } catch {
@@ -2195,7 +2196,7 @@ struct FamilyTreeView: View, Equatable {
             adjustSource = FamilyPhotoAdjustSource(
                 personID: person.id, personName: person.name,
                 assetPerson: assetPerson, image: image, originalURL: originalURL,
-                makeStore: { store })
+                makeStore: { store }, writeAuthority: { [model = self.model] in model.writeAuthority })
         }
     }
 
@@ -2239,7 +2240,8 @@ struct FamilyTreeView: View, Equatable {
 
     @ViewBuilder private var crestsPaneIfReadable: some View {
         if model.accessMode.allowsWrites {
-            FamilyCrestsPane(makeStore: { FamilyCrestsPane.writerStore() })
+            FamilyCrestsPane(makeStore: { FamilyCrestsPane.writerStore() },
+                             writeAuthority: { [model = self.model] in model.writeAuthority })
                 .padding(14)
                 .background(panelBackground)
         }
@@ -2277,6 +2279,7 @@ struct FamilyTreeView: View, Equatable {
     private func documentAddSheet(_ target: FamilyDocumentAddTarget) -> some View {
         FamilyDocumentAddSheet(
             target: target,
+            writeAuthority: { [model = self.model] in model.writeAuthority },
             onAdded: { _ in
                 documentsError = nil
                 model.noteDocumentsChanged(for: target.id)
@@ -2294,6 +2297,7 @@ struct FamilyTreeView: View, Equatable {
         RecordFinderFoundSheet(
             target: target,
             speakerName: model.noteAuthor,
+            writeAuthority: { [model = self.model] in model.writeAuthority },
             record: model.cyberBrainRecorder(),
             onFiled: { outcome in
                 model.noteDocumentsChanged(for: target.id)

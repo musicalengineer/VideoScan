@@ -15383,6 +15383,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyClosing4Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyClosing4Tests"
+      ],
+      "tests": [
+        "aPullToolThatWritesAfterRevocationLandsNothingOutsideThePermit",
+        "anOpenAdjustSheetRefusesAfterOnlyItsModelIsRevoked"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyIsolationTests.swift",
       "stage": "unit",
       "suites": [
@@ -35478,7 +35490,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3203,
+      "expected_floor": 3205,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35790,6 +35802,7 @@
         "VideoScanTests/FamilyTreeReadOnlyClosingTests",
         "VideoScanTests/FamilyTreeReadOnlyClosing2Tests",
         "VideoScanTests/FamilyTreeReadOnlyClosing3Tests",
+        "VideoScanTests/FamilyTreeReadOnlyClosing4Tests",
         "VideoScanTests/FamilyTreeReadOnlyDocumentTransitionTests",
         "VideoScanTests/FamilyTreeReadOnlyInFlightTests",
         "VideoScanTests/FamilyTreeReadOnlyIsolationTests",

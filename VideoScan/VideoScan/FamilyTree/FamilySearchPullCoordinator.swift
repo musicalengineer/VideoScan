@@ -79,6 +79,14 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// install and merge is refused in it — the GEDCOM folder is on the
     /// absent archive. Read at each use; tests inject.
     var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+    /// Where the spawned tool writes — its `-o` AND its working directory
+    /// (codex #198 F1): a scratch folder OUTSIDE every family-data location
+    /// and outside the user's chosen output folder. The finished export is
+    /// PUBLISHED to `request.outputURL` through the primitive. Tests that
+    /// simulate the tool by writing the chosen output set this to that
+    /// folder (then nothing needs publishing).
+    var answerScratchRoot: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("VideoScan-family-pull-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
     /// Where a merge is written BEFORE it is activated. Injected so tests
     /// stage under their own temp root; production: App Support
     /// family-tree/staging/. Nothing here is ever read by the loader.
@@ -206,7 +214,11 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             guard let toolURL = locator.locate() else {
                 throw FamilySearchPullError.toolNotFound
             }
-            let command = try FamilySearchPullCommand(toolURL: toolURL, request: request)
+            // The tool's -o and cwd: scratch (#198 F1).
+            let scratch = answerScratchRoot.appendingPathComponent(request.outputURL.lastPathComponent)
+            var toolRequest = request
+            toolRequest.outputURL = scratch
+            let command = try FamilySearchPullCommand(toolURL: toolURL, request: toolRequest)
             let outputDirectory = request.outputURL.deletingLastPathComponent()
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: outputDirectory.path,
@@ -216,14 +228,17 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             }
 
             previewLine = command.displayLine
-            let script = FamilySearchPullScript(command: command, scriptURL: scriptURL)
-            // The script AND the spawn are inside the primitive; the spawned
-            // tool's only output is request.outputURL, in the user's Downloads
-            // (not family data); the archive install is a separate write.
+            let script = FamilySearchPullScript(command: command, scriptURL: scriptURL,
+                                                workingDirectory: scratch.deletingLastPathComponent())
+            // The script, the scratch folder AND the spawn are inside the
+            // primitive; the spawned tool's -o and its working directory are
+            // the scratch folder; the chosen output and the archive install
+            // are later, separate writes through the permit (#198 F1).
             let workspace = self.workspace, scriptURL = self.scriptURL
             try FamilyTreeAccessMode.withWrite(.familySearchPull,
-                                               path: "FamilySearchPull.launch (script + spawn → \(request.outputURL.lastPathComponent) in Downloads)",
+                                               path: "FamilySearchPull.launch (script + spawn → \(scratch.lastPathComponent) in scratch)",
                                                mode: writeMode) {
+                try fileManager.createDirectory(at: scratch.deletingLastPathComponent(), withIntermediateDirectories: true)
                 _ = try script.write(fileManager: fileManager)
                 workspace.open(scriptURL)
             }
@@ -231,8 +246,8 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
             launchDate = Date()
             startedAt = launchDate
             quietSince = nil
-            phase = .waiting(output: request.outputURL)
-            startWatching(output: request.outputURL)
+            phase = .waiting(output: scratch)
+            startWatching(output: scratch)
         } catch let error as FamilySearchPullError {
             phase = .failed(message: error.localizedDescription)
         } catch {
@@ -320,7 +335,15 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
                 // the middle of a big write means "finished".
                 if size > 0, await Self.hasGedcomTrailer(at: output) {
                     self.quietSince = nil
-                    self.beginParse(output: output)
+                    // Published to the chosen output through the permit;
+                    // refused once revoked (#198 F1).
+                    do {
+                        self.beginParse(output: try self.publishPull(output))
+                    } catch {
+                        let mode = self.writeMode()
+                        self.phase = .failed(message: FamilyTreeWriteGate.refusalText(.familySearchPull, mode: mode)
+                            ?? "Could not keep \(output.lastPathComponent): \(error.localizedDescription)")
+                    }
                     return
                 }
                 if size > 0, size == lastSize {
@@ -407,6 +430,29 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Start (or restart) the parse. Only the newest generation may
     /// publish; anything older that is still running is cancelled and, if
     /// it cannot observe that, its result is dropped on return.
+    /// Copy the finished export from scratch to the chosen output, inside the
+    /// primitive. Same place (a test simulating the tool there) = nothing to
+    /// publish.
+    private func publishPull(_ scratch: URL) throws -> URL {
+        let destination = request.outputURL
+        guard scratch.standardizedFileURL.resolvingSymlinksInPath()
+                != destination.standardizedFileURL.resolvingSymlinksInPath() else { return scratch }
+        let fm = fileManager
+        try FamilyTreeAccessMode.withWrite(.familySearchPull,
+                                           path: "FamilySearchPull.publish (\(destination.lastPathComponent))",
+                                           mode: writeMode) {
+            let partial = destination.appendingPathExtension("partial")
+            try? fm.removeItem(at: partial)
+            try fm.copyItem(at: scratch, to: partial)
+            if fm.fileExists(atPath: destination.path) {
+                _ = try fm.replaceItemAt(destination, withItemAt: partial)
+            } else {
+                try fm.moveItem(at: partial, to: destination)
+            }
+        }
+        return destination
+    }
+
     private func beginParse(output: URL) {
         parseTask?.cancel()
         parseGeneration &+= 1
