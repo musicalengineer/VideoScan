@@ -243,12 +243,12 @@ struct VerifyCatalogConstraintTests {
         let g = CatalogConstraints.short(group)
         let alike = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
         #expect(alike.count == 1, "formed on likeness alone, still not copies")
-        #expect(alike.first?.words == "duplicate group \(g): formed on likeness alone (similar footage, not copies), but its members carry 2 different whole-file digests — Split Duplicate Groups by Full Hash settles it")
+        #expect(alike.first?.words == "duplicate group \(g): formed on likeness alone (similar footage, not copies), but its members carry 2 different whole-file digests — Catalog ▸ Tidy Catalog… ▸ Split Duplicate Groups by Full Hash settles it")
         p.duplicateReasons = "hash+duration"
         let red = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
         #expect(red.count == 1)
         #expect(red.first?.recordID == p.id)
-        #expect(red.first?.words == "duplicate group \(g): formed on a sampled-hash match, but its members carry 2 different whole-file digests — Split Duplicate Groups by Full Hash settles it")
+        #expect(red.first?.words == "duplicate group \(g): formed on a sampled-hash match, but its members carry 2 different whole-file digests — Catalog ▸ Tidy Catalog… ▸ Split Duplicate Groups by Full Hash settles it")
         #expect(red.first?.needsDecision == true)
         q.fullDigest = sha.uppercased()
         #expect(CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }.isEmpty)
