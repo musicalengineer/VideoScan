@@ -98,6 +98,12 @@ struct ContentView: View {
                 }
                 Spacer()
             }
+            // The role chip (Rick 2026-11-02): master or viewer · read-only,
+            // at the trailing edge, as an overlay so the tabs stay centred.
+            .overlay(alignment: .trailing) {
+                CatalogRoleChip(mode: catalogSync.mode, masterHostname: catalogSync.masterHostname)
+                    .padding(.trailing, 14)
+            }
             .padding(.top, 8)
             .padding(.bottom, 10)
             // Soft colour wash behind the bar so the glass has something to

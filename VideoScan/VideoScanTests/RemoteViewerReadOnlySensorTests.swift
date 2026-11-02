@@ -425,13 +425,13 @@ struct RemoteViewerReadOnlySensorTests {
         let now = Date()
         #expect(ViewerStatusChipText.compose(masterDisplayName: "RicksM4", syncedAt: now.addingTimeInterval(-120),
                                              syncing: false, media: "streaming", now: now)
-                == "Viewing RicksM4's catalog · synced 2 min ago · media: streaming")
+                == "Viewing RicksM4's catalog · read-only · synced 2 min ago · media: streaming")
         #expect(ViewerStatusChipText.compose(masterDisplayName: "RicksM4", syncedAt: nil, syncing: false,
                                              media: "master offline", now: now)
-                == "Viewing RicksM4's catalog · never synced · media: master offline")
+                == "Viewing RicksM4's catalog · read-only · never synced · media: master offline")
         #expect(ViewerStatusChipText.compose(masterDisplayName: "RicksM4", syncedAt: now, syncing: true,
                                              media: "checking…", now: now)
-                == "Viewing RicksM4's catalog · syncing… · media: checking…")
+                == "Viewing RicksM4's catalog · read-only · syncing… · media: checking…")
         #expect(ViewerStatusChipText.relative(now.addingTimeInterval(-30), now: now) == "just now")
         #expect(ViewerStatusChipText.relative(now.addingTimeInterval(-3 * 3600), now: now) == "3 hr ago")
         #expect(ViewerStatusChipText.relative(now.addingTimeInterval(-3 * 86400), now: now) == "3 days ago")

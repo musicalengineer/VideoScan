@@ -8612,6 +8612,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRoleChipTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRoleChipTests",
+        "CatalogRoleChipSensorTests"
+      ],
+      "tests": [
+        "placement",
+        "syncChipSaysReadOnly",
+        "words"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CICanaryTests.swift",
@@ -35764,7 +35778,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3251,
+      "expected_floor": 3254,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35956,6 +35970,8 @@
         "VideoScanTests/CatalogRealityBuilderTests",
         "VideoScanTests/CatalogRealityStateTests",
         "VideoScanTests/CatalogResizeLoopSourceSensors",
+        "VideoScanTests/CatalogRoleChipSensorTests",
+        "VideoScanTests/CatalogRoleChipTests",
         "VideoScanTests/CatalogRowMenuRulesTests",
         "VideoScanTests/CatalogRowMenuSelectionTests",
         "VideoScanTests/CatalogRowMenuTextTests",

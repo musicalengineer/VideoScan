@@ -20,7 +20,8 @@ enum ViewerStatusChipText {
         } else {
             synced = "never synced"
         }
-        return "Viewing \(masterDisplayName)'s catalog · \(synced) · media: \(media)"
+        // "read-only" in so many words (Rick 2026-11-02).
+        return "Viewing \(masterDisplayName)'s catalog · read-only · \(synced) · media: \(media)"
     }
 
     static func relative(_ date: Date, now: Date = Date()) -> String {
