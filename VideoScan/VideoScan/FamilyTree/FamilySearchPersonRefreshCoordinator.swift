@@ -72,6 +72,9 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     private let root: URL
     private let overlayStore: PersonFactOverlayStore
     private let journalDirectory: URL
+    /// The Family Tree's read-only state (2026-11-01): launch and apply are
+    /// refused in it. Read at each use; tests inject.
+    var writeMode: () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     private let installedFacts: @MainActor () -> PersonFacts?
     private let locator: FamilySearchToolLocator
     private let launcher: FamilySearchPullLauncher
@@ -163,8 +166,11 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
         // The attempt is on record BEFORE anything can refuse it: a run that
         // could not start still reads `started` … `failed: could not start`.
         note(PersonRefreshAuditLines.started(answerFile: Self.relative(output)))
-        if ViewerWriteGuard.refuse("PersonRefresh.launch") {
-            let message = "Refresh from FamilySearch runs on the master Mac, not on a viewer."
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.launch", mode: mode) {
+            let message = mode == .readOnly(.viewer)
+                ? "Refresh from FamilySearch runs on the master Mac, not on a viewer."
+                : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
             phase = .failed(message: message)
             noteOutcome(PersonRefreshAuditLines.couldNotStart(message))
             return
@@ -377,8 +383,11 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @discardableResult
     func apply(selectedFieldKeys: Set<String>) async -> Bool {
         guard case .ready(let diff) = phase, !isApplying else { return false }
-        if ViewerWriteGuard.refuse("PersonRefresh.apply") {
-            let message = "This Mac is a viewer; the tree is refreshed on the master."
+        let mode = writeMode()
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.apply", mode: mode) {
+            let message = mode == .readOnly(.viewer)
+                ? "This Mac is a viewer; the tree is refreshed on the master."
+                : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
             phase = .failed(message: message)
             noteOutcome(PersonRefreshAuditLines.failed(message))
             return false
@@ -434,10 +443,13 @@ final class PersonRefreshCoordinator: ObservableObject, Identifiable {
     @discardableResult
     static func undoLast(familySearchID: String, personName: String,
                          overlayStore: PersonFactOverlayStore, journalDirectory: URL,
-                         sink: PersonRefreshNoteSink = .production(console: nil), now: Date = Date()) async -> String {
+                         sink: PersonRefreshNoteSink = .production(console: nil), now: Date = Date(),
+                         mode: FamilyTreeAccessMode = .current()) async -> String {
         let subject = PersonRefreshAuditLines.subject(person: personName, familySearchID: familySearchID)
-        if ViewerWriteGuard.refuse("PersonRefresh.undo") {
-            return "This Mac is a viewer; the tree is refreshed on the master."
+        if FamilyTreeWriteGate.refuse(.personRefresh, path: "PersonRefresh.undo", mode: mode) {
+            return mode == .readOnly(.viewer)
+                ? "This Mac is a viewer; the tree is refreshed on the master."
+                : FamilyTreeWriteGate.refusalText(.personRefresh, mode: mode) ?? ""
         }
         typealias Popped = (undone: PersonFactOverlay.Entry, restored: PersonFactOverlay.Entry?)
         let outcome = await writeOverlay(overlayStore, now: now) { overlay -> Popped? in

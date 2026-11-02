@@ -25,6 +25,10 @@ struct ResearchStore: Sendable {
     /// The People directory (FamilyAssetStore.peopleDirectory in
     /// production; a temp directory in tests).
     let peopleRoot: URL
+    /// The Family Tree's read-only state (2026-11-01): every write here is
+    /// refused in it (the People folder is on the absent archive, or this
+    /// Mac is a viewer). Read at each write; tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
 
     static let maxCachedBodyBytes = 2 << 20
 
@@ -100,7 +104,7 @@ struct ResearchStore: Sendable {
     }
 
     func saveDossier(_ dossier: ResearchDossier) throws {
-        try ViewerWriteGuard.check("ResearchStore.saveDossier")
+        try FamilyTreeWriteGate.check(.research, path: "ResearchStore.saveDossier", mode: writeMode())
         let url = try dossierURL(key: dossier.subject.key)
         do {
             let data = try Self.encoder.encode(dossier)
@@ -148,7 +152,7 @@ struct ResearchStore: Sendable {
 
     /// Move dossier.json to research/.trash/dossier-<stamp>-<uuid>.json.
     private func retireDossierFile(key: String) throws {
-        try ViewerWriteGuard.check("ResearchStore.retireDossierFile")
+        try FamilyTreeWriteGate.check(.research, path: "ResearchStore.retireDossierFile", mode: writeMode())
         let url = try dossierURL(key: key)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let trash = try researchDirectory(key: key).appendingPathComponent(".trash", isDirectory: true)
@@ -191,7 +195,7 @@ struct ResearchStore: Sendable {
     /// Bodies over the cap are truncated before caching — the parsers only
     /// need the first couple of megabytes of any search page.
     func cache(_ page: CachedPage, key: String) throws {
-        try ViewerWriteGuard.check("ResearchStore.cache")
+        try FamilyTreeWriteGate.check(.research, path: "ResearchStore.cache", mode: writeMode())
         let capped = page.body.count > Self.maxCachedBodyBytes
             ? CachedPage(url: page.url, retrievedAt: page.retrievedAt,
                          statusCode: page.statusCode,

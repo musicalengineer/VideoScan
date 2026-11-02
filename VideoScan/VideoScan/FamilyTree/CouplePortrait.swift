@@ -72,7 +72,10 @@ enum CouplePortraitPreference {
         defaults.string(forKey: captionKey) ?? ""
     }
 
-    static func saveCaption(_ caption: String, to defaults: UserDefaults = .standard) {
+    static func saveCaption(_ caption: String, to defaults: UserDefaults = .standard,
+                            mode: FamilyTreeAccessMode = .current()) {
+        // Read-only state (2026-11-01): nothing is written anywhere.
+        if FamilyTreeWriteGate.refuse(.couplePortrait, path: "CouplePortrait.saveCaption", mode: mode) { return }
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             defaults.removeObject(forKey: captionKey)
@@ -87,7 +90,9 @@ enum CouplePortraitPreference {
     static func importPhoto(at source: URL,
                             into directory: URL? = nil,
                             defaults: UserDefaults = .standard,
-                            fileManager: FileManager = .default) throws -> URL {
+                            fileManager: FileManager = .default,
+                            mode: FamilyTreeAccessMode = .current()) throws -> URL {
+        try FamilyTreeWriteGate.check(.couplePortrait, path: "CouplePortrait.importPhoto", mode: mode)
         let dir = directory ?? defaultDirectory(fileManager: fileManager)
         guard let image = CropRenderer.boundedImage(at: source, maxPixels: storedMaxPixels)
         else { throw ImportError.notAnImage }
@@ -112,7 +117,9 @@ enum CouplePortraitPreference {
     /// cheap to re-type but annoying to lose.
     static func remove(from defaults: UserDefaults = .standard,
                        directory: URL? = nil,
-                       fileManager: FileManager = .default) {
+                       fileManager: FileManager = .default,
+                       mode: FamilyTreeAccessMode = .current()) {
+        if FamilyTreeWriteGate.refuse(.couplePortrait, path: "CouplePortrait.remove", mode: mode) { return }
         let dir = directory ?? defaultDirectory(fileManager: fileManager)
         if let current = load(from: defaults, directory: dir, fileManager: fileManager)?.url {
             try? fileManager.removeItem(at: current)

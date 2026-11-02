@@ -75,6 +75,10 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Where the archive wants the finished file. Injected so tests never
     /// write near a real archive.
     private let gedcomDirectory: URL
+    /// The Family Tree's read-only state (2026-11-01): every download,
+    /// install and merge is refused in it — the GEDCOM folder is on the
+    /// absent archive. Read at each use; tests inject.
+    var writeMode: () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
     /// Where a merge is written BEFORE it is activated. Injected so tests
     /// stage under their own temp root; production: App Support
     /// family-tree/staging/. Nothing here is ever read by the loader.
@@ -197,7 +201,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// Write the script, open it in Terminal, and start watching for output.
     /// Nothing runs until the user presses Return in that window.
     func launch() {
-        if ViewerWriteGuard.refuse("FamilySearchPull.launch") { return }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.launch", mode: writeMode()) { return }
         do {
             guard let toolURL = locator.locate() else {
                 throw FamilySearchPullError.toolNotFound
@@ -251,7 +255,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// watching, a MacFamilyTree export, an Ancestry download): same parse,
     /// same replace prompt, same install. Nothing is copied until Replace.
     func installFromFile(_ url: URL) {
-        if ViewerWriteGuard.refuse("FamilySearchPull.installFromFile") { return }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.installFromFile", mode: writeMode()) { return }
         watchTask?.cancel()
         watchTask = nil
         guard url.pathExtension.lowercased() == "ged" else {
@@ -530,7 +534,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     /// loader takes the newest valid file, so this is additive — the
     /// previous tree stays on disk as its own history.
     func install() {
-        if ViewerWriteGuard.refuse("FamilySearchPull.install") { return }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.install", mode: writeMode()) { return }
         guard case .ready(let output, let new, _, _) = phase, !isInstalling else { return }
         let people = new.people
         do {
@@ -624,7 +628,7 @@ final class FamilySearchPullCoordinator: ObservableObject, Identifiable {
     func installMerged(
         policy: GedcomFamilyGraph.MergePolicy = .unionKeepingFirst
     ) -> Task<Void, Never> {
-        if ViewerWriteGuard.refuse("FamilySearchPull.installMerged") { return Task {} }
+        if FamilyTreeWriteGate.refuse(.familySearchPull, path: "FamilySearchPull.installMerged", mode: writeMode()) { return Task {} }
         if let running = installTask { return running }
         guard case .ready(let output, _, _, _) = phase else { return Task {} }
         isInstalling = true

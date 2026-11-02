@@ -120,8 +120,25 @@ struct FamilyTreePersonCard: View {
     /// either, and the card stays as it was. No photo → the flag is the
     /// portrait; a photo → a small corner badge (FamilyTreeBirthFlagViews).
     var birthFlag: FamilyTreeBirthFlag? = nil
+    /// False in the read-only state (DECISIONS 2026-11-01): every item that
+    /// writes is shown disabled. The view passes the model's answer
+    /// (`FamilyTreeLiveModel.isEnabled`); the model refuses the write too.
+    var writesEnabled: Bool = true
+    private static let readOnlyHelp = "Unavailable until the Master Archive is connected"
 
     private var person: FamilyTreePersonSummary { card.person }
+
+    // Read-only state: the write actions become no-ops here AND are shown
+    // disabled; kept out of `body` so its branches stay countable.
+    private var bookmarkTap: () -> Void { writesEnabled ? onToggleBookmark : {} }
+    private var pickPhotoTap: () -> Void { writesEnabled ? onPickPhoto : {} }
+    private var refreshEnabled: Bool { canRefreshFromFamilySearch && writesEnabled }
+    private var refreshHelp: String {
+        if !writesEnabled { return Self.readOnlyHelp }
+        return canRefreshFromFamilySearch
+            ? "Fetch \(person.name) from FamilySearch and review what changed before anything is applied"
+            : "\(person.name) has no FamilySearch ID, so there is no FamilySearch record to refresh from."
+    }
     private var accent: Color { person.sex.accent }
 
     /// "Children of X" as a submenu of names, each one a jump. A submenu
@@ -161,6 +178,7 @@ struct FamilyTreePersonCard: View {
             onSelect()
             onFoundRecord()
         }
+        .disabled(!writesEnabled)
         .accessibilityIdentifier("tree.person.foundRecord")
     }
 
@@ -283,7 +301,7 @@ struct FamilyTreePersonCard: View {
                     .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
                     .padding(8)
                     .contentShape(Rectangle())
-                    .onTapGesture { onToggleBookmark() }
+                    .onTapGesture(perform: bookmarkTap)
                     .help("Bookmarked — click to remove")
                     .accessibilityLabel("Bookmarked")
                     .accessibilityAddTraits(.isButton)
@@ -318,7 +336,7 @@ struct FamilyTreePersonCard: View {
         // lone click (after the double-click window lapses) still selects.
         .onTapGesture(count: 2) {
             onSelect()
-            onPickPhoto()
+            pickPhotoTap()
         }
         .onTapGesture {
             onSelect()
@@ -330,12 +348,14 @@ struct FamilyTreePersonCard: View {
             Button("Research \(person.name)…") {
                 onResearch()
             }
+            .disabled(!writesEnabled)
             researchElsewhereMenu
             childrenMenu
             Button(isBookmarked ? "Remove bookmark" : "Bookmark \(person.name)",
                    systemImage: isBookmarked ? "bookmark.slash" : "bookmark") {
                 onToggleBookmark()
             }
+            .disabled(!writesEnabled)
             if canWalkTree {
                 Button("Walk Tree from \(person.name)", systemImage: "figure.walk.circle") {
                     onWalkTree(false)
@@ -357,6 +377,7 @@ struct FamilyTreePersonCard: View {
                        systemImage: isHidden ? "eye" : "eye.slash") {
                     onToggleHidden()
                 }
+                .disabled(!writesEnabled)
             }
             Divider()
             photoMenuItems
@@ -364,20 +385,20 @@ struct FamilyTreePersonCard: View {
                 onSelect()
                 onAddDocument()
             }
+            .disabled(!writesEnabled)
             .accessibilityIdentifier("tree.person.addDocument")
             Button("Refresh from FamilySearch…", systemImage: "arrow.triangle.2.circlepath") {
                 onSelect()
                 onRefreshFromFamilySearch()
             }
-            .disabled(!canRefreshFromFamilySearch)
-            .help(canRefreshFromFamilySearch
-                  ? "Fetch \(person.name) from FamilySearch and review what changed before anything is applied"
-                  : "\(person.name) has no FamilySearch ID, so there is no FamilySearch record to refresh from.")
+            .disabled(!refreshEnabled)
+            .help(refreshHelp)
             .accessibilityIdentifier("tree.person.refreshFromFamilySearch")
             if hasFamilySearchRefresh {
                 Button("Undo last refresh for this person", systemImage: "arrow.uturn.backward") {
                     onUndoFamilySearchRefresh()
                 }
+                .disabled(!writesEnabled)
                 .accessibilityIdentifier("tree.person.undoFamilySearchRefresh")
             }
             Divider()
@@ -402,13 +423,15 @@ struct FamilyTreePersonCard: View {
             onSelect()
             onPickPhoto()
         }
+        .disabled(!writesEnabled)
         Button("Apple Photos…") {
             onApplePhoto()
         }
+        .disabled(!writesEnabled)
         Button("Adjust Photo…") {
             onAdjustPhoto()
         }
-        .disabled(!canAdjustPhoto)
+        .disabled(!canAdjustPhoto || !writesEnabled)
     }
 }
 

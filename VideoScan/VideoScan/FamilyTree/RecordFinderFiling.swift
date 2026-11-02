@@ -193,6 +193,8 @@ struct RecordFinderFiler {
     let record: (@Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt)?
     let log: @Sendable (String) -> Void
     let now: @Sendable () -> Date
+    /// The Family Tree's read-only state (2026-11-01). Tests inject.
+    var writeMode: @Sendable () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
 
     init(assetStore: FamilyAssetStore, assetPerson: FamilyAssetPerson, researchStore: ResearchStore,
          subject: ResearchSubject, speakerName: String,
@@ -540,7 +542,7 @@ struct RecordFinderFiler {
         // Where it may be written.
         do {
             try assetStore.requireWriteAccess()
-            try ViewerWriteGuard.check("RecordFinderFiler.file")
+            try FamilyTreeWriteGate.check(.document, path: "RecordFinderFiler.file", mode: writeMode())
         } catch {
             return .failure(Refusal(code: "read-only", message: error.localizedDescription))
         }

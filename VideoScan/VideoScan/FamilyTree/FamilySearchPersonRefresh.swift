@@ -206,8 +206,20 @@ enum PersonRefreshOverlayReader {
                                   discoveryDirectory: URL, canWrite: Bool,
                                   log: (String) -> Void) -> GedcomFamilyGraph {
         guard let store else { return graph }
+        return apply(to: graph, store: store,
+                     newestPullAt: PersonFactOverlayStore.newestPullDate(in: discoveryDirectory),
+                     canWrite: canWrite, log: log)
+    }
+
+    /// Same, with the newest pull's date supplied by the caller — the
+    /// Family Tree's read-only load (2026-11-01) takes it from the compiled
+    /// manifest, because the GEDCOM folder is on the absent archive.
+    nonisolated static func apply(to graph: GedcomFamilyGraph, store: PersonFactOverlayStore?,
+                                  newestPullAt: Date?, canWrite: Bool,
+                                  log: (String) -> Void) -> GedcomFamilyGraph {
+        guard let store else { return graph }
         let overlay = store.effective(
-            newestPullAt: PersonFactOverlayStore.newestPullDate(in: discoveryDirectory),
+            newestPullAt: newestPullAt,
             canWrite: canWrite && !ViewerModeCenter.shared.isViewer)
         guard !overlay.entries.isEmpty else { return graph }
         let (overlaid, report) = graph.applyingFactOverlay(overlay)

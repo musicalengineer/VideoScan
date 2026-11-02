@@ -74,6 +74,20 @@ final class TreeIdentityCenter: ObservableObject {
     let kinshipCenter: KinshipDisplayCenter
     /// Injectable persistence + owner mirror + speaker source.
     var store: (POIProfile) throws -> Void = { try $0.save() }
+    /// The Family Tree's read-only state (2026-11-01): no pin, unpin or
+    /// auto-accept is written in it (the tab still installs a graph into the
+    /// kinship center, which would otherwise auto-pin). Tests inject.
+    var writeMode: () -> FamilyTreeAccessMode = { FamilyTreeAccessMode.current() }
+    /// Every write goes through here: the gate first, then `store`. A
+    /// refusal throws before the profile is touched, so the owner mirror
+    /// (TreeIdentityPinning, after a successful store) never runs either.
+    private var gatedStore: (POIProfile) throws -> Void {
+        let store = self.store, mode = writeMode()
+        return { profile in
+            try FamilyTreeWriteGate.check(.identityPin, path: "TreeIdentityCenter.store", mode: mode)
+            try store(profile)
+        }
+    }
     var defaults: UserDefaults? = .standard
     var speakers: () -> HallieTurnExecutor.Speakers = { .fromDefaults() }
     /// Narrow synchronous seams: production reads the display center's
@@ -220,6 +234,9 @@ final class TreeIdentityCenter: ObservableObject {
     /// source (owner setting, tree root). One record per profile; a
     /// collision is refused and logged, never forced.
     private func autoAccept(profiles: [POIProfile], speakers: HallieTurnExecutor.Speakers) {
+        // Read-only state: auto-accept is not a user's attempt, so it is
+        // skipped quietly rather than refused once per profile per pass.
+        guard writeMode().allowsWrites else { return }
         var current = profiles
         var pinnedAny = false
         for profile in profiles {
@@ -230,7 +247,7 @@ final class TreeIdentityCenter: ObservableObject {
                 candidate, on: profile, among: current,
                 fingerprint: candidate.familySearchID == nil ? kinshipCenter.graphFingerprint : nil,
                 attestation: reason.attestation, ownerName: speakers.ownerName,
-                store: store, defaults: defaults) {
+                store: gatedStore, defaults: defaults) {
             case .saved(let saved):
                 if let i = current.firstIndex(where: { $0.id == saved.id }) { current[i] = saved }
                 derivations[profile.id] = nil
@@ -414,7 +431,7 @@ final class TreeIdentityCenter: ObservableObject {
             candidate, on: currentProfile, among: profiles,
             fingerprint: candidate.familySearchID == nil ? currentFingerprint : nil,
             attestation: attestation, ownerName: speakers().ownerName,
-            store: store, defaults: defaults)
+            store: gatedStore, defaults: defaults)
         if case .saved = outcome {
             derivations[profile.id] = nil
             pinsRevision += 1
@@ -424,7 +441,7 @@ final class TreeIdentityCenter: ObservableObject {
 
     @discardableResult
     func unpin(_ profile: POIProfile) -> TreeIdentityPinning.Outcome {
-        let outcome = TreeIdentityPinning.unpin(profile, store: store)
+        let outcome = TreeIdentityPinning.unpin(profile, store: gatedStore)
         if case .saved = outcome {
             memoKey = nil          // the next pass re-derives this profile
             pinsRevision += 1
@@ -434,7 +451,7 @@ final class TreeIdentityCenter: ObservableObject {
 
     @discardableResult
     func markNotInTree(_ profile: POIProfile) -> TreeIdentityPinning.Outcome {
-        let outcome = TreeIdentityPinning.markNotInTree(profile, store: store)
+        let outcome = TreeIdentityPinning.markNotInTree(profile, store: gatedStore)
         if case .saved = outcome {
             derivations[profile.id] = nil
             pinsRevision += 1

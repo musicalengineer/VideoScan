@@ -15325,6 +15325,54 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyIsolationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyIsolationTests",
+        "FamilyTreeReadOnlyScaleTests"
+      ],
+      "tests": [
+        "aCanonicalWalkInTheReadOnlyStateIsNotSaved",
+        "aReadOnlyLoadAndEveryActionLeaveTheFolderByteIdentical",
+        "personRefreshUndoRefusesInWordsAndWritesNothing",
+        "theRealSizedTreeLoadsReadOnlyWithinThePrewarmBudget"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyModeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyMatrixTests",
+        "FamilyTreeReadOnlyTruthTests",
+        "FamilyTreeReadOnlyTransitionTests"
+      ],
+      "tests": [
+        "aViewerShowsTheSameBannerAndDisablesTheSameWriters",
+        "accessTimesRoleResolvesToTheRuledMode",
+        "connectingTheArchiveReEnablesEveryWriterWithoutARelaunch",
+        "modelShowsReadOnlyFullOrRefused",
+        "refusalWordsNameTheWriterAndTheReason",
+        "theBannerTheDisabledWritersAndTheCardsComeFromTheModel",
+        "theProcessWideModeReadsTheViewerCenterAndThePublishedAccess"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeReadOnlyWriteSiteSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyTreeReadOnlyWriteSiteSensorTests"
+      ],
+      "tests": [
+        "everyWriteSiteInFamilyTreeChecksTheAccessState",
+        "identityCenterWritesOnlyThroughTheGatedStore",
+        "loaderReadOnlyBranchComesFirst",
+        "theScannerFlagsAnUngatedWriter"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FamilyTreeRecompileButtonTests.swift",
@@ -35337,7 +35385,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3160,
+      "expected_floor": 3175,
       "name": "unit",
       "package_expected_floor": 641,
       "package_selectors": [
@@ -35646,6 +35694,12 @@
         "VideoScanTests/FamilyTreeNoteDraftOwnerTests",
         "VideoScanTests/FamilyTreePersonMetadataTests",
         "VideoScanTests/FamilyTreePullDatesTests",
+        "VideoScanTests/FamilyTreeReadOnlyIsolationTests",
+        "VideoScanTests/FamilyTreeReadOnlyMatrixTests",
+        "VideoScanTests/FamilyTreeReadOnlyScaleTests",
+        "VideoScanTests/FamilyTreeReadOnlyTransitionTests",
+        "VideoScanTests/FamilyTreeReadOnlyTruthTests",
+        "VideoScanTests/FamilyTreeReadOnlyWriteSiteSensorTests",
         "VideoScanTests/FamilyTreeResearchLinksIrishPlaceTests",
         "VideoScanTests/FamilyTreeResearchLinksTests",
         "VideoScanTests/FamilyTreeVerificationTests",

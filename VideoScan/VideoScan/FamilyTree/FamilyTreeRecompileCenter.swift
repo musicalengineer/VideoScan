@@ -91,6 +91,13 @@ final class FamilyTreeRecompileCenter {
         // Path 2: standalone, through the loader on the (injected or
         // production) store. Off the main actor; captions hop back.
         let configuration = configuration ?? FamilyAssetConfigurationCenter.shared.snapshot()
+        // Read-only state (2026-11-01): a compile writes the store.
+        if FamilyTreeWriteGate.refuse(.recompile, path: "FamilyTreeRecompileCenter.recompile",
+                                      mode: FamilyTreeAccessMode.resolve(
+                                        access: configuration.access,
+                                        isViewer: ViewerModeCenter.shared.isViewer)) {
+            return .failed
+        }
         let store = store ?? FamilyGraphCompiledStore.app
         let sources = cache.needsRecompile(for: configuration, store: store)
         guard !sources.isEmpty else {
