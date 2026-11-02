@@ -13817,8 +13817,12 @@
       ],
       "tests": [
         "affectedSubsetIncludesTransitiveBucketNeighbors",
+        "affectedSubsetOffMainAgreesWithTheSynchronousRule",
+        "affectedSubsetProjectionAt100kIsInsideItsMainActorBudget",
+        "affectedSubsetProjectionComputesNoStemOnTheMainActor",
         "analyzeAllIsInstantNoOpWhenEverythingIsStamped",
         "analyzeDuplicatesKeepsMainThreadResponsiveAtScale",
+        "analyzeDuplicatesScopesItsDeltaOffTheMainActor",
         "analyzeSelectedForcesReanalysisOfThatSubset",
         "analyzeStampsEveryExaminedRecordIncludingUniques",
         "cachedChromeFlagsUpdateOnCatalogRefresh",

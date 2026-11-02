@@ -173,7 +173,12 @@ else:
         self.assertEqual(self.stage('unit')['status'], 'passed')
         for call in self.calls:
             self.assertEqual(call['env']['VS_UI_TEST'], '1')
-            self.assertTrue(call['env']['HOME'].startswith(str(self.root / 'results')))
+            if 'build-for-testing' in call['args']:
+                # Builds keep the runner's own HOME (a13c3b25, 2026-10-21: Xcode 27.1's
+                # Metal Toolchain is a per-user component); only TESTS are confined.
+                self.assertEqual(call['env']['HOME'], '/private/tmp/poison-home')
+            else:
+                self.assertTrue(call['env']['HOME'].startswith(str(self.root / 'results')))
             self.assertEqual(call['env']['VS_GAUNTLET_CATALOG_ROOT'], self.result['roots']['catalog'])
             for key in cache_keys:
                 self.assertEqual(call['env'][key], self.result['roots']['caches'])
