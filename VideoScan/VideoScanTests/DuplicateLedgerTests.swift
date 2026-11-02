@@ -143,6 +143,77 @@ struct DuplicateLedgerTests {
                 "TRANSITIVE neighbor (via B's second bucket key) must be included — a one-hop expansion elects keepers over truncated components (QA P1-3)")
     }
 
+    // MARK: - 8. The closure's stems run OFF the main actor (nightly 2026-11-02)
+    //
+    // The beachball pin below (DuplicateLedgerPerfTests) failed in both
+    // Macs' nightly at 0.50 s / 0.53 s: ~3/4 of Analyze Duplicates'
+    // synchronous main-actor stretch was `affectedSubset` computing every
+    // active record's normalized stem (five regex replacements per name).
+    // Dimensions: LOGIC (same answer as the synchronous rule), ISOLATION
+    // (the main-actor projection computes no stem), SCALE (100k projection
+    // inside a budget), SENSOR (the verb calls the off-main form). Media
+    // matrix N/A — no media is opened.
+
+    @Test func affectedSubsetOffMainAgreesWithTheSynchronousRule() async {
+        // The transitive fixture (7) + a settled group whose second member
+        // shares no key with the delta (the full-group pull) + an unrelated
+        // record that must stay out.
+        let a = makeTwin("family tape.mov", md5: "k1", size: 1111)
+        let b = makeTwin("family tape copy.mov", md5: "k2", size: 2222, dir: "/vol/b")
+        let c = makeTwin("othername.mov", md5: "k2", size: 2222, dir: "/vol/c")
+        let star = makeTwin("zzz.mov", md5: "k3", size: 3333, dir: "/vol/d")
+        let unrelated = makeTwin("unrelated.mov", md5: "k9", size: 9999, dir: "/vol/e")
+        unrelated.durationSeconds = 7
+        let g = UUID()
+        c.duplicateGroupID = g; star.duplicateGroupID = g
+        for r in [b, c, star, unrelated] { r.dupAnalyzedAt = Date() }
+        let all = [a, b, c, star, unrelated]
+
+        let sync = DuplicateDetector.affectedSubset(delta: [a], allActive: all).map(\.id)
+        let offMain = await DuplicateDetector.affectedSubsetOffMain(delta: [a], allActive: all).map(\.id)
+        #expect(offMain == sync, "Same records, same order as the synchronous rule")
+        #expect(Set(offMain) == Set([a.id, b.id, c.id, star.id]),
+                "Transitive neighbours and the reached group's full membership — and nothing unrelated")
+        #expect(await DuplicateDetector.affectedSubsetOffMain(delta: [], allActive: all).isEmpty)
+    }
+
+    @Test func affectedSubsetProjectionComputesNoStemOnTheMainActor() {
+        let recs = (0..<50).map { makeTwin("clip \($0) copy (2).mov", md5: "m\($0)") }
+        let input = DuplicateDetector.AffectedSubsetInput(delta: [recs[0]], allActive: recs)
+        #expect(input.facts.count == recs.count && input.deltaIndices == [0])
+        #expect(input.facts.allSatisfy { $0.stem == DuplicateLikeness.Facts.deferredStem },
+                "The main-actor projection copies fields only; the regex stems run in the detached closure walk")
+    }
+
+    @Test func affectedSubsetProjectionAt100kIsInsideItsMainActorBudget() async {
+        var recs: [VideoRecord] = []
+        recs.reserveCapacity(100_000)
+        for i in 0..<50_000 {
+            recs.append(makeTwin("clip\(i).mov", md5: "md5-\(i)", size: Int64(4000 + i)))
+            recs.append(makeTwin("clip\(i) copy.mov", md5: "md5-\(i)", size: Int64(4000 + i), dir: "/vol/b"))
+        }
+        let t0 = SuspendingClock.now
+        let input = DuplicateDetector.AffectedSubsetInput(delta: recs, allActive: recs)
+        let projected = SuspendingClock.now - t0
+        let seconds = Double(projected.components.seconds) + Double(projected.components.attoseconds) / 1e18
+        // Measured at 90k, Debug, M5 Ultra under load: projection 0.072 s;
+        // the old all-on-main closure 0.681 s (stems + keys per record).
+        #expect(seconds < PerformanceLane.debugCeiling(seconds: 0.25),
+                "Main-actor projection for 100k records took \(String(format: "%.3f", seconds)) s")
+        let indices = await Task.detached { DuplicateDetector.affectedIndices(input) }.value
+        #expect(indices.count == recs.count, "Every record of a fully pending catalog is in scope")
+    }
+
+    @Test func analyzeDuplicatesScopesItsDeltaOffTheMainActor() throws {
+        let url = try #require(SourceTree.appSourceURL(named: "MediaOps/VideoScanModel+Duplicates.swift"))
+        let code = SourceTree.strippingComments(try String(contentsOf: url, encoding: .utf8))
+        let body = try #require(code.range(of: "func analyzeDuplicates(").map { String(code[$0.lowerBound...].prefix(6_000)) })
+        #expect(body.contains("DuplicateDetector.affectedSubsetOffMain("),
+                "Analyze Duplicates must build its scope with the off-main closure")
+        #expect(!body.contains("DuplicateDetector.affectedSubset("),
+                "…never the synchronous one (regex stems for every active record on the main actor)")
+    }
+
     // MARK: - 8. The mutation notification refreshes chrome caches (QA P0-1)
 
     @Test func catalogMutatedNotificationRefreshesChromeCaches() async throws {

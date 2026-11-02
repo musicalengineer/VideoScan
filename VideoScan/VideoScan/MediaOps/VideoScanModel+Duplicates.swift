@@ -151,7 +151,9 @@ extension VideoScanModel {
                 return
             }
             deltaCount = delta.count
-            scope = DuplicateDetector.affectedSubset(delta: delta, allActive: active)
+            // Off main: the stems behind the closure are ~3/4 of this
+            // verb's main-actor time at 30k records (nightly 2026-11-02).
+            scope = await DuplicateDetector.affectedSubsetOffMain(delta: delta, allActive: active)
         }
 
         duplicateStatus = "Analyzing \(scope.count) files (\(deltaCount) new/changed)…"

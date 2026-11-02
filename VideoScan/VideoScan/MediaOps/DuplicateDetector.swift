@@ -209,29 +209,82 @@ enum DuplicateDetector {
     static func affectedSubset(delta: [VideoRecord],
                                allActive: [VideoRecord]) -> [VideoRecord] {
         guard !delta.isEmpty else { return [] }
+        let input = AffectedSubsetInput(delta: delta, allActive: allActive)
+        return affectedIndices(input).map { allActive[$0] }
+    }
+
+    /// The same subset with the expensive half OFF the main actor (the
+    /// 2026-11-02 nightly: Analyze Duplicates' worst main-actor hop was
+    /// 0.50 s at 30k records, ~3/4 of it this function's normalized stems —
+    /// five regex replacements per record name — run on main). The main
+    /// actor only copies each record's facts by value (stems deferred, the
+    /// Find Similar Footage snapshot's pattern); the stems, the bucket
+    /// index and the closure walk run detached. Same answer as
+    /// `affectedSubset` (pinned by DuplicateLedgerTests).
+    ///
+    /// Memory: one `Facts` per active record (~20 short strings, mostly
+    /// shared buffers — ≈ 0.5 KB) + the key index; ≈ 50 MB worst case at
+    /// 100k records, freed when the pass returns.
+    @MainActor
+    static func affectedSubsetOffMain(delta: [VideoRecord],
+                                      allActive: [VideoRecord]) async -> [VideoRecord] {
+        guard !delta.isEmpty else { return [] }
+        let input = AffectedSubsetInput(delta: delta, allActive: allActive)
+        // (For Rick: `Task.detached` ≈ handing a value-type job to a worker
+        // thread; only the Sendable `input` crosses, never a VideoRecord.)
+        let indices = await Task.detached(priority: .userInitiated) { affectedIndices(input) }.value
+        return indices.map { allActive[$0] }
+    }
+
+    /// What the closure walk needs of each active record, by value
+    /// (Sendable): position `i` mirrors `allActive[i]`, like parallel
+    /// arrays in C.
+    struct AffectedSubsetInput: Sendable {
+        var facts: [DuplicateLikeness.Facts]
+        var groupIDs: [UUID?]
+        var deltaIndices: [Int]
+
+        /// O(records) field copies — no regex, no key strings (stems are
+        /// deferred to `affectedIndices`).
+        init(delta: [VideoRecord], allActive: [VideoRecord]) {
+            facts = []
+            facts.reserveCapacity(allActive.count)
+            groupIDs = []
+            groupIDs.reserveCapacity(allActive.count)
+            var indexOfID: [UUID: Int] = [:]
+            indexOfID.reserveCapacity(allActive.count)
+            for (i, r) in allActive.enumerated() {
+                facts.append(DuplicateLikeness.Facts(record: r, deferStem: true))
+                groupIDs.append(r.duplicateGroupID)
+                indexOfID[r.id] = i
+            }
+            deltaIndices = delta.compactMap { indexOfID[$0.id] }
+        }
+    }
+
+    /// The closure itself (pure; runs anywhere): sorted indices into the
+    /// projected records.
+    nonisolated static func affectedIndices(_ input: AffectedSubsetInput) -> [Int] {
         // Index once: bucket key → member indices, and per-record keys.
         var byKey: [String: [Int]] = [:]
         var keysOf: [[String]] = []
-        keysOf.reserveCapacity(allActive.count)
-        for (i, r) in allActive.enumerated() {
-            let keys = bucketKeys(r)
+        keysOf.reserveCapacity(input.facts.count)
+        for (i, f) in input.facts.enumerated() {
+            let keys = DuplicateLikeness.bucketKeys(f)   // computes the deferred stem
             keysOf.append(keys)
             for k in keys { byKey[k, default: []].append(i) }
         }
-        var indexOfID: [UUID: Int] = [:]
-        for (i, r) in allActive.enumerated() { indexOfID[r.id] = i }
 
         // BFS over bucket-key adjacency to a fixpoint.
         var includedIdx = Set<Int>()
         var frontier: [Int] = []
-        for r in delta {
-            guard let i = indexOfID[r.id], includedIdx.insert(i).inserted else { continue }
+        for i in input.deltaIndices where includedIdx.insert(i).inserted {
             frontier.append(i)
         }
         var visitedKeys = Set<String>()
         var affectedGroupIDs = Set<UUID>()
         while let i = frontier.popLast() {
-            if let g = allActive[i].duplicateGroupID { affectedGroupIDs.insert(g) }
+            if let g = input.groupIDs[i] { affectedGroupIDs.insert(g) }
             for key in keysOf[i] where visitedKeys.insert(key).inserted {
                 for j in byKey[key] ?? [] where includedIdx.insert(j).inserted {
                     frontier.append(j)
@@ -242,13 +295,13 @@ enum DuplicateDetector {
         // no shared bucket key — e.g. star members admitted via a key the
         // delta chain didn't touch — must still re-derive together).
         if !affectedGroupIDs.isEmpty {
-            for (i, r) in allActive.enumerated() where !includedIdx.contains(i) {
-                if let g = r.duplicateGroupID, affectedGroupIDs.contains(g) {
+            for (i, g) in input.groupIDs.enumerated() where !includedIdx.contains(i) {
+                if let g, affectedGroupIDs.contains(g) {
                     includedIdx.insert(i)
                 }
             }
         }
-        return includedIdx.sorted().map { allActive[$0] }
+        return includedIdx.sorted()
     }
 
     /// Run `analyze` OFF the main actor over exclusively-owned clones
