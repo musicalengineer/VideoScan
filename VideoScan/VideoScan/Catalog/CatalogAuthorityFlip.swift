@@ -60,6 +60,14 @@ enum CatalogAuthority: Equatable, Sendable {
     case refused(String)
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
+
+    /// THE catalog database (2026-11-03): the one the cutover opened this
+    /// session, else catalog.sqlite beside catalog.json. `catalogStore.
+    /// fileLocation` is catalog.json — the frozen pre-SQLite file — and is
+    /// never a database (Settings ▸ Background counted against it).
+    static func databaseURL(opened: URL?, catalogFile: URL) -> URL {
+        opened ?? catalogFile.deletingLastPathComponent().appendingPathComponent(databaseFileName)
+    }
     /// Written once, by the explicit "Switch Catalog to SQLite…" door (B2,
     /// retired 2026-10-20 after the switch); nothing in the app writes it now.
     nonisolated static let latchFileName = "catalog.cutover"

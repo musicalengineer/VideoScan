@@ -33237,6 +33237,19 @@
         "unknownTotal",
         "working"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundCountCatalogURLTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundCountCatalogURLTests"
+      ],
+      "tests": [
+        "countOpensSQLite",
+        "rule",
+        "wiring"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35925,7 +35938,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3290,
+      "expected_floor": 3293,
       "name": "unit",
       "package_expected_floor": 665,
       "package_selectors": [
@@ -36540,7 +36553,8 @@
         "VideoScanTests/LaunchPhaseLineTests",
         "VideoScanTests/SigningIdentitySensorTests",
         "VideoScanTests/BackgroundHelperBundleSensorTests",
-        "VideoScanTests/BackgroundRegistrationGateTests"
+        "VideoScanTests/BackgroundRegistrationGateTests",
+        "VideoScanTests/BackgroundCountCatalogURLTests"
       ]
     },
     {

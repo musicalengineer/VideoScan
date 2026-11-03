@@ -246,8 +246,14 @@ final class BackgroundServiceStore: ObservableObject {
     private func recountOnce() async {
         let fresh: BackgroundWorkCount
         switch await countWork(service?.jobs.map(\.id) ?? []) {
-        case .success(let c): fresh = c; work = c; workProblem = nil
-        case .failure(let r): work = nil; workProblem = r.words; return
+        case .success(let c):
+            if workProblem != nil { log("content analysis count: recovered — \(c.filesLeft.formatted()) file(s) left for the era job") }
+            fresh = c; work = c; workProblem = nil
+        case .failure(let r):
+            // Said once per change, with the whole refusal: the Settings line
+            // must never be the only place a failure is visible (Rick 11/03).
+            if workProblem != r.words { log("content analysis count: FAILED — \(r.words)") }
+            work = nil; workProblem = r.words; return
         }
         if Self.shouldEnqueue(enabled: enabled, viewer: isViewer(), launchd: launchdStatus, service: service, work: fresh) {
             await enqueueEra()

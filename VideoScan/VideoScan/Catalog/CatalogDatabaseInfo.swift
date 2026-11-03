@@ -67,7 +67,7 @@ struct CatalogDatabaseInfoSources: Sendable, Equatable {
         let folder = catalogFile.deletingLastPathComponent()
         let opened = model.catalogCutover.databaseURL
         return CatalogDatabaseInfoSources(
-            databaseURL: opened ?? folder.appendingPathComponent(CatalogAuthority.databaseFileName),
+            databaseURL: CatalogAuthority.databaseURL(opened: opened, catalogFile: catalogFile),
             databaseOpenThisSession: opened != nil,
             catalogFile: catalogFile,
             journalFolder: folder.appendingPathComponent("background/journal", isDirectory: true),

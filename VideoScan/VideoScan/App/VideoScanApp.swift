@@ -601,7 +601,12 @@ struct VideoScanApp: App {
             catalogModel?.log(line)
             appLog.write("[background-service] " + line)
         }
-        let catalogURL: () -> URL? = { [weak catalogModel] in catalogModel.map { URL(fileURLWithPath: $0.catalogStore.fileLocation) } }
+        // catalog.sqlite — never catalogStore.fileLocation, which is the frozen
+        // catalog.json ("file is not a database", 2026-11-03).
+        let catalogURL: () -> URL? = { [weak catalogModel] in
+            catalogModel.map { CatalogAuthority.databaseURL(opened: $0.catalogCutover.databaseURL,
+                                                            catalogFile: URL(fileURLWithPath: $0.catalogStore.fileLocation)) }
+        }
         backgroundService.countWork = BackgroundServiceStore.productionCountWork(catalogURL: catalogURL)
         backgroundService.findHandRun = BackgroundServiceStore.productionFindHandRun(catalogURL: catalogURL)
         backgroundService.isViewer = { [weak catalogModel] in catalogModel?.isReadOnly ?? true }

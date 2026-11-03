@@ -85,7 +85,7 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
         guard let db else { throw Refusal("the catalog handle is closed") }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw Self.refusal(db)
+            throw Self.refusal(db, url: url)
         }
         defer { sqlite3_finalize(statement) }
         var out: [String] = []
@@ -97,7 +97,7 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
                 continue
             }
             if rc == SQLITE_DONE { break }
-            throw Self.refusal(db)
+            throw Self.refusal(db, url: url)
         }
         return out
     }
@@ -110,14 +110,14 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
         guard let db else { throw Refusal("the catalog handle is closed") }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw Self.refusal(db)
+            throw Self.refusal(db, url: url)
         }
         defer { sqlite3_finalize(statement) }
         let columns = sqlite3_column_count(statement)
         while true {
             let rc = sqlite3_step(statement)
             if rc == SQLITE_DONE { break }
-            guard rc == SQLITE_ROW else { throw Self.refusal(db) }
+            guard rc == SQLITE_ROW else { throw Self.refusal(db, url: url) }
             var row: [String?] = []
             row.reserveCapacity(Int(columns))
             for c in 0..<columns {
@@ -127,11 +127,11 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
         }
     }
 
-    private static func refusal(_ db: OpaquePointer) -> Refusal {
+    private static func refusal(_ db: OpaquePointer, url: URL) -> Refusal {
         let code = sqlite3_extended_errcode(db) & 0xFF
         let message = String(cString: sqlite3_errmsg(db))
         if code == SQLITE_READONLY { return Refusal("\(readOnlyWords) — \(message)") }
-        return Refusal("catalog read failed: \(message)")
+        return Refusal("catalog read failed: \(message) (\(url.path))")
     }
 
     public func close() {
