@@ -8,6 +8,8 @@ REAL worker loop (bench.py `worker_command`) carries every request.  Behaviour b
   "stamp" → the 5 OCR stills read "JUN 21 1991"; windows cite the stamp
   "blank" → no valid era window, no date
   "generr" → every era window is a generation error (the model never answered), no date
+             ("generr-stamp": the same, beside five stills that read the stamp)
+  "ripfail" → every frame failed to rip: no window, no still, three frame_failed records
   else    → three era windows 1990-1994 / 1991-1995 / 1991-1995
 FAKE_CLIP_LOG (env): a file each load / analyze_clip appends one line to (the tests count loads).
 FAKE_LOAD_SECONDS (env): load sleeps this long first.
@@ -54,6 +56,12 @@ class FakeClipService:
             os._exit(3)
         if "boom" in path:
             raise RuntimeError("deliberate")
+        if "ripfail" in path:
+            return {"header": {"record_type": "clip", "duration_s": float(duration_s or 100.0), "windows": []},
+                    "window_results": [], "results": [],
+                    "frames_failed": [{"record_type": "frame_failed", "frame_index": k, "at_s": float(k)} for k in range(3)],
+                    "footer": {"record_type": "clip_done", "frames_ok": 0, "frames_failed": 3, "clip_s": 0.01, "peak_rss_bytes": 123456},
+                    "summary": {"year_range": None, "burned_in_years": [], "fused": None, "fused_years": None, "valid_era_windows": 0}}
         stamp = "stamp" in path
         generr = "generr" in path
         blank = "blank" in path or generr

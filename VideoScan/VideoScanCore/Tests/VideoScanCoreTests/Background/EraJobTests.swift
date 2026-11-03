@@ -9,8 +9,9 @@
 //              and is FROZEN per job id (a resume plans nothing new); the
 //              record mapper writes era.yearRange per valid window,
 //              ocr.date per still that read a stamp, one era.fused — or one
-//              era.none (no usable era; never a year) unless a window was a
-//              generation error; the planner skips a file whose only line by
+//              era.none (no usable era; never a year) — or NOTHING when there
+//              is no fused range and a window/still was a generation error or
+//              a frame would not rip (Codex 2026-11-02 F1/F2); the planner skips a file whose only line by
 //              the signer is era.none (journal or applied row), per signer.
 //   REGRESSION a file with no usable era was re-analyzed every run (2026-11-02).
 //   TRUTH      every line is signed by the worker's own load reply; START
@@ -133,7 +134,7 @@ struct EraJobLogicTests {
         let mapped = try Self.map(["window_results": [Self.window(0, raw: "not json"), Self.window(1, raw: "{}")],
                                    "results": [["prompt_kind": "date", "at_s": 5.0, "raw_text": "NONE", "error": NSNull(),
                                                 "parsed": ["dates": [], "degenerate": false]]],
-                                   "frames_failed": [["frame_index": 3]],
+                                   "frames_failed": [],
                                    "summary": ["fused_years": NSNull(), "year_range": NSNull(), "burned_in_years": []]])
         #expect(mapped.lines.map(\.field) == [EraRecordMapper.noneField])
         #expect(EraRecordMapper.noneField == "era.none" && EraRecordMapper.noneValue == "none", "the wire name is pinned")
@@ -144,7 +145,7 @@ struct EraJobLogicTests {
         let evidence = try #require(try JSONSerialization.jsonObject(with: Data(line.evidenceJSON.utf8)) as? [String: Any])
         #expect(evidence["reason"] as? String == "no era window passed the contract")
         #expect(evidence["eraWindows"] as? Int == 2 && evidence["validEraWindows"] as? Int == 0)
-        #expect(evidence["windowsRefusedByContract"] as? Int == 2 && evidence["framesFailed"] as? Int == 1)
+        #expect(evidence["windowsRefusedByContract"] as? Int == 2)
         #expect(evidence["promptHash"] as? String == "sha256:ee")
         #expect(mapped.eraNone && !mapped.retryNextRun && mapped.generationErrors == 0)
     }
@@ -152,7 +153,7 @@ struct EraJobLogicTests {
     @Test func aRecordWithNoEraWindowAtAllIsDoneToo() throws {
         let mapped = try Self.map(["window_results": [], "results": [], "summary": ["fused_years": NSNull()]])
         #expect(mapped.lines.map(\.field) == ["era.none"])
-        #expect(mapped.lines.first?.evidenceJSON.contains("no era window (no frame could be shown)") == true)
+        #expect(mapped.lines.first?.evidenceJSON.contains("no era window (the sampler planned none)") == true)
     }
 
     @Test func aGenerationErrorIsNotEvidenceNoEraNoneRetryNextRun() throws {
@@ -170,6 +171,63 @@ struct EraJobLogicTests {
                                                 "parsed": ["dates": ["1991-06-21"], "degenerate": false]]],
                                    "summary": ["fused_years": NSNull()]])
         #expect(mapped.lines.map(\.field) == ["ocr.date", "era.none"])
+    }
+
+    // Codex era.none pass (2026-11-02), closed against the invariant "a
+    // transient failure never leaves a file cached for its signer without a
+    // real verdict": the planner caches on ANY line, so a record with no
+    // fused range and any sign the model did not see the whole file writes
+    // NOTHING — not just no era.none — and the retry is real.
+
+    static let validEraRaw: String = {
+        let w = ["family": "era", "window": [60.0, 120.0], "yearRange": [1990, 1994], "rationale": "r", "cues": [],
+                 "selfConfidence": 0.6] as [String: Any]
+        return (try? JSONSerialization.data(withJSONObject: w)).flatMap { String(bytes: $0, encoding: .utf8) } ?? ""
+    }()
+    // Computed (a fresh dictionary per read): `[String: Any]` is not Sendable, so it cannot be a stored static.
+    static var stampStill: [String: Any] { ["prompt_kind": "date", "at_s": 5.0, "raw_text": "JUN 21 1991", "error": NSNull(),
+                                            "parsed": ["dates": ["1991-06-21"], "degenerate": false]] }
+
+    /// F1: every frame failed to rip → no window, no model call; not a verdict.
+    @Test func framesThatWouldNotRipAreNotAVerdictNothingIsWritten() throws {
+        let none = try Self.map(["window_results": [], "results": [],
+                                 "frames_failed": [["frame_index": 0], ["frame_index": 1], ["frame_index": 2]],
+                                 "summary": ["fused_years": NSNull()]])
+        #expect(none.lines.isEmpty && none.retryNextRun && !none.eraNone)
+        // Partial: one window's frames would not rip, the other was refused by the contract.
+        let partial = try Self.map(["window_results": [Self.window(1, raw: "not json")], "results": [],
+                                    "frames_failed": [["frame_index": 0, "window_index": 0]], "summary": ["fused_years": NSNull()]])
+        #expect(partial.lines.isEmpty && partial.retryNextRun)
+    }
+
+    /// F2: a generation error beside ocr.date or a valid window used to write those lines, which cached the file.
+    @Test func aGenerationErrorBesideOtherObservationsWritesNothingSoTheRetryIsReal() throws {
+        let withStamp = try Self.map(["window_results": [Self.window(0, raw: "", error: "GenerationTimeout: 120 s")],
+                                      "results": [Self.stampStill], "summary": ["fused_years": NSNull()]])
+        #expect(withStamp.lines.isEmpty && withStamp.retryNextRun)
+        let withWindow = try Self.map(["window_results": [Self.window(0, raw: "", error: "GenerationTimeout: 120 s"),
+                                                          Self.window(1, raw: Self.validEraRaw)],
+                                       "results": [], "summary": ["fused_years": NSNull()]])
+        #expect(withWindow.lines.isEmpty && withWindow.retryNextRun)
+    }
+
+    /// The same invariant on the OCR side: a still the model never answered is not "no date read".
+    @Test func anOCRStillGenerationErrorWithoutAFusedRangeWritesNothing() throws {
+        let mapped = try Self.map(["window_results": [Self.window(0, raw: "not json")],
+                                   "results": [["prompt_kind": "date", "at_s": 5.0, "raw_text": "", "error": "GenerationTimeout: 60 s",
+                                                "parsed": ["dates": [], "degenerate": false]], Self.stampStill],
+                                   "summary": ["fused_years": NSNull()]])
+        #expect(mapped.lines.isEmpty && mapped.retryNextRun)
+    }
+
+    /// Which wins: a fused range is a verdict — it is written even beside a transient failure.
+    @Test func aFusedRangeWinsOverATransientFailure() throws {
+        let mapped = try Self.map(["window_results": [Self.window(0, raw: "", error: "GenerationTimeout: 120 s"),
+                                                      Self.window(1, raw: Self.validEraRaw)],
+                                   "results": [], "frames_failed": [["frame_index": 9]],
+                                   "summary": ["fused_years": [1990, 1994]]])
+        #expect(mapped.lines.map(\.field) == ["era.yearRange", "era.fused"])
+        #expect(!mapped.retryNextRun && !mapped.eraNone)
     }
 }
 
@@ -329,7 +387,39 @@ struct EraJobRunTests {
         let words = await first.outcomeDetail()
         await first.end()
         #expect(try EraFixture.lines(root).isEmpty)
-        #expect(words.contains("1 retried next run (window generation errors)"), "\(words)")
+        #expect(words.contains("1 retried next run (generation errors or frames that would not rip)"), "\(words)")
+        let second = try EraJob(EraFixture.setup(fixture, root: root))
+        #expect(second.plan.units.map(\.digest) == [EraFixture.hex(1)])
+        await second.end()
+    }
+
+    /// Codex F2 at run level: generation errors beside five ocr.date stills —
+    /// nothing written, the next plan still holds the file.
+    @Test func aGenerationErrorBesideAStampIsRetriedNotCached() async throws {
+        let fixture = try await EraFixture.catalog([EraFixture.File(n: 1, path: "/synthetic/1970/generr-stamp.mov")])
+        defer { fixture.remove() }
+        let root = try EraFixture.stateRoot()
+        let first = try EraJob(EraFixture.setup(fixture, root: root))
+        #expect(try await first.runUnit(0) == .done)
+        await first.end()
+        #expect(try EraFixture.lines(root).isEmpty, "no ocr.date either: any line would cache the file")
+        let second = try EraJob(EraFixture.setup(fixture, root: root))
+        #expect(second.plan.units.map(\.digest) == [EraFixture.hex(1)])
+        await second.end()
+    }
+
+    /// Codex F1 at run level: every frame failed to rip (the file still
+    /// readable) — no era.none, the next plan still holds the file.
+    @Test func framesThatWouldNotRipAreRetriedNotCached() async throws {
+        let fixture = try await EraFixture.catalog([EraFixture.File(n: 1, path: "/synthetic/1970/ripfail.mov")])
+        defer { fixture.remove() }
+        let root = try EraFixture.stateRoot()
+        let first = try EraJob(EraFixture.setup(fixture, root: root))
+        #expect(try await first.runUnit(0) == .done)
+        let words = await first.outcomeDetail()
+        await first.end()
+        #expect(try EraFixture.lines(root).isEmpty)
+        #expect(words.contains("1 retried next run"), "\(words)")
         let second = try EraJob(EraFixture.setup(fixture, root: root))
         #expect(second.plan.units.map(\.digest) == [EraFixture.hex(1)])
         await second.end()

@@ -10,9 +10,13 @@
 // it, `era.none` (2026-11-02: "analyzed by this signer, no usable era
 // evidence", so the caching rule below sees the file as done instead of
 // re-running it every job; never an era, never a date) — for the app's
-// JournalApplier to commit. A window the model never answered (a generation
-// error) is not evidence of anything: such a file gets no `era.none` and is
-// retried next run. Nothing here writes the catalog; the catalog is opened
+// JournalApplier to commit. A record with no fused range that shows the model
+// did not see the whole file — an era window or OCR still it never answered
+// (a generation error), a frame that would not rip — is not evidence of
+// anything: the unit writes NO line at all (the caching rule below counts any
+// line by the signer, so even an ocr.date would cache it) and the file is
+// retried next run (Codex era.none pass, 2026-11-02). A fused range is a
+// verdict and wins over such a failure. Nothing here writes the catalog; the catalog is opened
 // read-only (BackgroundCatalogAccess) to plan.
 //
 // The plan (frozen per job id in background/plans/<id>.json, so a resume's
@@ -277,7 +281,7 @@ actor EraCounters {
     private var observed: [String: Set<String>] = [:]   // signer → digests with lines (journal + this run)
     private var windowsInvalid = 0
     private var eraNone = 0
-    private var retryGenerationErrors = 0
+    private var retriedNextRun = 0
 
     func loaded(_ info: PythonClipWorker.LoadInfo) {
         self.info = info
@@ -310,7 +314,7 @@ actor EraCounters {
         assertions += mapped.lines.count
         windowsInvalid += mapped.windowsInvalid
         if mapped.eraNone { eraNone += 1 }
-        if mapped.retryNextRun { retryGenerationErrors += 1 }
+        if mapped.retryNextRun { retriedNextRun += 1 }
         analyzed += 1
         seconds += Double(s.components.seconds) + Double(s.components.attoseconds) / 1e18
         // Only a unit that wrote a line is cached (the journal is the cache).
@@ -324,7 +328,7 @@ actor EraCounters {
             + "\(assertions) assertions written · skipped (cached) \(planCached) at plan + \(cachedAtRun) at run · "
             + "failed: \(timeouts) timeout, \(deaths) worker death, \(unreadable) unreadable, \(other) other · "
             + "\(windowsInvalid) windows refused by the Swift contract · no usable era: \(eraNone) era.none, "
-            + "\(retryGenerationErrors) retried next run (window generation errors) · \(perClip) s/clip · worker peak RSS \(rss)"
+            + "\(retriedNextRun) retried next run (generation errors or frames that would not rip) · \(perClip) s/clip · worker peak RSS \(rss)"
     }
 }
 
@@ -397,8 +401,9 @@ public enum EraRecordMapper {
         public var generationErrors = 0
         /// The record carries the file's `era.none` line.
         public var eraNone: Bool { lines.contains { $0.field == EraRecordMapper.noneField } }
-        /// No era verdict and a generation error: nothing about the era is known — retry.
-        public var retryNextRun: Bool { !lines.contains { $0.field == "era.fused" || $0.field == EraRecordMapper.noneField } }
+        /// No fused range and the model did not see the whole file (a generation
+        /// error, a frame that would not rip): `lines` is empty — retry.
+        public internal(set) var retryNextRun = false
         var selfConfidences: [Double] = []
         var validWindows: [[Double]] = []
     }
@@ -406,10 +411,10 @@ public enum EraRecordMapper {
     /// One bench clip record (ClipService.analyze_clip) → its journal lines:
     /// `era.yearRange` per window the Swift contract accepts (through
     /// EvidenceAssertionMapper), `ocr.date` per still that read a date,
-    /// one `era.fused` when the record's summary has a fused range, else one
-    /// `era.none` when every era window was answered (none was a generation
-    /// error) — including a record with no era window at all (no frame
-    /// ripped): the file is done for this signer, with no usable era evidence.
+    /// one `era.fused` when the record's summary has a fused range; else, when
+    /// the model saw the whole file (every frame ripped, every era window and
+    /// OCR still answered), one `era.none` — the file is done for this signer,
+    /// with no usable era evidence; else NOTHING (`retryNextRun`).
     public static func lines(record: Data, digest: String, info: PythonClipWorker.LoadInfo, job: String, unit: Int,
                              at: Int64) throws -> Mapped {
         guard let o = (try? JSONSerialization.jsonObject(with: record)) as? [String: Any] else {
@@ -421,7 +426,11 @@ public enum EraRecordMapper {
         out.lines += try stampLines(o["results"] as? [[String: Any]] ?? [], context)
         if let fused = try fusedLine(o["summary"] as? [String: Any], windows: out, context) {
             out.lines.append(fused)
-        } else if out.generationErrors == 0 {
+        } else if out.generationErrors > 0 || stillErrors(o) > 0 || !((o["frames_failed"] as? [Any]) ?? []).isEmpty {
+            // Not a verdict: write nothing, so the planner (any line = cached) retries the file.
+            out.lines = []
+            out.retryNextRun = true
+        } else {
             out.lines.append(try noneLine(o, windows: out, context))
         }
         return out
@@ -434,15 +443,21 @@ public enum EraRecordMapper {
     public static let noneField = "era.none"
     public static let noneValue = "none"
 
+    /// OCR stills the model never answered (`error` set).
+    static func stillErrors(_ o: [String: Any]) -> Int {
+        (o["results"] as? [[String: Any]] ?? []).filter { r in
+            r["prompt_kind"] as? String == "date" && r["error"] != nil && !(r["error"] is NSNull)
+        }.count
+    }
+
     static func noneLine(_ o: [String: Any], windows: Mapped, _ c: Context) throws -> ObservationLine {
         let eraWindows = (o["window_results"] as? [[String: Any]] ?? []).filter { $0["family"] as? String == "era" }.count
         let evidence: [String: Any] = [
             "meaning": "analyzed by this signer; no usable era evidence — not an era and not a date",
-            "reason": eraWindows == 0 ? "no era window (no frame could be shown)"
+            "reason": eraWindows == 0 ? "no era window (the sampler planned none)"
                 : windows.validWindows.isEmpty ? "no era window passed the contract" : "the valid windows gave no fused range",
             "eraWindows": eraWindows, "validEraWindows": windows.validWindows.count,
             "windowsRefusedByContract": windows.windowsInvalid - windows.generationErrors,
-            "framesFailed": (o["frames_failed"] as? [Any])?.count ?? 0,
             "promptHash": c.approach.promptHash, "host": c.approach.host.label,
         ]
         return try c.line(noneField, noneValue, confidence: 0, evidence: evidence)
