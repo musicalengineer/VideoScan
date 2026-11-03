@@ -33223,6 +33223,20 @@
         "refusalTable",
         "sensor"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundMenuPresentationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundMenuPresentationTests"
+      ],
+      "tests": [
+        "idle",
+        "paused",
+        "unknownTotal",
+        "working"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35913,10 +35927,11 @@
       ],
       "expected_floor": 3290,
       "name": "unit",
-      "package_expected_floor": 661,
+      "package_expected_floor": 665,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
+        "VideoScanCoreTests.BackgroundMenuPresentationTests",
         "VideoScanCoreTests.BackgroundPayloadCodecTests",
         "VideoScanCoreTests.BackoffPolicyTests",
         "VideoScanCoreTests.CaptionTextQualityTests",

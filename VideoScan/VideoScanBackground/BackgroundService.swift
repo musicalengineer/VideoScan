@@ -95,4 +95,12 @@ final class BackgroundService: @unchecked Sendable {
         termSource = source
     }
     private var termSource: DispatchSourceSignal?
+
+    /// The menu bar item (Rick 2026-11-03). Main thread, after `start()`.
+    @MainActor func installMenuBar() {
+        let controller = StatusMenuController(supervisor: supervisor, startedAt: startedAt, log: log)
+        controller.start()
+        menuBar = controller
+    }
+    private var menuBar: AnyObject?
 }

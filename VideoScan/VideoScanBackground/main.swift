@@ -6,9 +6,9 @@
 //
 //   • no arguments → the SERVICE. The same headless-Aqua arrangement as the
 //     app's `--find-tag` (App/main.swift): NSApplication with the
-//     `.prohibited` activation policy, because the jobs this process will
-//     host (Vision, CoreML, MLX) need an application context, and
-//     `.prohibited` keeps it out of the Dock. launchd starts it on the first
+//     `.accessory` activation policy, because the jobs this process will
+//     host (Vision, CoreML, MLX) need an application context; LSUIElement
+//     keeps it out of the Dock and the menu bar item shows it is running. launchd starts it on the first
 //     XPC message and relaunches it after a crash; it exits itself after 10
 //     idle minutes (IdleExitPolicy) so `KeepAlive: SuccessfulExit false`
 //     leaves it down until the next message.
@@ -41,8 +41,12 @@ if let verb = BackgroundCLI.verb(in: arguments) {
     RunLoop.main.run()
 } else {
     let serviceApp = NSApplication.shared
-    serviceApp.setActivationPolicy(.prohibited)
+    // `.accessory` (was `.prohibited`, Rick 2026-11-03): still no Dock icon
+    // (LSUIElement), but allowed the menu bar item that says the helper is
+    // alive and what it is doing (StatusMenuController).
+    serviceApp.setActivationPolicy(.accessory)
     let service = BackgroundService(arguments: arguments)
     service.start()
+    service.installMenuBar()
     RunLoop.main.run()
 }
