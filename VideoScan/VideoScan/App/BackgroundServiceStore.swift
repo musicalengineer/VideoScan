@@ -19,11 +19,11 @@
 // catalog and the journal, or a checkpoint file's `updatedAt`. "running" is
 // never said from the flag (BackgroundServicePresentation, tested).
 //
-// The enqueue rule (`shouldEnqueue`, pure): enabled AND launchd says enabled
+// The enqueue rule (`shouldEnqueue`, pure): enabled AND not a viewer AND launchd says enabled
 // AND the helper answered AND no era job is active in that answer AND the
 // FRESH count says files are left AND no run outside the service (a
-// `--run era` started by hand, seen by its checkpoint's updatedAt within
-// 15 minutes) is live. Decided only in a cycle that recounted — launch,
+// `--run era` started by hand: its checkpoint touched within 15 minutes AND
+// the state-root lock held by that `--run`) is live. Decided only in a cycle that recounted — launch,
 // toggle-on, every 10 minutes — never from a stale count, so a finished job
 // is not re-queued five seconds later on the old number.
 //
@@ -79,6 +79,9 @@ final class BackgroundServiceStore: ObservableObject {
     var enqueueRequest: (JobRequest) async -> Result<EnqueueReply, Refusal>
     /// The helper's job ids, so its own checkpoints are not read as a hand run.
     var countWork: ([JobID]) async -> Result<BackgroundWorkCount, Refusal>
+    /// The live hand run, re-read on every refresh (a few small files and one
+    /// flock probe — no catalog work), so the line drops it when it exits.
+    var findHandRun: ([JobID]) -> JobCheckpoint?
     var makeRequest: () -> JobRequest
     var persist: (Bool) -> Void
     var isViewer: () -> Bool
@@ -92,6 +95,7 @@ final class BackgroundServiceStore: ObservableObject {
          askStatus: @escaping () async -> Result<ServiceStatus, Refusal>,
          enqueueRequest: @escaping (JobRequest) async -> Result<EnqueueReply, Refusal>,
          countWork: @escaping ([JobID]) async -> Result<BackgroundWorkCount, Refusal>,
+         findHandRun: @escaping ([JobID]) -> JobCheckpoint?,
          makeRequest: @escaping () -> JobRequest,
          persist: @escaping (Bool) -> Void,
          isViewer: @escaping () -> Bool,
@@ -101,6 +105,7 @@ final class BackgroundServiceStore: ObservableObject {
         self.askStatus = askStatus
         self.enqueueRequest = enqueueRequest
         self.countWork = countWork
+        self.findHandRun = findHandRun
         self.makeRequest = makeRequest
         self.persist = persist
         self.isViewer = isViewer
@@ -119,6 +124,7 @@ final class BackgroundServiceStore: ObservableObject {
             askStatus: { await BackgroundServiceClient().status() },
             enqueueRequest: { await BackgroundServiceClient().enqueue($0) },
             countWork: productionCountWork(catalogURL: catalogURL),
+            findHandRun: productionFindHandRun(catalogURL: catalogURL),
             makeRequest: { EraJob.request(limit: nil, repoPath: EraCLIArguments.defaultRepo, requestedBy: "app") },
             persist: { defaults.set($0, forKey: defaultsKey) },
             isViewer: isViewer,
@@ -130,11 +136,23 @@ final class BackgroundServiceStore: ObservableObject {
     static func productionCountWork(catalogURL: @escaping () -> URL?) -> ([JobID]) async -> Result<BackgroundWorkCount, Refusal> {
         { known in
             guard let catalog = catalogURL() else { return .failure(Refusal("no catalog is open")) }
-            let root = catalog.deletingLastPathComponent().appendingPathComponent("background", isDirectory: true)
+            let root = stateRoot(beside: catalog)
             return await Task.detached(priority: .utility) {
                 Self.count(catalogURL: catalog, stateRoot: root, knownJobs: known, now: Date())
             }.value
         }
+    }
+
+    static func productionFindHandRun(catalogURL: @escaping () -> URL?) -> ([JobID]) -> JobCheckpoint? {
+        { known in
+            guard let catalog = catalogURL() else { return nil }
+            return foregroundRun(stateRoot: stateRoot(beside: catalog), knownJobs: known, now: Date())
+        }
+    }
+
+    /// The service's folder sits beside the catalog.
+    nonisolated static func stateRoot(beside catalog: URL) -> URL {
+        catalog.deletingLastPathComponent().appendingPathComponent("background", isDirectory: true)
     }
 
     // MARK: The toggle
@@ -155,10 +173,12 @@ final class BackgroundServiceStore: ObservableObject {
             launchdStatus = a.status
             Task { await refresh(recount: true) }
         } else {
-            BackgroundServiceRegistrar.unregister(service: { a }, log: log)
+            // A failed unregister is kept in words (codex-1102 F6): launchd
+            // still runs the helper, so the line must not say plain "off".
+            let failure = BackgroundServiceRegistrar.unregister(service: { a }, log: log)
             launchdStatus = a.status
             service = nil
-            serviceProblem = nil
+            serviceProblem = failure.map { "unregister failed — \($0)" }
         }
     }
 
@@ -166,8 +186,33 @@ final class BackgroundServiceStore: ObservableObject {
 
     /// launchd's status; when on and launchd agrees, the helper's status;
     /// with `recount`, the work count and — if the rule says so — one enqueue.
+    ///
+    /// One recount at a time (codex-1102 F3): a recount asked for while one
+    /// is in flight (the launch cycle and the toggle's Task interleave at
+    /// every `await`) runs once more AFTER it, on a fresh status — so it sees
+    /// the era job the first one queued. Bounded: a rerun happens only when
+    /// another caller asked during the run (10-minute cycle, toggles).
     func refresh(recount: Bool) async {
         refreshCount += 1
+        await readStatus()
+        recheckHandRun()
+        guard recount else { return }
+        guard !recounting else { recountAgain = true; return }
+        recounting = true
+        defer { recounting = false }
+        var rerun = false
+        repeat {
+            if rerun { await readStatus() }
+            recountAgain = false
+            await recountOnce()
+            rerun = recountAgain
+        } while rerun
+    }
+
+    private var recounting = false
+    private var recountAgain = false
+
+    private func readStatus() async {
         launchdStatus = agent().status
         if enabled, launchdStatus == .enabled {
             switch await askStatus() {
@@ -177,20 +222,34 @@ final class BackgroundServiceStore: ObservableObject {
         } else {
             service = nil
         }
-        guard recount else { return }
+    }
+
+    /// The hand run on the line is re-read every refresh (codex-1102 F5), so
+    /// it goes when the run's lock does; the count stands until the next recount.
+    private func recheckHandRun() {
+        guard work != nil else { return }
+        work?.foregroundRun = findHandRun(service?.jobs.map(\.id) ?? [])
+    }
+
+    /// Decides on THIS count only (codex-1102 F4): a failed count clears the
+    /// old one rather than letting it stand in for a fresh one.
+    private func recountOnce() async {
+        let fresh: BackgroundWorkCount
         switch await countWork(service?.jobs.map(\.id) ?? []) {
-        case .success(let c): work = c; workProblem = nil
-        case .failure(let r): workProblem = r.words
+        case .success(let c): fresh = c; work = c; workProblem = nil
+        case .failure(let r): work = nil; workProblem = r.words; return
         }
-        if Self.shouldEnqueue(enabled: enabled, launchd: launchdStatus, service: service, work: work) {
+        if Self.shouldEnqueue(enabled: enabled, viewer: isViewer(), launchd: launchdStatus, service: service, work: fresh) {
             await enqueueEra()
         }
     }
 
-    /// Pure: the five conditions in the file header.
-    nonisolated static func shouldEnqueue(enabled: Bool, launchd: SMAppService.Status?,
+    /// Pure: the six conditions in the file header. A viewer never queues
+    /// (codex-1102 F1: the toggle refused on a viewer, but a flag left on from
+    /// its master days still queued on every launch recount).
+    nonisolated static func shouldEnqueue(enabled: Bool, viewer: Bool, launchd: SMAppService.Status?,
                                           service: ServiceStatus?, work: BackgroundWorkCount?) -> Bool {
-        guard enabled, launchd == .enabled, let service, let work else { return false }
+        guard enabled, !viewer, launchd == .enabled, let service, let work else { return false }
         guard work.filesLeft > 0, work.foregroundRun == nil else { return false }
         return !service.jobs.contains { $0.kind == .era && $0.state.isActive }
     }
@@ -271,7 +330,8 @@ final class BackgroundServiceStore: ObservableObject {
     }
 
     /// The newest checkpoint under `checkpoints/` touched within the window
-    /// whose job the helper does not list — a `--run era` by hand. A
+    /// whose job the helper does not list, while a `--run` holds the root's
+    /// lock — a `--run era` by hand. A
     /// checkpoint that cannot be read is skipped (isolation: a torn file is
     /// not a run).
     nonisolated static func foregroundRun(stateRoot: URL, knownJobs: [JobID], now: Date) -> JobCheckpoint? {
@@ -286,6 +346,11 @@ final class BackgroundServiceStore: ObservableObject {
             guard now.timeIntervalSince(c.updatedAt) < foregroundRunWindow, c.updatedAt <= now.addingTimeInterval(60) else { continue }
             if newest.map({ c.updatedAt > $0.updatedAt }) ?? true { newest = c }
         }
+        // A checkpoint is past progress; the live process is the evidence:
+        // a `--run` holding the state-root lock (codex-1102 F5). Probed only
+        // when a candidate exists (StateRootLock.holder documents the probe).
+        guard newest != nil, let holder = FileStateRootLock.holder(of: stateRoot),
+              FileStateRootLock.isHandRun(holder: holder) else { return nil }
         return newest
     }
 }
@@ -321,6 +386,9 @@ enum BackgroundServicePresentation {
     private static func helper(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, problem: String?) -> String {
         let name = "VideoScan Background: "
         guard enabled else {
+            if launchd == .enabled, let problem {
+                return name + "still enabled in launchd — turning it off failed (\(problem)); turn the checkbox on and off again"
+            }
             return name + (launchd == .enabled ? "off — still listed in \(loginItems) until the app unregisters it" : "off")
         }
         switch launchd {

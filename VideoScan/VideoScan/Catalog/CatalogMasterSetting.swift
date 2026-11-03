@@ -29,11 +29,9 @@ enum CatalogMasterSetting {
     static let key = CatalogSyncDefaultsKey.masterHostname
 
     /// The master the launch would use: the key, else the built-in default.
+    /// The launch's own reading (CatalogSync.masterSetting), never a second one.
     static func effective(_ defaults: UserDefaults) -> (hostname: String, explicit: Bool) {
-        if let saved = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
-            return (saved, true)
-        }
-        return (defaultMasterHostname, false)
+        CatalogSync.masterSetting(defaults: defaults)
     }
 
     /// Trimmed; empty removes the key (back to the built-in default).

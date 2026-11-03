@@ -65,6 +65,34 @@ struct CatalogMasterSettingTests {
         #expect(sameRoleNewName.contains("Takes effect when VideoScan relaunches"), "a viewer that will sync from a different master must relaunch too")
     }
 
+    private struct Host: HostnameSource {
+        let name: String
+        func currentHostname() -> String { name }
+    }
+
+    /// Regression (codex-1102 review): the pane trimmed the key and read an
+    /// empty one as the built-in default; the launch read it raw. A key of ""
+    /// launched the Ultra as a viewer while the pane said "catalog master";
+    /// " RicksM4.local " launched the M4 as a viewer while the pane said master.
+    @Test("the pane and the launch read the key one way: padded, empty, whitespace, case and .local variants agree on every Mac")
+    func paneAgreesWithLaunch() {
+        let keys: [String?] = [nil, "", "   ", "\n", " RicksUltra.local ", "RICKSULTRA", "ricksultra.local",
+                               "RicksM4.local\n", "  RicksM4 ", "RicksM5"]
+        for raw in keys {
+            let d = defaults()
+            if let raw { d.set(raw, forKey: CatalogMasterSetting.key) }
+            let pane = CatalogMasterSetting.effective(d).hostname
+            #expect(CatalogSync.masterHostname(defaults: d) == pane, "launch and pane name one master for \(String(reflecting: raw))")
+            var masters = 0
+            for mac in ["RicksUltra", "RicksUltra.local", "RicksM4", "ricksm5", "Ricks-M1"] {
+                let launch = CatalogSync.launchMode(hostnameSource: Host(name: mac), defaults: d)
+                #expect(launch == CatalogMasterSetting.role(thisMac: mac, master: pane), "\(mac) under \(String(reflecting: raw))")
+                if launch == .master, !mac.hasSuffix(".local") { masters += 1 }
+            }
+            #expect(masters <= 1, "never two masters among distinct Macs under \(String(reflecting: raw))")
+        }
+    }
+
     @Test("the store: one setter, one log line per change, Use This Mac names this Mac")
     func store() {
         let d = defaults()

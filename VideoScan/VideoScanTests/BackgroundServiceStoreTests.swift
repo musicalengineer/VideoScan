@@ -59,6 +59,7 @@ struct BackgroundServiceStoreTests {
             askStatus: { r.statusAsks += 1; return status },
             enqueueRequest: { r.enqueued.append($0); return reply },
             countWork: { _ in r.counts += 1; return work },
+            findHandRun: { _ in nil },
             makeRequest: { EraJob.request(limit: nil, repoPath: "/tmp/repo", requestedBy: "app") },
             persist: { r.persisted.append($0) },
             isViewer: { readOnly },
@@ -133,17 +134,18 @@ struct BackgroundServiceStoreTests {
         let none = BackgroundWorkCount(filesLeft: 0, foregroundRun: nil)
         let hand = BackgroundWorkCount(filesLeft: 10, foregroundRun: JobCheckpoint(jobID: JobID(), totalUnits: 5))
         typealias R = BackgroundServiceStore
-        #expect(R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: left))
-        #expect(R.shouldEnqueue(enabled: true, launchd: .enabled, service: finished, work: left), "a finished job is not active")
-        #expect(!R.shouldEnqueue(enabled: false, launchd: .enabled, service: idle, work: left))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .requiresApproval, service: idle, work: left))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .notRegistered, service: idle, work: left))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: nil, service: idle, work: left))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: nil, work: left), "no answer, no enqueue")
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: busy, work: left))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: none))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: nil))
-        #expect(!R.shouldEnqueue(enabled: true, launchd: .enabled, service: idle, work: hand), "a hand-started run holds the lane")
+        #expect(R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: idle, work: left))
+        #expect(R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: finished, work: left), "a finished job is not active")
+        #expect(!R.shouldEnqueue(enabled: false, viewer: false, launchd: .enabled, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .requiresApproval, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .notRegistered, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: nil, service: idle, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: nil, work: left), "no answer, no enqueue")
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: busy, work: left))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: idle, work: none))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: idle, work: nil))
+        #expect(!R.shouldEnqueue(enabled: true, viewer: false, launchd: .enabled, service: idle, work: hand), "a hand-started run holds the lane")
+        #expect(!R.shouldEnqueue(enabled: true, viewer: true, launchd: .enabled, service: idle, work: left), "a viewer never queues")
     }
 
     @Test("launchd waiting for approval: the helper is never asked (asking would start it) and nothing is queued")
@@ -164,6 +166,102 @@ struct BackgroundServiceStoreTests {
         for _ in 0..<5 { await store.refresh(recount: false) }
         #expect(r.enqueued.count == 1, "the 5 s visible poll is read-only")
         #expect(r.counts == 1)
+    }
+
+    /// Regression (codex-1102 review): `refresh` never asked `isViewer`, so a
+    /// Mac that was master with the flag on and is now a viewer queued the
+    /// era job on its launch recount — the toggle's guard was the only one.
+    @Test("a viewer Mac with the flag already on never enqueues, on the launch recount or any later one")
+    func viewerNeverEnqueues() async {
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled), readOnly: true)
+        await store.refresh(recount: true)
+        await store.refresh(recount: true)
+        #expect(r.enqueued.isEmpty, "a viewer queued \(r.enqueued.count) job(s)")
+        #expect(store.enqueueCount == 0)
+        #expect(r.counts == 2, "the count still runs so the line can say how much is left")
+    }
+
+    /// Regression (codex-1102 review): two recounting refreshes interleaved
+    /// across their awaits (the launch cycle and the toggle's Task) — both
+    /// read the same pre-enqueue status and both queued an era job.
+    @Test("two recounts in flight at once queue the era job once")
+    func overlappingRecountsEnqueueOnce() async {
+        let r = Recorder()
+        let store = BackgroundServiceStore(
+            enabled: true,
+            agent: { FakeAgent(.enabled) },
+            askStatus: {
+                r.statusAsks += 1
+                // The helper lists what it was given: after one enqueue its era job is running.
+                return .success(Self.serviceStatus(jobs: r.enqueued.isEmpty ? [] : [Self.eraJob(.running)]))
+            },
+            enqueueRequest: { r.enqueued.append($0); try? await Task.sleep(for: .milliseconds(40)); return .success(.accepted($0.id)) },
+            countWork: { _ in r.counts += 1; try? await Task.sleep(for: .milliseconds(40))
+                return .success(BackgroundWorkCount(filesLeft: 3_878, foregroundRun: nil)) },
+            findHandRun: { _ in nil },
+            makeRequest: { EraJob.request(limit: nil, repoPath: "/tmp/repo", requestedBy: "app") },
+            persist: { _ in },
+            isViewer: { false },
+            log: { r.lines.append($0) })
+        async let first: Void = store.refresh(recount: true)
+        async let second: Void = store.refresh(recount: true)
+        _ = await (first, second)
+        #expect(r.enqueued.count == 1, "queued \(r.enqueued.count) era jobs from one burst of recounts")
+        #expect(store.service?.jobs.contains { $0.kind == .era && $0.state.isActive } == true)
+    }
+
+    /// Regression (codex-1102 F4): a failed recount kept the previous count
+    /// and enqueued on it — the rule is "only from a fresh count".
+    @Test("a recount that fails never enqueues on the previous count")
+    func failedRecountCannotEnqueue() async {
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled))
+        await store.refresh(recount: true)
+        #expect(r.enqueued.count == 1)
+        store.countWork = { _ in .failure(Refusal("catalog unavailable")) }
+        await store.refresh(recount: true)
+        #expect(r.enqueued.count == 1, "a failed count queued again on the old number")
+        #expect(store.work == nil, "the old count is not shown as current")
+        #expect(store.workProblem == "catalog unavailable")
+    }
+
+    /// Regression (codex-1102 F5): the hand run's line came from the count
+    /// only, so after the run exited the visible poll kept saying "running
+    /// outside the service" until the next recount (never, while off).
+    @Test("the visible poll re-reads the hand run: when it is gone, the line stops saying running")
+    func visiblePollClearsAFinishedHandRun() async {
+        var hand = JobCheckpoint(jobID: JobID(rawValue: "HAND"), totalUnits: 4_709)
+        hand.completedUnits = 831
+        let (store, _) = Self.make(enabled: false, agent: FakeAgent(.notRegistered),
+                                   work: .success(BackgroundWorkCount(filesLeft: 3_878, foregroundRun: hand)))
+        var live: JobCheckpoint? = hand
+        store.findHandRun = { _ in live }
+        await store.refresh(recount: true)
+        #expect(store.work?.foregroundRun?.jobID == hand.jobID)
+        live = nil
+        await store.refresh(recount: false)
+        #expect(store.work?.foregroundRun == nil, "the hand run exited; the line must not still say running")
+        #expect(store.work?.filesLeft == 3_878, "the count itself stands until the next recount")
+    }
+
+    /// Regression (codex-1102 F6): unregister failed, launchd still said
+    /// enabled, and the line said "off".
+    @Test("unregister fails and launchd still says enabled: the line says so, never plain off")
+    func failedUnregisterIsNotOff() async {
+        final class StuckAgent: BackgroundAgentService {
+            var status: SMAppService.Status = .enabled
+            func register() throws {}
+            func unregister() throws { throw Refusal("Operation not permitted") }
+        }
+        let agent = StuckAgent()
+        let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled))
+        store.agent = { agent }
+        store.setEnabled(false)
+        let l = BackgroundServicePresentation.lines(enabled: store.enabled, launchd: store.launchdStatus, service: store.service,
+                                                    serviceProblem: store.serviceProblem, work: store.work, workProblem: store.workProblem,
+                                                    lastNote: store.lastNote, time: { _ in "16:16" })
+        #expect(!l.helper.hasPrefix("VideoScan Background: off"), "\(l.helper)")
+        #expect(l.helper.contains("Operation not permitted"), "\(l.helper)")
+        #expect(r.lines.contains { $0.contains("unregister failed") }, "\(r.lines)")
     }
 
     @Test("an active era job in the helper's answer: nothing more is queued")
@@ -219,6 +317,10 @@ struct BackgroundServiceStoreTests {
         s.updatedAt = now.addingTimeInterval(-20 * 60)
         try store.save(s)
         try Data("{not json".utf8).write(to: folder.appendingPathComponent("TORN.json"))
+        // The hand run is alive: it holds the state-root lock.
+        let lock = FileStateRootLock(root: root, owner: "cli --run era")
+        guard case .success = lock.claim() else { Issue.record("could not claim the root"); return }
+        defer { lock.release() }
 
         let found = BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [helpers], now: now)
         #expect(found?.jobID == hand)
@@ -227,6 +329,58 @@ struct BackgroundServiceStoreTests {
         #expect(BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [], now: now.addingTimeInterval(16 * 60)) == nil,
                 "sixteen minutes later every checkpoint is stale")
         #expect(BackgroundServiceStore.foregroundRun(stateRoot: root.appendingPathComponent("missing"), knownJobs: [], now: now) == nil)
+    }
+
+    /// Regression (codex-1102 F5): a recent checkpoint proves past progress,
+    /// not a live run. The evidence of a live hand run is its held state-root
+    /// lock (StateRootLock.swift) naming a `--run`; a dead run (kill -9) leaves
+    /// a fresh checkpoint and a free lock.
+    @Test("a hand run is live only while a --run holds the state-root lock; a fresh checkpoint alone is not")
+    func handRunNeedsTheHeldLock() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bg-lock-\(UUID().uuidString)", isDirectory: true)
+        let folder = root.appendingPathComponent("checkpoints", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        var c = JobCheckpoint(jobID: JobID(rawValue: "HAND"), totalUnits: 4_709, startedAt: now.addingTimeInterval(-600))
+        c.updatedAt = now.addingTimeInterval(-30)
+        try FileCheckpointStore(directory: folder).save(c)
+
+        #expect(BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [], now: now) == nil,
+                "no process holds the root: the run died; its checkpoint is history, not a live run")
+
+        let service = FileStateRootLock(root: root, owner: "service Rick-Breen.VideoScan.Background")
+        guard case .success = service.claim() else { Issue.record("could not claim as the service"); return }
+        #expect(BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [], now: now) == nil,
+                "the service holds the root: its checkpoints are not a hand run")
+        service.release()
+
+        let cli = FileStateRootLock(root: root, owner: "cli --run era")
+        guard case .success = cli.claim() else { Issue.record("could not claim as the hand run"); return }
+        defer { cli.release() }
+        #expect(BackgroundServiceStore.foregroundRun(stateRoot: root, knownJobs: [], now: now)?.jobID == c.jobID)
+    }
+
+    /// Regression (codex-1102 F7): a helper that accepted the message and
+    /// never replied left the refresh cycle suspended forever — no deadline.
+    @Test("a helper that never replies: the call fails within its deadline; the late reply is dropped")
+    func silentHelperTimesOut() async {
+        final class Stash: @unchecked Sendable { var late: (@Sendable () -> Void)? }
+        final class Done: @unchecked Sendable { var result: Result<Int, Refusal>? }
+        let stash = Stash()
+        let done = Done()
+        let call = Task { @MainActor in
+            done.result = await BackgroundServiceClient.awaitReply(within: .milliseconds(200)) { once in stash.late = { once.resume(.success(1)) } }
+        }
+        // Bounded so a red run fails here instead of hanging the suite.
+        for _ in 0..<200 where done.result == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        guard case .failure(let refusal)? = done.result else {
+            Issue.record("the call was still waiting 2 s after a 200 ms deadline")
+            call.cancel()
+            return
+        }
+        #expect(refusal.words.contains("did not answer within"), "\(refusal.words)")
+        stash.late?()   // the late reply: dropped, no double resume
     }
 
     // MARK: The words (truth)

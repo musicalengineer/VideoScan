@@ -391,9 +391,7 @@ final class CatalogSync: ObservableObject {
     /// construct CatalogSync directly with mocks exercise the real logic
     /// (same pattern as CatalogStore.shared).
     static func production() -> CatalogSync {
-        let masterHost = UserDefaults.standard.string(
-            forKey: CatalogSyncDefaultsKey.masterHostname
-        ) ?? defaultMasterHostname
+        let masterHost = masterHostname(defaults: .standard)
 
         let paths = CatalogSyncPaths.standard()
         return CatalogSync(
@@ -481,8 +479,25 @@ final class CatalogSync: ObservableObject {
     /// same default master, same compare.
     static func launchMode(hostnameSource: HostnameSource = SystemHostnameSource(),
                            defaults: UserDefaults = .standard) -> CatalogSyncMode {
-        let master = defaults.string(forKey: CatalogSyncDefaultsKey.masterHostname) ?? defaultMasterHostname
-        return hostnameMatches(local: hostnameSource.currentHostname(), master: master) ? .master : .viewer
+        hostnameMatches(local: hostnameSource.currentHostname(), master: masterHostname(defaults: defaults)) ? .master : .viewer
+    }
+
+    /// The master the launch uses: the one key, else the built-in default.
+    static func masterHostname(defaults: UserDefaults) -> String {
+        masterSetting(defaults: defaults).hostname
+    }
+
+    /// The ONE reading of the key — the launch (`production()`, `launchMode`)
+    /// and Settings ▸ Catalog Master both call it (codex-1102 F2: the pane
+    /// trimmed and defaulted an empty key while the launch read it raw, so a
+    /// key of "" launched the Ultra as a viewer under a pane saying master).
+    /// Trimmed; empty or whitespace-only reads as unset → the built-in default.
+    static func masterSetting(defaults: UserDefaults) -> (hostname: String, explicit: Bool) {
+        if let saved = defaults.string(forKey: CatalogSyncDefaultsKey.masterHostname)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
+            return (saved, true)
+        }
+        return (defaultMasterHostname, false)
     }
 
     /// Hostname compare that ignores `.local` suffix and is case-insensitive.

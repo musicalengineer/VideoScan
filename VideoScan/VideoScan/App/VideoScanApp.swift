@@ -600,8 +600,9 @@ struct VideoScanApp: App {
             catalogModel?.log(line)
             appLog.write("[background-service] " + line)
         }
-        backgroundService.countWork = BackgroundServiceStore.productionCountWork(
-            catalogURL: { [weak catalogModel] in catalogModel.map { URL(fileURLWithPath: $0.catalogStore.fileLocation) } })
+        let catalogURL: () -> URL? = { [weak catalogModel] in catalogModel.map { URL(fileURLWithPath: $0.catalogStore.fileLocation) } }
+        backgroundService.countWork = BackgroundServiceStore.productionCountWork(catalogURL: catalogURL)
+        backgroundService.findHandRun = BackgroundServiceStore.productionFindHandRun(catalogURL: catalogURL)
         backgroundService.isViewer = { [weak catalogModel] in catalogModel?.isReadOnly ?? true }
         if !TestEnvironment.isTestHost { backgroundService.start() }
     }
