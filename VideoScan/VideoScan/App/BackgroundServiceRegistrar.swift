@@ -75,12 +75,17 @@ enum BackgroundServiceRegistrar {
         }
     }
 
-    static func unregister(service: () -> any BackgroundAgentService = { agent }, log: (String) -> Void) {
+    /// Returns the failure's words, nil on success (the Settings line shows them).
+    @discardableResult
+    static func unregister(service: () -> any BackgroundAgentService = { agent }, log: (String) -> Void) -> String? {
         do {
             try service().unregister()
             log("background service: unregistered \(plistName)")
+            return nil
         } catch {
-            log("background service: unregister failed — \(error.localizedDescription)")
+            let words = (error as? Refusal)?.words ?? error.localizedDescription
+            log("background service: unregister failed — \(words)")
+            return words
         }
     }
 }
@@ -125,9 +130,8 @@ final class BackgroundServiceClient: @unchecked Sendable {
 
     /// One round trip: the proxy's reply or its error handler, whichever
     /// lands first; the other is dropped.
-    private func call<T: Sendable>(_ body: (BackgroundServiceXPC, OnceResume<T>) -> Void) async -> Result<T, Refusal> {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Result<T, Refusal>, Never>) in
-            let once = OnceResume(continuation)
+    private func call<T: Sendable>(_ body: (BackgroundServiceXPC, OnceResume<Result<T, Refusal>>) -> Void) async -> Result<T, Refusal> {
+        await Self.awaitReply(within: Self.replyDeadline) { once in
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
                 once.resume(.failure(Refusal("VideoScan Background did not answer: \(error.localizedDescription)")))
             }) as? BackgroundServiceXPC else {
@@ -138,16 +142,20 @@ final class BackgroundServiceClient: @unchecked Sendable {
         }
     }
 
-    private final class OnceResume<T: Sendable>: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Result<T, Refusal>, Never>?
-        init(_ c: CheckedContinuation<Result<T, Refusal>, Never>) { continuation = c }
-        func resume(_ result: Result<T, Refusal>) {
-            lock.lock()
-            let c = continuation
-            continuation = nil
-            lock.unlock()
-            c?.resume(returning: result)
-        }
+    /// A helper that takes the message and never answers fails the call
+    /// after this (codex-1102 F7) instead of holding the refresh cycle
+    /// forever. Generous: launchd may cold-start the helper on this message.
+    static let replyDeadline: Duration = .seconds(30)
+
+    /// The app's one-shot latch with a deadline (`OnceResume.race`,
+    /// CatalogQuitRecovery.swift): the reply, the error handler or the timer,
+    /// whichever lands first; the others are dropped.
+    static func awaitReply<T: Sendable>(within deadline: Duration,
+                                        _ start: (OnceResume<Result<T, Refusal>>) -> Void) async -> Result<T, Refusal> {
+        let seconds = Double(deadline.components.seconds) + Double(deadline.components.attoseconds) / 1e18
+        return await OnceResume<Result<T, Refusal>>.race(
+            within: seconds,
+            timeout: .failure(Refusal("VideoScan Background did not answer within \(deadline.components.seconds) s")),
+            start)
     }
 }

@@ -88,6 +88,32 @@ public final class FileStateRootLock: StateRootOwnership, @unchecked Sendable {
         descriptor = -1
     }
 
+    /// Who holds `root` right now, in the holder's words; nil when nobody does
+    /// (no file, or the lock is free — a dead holder's words are history).
+    /// The evidence the app's Settings line uses for "a hand run is live"
+    /// (codex-1102 F5: a fresh checkpoint alone outlived a kill -9).
+    ///
+    /// A probe: a shared non-blocking flock, dropped at once. For that instant
+    /// a claimant's LOCK_EX|LOCK_NB fails; the service asks again after
+    /// `ownerRetryInterval`, a hand run is refused and can be re-run. Callers
+    /// probe only when a checkpoint already suggests a hand run. Never creates
+    /// the file. (C++: `open(O_RDONLY)` + `flock(LOCK_SH|LOCK_NB)`.)
+    public static func holder(of root: URL) -> String? {
+        let fd = open(root.appendingPathComponent(fileName).path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        if flock(fd, LOCK_SH | LOCK_NB) == 0 {
+            flock(fd, LOCK_UN)
+            return nil
+        }
+        return errno == EWOULDBLOCK ? holderWords(fd) : nil
+    }
+
+    /// True for the words a `--run` writes ("pid 1861 · cli --run era · …").
+    public static func isHandRun(holder words: String) -> Bool {
+        words.contains("· cli ")
+    }
+
     /// "pid 1861 · cli --run era · since 14:31"
     static func words(pid: Int32, owner: String, since: Date) -> String {
         let f = DateFormatter()

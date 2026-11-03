@@ -8195,19 +8195,26 @@
       ],
       "tests": [
         "activeJobBlocks",
+        "failedRecountCannotEnqueue",
+        "failedUnregisterIsNotOff",
         "foregroundRunFromCheckpoints",
+        "handRunNeedsTheHeldLock",
         "helperLineTruth",
         "jobLineOrder",
         "notAnswering",
         "oneKey",
+        "overlappingRecountsEnqueueOnce",
         "refusalShownAndLogged",
         "requiresApprovalAsksNothing",
         "sameValueIsNoOp",
         "shouldEnqueueTable",
+        "silentHelperTimesOut",
         "staleCountNeverEnqueues",
         "toggleOff",
         "toggleOn",
-        "viewerRefuses"
+        "viewerNeverEnqueues",
+        "viewerRefuses",
+        "visiblePollClearsAFinishedHandRun"
       ]
     },
     {
@@ -8616,6 +8623,7 @@
       ],
       "tests": [
         "builtInDefault",
+        "paneAgreesWithLaunch",
         "placementAndSetter",
         "poisonedKey",
         "role",
@@ -35791,7 +35799,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3254,
+      "expected_floor": 3262,
       "name": "unit",
       "package_expected_floor": 644,
       "package_selectors": [

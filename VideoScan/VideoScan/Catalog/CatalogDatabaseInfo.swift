@@ -74,7 +74,7 @@ struct CatalogDatabaseInfoSources: Sendable, Equatable {
             lastSyncFile: CatalogSyncPaths.standard().lastSyncFile,
             sessionRole: sync?.mode,
             localHostname: SystemHostnameSource().currentHostname(),
-            masterHostname: UserDefaults.standard.string(forKey: CatalogSyncDefaultsKey.masterHostname) ?? defaultMasterHostname,
+            masterHostname: CatalogSync.masterHostname(defaults: .standard),
             defaultsSuite: nil)
     }
 }
