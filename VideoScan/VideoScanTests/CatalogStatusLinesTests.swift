@@ -145,36 +145,44 @@ struct CatalogStatusLinesLogicTests {
         #expect(CatalogStatusLinesPolicy.files(garbage, missing: missing, now: now, date: d).state == .red)
     }
 
-    @Test("Content: counts per analyzer from the cycler stamps; Embedded and Inferred Dates never counted; grey until counted; an unreadable sound sidecar is red")
+    // 2026-11-03 (Rick): Content is never yellow or red; the grey words are
+    // "N left to analyze"; the sidecar moved to the Database line (Catalog).
+    @Test("Content: counts per analyzer from the cycler stamps; Embedded and Inferred Dates never counted; grey until counted; work left is grey 'N left to analyze', never yellow")
     func content() {
         var report = AnalyzeCoverageReport()
-        #expect(CatalogStatusLinesPolicy.content(report, soundStoreProblem: nil).state == .grey)
+        #expect(CatalogStatusLinesPolicy.content(report).state == .grey)
+        #expect(CatalogStatusLinesPolicy.content(report).words == "Counting…")
         report.computedAt = now
         report.byCycler[.embeddedDates] = AnalyzeCoverageCounts(eligible: 50, covered: 10)
         report.byCycler[.dateInference] = AnalyzeCoverageCounts(eligible: 50, covered: 0)
-        let green = CatalogStatusLinesPolicy.content(report, soundStoreProblem: nil)
+        let green = CatalogStatusLinesPolicy.content(report)
         #expect(green.state == .green, "Embedded and Inferred Dates do not count")
+        #expect(green.words == "Up to date")
         #expect(green.detail.last?.hasPrefix("Embedded Dates and Inferred Dates are not counted") == true)
         report.byCycler[.fullHashes] = AnalyzeCoverageCounts(eligible: 700, covered: 40)
         report.byCycler[.soundPrints] = AnalyzeCoverageCounts(eligible: 20, covered: 8)
-        let yellow = CatalogStatusLinesPolicy.content(report, soundStoreProblem: nil)
-        #expect(yellow.state == .yellow)
-        #expect(yellow.words == "Not yet analyzed: Full Hashes 660 · Sound Prints 12 — nothing is running it")
-        #expect(CatalogStatusLinesPolicy.content(report, soundStoreProblem: "not a database").state == .red)
+        report.contentFiles = AnalyzeCoverageCounts(eligible: 700, covered: 40)
+        let grey = CatalogStatusLinesPolicy.content(report)
+        #expect(grey.state == .grey, "work left, nothing running it: normal, not an alarm")
+        #expect(grey.words == "660 left to analyze", Comment(rawValue: grey.words))
+        #expect(grey.detail.contains("Not yet analyzed: Full Hashes 660 · Sound Prints 12"))
+        #expect(grey.detail.first == CatalogStatusLinesPolicy.countsFiles(660), "the window says what N counts")
     }
 
-    @Test("RED 2026-11-01 evening: Content is green with nothing left; IN PROGRESS when work is left and something is on it; yellow only when nothing will do it")
+    @Test("Content is green with nothing left; IN PROGRESS (blue) 'Analyzing N of M files' when work is left and something is on it; grey otherwise (2026-11-03: never yellow)")
     func contentThreeStates() {
         var report = AnalyzeCoverageReport()
         report.computedAt = now
         report.byCycler[.fullHashes] = AnalyzeCoverageCounts(eligible: 700, covered: 40)
-        let idle = CatalogStatusLinesPolicy.content(report, soundStoreProblem: nil, working: false)
-        #expect(idle.state == .yellow, "work left and nothing will do it: you must act")
-        let working = CatalogStatusLinesPolicy.content(report, soundStoreProblem: nil, working: true)
+        report.contentFiles = AnalyzeCoverageCounts(eligible: 700, covered: 40)
+        let idle = CatalogStatusLinesPolicy.content(report, working: false)
+        #expect(idle.state == .grey, "work left and nothing on it: grey, never yellow (Rick 2026-11-03)")
+        let working = CatalogStatusLinesPolicy.content(report, working: true)
         #expect(working.state == .inProgress)
-        #expect(working.words.hasPrefix("In progress — not yet analyzed: Full Hashes 660"), Comment(rawValue: working.words))
+        #expect(working.words == "Analyzing 40 of 700 files", Comment(rawValue: working.words))
         report.byCycler[.fullHashes] = AnalyzeCoverageCounts(eligible: 700, covered: 700)
-        #expect(CatalogStatusLinesPolicy.content(report, soundStoreProblem: nil, working: true).state == .green, "nothing left is green, running or not")
+        report.contentFiles = AnalyzeCoverageCounts(eligible: 700, covered: 700)
+        #expect(CatalogStatusLinesPolicy.content(report, working: true).state == .green, "nothing left is green, running or not")
         // What counts as "on it": a counted analyzer running, or the helper.
         #expect(CatalogStatusLinesPolicy.contentIsWorking(running: [.fullHashes], backgroundActive: false))
         #expect(CatalogStatusLinesPolicy.contentIsWorking(running: [.sceneCaptions], backgroundActive: false))
@@ -197,12 +205,15 @@ struct CatalogStatusLinesLogicTests {
         #expect(green.worst == nil)
         var two = green; two.files.state = .yellow; two.content.state = .yellow
         #expect(CatalogStatusLines.menuTitle(two) == "Catalog Status — Files needs attention…")
+        // 2026-11-03: Content is never the worst line — the title names Database or Files only.
         var red = two; red.content.state = .red; red.database.state = .yellow
-        #expect(CatalogStatusLines.menuTitle(red) == "Catalog Status — Content needs attention…")
+        #expect(CatalogStatusLines.menuTitle(red) == "Catalog Status — Database needs attention…")
         var db = green; db.database.state = .yellow
         #expect(CatalogStatusLines.menuTitle(db) == "Catalog Status — Database needs attention…")
         var counting = green; counting.content.state = .grey
-        #expect(CatalogStatusLines.menuTitle(counting) == "Catalog Status…")
+        #expect(CatalogStatusLines.menuTitle(counting) == "Catalog Status — Green…", "Content's grey (work left) is normal")
+        var offline = green; offline.files.state = .grey
+        #expect(CatalogStatusLines.menuTitle(offline) == "Catalog Status…", "a Catalog line not decided yet")
         #expect(CatalogStatusLines.menuTitle(nil) == "Catalog Status…")
         #expect(CatalogStatusWords.menuTitle(CatalogFreshnessState()) == "Catalog Status…", "not computed yet")
     }
@@ -355,7 +366,10 @@ struct CatalogStatusLinesTruthTests {
         #expect(CatalogStatusLines.menuTitle(CatalogStatusLines(database: line, files: l(.files, .green), content: l(.content, .green)))
                 == "Catalog Status — Database needs attention…")
         var state = band(facts)
-        #expect(state.summary.colour == .red && CatalogStatusWords.chipWords(state) == "Needs attention…", "the chip relays the same break")
+        #expect(state.summary.colour == .red, "the band relays the same break")
+        var computed = AnalyzeCoverageReport(); computed.computedAt = now
+        #expect(CatalogStatusLinesPolicy.lines(facts: facts, report: computed, now: now).catalog.words == "Unhealthy",
+                "the strip's Catalog indicator relays the same break")
         #expect(CatalogAnalyzeMenu.summaryTitle(state).hasPrefix("Needs attention: 1 event members point at nothing"), Comment(rawValue: CatalogAnalyzeMenu.summaryTitle(state)))
 
         // Rick's actual catalog (11/02): the member was REMOVED on purpose — history. Green, the facts listed under it.
@@ -372,8 +386,10 @@ struct CatalogStatusLinesTruthTests {
         #expect(row == "completed \(d(recent)) · 1 unverified", Comment(rawValue: row))
         facts = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
         state = band(facts)
-        #expect(state.summary.colour == .green && CatalogStatusWords.chipWords(state) == "Reconciled",
-                "the chip goes green with the line: \(state.summary.colour) / \(state.reality.reasons)")
+        #expect(state.summary.colour == .green,
+                "the band goes green with the line: \(state.summary.colour) / \(state.reality.reasons)")
+        #expect(CatalogStatusLinesPolicy.lines(facts: facts, report: computed, now: now).catalog.words == "Synced",
+                "the strip's Catalog indicator goes green with the line")
         #expect(CatalogAnalyzeMenu.summaryTitle(state) == "The catalog is reconciled")
         #expect(state.reality.information.contains("1 event members point at files removed from the catalog — kept as history"))
         #expect(CatalogStatusLines.menuTitle(CatalogStatusLines(database: line, files: l(.files, .green), content: l(.content, .green)))
@@ -421,12 +437,14 @@ struct CatalogStatusLinesTruthTests {
         #expect(CatalogStatusWords.menuTitle(snapshot.state) == "Catalog Status — Database needs attention…",
                 "no report beside this catalog: the Database line is the worst")
 
-        // Content with work left: yellow while idle, in progress while a counted
-        // analyzer runs or the helper has a job — through the snapshot's own inputs.
+        // Content with work left: grey while idle (never yellow, 2026-11-03), in
+        // progress while a counted analyzer runs or the helper has a job.
         var left = report
         left.byCycler[.fullHashes] = AnalyzeCoverageCounts(eligible: 10, covered: 2)
+        left.contentFiles = AnalyzeCoverageCounts(eligible: 10, covered: 2)
         snapshot.publish(report: left, facts: facts)
-        #expect(snapshot.state.lines?.content.state == .yellow)
+        #expect(snapshot.state.lines?.content.state == .grey)
+        #expect(snapshot.state.lines?.content.words == "8 left to analyze")
         snapshot.setRunning([.fullHashes])
         #expect(snapshot.state.lines?.content.state == .inProgress)
         snapshot.setRunning([])

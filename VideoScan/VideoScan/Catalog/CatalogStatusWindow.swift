@@ -4,6 +4,13 @@
 //
 //   Catalog Status
 //   <what it touches · never · instant>              (CatalogActionBrief)
+//   ● Catalog: Synced — the strip's indicator (Rick 2026-11-03), and under
+//     it, per colour: green = the database basics (schema, generation, size,
+//     last check — CatalogDatabaseInfoModel's own rows, no new source);
+//     yellow = the line(s) out of step with their one "Fix: <verb>"; red =
+//     what is wrong and its fix, or "no fix yet"; grey = why it is grey and
+//     what is happening underneath (Counting… / Checking… / a drive not
+//     connected), so the user knows whether to wait.
 //   ● Database  Integrity check passed 1 Nov 02:14 (9 h ago)     [Check Now…]
 //   ● Files     13,842 present where the catalog says · 3 missing · checked …
 //   ● Content   Not yet analyzed: Full Hashes 660 · …   [Content Analysis…]
@@ -62,6 +69,7 @@ struct CatalogStatusWindow: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text(Self.windowTitle).font(.title.weight(.semibold))
                 CatalogActionBriefHeader(brief: .catalogStatus)
+                catalogLead
                 threeLines
                 if cutover.canReopen || cutover.canAdopt { restore }
                 GroupBox {
@@ -94,6 +102,31 @@ struct CatalogStatusWindow: View {
         .sheet(isPresented: $showValidate) {
             ValidateCatalogSheet(model: model, center: center)
         }
+    }
+
+    // MARK: The Catalog indicator's lead
+
+    /// The strip's Catalog indicator, said in full. O(1): a few strings from
+    /// the snapshot, and (green) four of the facts model's ~14 rows.
+    private var catalogLead: some View {
+        let catalog = CatalogStatusIndicators(freshness.state).catalog
+        let lead = catalog.state == .green ? CatalogStatusWindowWords.basics(info.lines) : catalog.why
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Circle().fill(catalog.state.tint).frame(width: 14, height: 14)
+                Text(CatalogStatusIndicator.catalogPrefix + catalog.words)
+                    .font(.title2.weight(.semibold))
+                    .accessibilityIdentifier("catalogStatus.catalogIndicator")
+            }
+            ForEach(lead, id: \.self) { line in
+                Text(line)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(catalog.state.tint.opacity(catalog.state == .green ? 0.06 : 0.12)))
     }
 
     // MARK: The three lines
@@ -160,6 +193,18 @@ struct CatalogStatusWindow: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
         .accessibilityIdentifier("catalogStatus.restore")
+    }
+}
+
+/// Pure words for the window's lead.
+enum CatalogStatusWindowWords {
+    /// The rows a green Catalog shows: the facts model's own (no new source).
+    static let basicLabels = ["Schema", "Generation", "Size", "Last Validate Catalog"]
+
+    static func basics(_ lines: [CatalogDatabaseInfoLine]) -> [String] {
+        let rows = basicLabels.compactMap { label in lines.first { $0.label == label } }
+        guard !rows.isEmpty else { return ["Reading the database facts…"] }
+        return rows.map { "\($0.label): \($0.value)" }
     }
 }
 

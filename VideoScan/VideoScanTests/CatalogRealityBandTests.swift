@@ -246,7 +246,6 @@ struct CatalogRealityStateTests {
         #expect(s.summary.colour == .green)
         #expect(s.summary.headline == "The catalog is reconciled")
         #expect(s.reality.reviewLine == "1,358 to review")
-        #expect(CatalogStatusWords.chipWords(s) == "Reconciled")
         #expect(s.summary.items.map(\.kind) == ["ocr"], "the stale rows are still listed for Update everything stale")
         let without = CatalogFreshnessState.judged(rows: rows, reality: CatalogRealityInputs(facts: greenFacts), now: now, wording: wording)
         #expect(without.summary.colour == s.summary.colour && without.summary.headline == s.summary.headline)
@@ -256,11 +255,10 @@ struct CatalogRealityStateTests {
     func words() {
         var broke = greenFacts; broke.breaks = [CatalogRealityCount(count: 1, words: "1 paths have more than one live row")]
         let red = CatalogFreshnessState.judged(rows: [], reality: CatalogRealityInputs(facts: broke), now: now, wording: wording)
-        #expect(CatalogStatusWords.chipWords(red) == "Needs attention…")
+        #expect(red.summary.colour == .red)
         // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
         let yellow = CatalogFreshnessState.judged(rows: [], now: now, wording: wording)
         #expect(yellow.summary.colour == .yellow, "nothing known = never validated")
-        #expect(CatalogStatusWords.chipWords(yellow) == "Needs validation")
         // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
     }
 }

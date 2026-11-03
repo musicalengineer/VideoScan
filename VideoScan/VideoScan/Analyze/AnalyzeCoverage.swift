@@ -272,6 +272,16 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     var degenerateOCRDates = 0
     /// Catalog ▸ Tidy Catalog…'s live counts (Rick 2026-11-01; CatalogTidy.swift).
     var tidy = CatalogTidyCounts()
+    /// Catalog Status's Content indicator (Rick 2026-11-03): per FILE, over
+    /// the `contentAnalyzers` — eligible = a connected file at least one of
+    /// them applies to; covered = every one that applies is stamped;
+    /// offline = such a file on a drive not connected. "N left to analyze"
+    /// is `remaining`. One counter, +0 bytes per record.
+    var contentFiles = AnalyzeCoverageCounts()
+    /// Live (non-hidden) records on a drive not connected now, by scan-target
+    /// root (`otherRoot` for none) — the Files line names the drives. One
+    /// entry per drive: a few dozen strings.
+    var offlineFilesByRoot: [String: Int] = [:]
     /// When these counts were computed — a CAPTION ("counts as of …"),
     /// deliberately outside `==` below.
     var computedAt: Date = Date(timeIntervalSince1970: 0)
@@ -290,6 +300,8 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.missingCopies == rhs.missingCopies
             && lhs.degenerateOCRDates == rhs.degenerateOCRDates
             && lhs.tidy == rhs.tidy
+            && lhs.contentFiles == rhs.contentFiles
+            && lhs.offlineFilesByRoot == rhs.offlineFilesByRoot
     }
 
     /// Cyclers whose per-record stamp does not exist today, so the
@@ -297,6 +309,14 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// File Presence (the audit keeps one run marker, not a stamp per row —
     /// its "covered" is supplied by CatalogFreshnessRows from that marker).
     static let coverageUnknown: Set<AnalyzeCycler> = [.footage, .filePresence, .integrity]
+
+    /// The analyzers whose stamps say "analyzed" — Catalog Status's Content
+    /// counts. Embedded Dates and Inferred Dates are not here: a file whose
+    /// camera wrote no date can never carry their stamp, so their "left" is
+    /// not "not yet analyzed" (the line says so). Footage and Correlate keep
+    /// no per-file stamp (coverageUnknown / pairs).
+    static let contentAnalyzers: [AnalyzeCycler] = [.fullHashes, .soundPrints, .duplicates, .sceneCaptions,
+                                                     .ocr, .transcribe, .fileSignatures]
 
     func counts(_ c: AnalyzeCycler) -> AnalyzeCoverageCounts { byCycler[c] ?? AnalyzeCoverageCounts() }
 
@@ -315,6 +335,36 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
         if k.eligible == 0 { return "nothing eligible" }
         if k.remaining == 0 { return "current · \(k.covered.formatted()) of \(k.eligible.formatted())" }
         return "\(AnalyzeCoverageCounts.percentText(k.percent)) · \(k.remaining.formatted()) to go"
+    }
+}
+
+// MARK: - Per-file tally (Catalog Status's Content indicator, 2026-11-03)
+
+/// One FILE's view across the content analyzers, folded into two totals:
+/// files with at least one counted analysis left (`contentFiles`), and live
+/// files per drive not connected (`offlineByRoot`). begin → note per
+/// cycler → end, once per record (≈ a per-row accumulator struct in C++).
+/// Memory: two Bools, one Counts, one entry per offline drive.
+struct AnalyzePerFileTally {
+    private static let counted = Set(AnalyzeCoverageReport.contentAnalyzers)
+    private var applies = false
+    private var left = false
+    private(set) var contentFiles = AnalyzeCoverageCounts()
+    private(set) var offlineByRoot: [String: Int] = [:]
+
+    mutating func begin() { applies = false; left = false }
+
+    /// One cycler's verdict on this record; only the counted ones matter.
+    mutating func note(_ c: AnalyzeCycler, applies a: Bool, covered: Bool) {
+        guard a, Self.counted.contains(c) else { return }
+        applies = true
+        left = left || !covered
+    }
+
+    mutating func end(root: String, reachable: Bool) {
+        contentFiles.record(applies: applies, reachable: reachable, covered: !left, stamp: nil, secondary: false)
+        guard !reachable else { return }
+        offlineByRoot[root, default: 0] += 1
     }
 }
 
@@ -386,6 +436,7 @@ enum AnalyzeCoverageCalculator {
         for c in AnalyzeCycler.allCases where c.hasVolumeScope { byVol[c] = [:] }
         var corr = AnalyzeCorrelateCounts()
         var pairedRecords = 0
+        var perFile = AnalyzePerFileTally()
 
         /// Tally one record for one cycler — catalog-wide and, where the
         /// cycler has a volume scope, for its volume. `applies` = the cycler
@@ -398,12 +449,14 @@ enum AnalyzeCoverageCalculator {
             // per-volume table (≈ `if (p) p->at(root).record(…)`).
             byVol[c]?[root, default: AnalyzeCoverageCounts()]
                 .record(applies: applies, reachable: reachable, covered: covered, stamp: stamp, secondary: secondary)
+            perFile.note(c, applies: applies, covered: covered)
         }
 
         for r in inputs {
             if r.isHidden { continue }
             report.degenerateOCRDates += r.degenerateOCRDates
             let (root, reachable) = rootAndReachability(r.fullPath)
+            perFile.begin()
             let stream = StreamType(rawValue: r.streamTypeRaw) ?? .ffprobeFailed
             let classification = AnalysisScope.classify(streamTypeRaw: r.streamTypeRaw, filename: r.filename)
             let inScope = scope.includes(streamTypeRaw: r.streamTypeRaw, filename: r.filename)
@@ -463,8 +516,11 @@ enum AnalyzeCoverageCalculator {
             // so every applicable record counts as reachable here.
             tally(.dateInference, root: root, reachable: true,
                   applies: !r.hasUserDate, covered: r.hasInferredDate)
+            perFile.end(root: root, reachable: reachable)
         }
         corr.pairs = pairedRecords / 2
+        report.contentFiles = perFile.contentFiles
+        report.offlineFilesByRoot = perFile.offlineByRoot
         report.byCycler = by
         report.byVolume = byVol
         report.correlate = corr

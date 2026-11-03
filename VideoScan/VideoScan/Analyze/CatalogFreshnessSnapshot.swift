@@ -1,7 +1,7 @@
 // CatalogFreshnessSnapshot.swift
 // ONE equality-gated snapshot behind every Catalog Status surface (Rick
 // 2026-10-16, docs/archive/design/catalog_status_freshness_2026_10_16.md §4): the
-// chip on the totals strip, the dot on the Content Analysis button, the
+// two indicators on the totals strip (Catalog and Content, 2026-11-03), the dot on the Content Analysis button, the
 // Analyze menu's first row, the Catalog ▸ Catalog Status… title, the band
 // at the top of the Analyze panel and the freshness column on every row.
 //
@@ -207,30 +207,16 @@ struct CatalogFreshnessState: Equatable {
     }
 }
 
-// MARK: - Words for the chip and the menu (pure)
+// MARK: - Words for the menu and the launch line (pure)
 
+/// The strip's two indicators read `CatalogStatusIndicators(state)`
+/// (CatalogStatusLines.swift, Rick 2026-11-03); the band's reality verdict
+/// keeps its own words for the band, the toolbar dot and the launch line.
 enum CatalogStatusWords {
 
-    static let chipPrefix = "Catalog Status: "
-
-    /// What follows "Catalog Status: " on the totals strip: the colour in
-    /// two or three words, so the chip ends under the Files column (Rick
-    /// 2026-10-18). The headline and the items live in the tooltip and in
-    /// Content Analysis, one click away.
-    static func chipWords(_ state: CatalogFreshnessState) -> String {
-        guard state.isComputed else { return "checking…" }
-        // Rick 2026-10-20: the colour answers "does the catalog reflect reality?"
-        switch state.summary.colour {
-        case .green: return "Reconciled"
-        case .yellow: return state.reality.reasons.first?.shortWords ?? "Needs validation"
-        case .red: return "Needs attention…"
-        case .grey: return "nothing to check"
-        }
-    }
-
-    /// Catalog ▸ "Catalog Status — <Database|Files|Content> needs
-    /// attention…" naming the worst of the three lines, or "— Green…"
-    /// (Rick 2026-11-01; replaces the band-colour word).
+    /// Catalog ▸ "Catalog Status — <Database|Files> needs attention…"
+    /// naming the worst Catalog line, or "— Green…" (Rick 2026-11-01;
+    /// Content never needs attention since 2026-11-03).
     static func menuTitle(_ state: CatalogFreshnessState) -> String {
         CatalogStatusLines.menuTitle(state.isComputed ? state.lines : nil)
     }
@@ -440,7 +426,8 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         // The three lines read the SAME facts and report the band just used.
         new.lines = CatalogStatusLinesPolicy.lines(facts: facts, report: report, now: now,
                                                    working: CatalogStatusLinesPolicy.contentIsWorking(running: running,
-                                                                                                      backgroundActive: backgroundServiceActive))
+                                                                                                      backgroundActive: backgroundServiceActive),
+                                                   checking: CatalogStatusLinesPolicy.catalogIsChecking(running: running))
         guard new != state else { return }
         publishCount += 1
         state = new

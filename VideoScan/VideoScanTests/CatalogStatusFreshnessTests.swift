@@ -366,7 +366,7 @@ struct CatalogStatusWordsTests {
             FreshnessRow(kind: "fullHashes", title: "Full Hashes", eligible: 3, covered: 3, lastOutcome: .ok),
         ], reality: validatedAnHourAgo)
         #expect(s.summary.colour == .green)
-        #expect(CatalogStatusWords.chipWords(s) == "Reconciled")
+        // The strip's indicators read the three lines since 11/03 — CatalogStatusSplitTests pins them.
         // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
     }
 
@@ -379,7 +379,7 @@ struct CatalogStatusWordsTests {
             FreshnessRow(kind: "soundPrints", title: "Sound Prints", eligible: 20, covered: 8, lastOutcome: .ok,
                          phrases: CatalogFreshnessRows.phrases(.soundPrints)),
         ], reality: unsettled)
-        #expect(CatalogStatusWords.chipWords(yellow) == "Needs a look")
+        #expect(yellow.summary.colour == .yellow)
         #expect(yellow.summary.headline == "Tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes")
         // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
         #expect(yellow.summary.items.map(\.words) == ["660 files without a full hash", "12 files without a sound print"],
@@ -389,18 +389,18 @@ struct CatalogStatusWordsTests {
         broken.breaks = [CatalogRealityCount(count: 2, words: "2 paths have more than one live row"),
                          CatalogRealityCount(count: 1, words: "1 duplicate groups hold files with different whole-file digests")]
         let red = state([], reality: broken)
-        #expect(CatalogStatusWords.chipWords(red) == "Needs attention…")
+        #expect(red.summary.colour == .red)
         // The menu title names the worst of the three lines since 11/01 — CatalogStatusLinesTests pins it.
         #expect(CatalogStatusWords.launchLine(red.reality)
                 == "Needs attention: 2 paths have more than one live row · 1 more — 1 duplicate groups hold files with different whole-file digests. Catalog ▸ Catalog Status… lists the doors.")
     }
 
     @Test func uncomputedStaysQuietAndNothingKnownCannotVouch() {
-        #expect(CatalogStatusWords.chipWords(CatalogFreshnessState()) == "checking…")
+        let quiet = CatalogStatusIndicators(CatalogFreshnessState())
+        #expect(quiet.catalog.words == "Unknown" && quiet.content.words == "Counting…", "uncomputed: grey on both indicators")
         // Every drive offline and no Validate on record: the catalog can't vouch (yellow), not "nothing to check".
         let offline = state([FreshnessRow(kind: "fullHashes", title: "Full Hashes", offline: 5)])
         #expect(offline.summary.colour == .yellow)
-        #expect(CatalogStatusWords.chipWords(offline) == "Needs validation")
     }
 
     /// ONE button per item (§2.1), from the reason.
@@ -684,9 +684,10 @@ struct CatalogStatusSensorTests {
         let chip = code(try source("CatalogStatusChip.swift"))
         #expect(chip.contains("@ObservedObject var freshness: CatalogFreshnessSnapshot"))
         #expect(!chip.contains("@EnvironmentObject") && !chip.contains("VideoScanModel"), "the chip never sees the model")
-        #expect(chip.contains("CatalogStatusWords.chipWords(freshness.state)"))
-        #expect(chip.contains("AnalyzeWindowOpener.open(using: openWindow, source: \"status-chip\")"))
-        #expect(chip.contains("Text(CatalogStatusWords.chipPrefix)"))
+        #expect(chip.contains("CatalogStatusIndicators(freshness.state)"), "both indicators from the one snapshot value")
+        #expect(chip.contains("AnalyzeWindowOpener.open(using: openWindow, source: \"status-chip\")"), "Content opens Content Analysis")
+        #expect(chip.contains("openWindow(id: CatalogStatusWindow.sceneID)"), "Catalog opens the Catalog Status window")
+        #expect(chip.contains("Text(prefix)"))
         #expect(chip.contains("size: 15, weight: .medium, design: .monospaced"), "the totals strip's 15pt mono register")
 
         let item = code(try source("CatalogStatusMenuItem.swift"))

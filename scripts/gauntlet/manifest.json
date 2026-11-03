@@ -33090,6 +33090,30 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogStatusSplitTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogStatusSplitLogicTests",
+        "CatalogStatusSplitTruthTests",
+        "CatalogStatusSplitScaleTests",
+        "CatalogStatusSplitSensorTests"
+      ],
+      "tests": [
+        "catalogEveryState",
+        "contentEveryState",
+        "contentHasNoAlarmColours",
+        "contentIsNeverYellow",
+        "filesGreyWhileADriveIsAway",
+        "hundredThousandRows",
+        "perFileCountsFromTheCalculator",
+        "poisonedRecordDoesNotLeak",
+        "sidecarIsCatalogRed",
+        "snapshotIndicators",
+        "twoIndicatorsTwoDoors"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTidyTests.swift",
       "stage": "unit",
       "suites": [
@@ -35887,7 +35911,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3279,
+      "expected_floor": 3290,
       "name": "unit",
       "package_expected_floor": 661,
       "package_selectors": [
@@ -36101,6 +36125,10 @@
         "VideoScanTests/CatalogStatusLinesLogicTests",
         "VideoScanTests/CatalogStatusLinesTruthTests",
         "VideoScanTests/CatalogStatusSensorTests",
+        "VideoScanTests/CatalogStatusSplitLogicTests",
+        "VideoScanTests/CatalogStatusSplitScaleTests",
+        "VideoScanTests/CatalogStatusSplitSensorTests",
+        "VideoScanTests/CatalogStatusSplitTruthTests",
         "VideoScanTests/CatalogStatusStructureTests",
         "VideoScanTests/CatalogStatusUpdateQueueTests",
         "VideoScanTests/CatalogStatusWindowSensorTests",
