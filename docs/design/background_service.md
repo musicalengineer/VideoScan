@@ -73,7 +73,7 @@ how does machine generated intelligence get into the app and persist and be sear
    M4. Every job declares its RAM and whether it needs the one resident model; the service refuses to start a job
    the Mac cannot hold.
 6. **Cost Rick pays once:** the helper is its own bundle, so macOS asks for Full Disk Access (and removable-volume
-   access) for it once; signed with "VideoScan Local" (DECISIONS 2026-10-28) so the grant survives rebuilds. One
+   access) for it once; signed with Rick's Apple Development identity (DECISIONS 2026-11-03, replacing "VideoScan Local" of 10-28) so the grant and the launch constraint survive rebuilds. One
    grant, one time, is the price of its own name and lifecycle; the single-binary alternative (§2 option B) shares
    grants but is the design Rick does not want.
 
@@ -309,7 +309,7 @@ One protocol, versioned, in `VideoScanEngine`:
 
 Payloads are `Codable` structs serialised to `Data` (one serializer, versioned with a `schema` field; a mismatch is a
 refusal in words, like the catalog's). The service checks the caller's code signature (`SecCodeCheckValidity`
-against the "VideoScan Local" designated requirement) before accepting a connection — any process on the Mac can
+against the helper's own designated requirement, read at runtime) before accepting a connection — any process on the Mac can
 otherwise open a Mach service. Progress is pushed at most 4×/s; the app's MFO row draws it exactly as it draws an
 in-app job (`JobProgressSnapshot` is the same type).
 

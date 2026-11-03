@@ -33162,6 +33162,17 @@
       "tests": [
         "backfillAt12kRowsFitsBudget"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SigningIdentitySensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SigningIdentitySensorTests"
+      ],
+      "tests": [
+        "appAndHelperAreTeamSigned"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35850,7 +35861,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3272,
+      "expected_floor": 3273,
       "name": "unit",
       "package_expected_floor": 661,
       "package_selectors": [
@@ -36457,7 +36468,8 @@
         "VideoScanTests/WorkspaceImportTests",
         "VideoScanTests/DossierBackfillVerdictBudgetTests",
         "VideoScanTests/DossierBackfillEquivalenceTests",
-        "VideoScanTests/LaunchPhaseLineTests"
+        "VideoScanTests/LaunchPhaseLineTests",
+        "VideoScanTests/SigningIdentitySensorTests"
       ]
     },
     {
