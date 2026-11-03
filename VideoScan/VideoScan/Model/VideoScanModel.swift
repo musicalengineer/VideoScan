@@ -9,6 +9,9 @@ import SQLite3
 
 @MainActor
 final class VideoScanModel: ObservableObject {
+    /// Launch-phase timings (fix D, 2026-11-02): started here, the first
+    /// stored property, so "total" runs from model init. One line per launch.
+    let launchPhases = LaunchPhaseClock()
     @Published var records: [VideoRecord] = [] {
         // Keeps the O(1) chrome counters honest — see `dossierCounts`.
         // Covers every array-level mutation (scan commit, import, delete,
@@ -1229,6 +1232,7 @@ final class VideoScanModel: ObservableObject {
         // Rejection falls through to the rebuild branch — recovery is
         // automatic on the next launch.
         let idxStart = Date()
+        let idxMark = launchPhases.now
         let loaded = searchIndex.loadFromDisk(catalogModifiedAt: catalogMTime,
                                               expectedRecordCount: records.count)
         if loaded {
@@ -1245,6 +1249,7 @@ final class VideoScanModel: ObservableObject {
             let saveMs = Int((Date().timeIntervalSince(saveStart)) * 1000)
             log("Search index rebuilt in \(rebuildMs) ms, saved in \(saveMs) ms (\(records.count) records)")
         }
+        launchPhases.record(.searchIndex, since: idxMark)
         // Seed the memoized probe-cache count so the toolbar's first
         // render doesn't show 0 for 10 seconds.
         refreshCacheCountSoon()
@@ -1403,7 +1408,9 @@ final class VideoScanModel: ObservableObject {
         // catalog even when source volumes are offline. Cutover B1: the
         // launch rule picks catalog.json (today's path, unchanged) unless
         // the SQLite switch was made — CatalogAuthorityFlip.swift.
+        let catalogMark = launchPhases.now
         let restored = loadCatalogAtLaunch()
+        launchPhases.record(.catalog, since: catalogMark)
         // Master Archive designation rides the same snapshot (additive
         // key) — adopt it before anything else reads `masterArchive`.
         // Test hosts: the shared store never loads, and its `masterArchive`
@@ -1418,6 +1425,7 @@ final class VideoScanModel: ObservableObject {
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
+            let repairMark = launchPhases.now
             // One UUID = one record. Repairs the 8/17 duplicate-id incident
             // and any future re-append; see +RecordIdentityRepair.
             repairDuplicateRecordIDs()
@@ -1466,6 +1474,7 @@ final class VideoScanModel: ObservableObject {
                 log("Migrated \(migrated) records to lifecycleStage.")
                 saveCatalogDebounced()   // one funnel (B2.1)
             }
+            launchPhases.record(.repair, since: repairMark)
         }
         // Backfill: for any scan target that has zero records in the restored
         // snapshot, pull whatever the SQLite metadata cache has under that
