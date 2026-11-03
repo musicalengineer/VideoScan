@@ -139,10 +139,21 @@ enum AudioFingerprintBackfillPlanner {
 
     /// The record's content digests, preferred first: the stored full
     /// SHA-256 when the row has one, then the scan's sampled hash.
+    ///
+    /// "Stored full SHA-256" is the ONE rule (`storedFullDigest`, the one
+    /// Integrity and Cleanup read): the content fixity, else the archive
+    /// copy's archive fixity, each only when it covers the row's size — the
+    /// digest catalog.sqlite keys `sound_prints` on. GH #416: this read the
+    /// content fixity only, so an archive copy whose row's digest is its
+    /// archive fixity (it loads with no content fixity) was stamped under its
+    /// sampled "v1:" hash, which `sound_prints` never binds: the commit saw
+    /// no change, the stamp died at quit and 50 archived files were read
+    /// again every run — and when the content's print WAS stored (by its
+    /// original), the v1 restamp's commit deleted it.
     static func digests(of r: VideoRecord) -> [String] {
         var out: [String] = []
-        if let fixity = r.contentFixity, fixity.algorithm == ContentFixity.sha256, !fixity.digest.isEmpty {
-            out.append(AudioFingerprintStamp.fullDigest(fixity.digest))
+        if let full = VideoScanModel.storedFullDigest(r) {
+            out.append(AudioFingerprintStamp.fullDigest(full))
         }
         if let sampled = AudioFingerprintStamp.sampledDigest(r.contentHash) { out.append(sampled) }
         return out
