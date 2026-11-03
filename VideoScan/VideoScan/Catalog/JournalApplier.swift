@@ -32,7 +32,7 @@
 //     no-ops) instead of being skipped (F3); an earlier day's torn tail that
 //     has been quiet for 10 minutes is sealed and refused "torn" (F9);
 //   * rule 3 (archived means fixed): step 1's fields — era.yearRange,
-//     era.fused, ocr.date — are OBSERVATIONS, metadata, not the file's name
+//     era.fused, era.none, ocr.date — are OBSERVATIONS, metadata, not the file's name
 //     or date (DECISIONS 2026-11-01), so they are applied on archived
 //     contents too; a name or date field on an archived content is refused
 //     by the store's door (`archivedNameOrDate`). Both branches are tested.

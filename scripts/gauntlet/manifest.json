@@ -393,15 +393,32 @@
       "suites": [
         "EraJobLogicTests",
         "EraJobRunTests",
-        "EraJobCLITests"
+        "EraJobCLITests",
+        "EraPlannerEraNoneTests"
       ],
       "tests": [
         "aCorruptCheckpointRestartsFromZeroSaysSoAndWritesNoDuplicate",
         "aDuplicateLineWereOneWrittenAppliesOnce",
+        "aFileThatVanishedDuringAnalysisGetsNoEraNone",
+        "aFileWithNoUsableEraIsAnalyzedOnceNotEveryRun",
+        "aFusedRangeWinsOverATransientFailure",
+        "aGenerationErrorBesideAStampIsRetriedNotCached",
+        "aGenerationErrorBesideOtherObservationsWritesNothingSoTheRetryIsReal",
+        "aGenerationErrorIsNotEvidenceNoEraNoneRetryNextRun",
+        "aJournalWithOnlyAnEraNoneLineCachesTheFile",
         "aNewerCatalogSchemaIsRefusedAtPlan",
+        "aRecordWithNoEraWindowAtAllIsDoneToo",
+        "aStampWithoutAFusedRangeStillGetsItsEraNone",
+        "aWindowGenerationErrorWritesNoEraNoneAndTheFileIsRetried",
         "aWorkerDeathAndAClipPastItsCapFailThatUnitAndTheJobGoesOn",
+        "anAppliedEraNoneRowCachesTheFile",
+        "anOCRStillGenerationErrorWithoutAFusedRangeWritesNothing",
+        "anotherSignersEraNoneDoesNotCache",
+        "framesThatWouldNotRipAreNotAVerdictNothingIsWritten",
+        "framesThatWouldNotRipAreRetriedNotCached",
         "killMidUnitThenRelaunchSkipsTheUnitAndWritesNoSecondSet",
         "noModelLoadWhileRickIsAtTheKeyboardThenItRuns",
+        "noUsableWindowGivesExactlyOneEraNoneWithItsEvidenceAndNoYear",
         "orderAndPathYearOverOneHundredThousandInsideABudget",
         "orderIsOldestFirstByTheBestBoundUnknownLast",
         "pathYearIsAFourDigitRunClosestToTheFile",
@@ -420,6 +437,7 @@
         "JournalApplicationTests"
       ],
       "tests": [
+        "anEraNoneLineIsRecordedAsItselfNeverAnEraOrADate",
         "anUnknownTableIsRefused",
         "codex187F7UnsupportedSubjectIsRefused",
         "everyLineLandsInExactlyOneBucketWithItsRule",
@@ -35834,7 +35852,7 @@
       ],
       "expected_floor": 3272,
       "name": "unit",
-      "package_expected_floor": 644,
+      "package_expected_floor": 661,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35859,6 +35877,7 @@
         "VideoScanCoreTests.EraJobCLITests",
         "VideoScanCoreTests.EraJobLogicTests",
         "VideoScanCoreTests.EraJobRunTests",
+        "VideoScanCoreTests.EraPlannerEraNoneTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.IdleExitPolicyTests",
