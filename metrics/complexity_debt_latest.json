@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-02T12:57:58Z",
- "sha": "bb9ac540",
+ "ts": "2026-11-03T12:30:15Z",
+ "sha": "1c62401b",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
@@ -102,10 +102,20 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "ContentView.body",
    "ccn": 14,
-   "nloc": 125,
+   "nloc": 129,
    "lang": "swift",
    "base_ccn": 12,
    "base_nloc": 108
+  },
+  {
+   "key": "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body",
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "function": "VideoScanApp.body",
+   "ccn": 13,
+   "nloc": 265,
+   "lang": "swift",
+   "base_ccn": 13,
+   "base_nloc": 238
   },
   {
    "key": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body",

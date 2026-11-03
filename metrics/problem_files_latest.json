@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-02T12:58:35Z",
- "sha": "bb9ac540",
+ "ts": "2026-11-03T12:31:02Z",
+ "sha": "1c62401b",
  "formula_version": 1,
- "files_scored": 835,
+ "files_scored": 837,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -13,19 +13,30 @@
    "lines": 2973,
    "could_be_private": 38,
    "widened_for_split": 0,
-   "churn_7d": 4,
-   "score": 86.5
+   "churn_7d": 3,
+   "score": 76.9
   },
   {
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "offenders": 4,
    "worst_ccn": 20,
    "new_or_worse": 4,
-   "lines": 1956,
+   "lines": 1962,
    "could_be_private": 5,
    "widened_for_split": 20,
-   "churn_7d": 2,
-   "score": 59.2
+   "churn_7d": 3,
+   "score": 67.7
+  },
+  {
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "offenders": 2,
+   "worst_ccn": 24,
+   "new_or_worse": 1,
+   "lines": 1357,
+   "could_be_private": 11,
+   "widened_for_split": 0,
+   "churn_7d": 9,
+   "score": 53.4
   },
   {
    "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
@@ -48,17 +59,6 @@
    "widened_for_split": 0,
    "churn_7d": 2,
    "score": 44.0
-  },
-  {
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 1679,
-   "could_be_private": 18,
-   "widened_for_split": 0,
-   "churn_7d": 12,
-   "score": 40.2
   },
   {
    "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift",
@@ -94,17 +94,6 @@
    "score": 36.1
   },
   {
-   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
-   "offenders": 2,
-   "worst_ccn": 24,
-   "new_or_worse": 0,
-   "lines": 1330,
-   "could_be_private": 11,
-   "widened_for_split": 0,
-   "churn_7d": 7,
-   "score": 33.5
-  },
-  {
    "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
    "offenders": 4,
    "worst_ccn": 23,
@@ -116,15 +105,15 @@
    "score": 32.4
   },
   {
-   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
-   "offenders": 3,
-   "worst_ccn": 31,
-   "new_or_worse": 1,
-   "lines": 2092,
-   "could_be_private": 4,
-   "widened_for_split": 1,
-   "churn_7d": 2,
-   "score": 32.1
+   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 1934,
+   "could_be_private": 6,
+   "widened_for_split": 27,
+   "churn_7d": 5,
+   "score": 30.8
   },
   {
    "file": "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift",
@@ -147,6 +136,17 @@
    "widened_for_split": 2,
    "churn_7d": 2,
    "score": 29.8
+  },
+  {
+   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
+   "offenders": 3,
+   "worst_ccn": 31,
+   "new_or_worse": 1,
+   "lines": 2092,
+   "could_be_private": 4,
+   "widened_for_split": 1,
+   "churn_7d": 1,
+   "score": 27.5
   },
   {
    "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",
