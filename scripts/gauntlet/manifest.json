@@ -33173,6 +33173,18 @@
       "tests": [
         "appAndHelperAreTeamSigned"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundHelperBundleSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundHelperBundleSensorTests"
+      ],
+      "tests": [
+        "helperHasItsOwnIcon",
+        "schemeBuildsTheHelperAlone"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35861,7 +35873,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3273,
+      "expected_floor": 3275,
       "name": "unit",
       "package_expected_floor": 661,
       "package_selectors": [
@@ -36469,7 +36481,8 @@
         "VideoScanTests/DossierBackfillVerdictBudgetTests",
         "VideoScanTests/DossierBackfillEquivalenceTests",
         "VideoScanTests/LaunchPhaseLineTests",
-        "VideoScanTests/SigningIdentitySensorTests"
+        "VideoScanTests/SigningIdentitySensorTests",
+        "VideoScanTests/BackgroundHelperBundleSensorTests"
       ]
     },
     {
