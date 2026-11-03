@@ -60,12 +60,48 @@ enum BackgroundServiceRegistrar {
         }
     }
 
+    // MARK: Who may register (Rick 2026-11-03: "yes on helper rel build")
+
+    /// macOS registers the helper from whichever app copy turns it on, and
+    /// the defaults key is shared by the Debug and Release apps — so a Debug
+    /// launch used to swap the registered helper for its own Debug copy.
+    /// Only the Release build on the catalog master registers it.
+    /// (C++: a compile-time constant from `#ifdef DEBUG`.)
+    static var isReleaseBuild: Bool {
+        #if DEBUG
+        false
+        #else
+        true
+        #endif
+    }
+
+    static let viewerRefusal = "This Mac is a viewer — the master runs content analysis."
+    static let debugBuildRefusal = "This is a Debug build — VideoScan Background runs from the Release build (scheme VideoScan-Release)."
+
+    /// Nil = may register. A viewer is named first: it holds on any build.
+    nonisolated static func registrationRefusal(isViewer: Bool, isReleaseBuild: Bool) -> String? {
+        if isViewer { return viewerRefusal }
+        return isReleaseBuild ? nil : debugBuildRefusal
+    }
+
+    /// The launch's answer, before the catalog opens: the same role the
+    /// launch decides (`CatalogSync.launchMode`) and this build's flavour.
+    @MainActor static func launchRefusal() -> String? {
+        registrationRefusal(isViewer: CatalogSync.launchMode() == .viewer, isReleaseBuild: isReleaseBuild)
+    }
+
     /// Called once at launch. Does nothing — not even make the service —
-    /// unless `enabled` (the defaults key) is true.
+    /// unless `enabled` (the defaults key) is true and nothing refuses it.
+    /// A refusal leaves any existing registration alone (the Release app's).
     static func registerIfEnabled(enabled: Bool = isEnabled,
+                                  refusal: String? = nil,
                                   service: () -> any BackgroundAgentService = { agent },
                                   log: (String) -> Void) {
         guard enabled else { return }
+        if let refusal {
+            log("background service: not registered — \(refusal)")
+            return
+        }
         let agent = service()
         do {
             try agent.register()

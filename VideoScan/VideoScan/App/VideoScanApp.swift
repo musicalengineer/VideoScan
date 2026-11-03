@@ -156,9 +156,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // VideoScan Background (step 0, 2026-10-30): registers the launchd
-        // agent ONLY when `background.service.enabled` is true in defaults;
-        // a normal launch does nothing here.
-        BackgroundServiceRegistrar.registerIfEnabled { appLog.write($0) }
+        // agent ONLY when `background.service.enabled` is true in defaults —
+        // and only from the Release build on the catalog master (Rick
+        // 2026-11-03); a Debug or viewer launch leaves the registration alone.
+        BackgroundServiceRegistrar.registerIfEnabled(refusal: BackgroundServiceRegistrar.launchRefusal()) { appLog.write($0) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

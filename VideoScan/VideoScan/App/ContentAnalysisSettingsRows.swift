@@ -13,17 +13,18 @@ import ServiceManagement
 import SwiftUI
 
 struct ContentAnalysisSettingsRows: View {
-    @ObservedObject var store: BackgroundServiceStore
     /// A viewer Mac never runs content analysis (its committer refuses the
-    /// journal); the checkbox is disabled and the footnote says why.
-    let isViewer: Bool
+    /// journal), and only the Release build registers the helper (Rick
+    /// 2026-11-03): either way the checkbox is disabled and the footnote
+    /// says why (`store.registrationRefusal`). Turning it off stays possible
+    /// in the store, but the disabled checkbox is the honest picture here.
+    @ObservedObject var store: BackgroundServiceStore
 
     static let title = "Keep analyzing content in the background"
     static let footnote = "VideoScan Background keeps running the content analyzers — Machine era first — after VideoScan quits, "
         + "and backs off while you work. The first time you turn it on, macOS asks once to allow it under Login Items and "
         + "once for Full Disk Access for the helper so it can read your files. It never writes the catalog; only VideoScan "
         + "applies what it finds."
-    static let viewerFootnote = "This Mac is a viewer — the master runs content analysis."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -32,9 +33,9 @@ struct ContentAnalysisSettingsRows: View {
                 set: { store.setEnabled($0) }
             ))
             .toggleStyle(.checkbox)
-            .disabled(isViewer)
+            .disabled(store.registrationRefusal != nil)
             .accessibilityIdentifier("settings.backgroundService.enabled")
-            Text(isViewer ? Self.viewerFootnote : Self.footnote)
+            Text(store.registrationRefusal ?? Self.footnote)
                 .font(.footnote).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

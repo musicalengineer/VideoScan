@@ -192,7 +192,7 @@ struct SettingsTabView: View {
                         .font(.headline)
                         .foregroundColor(.purple)
 
-                    ContentAnalysisSettingsRows(store: backgroundService, isViewer: isViewer)
+                    ContentAnalysisSettingsRows(store: backgroundService)
 
                     Toggle("Keep previews fresh in the background", isOn: $sweepEnabled)
                         .toggleStyle(.checkbox)

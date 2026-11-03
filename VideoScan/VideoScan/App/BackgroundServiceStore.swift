@@ -85,7 +85,14 @@ final class BackgroundServiceStore: ObservableObject {
     var makeRequest: () -> JobRequest
     var persist: (Bool) -> Void
     var isViewer: () -> Bool
+    /// The build flavour, injectable so tests (which run Debug) can say Release.
+    var isReleaseBuild: () -> Bool = { true }
     var log: (String) -> Void
+
+    /// Why the checkbox may not turn the helper on here — nil when it may.
+    var registrationRefusal: String? {
+        BackgroundServiceRegistrar.registrationRefusal(isViewer: isViewer(), isReleaseBuild: isReleaseBuild())
+    }
 
     private var cycle: Task<Void, Never>?
     private var visible: Task<Void, Never>?
@@ -118,7 +125,7 @@ final class BackgroundServiceStore: ObservableObject {
                            catalogURL: @escaping () -> URL?,
                            isViewer: @escaping () -> Bool,
                            log: @escaping (String) -> Void) -> BackgroundServiceStore {
-        BackgroundServiceStore(
+        let store = BackgroundServiceStore(
             enabled: defaults.bool(forKey: defaultsKey),
             agent: { SMAppService.agent(plistName: BackgroundServiceRegistrar.plistName) },
             askStatus: { await BackgroundServiceClient().status() },
@@ -129,6 +136,8 @@ final class BackgroundServiceStore: ObservableObject {
             persist: { defaults.set($0, forKey: defaultsKey) },
             isViewer: isViewer,
             log: log)
+        store.isReleaseBuild = { BackgroundServiceRegistrar.isReleaseBuild }
+        return store
     }
 
     /// The count against the catalog at `catalogURL()` (the service folder
@@ -160,8 +169,9 @@ final class BackgroundServiceStore: ObservableObject {
     /// The checkbox's setter: persist, register or unregister (one log line
     /// each, with launchd's answer), then a recounting refresh when on.
     func setEnabled(_ on: Bool) {
-        guard !isViewer() else {
-            lastNote = "This Mac is a viewer — the master runs content analysis"
+        // Turning it OFF is always allowed; turning it ON needs the gate.
+        if on, let refusal = registrationRefusal {
+            lastNote = refusal
             return
         }
         guard on != enabled else { return }

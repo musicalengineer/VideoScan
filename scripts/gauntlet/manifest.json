@@ -33185,6 +33185,20 @@
         "helperHasItsOwnIcon",
         "schemeBuildsTheHelperAlone"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundRegistrationGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "BackgroundRegistrationGateTests"
+      ],
+      "tests": [
+        "debugBuildToggleRefuses",
+        "launchRefusalRegistersNothing",
+        "refusalTable",
+        "sensor"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35873,7 +35887,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3275,
+      "expected_floor": 3279,
       "name": "unit",
       "package_expected_floor": 661,
       "package_selectors": [
@@ -36482,7 +36496,8 @@
         "VideoScanTests/DossierBackfillEquivalenceTests",
         "VideoScanTests/LaunchPhaseLineTests",
         "VideoScanTests/SigningIdentitySensorTests",
-        "VideoScanTests/BackgroundHelperBundleSensorTests"
+        "VideoScanTests/BackgroundHelperBundleSensorTests",
+        "VideoScanTests/BackgroundRegistrationGateTests"
       ]
     },
     {
