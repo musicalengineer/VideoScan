@@ -148,7 +148,8 @@ enum BackgroundCLI {
         let supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                        checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
                                        factory: DefaultJobFactory(stateRoot: root, catalogURL: catalog, backoff: backoff),
-                                       backoff: backoff, log: log)
+                                       backoff: backoff, log: log,
+                                       ownership: FileStateRootLock(root: root, owner: "cli --run era"))
         log.write("foreground --run era — state in \(root.path), catalog \(catalog.path) (read-only)\(full ? ", --full" : "")")
         try? FileManager.default.createDirectory(at: root.appendingPathComponent("queue", isDirectory: true), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: root.appendingPathComponent("checkpoints", isDirectory: true), withIntermediateDirectories: true)

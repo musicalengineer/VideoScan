@@ -325,6 +325,7 @@ line and the verbs that need the service are disabled with the reason; nothing s
 | Journal | `journal/<yyyy-mm-dd>.jsonl` (UTC day) | append-only, one line per observation, version 1, canonical JSON: `{at, by, confidence, evidence, field, id, job, state, subject_id, subject_kind, table, unit, v, value}`; `id` = SHA-256 of the line without `id` (the idempotence key); one `write(2)` + `F_FULLFSYNC` per unit; a torn tail is sealed and refused, never glued (`ObservationJournal.swift`) |
 | Sidecars | `../model-lab.sqlite`, `../audio-fingerprints.sqlite`, `../picture-prints.sqlite` | as designed already; the service is their only writer once the engine has moved |
 | Log | `~/Library/Logs/VideoScan/background.log` | same line format as `videoscan.log`, same `LogSink` class, its own file (two processes never append to one file) |
+| Owner | `owner.lock` | advisory `flock(2)` held for the owner's life, contents "pid N · cli --run era · since HH:MM"; **one supervisor per state root** (2026-11-02): the service and a hand run share these folders, so whichever claims first runs the jobs; the other serves status, refuses `enqueue` in the holder's words and asks again every 30 s; the kernel drops a dead holder's lock (`StateRootLock.swift`) |
 
 **The journal is the only road into the catalog.** `JournalApplier` in the app reads unapplied lines at launch and
 every few minutes, applies them through `CatalogCommitter.commit(as:)` in batches keyed by digest (idempotent: a

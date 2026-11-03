@@ -454,6 +454,19 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/StateRootLockTests.swift",
+      "stage": "unit",
+      "suites": [
+        "StateRootLockTests"
+      ],
+      "tests": [
+        "lockWordsNameTheHolder",
+        "secondSupervisorWaitsForTheFirst",
+        "uncontestedRootIsTransparent"
+      ]
+    },
+    {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
@@ -35780,7 +35793,7 @@
       ],
       "expected_floor": 3254,
       "name": "unit",
-      "package_expected_floor": 641,
+      "package_expected_floor": 644,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35845,7 +35858,8 @@
         "VideoScanCoreTests.PreflightGateTests",
         "VideoScanCoreTests.PythonClipWorkerTests",
         "VideoScanCoreTests.RowPreflightTests",
-        "VideoScanCoreTests.SQLiteCatalogReaderTests"
+        "VideoScanCoreTests.SQLiteCatalogReaderTests",
+        "VideoScanCoreTests.StateRootLockTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

@@ -13,6 +13,12 @@
 // resumes from that checkpoint, so the log never shows a START without an
 // OUTCOME (design §6 sensor 5).
 //
+// One supervisor per state root (2026-11-02): before it adopts or accepts a
+// job the supervisor claims the root through `StateRootOwnership`. A hand
+// run and the launchd service share the folders; whichever claims first
+// runs the jobs, the other serves status, refuses enqueue, and asks again
+// every `ownerRetryInterval` until the holder is gone (`StateRootLock.swift`).
+//
 // Concurrency shape: one actor. Each lane has one Task (created inside the
 // actor, so it inherits the actor's isolation); the unit itself runs on the
 // cooperative pool because `BackgroundJob.runUnit` is a nonisolated async
@@ -37,6 +43,8 @@ public actor JobSupervisor {
         public var finishedHistoryLimit = 50
         /// How long a `.deferred` unit waits before it is asked again.
         public var deferRetryInterval: Duration = .seconds(30)
+        /// How often a supervisor that does not own its state root asks again.
+        public var ownerRetryInterval: Duration = .seconds(30)
         public init() {}
     }
 
@@ -61,6 +69,7 @@ public actor JobSupervisor {
     private let backoff: Backoff
     private let log: any BackgroundLogSink
     private let configuration: Configuration
+    private let ownership: any StateRootOwnership
     private let clock = ContinuousClock()
 
     private var runs: [JobID: Run] = [:]
@@ -73,16 +82,60 @@ public actor JobSupervisor {
     private var lastPush: [JobID: ContinuousClock.Instant] = [:]
     /// Pushes delivered to the sink — the 4/s test counts them.
     public private(set) var progressPushCount = 0
+    /// Why this supervisor is not running jobs — the holder's words — or nil
+    /// while it owns the root (tests and the status line read it).
+    public private(set) var ownershipRefusal: String?
+    private var ownerRetry: Task<Void, Never>?
 
     public init(queue: any JobQueueStore, checkpoints: any CheckpointStore, factory: any JobFactory,
-                backoff: Backoff, log: any BackgroundLogSink, configuration: Configuration = Configuration()) {
+                backoff: Backoff, log: any BackgroundLogSink, configuration: Configuration = Configuration(),
+                ownership: any StateRootOwnership = UncontestedStateRoot()) {
         self.queue = queue
         self.checkpoints = checkpoints
         self.factory = factory
         self.backoff = backoff
         self.log = log
         self.configuration = configuration
+        self.ownership = ownership
         self.lastActivity = clock.now
+    }
+
+    deinit { ownership.release() }
+
+    // MARK: - Ownership
+
+    /// True once this process owns the state root. Logs the holder's words
+    /// once per change, never once per poll.
+    private func claimRoot() -> Bool {
+        switch ownership.claim() {
+        case .success:
+            if ownershipRefusal != nil {
+                log.write("state root is free — this process owns it now")
+                ownershipRefusal = nil
+            }
+            return true
+        case .failure(let refusal):
+            if ownershipRefusal != refusal.words {
+                log.write("not running jobs: \(refusal.words); serving status only, asking again every \(configuration.ownerRetryInterval.components.seconds) s")
+                ownershipRefusal = refusal.words
+            }
+            return false
+        }
+    }
+
+    private func scheduleOwnerRetry() {
+        guard ownerRetry == nil else { return }
+        let interval = configuration.ownerRetryInterval
+        ownerRetry = Task { [weak self] in
+            try? await Task.sleep(for: interval)
+            await self?.retryOwnership()
+        }
+    }
+
+    private func retryOwnership() {
+        ownerRetry = nil
+        guard !Task.isCancelled else { return }
+        start()
     }
 
     // MARK: - Lifecycle
@@ -92,6 +145,7 @@ public actor JobSupervisor {
     /// test times this alone. Returns how many were planned.
     @discardableResult
     public func plan() -> Int {
+        guard claimRoot() else { return 0 }
         let (requests, ignored) = queue.list()
         for line in ignored { log.write("queue: ignored \(line)") }
         var added = 0
@@ -116,9 +170,11 @@ public actor JobSupervisor {
         return added
     }
 
-    /// `plan()` then run every lane that has work.
+    /// `plan()` then run every lane that has work. Without the root it plans
+    /// nothing and tries again after `ownerRetryInterval`.
     public func start() {
         plan()
+        guard ownershipRefusal == nil else { scheduleOwnerRetry(); return }
         kickLanes()
     }
 
@@ -135,6 +191,10 @@ public actor JobSupervisor {
     public func abandonForTest() {
         for task in laneTasks.values { task.cancel() }
         laneTasks.removeAll()
+        ownerRetry?.cancel()
+        ownerRetry = nil
+        // The kernel drops a dead process's flock; this stands in for that.
+        ownership.release()
     }
 
     public func setProgressSink(_ sink: (@Sendable (JobProgressSnapshot) -> Void)?) {
@@ -146,6 +206,11 @@ public actor JobSupervisor {
     public func enqueue(_ request: JobRequest) -> EnqueueReply {
         touch()
         if runs[request.id] != nil { return .refused(Refusal("job \(request.id) is already known")) }
+        guard claimRoot() else {
+            let words = "enqueue refused: \(ownershipRefusal ?? "the state root is owned by another process")"
+            log.write(words)
+            return .refused(Refusal(words))
+        }
         do {
             _ = try factory.makeJob(for: request)
         } catch {

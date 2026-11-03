@@ -39,9 +39,12 @@ final class BackgroundService: @unchecked Sendable {
         let root = Self.stateRoot
         activity = SystemActivitySource(nightWindow: forceFull)
         backoff = Backoff(source: activity)
+        // One supervisor per state root: a hand run (`--run era`) that is still
+        // alive keeps this service to status-only until it finishes (StateRootLock.swift).
         supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                    checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
-                                   factory: DefaultJobFactory(stateRoot: root, backoff: backoff), backoff: backoff, log: log)
+                                   factory: DefaultJobFactory(stateRoot: root, backoff: backoff), backoff: backoff, log: log,
+                                   ownership: FileStateRootLock(root: root, owner: "service \(Self.bundleIdentifier)"))
         server = XPCServer(machServiceName: Self.machServiceName, supervisor: supervisor, log: log,
                            allowedPeers: [Self.appBundleIdentifier, Self.bundleIdentifier], startedAt: startedAt)
     }
