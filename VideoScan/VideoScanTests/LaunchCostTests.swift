@@ -266,7 +266,7 @@ struct DossierBackfillEquivalenceTests {
             if by[r.partialMD5] == nil { order.append(r.partialMD5) }
             by[r.partialMD5, default: []].append(r)
         }
-        return order.compactMap { by[$0]!.count >= 2 ? by[$0]! : nil }
+        return order.compactMap { key in by[key].flatMap { $0.count >= 2 ? $0 : nil } }
     }
 
     @Test("per group: same mutated count and the same field values as the pre-fix code", arguments: [UInt64(1), 2, 3, 402, 20261102])
