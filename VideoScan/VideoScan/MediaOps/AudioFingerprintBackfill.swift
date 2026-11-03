@@ -140,19 +140,28 @@ enum AudioFingerprintBackfillPlanner {
     /// The record's content digests, preferred first: the stored full
     /// SHA-256 when the row has one, then the scan's sampled hash.
     ///
-    /// "Stored full SHA-256" is the ONE rule (`storedFullDigest`, the one
-    /// Integrity and Cleanup read): the content fixity, else the archive
-    /// copy's archive fixity, each only when it covers the row's size — the
-    /// digest catalog.sqlite keys `sound_prints` on. GH #416: this read the
+    /// "Stored full SHA-256" is the digest catalog.sqlite keys `sound_prints`
+    /// on: the content fixity, else the archive copy's archive fixity, each
+    /// only when it covers the row's size. GH #416: this read the
     /// content fixity only, so an archive copy whose row's digest is its
     /// archive fixity (it loads with no content fixity) was stamped under its
     /// sampled "v1:" hash, which `sound_prints` never binds: the commit saw
     /// no change, the stamp died at quit and 50 archived files were read
     /// again every run — and when the content's print WAS stored (by its
     /// original), the v1 restamp's commit deleted it.
+    ///
+    /// Asked of the commit's OWN rule (`CatalogRecordDTO.resolveDigest`),
+    /// not a copy of it (Codex cycle #216 P1): two sha256 fixities that
+    /// disagree name no identity — the commit refuses the row — so the
+    /// stamp gets no full key, nothing is shared to it and no sidecar row
+    /// is written under either hash.
     static func digests(of r: VideoRecord) -> [String] {
         var out: [String] = []
-        if let full = VideoScanModel.storedFullDigest(r) {
+        let state = CatalogRecordDTO.resolveDigest(
+            content: r.contentFixity.map { .init(algorithm: $0.algorithm, digest: $0.digest, bytes: $0.byteCount) },
+            archive: r.archiveFixity.map { .init(algorithm: $0.algorithm, digest: $0.digest, bytes: $0.sizeBytes) },
+            sizeBytes: r.sizeBytes)
+        if let full = state.digest {
             out.append(AudioFingerprintStamp.fullDigest(full))
         }
         if let sampled = AudioFingerprintStamp.sampledDigest(r.contentHash) { out.append(sampled) }

@@ -129,6 +129,36 @@ struct AudioFingerprintStampDurabilityTests {
         #expect(AudioFingerprintBackfillPlanner.digests(of: r) == ["v1:a"])
     }
 
+    @Test("RED Codex #216 P1: content and archive fixities that DISAGREE give no full-digest key (either size), as the commit refuses them; the run shares nothing and keeps no sidecar row under either hash")
+    func disagreeingFixitiesGiveNoFullKey() async throws {
+        let sb = try ShowAgainSandbox.make("afb416_disagree"); defer { sb.cleanup() }
+        let a = String(repeating: "a", count: 64), b = String(repeating: "b", count: 64)
+        let r = try sb.record("disputed.mov", bytes: 2_000, onDisk: true, stage: .none)
+        r.contentHash = "v1:x"
+        r.durationSeconds = 60
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.audioCodec = "aac"
+        r.archiveFixity = ArchiveFixity(digest: a, verifiedAt: Date(), sizeBytes: 2_000)
+        for contentBytes in [Int64(1_999), 2_000] {
+            r.contentFixity = ContentFixity(digest: b, byteCount: contentBytes,
+                                            stamp: FileIdentityStamp(device: 1, inode: 2, size: contentBytes, mtimeNs: 3))
+            #expect(AudioFingerprintBackfillPlanner.digests(of: r) == ["v1:x"],
+                    "content fixity over \(contentBytes) bytes vs archive fixity: \(AudioFingerprintBackfillPlanner.digests(of: r))")
+        }
+        // A sidecar row for one of the two hashes must not be shared to it.
+        let store = try AudioFingerprintStore(directory: sb.catalogDir)
+        let other = try await printablePass(AudioFingerprintBackfillItem(id: UUID(), path: "/x", filename: "x", sizeBytes: 2_000,
+                                                                         durationSeconds: 60, isVideoOnly: false, audioCodec: "aac",
+                                                                         isArchived: false, digests: ["sha256:" + a]))
+        try store.put([AudioFingerprintStore.Entry(key: .init(contentDigest: "sha256:" + a, sizeBytes: 2_000), fingerprint: other,
+                                                   sourcePath: "/elsewhere/a.mov", computedAt: Date())])
+        let job = await StampScene.run(sb.model)
+        #expect(job.totals[.shared] == 0, Comment(rawValue: job.totals.line))
+        #expect(r.audioFingerprint?.contentDigest == "v1:x", "stamped under the sampled hash only: \(r.audioFingerprint?.contentDigest ?? "nil")")
+        #expect(try !AudioFingerprintStore(directory: sb.catalogDir).has(.init(contentDigest: "sha256:" + b, sizeBytes: 2_000)),
+                "no sidecar row under the disputed content hash")
+    }
+
     @Test("RED #416 (production shape): an archive copy whose original was purged — its stamp lands in sound_prints, survives a relaunch, and the next plan has nothing to do")
     func archiveCopyStampSurvivesRelaunch() async throws {
         let scene = try CutoverScene.make("afb416_purged"); defer { scene.cleanup() }

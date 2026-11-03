@@ -210,13 +210,35 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
     public static func resolveDigest(contentFixity cf: ContentFixityEvidence?,
                                    archiveFixity af: ArchiveFixityEvidence?,
                                    sizeBytes: Int64) -> DigestState {
-        let c = cf.flatMap { $0.algorithm == "sha256" && isWholeFileDigest($0.digest) ? $0 : nil }
-        let a = af.flatMap { $0.algorithm == "sha256" && isWholeFileDigest($0.digest) ? $0 : nil }
+        resolveDigest(content: cf.map { FixityClaim(algorithm: $0.algorithm, digest: $0.digest, bytes: $0.byteCount) },
+                      archive: af.map { FixityClaim(algorithm: $0.algorithm, digest: $0.digest, bytes: $0.sizeBytes) },
+                      sizeBytes: sizeBytes)
+    }
+
+    /// One fixity's claim: its algorithm, digest and the bytes it covers.
+    public struct FixityClaim: Sendable, Equatable {
+        public var algorithm: String
+        public var digest: String
+        public var bytes: Int64
+        public init(algorithm: String, digest: String, bytes: Int64) {
+            self.algorithm = algorithm
+            self.digest = digest.lowercased()
+            self.bytes = bytes
+        }
+    }
+
+    /// THE digest rule on bare claims — the one the commit binds every
+    /// digest-keyed row to (`sound_prints` included). Callers that hold a
+    /// live record (the sound backfill's planner, GH #416 Codex P1) ask
+    /// this, so the key they write under is the key the commit stores.
+    public static func resolveDigest(content: FixityClaim?, archive: FixityClaim?, sizeBytes: Int64) -> DigestState {
+        let c = content.flatMap { $0.algorithm == "sha256" && isWholeFileDigest($0.digest) ? $0 : nil }
+        let a = archive.flatMap { $0.algorithm == "sha256" && isWholeFileDigest($0.digest) ? $0 : nil }
         if let c, let a, c.digest != a.digest {
             return .disagree(digests: [c.digest, a.digest])
         }
-        if let c, c.byteCount == sizeBytes { return .known(digest: c.digest, source: .contentFixity) }
-        if let a, a.sizeBytes == sizeBytes { return .known(digest: a.digest, source: .archiveFixity) }
+        if let c, c.bytes == sizeBytes { return .known(digest: c.digest, source: .contentFixity) }
+        if let a, a.bytes == sizeBytes { return .known(digest: a.digest, source: .archiveFixity) }
         return .none
     }
 
