@@ -88,6 +88,13 @@ extension VideoScanModel {
     /// whether this instance is the master or a read-only viewer.
     func activateFindTagBackground() {
         guard !TestEnvironment.isTestHost else { return }
+        // The last launch phase (fix D, 2026-11-02): time it, then write the
+        // one `launch phases:` line — on a viewer too (find-tag ≈ 0 there).
+        let findTagMark = launchPhases.now
+        defer {
+            launchPhases.record(.findTag, since: findTagMark)
+            if let line = launchPhases.takeReportLine() { log(line) }
+        }
         guard !isReadOnly else {
             if findTagBackgroundSetting.enabled {
                 appLog.write("Find and Tag background: viewer mode — daemon not spawned, ingest disabled")

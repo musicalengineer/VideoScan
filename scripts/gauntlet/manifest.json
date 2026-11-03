@@ -33111,6 +33111,39 @@
         "theStatusLineSitsBesideTheJournalLineAndIsAbsentAtZero",
         "theStoreCountsOnlyContentsWithBothAndPublishesToStatusAndSearch"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/LaunchCostTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DossierBackfillVerdictBudgetTests",
+        "DossierBackfillEquivalenceTests",
+        "LaunchPhaseLineTests"
+      ],
+      "tests": [
+        "agreeingGroupsCostNoVerdict",
+        "backfillSameAsPreFix",
+        "behindGroupCostsOneVerdict",
+        "degenerateLongestFallsThroughToNext",
+        "judgeUsableMatchesCore",
+        "lineFormatIsPinned",
+        "missingPhasePrintsZero",
+        "modelYieldsWellFormedLine",
+        "reportsOnce",
+        "sameWritesAsPreFix"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierBackfillScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "DossierBackfillScaleTests"
+      ],
+      "tests": [
+        "backfillAt12kRowsFitsBudget"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -35799,7 +35832,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3262,
+      "expected_floor": 3272,
       "name": "unit",
       "package_expected_floor": 644,
       "package_selectors": [
@@ -36402,7 +36435,10 @@
         "VideoScanTests/WorkflowTagsModelTests",
         "VideoScanTests/WorkflowTagsScaleSensorTests",
         "VideoScanTests/WorkspaceActiveTests",
-        "VideoScanTests/WorkspaceImportTests"
+        "VideoScanTests/WorkspaceImportTests",
+        "VideoScanTests/DossierBackfillVerdictBudgetTests",
+        "VideoScanTests/DossierBackfillEquivalenceTests",
+        "VideoScanTests/LaunchPhaseLineTests"
       ]
     },
     {
@@ -37079,7 +37115,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 68,
+      "expected_floor": 69,
       "name": "performance",
       "package_expected_floor": 15,
       "package_selectors": [
@@ -37117,7 +37153,8 @@
         "VideoScanTests/TreeIdentityPinPerformanceTests",
         "VideoScanTests/VerifyAudioScaleSensorTests",
         "VideoScanTests/CatalogSearchKeystrokeBudgetTests",
-        "VideoScanTests/ConfirmedDateFilterScaleTests"
+        "VideoScanTests/ConfirmedDateFilterScaleTests",
+        "VideoScanTests/DossierBackfillScaleTests"
       ]
     },
     {

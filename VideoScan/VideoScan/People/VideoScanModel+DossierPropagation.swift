@@ -56,6 +56,16 @@ extension VideoScanModel {
     @MainActor
     @discardableResult
     func backfillDossierAcrossDuplicates() -> Int {
+        var judge = DossierTextJudge()
+        return backfillDossierAcrossDuplicates(judge: &judge)
+    }
+
+    /// The backfill with the caption judge supplied by the caller, so a
+    /// test can count the verdicts one pass spends (launch-time fix
+    /// 2026-11-02). Same rows, same values, same log line as above.
+    @MainActor
+    @discardableResult
+    func backfillDossierAcrossDuplicates(judge: inout DossierTextJudge) -> Int {
         var byMD5: [String: [VideoRecord]] = [:]
         byMD5.reserveCapacity(records.count)
         for rec in records where !rec.partialMD5.isEmpty {
@@ -64,7 +74,7 @@ extension VideoScanModel {
 
         var totalUpdated = 0
         for (_, members) in byMD5 where members.count >= 2 {
-            totalUpdated += propagateBestDossier(in: members)
+            totalUpdated += propagateBestDossier(in: members, judge: &judge)
         }
 
         if totalUpdated > 0 {
@@ -83,6 +93,16 @@ extension VideoScanModel {
     @MainActor
     @discardableResult
     func propagateBestDossier(in group: [VideoRecord]) -> Int {
+        var judge = DossierTextJudge()
+        return propagateBestDossier(in: group, judge: &judge)
+    }
+
+    /// `propagateBestDossier(in:)` with the caption judge supplied (the
+    /// test seam; its memo is scoped to this one group).
+    @MainActor
+    @discardableResult
+    func propagateBestDossier(in group: [VideoRecord], judge: inout DossierTextJudge) -> Int {
+        judge.forgetTexts()
         // Playability guard (regression fix 2026-06-30, smear introduced
         // 2026-06-15): a record that's `.ffprobeFailed` OR
         // `isLikelyUnanalyzable` is excluded as BOTH donor and recipient.
@@ -97,10 +117,25 @@ extension VideoScanModel {
         let eligible = group.filter { !Self.isExcludedFromPropagation($0) }
         guard eligible.count >= 2 else { return 0 }
 
-        let bestTranscript = Self.bestAudioTranscript(in: eligible)
-        let bestCaptions   = Self.bestSceneCaptions(in: eligible)
-        let bestOCRText    = Self.bestOCRText(in: eligible)
-        let bestOCRDates   = Self.bestOCRDateCandidates(in: eligible)
+        // Launch-time fix (2026-11-02): a channel whose copies already agree
+        // has nothing to propagate, so it is skipped BEFORE any verdict.
+        // Proof it writes the same rows: every write below fires only when a
+        // member differs from the best. If every member holds the same value
+        // V, the best is either nil (no donor) or derived from V — the
+        // transcript V itself; the captions V; for OCR `usable(V)`, which
+        // equals every member's `usable(V)` — so no member differs. Almost
+        // every group is harmonised at launch, so this is the common path.
+        let first = eligible[0]
+        let firstTranscript = first.audioTranscript ?? ""
+        let transcriptsAgree = eligible.allSatisfy { ($0.audioTranscript ?? "") == firstTranscript }
+        let captionsAgree    = eligible.allSatisfy { $0.sceneCaptions == first.sceneCaptions }
+        let ocrTextAgree     = eligible.allSatisfy { $0.ocrText == first.ocrText }
+        let ocrDatesAgree    = eligible.allSatisfy { $0.ocrDateCandidates == first.ocrDateCandidates }
+
+        let bestTranscript = transcriptsAgree ? nil : Self.bestAudioTranscript(in: eligible, judge: &judge)
+        let bestCaptions   = captionsAgree    ? nil : Self.bestSceneCaptions(in: eligible)
+        let bestOCRText    = ocrTextAgree     ? nil : Self.bestOCRText(in: eligible, judge: &judge)
+        let bestOCRDates   = ocrDatesAgree    ? nil : Self.bestOCRDateCandidates(in: eligible, judge: &judge)
 
         var mutated = 0
         for rec in eligible {
@@ -124,12 +159,12 @@ extension VideoScanModel {
             // is ever triggered by stored junk alone); a behind member gets
             // the donor's usable entries, never its degenerate ones.
             if let best = bestOCRText,
-               CaptionTextQuality.usable(rec.ocrText) != best.entries {
+               judge.usable(rec.ocrText) != best.entries {
                 rec.ocrText = best.entries
                 changed = true
             }
             if let best = bestOCRDates,
-               rec.usableOCRDates != best.entries {
+               judge.usable(rec.ocrDateCandidates) != best.entries {
                 rec.ocrDateCandidates = best.entries
                 changed = true
             }
@@ -386,24 +421,33 @@ extension VideoScanModel {
     /// it. Returns nil when no member has a non-empty transcript
     /// (nothing worth propagating).
     @MainActor static func bestAudioTranscript(in group: [VideoRecord]) -> BestTranscript? {
-        var best: BestTranscript?
-        for rec in group {
+        var judge = DossierTextJudge()
+        return bestAudioTranscript(in: group, judge: &judge)
+    }
+
+    @MainActor static func bestAudioTranscript(in group: [VideoRecord],
+                                               judge: inout DossierTextJudge) -> BestTranscript? {
+        // The winner is the longest USABLE transcript, the earliest member on
+        // a tie. Launch-time fix (2026-11-02): order the candidates longest
+        // first (ties in group order) and judge only until the first usable
+        // one — the same winner, one verdict in the common case instead of
+        // one per member. Reject degenerate donor output: a Whisper failure
+        // artifact ("!!!!", a looped token) is never real speech; without
+        // this guard the smear bug propagated a literal "!!!!" transcript
+        // across a whole MD5 group (Rick 2026-06-30; GH #402 verdict).
+        var candidates: [(index: Int, length: Int, text: String)] = []
+        for (index, rec) in group.enumerated() {
             guard let tx = rec.audioTranscript, !tx.isEmpty else { continue }
-            // Reject degenerate donor output: a transcript that collapses
-            // to a single repeated character ("!!!!", "----") after
-            // trimming is a Whisper failure artifact, never real speech.
-            // Without this guard the smear bug propagated a literal "!!!!"
-            // transcript across a whole MD5 group (Rick 2026-06-30).
-            if CaptionTextQuality.verdict(tx).isDegenerate { continue }
-            if best == nil || tx.count > (best?.text.count ?? 0) {
-                best = BestTranscript(
-                    text: tx,
-                    model: rec.audioTranscriptModel,
-                    date: rec.audioTranscriptDate
-                )
-            }
+            candidates.append((index, tx.count, tx))
         }
-        return best
+        candidates.sort { $0.length != $1.length ? $0.length > $1.length : $0.index < $1.index }
+        for c in candidates where judge.isUsable(c.text) {
+            let rec = group[c.index]
+            return BestTranscript(text: c.text,
+                                  model: rec.audioTranscriptModel,
+                                  date: rec.audioTranscriptDate)
+        }
+        return nil
     }
 
     /// Best scene captions = largest count of captions, tiebreak on
@@ -435,10 +479,16 @@ extension VideoScanModel {
     /// Best OCR text = largest count, tiebreak on total text length.
     /// Same shape as scene captions. Nil when nobody has OCR text.
     @MainActor static func bestOCRText(in group: [VideoRecord]) -> BestOCREntries? {
+        var judge = DossierTextJudge()
+        return bestOCRText(in: group, judge: &judge)
+    }
+
+    @MainActor static func bestOCRText(in group: [VideoRecord],
+                                       judge: inout DossierTextJudge) -> BestOCREntries? {
         var best: BestOCREntries?
         var bestScore = -1
         for rec in group {
-            let usable = CaptionTextQuality.usable(rec.ocrText)   // GH #402: junk never scores
+            let usable = judge.usable(rec.ocrText)   // GH #402: junk never scores
             guard !usable.isEmpty else { continue }
             let textLen = usable.reduce(0) { $0 + $1.text.count }
             let score = usable.count * 1000 + textLen
@@ -455,10 +505,16 @@ extension VideoScanModel {
     /// has a usable OCR date. GH #402: three frames of `!!!!` used to
     /// outscore one real `JUN 21 1991` and overwrite it.
     @MainActor static func bestOCRDateCandidates(in group: [VideoRecord]) -> BestOCREntries? {
+        var judge = DossierTextJudge()
+        return bestOCRDateCandidates(in: group, judge: &judge)
+    }
+
+    @MainActor static func bestOCRDateCandidates(in group: [VideoRecord],
+                                                 judge: inout DossierTextJudge) -> BestOCREntries? {
         var best: BestOCREntries?
         var bestScore = -1
         for rec in group {
-            let usable = rec.usableOCRDates
+            let usable = judge.usable(rec.ocrDateCandidates)   // == rec.usableOCRDates
             guard !usable.isEmpty else { continue }
             let textLen = usable.reduce(0) { $0 + $1.text.count }
             let score = usable.count * 1000 + textLen
@@ -468,5 +524,61 @@ extension VideoScanModel {
             }
         }
         return best
+    }
+}
+
+// MARK: - The caption judge (launch-time fix, 2026-11-02)
+
+/// The one place propagation asks `CaptionTextQuality.verdict` (GH #402),
+/// counted and memoised. Propagation runs over every duplicate group at
+/// launch on the main thread; a full verdict is four whole-string passes,
+/// so the selectors must ask it as rarely as the answer allows.
+///
+/// - `isUsable(_:)` is `!verdict(text).isDegenerate`, memoised per text.
+/// - `usable(_:)` is exactly `CaptionTextQuality.usable(_:)` (order kept),
+///   built from `isUsable`.
+/// - `verdictCalls` counts real verdicts (memo misses) for the whole pass:
+///   the seam the launch-cost tests read.
+///
+/// Memory: the memo is cleared per group (`forgetTexts()`), so its worst
+/// case is one group's distinct texts. Keys are copy-on-write Strings that
+/// share the records' storage; the extra cost is one dictionary entry
+/// (~40 B) per distinct text in that group.
+///
+/// C++ analogy: a functor with a small `unordered_map<string,bool>` cache,
+/// passed by reference (`inout` ~ `Judge&`) through the selectors.
+struct DossierTextJudge {
+    typealias Verdict = (String) -> CaptionTextQuality.Verdict
+
+    private let verdict: Verdict
+    private var memo: [String: Bool] = [:]
+    /// Real verdicts this judge has run (memo hits are not counted).
+    private(set) var verdictCalls = 0
+
+    init(verdict: @escaping Verdict = { CaptionTextQuality.verdict($0) }) {
+        self.verdict = verdict
+    }
+
+    mutating func isUsable(_ text: String) -> Bool {
+        if let known = memo[text] { return known }
+        verdictCalls += 1
+        let ok = !verdict(text).isDegenerate
+        memo[text] = ok
+        return ok
+    }
+
+    /// `CaptionTextQuality.usable(captions)`, through the memo.
+    mutating func usable(_ captions: [SceneCaption]) -> [SceneCaption] {
+        guard !captions.isEmpty else { return [] }
+        var kept: [SceneCaption] = []
+        kept.reserveCapacity(captions.count)
+        for c in captions where isUsable(c.text) { kept.append(c) }
+        return kept
+    }
+
+    /// Drop the memo (keep the count): called at the start of each group so
+    /// the cache never outgrows one group.
+    mutating func forgetTexts() {
+        memo.removeAll(keepingCapacity: true)
     }
 }
