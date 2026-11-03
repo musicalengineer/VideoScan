@@ -43,7 +43,9 @@ public enum ProvenanceAssertionFieldPolicy {
     /// are NOT the file's name or date (DECISIONS 2026-11-01: "Observations
     /// are never shown as a date") — so they are metadata, and rule 3
     /// ("background jobs add metadata only") allows them on archived rows.
-    public static let observationFields: Set<String> = ["era.yearRange", "era.fused", "ocr.date"]
+    /// `era.none` (2026-11-02) is the era job's "analyzed, no usable era
+    /// evidence" verdict — metadata about the analysis, not a value of the file.
+    public static let observationFields: Set<String> = ["era.yearRange", "era.fused", "era.none", "ocr.date"]
 
     /// A field that IS a name or a date of the file: refused on an archived
     /// content from any writer but Rick's Update… (rule 3).

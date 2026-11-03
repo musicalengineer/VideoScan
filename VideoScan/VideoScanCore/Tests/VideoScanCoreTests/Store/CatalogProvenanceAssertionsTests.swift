@@ -149,7 +149,8 @@ struct CatalogProvenanceAssertionsTests {
         try seedContent(fixture, count: 2)
         try markArchived(fixture, 1)
         let repository = try await open(fixture)
-        let observations = try await append(repository, [Self.draft(1), Self.draft(1, field: "era.fused"), Self.draft(1, field: "ocr.date", value: "1991-06-21")])
+        let observations = try await append(repository, [Self.draft(1), Self.draft(1, field: "era.fused"),
+                                                          Self.draft(1, field: "era.none", value: "none"), Self.draft(1, field: "ocr.date", value: "1991-06-21")])
         #expect(observations.allSatisfy { if case .recorded = $0 { return true } else { return false } }, "\(observations)")
         #expect(try await append(repository, [Self.draft(1, field: "date", value: "1991-06-21")]) == [.archivedNameOrDate])
         #expect(try await append(repository, [Self.draft(1, field: "name", value: "Cape 1991")]) == [.archivedNameOrDate])
@@ -159,7 +160,8 @@ struct CatalogProvenanceAssertionsTests {
     }
 
     @Test func theFieldPolicyNamesObservationsAndNamesOrDates() {
-        for field in ["era.yearRange", "era.fused", "ocr.date"] { #expect(!ProvenanceAssertionFieldPolicy.isNameOrDate(field), "\(field)") }
+        for field in ["era.yearRange", "era.fused", "era.none", "ocr.date"] { #expect(!ProvenanceAssertionFieldPolicy.isNameOrDate(field), "\(field)") }
+        #expect(ProvenanceAssertionFieldPolicy.observationFields.contains(EraRecordMapper.noneField))
         for field in ["name", "name.display", "date", "date.recorded", "title", "tapeYear", "digitizedOn"] {
             #expect(ProvenanceAssertionFieldPolicy.isNameOrDate(field), "\(field)")
         }

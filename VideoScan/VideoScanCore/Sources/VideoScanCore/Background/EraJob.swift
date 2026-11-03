@@ -4,10 +4,16 @@
 // job. Units = files. Per unit, the seated 8B (SeatedApproach.eraA2, through
 // PythonClipWorker → bench.py ClipService) looks at the pixels only and the
 // job appends journal lines — one `era.yearRange` per valid window, one
-// `ocr.date` per still that read a date stamp, and ONE file-level
-// `era.fused` (bench.py's fuse_range of the windows' range and the burned-in
-// years) — for the app's JournalApplier to commit. Nothing here writes the
-// catalog; the catalog is opened read-only (BackgroundCatalogAccess) to plan.
+// `ocr.date` per still that read a date stamp, and ONE file-level era
+// verdict — `era.fused` (bench.py's fuse_range of the windows' range and the
+// burned-in years) or, when the model answered but no usable range came of
+// it, `era.none` (2026-11-02: "analyzed by this signer, no usable era
+// evidence", so the caching rule below sees the file as done instead of
+// re-running it every job; never an era, never a date) — for the app's
+// JournalApplier to commit. A window the model never answered (a generation
+// error) is not evidence of anything: such a file gets no `era.none` and is
+// retried next run. Nothing here writes the catalog; the catalog is opened
+// read-only (BackgroundCatalogAccess) to plan.
 //
 // The plan (frozen per job id in background/plans/<id>.json, so a resume's
 // unit N is the same file as the first run's unit N):
@@ -193,6 +199,12 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
         }
         let at = Int64(setup.now().timeIntervalSince1970)
         let mapped = try EraRecordMapper.lines(record: data, digest: unit.digest, info: info, job: setup.jobID.rawValue, unit: index, at: at)
+        // A verdict of "no usable era" is cached for good; never reach it on a
+        // file that went away while the model looked (frames that would not rip).
+        if mapped.eraNone, !setup.isReadable(unit.path) {
+            await counters.count(.unreadable)
+            throw Refusal("unreadable: \(unit.path) — the file went away during analysis; nothing written, retried next run")
+        }
         try journal.append(mapped.lines)
         await counters.wrote(mapped, digest: unit.digest, signer: info.signer, seconds: started.duration(to: .now))
         await setup.afterJournalAppend?(index)
@@ -264,6 +276,8 @@ actor EraCounters {
     private var info: PythonClipWorker.LoadInfo?
     private var observed: [String: Set<String>] = [:]   // signer → digests with lines (journal + this run)
     private var windowsInvalid = 0
+    private var eraNone = 0
+    private var retryGenerationErrors = 0
 
     func loaded(_ info: PythonClipWorker.LoadInfo) {
         self.info = info
@@ -295,9 +309,12 @@ actor EraCounters {
     func wrote(_ mapped: EraRecordMapper.Mapped, digest: String, signer: String, seconds s: Duration) {
         assertions += mapped.lines.count
         windowsInvalid += mapped.windowsInvalid
+        if mapped.eraNone { eraNone += 1 }
+        if mapped.retryNextRun { retryGenerationErrors += 1 }
         analyzed += 1
         seconds += Double(s.components.seconds) + Double(s.components.attoseconds) / 1e18
-        observed[signer, default: []].insert(digest)
+        // Only a unit that wrote a line is cached (the journal is the cache).
+        if !mapped.lines.isEmpty { observed[signer, default: []].insert(digest) }
     }
 
     func words(peakRSS: Int64?, planCached: Int) -> String {
@@ -306,7 +323,8 @@ actor EraCounters {
         return "approach \(info?.signer ?? "not loaded") · model \(info?.model ?? "–") · \(analyzed) analyzed · "
             + "\(assertions) assertions written · skipped (cached) \(planCached) at plan + \(cachedAtRun) at run · "
             + "failed: \(timeouts) timeout, \(deaths) worker death, \(unreadable) unreadable, \(other) other · "
-            + "\(windowsInvalid) windows refused by the Swift contract · \(perClip) s/clip · worker peak RSS \(rss)"
+            + "\(windowsInvalid) windows refused by the Swift contract · no usable era: \(eraNone) era.none, "
+            + "\(retryGenerationErrors) retried next run (window generation errors) · \(perClip) s/clip · worker peak RSS \(rss)"
     }
 }
 
@@ -372,8 +390,15 @@ public enum EraRecordMapper {
 
     public struct Mapped: Sendable {
         public var lines: [ObservationLine] = []
-        /// era windows the Swift ContractDecoder refused (fail-closed; never written).
+        /// era windows the Swift ContractDecoder refused (fail-closed; never written),
+        /// generation errors included.
         public var windowsInvalid = 0
+        /// era windows the model never answered (`error` set: a timeout, a crash in the generation).
+        public var generationErrors = 0
+        /// The record carries the file's `era.none` line.
+        public var eraNone: Bool { lines.contains { $0.field == EraRecordMapper.noneField } }
+        /// No era verdict and a generation error: nothing about the era is known — retry.
+        public var retryNextRun: Bool { !lines.contains { $0.field == "era.fused" || $0.field == EraRecordMapper.noneField } }
         var selfConfidences: [Double] = []
         var validWindows: [[Double]] = []
     }
@@ -381,7 +406,10 @@ public enum EraRecordMapper {
     /// One bench clip record (ClipService.analyze_clip) → its journal lines:
     /// `era.yearRange` per window the Swift contract accepts (through
     /// EvidenceAssertionMapper), `ocr.date` per still that read a date,
-    /// one `era.fused` when the record's summary has a fused range.
+    /// one `era.fused` when the record's summary has a fused range, else one
+    /// `era.none` when every era window was answered (none was a generation
+    /// error) — including a record with no era window at all (no frame
+    /// ripped): the file is done for this signer, with no usable era evidence.
     public static func lines(record: Data, digest: String, info: PythonClipWorker.LoadInfo, job: String, unit: Int,
                              at: Int64) throws -> Mapped {
         guard let o = (try? JSONSerialization.jsonObject(with: record)) as? [String: Any] else {
@@ -391,8 +419,33 @@ public enum EraRecordMapper {
         let context = Context(subject: subject, info: info, job: job, unit: unit, at: at)
         var out = try windowLines(o["window_results"] as? [[String: Any]] ?? [], context)
         out.lines += try stampLines(o["results"] as? [[String: Any]] ?? [], context)
-        if let fused = try fusedLine(o["summary"] as? [String: Any], windows: out, context) { out.lines.append(fused) }
+        if let fused = try fusedLine(o["summary"] as? [String: Any], windows: out, context) {
+            out.lines.append(fused)
+        } else if out.generationErrors == 0 {
+            out.lines.append(try noneLine(o, windows: out, context))
+        }
         return out
+    }
+
+    /// The file-level "looked, found no usable era" verdict (2026-11-02).
+    /// Its field is not `era.fused` / `era.yearRange`, so MachineEraResolver
+    /// never reads it as an era, and its value is not a year: nothing can
+    /// make it a date (DECISIONS 2026-11-01). It exists for the caching rule.
+    public static let noneField = "era.none"
+    public static let noneValue = "none"
+
+    static func noneLine(_ o: [String: Any], windows: Mapped, _ c: Context) throws -> ObservationLine {
+        let eraWindows = (o["window_results"] as? [[String: Any]] ?? []).filter { $0["family"] as? String == "era" }.count
+        let evidence: [String: Any] = [
+            "meaning": "analyzed by this signer; no usable era evidence — not an era and not a date",
+            "reason": eraWindows == 0 ? "no era window (no frame could be shown)"
+                : windows.validWindows.isEmpty ? "no era window passed the contract" : "the valid windows gave no fused range",
+            "eraWindows": eraWindows, "validEraWindows": windows.validWindows.count,
+            "windowsRefusedByContract": windows.windowsInvalid - windows.generationErrors,
+            "framesFailed": (o["frames_failed"] as? [Any])?.count ?? 0,
+            "promptHash": c.approach.promptHash, "host": c.approach.host.label,
+        ]
+        return try c.line(noneField, noneValue, confidence: 0, evidence: evidence)
     }
 
     /// What every line of one record shares.
@@ -426,7 +479,8 @@ public enum EraRecordMapper {
     static func windowLines(_ windows: [[String: Any]], _ c: Context) throws -> Mapped {
         var out = Mapped()
         for (i, w) in windows.enumerated() where w["family"] as? String == "era" {
-            guard w["error"] is NSNull || w["error"] == nil, let raw = w["raw_text"] as? String,
+            if let error = w["error"], !(error is NSNull) { out.generationErrors += 1; out.windowsInvalid += 1; continue }
+            guard let raw = w["raw_text"] as? String,
                   let window = w["window"] as? [Double], window.count == 2 else { out.windowsInvalid += 1; continue }
             let sample = SampleWindow(startS: window[0], endS: window[1], frameTimesS: w["frame_times_s"] as? [Double] ?? [], audioRange: nil)
             guard case .output(let output) = ContractDecoder.decode(family: .era, json: Data(raw.utf8), window: sample),

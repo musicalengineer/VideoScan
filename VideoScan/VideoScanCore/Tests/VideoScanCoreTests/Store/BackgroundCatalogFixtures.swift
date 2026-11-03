@@ -63,6 +63,11 @@ enum EraFixture {
         }
     }
 
+    /// One integer a raw query answers (a test's read-back).
+    static func count(_ fixture: StoreFixture, _ sql: String) throws -> Int {
+        try DatabaseQueue(path: fixture.url.path).read { try Int.fetchOne($0, sql: sql) } ?? 0
+    }
+
     /// `count` content rows hex(1)…hex(count), one transaction.
     static func seedContents(_ fixture: StoreFixture, count: Int) throws {
         try DatabaseQueue(path: fixture.url.path).inDatabase { db in

@@ -46,6 +46,28 @@ struct JournalApplicationTests {
         return box.value
     }
 
+    /// era.none (2026-11-02): applied as the row it is — field `era.none`,
+    /// value "none" — and nothing more: no era (MachineEraResolver reads only
+    /// era.fused / era.yearRange), no date (`inferred_dates` untouched).
+    @Test func anEraNoneLineIsRecordedAsItselfNeverAnEraOrADate() async throws {
+        let (fixture, repository) = try await Self.scene(contents: 1)
+        defer { fixture.remove() }
+        let none = try ObservationLine(subjectID: Self.hex(1), field: "era.none", value: "none", by: Self.by, at: 5, confidence: 0,
+                                       evidence: ["meaning": "analyzed by this signer; no usable era evidence — not an era and not a date"],
+                                       job: "J", unit: 0)
+        let outcome = try Self.apply(repository, [Self.readLine(none)])
+        #expect(outcome.applied == 1 && outcome.duplicates == 0 && outcome.refused.isEmpty)
+        let rows = try await repository.read { try $0.provenanceAssertions(subjectKind: "content", subjectID: Self.hex(1)) }
+        #expect(rows.map(\.field) == ["era.none"] && rows.map(\.value) == ["none"] && rows.map(\.state) == ["inferred"])
+        let eras = try await repository.read { try MachineEraResolver.eras(in: $0) }
+        #expect(eras.isEmpty, "era.none is not an era: \(eras)")
+        #expect(MachineEraResolver.eras(fromRowsOfOneSubject: rows).isEmpty)
+        let dates = try EraFixture.count(fixture, "SELECT count(*) FROM inferred_dates")
+        #expect(dates == 0, "era.none never becomes a date")
+        #expect(try Self.apply(repository, [Self.readLine(none)]).duplicates == 1, "applying it twice = once")
+        await repository.close()
+    }
+
     @Test func everyLineLandsInExactlyOneBucketWithItsRule() async throws {
         let (fixture, repository) = try await Self.scene(contents: 3)
         defer { fixture.remove() }

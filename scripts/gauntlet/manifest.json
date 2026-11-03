@@ -393,15 +393,26 @@
       "suites": [
         "EraJobLogicTests",
         "EraJobRunTests",
-        "EraJobCLITests"
+        "EraJobCLITests",
+        "EraPlannerEraNoneTests"
       ],
       "tests": [
         "aCorruptCheckpointRestartsFromZeroSaysSoAndWritesNoDuplicate",
         "aDuplicateLineWereOneWrittenAppliesOnce",
+        "aFileThatVanishedDuringAnalysisGetsNoEraNone",
+        "aFileWithNoUsableEraIsAnalyzedOnceNotEveryRun",
+        "aGenerationErrorIsNotEvidenceNoEraNoneRetryNextRun",
+        "aJournalWithOnlyAnEraNoneLineCachesTheFile",
         "aNewerCatalogSchemaIsRefusedAtPlan",
+        "aRecordWithNoEraWindowAtAllIsDoneToo",
+        "aStampWithoutAFusedRangeStillGetsItsEraNone",
+        "aWindowGenerationErrorWritesNoEraNoneAndTheFileIsRetried",
         "aWorkerDeathAndAClipPastItsCapFailThatUnitAndTheJobGoesOn",
+        "anAppliedEraNoneRowCachesTheFile",
+        "anotherSignersEraNoneDoesNotCache",
         "killMidUnitThenRelaunchSkipsTheUnitAndWritesNoSecondSet",
         "noModelLoadWhileRickIsAtTheKeyboardThenItRuns",
+        "noUsableWindowGivesExactlyOneEraNoneWithItsEvidenceAndNoYear",
         "orderAndPathYearOverOneHundredThousandInsideABudget",
         "orderIsOldestFirstByTheBestBoundUnknownLast",
         "pathYearIsAFourDigitRunClosestToTheFile",
@@ -420,6 +431,7 @@
         "JournalApplicationTests"
       ],
       "tests": [
+        "anEraNoneLineIsRecordedAsItselfNeverAnEraOrADate",
         "anUnknownTableIsRefused",
         "codex187F7UnsupportedSubjectIsRefused",
         "everyLineLandsInExactlyOneBucketWithItsRule",
@@ -35793,7 +35805,7 @@
       ],
       "expected_floor": 3254,
       "name": "unit",
-      "package_expected_floor": 644,
+      "package_expected_floor": 655,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -35818,6 +35830,7 @@
         "VideoScanCoreTests.EraJobCLITests",
         "VideoScanCoreTests.EraJobLogicTests",
         "VideoScanCoreTests.EraJobRunTests",
+        "VideoScanCoreTests.EraPlannerEraNoneTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.IdleExitPolicyTests",
