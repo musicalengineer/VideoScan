@@ -240,6 +240,12 @@ struct OccurrenceWriter {
         if let print = dto.soundPrint {
             _ = try tx.insertSoundPrint(print)
         }
+        // v15: a catalog.json row that carries tries without a print (only a
+        // file written by a v15 build can) keeps them; the door drops a try
+        // no newer than the content's print.
+        if let attempt = dto.soundAttempt {
+            try tx.upsertSoundAttempt(attempt)
+        }
     }
 
     private func deferRelations(fileID: String?, into pass: inout ImportRowPass) {

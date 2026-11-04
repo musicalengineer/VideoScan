@@ -75,6 +75,8 @@ public struct CatalogLoadedRow: Sendable, Equatable {
     public var archiveCopy: CatalogRecordDTO.ArchiveCopyRow?
     public var backupDestinations: [CatalogRecordDTO.BackupDestinationRow] = []
     public var soundPrint: CatalogRecordDTO.SoundPrintRow?
+    /// `sound_attempts` (v15, by digest — like the print).
+    public var soundAttempt: CatalogRecordDTO.SoundAttemptRow?
     public var shown = Shown()
     public var rowKnowledge: [CatalogDDL.KnowledgeField: CatalogJSONValue] = [:]
     public var footageDecisions: [CatalogRecordDTO.FootageDecisionRow] = []

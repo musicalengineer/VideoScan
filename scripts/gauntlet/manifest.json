@@ -33276,6 +33276,59 @@
       "tests": [
         "archiveFixityRowsStampDurably"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioFingerprintAttemptTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AudioFingerprintAttemptTests"
+      ],
+      "tests": [
+        "aNewerEngineRetries",
+        "aPrintEndsTheTries",
+        "aRoleFlipCommitsTheTryThenRefuses",
+        "aSampledOnlyRecordNeverGetsATry",
+        "aTryAndAnEditInTheDebounceWindowBothLand",
+        "aTrySurvivesARelaunch",
+        "aWriteHoldUndoesTheTries",
+        "coverageCountsAGiveUpAsObservedAndSaysSo",
+        "decodeFailureIsTriedThreeTimesThenSkipped",
+        "environmentFailuresAreNotAttempts",
+        "heardTooLittleIsTriedThreeTimesThenSkipped",
+        "missingIsNotAnAttempt",
+        "planningAt100kWithCappedTries",
+        "theWordsSayIt"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogSoundAttemptsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSoundAttemptsTests"
+      ],
+      "tests": [
+        "aFifteenFileIsRefusedInWordsByTheGateAFourteenBuildRan",
+        "aPrintEndsTheTries",
+        "aSchemaFourteenDatabaseOpensAsFifteen",
+        "dtoBindsOnlyAFullDigestNote",
+        "poisonedRowsAreRefusedByTheChecks",
+        "theAttemptRule",
+        "upsertIsMonotone"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeSoundAttemptsMigrationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeSoundAttemptsMigrationTests"
+      ],
+      "tests": [
+        "theLiveCatalogMigratesWithEveryRowKept"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -36896,11 +36949,15 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeSoundStampTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeSoundAttemptsMigrationTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 392,
+      "expected_floor": 406,
       "name": "regression",
-      "package_expected_floor": 286,
+      "package_expected_floor": 293,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -36944,7 +37001,8 @@
         "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests",
         "VideoScanCoreTests.CatalogStoreOpenVerdictTests",
         "VideoScanCoreTests.SQLiteWALSidecarTests",
-        "VideoScanCoreTests.RecordVolumeEvidenceTests"
+        "VideoScanCoreTests.RecordVolumeEvidenceTests",
+        "VideoScanCoreTests.CatalogSoundAttemptsTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -37044,7 +37102,8 @@
         "VideoScanTests/ConfirmedDateFilterTests",
         "VideoScanTests/ConfirmedDateFilterTruthTests",
         "VideoScanTests/ConfirmedDateFilterSensorTests",
-        "VideoScanTests/AudioFingerprintStampDurabilityTests"
+        "VideoScanTests/AudioFingerprintStampDurabilityTests",
+        "VideoScanTests/AudioFingerprintAttemptTests"
       ]
     },
     {

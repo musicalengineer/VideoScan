@@ -81,7 +81,7 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["fullfsync"] == "1")
         #expect(pragmas["foreign_keys"] == "1")
         #expect(pragmas["busy_timeout"] == "5000")
-        #expect(pragmas["user_version"] == "14")                // v1.13 (`v9_provenance_assertions`) raised it
+        #expect(pragmas["user_version"] == "15")                // v1.14 (`v10_sound_attempts`) raised it
         #expect(pragmas["recursive_triggers"] == "1")   // codex C′ #1: REPLACE's deletes reach the delete triggers
         // codex #141 F1: the WRITER is the connection that commits; GRDB's WAL
         // setup had left it at NORMAL while every reader said FULL.

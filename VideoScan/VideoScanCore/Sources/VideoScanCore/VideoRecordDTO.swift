@@ -171,6 +171,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let perceptualFingerprint: StoredPerceptualFingerprint?
     public let mediaReportCard: MediaReportCard?
     public let audioFingerprint: AudioFingerprintStamp?
+    public let audioFingerprintAttempt: AudioFingerprintAttempt?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -309,6 +310,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         perceptualFingerprint       = r.perceptualFingerprint
         mediaReportCard             = r.mediaReportCard
         audioFingerprint            = r.audioFingerprint
+        audioFingerprintAttempt     = r.audioFingerprintAttempt
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -579,5 +581,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         try c.encodeIfPresent(mediaReportCard, forKey: .mediaReportCard)
         // Fingerprint Sound (2026-10-14): only once the sound was looked at.
         try c.encodeIfPresent(audioFingerprint, forKey: .audioFingerprint)
+        // GH #416 part 2: only once a try heard too little or failed.
+        try c.encodeIfPresent(audioFingerprintAttempt, forKey: .audioFingerprintAttempt)
     }
 }

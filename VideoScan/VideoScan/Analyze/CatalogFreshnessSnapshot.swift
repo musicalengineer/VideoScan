@@ -68,6 +68,7 @@ enum CatalogFreshnessRows {
             if audit.predatesSwitch { row.phrases.uncovered = Self.notSinceTheSwitch("checked") }
         case .soundPrints:
             row.storeUnavailable = facts.soundStoreProblem
+            if report.soundGaveUp > 0 { row.note = Self.soundGaveUpWords(report.soundGaveUp) }
         case .integrity:
             // No stamp per row: the last Verify Catalog report stands in
             // (its BUILT tiers' results, dates and words — IntegrityReportFacts).
@@ -120,6 +121,12 @@ enum CatalogFreshnessRows {
     /// row whose last pass read catalog.json, before the switch.
     static func notSinceTheSwitch(_ participle: String) -> String {
         "not \(participle) since the switch to SQLite"
+    }
+
+    /// GH #416 part 2: the files counted covered because Sound Prints gave
+    /// up on them — said, never hidden in the percentage.
+    static func soundGaveUpWords(_ n: Int) -> String {
+        "\(n.formatted()) gave up after \(AudioFingerprintAttempt.cap) tries (heard too little or would not decode) — a new engine retries them"
     }
 
     /// Each kind's own words for its counts (FreshnessRow.Phrases).

@@ -172,6 +172,18 @@ extension CatalogRecordDTO {
         public var computedAt: Int64
     }
 
+    /// `sound_attempts` (v15, GH #416 part 2) — only a `sha256:`-keyed note
+    /// whose words this build knows (outcome, counts ≥ 1); the prefix is
+    /// stripped. Anything else is not bound (the file is simply tried again).
+    public struct SoundAttemptRow: Codable, Sendable, Equatable {
+        public var digest: String
+        public var engineVersion: Int
+        public var outcome: String
+        public var attempts: Int
+        public var lastAt: Int64
+        public var detail: String?
+    }
+
     // MARK: Curated (§10b) — display-table shapes; the verbatim value is `knowledgeSources`.
 
     public struct UserDateRow: Codable, Sendable, Equatable {
@@ -373,6 +385,17 @@ extension CatalogRecordDTO.SoundPrintRow {
         self.init(digest: hex, engineVersion: s.engineVersion, outcome: s.outcome,
                   analyzedS: s.analyzedSeconds, complete: s.complete, landmarks: s.landmarks,
                   blobBytes: s.bytes, computedAt: s.computedAt.unixSeconds)
+    }
+}
+
+extension CatalogRecordDTO.SoundAttemptRow {
+    init?(_ a: VideoRecordJSON.AudioFingerprintAttemptJSON) {
+        guard a.contentDigest.hasPrefix("sha256:") else { return nil }
+        let hex = String(a.contentDigest.dropFirst("sha256:".count)).lowercased()
+        guard CatalogRecordDTO.isWholeFileDigest(hex), CatalogDDL.SoundAttemptOutcome(rawValue: a.outcome) != nil,
+              a.attempts >= 1, a.engineVersion >= 1 else { return nil }
+        self.init(digest: hex, engineVersion: a.engineVersion, outcome: a.outcome, attempts: a.attempts,
+                  lastAt: a.lastAt.unixSeconds, detail: a.detail)
     }
 }
 

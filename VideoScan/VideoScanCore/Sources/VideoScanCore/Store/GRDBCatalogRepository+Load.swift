@@ -156,6 +156,7 @@ enum LoadSQL {
                dm.group_id, dm.confidence, dm.disposition, dm.reasons, dm.best_match, dg.analyzed_at,
                (SELECT count(*) FROM duplicate_members x WHERE x.group_id = dm.group_id),
                sp.digest, sp.engine_version, sp.outcome, sp.analyzed_s, sp.complete, sp.landmarks, sp.blob_bytes, sp.computed_at,
+               sa.digest, sa.engine_version, sa.outcome, sa.attempts, sa.last_at, sa.detail,
                st.digest, st.rating, st.conflict,
                ud.digest, ud.value, ud.confidence, ud.conflict,
                up.digest, up.place, up.confidence, up.conflict,
@@ -169,6 +170,7 @@ enum LoadSQL {
           LEFT JOIN duplicate_members dm ON dm.file_id = f.id
           LEFT JOIN duplicate_groups dg ON dg.group_id = dm.group_id
           LEFT JOIN sound_prints sp ON sp.digest = f.content_digest
+          LEFT JOIN sound_attempts sa ON sa.digest = f.content_digest
           LEFT JOIN stars st ON st.digest = f.content_digest
           LEFT JOIN user_dates ud ON ud.digest = f.content_digest
           LEFT JOIN user_places up ON up.digest = f.content_digest
@@ -199,6 +201,7 @@ enum LoadSQL {
         loaded.archiveCopy = archiveCopy(&c)
         (loaded.duplicate, loaded.duplicateGroupCount) = duplicate(&c)
         loaded.soundPrint = soundPrint(&c)
+        loaded.soundAttempt = soundAttempt(&c)
         loaded.shown = LoadShownScalars.read(&c)
         loaded.pair = pair(&c)
         return loaded
@@ -225,6 +228,12 @@ enum LoadSQL {
         return CatalogRecordDTO.SoundPrintRow(digest: digest, engineVersion: Int(c.int()), outcome: c.text(), analyzedS: c.next() ?? 0,
                                               complete: c.flag(), landmarks: Int(c.int()), blobBytes: Int(c.int()),
                                               computedAt: c.int())
+    }
+
+    private static func soundAttempt(_ c: inout ColumnCursor) -> CatalogRecordDTO.SoundAttemptRow? {
+        guard let digest: String = c.next() else { c.skip(5); return nil }
+        return CatalogRecordDTO.SoundAttemptRow(digest: digest, engineVersion: Int(c.int()), outcome: c.text(),
+                                                attempts: Int(c.int()), lastAt: c.int(), detail: c.next())
     }
 
     private static func pair(_ c: inout ColumnCursor) -> CatalogLoadedRow.PairIDs? {

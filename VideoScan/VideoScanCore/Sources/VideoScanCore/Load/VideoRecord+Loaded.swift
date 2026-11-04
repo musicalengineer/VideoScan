@@ -159,6 +159,12 @@ extension VideoRecord {
                                                      sizeBytes: f.sizeBytes, outcome: outcome, analyzedSeconds: p.analyzedS,
                                                      complete: p.complete, landmarks: p.landmarks, bytes: p.blobBytes)
         }
+        if let a = row.soundAttempt, let outcome = AudioFingerprintAttempt.Outcome(rawValue: a.outcome) {
+            audioFingerprintAttempt = AudioFingerprintAttempt(contentDigest: "sha256:" + a.digest, engineVersion: a.engineVersion,
+                                                              outcome: outcome, attempts: a.attempts,
+                                                              lastAt: Date(timeIntervalSince1970: TimeInterval(a.lastAt)),
+                                                              detail: a.detail)
+        }
     }
 
     /// `FileIdentityStamp` from the `stamp_*` columns (device / inode are

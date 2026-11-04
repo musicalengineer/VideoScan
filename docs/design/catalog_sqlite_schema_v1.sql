@@ -76,6 +76,11 @@
 -- with the veto trigger (VideoScanCore/Store/CatalogProvenanceAssertionsSchema.swift, migration
 -- `v9_provenance_assertions`, which raises catalog_state.schema_version to 14). ADDITIVE: one new
 -- table, one index, three triggers; no earlier table, trigger, index or CHECK changed.
+-- Revision 15 (v1.14, 2026-11-03, GH #416 part 2; Rick approved option B 2026-11-03): §19 —
+-- `sound_attempts`, the tries Fingerprint Sound made on a content that gave no print, per digest
+-- (VideoScanCore/Store/CatalogSoundAttemptsSchema.swift, migration `v10_sound_attempts`, which raises
+-- catalog_state.schema_version to 15). ADDITIVE: one new table; no earlier table, trigger, index or
+-- CHECK changed.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1800,3 +1805,24 @@ CREATE TRIGGER provenance_assertions_no_update BEFORE UPDATE ON provenance_asser
 BEGIN SELECT RAISE(ABORT, 'provenance_assertions is append-only'); END;
 CREATE TRIGGER provenance_assertions_no_delete BEFORE DELETE ON provenance_assertions
 BEGIN SELECT RAISE(ABORT, 'provenance_assertions is append-only'); END;
+
+-- ---------------------------------------------------------------------------------------------
+-- 19. SOUND ATTEMPTS (v1.14, 2026-11-03, migration `v10_sound_attempts`; GH #416 part 2, Rick
+--     approved option B 2026-11-03). One row per content digest (as content.digest holds it, no
+--     'sha256:' prefix; a sampled v1: key never gets a row): Fingerprint Sound tried the content's
+--     sound `attempts` times at `engine_version` and got no print — `outcome` is the last try's:
+--     heard sound but too little to make a landmark, or ffmpeg could not decode it. The plan skips
+--     a content after 3 tries at the CURRENT engine version; a row from an older engine counts as
+--     0. A drive not connected, a file missing at its path, a changed record, a cut-off run, a
+--     timeout or a missing ffmpeg are never an attempt. Written only by the commit door (an upsert
+--     that never lowers a count); deleted when the content's sound print is written.
+--     The migration then runs: UPDATE catalog_state SET schema_version = 15; PRAGMA user_version = 15.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE sound_attempts (              -- v1.14: tries that gave no sound print, per content (AudioFingerprintAttempt)
+  digest          TEXT PRIMARY KEY NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
+  engine_version  INTEGER NOT NULL CHECK (engine_version >= 1),
+  outcome         TEXT    NOT NULL CHECK (outcome IN ('heardTooLittle','failed')),
+  attempts        INTEGER NOT NULL CHECK (attempts >= 1),
+  last_at         INTEGER NOT NULL,
+  detail          TEXT
+) STRICT;

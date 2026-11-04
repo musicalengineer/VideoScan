@@ -26,13 +26,17 @@ public struct CatalogRecordDiff: Sendable, Equatable {
     public var footageDecisions = false
     public var duplicate = false
     public var soundPrint = false
+    /// The record carries a `sound_attempts` note the store does not hold.
+    /// A record WITHOUT one never differs (only a sound print ends the
+    /// row: a copy loaded before a sibling's try must not erase it).
+    public var soundAttempt = false
     /// The knowledge fields whose verbatim value differs.
     public var knowledge: [CatalogDDL.KnowledgeField] = []
     public var pair = false
     public var derived: [CatalogDDL.DerivedKind] = []
 
     public var isEmpty: Bool {
-        !file && !marker && !archiveCopy && !backups && !footageDecisions && !duplicate && !soundPrint
+        !file && !marker && !archiveCopy && !backups && !footageDecisions && !duplicate && !soundPrint && !soundAttempt
             && knowledge.isEmpty && !pair && derived.isEmpty
     }
 
@@ -51,6 +55,7 @@ public struct CatalogRecordDiff: Sendable, Equatable {
         footageDecisions = stored.curated.footageDecisions != current.curated.footageDecisions
         duplicate = stored.duplicateMember != current.duplicateMember
         soundPrint = stored.soundPrint != current.soundPrint
+        soundAttempt = current.soundAttempt != nil && stored.soundAttempt != current.soundAttempt
         knowledge = CatalogDDL.KnowledgeField.allCases.filter {
             CatalogRecordDTO.knowledgeValue($0, raw: stored.raw) != CatalogRecordDTO.knowledgeValue($0, raw: current.raw)
         }
@@ -78,6 +83,7 @@ public struct CatalogRecordDiff: Sendable, Equatable {
         footageDecisions = !current.curated.footageDecisions.isEmpty
         duplicate = current.duplicateMember != nil
         soundPrint = current.soundPrint != nil
+        soundAttempt = current.soundAttempt != nil
         knowledge = current.curatedFields
         pair = current.pairLink != nil
         derived = Array(Set(current.derivedUnverified.map(\.kind))).sorted { $0.rawValue < $1.rawValue }

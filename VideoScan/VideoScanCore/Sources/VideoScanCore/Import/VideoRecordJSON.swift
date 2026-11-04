@@ -92,6 +92,7 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
         case perceptualFingerprint
         case mediaReportCard
         case audioFingerprint
+        case audioFingerprintAttempt
     }
 
     // MARK: Nested mirrors (contract §b) — field names are the JSON keys.
@@ -135,6 +136,17 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
         public var complete: Bool
         public var landmarks: Int
         public var bytes: Int
+    }
+
+    /// `AudioFingerprintAttempt` (GH #416 part 2) — `sound_attempts`.
+    /// `outcome` is kept as a word: an unknown one is not bound (§b).
+    public struct AudioFingerprintAttemptJSON: Codable, Sendable, Equatable {
+        public var contentDigest: String
+        public var engineVersion: Int
+        public var outcome: String
+        public var attempts: Int
+        public var lastAt: CatalogJSONDate
+        public var detail: String?
     }
 
     /// `RemovalMarker` (C/RemovalMarker.swift:64). `state` and `reason` are
@@ -363,6 +375,7 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
     /// future build must not fail the row.
     public var mediaReportCard: CatalogJSONValue?
     public var audioFingerprint: AudioFingerprintJSON?
+    public var audioFingerprintAttempt: AudioFingerprintAttemptJSON?
 
     // MARK: Evidence of the read itself
 
@@ -521,6 +534,7 @@ public struct VideoRecordJSON: Decodable, Sendable, Equatable {
         perceptualFingerprint = Self.read(c, .perceptualFingerprint, &bad)
         mediaReportCard = Self.read(c, .mediaReportCard, &bad)
         audioFingerprint = Self.read(c, .audioFingerprint, &bad)
+        audioFingerprintAttempt = Self.read(c, .audioFingerprintAttempt, &bad)
 
         undecodable = bad.sorted()
     }

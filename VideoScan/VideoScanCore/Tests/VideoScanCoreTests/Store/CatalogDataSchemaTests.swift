@@ -68,7 +68,7 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
-        #expect(inventory.tables.count == 57)                  // 3 bookkeeping + 47 data + 1 live (v1.7 row_knowledge) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12) + provenance_assertions (v1.13)
+        #expect(inventory.tables.count == 58)                  // 3 bookkeeping + 47 data + 1 live (v1.7 row_knowledge) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12) + provenance_assertions (v1.13) + sound_attempts (v1.14)
         #expect(inventory.virtualTables == ["content_text_fts"])
         #expect(inventory.triggers.count == 83)                // 12 bookkeeping + 58 data (v1.5: +5, +8 for codex C′ #1/#2) + 3 live + 1 pending + 4 append-only (v1.11) + 2 append-only (v1.12) + veto + 2 append-only (v1.13)
         #expect(inventory.indexes.count == 38)                 // 8 UNIQUE + 25 plain + 1 live + 1 read-back (v1.9) + footage_likeness_by_b (v1.11) + provenance_roles_by_digest (v1.12) + provenance_assertions_by_subject (v1.13), all named in the DDL
@@ -80,16 +80,18 @@ struct CatalogDataSchemaTests {
         #expect(migrations == [CatalogBookkeepingSchema.migrationID, CatalogDataSchema.migrationID, CatalogLiveWritesSchema.migrationID,
                                CatalogPendingRowsSchema.migrationID, CatalogCommitB22Schema.migrationID,
                                CatalogFolderKindSchema.migrationID, CatalogDecisionTablesSchema.migrationID,
-                               CatalogProvenanceRolesSchema.migrationID, CatalogProvenanceAssertionsSchema.migrationID])
+                               CatalogProvenanceRolesSchema.migrationID, CatalogProvenanceAssertionsSchema.migrationID,
+                               CatalogSoundAttemptsSchema.migrationID])
         let version = try count(try rawQueue(fixture), "SELECT schema_version FROM catalog_state")
-        #expect(version == CatalogProvenanceAssertionsSchema.schemaVersion)
+        #expect(version == CatalogSoundAttemptsSchema.schemaVersion)
     }
 
     @Test func theSwiftSchemaIsSplitByTableInDocumentOrder() throws {
         let documented = try SchemaDocument.ddl().tableNames.filter { !["catalog_state", "generations", "generation_history"].contains($0) }
         let swiftOrder = (CatalogDataSchema.statements + CatalogLiveWritesSchema.statements + CatalogPendingRowsSchema.statements
                          + CatalogCommitB22Schema.statements + CatalogDecisionTablesSchema.statements
-                         + CatalogProvenanceRolesSchema.statements + CatalogProvenanceAssertionsSchema.statements).compactMap { sql in
+                         + CatalogProvenanceRolesSchema.statements + CatalogProvenanceAssertionsSchema.statements
+                         + CatalogSoundAttemptsSchema.statements).compactMap { sql in
             sql.firstMatch(of: #/^CREATE (?:VIRTUAL )?TABLE (\w+)/#).map { String($0.1) }
         }
         #expect(swiftOrder == documented)
@@ -114,7 +116,7 @@ struct CatalogDataSchemaTests {
         #expect(outcome == .readWrite)
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
         #expect(inventory.tables.contains("files"))
-        #expect(inventory.tables.count == 57)                  // + pending_rows (v1.8), pending_purges (v1.9), the two decision tables (v1.11), provenance_roles (v1.12), provenance_assertions (v1.13)
+        #expect(inventory.tables.count == 58)                  // + pending_rows (v1.8), pending_purges (v1.9), the two decision tables (v1.11), provenance_roles (v1.12), provenance_assertions (v1.13), sound_attempts (v1.14)
         let generation = try count(try rawQueue(fixture), "SELECT generation FROM generations WHERE id = 1")
         #expect(generation == 0)
     }
@@ -164,7 +166,7 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let documented = try SchemaDocument.ddl().statements.filter { $0.hasPrefix("CREATE") }
-        #expect(documented.count == 181)                       // 58 tables + 83 triggers + 38 indexes + 2 views
+        #expect(documented.count == 182)                       // 59 tables + 83 triggers + 38 indexes + 2 views
         let created = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }.normalizedSQL
         let createdText = Set(created.values)
         for statement in documented {
