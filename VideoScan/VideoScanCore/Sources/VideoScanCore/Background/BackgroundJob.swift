@@ -38,12 +38,20 @@ public protocol BackgroundJob: Sendable {
     /// The job ends (finished or stopped): release what it holds (a worker
     /// process, a plan file). Not called when the process dies.
     func end() async
+    /// Can this unit's failure speak for the whole job — the environment, the
+    /// worker — rather than for one unit's file? The supervisor stops a job
+    /// after `Configuration.failFastUnits` such failures in a row with the
+    /// same words (2026-11-03: 523 of 523 units failed on a missing ffmpeg).
+    /// Default true; answer false for failures one bad file can cause whose
+    /// words do not name the file (EraJob: a clip past its cap, a worker death).
+    func failureIsSystemic(_ error: any Error) -> Bool
 }
 
 extension BackgroundJob {
     public var startDetail: String { "" }
     public func outcomeDetail() async -> String { "" }
     public func end() async {}
+    public func failureIsSystemic(_ error: any Error) -> Bool { true }
 }
 
 public struct NoOpJob: BackgroundJob {
@@ -130,7 +138,13 @@ extension EraJob {
     /// `python` (default <repo>/venv-mlx/bin/python3), `modelDir` (default:
     /// the Hugging Face snapshot of the 8B, which must be present),
     /// `catalogPath` (default the factory's), `limit` (files; default all).
-    public static func setup(for request: JobRequest, stateRoot: URL, catalogURL: URL, backoff: Backoff?) throws -> Setup {
+    /// `environment` is the helper's own (launchd's minimal PATH under the
+    /// service): the worker gets it through `SubprocessEnvironment.mediaTools`,
+    /// so bench.py's bare `ffmpeg`/`ffprobe` are the ones FFmpegLocator finds —
+    /// or the job is refused here, naming what is missing (2026-11-03 bug).
+    public static func setup(for request: JobRequest, stateRoot: URL, catalogURL: URL, backoff: Backoff?,
+                             environment: [String: String] = ProcessInfo.processInfo.environment,
+                             fileManager: FileManager = .default) throws -> Setup {
         let p = request.parameters
         guard let repo = p[repoPathKey], !repo.isEmpty else {
             throw Refusal("era: `\(repoPathKey)` is required — the VideoScan checkout that holds tools/video-llm-bench/bench.py and venv-mlx")
@@ -144,8 +158,13 @@ extension EraJob {
         guard let modelDir, FileManager.default.fileExists(atPath: modelDir + "/config.json") else {
             throw Refusal("era: the 8B weights are not on this Mac (\(p[modelDirKey] ?? "no snapshot of mlx-community/Qwen3-VL-8B-Instruct-4bit in ~/.cache/huggingface")) — refused at START, not after 400 files")
         }
-        let worker = try PythonClipWorker.Configuration.repo(URL(fileURLWithPath: repo), factory: "clip-service:a2-py:\(modelDir)",
+        var worker = try PythonClipWorker.Configuration.repo(URL(fileURLWithPath: repo), factory: "clip-service:a2-py:\(modelDir)",
                                                               python: p[pythonKey].map { URL(fileURLWithPath: $0) })
+        do {
+            worker.environment = try SubprocessEnvironment.mediaTools(inheriting: environment, fileManager: fileManager)
+        } catch let refusal as Refusal {
+            throw Refusal("era: \(refusal.words) — refused at START, not once per file")
+        }
         let catalog = p[catalogPathKey].map { URL(fileURLWithPath: $0) } ?? catalogURL
         return Setup(jobID: request.id, catalogURL: catalog, stateRoot: stateRoot, worker: worker, limit: limit, backoff: backoff)
     }

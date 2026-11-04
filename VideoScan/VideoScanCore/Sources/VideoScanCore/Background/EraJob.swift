@@ -37,7 +37,11 @@
 // file → the unit throws (the supervisor counts it failed) and the job goes
 // on; the next unit respawns the worker. Two load failures in a row → every
 // remaining unit fails fast with the load's words (weights missing must not
-// cost 300 s × 6,000 files).
+// cost 300 s × 6,000 files), and the supervisor's fail-fast then stops the
+// job (`failureIsSystemic`; timeouts and worker deaths never stop it).
+// The worker's environment comes from `SubprocessEnvironment.mediaTools` in
+// `EraJob.setup`, so ffmpeg/ffprobe are found under launchd or the job is
+// refused at START (2026-11-03: 523 units failed on a bare `ffmpeg`).
 // Backoff (§3.5): while Backoff says `.trickle` and the model is not loaded,
 // a unit DEFERS (no model load while Rick is at the keyboard).
 //
@@ -221,6 +225,17 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     public func outcomeDetail() async -> String {
         let rss = await worker.peakRSSBytes()
         return await counters.words(peakRSS: rss, planCached: plan.cached)
+    }
+
+    /// A clip past its cap and a worker death can come from one file (a huge
+    /// tape, a decoder crash) and their words do not name it, so a run of
+    /// them never stops the job; everything else (a worker exception, a load
+    /// failure, a protocol error) can (JobSupervisor fail-fast).
+    public func failureIsSystemic(_ error: any Error) -> Bool {
+        switch error as? PythonClipWorkerError {
+        case .timeout?, .died?: return false
+        default: return true
+        }
     }
 
     public func end() async {

@@ -432,6 +432,65 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/EraJobEnvironmentTests.swift",
+      "stage": "regression",
+      "suites": [
+        "EraJobEnvironmentTests",
+        "BackgroundMenuFailedJobTests"
+      ],
+      "tests": [
+        "aFailedEraJobIsShownWithItsReasonUntilAnotherOfItsKindStarts",
+        "theFirstUnitsFailingWithTheSameWorkerErrorStopTheJobAndSayItOnce",
+        "underLaunchdsMinimalPATHTheWorkerFindsFFprobeAndFFmpeg",
+        "unitsThatFailedAreAllPlannedAgain"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JobSupervisorFailFastTests.swift",
+      "stage": "regression",
+      "suites": [
+        "JobSupervisorFailFastTests",
+        "EraJobFailFastTests"
+      ],
+      "tests": [
+        "aSuccessOrDifferentWordsStartTheCountOver",
+        "failuresTheJobCallsPerFileNeverStopIt",
+        "fewerUnitsThanTheThresholdJustFinish",
+        "fiveIdenticalSystemicFailuresStopTheJobAndTheOutcomeNamesThem",
+        "noFFmpegIsRefusedAtStartInWordsNeverOncePerFile",
+        "theFailureStreakIsAPureValue",
+        "timeoutsAndWorkerDeathsArePerFileEverythingElseIsSystemic"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SubprocessEnvironmentTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SubprocessEnvironmentTests"
+      ],
+      "tests": [
+        "anExecutableOverrideWinsAndItsFolderComesFirst",
+        "augmentedPathPutsHomebrewFirstAndNeverEndsInAColon",
+        "mediaToolsPutsTheResolvedToolsFoldersFirstOnceEachAndKeepsEveryOtherKey",
+        "noFFmpegAnywhereIsRefusedNamingTheToolAndEveryPlaceLooked"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/SubprocessPathSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SubprocessPathSensorTests"
+      ],
+      "tests": [
+        "everyChildPATHComesFromTheOneBuilder",
+        "everyPythonClipWorkerConfigurationGetsTheMediaToolsEnvironment"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JournalApplicationTests.swift",
       "stage": "unit",
       "suites": [
@@ -36095,7 +36154,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 669,
+      "package_expected_floor": 675,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36164,7 +36223,9 @@
         "VideoScanCoreTests.RowPreflightTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
         "VideoScanCoreTests.StateRootLockTests",
-        "VideoScanCoreTests.BackgroundMenuPresentationReviewTests"
+        "VideoScanCoreTests.BackgroundMenuPresentationReviewTests",
+        "VideoScanCoreTests.SubprocessEnvironmentTests",
+        "VideoScanCoreTests.SubprocessPathSensorTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -37039,7 +37100,7 @@
       ],
       "expected_floor": 421,
       "name": "regression",
-      "package_expected_floor": 301,
+      "package_expected_floor": 312,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -37085,7 +37146,11 @@
         "VideoScanCoreTests.SQLiteWALSidecarTests",
         "VideoScanCoreTests.RecordVolumeEvidenceTests",
         "VideoScanCoreTests.CatalogSoundAttemptsTests",
-        "VideoScanCoreTests.BackgroundWaitingTruthTests"
+        "VideoScanCoreTests.BackgroundWaitingTruthTests",
+        "VideoScanCoreTests.EraJobEnvironmentTests",
+        "VideoScanCoreTests.BackgroundMenuFailedJobTests",
+        "VideoScanCoreTests.JobSupervisorFailFastTests",
+        "VideoScanCoreTests.EraJobFailFastTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

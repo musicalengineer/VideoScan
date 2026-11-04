@@ -57,15 +57,24 @@ public enum FFmpegLocator {
         fileManager: FileManager = .default,
         fallback: String
     ) -> String {
+        locate(envVar: envVar, candidates: candidates, environment: environment, fileManager: fileManager) ?? fallback
+    }
+
+    /// The same order as `resolve` — override, then candidates — but nil
+    /// when nothing is executable, for a caller that must refuse rather
+    /// than hand a child a path that is not there (SubprocessEnvironment).
+    public static func locate(
+        envVar: String,
+        candidates: [String],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> String? {
         if let override = environment[envVar],
            !override.isEmpty,
            fileManager.isExecutableFile(atPath: override) {
             return override
         }
-        if let found = firstExecutable(in: candidates, fileManager: fileManager) {
-            return found
-        }
-        return fallback
+        return firstExecutable(in: candidates, fileManager: fileManager)
     }
 
     // MARK: - Resolved paths
@@ -85,11 +94,6 @@ public enum FFmpegLocator {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> Bool {
-        if let override = environment[ffmpegEnvVar],
-           !override.isEmpty,
-           fileManager.isExecutableFile(atPath: override) {
-            return true
-        }
-        return firstExecutable(in: ffmpegCandidates, fileManager: fileManager) != nil
+        locate(envVar: ffmpegEnvVar, candidates: ffmpegCandidates, environment: environment, fileManager: fileManager) != nil
     }
 }

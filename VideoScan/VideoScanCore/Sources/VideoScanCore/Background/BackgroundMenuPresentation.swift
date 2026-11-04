@@ -38,7 +38,8 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
 
     public static func from(_ s: ServiceStatus) -> Self {
         let active = s.jobs.filter { $0.state.isActive }
-        let lines = active.map(jobLine)
+        let failures = lastFailures(s.jobs).map(jobLine)
+        let lines = active.map(jobLine) + failures
         let moving = active.filter { ($0.state == .running || $0.state == .pausing) && !$0.isWaiting }
         let waiting = active.filter { $0.isWaiting || $0.state == .queued }
         let icon: Icon
@@ -50,12 +51,34 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
             + (icon == .waiting ? waitingHeadline(s.backoff) : backoffWords(s.backoff, jobs: active.count))
         let tooltip: String
         switch icon {
-        case .idle: tooltip = "VideoScan Background — idle, nothing queued"
+        case .idle: tooltip = "VideoScan Background — " + (failures.first?.words ?? "idle, nothing queued")
         case .working: tooltip = "VideoScan Background — " + (moving.first.map { jobLine($0).words } ?? "working")
         case .paused: tooltip = "VideoScan Background — paused"
         case .waiting: tooltip = "VideoScan Background — " + (waiting.first.map { jobLine($0).words } ?? "waiting")
         }
         return Self(icon: icon, headline: headline, jobs: lines, tooltip: tooltip)
+    }
+
+    /// Per kind, the newest job (by start, else finish) when it FAILED — a
+    /// START refusal or a fail-fast stop (2026-11-03) — so the menu says why
+    /// nothing runs instead of going quiet. A newer job of the kind, of any
+    /// state, replaces it. O(jobs); the status list is bounded (≤ 50 finished).
+    static func lastFailures(_ jobs: [JobProgressSnapshot]) -> [JobProgressSnapshot] {
+        var newest: [JobKind: JobProgressSnapshot] = [:]
+        var kinds: [JobKind] = []
+        func when(_ j: JobProgressSnapshot) -> Date { j.startedAt ?? j.finishedAt ?? .distantPast }
+        for job in jobs {
+            if let seen = newest[job.kind] {
+                if when(job) >= when(seen) { newest[job.kind] = job }
+            } else {
+                newest[job.kind] = job
+                kinds.append(job.kind)
+            }
+        }
+        return kinds.compactMap { kind in
+            guard let job = newest[kind], case .failed = job.state else { return nil }
+            return job
+        }
     }
 
     /// "idle" · "working — full speed (you're away)" · "working — gently (you're at the Mac)" · "paused (thermal)"

@@ -13,6 +13,11 @@
 // resumes from that checkpoint, so the log never shows a START without an
 // OUTCOME (design §6 sensor 5).
 //
+// Fail fast (2026-11-03): `failFastUnits` units in a row failing with the
+// same words, each `failureIsSystemic`, end the job `.failed` with those
+// words in its OUTCOME; a repeat failure is logged as "the same error as
+// unit N", so the words are said once (`FailureStreak`).
+//
 // One supervisor per state root (2026-11-02): before it adopts or accepts a
 // job the supervisor claims the root through `StateRootOwnership`. A hand
 // run and the launchd service share the folders; whichever claims first
@@ -45,6 +50,17 @@ public actor JobSupervisor {
         public var deferRetryInterval: Duration = .seconds(30)
         /// How often a supervisor that does not own its state root asks again.
         public var ownerRetryInterval: Duration = .seconds(30)
+        /// Fail fast (2026-11-03: a missing ffmpeg failed 523 of 523 era
+        /// units over 44 minutes, logged 523 times, and ended "finished"):
+        /// this many units in a row that fail with the SAME words, each one
+        /// `failureIsSystemic`, stop the job as failed. 5 because: it costs
+        /// ≤ 5 units (≈ 25 s at that failure's 5 s/unit, after one model load)
+        /// instead of the whole plan; a per-file failure names its file, so
+        /// five identical words in a row are the environment or the worker,
+        /// not five bad files (the per-file failures whose words carry no
+        /// path — timeouts, worker deaths — are not systemic); and five, not
+        /// two, rides out a one-off hiccup (a worker respawn) mid-night.
+        public var failFastUnits = 5
         public init() {}
     }
 
@@ -395,23 +411,31 @@ public actor JobSupervisor {
         // relaunch write this START's OUTCOME (review 2026-10-30, fix 3a).
         guard persist(cp, id) else { return }
 
-        var deferredSaid: String?
+        var turn = Turn()
         while cp.completedUnits < cp.totalUnits {
-            switch await step(job, &cp, id, deferredSaid: &deferredSaid) {
+            switch await step(job, &cp, id, &turn) {
             case .killed: return
             case .stop: return await end(job, id, as: .stopped, cp, began)
+            case .failFast(let reason): return await end(job, id, as: .failed(reason: reason), cp, began)
             case .next: continue
             }
         }
         await end(job, id, as: runs[id]?.stopRequested == true ? .stopped : .finished, cp, began)
     }
 
-    private enum Step { case next, stop, killed }
+    private enum Step { case next, stop, killed, failFast(String) }
+
+    /// What one job's loop carries from unit to unit: the wait it last said,
+    /// and the run of identical systemic failures (fail fast).
+    private struct Turn {
+        var deferredSaid: String?
+        var streak = FailureStreak()
+    }
 
     /// One unit's turn: the hold between units (pause / stop / Backoff and
     /// the trickle cadence), the unit, then its checkpoint — or, for a
     /// `.deferred` unit, a wait and no checkpoint (said once per reason).
-    private func step(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, deferredSaid: inout String?) async -> Step {
+    private func step(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, _ turn: inout Turn) async -> Step {
         switch await holdBetweenUnits(id, cp) {
         case .killed: return .killed
         case .stop: return .stop
@@ -421,17 +445,22 @@ public actor JobSupervisor {
                 if Task.isCancelled { return .killed }
             }
         }
-        switch await performUnit(job, &cp, id) {
+        switch await performUnit(job, &cp, id, &turn.streak) {
         case .killed: return .killed
         case .deferred(let reason):
-            noteWait(id, reason: reason, at: cp, said: &deferredSaid)
+            noteWait(id, reason: reason, at: cp, said: &turn.deferredSaid)
             try? await Task.sleep(for: configuration.deferRetryInterval)
             return Task.isCancelled ? .killed : .next
         case .recorded:
-            deferredSaid = nil
+            turn.deferredSaid = nil
             runs[id]?.waiting = nil
         }
-        return persist(cp, id) ? .next : .killed
+        guard persist(cp, id) else { return .killed }
+        if let words = turn.streak.words, turn.streak.length >= max(1, configuration.failFastUnits) {
+            return .failFast("units \(turn.streak.firstUnit)–\(cp.completedUnits - 1), \(turn.streak.length) in a row, all failed with the same error, "
+                             + "so the job stopped (\(cp.totalUnits - cp.completedUnits) not tried; nothing was written for them, the next plan holds them all): \(words)")
+        }
+        return .next
     }
 
     /// A unit came back `.deferred`: say the wait once per reason in the log,
@@ -463,7 +492,7 @@ public actor JobSupervisor {
         } catch {
             let words = (error as? Refusal)?.words ?? String(describing: error)
             log.write("START \(run.request.kind) \(id) — refused: \(words)")
-            finish(id, as: .failed(reason: words), checkpoint: nil, elapsed: nil)
+            finish(id, as: .failed(reason: words), checkpoint: nil, elapsed: nil, keepQueueFile: true)
             return nil
         }
     }
@@ -520,8 +549,10 @@ public actor JobSupervisor {
     private enum UnitEnd { case recorded, killed, deferred(String) }
 
     /// Run unit `cp.completedUnits` and count it (done / skipped / failed).
-    /// A cancellation (the process "dying") records nothing.
-    private func performUnit(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID) async -> UnitEnd {
+    /// A cancellation (the process "dying") records nothing. A failure that
+    /// repeats the one before it word for word is logged as "the same error
+    /// as unit N", so a run of them says its words once.
+    private func performUnit(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, _ streak: inout FailureStreak) async -> UnitEnd {
         let index = cp.completedUnits
         do {
             switch try await job.runUnit(index) {
@@ -529,11 +560,19 @@ public actor JobSupervisor {
             case .skipped: cp.unitsSkipped += 1
             case .deferred(let reason): return Task.isCancelled ? .killed : .deferred(reason)
             }
+            streak = FailureStreak()
         } catch is CancellationError where Task.isCancelled {
             return .killed
         } catch {
             cp.unitsFailed += 1
-            log.write("\(runs[id]?.request.kind.rawValue ?? "?") \(id) unit \(index) failed: \(error)")
+            let words = String(describing: error)
+            let kind = runs[id]?.request.kind.rawValue ?? "?"
+            if let first = streak.repeats(words) {
+                log.write("\(kind) \(id) unit \(index) failed: the same error as unit \(first)")
+            } else {
+                log.write("\(kind) \(id) unit \(index) failed: \(words)")
+            }
+            streak.record(words, unit: index, systemic: job.failureIsSystemic(error))
         }
         if Task.isCancelled { return .killed }
         cp.completedUnits += 1
@@ -568,19 +607,24 @@ public actor JobSupervisor {
     /// THE terminal transition — the one door every job leaves through, and
     /// the one place the OUTCOME line is written (≈ the RAII guard's
     /// destructor: a START cannot end without it). The checkpoint goes; the
-    /// queue file goes too, except for a job this build REFUSED — that file is
-    /// the app's intent and is kept for a build that knows the kind (refuse,
-    /// never erase). The run stays in the status list for a while.
-    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?, detail: String = "") {
+    /// queue file goes too, except for a job this build REFUSED at START
+    /// (`keepQueueFile`) — that file is the app's intent and is kept for a
+    /// build that knows the kind (refuse, never erase). A job that failed fast
+    /// mid-run is not a refusal: its file goes, or every relaunch would
+    /// resurrect it beside the fresh job the app queues on its next recount.
+    /// The run stays in the status list for a while.
+    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?, detail: String = "",
+                        keepQueueFile: Bool = false) {
         guard var run = runs[id] else { return }
         run.state = state
         run.finishedAt = Date()
         run.parked = false
         run.waiting = nil
         runs[id] = run
-        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed)
+        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed,
+                                   queueFileKept: keepQueueFile)
                   + (detail.isEmpty ? "" : "; \(detail)"))
-        if case .failed = state {} else { queue.remove(id) }
+        if !keepQueueFile { queue.remove(id) }
         checkpoints.remove(id)
         touch()
         push(id, force: true)
@@ -594,7 +638,8 @@ public actor JobSupervisor {
     }
 
     /// The OUTCOME line for a terminal state, with the counts when there are any.
-    static func outcomeLine(kind: String, id: JobID, state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?) -> String {
+    static func outcomeLine(kind: String, id: JobID, state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?,
+                            queueFileKept: Bool = true) -> String {
         let counts = cp.map { "\($0.unitsRun) run · \($0.unitsSkipped) skipped · \($0.unitsFailed) failed" } ?? "0 run · 0 skipped · 0 failed"
         let time = elapsed.map { " in \(seconds($0))" } ?? ""
         switch state {
@@ -604,7 +649,7 @@ public actor JobSupervisor {
             let place = cp.map { "at \($0.completedUnits) of \($0.totalUnits)" } ?? "before it started"
             return "OUTCOME \(kind) \(id) — stopped \(place): \(counts)\(time)"
         case .failed(let reason):
-            return "OUTCOME \(kind) \(id) — failed: \(reason); \(counts); the queue file is kept"
+            return "OUTCOME \(kind) \(id) — failed: \(reason); \(counts)\(time)" + (queueFileKept ? "; the queue file is kept" : "")
         case .queued, .running, .pausing, .paused:
             return "OUTCOME \(kind) \(id) — \(state.words): \(counts)\(time)"
         }
@@ -622,5 +667,29 @@ public actor JobSupervisor {
     private static func seconds(_ d: Duration) -> String {
         let s = Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
         return String(format: "%.1f s", s)
+    }
+}
+
+/// The run of failures one job is in: the words, the unit it began at, and
+/// how many of its failures were systemic (`BackgroundJob.failureIsSystemic`).
+/// A success or different words start it over. Pure value; the supervisor
+/// keeps one per job loop (C++: a small struct passed by reference).
+struct FailureStreak: Equatable {
+    private(set) var lastWords: String?
+    private(set) var firstUnit = 0
+    private(set) var length = 0
+
+    /// The words of a systemic run in progress, else nil.
+    var words: String? { length >= 1 ? lastWords : nil }
+
+    /// The unit the run began at, when `words` repeats it exactly.
+    func repeats(_ words: String) -> Int? { lastWords == words ? firstUnit : nil }
+
+    mutating func record(_ words: String, unit: Int, systemic: Bool) {
+        if lastWords == words {
+            if systemic { length += 1 }
+        } else {
+            self = FailureStreak(lastWords: words, firstUnit: unit, length: systemic ? 1 : 0)
+        }
     }
 }

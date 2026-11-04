@@ -10,12 +10,16 @@ REAL worker loop (bench.py `worker_command`) carries every request.  Behaviour b
   "generr" → every era window is a generation error (the model never answered), no date
              ("generr-stamp": the same, beside five stills that read the stamp)
   "ripfail" → every frame failed to rip: no window, no still, three frame_failed records
+  "tools" → first runs `ffprobe -version` then `ffmpeg -version` BY BARE NAME, exactly as
+            bench.py's probe_duration / rip_frame do, so a worker started with a PATH that has
+            no Homebrew raises FileNotFoundError (the 2026-11-03 launchd bug); then as below
   else    → three era windows 1990-1994 / 1991-1995 / 1991-1995
 FAKE_CLIP_LOG (env): a file each load / analyze_clip appends one line to (the tests count loads).
 FAKE_LOAD_SECONDS (env): load sleeps this long first.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -56,6 +60,9 @@ class FakeClipService:
             os._exit(3)
         if "boom" in path:
             raise RuntimeError("deliberate")
+        if "tools" in path:
+            for tool in ("ffprobe", "ffmpeg"):
+                subprocess.run([tool, "-version"], capture_output=True, timeout=30, check=True)
         if "ripfail" in path:
             return {"header": {"record_type": "clip", "duration_s": float(duration_s or 100.0), "windows": []},
                     "window_results": [], "results": [],
