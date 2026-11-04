@@ -477,13 +477,16 @@ final class CatalogSync: ObservableObject {
     /// for the model's launch, which must know it BEFORE catalog.sqlite opens
     /// (codex cycle #112: a viewer opens it read-only). Same defaults key,
     /// same default master, same compare.
-    static func launchMode(hostnameSource: HostnameSource = SystemHostnameSource(),
-                           defaults: UserDefaults = .standard) -> CatalogSyncMode {
+    /// `nonisolated` (2026-11-04): the headless readers (Hallie shell,
+    /// find-tag) ask it before any actor exists; it reads only the hostname
+    /// and one defaults key (≈ a free function, not a member of the UI object).
+    nonisolated static func launchMode(hostnameSource: HostnameSource = SystemHostnameSource(),
+                                       defaults: UserDefaults = .standard) -> CatalogSyncMode {
         hostnameMatches(local: hostnameSource.currentHostname(), master: masterHostname(defaults: defaults)) ? .master : .viewer
     }
 
     /// The master the launch uses: the one key, else the built-in default.
-    static func masterHostname(defaults: UserDefaults) -> String {
+    nonisolated static func masterHostname(defaults: UserDefaults) -> String {
         masterSetting(defaults: defaults).hostname
     }
 
@@ -492,7 +495,7 @@ final class CatalogSync: ObservableObject {
     /// trimmed and defaulted an empty key while the launch read it raw, so a
     /// key of "" launched the Ultra as a viewer under a pane saying master).
     /// Trimmed; empty or whitespace-only reads as unset → the built-in default.
-    static func masterSetting(defaults: UserDefaults) -> (hostname: String, explicit: Bool) {
+    nonisolated static func masterSetting(defaults: UserDefaults) -> (hostname: String, explicit: Bool) {
         if let saved = defaults.string(forKey: CatalogSyncDefaultsKey.masterHostname)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
             return (saved, true)
@@ -502,7 +505,7 @@ final class CatalogSync: ObservableObject {
 
     /// Hostname compare that ignores `.local` suffix and is case-insensitive.
     /// Exposed for tests.
-    static func hostnameMatches(local: String, master: String) -> Bool {
+    nonisolated static func hostnameMatches(local: String, master: String) -> Bool {
         func normalize(_ s: String) -> String {
             var n = s.lowercased()
             if n.hasSuffix(".local") { n = String(n.dropLast(".local".count)) }

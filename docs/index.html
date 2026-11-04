@@ -852,8 +852,28 @@ const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["re
 function laneWords(cell) {
   const parts = [];
   if (isNum(cell.core_passed) || isNum(cell.core_failed)) parts.push(`Core ${n(cell.core_passed || 0)} passed · ${n(cell.core_failed || 0)} failed`);
-  if (cell.hallie_status && cell.hallie_status !== "ok") parts.push(`Hallie replay ${cell.hallie_status}`);
+  const hallie = hallieReplayWords(cell);
+  if (hallie) parts.push(hallie);
   return parts.length ? " · " + parts.join(" · ") : "";
+}
+// A sanitized reason code as words ("catalog-schema-not-current" -> "catalog schema not current").
+const codeWords = code => String(code || "").replace(/[-:=]+/g, " ").trim();
+// How much of one Hallie lane ran (2026-11-04, Rick): a lane that completed NOTHING "did not
+// run" and says why (its reason code); a lane cut short says how many of how many; a row
+// without the completed count (older) says only its status word. Never "a few" — that word
+// belongs to the app suite's failed count.
+function hallieLaneRan(completed, expected, reason) {
+  if (!isNum(completed)) return null;
+  if (completed === 0) return { none: true, words: `did not run${reason ? ": " + codeWords(reason) : ""}` };
+  if (isNum(expected) && expected > completed) return { none: false, words: `${n(expected - completed)} of ${n(expected)} incomplete` };
+  return null;
+}
+function hallieReplayWords(cell) {
+  if (!cell.hallie_status || cell.hallie_status === "ok") return "";
+  const ran = hallieLaneRan(cell.hallie_strict_completed, cell.hallie_strict_expected, cell.hallie_strict_reason);
+  if (ran && ran.none) return `Hallie replay ${ran.words}`;
+  if (ran) return `Hallie replay ${cell.hallie_status}: ${ran.words}`;
+  return `Hallie replay ${cell.hallie_status}`;
 }
 // Failures across every lane of one Mac's night (the app suite and the Core lane).
 const laneFailed = cell => (cell ? (cell.failed || 0) + (isNum(cell.core_failed) ? cell.core_failed : 0) : 0);
@@ -882,13 +902,18 @@ function laneVerdicts(cell) {
   if (isNum(cell.core_failed) || isNum(cell.core_passed)) {
     out.push({ lane: "core", label: "Core package", state: countState(cell.core_failed || 0), words: `${n(cell.core_passed || 0)} passed · ${n(cell.core_failed || 0)} failed${why}` });
   } else out.push({ lane: "core", label: "Core package", state: "grey", words: "no Core lane in this row" });
-  const frac = (id, name, pass, expected, status, goodWords) => {
+  const frac = (id, name, pass, expected, status, goodWords, completed, reason) => {
     if (!isNum(pass) && !isNum(expected) && !status) return { lane: id, label: name, state: "grey", words: "did not run" };
-    return { lane: id, label: name, state: fractionState(pass, expected, status, goodWords),
-             words: `${isNum(pass) ? n(pass) : "?"} of ${isNum(expected) ? n(expected) : "?"}${status ? " · " + status : ""}` };
+    const state = fractionState(pass, expected, status, goodWords);
+    const ran = goodWords.includes(status) ? null : hallieLaneRan(completed, expected, reason);
+    if (ran && ran.none) return { lane: id, label: name, state, words: `${ran.words} · 0 of ${isNum(expected) ? n(expected) : "?"} ran` };
+    return { lane: id, label: name, state,
+             words: `${isNum(pass) ? n(pass) : "?"} of ${isNum(expected) ? n(expected) : "?"}${status ? " · " + status : ""}${ran ? " · " + ran.words : ""}` };
   };
-  out.push(frac("hallie-strict", "Hallie strict", cell.hallie_strict_pass, cell.hallie_strict_expected, cell.hallie_strict_status, ["ok"]));
-  out.push(frac("hallie-advisory", "Hallie advisory", cell.hallie_advisory_pass, cell.hallie_advisory_expected, cell.hallie_advisory_status, ["ok", "advisory"]));
+  out.push(frac("hallie-strict", "Hallie strict", cell.hallie_strict_pass, cell.hallie_strict_expected, cell.hallie_strict_status, ["ok"],
+                cell.hallie_strict_completed, cell.hallie_strict_reason));
+  out.push(frac("hallie-advisory", "Hallie advisory", cell.hallie_advisory_pass, cell.hallie_advisory_expected, cell.hallie_advisory_status, ["ok", "advisory"],
+                cell.hallie_advisory_completed, cell.hallie_advisory_reason));
   const voice = cell.hallie_voice_status;
   out.push({ lane: "hallie-voice", label: "Hallie voice", state: voice === "ok" ? "green" : voice ? "red" : "grey", words: voice || "did not run" });
   return out;
@@ -919,7 +944,8 @@ function cellWords(cell) {
   const app = `${n(cell.passed)} passed · ${n(cell.failed)} failed`;
   if (cell.state === "green") return `all ${n(cell.passed)} passed${laneWords(cell)}`;
   if (cell.state === "red") return `${app}${laneWords(cell)} — broken${why}`;
-  if (cell.state === "watch") return `${app}${laneWords(cell)} (a few${why})`;
+  // "(a few)" describes the app suite's failed count, so it sits beside it — never after a Hallie lane (11/04).
+  if (cell.state === "watch") return `${app} (a few${why})${laneWords(cell)}`;
   return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
 }
 function stability(N) {

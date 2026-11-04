@@ -7,7 +7,11 @@ import VideoScanCore
 
 enum HallieShellCLI {
     struct Options: Equatable {
-        var catalogURL: URL = defaultCatalogURL
+        /// Which catalog.sqlite: this Mac's role decides (CatalogAuthority.
+        /// headlessSource — on a viewer, the master's synced copy); `--catalog`
+        /// names one explicitly.
+        var catalog: SQLiteCatalogReader.Source = CatalogAuthority.headlessSource()
+        var catalogURL: URL { catalog.databaseURL }
         var hosts: [String] = OllamaEndpoints.defaultHosts
         var model = HallieBrain.defaultModel
         var gedcomURL: URL?
@@ -131,7 +135,7 @@ enum HallieShellCLI {
         /// catalog.sqlite → records, read-only (async: the store's read
         /// runs off this task). nil = not readable; the production loader
         /// has already said why on stderr.
-        var loadCatalog: (URL) async -> [VideoRecord]?
+        var loadCatalog: (SQLiteCatalogReader.Source) async -> [VideoRecord]?
         /// Publish the read-only archive authority before GEDCOM/cards load.
         /// Injected as a no-op so unit tests never inspect the real catalog
         /// designation or mutate the process-wide presentation snapshot.
@@ -202,7 +206,7 @@ enum HallieShellCLI {
         var loadAppOwner: (() -> HallieTurnExecutor.Speakers)? = nil
 
         init(
-            loadCatalog: @escaping (URL) async -> [VideoRecord]?,
+            loadCatalog: @escaping (SQLiteCatalogReader.Source) async -> [VideoRecord]?,
             configureFamilyAssets: @escaping (Options) -> Void = { _ in },
             loadProfiles: @escaping () -> ProfileLoadResult,
             loadGraph: @escaping (URL?) -> GedcomFamilyGraph?,
@@ -477,11 +481,20 @@ enum HallieShellCLI {
         func set(_ value: String) { lock.withLock { storage = value } }
     }
 
+    /// The diagnostics line's words for the catalog: its path, and on a viewer
+    /// which master the synced copy came from.
+    static func catalogWords(_ source: SQLiteCatalogReader.Source) -> String {
+        switch source {
+        case .live(let url): return url.path
+        case .syncedCopy(let url, let master): return "\(url.path) — this Mac is a viewer; the synced copy from \(master)"
+        }
+    }
+
     /// The production catalog read: catalog.sqlite, read-only, through
     /// Core's one reader door. No `catalog.cutover` ⇒ refused with words
     /// (never the frozen catalog.json — 2026-10-19, audit gap 3).
-    static func loadCatalogReadOnly(_ url: URL) async -> SQLiteCatalogReader.Loaded? {
-        switch await SQLiteCatalogReader.load(databaseURL: url) {
+    static func loadCatalogReadOnly(_ source: SQLiteCatalogReader.Source) async -> SQLiteCatalogReader.Loaded? {
+        switch await SQLiteCatalogReader.load(source) {
         case .success(let loaded):
             return loaded
         case .failure(let failure):
@@ -497,8 +510,8 @@ enum HallieShellCLI {
     final class CatalogRead {
         private(set) var designationJSON: String?
 
-        func records(at url: URL) async -> [VideoRecord]? {
-            guard let loaded = await HallieShellCLI.loadCatalogReadOnly(url) else { return nil }
+        func records(at source: SQLiteCatalogReader.Source) async -> [VideoRecord]? {
+            guard let loaded = await HallieShellCLI.loadCatalogReadOnly(source) else { return nil }
             designationJSON = loaded.masterArchiveJSON
             return loaded.records
         }
@@ -606,7 +619,7 @@ enum HallieShellCLI {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { throw ParseError.emptyValue(argument) }
             switch argument {
-            case "--catalog": result.catalogURL = URL(fileURLWithPath: value)
+            case "--catalog": result.catalog = CatalogAuthority.explicitSource(URL(fileURLWithPath: value))
             case "--host":
                 let hosts = OllamaEndpoints.parse(value)
                 guard !hosts.isEmpty else { throw ParseError.emptyValue(argument) }
@@ -693,9 +706,9 @@ enum HallieShellCLI {
             ? "Hallie Mae — headless read-only shell"
             : "Hallie Mae — standalone family librarian")
         if options.diagnostics {
-            output("opening catalog read-only: \(options.catalogURL.path)")
+            output("opening catalog read-only: \(catalogWords(options.catalog))")
         }
-        guard let records = await dependencies.loadCatalog(options.catalogURL) else {
+        guard let records = await dependencies.loadCatalog(options.catalog) else {
             output("error: cannot read catalog at \(options.catalogURL.path)")
             return ExitCode.catalogUnavailable.rawValue
         }
@@ -2081,13 +2094,6 @@ enum HallieShellCLI {
     ) -> ArchivistTemporalSelectionDateSnapshot? {
         ArchivistTemporalSelectionDateSnapshot.resolvedCatalogDate(record: record)
             ?? ArchivistTemporalSelectionDateSnapshot.legacyFallback(record: record)
-    }
-
-    private static var defaultCatalogURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory())
-        return base.appendingPathComponent("VideoScan/\(SQLiteCatalogReader.databaseFileName)")
     }
 
     /// True for a POI/ entry that is never a person: the family-groups

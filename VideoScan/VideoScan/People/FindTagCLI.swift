@@ -39,7 +39,10 @@ enum FindTagCLI {
 
     struct Options {
         var person = "Donna"
-        var catalogURL = PreviewSweepCLIOptions.defaultCatalogURL()
+        /// This Mac's role decides (CatalogAuthority.headlessSource — on a
+        /// viewer, the master's synced copy); `--catalog` names one.
+        var catalog: SQLiteCatalogReader.Source = CatalogAuthority.headlessSource()
+        var catalogURL: URL { catalog.databaseURL }
         var galleryPath = FindPersonJob.galleryPath
         var journalDir = FindTagPaths.journalDirectoryURL()
         /// Only records whose fullPath starts with this (spot-test aid).
@@ -120,12 +123,12 @@ enum FindTagCLI {
 
     /// The catalog's records, read-only through Core's one reader door;
     /// nil after saying why on stderr.
-    private static func planRecords(_ url: URL) async -> [VideoRecord]? {
-        switch await SQLiteCatalogReader.load(databaseURL: url) {
+    private static func planRecords(_ source: SQLiteCatalogReader.Source) async -> [VideoRecord]? {
+        switch await SQLiteCatalogReader.load(source) {
         case .success(let loaded):
             return loaded.records
         case .failure(let failure):
-            err("findtagd: cannot read catalog at \(url.path) — \(failure.words)")
+            err("findtagd: cannot read catalog at \(source.databaseURL.path) — \(failure.words)")
             return nil
         }
     }
@@ -164,7 +167,7 @@ enum FindTagCLI {
 
         // Work plan from catalog.sqlite (READ-ONLY; no catalog.cutover ⇒
         // refused — never the frozen catalog.json, 2026-10-19 audit gap 3).
-        guard let records = await planRecords(options.catalogURL) else { return 2 }
+        guard let records = await planRecords(options.catalog) else { return 2 }
         // Eligibility = FindPersonJob.skipReason — the SAME pure spec
         // the in-app job uses (≥10s, no junk/bundle-internals/purged,
         // real video streams), so the two planners cannot drift
@@ -574,8 +577,8 @@ enum FindTagCLI {
             case "--no-resume": opts.resume = false
             case "--person": opts.person = try value(arg)
             case "--catalog":
-                opts.catalogURL = URL(fileURLWithPath:
-                    (try value(arg) as NSString).expandingTildeInPath)
+                opts.catalog = CatalogAuthority.explicitSource(URL(fileURLWithPath:
+                    (try value(arg) as NSString).expandingTildeInPath))
             case "--gallery":
                 opts.galleryPath = (try value(arg) as NSString).expandingTildeInPath
             case "--journal-dir":

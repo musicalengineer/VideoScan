@@ -954,6 +954,47 @@ def test_passing_scoped_run_cannot_replace_full_suite_failure_or_freshness(tmp_p
 
 
 @needs_node
+def test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few(tmp_path):
+    """RED 2026-11-04 (Rick): both Macs' replays answered 0 of 56 — the shell refused the
+    catalog ("schema not current") — and the card read "Hallie replay incomplete (a few)".
+    "A few" was the APP lane's word (1 failed) landing after the Hallie words. A lane that
+    completed nothing says "did not run" with the reason code in words; a lane cut short
+    says how many of how many; "(a few)" stays with the app counts it describes."""
+    now = datetime.now(timezone.utc)
+    fx = full_fixtures(now)
+    s = fx["summary_latest.json"]
+    last = s["nightly"]["nights"][-1]
+    for h in ("M1", "M5"):
+        last["hosts"].pop(h, None)
+    base = {"state": "watch", "passed": 13015, "failed": 1, "total": 13079, "reason": "failed-tests:1",
+            "core_passed": 2267, "core_failed": 0, "core_status": "ok", "hallie_voice_status": "ok"}
+    last["hosts"]["M4"] = dict(base, hallie_status="incomplete",
+                               hallie_strict_pass=0, hallie_strict_expected=56, hallie_strict_completed=0,
+                               hallie_strict_status="incomplete", hallie_strict_reason="catalog-schema-not-current",
+                               hallie_advisory_pass=0, hallie_advisory_expected=826, hallie_advisory_completed=0,
+                               hallie_advisory_status="incomplete", hallie_advisory_reason="catalog-schema-not-current")
+    last["hosts"]["Ultra"] = dict(base, hallie_status="incomplete",
+                                  hallie_strict_pass=40, hallie_strict_expected=56, hallie_strict_completed=44,
+                                  hallie_strict_status="incomplete", hallie_strict_reason=None,
+                                  hallie_advisory_pass=600, hallie_advisory_expected=826, hallie_advisory_completed=826,
+                                  hallie_advisory_status="advisory", hallie_advisory_reason=None)
+    s["nightly"]["hosts"] = ["M4", "Ultra"]
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    assert "Hallie replay did not run: catalog schema not current" in head, head
+    assert "Hallie replay incomplete: 12 of 56 incomplete" in head, head
+    assert "13,015 passed · 1 failed (a few)" in head
+    assert "incomplete (a few" not in head and "did not run: catalog schema not current (a few" not in head
+    assert "<title>Hallie strict: did not run: catalog schema not current · 0 of 56 ran</title>" in head, head
+    assert "<title>Hallie advisory: did not run: catalog schema not current · 0 of 826 ran</title>" in head
+    assert "<title>Hallie strict: 40 of 56 · incomplete · 12 of 56 incomplete</title>" in head, head
+    # The reason is a sanitized code turned into words on the page — never a row's free text.
+    tl = out["sections"]["tl"]
+    assert "Hallie replay did not run: catalog schema not current" in tl
+
+
+@needs_node
 def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path):
     now = datetime.now(timezone.utc)
     fixtures = full_fixtures(now)

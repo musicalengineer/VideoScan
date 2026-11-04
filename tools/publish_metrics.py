@@ -186,6 +186,10 @@ _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "to
           # pass / expected with the lane's status word, and the voice check's status.
           "hallie_strict_pass": "int?", "hallie_strict_expected": "int?", "hallie_strict_status": "code?",
           "hallie_advisory_pass": "int?", "hallie_advisory_expected": "int?", "hallie_advisory_status": "code?",
+          # 2026-11-04: how many of each lane RAN, and the lane's reason code when it ran
+          # none (scripts/hallie_replay_reason.py) — "0 of 56 · incomplete" read as "a few".
+          "hallie_strict_completed": "int?", "hallie_strict_reason": "code?",
+          "hallie_advisory_completed": "int?", "hallie_advisory_reason": "code?",
           "hallie_voice_status": "code?"}
 
 # Sanitizer runs (scripts/weekly_sanitizer.py's runs.jsonl). Its status words,
@@ -979,6 +983,10 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
             "hallie_advisory_pass": _opt_int(row.get("hallie_advisory_pass")),
             "hallie_advisory_expected": _opt_int(row.get("hallie_advisory_expected")),
             "hallie_advisory_status": reason_code(row.get("hallie_advisory_status")),
+            "hallie_strict_completed": _opt_int(row.get("hallie_strict_completed")),
+            "hallie_strict_reason": reason_code(row.get("hallie_strict_reason")),
+            "hallie_advisory_completed": _opt_int(row.get("hallie_advisory_completed")),
+            "hallie_advisory_reason": reason_code(row.get("hallie_advisory_reason")),
             "hallie_voice_status": reason_code(row.get("hallie_voice_status")),
         }
     hosts = [h for h in order if h in seen_hosts] + sorted(seen_hosts - set(order))

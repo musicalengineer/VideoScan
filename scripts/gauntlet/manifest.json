@@ -2877,13 +2877,17 @@
       "tests": [
         "freshnessIsTheHighWater",
         "jsonPathRefused",
+        "liveSourceIsTheOldDoor",
         "missingDatabaseRefused",
         "openForReadingMissingFile",
         "openForReadingRefusesWrites",
         "previewSourcePlansFromSQLite",
         "previewSourceWithoutLatch",
         "readsTheAppsRecordsReadOnly",
-        "refusedWithoutLatch"
+        "refusedWithoutLatch",
+        "syncedCopyNotArrived",
+        "syncedCopyOnAnOlderSchemaIsRefused",
+        "syncedCopyReadsTheMastersRecords"
       ]
     },
     {
@@ -31869,6 +31873,7 @@
         "test_metrics_dashboard.py"
       ],
       "tests": [
+        "test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few",
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
         "test_both_kinds_fresh_and_clean_is_green",
         "test_event_recognition_line_and_twist_render_counts_only",
@@ -32409,6 +32414,7 @@
         "test_summary_gate_refuses_anything_off_the_allowlist",
         "test_summary_object_validates_and_leaks_nothing",
         "test_summary_with_everything_failing_is_still_valid",
+        "test_the_cell_carries_how_much_of_each_hallie_lane_ran_and_why_it_did_not",
         "test_the_real_rota_runs_the_nightly_on_mac_studios_only"
       ]
     },
@@ -33519,6 +33525,48 @@
       "tests": [
         "theLiveCatalogMigratesWithEveryRowKept"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieViewerCatalogTests.swift",
+      "suites": [
+        "HallieViewerCatalogTests"
+      ],
+      "tests": [
+        "explicitCatalogPaths",
+        "masterReadsItsOwnFile",
+        "viewerIgnoresAPoisonedTopLevelFile",
+        "viewerReadsTheSyncedCopyNotItsOwnTopLevelFile",
+        "viewerWithNothingSyncedRefusesInWords"
+      ],
+      "stage": "regression"
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeadlessCatalogRuleSensorTests.swift",
+      "suites": [
+        "HeadlessCatalogRuleSensorTests"
+      ],
+      "tests": [
+        "noHeadlessPathBypassesTheRule",
+        "theHeadlessEntriesUseTheRule"
+      ],
+      "stage": "unit"
+    },
+    {
+      "kind": "python",
+      "path": "tests/test_hallie_replay_reason.py",
+      "suites": [
+        "test_hallie_replay_reason.py"
+      ],
+      "tests": [
+        "test_a_lane_that_answered_something_has_no_did_not_run_reason",
+        "test_each_known_refusal_has_its_code_and_unknown_is_no_turns",
+        "test_the_1104_log_is_catalog_schema_not_current",
+        "test_the_replay_script_puts_the_reason_in_each_lane_row"
+      ],
+      "stage": "unit",
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -36213,11 +36261,15 @@
         {
           "name": "VideoScan/VideoScanTests/GauntletFamilyTreeSeamTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "tests/test_hallie_replay_reason.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3312,
+      "expected_floor": 3314,
       "name": "unit",
-      "package_expected_floor": 683,
+      "package_expected_floor": 687,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36839,7 +36891,8 @@
         "VideoScanTests/CatalogStatusBackgroundClaimTests",
         "VideoScanTests/CatalogStatusTransitionLogTests",
         "VideoScanTests/CatalogDatabaseInfoUnknownLogTests",
-        "VideoScanTests/BackgroundRegistrationGateReviewTests"
+        "VideoScanTests/BackgroundRegistrationGateReviewTests",
+        "VideoScanTests/HeadlessCatalogRuleSensorTests"
       ]
     },
     {
@@ -37161,7 +37214,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 421,
+      "expected_floor": 426,
       "name": "regression",
       "package_expected_floor": 314,
       "package_selectors": [
@@ -37315,7 +37368,8 @@
         "VideoScanTests/ConfirmedDateFilterSensorTests",
         "VideoScanTests/AudioFingerprintStampDurabilityTests",
         "VideoScanTests/AudioFingerprintAttemptTests",
-        "VideoScanTests/BackgroundServiceLoggingTests"
+        "VideoScanTests/BackgroundServiceLoggingTests",
+        "VideoScanTests/HallieViewerCatalogTests"
       ]
     },
     {
