@@ -112,11 +112,11 @@ enum EraFixture {
     static func stateRoot() throws -> URL { try BackgroundFixtures.scratch("era") }
 
     static func setup(_ fixture: StoreFixture, root: URL, jobID: JobID = JobID(), limit: Int? = nil, clipTimeout: Duration = .seconds(20),
-                      log: URL? = nil, backoff: Backoff? = nil, readable: @escaping @Sendable (String) -> Bool = { _ in true },
+                      log: URL? = nil, readable: @escaping @Sendable (String) -> Bool = { _ in true },
                       afterAppend: (@Sendable (Int) async -> Void)? = nil) -> EraJob.Setup {
         EraJob.Setup(jobID: jobID, catalogURL: fixture.url, stateRoot: root,
                      worker: ClipWorkerFixture.configuration(clipTimeout: clipTimeout, log: log),
-                     limit: limit, backoff: backoff, isReadable: readable, afterJournalAppend: afterAppend)
+                     limit: limit, isReadable: readable, afterJournalAppend: afterAppend)
     }
 
     static func lines(_ root: URL) throws -> [ObservationLine] {

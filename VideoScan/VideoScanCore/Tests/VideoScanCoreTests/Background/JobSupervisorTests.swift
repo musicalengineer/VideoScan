@@ -174,24 +174,10 @@ struct JobSupervisorTests {
         await supervisor.start()
         await supervisor.drain()
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME noop \(request.id) — finished: 8 run · 0 skipped · 0 failed") }, "\(log.lines)")
-        #expect(checkpoints.saveCount == 1 + 1 + 3, "one seed save, one at START (so a kill in the first unit still has its OUTCOME), then one per remaining unit")
+        #expect(checkpoints.saveCount == 1 + 1 + 3 * 2, "one seed save, one at START (so a kill in the first unit still has its OUTCOME), then two per remaining unit: the in-flight mark before it, the record after")
     }
 
-    @Test("the trickle state spaces units by the trickle interval")
-    func trickleSpacing() async throws {
-        let recorder = UnitRecorder()
-        let source = FakeActivitySource(ActivitySample(secondsSinceLastInput: 1))
-        let backoff = Backoff(source: source, trickleInterval: .milliseconds(50))
-        let supervisor = make(factory: RecordingFactory(recorder: recorder, units: 4), backoff: backoff)
-        let clock = ContinuousClock()
-        let began = clock.now
-        _ = await supervisor.enqueue(RecordingFactory.request())
-        await supervisor.drain()
-        #expect(clock.now - began >= .milliseconds(180), "4 units × 50 ms of trickle")
-        #expect(recorder.completedUnits.count == 4)
-    }
-
-    @Test("status lists every job with its state, and idle time resets on activity")
+    @Test("status lists every job with its state; idle time counts from the last unit")
     func status() async throws {
         let supervisor = make(factory: RecordingFactory(recorder: UnitRecorder(), units: 2))
         let request = RecordingFactory.request()
@@ -202,8 +188,7 @@ struct JobSupervisorTests {
         #expect(status.jobs.first?.state == .finished)
         #expect(status.backoff == .full)
         #expect(status.idleSeconds < 1)
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 0))
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 600) == false)
+        #expect(status.holds == nil && status.planned == nil, "no schedule, no schedule fields")
     }
     // MARK: - Reviewer reds (2026-10-30), now green
 
@@ -221,7 +206,6 @@ struct JobSupervisorTests {
         #expect(log.startCount == log.outcomeCount, "\(log.lines)")
         #expect(queue.contains(newer.id), "the request is the app's intent; a build that knows the kind will run it")
         #expect(await supervisor.snapshot(newer.id)?.state == .failed(reason: "VideoScan Background does not know the job kind `caption` (this build knows: noop, era)"))
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 0), "a refused file is not pending work")
     }
 
     @Test("a unit that throws CancellationError while the task is NOT cancelled is a failed unit; the job finishes with its OUTCOME")
@@ -237,7 +221,6 @@ struct JobSupervisorTests {
         #expect(recorder.completedUnits == [0, 2])
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME selfcancel \(request.id) — finished: 2 run · 0 skipped · 1 failed") }, "\(log.lines)")
         #expect(log.startCount == log.outcomeCount)
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 0))
     }
 
     @Test("resume() before the pause lands restores .running — the row never keeps saying pausing…")
@@ -270,7 +253,7 @@ struct JobSupervisorTests {
     func pauseDuringThermalHoldRunsNoUnit() async throws {
         let recorder = UnitRecorder()
         let source = FakeActivitySource(ActivitySample(thermalState: .serious))
-        let backoff = Backoff(source: source, trickleInterval: .milliseconds(1))
+        let backoff = Backoff(source: source)
         let supervisor = make(factory: RecordingFactory(recorder: recorder, units: 10), backoff: backoff)
         let request = RecordingFactory.request()
         _ = await supervisor.enqueue(request)

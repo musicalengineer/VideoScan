@@ -26,6 +26,11 @@ public struct JobCheckpoint: Codable, Equatable, Sendable {
     public var unitsFailed: Int
     public var startedAt: Date
     public var updatedAt: Date
+    /// Write-ahead (2026-11-04): the unit that was started and has not yet
+    /// recorded, and how many processes have died inside it. Additive and
+    /// optional, so a checkpoint from an older helper still decodes.
+    public var inFlightUnit: Int?
+    public var inFlightAttempts: Int?
 
     public init(jobID: JobID, totalUnits: Int, startedAt: Date = Date()) {
         self.jobID = jobID

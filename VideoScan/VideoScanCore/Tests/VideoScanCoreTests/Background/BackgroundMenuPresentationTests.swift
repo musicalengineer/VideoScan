@@ -35,7 +35,7 @@ struct BackgroundMenuPresentationTests {
         #expect(p.jobs[0].canPause && !p.jobs[0].canResume)
         #expect(p.tooltip.contains("1,203 of 4,709"))
         let away = BackgroundMenuPresentation.from(Self.status(.full, [Self.job(.running)]))
-        #expect(away.headline == "VideoScan Background — full speed (you're away)")
+        #expect(away.headline == "VideoScan Background — full speed", "no 'you're away': the helper runs whether or not Rick is at the Mac")
     }
 
     @Test("paused: by the user (every active job paused) or by the service (thermal) — pause glyph, Resume offered")
@@ -49,6 +49,31 @@ struct BackgroundMenuPresentationTests {
         #expect(thermal.headline == "VideoScan Background — paused (thermal)")
     }
 
+    @Test("HOLD: a held kind has its own line with Resume (and no Pause), the outline glyph, and its failed job's line is not repeated")
+    func heldKindHasResume() {
+        var failed = Self.job(.failed(reason: "the worker could not load the model"))
+        failed.finishedAt = Date()
+        var s = Self.status(.full, [failed])
+        s.holds = [ScheduleHold(kind: .era, jobID: failed.id, reason: "the worker could not load the model", build: "b1", generation: 7)]
+        let p = BackgroundMenuPresentation.from(s)
+        #expect(p.icon == .waiting)
+        #expect(p.headline == "VideoScan Background — held after a failure")
+        #expect(p.jobs.count == 1, "\(p.jobs.map(\.words))")
+        #expect(p.jobs[0].id == failed.id)
+        #expect(p.jobs[0].canResume && !p.jobs[0].canPause)
+        #expect(p.jobs[0].words.contains("held after a failure: the worker could not load the model"))
+        #expect(p.jobs[0].words.contains("Resume, a new build or a catalog change clears it"))
+    }
+
+    @Test("HOLD after a restart: no job is listed, the hold still has its line and Resume, titled by kind")
+    func heldKindAfterRestart() {
+        var s = Self.status(.full, [])
+        s.holds = [ScheduleHold(kind: .era, jobID: JobID(rawValue: "old"), reason: "x", build: "b1", generation: nil, sticky: true)]
+        let p = BackgroundMenuPresentation.from(s)
+        #expect(p.jobs.map(\.words) == ["Machine era (8B) — held after a failure: x — Resume or a new build clears it"])
+        #expect(p.jobs[0].canResume)
+    }
+
     @Test("an unknown total says what is known, never a made-up denominator")
     func unknownTotal() {
         let p = BackgroundMenuPresentation.from(Self.status(.full, [Self.job(.running, done: 12, total: 0)]))
@@ -60,55 +85,8 @@ struct BackgroundMenuPresentationTests {
 // from the review-1103 worktree (doubles renamed: BackgroundWaitingTruthTests
 // has its own DeferringJob).
 
-/// A job whose every unit defers — EraJob while Backoff says trickle and the
-/// model is not loaded (EraJob.swift:174).
-struct ReviewDeferringJob: BackgroundJob {
-    let title = "Machine era (8B)"
-    let unitCount = 3
-    func runUnit(_ index: Int) async throws -> UnitOutcome { .deferred(reason: EraJob.deferWords) }
-}
-
-struct ReviewDeferringFactory: JobFactory {
-    static let kind = JobKind(rawValue: "review-deferring")
-    func makeJob(for request: JobRequest) throws -> any BackgroundJob { ReviewDeferringJob() }
-}
-
 @Suite("Background menu bar item — reviewer reds (2026-11-03)")
 struct BackgroundMenuPresentationReviewTests {
-
-    @Test("TRUE: an era job waiting for Rick to step away is not 'running' — the lens must not fill and the line must not say running")
-    func deferredJobIsNotShownRunning() async throws {
-        let source = FakeActivitySource(ActivitySample(secondsSinceLastInput: 5))   // Rick is typing → trickle
-        let backoff = Backoff(source: source, trickleInterval: .milliseconds(5))
-        var configuration = BackgroundFixtures.fastConfiguration()
-        configuration.deferRetryInterval = .milliseconds(20)
-        let log = InMemoryBackgroundLog()
-        let supervisor = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
-                                       factory: ReviewDeferringFactory(), backoff: backoff, log: log, configuration: configuration)
-        _ = await supervisor.enqueue(JobRequest(kind: ReviewDeferringFactory.kind, requestedBy: "test"))
-        let said = await BackgroundFixtures.waitUntil { log.lines.contains { $0.contains("waits at 0 of 3") } }
-        #expect(said, "the supervisor logged the wait: \(log.lines)")
-        let status = await supervisor.status(processIdentifier: 1, startedAt: Date())
-        let p = BackgroundMenuPresentation.from(status)
-        #expect(status.backoff == .trickle)
-        #expect(p.icon != .working,
-                "the filled lens means a unit is being worked; this job is waiting — JobSupervisor.swift:368 leaves .running while every unit defers")
-        #expect(!(p.jobs.first?.words.hasSuffix("running") ?? false), "menu line: \(p.jobs.first?.words ?? "-")")
-        await supervisor.abandonForTest()
-    }
-
-    @Test("a status READ is not activity: the menu bar's 5 s poll must not keep the helper alive past its idle exit")
-    func statusReadDoesNotResetIdle() async throws {
-        let supervisor = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
-                                       factory: ReviewDeferringFactory(), backoff: BackgroundFixtures.fullBackoff(),
-                                       log: InMemoryBackgroundLog(), configuration: BackgroundFixtures.fastConfiguration())
-        await supervisor.start()
-        try await Task.sleep(for: .milliseconds(300))
-        // StatusMenuController.swift:50 — every 5 s for the life of the process.
-        _ = await supervisor.status(processIdentifier: 1, startedAt: Date())
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 0.2),
-                "JobSupervisor.swift:281 touch() on status: every poll resets idleSeconds, so IdleExitPolicy never fires")
-    }
 
     @Test("a queued job is not working: the filled lens says a unit is being worked")
     func queuedIsNotWorking() {

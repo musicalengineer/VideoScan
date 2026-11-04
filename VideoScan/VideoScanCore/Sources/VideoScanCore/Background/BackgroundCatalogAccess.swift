@@ -77,6 +77,21 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
         return try strings("SELECT schema_version FROM catalog_state WHERE singleton = 1").first.flatMap(Int.init)
     }
 
+    /// `generations.generation` (id 1): the committed catalog generation the
+    /// helper's schedule watches (one primary-key read); nil without the table.
+    public func generation() throws -> Int? {
+        let tables = try strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'generations'")
+        guard !tables.isEmpty else { return nil }
+        return try strings("SELECT generation FROM generations WHERE id = 1").first.flatMap(Int.init)
+    }
+
+    /// Open, read the generation, close; nil when the catalog cannot be read.
+    public static func generation(at url: URL) -> Int? {
+        guard let catalog = try? open(at: url) else { return nil }
+        defer { catalog.close() }
+        return try? catalog.generation()   // try? flattens Int?? to Int?
+    }
+
     /// The first column of each row of `sql`, as text (NULL → ""). A
     /// statement that would write is refused by the engine (SQLITE_READONLY)
     /// and surfaces as a `Refusal` carrying `readOnlyWords`.

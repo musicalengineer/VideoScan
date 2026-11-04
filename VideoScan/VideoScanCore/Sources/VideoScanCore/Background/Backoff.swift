@@ -1,19 +1,19 @@
 // Backoff.swift — VideoScanCore/Background
 //
-// "It backs off while Rick works" (design §0.5, §3.5). ONE actor with ONE
-// published state: `.full`, `.trickle`, `.paused(reason)`. The decision is
-// the pure `BackoffPolicy.state(for:latchedThermal:)`; the actor adds the
-// thermal hysteresis (paused at ≥ serious, released only at nominal) and
-// the trickle cadence the supervisor sleeps between units.
+// The Mac's say over the helper: ONE actor with ONE published state, `.full`
+// or `.paused(reason)`. The decision is the pure `BackoffPolicy.state(for:
+// latchedThermal:)`; the actor adds the thermal hysteresis (paused at ≥
+// serious, released only at nominal).
 //
-// Precedence, highest first (the table in §3.5, resolved where rows meet):
-//   1. thermal ≥ serious → paused(thermal)       (the Mac first)
-//   2. memory warning/critical → paused(memory)  (finish the unit, unload)
-//   3. night window → full                       (Rick asked for it)
-//   4. screen locked → full                      (Rick is away)
-//   5. app frontmost on an attended job → trickle
-//   6. input within idleThreshold → trickle      (Rick is at the keyboard)
-//   7. otherwise → full
+// Precedence, highest first:
+//   1. thermal ≥ serious → paused(thermal)
+//   2. memory warning/critical → paused(memory)  (finish the unit)
+//   3. otherwise → full
+//
+// No keyboard / trickle backoff since 2026-11-04 (Rick: the Ultra is
+// dedicated; the worker child runs at utility QoS so interactive apps win
+// the CPU). `.trickle` stays in the enum only so a status payload from an
+// older helper still decodes; nothing produces it.
 //
 // C++ reading: `actor` ≈ a class whose every method runs under one mutex,
 // awaited rather than blocked on.
@@ -22,6 +22,7 @@ import Foundation
 
 public enum BackoffState: Codable, Equatable, Sendable {
     case full
+    /// Never produced since 2026-11-04; decodes an older helper's payload.
     case trickle
     case paused(reason: String)
 
@@ -44,40 +45,25 @@ public enum BackoffState: Codable, Equatable, Sendable {
 }
 
 public enum BackoffPolicy {
-    /// Seconds of no input before Rick counts as away (design §3.5: 300 s).
-    public static let defaultIdleThreshold: Double = 300
-
     /// The state for one sample. `latchedThermal` is true while a thermal
     /// pause is held waiting for `.nominal`.
-    public static func state(for s: ActivitySample, idleThreshold: Double = defaultIdleThreshold,
-                             latchedThermal: Bool = false) -> BackoffState {
+    public static func state(for s: ActivitySample, latchedThermal: Bool = false) -> BackoffState {
         if s.thermalState >= .serious || (latchedThermal && s.thermalState != .nominal) {
             return .paused(reason: BackoffState.thermalReason)
         }
         if s.memoryPressure != .normal { return .paused(reason: BackoffState.memoryReason) }
-        if s.nightWindow { return .full }
-        if s.isScreenLocked { return .full }
-        if s.appForegroundAttended { return .trickle }
-        if s.secondsSinceLastInput < idleThreshold { return .trickle }
         return .full
     }
 }
 
 public actor Backoff {
     private let source: any ActivitySource
-    private let idleThreshold: Double
-    /// Seconds between units while trickling (design §6 sensor 3: ≤ 1 unit
-    /// per 5 s with recent input). Injected so tests run in milliseconds.
-    public let trickleInterval: Duration
     private var latchedThermal = false
     public private(set) var state: BackoffState = .full
     private var observers: [(BackoffState) -> Void] = []
 
-    public init(source: any ActivitySource, idleThreshold: Double = BackoffPolicy.defaultIdleThreshold,
-                trickleInterval: Duration = .seconds(5)) {
+    public init(source: any ActivitySource) {
         self.source = source
-        self.idleThreshold = idleThreshold
-        self.trickleInterval = trickleInterval
     }
 
     /// Re-read the Mac and publish the state. Called by the supervisor
@@ -85,7 +71,7 @@ public actor Backoff {
     @discardableResult
     public func refresh() -> BackoffState {
         let sample = source.sample()
-        let next = BackoffPolicy.state(for: sample, idleThreshold: idleThreshold, latchedThermal: latchedThermal)
+        let next = BackoffPolicy.state(for: sample, latchedThermal: latchedThermal)
         // Hysteresis: a thermal pause holds until the Mac is back to nominal.
         if case .paused(let reason) = next, reason == BackoffState.thermalReason {
             latchedThermal = true
@@ -99,7 +85,7 @@ public actor Backoff {
         return next
     }
 
-    /// Called with every CHANGE of state (the log line "backoff → trickle").
+    /// Called with every CHANGE of state (the log line "backoff → paused (thermal)").
     public func onChange(_ observer: @escaping @Sendable (BackoffState) -> Void) {
         observers.append(observer)
     }

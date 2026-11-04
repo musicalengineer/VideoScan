@@ -24,6 +24,13 @@
 // runs the jobs, the other serves status, refuses enqueue, and asks again
 // every `ownerRetryInterval` until the holder is gone (`StateRootLock.swift`).
 //
+// The helper owns its schedule (Rick 2026-11-04): with a `JobSchedule`, the
+// owner plans by itself — at start, every `planInterval`, and when the
+// catalog generation changes — enqueues each scheduled kind that has work and
+// no active job, and HOLDS a kind whose job failed until Resume, a new build
+// or a catalog change (`JobSchedule.swift`). No energy backoff: units run back
+// to back; only Pause, a hold, or the Mac's own thermal / memory pause stop them.
+//
 // Concurrency shape: one actor. Each lane has one Task (created inside the
 // actor, so it inherits the actor's isolation); the unit itself runs on the
 // cooperative pool because `BackgroundJob.runUnit` is a nonisolated async
@@ -46,8 +53,6 @@ public actor JobSupervisor {
         /// Progress pushes per job are no closer than this (design §3.3: 4/s).
         public var progressMinInterval: Duration = .milliseconds(250)
         public var finishedHistoryLimit = 50
-        /// How long a `.deferred` unit waits before it is asked again.
-        public var deferRetryInterval: Duration = .seconds(30)
         /// How often a supervisor that does not own its state root asks again.
         public var ownerRetryInterval: Duration = .seconds(30)
         /// Fail fast (2026-11-03: a missing ffmpeg failed 523 of 523 era
@@ -61,6 +66,11 @@ public actor JobSupervisor {
         /// path — timeouts, worker deaths — are not systemic); and five, not
         /// two, rides out a one-off hiccup (a worker respawn) mid-night.
         public var failFastUnits = 5
+        /// A unit found in flight at this many relaunches (the helper died
+        /// inside it each time — a crash loop launchd only throttles) is
+        /// quarantined: counted failed and skipped. 3: one crash is bad luck,
+        /// three on the same file is the file.
+        public var crashQuarantineAttempts = 3
         public init() {}
     }
 
@@ -77,10 +87,6 @@ public actor JobSupervisor {
         var stopRequested = false
         /// paused(disk): no lane owns it until `resume` re-queues it.
         var parked = false
-        /// The last `.deferred` unit's reason while the job is still waiting
-        /// for it (checklist F3, 2026-11-03); cleared when a unit records or
-        /// the state changes. Published as `JobProgressSnapshot.waiting`.
-        var waiting: String?
     }
 
     private let queue: any JobQueueStore
@@ -97,6 +103,7 @@ public actor JobSupervisor {
     private var order: [JobID] = []
     private var finishedOrder: [JobID] = []
     private var laneTasks: [String: Task<Void, Never>] = [:]
+    /// When a unit last finished or a job ended (`ServiceStatus.idleSeconds`).
     private var lastActivity: ContinuousClock.Instant
     private var progressSink: (@Sendable (JobProgressSnapshot) -> Void)?
     private var lastPush: [JobID: ContinuousClock.Instant] = [:]
@@ -107,9 +114,25 @@ public actor JobSupervisor {
     public private(set) var ownershipRefusal: String?
     private var ownerRetry: Task<Void, Never>?
 
+    // The schedule (nil: a hand run or a test that only enqueues).
+    private let schedule: JobSchedule?
+    private var scheduleTask: Task<Void, Never>?
+    private var lastPlanAt: ContinuousClock.Instant?
+    private var lastGeneration: Int?
+    private var generationSeen = false
+    /// Every hold record, active or released-by-catalog (`holds.json`).
+    private var holds: [ScheduleHold] = []
+    private var holdsLoaded = false
+    /// The last plan size per kind (status: "N files to analyze").
+    private var planned: [String: Int] = [:]
+    /// Words last logged per kind for a plan that could not be made.
+    private var planProblem: [String: String] = [:]
+    /// Scheduling ticks that planned (tests).
+    public private(set) var planCount = 0
+
     public init(queue: any JobQueueStore, checkpoints: any CheckpointStore, factory: any JobFactory,
                 backoff: Backoff, log: any BackgroundLogSink, configuration: Configuration = Configuration(),
-                ownership: any StateRootOwnership = UncontestedStateRoot()) {
+                ownership: any StateRootOwnership = UncontestedStateRoot(), schedule: JobSchedule? = nil) {
         self.queue = queue
         self.checkpoints = checkpoints
         self.factory = factory
@@ -117,6 +140,7 @@ public actor JobSupervisor {
         self.log = log
         self.configuration = configuration
         self.ownership = ownership
+        self.schedule = schedule
         self.lastActivity = clock.now
     }
 
@@ -186,16 +210,16 @@ public actor JobSupervisor {
             order.append(request.id)
             added += 1
         }
-        touch()
         return added
     }
 
-    /// `plan()` then run every lane that has work. Without the root it plans
-    /// nothing and tries again after `ownerRetryInterval`.
+    /// `plan()` then run every lane that has work, then the schedule's loop.
+    /// Without the root it plans nothing and tries again after `ownerRetryInterval`.
     public func start() {
         plan()
         guard ownershipRefusal == nil else { scheduleOwnerRetry(); return }
         kickLanes()
+        startSchedule()
     }
 
     /// Wait until every lane is idle (tests; the CLI never needs it).
@@ -211,6 +235,8 @@ public actor JobSupervisor {
     public func abandonForTest() {
         for task in laneTasks.values { task.cancel() }
         laneTasks.removeAll()
+        scheduleTask?.cancel()
+        scheduleTask = nil
         ownerRetry?.cancel()
         ownerRetry = nil
         // The kernel drops a dead process's flock; this stands in for that.
@@ -224,7 +250,6 @@ public actor JobSupervisor {
     // MARK: - Verbs (XPC)
 
     public func enqueue(_ request: JobRequest) -> EnqueueReply {
-        touch()
         if runs[request.id] != nil { return .refused(Refusal("job \(request.id) is already known")) }
         guard claimRoot() else {
             let words = "enqueue refused: \(ownershipRefusal ?? "the state root is owned by another process")"
@@ -254,7 +279,6 @@ public actor JobSupervisor {
 
     @discardableResult
     public func pause(_ id: JobID) -> Bool {
-        touch()
         guard var run = runs[id], run.state.isActive else { return false }
         run.pauseRequested = true
         if run.state == .running { run.state = .pausing }
@@ -265,7 +289,11 @@ public actor JobSupervisor {
 
     @discardableResult
     public func resume(_ id: JobID) -> Bool {
-        touch()
+        // Resume on a held kind's failed job (the menu's line) releases the hold.
+        if let hold = holds.first(where: { $0.isActive && $0.jobID == id }) {
+            releaseHold(hold.kind, words: "Resume")
+            return true
+        }
         guard var run = runs[id], run.state.isActive else { return false }
         run.pauseRequested = false
         // Resume before the pause landed: the row must not keep saying "pausing…".
@@ -287,7 +315,6 @@ public actor JobSupervisor {
 
     @discardableResult
     public func stop(_ id: JobID) -> Bool {
-        touch()
         guard var run = runs[id], run.state.isActive else { return false }
         run.stopRequested = true
         runs[id] = run
@@ -297,15 +324,16 @@ public actor JobSupervisor {
         return true
     }
 
-    /// The service's answer. Reading it is NOT activity (checklist F5,
-    /// 2026-11-03): the helper's own menu bar reads it every 5 s, and a
-    /// `touch()` here kept `idleSeconds` near zero forever, so an empty
-    /// service never exited. A message from a client (the app over XPC) says
-    /// so with `noteClientActivity()` — XPCServer does, before it asks.
+    /// The service's answer, with the holds and the last plan sizes.
     public func status(processIdentifier: Int32, startedAt: Date) async -> ServiceStatus {
         let state = await backoff.refresh()
-        return ServiceStatus(processIdentifier: processIdentifier, startedAt: startedAt, backoff: state,
-                             jobs: order.compactMap { snapshot($0) }, idleSeconds: idleSeconds)
+        var status = ServiceStatus(processIdentifier: processIdentifier, startedAt: startedAt, backoff: state,
+                                   jobs: order.compactMap { snapshot($0) }, idleSeconds: idleSeconds)
+        if schedule != nil {
+            status.holds = activeHolds
+            status.planned = planned
+        }
+        return status
     }
 
     public func snapshot(_ id: JobID) -> JobProgressSnapshot? {
@@ -318,13 +346,11 @@ public actor JobSupervisor {
             subtitle: total > 0 ? "unit \(completed) of \(total) — \(run.state.words)" : run.state.words,
             completedUnits: completed, totalUnits: total,
             skippedUnits: cp?.unitsSkipped ?? 0, failedUnits: cp?.unitsFailed ?? 0,
-            state: run.state, startedAt: run.startedAt, finishedAt: run.finishedAt,
-            waiting: run.state == .running || run.state == .pausing ? run.waiting : nil)
+            state: run.state, startedAt: run.startedAt, finishedAt: run.finishedAt)
     }
 
-    // MARK: - Idle
-
-    /// Seconds since a unit finished or a verb arrived.
+    /// Seconds since a unit finished or a job ended (the helper never exits
+    /// on idle since 2026-11-04; this is information, not a trigger).
     public var idleSeconds: Double {
         let d = clock.now - lastActivity
         return Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
@@ -332,33 +358,133 @@ public actor JobSupervisor {
 
     public var activeJobCount: Int { runs.values.filter { $0.state.isActive }.count }
 
-    /// Active jobs that hold the service up. A job parked by a full disk does
-    /// not: the next launch finds its checkpoint and resumes it.
-    private var holdingJobCount: Int { runs.values.filter { $0.state.isActive && !$0.parked }.count }
-
-    /// `IdleExitPolicy` over this supervisor's state (design §3.2). The cheap
-    /// checks first; the queue folder is decoded only when they say "maybe".
-    public func shouldExitWhenIdle(threshold: Double = IdleExitPolicy.defaultIdleSeconds) -> Bool {
-        guard holdingJobCount == 0, idleSeconds >= threshold else { return false }
-        // A queue file whose job this build refused (kept: it is the app's intent)
-        // or parked is not pending work.
-        let pending = queue.list().requests.filter { request in
-            guard let run = runs[request.id] else { return true }
-            return run.state.isActive && !run.parked
-        }
-        return IdleExitPolicy.shouldExit(idleSeconds: idleSeconds, queueEmpty: pending.isEmpty,
-                                         activeJobs: holdingJobCount, threshold: threshold)
-    }
-
     private func touch() { lastActivity = clock.now }
 
-    /// A client spoke (the app's XPC status poll — 60 s while VideoScan runs
-    /// with the service on, 5 s while Settings is open). That is activity:
-    /// exiting under a client that asks again within the minute would only
-    /// trade one process for a relaunch (launchd starts the helper on the
-    /// next message) and flicker the menu item. With VideoScan closed nobody
-    /// asks, and the idle exit runs (F5).
-    public func noteClientActivity() { touch() }
+    // MARK: - The schedule (Rick 2026-11-04)
+
+    private func startSchedule() {
+        guard let schedule, scheduleTask == nil else { return }
+        let poll = schedule.pollInterval
+        scheduleTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.scheduleTick()
+                try? await Task.sleep(for: poll)
+            }
+        }
+    }
+
+    /// One look: read the generation, release what a new build or a catalog
+    /// change releases, and plan when due (first tick, `planInterval` since
+    /// the last plan, a generation change, or a released hold).
+    public func scheduleTick() async {
+        guard let schedule, ownershipRefusal == nil else { return }
+        loadHolds()
+        let generation = schedule.generation()
+        let changed = generationSeen && generation != lastGeneration
+        if changed {
+            log.write("schedule: catalog generation \(lastGeneration.map(String.init) ?? "unknown") → \(generation.map(String.init) ?? "unknown") — planning")
+        }
+        generationSeen = true
+        lastGeneration = generation
+        releaseHolds(build: schedule.buildID, generation: generation)
+        let due = lastPlanAt.map { clock.now - $0 >= schedule.planInterval } ?? true
+        guard due || changed else { return }
+        lastPlanAt = clock.now
+        planCount += 1
+        for kind in schedule.kinds { await planKind(kind, generation: generation) }
+    }
+
+    private func planKind(_ k: JobSchedule.Kind, generation: Int?) async {
+        let name = k.kind.rawValue
+        if activeHolds.contains(where: { $0.kind == k.kind }) { return }
+        if runs.values.contains(where: { $0.request.kind == k.kind && $0.state.isActive }) { return }
+        let size: Int
+        do {
+            // Off the actor: a plan reads the catalog (≈ 1 s at 100k rows); status must still answer.
+            let planSize = k.planSize
+            size = try await Task.detached(priority: .utility) { try planSize() }.value
+        } catch {
+            let words = (error as? Refusal)?.words ?? String(describing: error)
+            if planProblem[name] != words { log.write("schedule: could not plan \(name) — \(words)") }
+            planProblem[name] = words
+            planned[name] = nil
+            return
+        }
+        if planProblem.removeValue(forKey: name) != nil { log.write("schedule: planning \(name) works again") }
+        if planned[name] != size { log.write("schedule: plan \(name) — \(size) unit(s) to do") }
+        planned[name] = size
+        guard size > 0 else { return }
+        // Re-check after the await: the actor is re-entrant there, and a second
+        // tick (Resume releases a hold and plans at once) may have queued the kind.
+        if activeHolds.contains(where: { $0.kind == k.kind })
+            || runs.values.contains(where: { $0.request.kind == k.kind && $0.state.isActive }) { return }
+        let request = k.makeRequest()
+        if case .refused(let refusal) = enqueue(request) {
+            hold(k.kind, jobID: request.id, reason: refusal.words, generation: generation)
+        }
+    }
+
+    private var activeHolds: [ScheduleHold] { holds.filter(\.isActive) }
+
+    private func loadHolds() {
+        guard !holdsLoaded, let schedule else { return }
+        holdsLoaded = true
+        switch schedule.holds.load() {
+        case .success(let h):
+            holds = h
+            for hold in h where hold.isActive { log.write("schedule: \(hold.kind) is \(hold.words)") }
+        case .failure(let r):
+            log.write("schedule: \(r.words)")
+        }
+    }
+
+    private func saveHolds() {
+        do { try schedule?.holds.save(holds) } catch {
+            log.write("schedule: could not write the holds file (\(error)) — the hold lasts until this process ends")
+        }
+    }
+
+    /// A scheduled kind failed: hold it. A repeat of the words a catalog
+    /// change already released once is sticky (see JobSchedule.swift).
+    private func hold(_ kind: JobKind, jobID: JobID, reason: String, generation: Int?) {
+        guard let schedule, schedule.kinds.contains(where: { $0.kind == kind }) else { return }
+        loadHolds()
+        let previous = holds.first { $0.kind == kind }
+        let sticky = previous.map { $0.reason == reason && ($0.sticky || $0.releasedByCatalogAt != nil) } ?? false
+        holds.removeAll { $0.kind == kind }
+        let h = ScheduleHold(kind: kind, jobID: jobID, reason: reason, build: schedule.buildID, generation: generation, sticky: sticky)
+        holds.append(h)
+        saveHolds()
+        log.write("schedule: \(kind) \(h.words)")
+    }
+
+    private func releaseHolds(build: String, generation: Int?) {
+        let before = holds
+        holds = holds.compactMap { h in
+            // Any record from another build goes: that build's failure says nothing about this one.
+            guard h.build == build else {
+                if h.isActive { log.write("schedule: hold on \(h.kind) released — a new build (\(build))") }
+                return nil
+            }
+            guard h.isActive, !h.sticky, h.generation != generation else { return h }
+            log.write("schedule: hold on \(h.kind) released — the catalog changed (generation \(h.generation.map(String.init) ?? "unknown") → \(generation.map(String.init) ?? "unknown"))")
+            var released = h
+            released.releasedByCatalogAt = Date()
+            return released
+        }
+        if holds != before { saveHolds(); lastPlanAt = nil }
+    }
+
+    /// Rick pressed Resume: forget the hold and plan now.
+    public func releaseHold(_ kind: JobKind, words: String) {
+        loadHolds()
+        guard holds.contains(where: { $0.kind == kind && $0.isActive }) else { return }
+        holds.removeAll { $0.kind == kind }
+        saveHolds()
+        log.write("schedule: hold on \(kind) released — \(words)")
+        lastPlanAt = nil
+        Task { await self.scheduleTick() }
+    }
 
     // MARK: - Lanes
 
@@ -425,56 +551,36 @@ public actor JobSupervisor {
 
     private enum Step { case next, stop, killed, failFast(String) }
 
-    /// What one job's loop carries from unit to unit: the wait it last said,
-    /// and the run of identical systemic failures (fail fast).
+    /// What one job's loop carries from unit to unit: the run of identical
+    /// systemic failures (fail fast).
     private struct Turn {
-        var deferredSaid: String?
         var streak = FailureStreak()
     }
 
-    /// One unit's turn: the hold between units (pause / stop / Backoff and
-    /// the trickle cadence), the unit, then its checkpoint — or, for a
-    /// `.deferred` unit, a wait and no checkpoint (said once per reason).
+    /// One unit's turn: the hold between units (pause / stop / the Mac's
+    /// thermal or memory pause), the unit, then its checkpoint. No cadence:
+    /// units run back to back (Rick 2026-11-04 — the worker runs at utility
+    /// QoS, so interactive work wins the CPU without a sleep here).
     private func step(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, _ turn: inout Turn) async -> Step {
         switch await holdBetweenUnits(id, cp) {
         case .killed: return .killed
         case .stop: return .stop
-        case .proceed(let state):
-            if state == .trickle {
-                try? await Task.sleep(for: backoff.trickleInterval)
-                if Task.isCancelled { return .killed }
-            }
+        case .proceed: break
         }
-        switch await performUnit(job, &cp, id, &turn.streak) {
+        switch beginUnit(&cp, id) {
         case .killed: return .killed
-        case .deferred(let reason):
-            noteWait(id, reason: reason, at: cp, said: &turn.deferredSaid)
-            try? await Task.sleep(for: configuration.deferRetryInterval)
-            return Task.isCancelled ? .killed : .next
-        case .recorded:
-            turn.deferredSaid = nil
-            runs[id]?.waiting = nil
+        case .quarantined: return .next
+        case .begin: break
         }
+        guard await performUnit(job, &cp, id, &turn.streak) else { return .killed }
+        cp.inFlightUnit = nil
+        cp.inFlightAttempts = nil
         guard persist(cp, id) else { return .killed }
         if let words = turn.streak.words, turn.streak.length >= max(1, configuration.failFastUnits) {
             return .failFast("units \(turn.streak.streakStart)–\(cp.completedUnits - 1), \(turn.streak.length) in a row, all failed with the same error, "
                              + "so the job stopped (\(cp.totalUnits - cp.completedUnits) not tried; nothing was written for them, the next plan holds them all): \(words)")
         }
         return .next
-    }
-
-    /// A unit came back `.deferred`: say the wait once per reason in the log,
-    /// and publish it on the row (`waiting`) once, so no surface reads the
-    /// job as working while no unit can start (F3).
-    private func noteWait(_ id: JobID, reason: String, at cp: JobCheckpoint, said: inout String?) {
-        if said != reason {
-            let kind = runs[id]?.request.kind.rawValue ?? "?"
-            log.write("\(kind) \(id) waits at \(cp.completedUnits) of \(cp.totalUnits): \(reason)")
-            said = reason
-        }
-        guard runs[id]?.waiting != reason else { return }
-        runs[id]?.waiting = reason
-        push(id, force: true)
     }
 
     /// The job's own release and words, then the one terminal door.
@@ -497,7 +603,7 @@ public actor JobSupervisor {
         }
     }
 
-    /// Between units: honour a user pause, then Backoff (design §3.5). Returns
+    /// Between units: honour a user pause, then the Mac's pause. Returns
     /// once the job may run a unit, or should stop, or the process is gone.
     private func holdBetweenUnits(_ id: JobID, _ cp: JobCheckpoint) async -> HoldOutcome {
         guard let kind = runs[id]?.request.kind.rawValue else { return .killed }
@@ -546,23 +652,43 @@ public actor JobSupervisor {
         return .proceed(state)
     }
 
-    private enum UnitEnd { case recorded, killed, deferred(String) }
+    private enum Begin { case begin, quarantined, killed }
 
-    /// Run unit `cp.completedUnits` and count it (done / skipped / failed).
-    /// A cancellation (the process "dying") records nothing. A failure that
-    /// repeats the one before it word for word is logged as "the same error
-    /// as unit N", so a run of them says its words once.
-    private func performUnit(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, _ streak: inout FailureStreak) async -> UnitEnd {
+    /// Write-ahead: mark unit `cp.completedUnits` in flight before it runs. A
+    /// unit already in flight `crashQuarantineAttempts` times — every process
+    /// that ran it died — is counted failed and skipped instead (in words).
+    private func beginUnit(_ cp: inout JobCheckpoint, _ id: JobID) -> Begin {
+        let index = cp.completedUnits
+        let attempts = cp.inFlightUnit == index ? (cp.inFlightAttempts ?? 0) : 0
+        if attempts >= max(1, configuration.crashQuarantineAttempts) {
+            let kind = runs[id]?.request.kind.rawValue ?? "?"
+            log.write("\(kind) \(id) unit \(index) was in flight when the helper died \(attempts) times — quarantined: counted failed, skipped, nothing written for it")
+            cp.unitsFailed += 1
+            cp.completedUnits += 1
+            cp.inFlightUnit = nil
+            cp.inFlightAttempts = nil
+            cp.updatedAt = Date()
+            return persist(cp, id) ? .quarantined : .killed
+        }
+        cp.inFlightUnit = index
+        cp.inFlightAttempts = attempts + 1
+        return persist(cp, id) ? .begin : .killed
+    }
+
+    /// Run unit `cp.completedUnits` and count it (done / skipped / failed);
+    /// false when the process is "dying" (a cancellation records nothing). A
+    /// failure that repeats the one before it word for word is logged as "the
+    /// same error as unit N", so a run of them says its words once.
+    private func performUnit(_ job: any BackgroundJob, _ cp: inout JobCheckpoint, _ id: JobID, _ streak: inout FailureStreak) async -> Bool {
         let index = cp.completedUnits
         do {
             switch try await job.runUnit(index) {
             case .done: cp.unitsRun += 1
             case .skipped: cp.unitsSkipped += 1
-            case .deferred(let reason): return Task.isCancelled ? .killed : .deferred(reason)
             }
             streak = FailureStreak()
         } catch is CancellationError where Task.isCancelled {
-            return .killed
+            return false
         } catch {
             cp.unitsFailed += 1
             let words = String(describing: error)
@@ -574,10 +700,10 @@ public actor JobSupervisor {
             }
             streak.record(words, unit: index, systemic: job.failureIsSystemic(error))
         }
-        if Task.isCancelled { return .killed }
+        if Task.isCancelled { return false }
         cp.completedUnits += 1
         cp.updatedAt = Date()
-        return .recorded
+        return true
     }
 
     /// Write the checkpoint — the proof of the unit. Without it the unit is
@@ -601,7 +727,6 @@ public actor JobSupervisor {
 
     private func setState(_ id: JobID, _ state: JobRunState) {
         runs[id]?.state = state
-        runs[id]?.waiting = nil
     }
 
     /// THE terminal transition — the one door every job leaves through, and
@@ -611,7 +736,7 @@ public actor JobSupervisor {
     /// (`keepQueueFile`) — that file is the app's intent and is kept for a
     /// build that knows the kind (refuse, never erase). A job that failed fast
     /// mid-run is not a refusal: its file goes, or every relaunch would
-    /// resurrect it beside the fresh job the app queues on its next recount.
+    /// resurrect it. A FAILED scheduled kind is held (JobSchedule.swift).
     /// The run stays in the status list for a while.
     private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?, detail: String = "",
                         keepQueueFile: Bool = false) {
@@ -619,13 +744,15 @@ public actor JobSupervisor {
         run.state = state
         run.finishedAt = Date()
         run.parked = false
-        run.waiting = nil
         runs[id] = run
         log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed,
                                    queueFileKept: keepQueueFile)
                   + (detail.isEmpty ? "" : "; \(detail)"))
         if !keepQueueFile { queue.remove(id) }
         checkpoints.remove(id)
+        if case .failed(let reason) = state {
+            hold(run.request.kind, jobID: id, reason: reason, generation: lastGeneration)
+        }
         touch()
         push(id, force: true)
         finishedOrder.append(id)

@@ -1,16 +1,10 @@
 // SystemActivitySource.swift — VideoScan Background
 //
-// The real Mac behind `Backoff` (design §3.5 table): seconds since the last
-// keyboard/mouse event (CGEventSource), the lock screen
-// (CGSessionCopyCurrentDictionary), ProcessInfo.thermalState and a
-// memory-pressure DispatchSource. Core never imports CoreGraphics; this is
-// the one file that does.
-//
-// `appForegroundAttended` is the XPC heartbeat from the app (design §3.5
-// row 2); the app does not send it yet, so it reads false — the policy for
-// it is already tested in Core (BackoffPolicyTests).
+// The real Mac behind `Backoff`: ProcessInfo.thermalState and a
+// memory-pressure DispatchSource. No keyboard / lock-screen reading since
+// 2026-11-04 (Rick: no energy backoff on the Ultra; the worker runs at
+// utility QoS instead).
 
-import CoreGraphics
 import Foundation
 import VideoScanCore
 
@@ -18,11 +12,6 @@ final class SystemActivitySource: ActivitySource, @unchecked Sendable {
     private let lock = NSLock()
     private var memoryPressure: MemoryPressureLevel = .normal
     private var pressureSource: DispatchSourceMemoryPressure?
-    private let nightWindow: Bool
-
-    init(nightWindow: Bool) {
-        self.nightWindow = nightWindow
-    }
 
     func start() {
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical],
@@ -43,29 +32,7 @@ final class SystemActivitySource: ActivitySource, @unchecked Sendable {
         lock.lock()
         let pressure = memoryPressure
         lock.unlock()
-        return ActivitySample(secondsSinceLastInput: Self.secondsSinceLastInput(),
-                              isScreenLocked: Self.isScreenLocked(),
-                              thermalState: Self.thermalLevel(ProcessInfo.processInfo.thermalState),
-                              memoryPressure: pressure,
-                              appForegroundAttended: false,
-                              nightWindow: nightWindow)
-    }
-
-    /// The smallest "seconds since" over the input event types a person
-    /// produces. (`kCGAnyInputEventType` is a C macro Swift does not import
-    /// as a `CGEventType` case; the minimum over the real types is the same
-    /// number and cannot trip an unrepresentable raw value.)
-    static func secondsSinceLastInput() -> Double {
-        let types: [CGEventType] = [.keyDown, .flagsChanged, .mouseMoved, .leftMouseDown, .rightMouseDown,
-                                    .otherMouseDown, .scrollWheel, .leftMouseDragged]
-        return types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? .infinity
-    }
-
-    static func isScreenLocked() -> Bool {
-        guard let dictionary = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
-        if let locked = dictionary["CGSSessionScreenIsLocked"] as? Bool { return locked }
-        if let locked = dictionary["CGSSessionScreenIsLocked"] as? Int { return locked != 0 }
-        return false
+        return ActivitySample(thermalState: Self.thermalLevel(ProcessInfo.processInfo.thermalState), memoryPressure: pressure)
     }
 
     static func thermalLevel(_ state: ProcessInfo.ThermalState) -> ThermalLevel {

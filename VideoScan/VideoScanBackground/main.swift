@@ -8,10 +8,11 @@
 //     app's `--find-tag` (App/main.swift): NSApplication with the
 //     `.accessory` activation policy, because the jobs this process will
 //     host (Vision, CoreML, MLX) need an application context; LSUIElement
-//     keeps it out of the Dock and the menu bar item shows it is running. launchd starts it on the first
-//     XPC message and relaunches it after a crash; it exits itself after 10
-//     idle minutes (IdleExitPolicy) so `KeepAlive: SuccessfulExit false`
-//     leaves it down until the next message.
+//     keeps it out of the Dock and the menu bar item shows it is running.
+//     launchd starts it at registration and login (RunAtLoad + KeepAlive)
+//     and restarts it after a crash; it owns its schedule (JobSchedule) and
+//     never exits on idle. Unregistering sends SIGTERM → exit 0, and
+//     `KeepAlive {SuccessfulExit false}` leaves it down (off = not running).
 //
 //   • `--status | --pause <id> | --resume <id> | --stop <id> | --enqueue noop`
 //     → the CLIENT: this is the design's `videoscan-bg` CLI folded into the

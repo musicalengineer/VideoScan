@@ -160,3 +160,34 @@ struct PythonClipWorkerTests {
         #expect(await worker.workerPID == nil)
     }
 }
+
+/// The worker child's QoS (Rick 2026-11-04): utility — interactive apps win
+/// the CPU and the performance cores stay reachable — never background (on
+/// Apple silicon steered to the efficiency cores).
+@Suite("PythonClipWorker — the child runs at utility QoS")
+struct PythonClipWorkerQoSTests {
+    static func configuration() -> PythonClipWorker.Configuration {
+        PythonClipWorker.Configuration(python: URL(fileURLWithPath: "/usr/bin/python3"), script: URL(fileURLWithPath: "/dev/null"),
+                                       factory: "unused")
+    }
+
+    @Test("LOGIC: the worker's Process is set to .utility before it runs")
+    func processIsUtility() {
+        #expect(PythonClipWorker.makeProcess(Self.configuration()).qualityOfService == .utility)
+    }
+
+    @Test("TRUTH: a child started the worker's way reports QOS_CLASS_UTILITY (0x11) from qos_class_self()",
+          .enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/python3")))
+    func childReportsUtility() throws {
+        let process = PythonClipWorker.makeProcess(Self.configuration())
+        // Same Process, same QoS; only the words it runs change: ask the kernel what the child got.
+        process.arguments = ["-I", "-c", "import ctypes; print(ctypes.CDLL(None).qos_class_self())"]
+        let out = Pipe()
+        process.standardOutput = out
+        try process.run()
+        process.waitUntilExit()
+        let text = (String(bytes: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(text == "17", "QOS_CLASS_UTILITY is 0x11 = 17; the child said \(text) (33 = user-interactive, 9 = background)")
+    }
+}

@@ -127,7 +127,7 @@ struct JobSupervisorIsolationTests {
         #expect(log.startCount == log.outcomeCount, "every START has its OUTCOME — \(log.lines)")
     }
 
-    @Test("after a disk-full pause the job is parked: resume re-queues it to its OUTCOME, stop ends it, and it never keeps the service resident")
+    @Test("after a disk-full pause the job is parked: resume re-queues it to its OUTCOME, stop ends it")
     func diskFullJobResumesOrStops() async throws {
         struct DiskFull: Error, CustomStringConvertible { var description: String { "ENOSPC" } }
         let queue = InMemoryJobQueueStore()
@@ -143,7 +143,6 @@ struct JobSupervisorIsolationTests {
         checkpoints.saveError = DiskFull()
         await supervisor.drain()
         #expect(await supervisor.snapshot(request.id)?.state == .paused(reason: "disk"))
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 0), "a parked job does not hold the service up; the next launch resumes it from its checkpoint")
         let parkedAt = recorder.completedUnits.count
 
         // The disk is back: resume re-queues, a lane runs it to the end.
@@ -155,7 +154,6 @@ struct JobSupervisorIsolationTests {
         #expect(parkedAt < recorder.completedUnits.count)
         #expect(log.lines.contains { $0.hasPrefix("START recording \(request.id)") && $0.contains("resuming at unit") }, "\(log.lines)")
         #expect(log.startCount == log.outcomeCount, "\(log.lines)")
-        #expect(await supervisor.shouldExitWhenIdle(threshold: 0))
 
         // And a parked job can be stopped outright.
         let other = RecordingFactory.request()

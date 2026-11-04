@@ -2,26 +2,27 @@
 //
 // Wires the Core pieces into one running service: the supervisor on the
 // durable folders under ~/Library/Application Support/VideoScan/background/,
-// Backoff on the real Mac (SystemActivitySource), the XPC listener, the log
-// at ~/Library/Logs/VideoScan/background.log, and the idle-exit timer.
+// Backoff on the real Mac (thermal, memory), the XPC listener, the log at
+// ~/Library/Logs/VideoScan/background.log, and THE SCHEDULE (Rick
+// 2026-11-04): the era job planned by the helper itself — at start, every
+// 10 minutes, and when the catalog generation changes — never by the app.
+// No idle exit: launchd keeps the helper up while it is registered.
 //
 // Memory: the supervisor's bookkeeping (see JobSupervisor) plus one NSXPC
-// listener; the NoOp job holds nothing. Logged at start.
+// listener; a plan count holds one EraCandidate per video file while it runs
+// (≈ 200 B each, 100k files ≈ 20 MB) and drops it.
 
 import Foundation
 import VideoScanCore
 
 final class BackgroundService: @unchecked Sendable {
 
-    /// `--full` (design §3.5 night window): run full-out regardless of idle.
-    private let forceFull: Bool
     private let log: BackgroundFileLog
     private let supervisor: JobSupervisor
     private let backoff: Backoff
     private let activity: SystemActivitySource
     private let server: XPCServer
     private let startedAt = Date()
-    private var idleTimer: DispatchSourceTimer?
 
     static let bundleIdentifier = Bundle.main.bundleIdentifier ?? "Rick-Breen.VideoScan.Background"
     static let appBundleIdentifier = BackgroundServiceNames.appBundleIdentifier(helperBundleIdentifier: bundleIdentifier) ?? "Rick-Breen.VideoScan"
@@ -34,24 +35,39 @@ final class BackgroundService: @unchecked Sendable {
     }
 
     init(arguments: [String]) {
-        forceFull = arguments.contains("--full")
         log = BackgroundFileLog.production()
         let root = Self.stateRoot
-        activity = SystemActivitySource(nightWindow: forceFull)
+        activity = SystemActivitySource()
         backoff = Backoff(source: activity)
         // One supervisor per state root: a hand run (`--run era`) that is still
         // alive keeps this service to status-only until it finishes (StateRootLock.swift).
         supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                    checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
-                                   factory: DefaultJobFactory(stateRoot: root, backoff: backoff), backoff: backoff, log: log,
-                                   ownership: FileStateRootLock(root: root, owner: "service \(Self.bundleIdentifier)"))
+                                   factory: DefaultJobFactory(stateRoot: root), backoff: backoff, log: log,
+                                   ownership: FileStateRootLock(root: root, owner: "service \(Self.bundleIdentifier)"),
+                                   schedule: Self.schedule(stateRoot: root, catalog: DefaultJobFactory.productionCatalogURL))
         server = XPCServer(machServiceName: Self.machServiceName, supervisor: supervisor, log: log,
                            allowedPeers: [Self.appBundleIdentifier, Self.bundleIdentifier], startedAt: startedAt)
     }
 
+    /// The era job, scheduled by the helper (Rick 2026-11-04). The plan size
+    /// is EraPlanner's own unit list — the one engine the job freezes at START.
+    static func schedule(stateRoot: URL, catalog: URL) -> JobSchedule {
+        let era = JobSchedule.Kind(
+            kind: .era,
+            planSize: {
+                let journal = ObservationJournal(directory: stateRoot.appendingPathComponent("journal", isDirectory: true))
+                return try EraPlanner.plan(catalogURL: catalog, journal: journal, signer: SeatedApproach.eraA2.signer, limit: nil,
+                                           jobID: JobID(), isReadable: { FileManager.default.isReadableFile(atPath: $0) }).units.count
+            },
+            makeRequest: { EraJob.request(limit: nil, repoPath: EraCLIArguments.defaultRepo, requestedBy: "schedule") })
+        return JobSchedule(kinds: [era], generation: { BackgroundCatalogAccess.generation(at: catalog) },
+                           buildID: JobSchedule.buildID(), holds: ScheduleHoldStore.beside(stateRoot: stateRoot))
+    }
+
     func start() {
         log.start()
-        log.write("service started — \(Self.bundleIdentifier) pid \(ProcessInfo.processInfo.processIdentifier), mach service \(Self.machServiceName), state in \(Self.stateRoot.path), schema \(BackgroundProtocolVersion.current)\(forceFull ? ", --full" : "")")
+        log.write("service started — \(Self.bundleIdentifier) pid \(ProcessInfo.processInfo.processIdentifier), mach service \(Self.machServiceName), state in \(Self.stateRoot.path), schema \(BackgroundProtocolVersion.current), build \(JobSchedule.buildID())")
         activity.start()
         let log = self.log
         Task {
@@ -60,25 +76,6 @@ final class BackgroundService: @unchecked Sendable {
         }
         server.resume()
         installSignalHandlers()
-        startIdleTimer()
-    }
-
-    /// Every 30 s: exit cleanly when nothing is queued, nothing is active and
-    /// 10 idle minutes have passed (IdleExitPolicy; design §3.2).
-    private func startIdleTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "\(Self.bundleIdentifier).idle", qos: .utility))
-        timer.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(5))
-        timer.setEventHandler { [supervisor, log] in
-            Task {
-                if await supervisor.shouldExitWhenIdle() {
-                    log.write("service idle for \(Int(IdleExitPolicy.defaultIdleSeconds)) s with an empty queue — exiting cleanly (launchd restarts it on the next message)")
-                    log.close()
-                    exit(0)
-                }
-            }
-        }
-        timer.resume()
-        idleTimer = timer
     }
 
     /// SIGTERM (launchctl kickstart -k, logout): say so, then go. The
@@ -87,7 +84,7 @@ final class BackgroundService: @unchecked Sendable {
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         signal(SIGTERM, SIG_IGN)
         source.setEventHandler { [log] in
-            log.write("service received SIGTERM — exiting; queued work resumes from its checkpoints on the next launch")
+            log.write("service received SIGTERM — exiting 0 (launchd leaves it down); work resumes from its checkpoints at the next launch")
             log.close()
             exit(0)
         }

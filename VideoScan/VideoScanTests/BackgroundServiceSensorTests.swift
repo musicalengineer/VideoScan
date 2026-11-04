@@ -126,10 +126,11 @@ struct BackgroundServiceSensorTests {
         let mach = BackgroundServiceNames.machServiceName(appBundleIdentifier: appID)
         #expect(plist["Label"] as? String == mach)
         #expect((plist["MachServices"] as? [String: Any])?[mach] as? Bool == true)
-        #expect((plist["KeepAlive"] as? [String: Any])?["SuccessfulExit"] as? Bool == false, "exit-when-idle needs SuccessfulExit false")
-        #expect(plist["ProcessType"] as? String == "Background")
-        #expect(plist["LowPriorityIO"] as? Bool == true)
-        #expect(plist["Nice"] as? Int == 10)
+        // Rick 2026-11-04: resident while registered; a crash or error exit restarts, a clean exit 0 stays down.
+        #expect(plist["KeepAlive"] as? [String: Bool] == ["SuccessfulExit": false, "Crashed": true])
+        #expect(plist["RunAtLoad"] as? Bool == true)
+        #expect(plist["ProcessType"] as? String == "Interactive", "Background / Standard throttle CPU and I/O (launchd.plist(5))")
+        #expect(plist["LowPriorityIO"] == nil && plist["Nice"] == nil)
         #expect(plist["ThrottleInterval"] as? Int == 10)
         let program = try #require(plist["BundleProgram"] as? String)
         #expect(FileManager.default.isExecutableFile(atPath: appBundle.appendingPathComponent(program).path),
@@ -217,7 +218,7 @@ struct BackgroundServiceSensorTests {
         var configuration = JobSupervisor.Configuration()
         configuration.pausePollInterval = .milliseconds(10)
         let supervisor = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(), factory: DefaultJobFactory(),
-                                       backoff: Backoff(source: FakeActivitySource(ActivitySample()), trickleInterval: .milliseconds(1)),
+                                       backoff: Backoff(source: FakeActivitySource(ActivitySample())),
                                        log: log, configuration: configuration)
 
         let finished = NoOpJob.request(units: 3, sleepMilliseconds: 0, lane: "a", requestedBy: "sensor")

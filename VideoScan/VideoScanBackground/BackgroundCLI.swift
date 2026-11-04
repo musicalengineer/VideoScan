@@ -11,7 +11,7 @@
 //   "…/VideoScan Background" --pause <id> | --resume <id> | --stop <id>
 //
 // And one FOREGROUND mode (background service step 1): `--run era …
-// [state-root PATH] [--full]` runs the job in THIS process with its own
+// [state-root PATH]` runs the job in THIS process with its own
 // supervisor over `state-root` (default the service's folder) — for a smoke
 // on a `.backup` copy of the catalog and the M4 corpus run, with the app and
 // the service untouched. Its journal is <state-root>/journal; nothing reaches
@@ -25,23 +25,22 @@ enum BackgroundCLI {
         case status
         case enqueueNoop(units: Int, sleepMilliseconds: Int)
         case enqueueEra(EraCLIArguments)
-        case runEra(EraCLIArguments, full: Bool)
+        case runEra(EraCLIArguments)
         case refused(String)
         case pause(String), resume(String), stop(String)
     }
 
-    static let usage = "usage: --status | --enqueue noop [units] [sleepMilliseconds] | --enqueue \(EraCLIArguments.usage) | --run \(EraCLIArguments.usage) [--full] | --pause <id> | --resume <id> | --stop <id>"
+    static let usage = "usage: --status | --enqueue noop [units] [sleepMilliseconds] | --enqueue \(EraCLIArguments.usage) | --run \(EraCLIArguments.usage) | --pause <id> | --resume <id> | --stop <id>"
 
     static func verb(in arguments: [String]) -> Verb? {
-        guard let first = arguments.first, first.hasPrefix("--"), first != "--full" else { return nil }
+        guard let first = arguments.first, first.hasPrefix("--") else { return nil }
         let rest = Array(arguments.dropFirst())
         switch first {
         case "--status": return .status
         case "--enqueue" where rest.first == "era", "--run" where rest.first == "era":
-            let words = Array(rest.dropFirst()).filter { $0 != "--full" }
             do {
-                let parsed = try EraCLIArguments.parse(words)
-                return first == "--run" ? .runEra(parsed, full: rest.contains("--full")) : .enqueueEra(parsed)
+                let parsed = try EraCLIArguments.parse(Array(rest.dropFirst()))
+                return first == "--run" ? .runEra(parsed) : .enqueueEra(parsed)
             } catch {
                 return .refused((error as? Refusal)?.words ?? "\(error)")
             }
@@ -62,7 +61,7 @@ enum BackgroundCLI {
             fputs("videoscan-bg: \(words)\n\(usage)\n", stderr)
             return 1
         }
-        if case .runEra(let arguments, let full) = verb { return await runForeground(arguments, full: full) }
+        if case .runEra(let arguments) = verb { return await runForeground(arguments) }
         let connection = NSXPCConnection(machServiceName: BackgroundService.machServiceName)
         connection.remoteObjectInterface = NSXPCInterface(with: BackgroundServiceXPC.self)
         connection.resume()
@@ -135,22 +134,22 @@ enum BackgroundCLI {
     /// `--run era …`: one job in this process, its own supervisor and log,
     /// over `state-root` (default the service's). Prints the START / OUTCOME
     /// lines as they are logged; exit 0 when the job finished.
-    static func runForeground(_ arguments: EraCLIArguments, full: Bool) async -> Int32 {
+    static func runForeground(_ arguments: EraCLIArguments) async -> Int32 {
         let root = arguments.stateRoot.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? BackgroundService.stateRoot
         let fileLog = arguments.stateRoot == nil ? BackgroundFileLog.production()
             : BackgroundFileLog(url: root.appendingPathComponent("background.log"))
         fileLog.start()
         let log = EchoLog(fileLog)
-        let activity = SystemActivitySource(nightWindow: full)
+        let activity = SystemActivitySource()
         activity.start()
         let backoff = Backoff(source: activity)
         let catalog = arguments.catalogPath.map { URL(fileURLWithPath: $0) } ?? DefaultJobFactory.productionCatalogURL
         let supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                        checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
-                                       factory: DefaultJobFactory(stateRoot: root, catalogURL: catalog, backoff: backoff),
+                                       factory: DefaultJobFactory(stateRoot: root, catalogURL: catalog),
                                        backoff: backoff, log: log,
                                        ownership: FileStateRootLock(root: root, owner: "cli --run era"))
-        log.write("foreground --run era — state in \(root.path), catalog \(catalog.path) (read-only)\(full ? ", --full" : "")")
+        log.write("foreground --run era — state in \(root.path), catalog \(catalog.path) (read-only)")
         try? FileManager.default.createDirectory(at: root.appendingPathComponent("queue", isDirectory: true), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: root.appendingPathComponent("checkpoints", isDirectory: true), withIntermediateDirectories: true)
         guard case .accepted = await supervisor.enqueue(arguments.request(requestedBy: "cli --run")) else {

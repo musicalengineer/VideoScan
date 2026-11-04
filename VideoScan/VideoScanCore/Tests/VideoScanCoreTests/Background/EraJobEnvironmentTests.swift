@@ -47,7 +47,7 @@ enum EraEnvironmentFixture {
     static func productionSetup(_ fixture: StoreFixture, root: URL, model: URL, environment: [String: String],
                                 id: JobID = JobID(), log: URL? = nil) throws -> EraJob.Setup {
         var setup = try EraJob.setup(for: request(model: model, id: id), stateRoot: root, catalogURL: fixture.url,
-                                     backoff: nil, environment: environment)
+                                     environment: environment)
         setup.worker.factory = ClipWorkerFixture.factory()
         setup.isReadable = { _ in true }                     // synthetic paths
         if let log { setup.worker.environment?["FAKE_CLIP_LOG"] = log.path }

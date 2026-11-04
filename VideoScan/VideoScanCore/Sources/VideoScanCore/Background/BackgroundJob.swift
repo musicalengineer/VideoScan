@@ -2,7 +2,7 @@
 //
 // A job is a loop over UNITS (one file, one window; design §3.5): the
 // supervisor runs `runUnit(i)` for i in checkpoint..<unitCount, checks
-// Backoff and pause/stop between units, and rewrites the checkpoint after
+// the Mac's pause and pause/stop between units, and rewrites the checkpoint after
 // each. A job never sees the queue, the checkpoint or the log — it only
 // does one unit when asked.
 //
@@ -18,12 +18,6 @@ import Foundation
 public enum UnitOutcome: Sendable, Equatable {
     case done
     case skipped
-    /// Not now, and not counted: the unit is asked again after the
-    /// supervisor's `deferRetryInterval`, through the same between-units
-    /// hold (pause / stop / Backoff honoured). EraJob defers while Backoff
-    /// says `.trickle` and its model is not loaded — no model load while
-    /// Rick is at the keyboard (design §3.5).
-    case deferred(reason: String)
 }
 
 public protocol BackgroundJob: Sendable {
@@ -109,16 +103,14 @@ public protocol JobFactory: Sendable {
 public struct DefaultJobFactory: JobFactory {
     public let stateRoot: URL?
     public let catalogURL: URL
-    public let backoff: Backoff?
 
     public static var productionCatalogURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/VideoScan/catalog.sqlite")
     }
 
-    public init(stateRoot: URL? = nil, catalogURL: URL = DefaultJobFactory.productionCatalogURL, backoff: Backoff? = nil) {
+    public init(stateRoot: URL? = nil, catalogURL: URL = DefaultJobFactory.productionCatalogURL) {
         self.stateRoot = stateRoot
         self.catalogURL = catalogURL
-        self.backoff = backoff
     }
 
     public func makeJob(for request: JobRequest) throws -> any BackgroundJob {
@@ -126,7 +118,7 @@ public struct DefaultJobFactory: JobFactory {
         case .noop: return try NoOpJob(request: request)
         case .era:
             guard let stateRoot else { throw Refusal("era: this service has no state folder for its journal") }
-            return try EraJob(try EraJob.setup(for: request, stateRoot: stateRoot, catalogURL: catalogURL, backoff: backoff))
+            return try EraJob(try EraJob.setup(for: request, stateRoot: stateRoot, catalogURL: catalogURL))
         default: throw Refusal("VideoScan Background does not know the job kind `\(request.kind)` (this build knows: noop, era)")
         }
     }
@@ -142,7 +134,7 @@ extension EraJob {
     /// service): the worker gets it through `SubprocessEnvironment.mediaTools`,
     /// so bench.py's bare `ffmpeg`/`ffprobe` are the ones FFmpegLocator finds —
     /// or the job is refused here, naming what is missing (2026-11-03 bug).
-    public static func setup(for request: JobRequest, stateRoot: URL, catalogURL: URL, backoff: Backoff?,
+    public static func setup(for request: JobRequest, stateRoot: URL, catalogURL: URL,
                              environment: [String: String] = ProcessInfo.processInfo.environment,
                              fileManager: FileManager = .default) throws -> Setup {
         let p = request.parameters
@@ -166,7 +158,7 @@ extension EraJob {
             throw Refusal("era: \(refusal.words) — refused at START, not once per file")
         }
         let catalog = p[catalogPathKey].map { URL(fileURLWithPath: $0) } ?? catalogURL
-        return Setup(jobID: request.id, catalogURL: catalog, stateRoot: stateRoot, worker: worker, limit: limit, backoff: backoff)
+        return Setup(jobID: request.id, catalogURL: catalog, stateRoot: stateRoot, worker: worker, limit: limit)
     }
 
     /// The newest snapshot folder of the 8B in the Hugging Face cache, or nil.

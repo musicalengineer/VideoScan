@@ -183,11 +183,22 @@ public actor PythonClipWorker {
 
     // MARK: Process
 
-    private func spawn() throws -> Child {
+    /// The worker's Process, not yet run. Utility QoS (Rick 2026-11-04): the
+    /// worker runs whenever there is work, and interactive apps still win the
+    /// CPU. Never `.background`: on Apple silicon that class is steered to the
+    /// efficiency cores (Apple, "Tuning your code's performance for Apple
+    /// silicon"); utility keeps the performance cores.
+    static func makeProcess(_ configuration: Configuration) -> Process {
         let process = Process()
         process.executableURL = configuration.python
         process.arguments = ["-I", configuration.script.path, "worker", "--factory", configuration.factory]
         if let environment = configuration.environment { process.environment = environment }
+        process.qualityOfService = .utility
+        return process
+    }
+
+    private func spawn() throws -> Child {
+        let process = Self.makeProcess(configuration)
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout

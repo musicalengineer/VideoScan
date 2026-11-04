@@ -1,6 +1,6 @@
-// BackoffPolicyTests.swift — every row of the design §3.5 table, the
-// precedence where rows meet, the thermal hysteresis, the idle-exit rule
-// and the peer-trust decision.
+// BackoffPolicyTests.swift — the Mac's pause (thermal, memory), its
+// precedence and hysteresis, and the peer-trust decision. The keyboard rows
+// and the idle-exit rule went on 2026-11-04 (the helper owns its schedule).
 //
 // Dimensions: LOGIC. The sources are fakes; no Mac state is read.
 
@@ -8,24 +8,12 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("Backoff — the §3.5 table")
+@Suite("Backoff — thermal and memory only")
 struct BackoffPolicyTests {
 
-    @Test("nobody at the keyboard → full")
-    func idleIsFull() {
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 3600)) == .full)
-    }
-
-    @Test("Rick is at the keyboard (input < 300 s) → trickle")
-    func recentInputTrickles() {
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 12)) == .trickle)
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 299.9)) == .trickle)
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 300)) == .full)
-    }
-
-    @Test("the app is frontmost on an attended job → trickle, even when idle")
-    func attendedTrickles() {
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 3600, appForegroundAttended: true)) == .trickle)
+    @Test("no keyboard backoff (2026-11-04): a normal Mac is full")
+    func normalIsFull() {
+        #expect(BackoffPolicy.state(for: ActivitySample()) == .full)
     }
 
     @Test("thermal ≥ serious → paused(thermal); fair alone is not a pause")
@@ -41,20 +29,9 @@ struct BackoffPolicyTests {
         #expect(BackoffPolicy.state(for: ActivitySample(memoryPressure: .critical)) == .paused(reason: "memory"))
     }
 
-    @Test("the night window → full regardless of idle or the attended app")
-    func night() {
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 1, appForegroundAttended: true, nightWindow: true)) == .full)
-    }
-
-    @Test("screen locked → full (Rick is away) even with recent input")
-    func locked() {
-        #expect(BackoffPolicy.state(for: ActivitySample(secondsSinceLastInput: 1, isScreenLocked: true)) == .full)
-    }
-
-    @Test("the Mac comes first: thermal beats night, memory beats locked")
+    @Test("the Mac comes first: thermal beats memory")
     func precedence() {
-        #expect(BackoffPolicy.state(for: ActivitySample(thermalState: .serious, nightWindow: true)) == .paused(reason: "thermal"))
-        #expect(BackoffPolicy.state(for: ActivitySample(isScreenLocked: true, memoryPressure: .warning)) == .paused(reason: "memory"))
+        #expect(BackoffPolicy.state(for: ActivitySample(thermalState: .serious, memoryPressure: .warning)) == .paused(reason: "thermal"))
     }
 
     @Test("the actor holds a thermal pause until nominal, and publishes each change once")
@@ -72,18 +49,6 @@ struct BackoffPolicyTests {
         source.set(ActivitySample(thermalState: .fair))
         #expect(await backoff.refresh() == .full, "fair on its own never pauses")
         #expect(seen.lines == ["paused (thermal)", "full"])
-    }
-}
-
-@Suite("IdleExitPolicy — exit after 10 idle minutes with nothing queued")
-struct IdleExitPolicyTests {
-    @Test("exits only when the queue is empty, no job is active and the idle time has passed")
-    func rule() {
-        #expect(IdleExitPolicy.shouldExit(idleSeconds: 600, queueEmpty: true, activeJobs: 0))
-        #expect(!IdleExitPolicy.shouldExit(idleSeconds: 599, queueEmpty: true, activeJobs: 0))
-        #expect(!IdleExitPolicy.shouldExit(idleSeconds: 6000, queueEmpty: false, activeJobs: 0))
-        #expect(!IdleExitPolicy.shouldExit(idleSeconds: 6000, queueEmpty: true, activeJobs: 1), "a paused job is work waiting")
-        #expect(IdleExitPolicy.defaultIdleSeconds == 600)
     }
 }
 

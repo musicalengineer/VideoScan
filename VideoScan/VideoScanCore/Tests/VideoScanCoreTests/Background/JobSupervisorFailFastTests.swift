@@ -132,7 +132,7 @@ struct EraJobFailFastTests {
         let catalog: URL
         let model: URL
         func makeJob(for request: JobRequest) throws -> any BackgroundJob {
-            try EraJob(try EraJob.setup(for: request, stateRoot: root, catalogURL: catalog, backoff: nil,
+            try EraJob(try EraJob.setup(for: request, stateRoot: root, catalogURL: catalog,
                                         environment: EraEnvironmentFixture.launchd, fileManager: NoExecutablesFileManager()))
         }
     }

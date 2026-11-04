@@ -42,8 +42,9 @@
 // The worker's environment comes from `SubprocessEnvironment.mediaTools` in
 // `EraJob.setup`, so ffmpeg/ffprobe are found under launchd or the job is
 // refused at START (2026-11-03: 523 units failed on a bare `ffmpeg`).
-// Backoff (§3.5): while Backoff says `.trickle` and the model is not loaded,
-// a unit DEFERS (no model load while Rick is at the keyboard).
+// No keyboard backoff (2026-11-04): units run back to back and the model
+// stays loaded in the worker for the whole job; the worker child runs at
+// utility QoS (PythonClipWorker.makeProcess).
 //
 // Memory: the plan holds one EraUnit (≈ 200 B) per planned file — 100k files
 // ≈ 20 MB; the caching sets one 64-char digest per cached content; one clip
@@ -107,10 +108,6 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     public static let modelDirKey = "modelDir"
     public static let catalogPathKey = "catalogPath"
     public static let orderRule = "oldest first by the best date bound (Rick's date, else embedded, else inferred, else a year in the path; unknown last)"
-    /// The wait's words — the log line and every surface's job line
-    /// ("· waiting — you're at the Mac (the model loads when you step away)"):
-    /// Backoff trickle with no model loaded (design §3.5).
-    public static let deferWords = "you're at the Mac (the model loads when you step away)"
 
     /// Everything a job needs, injected (the factory builds it from a request; tests directly).
     public struct Setup: Sendable {
@@ -119,21 +116,19 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
         public var stateRoot: URL
         public var worker: PythonClipWorker.Configuration
         public var limit: Int?
-        public var backoff: Backoff?
         public var isReadable: @Sendable (String) -> Bool
         public var now: @Sendable () -> Date
         /// Test seam: runs after a unit's journal append, before it returns.
         public var afterJournalAppend: (@Sendable (Int) async -> Void)?
 
         public init(jobID: JobID, catalogURL: URL, stateRoot: URL, worker: PythonClipWorker.Configuration, limit: Int? = nil,
-                    backoff: Backoff? = nil, isReadable: @escaping @Sendable (String) -> Bool = { FileManager.default.isReadableFile(atPath: $0) },
+                    isReadable: @escaping @Sendable (String) -> Bool = { FileManager.default.isReadableFile(atPath: $0) },
                     now: @escaping @Sendable () -> Date = { Date() }, afterJournalAppend: (@Sendable (Int) async -> Void)? = nil) {
             self.jobID = jobID
             self.catalogURL = catalogURL
             self.stateRoot = stateRoot
             self.worker = worker
             self.limit = limit
-            self.backoff = backoff
             self.isReadable = isReadable
             self.now = now
             self.afterJournalAppend = afterJournalAppend
@@ -178,9 +173,6 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     public func runUnit(_ index: Int) async throws -> UnitOutcome {
         let unit = plan.units[index]
         if let words = await counters.failFast { throw Refusal(words) }
-        if !(await worker.isLoaded), let backoff = setup.backoff, await backoff.state == .trickle {
-            return .deferred(reason: Self.deferWords)
-        }
         let info: PythonClipWorker.LoadInfo
         do {
             info = try await worker.load()
@@ -309,7 +301,7 @@ actor EraCounters {
     func loadFailed(_ words: String) -> String {
         loadFailures += 1
         let message = "the worker could not load the model (\(words))"
-        if loadFailures >= 2 { failFast = message + " — twice in a row; the remaining files fail fast, fix it and enqueue again" }
+        if loadFailures >= 2 { failFast = message + " — twice in a row; the remaining files fail fast; the helper holds the job until Resume, a new build or a catalog change" }
         return message
     }
 

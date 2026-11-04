@@ -118,10 +118,9 @@ struct BackgroundRegistrationGateReviewTests {
         let agent = BackgroundServiceStoreTests.FakeAgent(.notRegistered)
         let (store, _) = BackgroundServiceStoreTests.make(enabled: true, agent: agent)
         store.isReleaseBuild = { false }
-        await store.refresh(recount: false)
+        await store.refresh()
         let lines = BackgroundServicePresentation.lines(enabled: store.enabled, launchd: store.launchdStatus, service: store.service,
-                                                        serviceProblem: store.serviceProblem, work: store.work,
-                                                        workProblem: store.workProblem, lastNote: store.lastNote,
+                                                        serviceProblem: store.serviceProblem, lastNote: store.lastNote,
                                                         refusal: store.registrationRefusal)
         // Turning it back ON is what re-registers, and ON is refused in Debug.
         #expect(!lines.helper.contains("turn the checkbox off and on"), "\(lines.helper)")

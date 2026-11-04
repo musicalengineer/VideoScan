@@ -131,9 +131,10 @@ public struct JobProgressSnapshot: Codable, Equatable, Sendable {
     public var state: JobRunState
     public var startedAt: Date?
     public var finishedAt: Date?
-    /// Why a `.running` job runs no unit right now — its last unit came back
-    /// `.deferred` (EraJob: a cold model while Backoff trickles). nil = not
-    /// waiting. Additive (2026-11-03, checklist F3): an older payload has no
+    /// Why a `.running` job runs no unit right now. Since 2026-11-04 (no
+    /// keyboard backoff, no deferred units) this helper never sets it; it is
+    /// kept so an older helper's payload decodes and still reads "waiting" on
+    /// every surface. Additive (2026-11-03, checklist F3): an older payload has no
     /// key and decodes as nil; an older reader ignores the key, so the schema
     /// (`BackgroundProtocolVersion.current`) does not move. Kept beside the
     /// state, not in it: `JobRunState` is a closed enum an older build could
@@ -186,17 +187,26 @@ public struct ServiceStatus: Codable, Equatable, Sendable {
     public var startedAt: Date
     public var backoff: BackoffState
     public var jobs: [JobProgressSnapshot]
-    /// Seconds since the service last did anything (a unit, an XPC call).
+    /// Seconds since a unit finished or a job ended.
     public var idleSeconds: Double
+    /// Scheduled kinds held after a failure (2026-11-04; JobSchedule.swift).
+    /// Additive: nil from an older helper or one without a schedule.
+    public var holds: [ScheduleHold]?
+    /// The last plan size per kind (raw value → units), the helper's own
+    /// count of work left. Additive, like `holds`.
+    public var planned: [String: Int]?
 
     public init(protocolVersion: Int = BackgroundProtocolVersion.current, processIdentifier: Int32,
-                startedAt: Date, backoff: BackoffState, jobs: [JobProgressSnapshot], idleSeconds: Double) {
+                startedAt: Date, backoff: BackoffState, jobs: [JobProgressSnapshot], idleSeconds: Double,
+                holds: [ScheduleHold]? = nil, planned: [String: Int]? = nil) {
         self.protocolVersion = protocolVersion
         self.processIdentifier = processIdentifier
         self.startedAt = startedAt
         self.backoff = backoff
         self.jobs = jobs
         self.idleSeconds = idleSeconds
+        self.holds = holds
+        self.planned = planned
     }
 
     /// One line for the CLI and the log.

@@ -100,8 +100,8 @@ enum BackgroundFixtures {
         return dir
     }
 
-    static func fullBackoff(trickle: Duration = .milliseconds(20)) -> Backoff {
-        Backoff(source: FakeActivitySource(ActivitySample()), trickleInterval: trickle)
+    static func fullBackoff() -> Backoff {
+        Backoff(source: FakeActivitySource(ActivitySample()))
     }
 
     static func fastConfiguration() -> JobSupervisor.Configuration {

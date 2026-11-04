@@ -343,7 +343,7 @@ struct CatalogStatusBackgroundClaimTests {
             (.running, nil, "Machine era: 120 of 4,709 files (VideoScan Background — running)"),
             (.queued, nil, "Machine era: 120 of 4,709 files (VideoScan Background — queued)"),
             (.paused(reason: "user"), nil, "Machine era: 120 of 4,709 files (VideoScan Background — paused (user))"),
-            (.running, EraJob.deferWords, "Machine era: 120 of 4,709 files (VideoScan Background — waiting — \(EraJob.deferWords))"),
+            (.running, "you're at the Mac", "Machine era: 120 of 4,709 files (VideoScan Background — waiting — you're at the Mac)"),
         ]
         for (state, waiting, eraWords) in cases {
             let reading = BackgroundServiceActivity.Reading(eraOnly(state, waiting: waiting))

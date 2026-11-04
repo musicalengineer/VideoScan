@@ -120,8 +120,6 @@ final class XPCServer: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
             let supervisor = self.supervisor
             let startedAt = self.startedAt
             Task {
-                // A client asked: that is activity (JobSupervisor.status is not — F5).
-                await supervisor.noteClientActivity()
                 let status = await supervisor.status(processIdentifier: ProcessInfo.processInfo.processIdentifier, startedAt: startedAt)
                 reply((try? BackgroundPayloadCodec.encode(status)) ?? Data())
             }

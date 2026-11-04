@@ -14,7 +14,8 @@
 //     test can prove that a disabled launch makes NO ServiceManagement call.
 //
 //   • `BackgroundServiceClient` — an NSXPCConnection to the Mach service;
-//     `status()` (step 0) and `enqueue()` (Settings ▸ Background, 11/02).
+//     `status()` only. The app never enqueues (2026-11-04: the helper owns
+//     its schedule; BackgroundSettingsSensorTests).
 //     The MFO row that draws a service job is still to come; the Settings
 //     pane is `BackgroundServiceStore` + `ContentAnalysisSettingsRows`.
 //
@@ -126,9 +127,7 @@ enum BackgroundServiceRegistrar {
     }
 }
 
-/// XPC client to the running service (launchd starts it on the first message).
-/// Two verbs today: `status` (step 0) and `enqueue` (Settings ▸ Background,
-/// 2026-11-02: the app queues the era job when work is left).
+/// XPC client to the running service. One verb: `status`.
 final class BackgroundServiceClient: @unchecked Sendable {
     private let connection: NSXPCConnection
 
@@ -143,16 +142,6 @@ final class BackgroundServiceClient: @unchecked Sendable {
     func status() async -> Result<ServiceStatus, Refusal> {
         await call { proxy, once in
             proxy.status { data in once.resume(Self.decode(ServiceStatus.self, data)) }
-        }
-    }
-
-    /// `JobRequest` → accepted with its id, or refused in the helper's words.
-    func enqueue(_ request: JobRequest) async -> Result<EnqueueReply, Refusal> {
-        guard let data = try? BackgroundPayloadCodec.encode(request) else {
-            return .failure(Refusal("could not encode the request"))
-        }
-        return await call { proxy, once in
-            proxy.enqueue(data) { reply in once.resume(Self.decode(EnqueueReply.self, reply)) }
         }
     }
 

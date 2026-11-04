@@ -1,6 +1,6 @@
 # VideoScan Background — the analyzer service
 
-Status: in flight — 2026-11-01. Step 0 is built (the helper, its launchd job, XPC control, a no-op job; off unless `background.service.enabled` is set, no Settings toggle yet). Step 1 merged on 2026-11-01 (`0656aee6`): the seated 8B era/OCR job, the observation journal, `JournalApplier` through the commit door, schema v14 `provenance_assertions` (DECISIONS 2026-10-31, 2026-11-01). The corpus run proceeds in Rick's windows on the Ultra (STATUS). Step 2, captions on the 8B, is §4.
+Status: in flight — 2026-11-04: **the helper owns its schedule** (DECISIONS 2026-11-04; §3.2, §3.5 below). Earlier: 2026-11-01. Step 0 is built (the helper, its launchd job, XPC control, a no-op job; off unless `background.service.enabled` is set, no Settings toggle yet). Step 1 merged on 2026-11-01 (`0656aee6`): the seated 8B era/OCR job, the observation journal, `JournalApplier` through the commit door, schema v14 `provenance_assertions` (DECISIONS 2026-10-31, 2026-11-01). The corpus run proceeds in Rick's windows on the Ultra (STATUS). Step 2, captions on the 8B, is §4.
 
 VideoScan Background is the helper process that keeps analysing after the app quits: a login-item launchd job the app registers, controlled over XPC, with its durable state in files under `App Support/VideoScan/background/`, backing off when Rick is working, and taking one engine at a time out of the app so the app is never down for a rewrite. What it may run is listed in §3.6; it never touches media. §0.6 (Rick, 10/31) says what goes in and what comes out; §0.7 names the outputs **observations**, says where they live (the three homes) and in what order they are produced (1960–2010, oldest first). An observation reaches the catalog only through the app's one commit door, and is never shown as a date (DECISIONS 2026-11-01). The first job it hosts is the video-model work in `docs/design/machine_intelligence.md`.
 
@@ -68,10 +68,11 @@ how does machine generated intelligence get into the app and persist and be sear
    the same row (verb, N of M, current file, Pause/Stop). Control and progress go over **XPC**; durable state (queue,
    checkpoints, journal) is on disk so a crash of either side loses nothing. With the app closed, Activity Monitor
    and a one-line CLI (`videoscan-bg status|pause|stop`) are the window.
-5. **It backs off while Rick works.** Idle detection (no keyboard or mouse for N minutes, or the app in the
-   foreground on a Rick-attended job) drops the service to a trickle; it runs full-out on the night shift and on the
-   M4. Every job declares its RAM and whether it needs the one resident model; the service refuses to start a job
-   the Mac cannot hold.
+5. **It runs whenever there is work (2026-11-04, replacing "it backs off while Rick works").** No keyboard or
+   trickle backoff: the worker child runs at utility QoS, so interactive apps win the CPU and the performance cores
+   stay reachable. Only the Mac's own thermal and memory pauses, Pause in the menu bar, or a hold after a failure stop
+   it. A Speed control is deferred until Rick sees interference. Every job declares its RAM and whether it needs the
+   one resident model; the service refuses to start a job the Mac cannot hold.
 6. **Cost Rick pays once:** the helper is its own bundle, so macOS asks for Full Disk Access (and removable-volume
    access) for it once; signed with Rick's Apple Development identity (DECISIONS 2026-11-03, replacing "VideoScan Local" of 10-28) so the grant and the launch constraint survive rebuilds. One
    grant, one time, is the price of its own name and lifecycle; the single-binary alternative (§2 option B) shares
@@ -84,10 +85,10 @@ not open. It owns no analysis logic of its own.
 
 | It is responsible for | It is not responsible for |
 |---|---|
-| Staying alive across app quit and reboot (launchd), and exiting when idle | Any user interface; it has no windows and draws nothing |
-| Running jobs from the queue, one per lane, in order, with checkpoints; and, once the Analyze cyclers have moved (§4 step 4), running them continuously so the media is always being analyzed (Rick's statement above) | Owning the *rule* that decides what is stale (that is the cyclers' policy, in the engine library); the app and the nightly may enqueue specific jobs at any time |
+| Staying alive across app quit and reboot while registered (launchd KeepAlive; no idle exit since 2026-11-04) | Any user interface; it has no windows and draws nothing |
+| **Its own schedule** (2026-11-04): planning each scheduled kind at launch, every 10 minutes and when the catalog generation changes; running jobs one per lane with checkpoints; holding a kind whose job failed | Owning the *rule* that decides what is stale (that is the job's planner, in the engine library). The app enqueues nothing; the CLI may still `--enqueue` / `--run` by hand |
 | Hosting engines from the libraries (`VideoScanCore`, `VideoScanEngine`) and loading at most one resident model | Containing an engine's logic; an engine that needs the service must first live in a library with its own tests |
-| Backing off while Rick works; thermal and memory pressure | Scheduling policy beyond backoff (the nightly rota and the app decide when) |
+| Thermal and memory pressure (pause); utility QoS for the worker | Energy backoff while Rick works (removed 2026-11-04) |
 | Writing results to sidecar stores and the append-only journal, with START/OUTCOME in `background.log` | **Writing the catalog**, ever; the app's one committer applies the journal |
 | Reading media and the catalog read-only | Moving, renaming, deleting, trashing, re-encoding or promoting media (data-risk verbs stay in the app, with Rick present) |
 | Answering XPC `status/enqueue/pause/resume/stop` from a signed VideoScan client | Trusting any other client; and it never initiates contact with the app |
@@ -255,7 +256,7 @@ and the app must read `SMAppService.status` and say so in Settings instead of as
   │ MFO window ── BackgroundJobsClient ─────┼──control/───▶ │ JobSupervisor ── one job at a time per lane   │
   │ Settings ▸ Background (status, on/off)  │◀──progress──  │  ├ ModelLabJob (A0…)                          │
   │ CatalogCommitter ◀── JournalApplier ◀───┼── files ──────┼──┤ CaptionJob · FingerprintJob · …            │
-  └─────────────────────────────────────────┘               │  └ Backoff (idle, thermal, app-foreground)    │
+  └─────────────────────────────────────────┘               │  └ Schedule + holds; thermal/memory pause    │
             │ read/write                                    │ writes: sidecars/*.sqlite · journal/*.jsonl   │
             ▼                                               │ reads : catalog.sqlite (read-only door), media│
      catalog.sqlite  ◀────────────────── read-only ─────────┘ logs  : ~/Library/Logs/VideoScan/background.log│
@@ -278,16 +279,36 @@ Swift protocol); the journal is a write-ahead log the app replays into the catal
 
 ### 3.2 Lifecycle
 
-- **Registration.** On first launch after install, the app calls `SMAppService.agent(plistName: "com.rickbreen.VideoScan.Background.plist").register()`.
-  The plist (in `Contents/Library/LaunchAgents/`) declares `MachServices` (`com.rickbreen.VideoScan.Background`),
-  `KeepAlive: { SuccessfulExit: false }`, `ProcessType: Background`, `LowPriorityIO: true`, `Nice: 10`.
-- **On demand, not resident forever.** The agent is started by launchd on the first XPC message (the app opening,
-  the CLI, the nightly). It exits **cleanly** when the queue is empty and nothing has happened for 10 minutes; with
-  `SuccessfulExit: false` launchd leaves it down until the next message, and relaunches it at once after a crash
-  (`ThrottleInterval` 10 s). So "persists after quit" is true whenever there is work, and the Mac is not carrying an
-  idle 20 GB model at breakfast. Rick can pin it resident with one Settings toggle (`KeepAlive: true`).
-- **Reboot.** launchd agents load at login; a queue with work in it resumes from its last checkpoint without anyone
-  touching anything.
+- **Registration.** The Settings checkbox (Release build, catalog master only) calls
+  `SMAppService.agent(plistName:).register()` / `unregister()` and nothing else. The plist (in
+  `Contents/Library/LaunchAgents/`) declares `MachServices`, `RunAtLoad`, `KeepAlive {SuccessfulExit: false, Crashed:
+  true}`, `ProcessType: Interactive`, `ThrottleInterval 10`, `ExitTimeOut 30` (sources and reasons:
+  launchd.plist(5); `.scratch/helper-schedule-bp.md` at the time of the change). `Background` and the unspecified
+  `Standard` type both throttle CPU and I/O; the priority comes from QoS instead.
+- **Resident while registered (2026-11-04, replacing "on demand, exit when idle").** `register()` bootstraps the
+  agent at once and at every login. A crash or an error exit restarts it (throttled to one spawn per 10 s). A clean exit 0
+  (SIGTERM from `unregister()` or logout) leaves it down, so off means not running. There is no idle exit.
+- **A plist change needs a re-registration.** `SMAppService.h` says to re-register when the plist or the executable
+  changes, and to unregister first if the executable changed. The app does not do this automatically, so after an
+  update that changes the plist, Rick unticks and re-ticks the checkbox once.
+- **The schedule.** `JobSupervisor` with a `JobSchedule` (`JobSchedule.swift`): every 30 s it reads the catalog's
+  `generations.generation` through the read-only door. It plans at start, every 10 minutes and on a generation change.
+  For each scheduled kind with no active job and no hold, it asks the planner for the plan size (the job's own planner;
+  EraPlanner for era), reports that size in `ServiceStatus.planned`, and enqueues a job when the plan is not empty.
+  It runs only while it owns the state root (StateRootLock).
+- **Failures hold.** A scheduled kind whose job ends `.failed` (after `failFastUnits = 5` identical systemic
+  failures, or a START or enqueue refusal) is held in `background/holds.json`. The hold survives a restart and is released by:
+  - Resume on its menu line;
+  - a new build (the executable's size and mtime);
+  - a catalog generation change, honoured once per reason: the same failure after that is sticky.
+
+  The menu bar and Settings say why. This answers Codex #232 F4.
+- **Crash loops.** Before each unit, the checkpoint records that unit as in flight. A unit found in flight at 3
+  relaunches is quarantined: counted failed, skipped, and logged. launchd only throttles, so this is what stops a crash
+  loop on one file.
+- **Full Disk Access (note, 2026-11-04).** DTS (forum threads 694948, 661178) says TCC treats the containing app as
+  the responsible code for a helper embedded in it, so the grant is the app's. This is not verified on the Ultra; the
+  §0 point 6 wording stands until it is.
 - **One resident model.** The service owns the "one resident MLX model" rule that `CaptionRunner` enforces today;
   the app no longer loads a VLM at all once Scene Captions has moved. A job's `ResourceProfile` (peak RAM, needs
   resident model, s/unit) is checked against `ProcessInfo.physicalMemory` minus a reserve before START.
@@ -334,22 +355,16 @@ logs OUTCOME with rows before · rows after. Lines the catalog refuses (unknown 
 a name or date — rule 3, a rejected value — the veto trigger) are written to `journal/refused.jsonl` with the reason
 and shown as a count in Catalog Status. The service never learns whether a line was applied; it does not need to.
 
-### 3.5 Backing off
+### 3.5 The Mac's pause (was "Backing off"; 2026-11-04)
 
-`Backoff` is one actor with one published state: `.full`, `.trickle`, `.paused(reason)`.
-
-| Signal | Source | Effect |
-|---|---|---|
-| Rick is at the keyboard | `CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .null)` < 300 s | `.trickle`: one unit at a time, QoS `.background`, no model loads |
-| The app is frontmost and a Rick-attended job is running | XPC heartbeat from the app | `.trickle` for service jobs; the attended job keeps the lane |
-| Thermal pressure | `ProcessInfo.thermalState` ≥ `.serious` | `.paused(thermal)` until `.nominal` |
-| Memory pressure | `DispatchSource.makeMemoryPressureSource` `.warning`/`.critical` | finish the unit, unload the model, `.paused(memory)` |
-| Night window | `nightly_rota.json` hours, or the CLI's `--full` | `.full` regardless of idle |
-| Display asleep / Mac locked | `CGSessionCopyCurrentDictionary` `CGSSessionScreenIsLocked` | `.full` (Rick is away) |
-
-Each job is written as a loop over *units* (one file, one window) and checks `Backoff.state` and cancellation
-between units, exactly as MFO jobs check `Task.isCancelled` today. Pause is honoured within one unit's length
-(seconds for a window, a minute for a long hash); the row says "pausing…" meanwhile.
+`Backoff` is one actor with one published state: `.full` or `.paused(reason)`. Thermal at serious or above pauses
+until the Mac is back to nominal. Memory pressure at warning or critical pauses after the current unit. There is no keyboard,
+lock-screen, night-window or app-heartbeat row, and no trickle. `.trickle` and `JobProgressSnapshot.waiting` still
+decode so an older helper's payload reads correctly; this helper never produces them. Each job is a loop over units.
+The supervisor checks Pause, Stop and the Mac's pause between units and runs units back to back. The worker
+child is spawned with `Process.qualityOfService = .utility`, so interactive and user-initiated work outrank it. It is
+never `.background`, which Apple says is "more likely" to run on the efficiency cores. The model stays loaded in the worker for
+the whole job.
 
 ### 3.6 What may run in the service, and what never does
 
@@ -420,7 +435,7 @@ Open: Rick —
 
 ## 5. Machines
 
-- **Ultra:** the service runs big models beside the app; `.trickle` while Rick works; `.full` at night.
+- **Ultra:** the service runs big models beside the app whenever there is work, at utility QoS (2026-11-04).
 - **M4:** the service runs `.full` all day on read-only model jobs and backfills against its catalog `.backup` copy
   and media over TB5 (STATUS 10/30); it is the natural home of the 3B model and of long benchmark runs.
 - One service per Mac; they do not talk to each other. The nightly already knows both.
@@ -440,7 +455,10 @@ Open: Rick —
   job pauses with `paused(disk)`, no truncated line (write-then-rename).
 - **Sensors (lane):** (1) **no committer in the helper** — symbol scan of the built helper + a runtime check that
   its catalog handle is read-only; (2) **journal only** — a fake job that tries to open `catalog.sqlite` read-write
-  is refused; (3) **backoff honoured** — with simulated recent input the supervisor runs ≤ 1 unit per 5 s;
+  is refused; (3) **schedule** — the helper plans by itself at launch and on a generation change, holds a failed kind across a
+  restart, the app enqueues nothing (`BackgroundSettingsSensorTests.noAppCodeEnqueues`), the bundled plist carries the
+  KeepAlive keys, and the worker child reports utility QoS (`JobScheduleTests`, `PythonClipWorkerQoSTests`,
+  `BackgroundHelperBundleSensorTests`);
   (4) **one resident model** — two jobs declaring `needsResidentModel` never overlap; (5) **MFO lifecycle** —
   START/OUTCOME lines with counts in `background.log` for every job, including stopped and crashed ones
   (OUTCOME written by the supervisor on relaunch from the checkpoint).
@@ -454,7 +472,7 @@ Open: Rick —
 1. **One extra permission grant** for the helper bundle (Full Disk Access + removable volumes, once, sticky under
    "VideoScan Local") — acceptable? It is the price of its own name and lifecycle. Default: yes. Rick Agrees.
 2. **Name and icon:** "VideoScan Background" with the app icon badged (gear-in-arrows or clock, BACKLOG 10/28)?
-3. **Exit-when-idle (default) or always resident?** Default: exit after 10 idle minutes; a Settings toggle pins it.
+3. ~~Exit-when-idle or always resident?~~ — **answered** (DECISIONS 2026-11-04): resident while registered; the helper owns its schedule.
 4. ~~Step order~~ — **answered** (DECISIONS 2026-10-31): the 8B era/OCR job first (step 1, merged), captions second.
 
 ## 8. Sources

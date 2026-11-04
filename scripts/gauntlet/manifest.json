@@ -315,23 +315,17 @@
       "stage": "unit",
       "suites": [
         "BackoffPolicyTests",
-        "IdleExitPolicyTests",
         "PeerTrustPolicyTests",
         "PeerRequirementTests"
       ],
       "tests": [
         "adHoc",
         "adHocOrForeign",
-        "attendedTrickles",
         "hysteresis",
-        "idleIsFull",
-        "locked",
         "memory",
-        "night",
+        "normalIsFull",
         "precedence",
-        "recentInputTrickles",
         "refusals",
-        "rule",
         "sameCertificate",
         "thermal",
         "widensIdentifier"
@@ -382,9 +376,30 @@
         "resumeFromCheckpoint",
         "startAndOutcome",
         "status",
-        "trickleSpacing",
         "unitThrowingCancellationErrorIsAFailedUnit",
         "unknownKindQueueFileHasItsOutcomeAndKeepsItsFile"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/JobScheduleTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JobScheduleTests",
+        "JobScheduleReentrancyTests"
+      ],
+      "tests": [
+        "activeJobIsNotDoubled",
+        "crashLoopUnitIsQuarantined",
+        "generationChangePlans",
+        "holdReleasedByBuildAndGeneration",
+        "holdSurvivesRestartAndClearsOnResume",
+        "interleavedTicksEnqueueOnce",
+        "olderCheckpointDecodes",
+        "oneCrashRetries",
+        "planOneHundredThousandRows",
+        "plansAtLaunchWithNoMessage",
+        "tornHoldsFile"
       ]
     },
     {
@@ -393,9 +408,9 @@
       "stage": "unit",
       "suites": [
         "EraJobLogicTests",
+        "EraPlannerEraNoneTests",
         "EraJobRunTests",
-        "EraJobCLITests",
-        "EraPlannerEraNoneTests"
+        "EraJobCLITests"
       ],
       "tests": [
         "aCorruptCheckpointRestartsFromZeroSaysSoAndWritesNoDuplicate",
@@ -418,11 +433,11 @@
         "framesThatWouldNotRipAreNotAVerdictNothingIsWritten",
         "framesThatWouldNotRipAreRetriedNotCached",
         "killMidUnitThenRelaunchSkipsTheUnitAndWritesNoSecondSet",
-        "noModelLoadWhileRickIsAtTheKeyboardThenItRuns",
         "noUsableWindowGivesExactlyOneEraNoneWithItsEvidenceAndNoYear",
         "orderAndPathYearOverOneHundredThousandInsideABudget",
         "orderIsOldestFirstByTheBestBoundUnknownLast",
         "pathYearIsAFourDigitRunClosestToTheFile",
+        "runsWithoutAWait",
         "theCLIWordsParseAndRefuseInWords",
         "theFactoryRefusesAMissingRepoMissingWeightsAndAnUnknownKindInWords",
         "theJobRunsSignsEveryLineFromTheWorkerAndSaysItAtStartAndOutcome",
@@ -3024,7 +3039,8 @@
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ModelLab/PythonClipWorkerTests.swift",
       "stage": "unit",
       "suites": [
-        "PythonClipWorkerTests"
+        "PythonClipWorkerTests",
+        "PythonClipWorkerQoSTests"
       ],
       "tests": [
         "aClipPastItsCapIsKilledAndTheNextClipRespawnsAndReloads",
@@ -3034,7 +3050,9 @@
         "aRemoteHostIsRefusedByThePayloadGateBeforeAnySpawn",
         "aWorkerThatDiesMidClipIsDiedWithItsLastWordsAndTheNextClipRespawns",
         "anExceptionIsAWorkerErrorAndTheWorkerStaysUp",
-        "loadNamesWhatRanAndAClipComesBackAsTheWorkersRecord"
+        "childReportsUtility",
+        "loadNamesWhatRanAndAClipComesBackAsTheWorkersRecord",
+        "processIsUtility"
       ]
     },
     {
@@ -8282,27 +8300,18 @@
         "BackgroundServiceStoreTests"
       ],
       "tests": [
-        "activeJobBlocks",
-        "failedRecountCannotEnqueue",
         "failedUnregisterIsNotOff",
-        "foregroundRunFromCheckpoints",
-        "handRunNeedsTheHeldLock",
         "helperLineTruth",
+        "holdLoggedOnChange",
         "jobLineOrder",
         "notAnswering",
         "oneKey",
-        "overlappingRecountsEnqueueOnce",
-        "refusalShownAndLogged",
         "requiresApprovalAsksNothing",
         "sameValueIsNoOp",
-        "shouldEnqueueTable",
         "silentHelperTimesOut",
-        "staleCountNeverEnqueues",
         "toggleOff",
         "toggleOn",
-        "viewerNeverEnqueues",
-        "viewerRefuses",
-        "visiblePollClearsAFinishedHandRun"
+        "viewerRefuses"
       ]
     },
     {
@@ -8314,6 +8323,7 @@
       ],
       "tests": [
         "archivistTitle",
+        "noAppCodeEnqueues",
         "oneBackgroundSection",
         "theOneSetter",
         "wiredOnce"
@@ -33296,6 +33306,7 @@
       ],
       "tests": [
         "helperHasItsOwnIcon",
+        "plistKeepAliveKeys",
         "schemeBuildsTheHelperAlone"
       ]
     },
@@ -33327,8 +33338,6 @@
         "BackgroundServiceLoggingTests"
       ],
       "tests": [
-        "countRecoveryNamesThePath",
-        "countRefusalNamesThePath",
         "gateIsLoggedOnce",
         "launchdStatesAreLogged",
         "notAnsweringIsLoggedOnAppearAndClear",
@@ -33344,11 +33353,11 @@
         "BackgroundMenuPresentationReviewTests"
       ],
       "tests": [
-        "deferredJobIsNotShownRunning",
+        "heldKindAfterRestart",
+        "heldKindHasResume",
         "idle",
         "paused",
         "queuedIsNotWorking",
-        "statusReadDoesNotResetIdle",
         "unknownTotal",
         "working"
       ]
@@ -33361,13 +33370,8 @@
         "BackgroundWaitingTruthTests"
       ],
       "tests": [
-        "clientMessageIsActivity",
-        "deferredUnitIsWaitingNotRunning",
         "olderPayloadDecodes",
-        "pausingAWaitingJobIsNotWorking",
-        "sensorWhoTouches",
-        "statusReadsAreNotActivity",
-        "waitClearsWhenAUnitRecords"
+        "olderWaitingPayloadIsNotRunning"
       ]
     },
     {
@@ -33378,8 +33382,6 @@
         "BackgroundCountCatalogURLTests"
       ],
       "tests": [
-        "countFollowsTheOpenedDatabase",
-        "countOpensSQLite",
         "databaseInfoOnAViewerReadsTheSnapshot",
         "rule",
         "viewerCountsNothing",
@@ -36164,10 +36166,11 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 683,
+      "package_expected_floor": 690,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
+        "VideoScanCoreTests.BackgroundMenuPresentationReviewTests",
         "VideoScanCoreTests.BackgroundMenuPresentationTests",
         "VideoScanCoreTests.BackgroundPayloadCodecTests",
         "VideoScanCoreTests.BackoffPolicyTests",
@@ -36193,7 +36196,6 @@
         "VideoScanCoreTests.EraPlannerEraNoneTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
-        "VideoScanCoreTests.IdleExitPolicyTests",
         "VideoScanCoreTests.ImportComparatorScaleTests",
         "VideoScanCoreTests.ImportComparatorTests",
         "VideoScanCoreTests.ImportGateFixtureTests",
@@ -36204,6 +36206,8 @@
         "VideoScanCoreTests.ImportGateWordsTests",
         "VideoScanCoreTests.JSONDuplicateKeyScannerScaleTests",
         "VideoScanCoreTests.JSONDuplicateKeyScannerTests",
+        "VideoScanCoreTests.JobScheduleReentrancyTests",
+        "VideoScanCoreTests.JobScheduleTests",
         "VideoScanCoreTests.JobSupervisorIsolationTests",
         "VideoScanCoreTests.JobSupervisorScaleTests",
         "VideoScanCoreTests.JobSupervisorTests",
@@ -36229,11 +36233,11 @@
         "VideoScanCoreTests.PoisonedCatalogFixtureAppDecodeTests",
         "VideoScanCoreTests.PreflightCancellationQAR2Tests",
         "VideoScanCoreTests.PreflightGateTests",
+        "VideoScanCoreTests.PythonClipWorkerQoSTests",
         "VideoScanCoreTests.PythonClipWorkerTests",
         "VideoScanCoreTests.RowPreflightTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
         "VideoScanCoreTests.StateRootLockTests",
-        "VideoScanCoreTests.BackgroundMenuPresentationReviewTests",
         "VideoScanCoreTests.SubprocessEnvironmentTests",
         "VideoScanCoreTests.SubprocessPathSensorTests"
       ],

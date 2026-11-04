@@ -14,12 +14,10 @@
 //           and a viewer counts NO local era work (Codex 11/03 F1: the count
 //           followed a stale top-level catalog.sqlite).
 //
-// Codex 11/03 F7: the old TRUTH test never created a catalog.sqlite, and its
-// "fixed" branch passed on ANY failure but "not a database" — including "no
-// file". These tests build a REAL schema-current catalog (the repository's
-// own open, then rows), with a known eligible count, and require `.success`
-// with exactly that count through `productionCountWork` — the closure the
-// launch installs.
+// 2026-11-04: the app no longer counts (the helper owns its schedule and
+// reports its own plan size), so the count tests (countOpensSQLite,
+// countFollowsTheOpenedDatabase) went with it; the one rule still serves
+// Catalog Database Info, tested below.
 //
 // Dimensions: LOGIC (the rule, three sources), TRUTH (a real database, a
 // known count, through the production closure), ISOLATION (two databases
@@ -93,61 +91,21 @@ struct BackgroundCountCatalogURLTests {
                 == CatalogViewerSnapshot.databaseURL(in: URL(fileURLWithPath: "/tmp/VS")), "a viewer shows the snapshot, whatever was opened")
     }
 
-    @Test("RED 11/03 F7 TRUTH: master, cutover not open — a real catalog.sqlite beside catalog.json counts exactly its 3 video files")
-    func countOpensSQLite() async throws {
-        let dir = try BackgroundCountFixture.folder()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let json = dir.appendingPathComponent("catalog.json")
-        try Data(#"{"version": 9, "records": []}"#.utf8).write(to: json)
-        let db = CatalogAuthority.databaseURL(role: .master, opened: nil, catalogFile: json)
-        try await BackgroundCountFixture.catalog(at: db, video: 3, mediaIn: dir.appendingPathComponent("media"))
-
-        // The JSON file is never a catalog (the 11/03 bug, kept as the contrast).
-        guard case .failure(let r) = BackgroundServiceStore.count(catalogURL: json, stateRoot: dir.appendingPathComponent("background"),
-                                                                  knownJobs: [], now: Date()) else {
-            Issue.record("JSON must not count as a catalog"); return
-        }
-        #expect(r.words.contains("not a database"), "\(r.words)")
-
-        let count = BackgroundServiceStore.productionCountWork(catalogURL: { db })
-        guard case .success(let c) = await count([]) else { Issue.record("the real catalog must count"); return }
-        #expect(c.filesLeft == 3, "3 live readable videos; the audio-only and the removed row are not era work")
-        #expect(c.catalogPath == db.path)
-    }
-
-    @Test("TRUTH: master with the cutover open elsewhere — the opened database is counted, not the one beside catalog.json")
-    func countFollowsTheOpenedDatabase() async throws {
-        let dir = try BackgroundCountFixture.folder()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let json = dir.appendingPathComponent("catalog.json")
-        try await BackgroundCountFixture.catalog(at: dir.appendingPathComponent("catalog.sqlite"), video: 2, mediaIn: dir.appendingPathComponent("m1"))
-        let opened = dir.appendingPathComponent("restored/catalog.sqlite")
-        try await BackgroundCountFixture.catalog(at: opened, video: 5, mediaIn: dir.appendingPathComponent("m2"), seed: 100)
-        let count = BackgroundServiceStore.productionCountWork(catalogURL: {
-            CatalogAuthority.databaseURL(role: .master, opened: opened, catalogFile: json)
-        })
-        guard case .success(let c) = await count([]) else { Issue.record("the opened catalog must count"); return }
-        #expect(c.filesLeft == 5)
-    }
-
-    @Test("RED 11/03 F1 ISOLATION: a viewer with a stale top-level catalog.sqlite counts nothing and says the master analyzes")
+    @Test("RED 11/03 F1 ISOLATION: a viewer says the master analyzes, even when a leftover helper lists a job")
     func viewerCountsNothing() async throws {
         let agent = BackgroundServiceStoreTests.FakeAgent(.enabled)
         let (store, r) = BackgroundServiceStoreTests.make(enabled: true, agent: agent, readOnly: true)
-        await store.refresh(recount: true)
-        #expect(r.counts == 0, "no count is attempted on a viewer")
-        #expect(store.work == nil && store.workProblem == nil)
-        #expect(r.enqueued.isEmpty)
+        await store.refresh()
+        _ = r
         let lines = BackgroundServicePresentation.lines(enabled: store.enabled, launchd: store.launchdStatus, service: store.service,
-                                                        serviceProblem: store.serviceProblem, work: store.work,
-                                                        workProblem: store.workProblem, lastNote: store.lastNote, viewer: true)
+                                                        serviceProblem: store.serviceProblem, lastNote: store.lastNote, viewer: true)
         #expect(lines.job == BackgroundServicePresentation.viewerJob)
         #expect(lines.job.contains("the master runs content analysis"))
         // Codex closing #3: a helper left registered from the master days still
         // lists an era job — the viewer words still win.
         let leftover = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled,
                                                            service: BackgroundServiceStoreTests.serviceStatus(jobs: [BackgroundServiceStoreTests.eraJob(.running)]),
-                                                           serviceProblem: nil, work: nil, workProblem: nil, lastNote: nil, viewer: true)
+                                                           serviceProblem: nil, lastNote: nil, viewer: true)
         #expect(leftover.job == BackgroundServicePresentation.viewerJob, "\(leftover.job)")
     }
 
@@ -178,7 +136,6 @@ struct BackgroundCountCatalogURLTests {
         let text = try String(contentsOf: src.appendingPathComponent("App/VideoScanApp.swift"), encoding: .utf8)
         let start = try #require(text.range(of: "private func wireBackgroundService()")).upperBound
         let body = String(text[start...].prefix(2_000))
-        #expect(body.contains("CatalogAuthority.databaseURL(role: role()"), "the store counts against the role's catalog")
         #expect(body.contains("backgroundService.isViewer = { role() == .viewer }"), "viewer = the sync role, one source")
         #expect(!body.contains("isReadOnly"), "read-only for other reasons is not a viewer")
         #expect(!body.contains("catalogModel.map { URL(fileURLWithPath: $0.catalogStore.fileLocation) }"), "catalog.json is not a database")

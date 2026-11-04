@@ -55,6 +55,23 @@ struct BackgroundSettingsSensorTests {
         #expect(app.contains("backgroundService: backgroundService,"))
     }
 
+    @Test("RED→GREEN SENSOR (Rick 2026-11-04, the helper owns its schedule): no app code path enqueues a background job or counts its work")
+    func noAppCodeEnqueues() throws {
+        let fm = FileManager.default
+        let files = try #require(fm.enumerator(at: Self.appRoot, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        #expect(files.count > 100, "scanned the app target")
+        var offenders: [String] = []
+        for url in files {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            for needle in ["proxy.enqueue(", ".enqueue(request", "enqueueRequest", "EraJob.request(", "shouldEnqueue", "EraPlanner.plan("]
+            where text.contains(needle) {
+                offenders.append("\(url.lastPathComponent): \(needle)")
+            }
+        }
+        #expect(offenders.isEmpty, "the app schedules nothing; the helper plans its own work: \(offenders)")
+    }
+
     @Test("the Archivist pane is titled Model Configuration (Rick 11/02)")
     func archivistTitle() throws {
         let s = try Self.source("Hallie/LLM/ArchivistEndpointSettings.swift")

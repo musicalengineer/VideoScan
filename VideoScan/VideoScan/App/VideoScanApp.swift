@@ -580,40 +580,29 @@ struct VideoScanApp: App {
     @State private var backgroundActivity = BackgroundServiceActivity()
     /// Settings ▸ Background's Content Analysis rows (2026-11-02): the one
     /// setter for VideoScan Background — register/unregister, launchd's
-    /// status, the helper's job line, and the era job enqueued when work is
-    /// left. Built once; attached to the model at launch (below).
+    /// status, the helper's job line. The helper schedules its own work
+    /// (2026-11-04). Built once; attached to the model at launch (below).
     /// Settings ▸ Catalog Master (2026-11-02): the one defaults key the
     /// launch read a moment ago, and what this Mac is because of it.
     @StateObject private var catalogMaster = CatalogMasterStore.production(log: { appLog.write("[catalog-master] " + $0) })
     @StateObject private var backgroundService = BackgroundServiceStore.production(
-        catalogURL: { nil }, isViewer: { false }, log: { appLog.write($0) })
+        isViewer: { false }, log: { appLog.write($0) })
     // The two run markers (fullhash-backfill.json, catalog-audit.json) are
     // MODEL-OWNED since 2026-10-16 (`catalogModel.fullHashResumeMarker`,
     // `catalogModel.catalogAuditRunMarker`) so the Catalog menu, the
     // Analyze panel and the Catalog Status band all hand the SAME marker
     // to the job they start. Read at launch below.
 
-    /// Settings ▸ Background's store counts against THIS catalog, logs
-    /// through the model and the app log, and refuses the toggle on a
-    /// viewer; one recounting refresh now, then every 10 minutes while on.
+    /// Settings ▸ Background's store logs through the model and the app log
+    /// and refuses the toggle on a viewer; one refresh now, then every 10
+    /// minutes. The role is the sync engine's, decided at launch (Codex 11/03
+    /// F1: a viewer is a ROLE, not "read-only").
     private func wireBackgroundService() {
         backgroundService.log = { [weak catalogModel] line in
             catalogModel?.log(line)
             appLog.write("[background-service] " + line)
         }
-        // The catalog this role shows — never catalogStore.fileLocation, which
-        // is the frozen catalog.json ("file is not a database", 2026-11-03).
-        // The role is the sync engine's, decided at launch (Codex 11/03 F1: a
-        // viewer is a ROLE, not "read-only" — a master whose launch refused is
-        // read-only and is not a viewer). A viewer counts nothing: the store
-        // asks `isViewer` first and the job line says the master analyzes.
         let role: () -> CatalogSyncMode = { [weak catalogSync] in catalogSync?.mode ?? .viewer }
-        let catalogURL: () -> URL? = { [weak catalogModel] in
-            catalogModel.map { CatalogAuthority.databaseURL(role: role(), opened: $0.catalogCutover.databaseURL,
-                                                            catalogFile: URL(fileURLWithPath: $0.catalogStore.fileLocation)) }
-        }
-        backgroundService.countWork = BackgroundServiceStore.productionCountWork(catalogURL: catalogURL)
-        backgroundService.findHandRun = BackgroundServiceStore.productionFindHandRun(catalogURL: catalogURL)
         backgroundService.isViewer = { role() == .viewer }
         if !TestEnvironment.isTestHost { backgroundService.start() }
     }

@@ -23,8 +23,7 @@
 //              of lines; a duplicate line, were one written, applies once; a
 //              corrupt checkpoint restarts from zero, says so, and writes no
 //              duplicate; a newer catalog schema is refused at plan.
-//   SENSOR     Backoff trickle: no model load while Rick is at the keyboard
-//              (the fake worker's load log stays empty), then it runs.
+//   LOGIC      no keyboard backoff (2026-11-04): the unit runs at once.
 //   SCALE      order + pathYear over 100k candidates inside a budget.
 // Synthetic digests and paths only.
 
@@ -540,28 +539,21 @@ struct EraJobRunTests {
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME era") && $0.contains("1 run · 1 skipped") })
     }
 
-    @Test func noModelLoadWhileRickIsAtTheKeyboardThenItRuns() async throws {
+    @Test("no keyboard backoff (2026-11-04): the model loads and the unit runs at once, with no wait line")
+    func runsWithoutAWait() async throws {
         let fixture = try await EraFixture.catalog([EraFixture.File(n: 1, path: "/synthetic/1970/a.mov")])
         defer { fixture.remove() }
         let root = try EraFixture.stateRoot()
         let loads = ClipWorkerFixture.temporaryFile("era-loads")
         defer { try? FileManager.default.removeItem(at: loads) }
-        let source = FakeActivitySource(ActivitySample(secondsSinceLastInput: 5))     // Rick is typing
-        let backoff = Backoff(source: source, trickleInterval: .milliseconds(10))
-        var configuration = BackgroundFixtures.fastConfiguration()
-        configuration.deferRetryInterval = .milliseconds(50)
         let log = LogLines()
         let supervisor = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
-                                       factory: EraTestFactory { EraFixture.setup(fixture, root: root, jobID: $0, log: loads, backoff: backoff) },
-                                       backoff: backoff, log: log, configuration: configuration)
+                                       factory: EraTestFactory { EraFixture.setup(fixture, root: root, jobID: $0, log: loads) },
+                                       backoff: BackgroundFixtures.fullBackoff(), log: log, configuration: BackgroundFixtures.fastConfiguration())
         _ = await supervisor.enqueue(JobRequest(kind: .era, requestedBy: "test"))
-        try await Task.sleep(for: .milliseconds(800))
-        #expect(ClipWorkerFixture.lines(loads).isEmpty, "no model load while trickling")
-        #expect(log.lines.contains { $0.contains(EraJob.deferWords) })
-        #expect(log.lines.filter { $0.contains(EraJob.deferWords) }.count == 1, "said once, not every retry")
-        source.update { $0.secondsSinceLastInput = 3_600 }                          // Rick walked away
         await supervisor.drain()
         #expect(ClipWorkerFixture.lines(loads).first == "load")
+        #expect(!log.lines.contains { $0.contains(" waits at ") }, "no unit defers")
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME era") && $0.contains("1 run") })
     }
 

@@ -22,8 +22,8 @@ struct ContentAnalysisSettingsRows: View {
     @ObservedObject var store: BackgroundServiceStore
 
     static let title = "Keep analyzing content in the background"
-    static let footnote = "VideoScan Background keeps running the content analyzers — Machine era first — after VideoScan quits, "
-        + "and backs off while you work. The first time you turn it on, macOS asks once to allow it under Login Items and "
+    static let footnote = "VideoScan Background keeps running the content analyzers — Machine era first — whenever there is work, "
+        + "including after VideoScan quits; it runs below your apps' priority, and its menu bar item pauses it. The first time you turn it on, macOS asks once to allow it under Login Items and "
         + "once for Full Disk Access for the helper so it can read your files. It never writes the catalog; only VideoScan "
         + "applies what it finds."
 
@@ -48,8 +48,8 @@ struct ContentAnalysisSettingsRows: View {
 
             let lines = BackgroundServicePresentation.lines(
                 enabled: store.enabled, launchd: store.launchdStatus, service: store.service,
-                serviceProblem: store.serviceProblem, work: store.work, workProblem: store.workProblem,
-                lastNote: store.lastNote, viewer: store.isViewer(), refusal: store.registrationRefusal)
+                serviceProblem: store.serviceProblem, lastNote: store.lastNote, viewer: store.isViewer(),
+                refusal: store.registrationRefusal)
 
             HStack(spacing: 6) {
                 Image(systemName: lines.helperIsUp ? "circle.fill" : "circle")

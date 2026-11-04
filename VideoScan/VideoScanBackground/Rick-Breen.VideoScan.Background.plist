@@ -4,7 +4,14 @@
 <dict>
 	<!-- launchd agent for VideoScan Background (docs/design/background_service.md §3.2).
 	     Copied by the app target into VideoScan.app/Contents/Library/LaunchAgents/ and registered
-	     with SMAppService.agent(plistName:). BundleProgram is relative to the app bundle. -->
+	     with SMAppService.agent(plistName:). BundleProgram is relative to the app bundle.
+	     The helper owns its schedule (Rick 2026-11-04): launchd keeps it up while registered.
+	     KeepAlive {SuccessfulExit false, Crashed true}: a crash or an error exit restarts it
+	     (ThrottleInterval 10 s bounds a loop); a clean exit 0 (SIGTERM from unregister / logout)
+	     leaves it down. KeepAlive implies RunAtLoad; it is set to say so. ProcessType Interactive:
+	     unspecified/Standard is "light resource limits ... throttling its CPU usage and I/O" and
+	     Background is the Darwin-bg class (launchd.plist(5)); the priority comes from QoS instead
+	     (the worker child at utility). No LowPriorityIO / Nice: tuning point if Rick sees interference. -->
 	<key>Label</key>
 	<string>Rick-Breen.VideoScan.Background</string>
 	<key>BundleProgram</key>
@@ -14,19 +21,21 @@
 		<key>Rick-Breen.VideoScan.Background</key>
 		<true/>
 	</dict>
+	<key>RunAtLoad</key>
+	<true/>
 	<key>KeepAlive</key>
 	<dict>
 		<key>SuccessfulExit</key>
 		<false/>
+		<key>Crashed</key>
+		<true/>
 	</dict>
 	<key>ProcessType</key>
-	<string>Background</string>
-	<key>LowPriorityIO</key>
-	<true/>
-	<key>Nice</key>
-	<integer>10</integer>
+	<string>Interactive</string>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
 	<key>AssociatedBundleIdentifiers</key>
 	<array>
 		<string>Rick-Breen.VideoScan</string>
