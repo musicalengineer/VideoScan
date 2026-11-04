@@ -30,7 +30,7 @@ public protocol BackgroundJob: Sendable {
     /// Words appended to the OUTCOME line (assertions written, s/unit, RSS…).
     func outcomeDetail() async -> String
     /// The job ends (finished or stopped): release what it holds (a worker
-    /// process, a plan file). Not called when the process dies.
+    /// process). Not called when the process dies.
     func end() async
     /// Can this unit's failure speak for the whole job — the environment, the
     /// worker — rather than for one unit's file? The supervisor stops a job
@@ -43,6 +43,9 @@ public protocol BackgroundJob: Sendable {
     /// before the checkpoint recorded it)? Asked only before quarantining a
     /// unit the helper died in. Default false.
     func unitIsAlreadyRecorded(_ index: Int) async -> Bool
+    /// After the terminal door removed the checkpoint: drop what only a resume
+    /// needs (EraJob: its frozen plan file). Default nothing.
+    func forget() async
 }
 
 extension BackgroundJob {
@@ -51,6 +54,7 @@ extension BackgroundJob {
     public func end() async {}
     public func failureIsSystemic(_ error: any Error) -> Bool { true }
     public func unitIsAlreadyRecorded(_ index: Int) async -> Bool { false }
+    public func forget() async {}
 }
 
 public struct NoOpJob: BackgroundJob {

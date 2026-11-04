@@ -390,7 +390,8 @@
         "JobScheduleCodex235Tests",
         "JobScheduleCodex236Tests",
         "JobScheduleCodex237Tests",
-        "JobScheduleCodex238Tests"
+        "JobScheduleCodex238Tests",
+        "JobScheduleCodex239Tests"
       ],
       "tests": [
         "activeJobIsNotDoubled",
@@ -412,7 +413,9 @@
         "planOneHundredThousandRows",
         "plansAtLaunchWithNoMessage",
         "quarantineReconcilesWithTheJob",
+        "refusedRequestWithAStreakRunsFreshOnResume",
         "relaunchAdoptsOnePerKind",
+        "releasedAttemptFailingAgainHolds",
         "restoredFailFastAtTheEndIsAFailure",
         "restoredFailFastMidPlanStopsAtOnce",
         "resumeForgetsTheHeldStreak",
@@ -36191,7 +36194,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 710,
+      "package_expected_floor": 712,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36235,6 +36238,7 @@
         "VideoScanCoreTests.JobScheduleCodex236Tests",
         "VideoScanCoreTests.JobScheduleCodex237Tests",
         "VideoScanCoreTests.JobScheduleCodex238Tests",
+        "VideoScanCoreTests.JobScheduleCodex239Tests",
         "VideoScanCoreTests.JobScheduleReentrancyTests",
         "VideoScanCoreTests.JobScheduleTests",
         "VideoScanCoreTests.JobSupervisorIsolationTests",

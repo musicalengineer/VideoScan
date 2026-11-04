@@ -468,43 +468,29 @@ public actor JobSupervisor {
 
     private var activeHolds: [ScheduleHold] { holds.filter(\.isActive) }
 
-    /// A refused request of `kind` whose queue file was kept (refuse, never
-    /// erase) runs again on release, instead of a fresh one queued beside it
-    /// — two requests of one kind would both be adopted at the next relaunch
-    /// (Codex #236 F3). The newest such request only.
-    /// A release means "try again": the persisted failure streak of the kind's
-    /// queued (adopted) runs goes, or the restored-streak guard would fail
-    /// them again before any unit runs (Codex #238 F1). The guard still
-    /// covers a crash before a hold was published (no hold, nothing released).
-    private func forgetStreaks(_ kind: JobKind) {
-        for (id, run) in runs where run.request.kind == kind && run.state == .queued {
-            guard var cp = run.checkpoint, cp.streakWords != nil else { continue }
-            if cp.completedUnits >= cp.totalUnits {
-                // Nothing left in it to try: drop the spent work item (its OUTCOME
-                // was written at adoption) and let the release's plan queue fresh work.
-                queue.remove(id)
-                checkpoints.remove(id)
-                runs[id] = nil
-                order.removeAll { $0 == id }
-                log.write("schedule: \(kind) \(id) — every unit was tried before the hold; dropped, the release plans fresh work")
-                continue
+    /// A release means "try again, fresh" (Codex #236 F3, #238 F1, #239):
+    /// every retained work item of the kind — a queued (adopted) request with
+    /// its checkpoint, or a refused request whose queue file was kept — is
+    /// dropped (queue file and checkpoint; its OUTCOME is already in the log),
+    /// and the release's plan queues ONE new job: a fresh checkpoint, fresh
+    /// counts and a fresh frozen plan. Re-using an old work item carried its
+    /// streak, its counts or its unit indices into a different plan.
+    private func dropRetainedWork(_ kind: JobKind) {
+        for (id, run) in runs where run.request.kind == kind {
+            let retained: Bool
+            switch run.state {
+            case .queued: retained = true
+            case .failed: retained = queue.contains(id)
+            default: retained = false
             }
-            FailureStreak().save(into: &cp)
-            runs[id]?.checkpoint = cp
-            try? checkpoints.save(cp)
-            log.write("schedule: \(kind) \(id) — its failure streak is forgotten with the hold; it tries again from unit \(cp.completedUnits)")
+            guard retained else { continue }
+            queue.remove(id)
+            checkpoints.remove(id)
+            runs[id] = nil
+            order.removeAll { $0 == id }
+            finishedOrder.removeAll { $0 == id }
+            log.write("schedule: \(kind) \(id) — its old work item is dropped with the hold (\(run.checkpoint.map { "at \($0.completedUnits) of \($0.totalUnits)" } ?? "never started")); the release plans fresh work")
         }
-    }
-
-    private func requeueRetained(_ kind: JobKind) {
-        guard let id = order.last(where: { id in
-            guard let r = runs[id], r.request.kind == kind, case .failed = r.state else { return false }
-            return queue.contains(id)
-        }) else { return }
-        runs[id]?.state = .queued
-        runs[id]?.finishedAt = nil
-        finishedOrder.removeAll { $0 == id }
-        log.write("schedule: \(kind) \(id) re-queued from its kept queue file")
     }
 
     /// Held, or a job of the kind is active: the schedule leaves it alone.
@@ -593,7 +579,7 @@ public actor JobSupervisor {
             return released
         }
         // A released kind's kept refused request runs again, not a new one beside it (Codex #237 F3).
-        for kind in released { forgetStreaks(kind); requeueRetained(kind) }
+        for kind in released { dropRetainedWork(kind) }
         if holds != before { saveHolds(); lastPlanAt = nil; kickLanes() }
     }
 
@@ -605,8 +591,7 @@ public actor JobSupervisor {
         holds.removeAll { $0.kind == kind }
         saveHolds()
         log.write("schedule: hold on \(kind) released — \(words)")
-        forgetStreaks(kind)
-        requeueRetained(kind)
+        dropRetainedWork(kind)
         lastPlanAt = nil
         kickLanes()        // an adopted request of the kind may now run
         Task { await self.scheduleTick() }
@@ -744,6 +729,9 @@ public actor JobSupervisor {
         await job.end()
         let detail = await job.outcomeDetail()
         finish(id, as: state, checkpoint: cp, elapsed: clock.now - began, detail: detail)
+        // Only now, with the checkpoint gone, may the job forget its frozen plan:
+        // a checkpoint without its plan would resume unit N of a different list (Codex #239 F1).
+        await job.forget()
     }
 
     /// The factory's job for `id`, or the refusal written as START…refused.

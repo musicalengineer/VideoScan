@@ -303,6 +303,15 @@ Swift protocol); the journal is a write-ahead log the app replays into the catal
   - a catalog generation change, honoured once per reason: the same failure after that is sticky.
 
   The menu bar and Settings say why. This answers Codex #232 F4.
+
+  Codex #235–#239 hardening:
+  - A release drops the kind's retained work items (a queued checkpoint, a kept refused request) and plans one fresh job.
+  - A factory refusal from any caller holds.
+  - The failure streak lives in the checkpoint, so the verdict survives a relaunch.
+  - Relaunch adopts one request per scheduled kind.
+  - A torn `holds.json` fails closed. It is copied aside, then the holds are rewritten.
+  - An unknown generation is never a change.
+  - A job's frozen plan is removed only after its checkpoint.
 - **Crash loops.** Before each unit, the checkpoint records that unit as in flight. A unit found in flight at 3
   relaunches is quarantined: counted failed, skipped, and logged. launchd only throttles, so this is what stops a crash
   loop on one file.

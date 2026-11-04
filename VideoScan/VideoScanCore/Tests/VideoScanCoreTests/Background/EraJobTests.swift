@@ -314,7 +314,11 @@ struct EraJobRunTests {
         #expect(try EraJob(EraFixture.setup(fixture, root: root, jobID: id, limit: 1)).plan.units.count == 2, "a resume never re-plans")
         #expect(try EraJob(EraFixture.setup(fixture, root: root, limit: 1)).plan.units.count == 1, "a new job honours limit")
         await job.end()
-        #expect(!FileManager.default.fileExists(atPath: EraJob.planURL(root, id).path), "end removes the plan")
+        #expect(FileManager.default.fileExists(atPath: EraJob.planURL(root, id).path),
+                "end keeps the plan: a crash before the checkpoint goes must resume the SAME list (Codex #239 F1)")
+        await job.forget()
+        #expect(!FileManager.default.fileExists(atPath: EraJob.planURL(root, id).path), "forget, after the checkpoint is gone, removes it")
+        await #expect(throws: Refusal.self) { _ = try await job.runUnit(job.plan.units.count) }
     }
 
     @Test func aNewerCatalogSchemaIsRefusedAtPlan() async throws {

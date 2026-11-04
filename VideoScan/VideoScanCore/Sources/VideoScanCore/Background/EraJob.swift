@@ -171,6 +171,10 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     }
 
     public func runUnit(_ index: Int) async throws -> UnitOutcome {
+        // A checkpoint that outlived its frozen plan must not trap the helper.
+        guard plan.units.indices.contains(index) else {
+            throw Refusal("unit \(index) is beyond this job's frozen plan (\(plan.units.count) files) — its plan file was lost")
+        }
         let unit = plan.units[index]
         if let words = await counters.failFast { throw Refusal(words) }
         let info: PythonClipWorker.LoadInfo
@@ -238,6 +242,10 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
 
     public func end() async {
         await worker.close()
+    }
+
+    /// The frozen plan goes only after the checkpoint did (JobSupervisor.end).
+    public func forget() async {
         try? FileManager.default.removeItem(at: Self.planURL(setup.stateRoot, setup.jobID))
     }
 

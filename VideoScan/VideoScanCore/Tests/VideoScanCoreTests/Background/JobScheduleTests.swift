@@ -612,7 +612,7 @@ struct JobScheduleCodex236Tests {
         await s.abandonForTest()
     }
 
-    @Test("F3b: Resume after a START refusal re-queues the kept request — no second request beside it")
+    @Test("F3b (amended by #239): Resume after a START refusal drops the kept request and runs ONE fresh job — never two")
     func resumeRequeuesTheKeptRequest() async throws {
         let root = try BackgroundFixtures.scratch("c236-f3b")
         let probe = ScheduleProbe()
@@ -634,10 +634,10 @@ struct JobScheduleCodex236Tests {
         allow.on = true
         probe.size = 3
         #expect(await s.resume(a.id))
-        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "the kept request ran")
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "a fresh job ran")
         let jobs = await T.jobs(s)
-        #expect(jobs.filter { $0.state.isActive }.map(\.id) == [a.id], "\(jobs.map { ($0.id, $0.state) })")
-        #expect(queue.list().requests.map(\.id) == [a.id], "no second request was queued beside it")
+        #expect(jobs.filter { $0.state.isActive }.count == 1, "\(jobs.map { ($0.id, $0.state) })")
+        #expect(queue.list().requests.count == 1 && !queue.contains(a.id), "the old request is dropped; one fresh request")
         gate.open()
         await s.abandonForTest()
     }
@@ -712,7 +712,7 @@ struct JobScheduleCodex237Tests {
         await s.abandonForTest()
     }
 
-    @Test("F3: a catalog release re-queues the kept refused request — no second request beside it")
+    @Test("F3 (amended by #239): a catalog release drops the kept refused request and plans ONE fresh job")
     func catalogReleaseRequeuesTheKeptRequest() async throws {
         let root = try BackgroundFixtures.scratch("c237-f3")
         let probe = ScheduleProbe()
@@ -733,8 +733,8 @@ struct JobScheduleCodex237Tests {
         allow.on = true
         probe.size = 3
         probe.generation = 2
-        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "the kept request ran after the catalog release")
-        #expect(queue.list().requests.map(\.id) == [a.id], "no second request beside the kept one")
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "a fresh job ran after the catalog release")
+        #expect(queue.list().requests.count == 1 && !queue.contains(a.id), "one request of the kind, not two")
         gate.open()
         await s.abandonForTest()
     }
@@ -792,7 +792,7 @@ struct JobScheduleCodex238Tests {
         await s.abandonForTest()
     }
 
-    @Test("F1 mid-plan: Resume forgets the held streak of a half-done adopted job; its remaining units run")
+    @Test("F1 mid-plan (amended by #239): Resume drops the half-done adopted job and a fresh job runs its own plan")
     func resumeMidPlanRunsTheRest() async throws {
         let root = try BackgroundFixtures.scratch("c238-f1b")
         let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
@@ -814,7 +814,7 @@ struct JobScheduleCodex238Tests {
                               log: InMemoryBackgroundLog(), configuration: config, schedule: T.schedule(ScheduleProbe(), root: root))
         await s.start()
         #expect(await s.resume(request.id))
-        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits == [3, 4, 5] }, "\(recorder.completedUnits)")
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits == [0, 1, 2] }, "a fresh job runs its own plan: \(recorder.completedUnits)")
         await s.abandonForTest()
     }
 
@@ -838,6 +838,70 @@ struct JobScheduleCodex238Tests {
         await s.start()
         try await Task.sleep(for: .milliseconds(200))
         #expect(!gate.isHeld, "a tick retried a held kind without a release")
+        await s.abandonForTest()
+    }
+}
+
+@Suite("JobSchedule — Codex #239 closing reds", .serialized)
+struct JobScheduleCodex239Tests {
+    typealias T = JobScheduleTests
+
+    @Test("F2: after Resume the released attempt is counted fresh — a failure that repeats holds again, no retry after it")
+    func releasedAttemptFailingAgainHolds() async throws {
+        let root = try BackgroundFixtures.scratch("c239-f2")
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        var cp = JobCheckpoint(jobID: request.id, totalUnits: 6)
+        cp.completedUnits = 5
+        cp.unitsFailed = 5
+        var st = FailureStreak()
+        for u in 0..<5 { st.record("ffmpeg is missing", unit: u, systemic: true) }
+        st.save(into: &cp)
+        let checkpoints = InMemoryCheckpointStore()
+        try checkpoints.save(cp)
+        try ScheduleHoldStore.beside(stateRoot: root).save([ScheduleHold(kind: ScheduleFactory.kind, jobID: request.id, reason: "ffmpeg is missing",
+                                                                         signature: "ffmpeg is missing", build: "b1", generation: 1)])
+        let s = JobSupervisor(queue: InMemoryJobQueueStore([request]), checkpoints: checkpoints,
+                              factory: ScheduleFactory(recorder: UnitRecorder(), failing: true, failingUnits: { 2 }),
+                              backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                              configuration: BackgroundFixtures.fastConfiguration(),
+                              schedule: T.schedule(ScheduleProbe(), root: root, planInterval: .milliseconds(40)))
+        await s.start()
+        #expect(await s.resume(request.id))
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.first.map { $0.jobID != request.id } == true },
+                "the fresh attempt failed the same way and holds again")
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(await T.jobs(s).count == 1, "one fresh attempt, then held — no retry after it")
+        await s.abandonForTest()
+    }
+
+    @Test("F3: a START-refused request that carried a fail-fast streak is dropped on Resume; a fresh job reaches its gate")
+    func refusedRequestWithAStreakRunsFreshOnResume() async throws {
+        let root = try BackgroundFixtures.scratch("c239-f3")
+        let a = JobRequest(kind: GatedFactory.kind, requestedBy: "schedule")
+        var cp = JobCheckpoint(jobID: a.id, totalUnits: 6)
+        cp.completedUnits = 5
+        cp.unitsFailed = 5
+        var st = FailureStreak()
+        for u in 0..<5 { st.record("x", unit: u, systemic: true) }
+        st.save(into: &cp)
+        let checkpoints = InMemoryCheckpointStore()
+        try checkpoints.save(cp)
+        let probe = ScheduleProbe()
+        let allow = Toggle()
+        let gate = UnitGate()
+        var sc = JobSchedule(kinds: [JobSchedule.Kind(kind: GatedFactory.kind, planSize: { probe.planned() }, makeRequest: { GatedFactory.request() })],
+                             generation: { 1 }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        sc.pollInterval = .milliseconds(20)
+        let s = JobSupervisor(queue: InMemoryJobQueueStore([a]), checkpoints: checkpoints,
+                              factory: RefuseThenGateFactory(allow: allow, gate: gate, recorder: UnitRecorder()),
+                              backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                              configuration: BackgroundFixtures.fastConfiguration(), schedule: sc)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.isEmpty == false })
+        allow.on = true
+        #expect(await s.resume(a.id))
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "the obsolete streak failed the work again")
+        gate.open()
         await s.abandonForTest()
     }
 }
