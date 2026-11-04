@@ -465,6 +465,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // Sound attempts (v1.14, Rick approved option B 2026-11-03, GH #416):
+        // additive — `sound_attempts`, version 15.
+        migrator.registerMigration(CatalogSoundAttemptsSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
+            for statement in CatalogSoundAttemptsSchema.statements + CatalogSoundAttemptsSchema.versionBump {
+                try db.execute(sql: statement)
+            }
+        }
         return migrator
     }
 
@@ -472,8 +480,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// (v1 creates 7; `v3_live_writes` raises it to 8; `v4_pending_rows` to
     /// 9; `v5_b22_commit` to 10; `v6_folder_kind` to 11; `v7_decision_tables`
     /// to 12; `v8_provenance_roles` to 13; `v9_provenance_assertions` to
-    /// 14). A HIGHER number is a newer build's file and is refused at open.
-    static let currentSchemaVersion = CatalogProvenanceAssertionsSchema.schemaVersion
+    /// 14; `v10_sound_attempts` to 15). A HIGHER number is a newer build's file and is refused at open.
+    static let currentSchemaVersion = CatalogSoundAttemptsSchema.schemaVersion
 
     // MARK: - High-water at open (DDL §11)
 

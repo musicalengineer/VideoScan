@@ -24,7 +24,10 @@
 //                   last audit's catalog-audit.json (CatalogFreshnessRows)
 //   Full Hashes     a stored whole-file SHA-256 (VideoScanModel
 //                   .storedFullDigest) — a sampled `v1:` hash does NOT count
-//   Sound Prints    audioFingerprint stamp present (fingerprinted or noAudio)
+//   Sound Prints    audioFingerprint stamp present (fingerprinted or noAudio),
+//                   or the file was tried 3 times by this engine with no
+//                   print (GH #416 part 2) — observed, not "left"; counted
+//                   apart as "gave up after 3 tries"
 //
 // DENOMINATOR = eligible AND reachable (design §5.5 revision): a record on
 // a drive that is not connected is counted as "offline", a DRM / photo /
@@ -83,6 +86,9 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     /// Fingerprint Sound's stamp (fingerprinted or "no sound").
     var hasSoundStamp: Bool
     var soundStampAt: Date?
+    /// No stamp, but tried `AudioFingerprintAttempt.cap` times by this
+    /// engine without a print — the plan skips it (GH #416 part 2).
+    var soundGaveUp: Bool
     /// GH #402: this row's stored OCR date captions the verdict calls
     /// degenerate (`!!!!…`, written before the caption path refused them).
     /// Read-only count for the Catalog Status information line. One Int a
@@ -97,7 +103,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
          hasTranscript: Bool = false, isPaired: Bool = false, hasHash: Bool = false,
          hasEmbeddedDate: Bool = false, hasInferredDate: Bool = false, hasUserDate: Bool = false,
          hasFullDigest: Bool = false, fullDigestAt: Date? = nil,
-         hasSoundStamp: Bool = false, soundStampAt: Date? = nil, degenerateOCRDates: Int = 0) {
+         hasSoundStamp: Bool = false, soundStampAt: Date? = nil, soundGaveUp: Bool = false, degenerateOCRDates: Int = 0) {
         self.fullPath = fullPath
         self.degenerateOCRDates = degenerateOCRDates
         self.filename = filename.isEmpty ? (fullPath as NSString).lastPathComponent : filename
@@ -123,6 +129,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
         self.fullDigestAt = fullDigestAt
         self.hasSoundStamp = hasSoundStamp
         self.soundStampAt = soundStampAt
+        self.soundGaveUp = soundGaveUp
     }
 
     /// The dossier pool's gate, minus the Analysis Scope (applied by the
@@ -133,6 +140,13 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     /// A file with bytes at a path — what Signatures, Full Hashes and
     /// Sound Prints can read at all.
     var hasBytes: Bool { sizeBytes > 0 && !fullPath.isEmpty }
+
+    /// Sound Prints has its answer: a stamp, or it gave up after the cap
+    /// (GH #416 part 2 — observed, never "left to analyze").
+    var soundObserved: Bool { hasSoundStamp || soundGaveUp }
+
+    /// 1 when this file counts in "N gave up after 3 tries", else 0.
+    var soundGaveUpCount: Int { hasBytes && soundGaveUp ? 1 : 0 }
 
     /// Project one live record. Main actor (the record lives there).
     @MainActor
@@ -162,6 +176,8 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   fullDigestAt: VideoScanModel.storedFullDigest(r) == nil ? nil : r.contentFixity?.computedAt,
                   hasSoundStamp: r.audioFingerprint != nil,
                   soundStampAt: r.audioFingerprint?.computedAt,
+                  // The plan's own rule (one O(1) check a row).
+                  soundGaveUp: AudioFingerprintBackfillPlanner.gaveUp(r) != nil,
                   // O(this row's OCR dates); rows without any skip the verdict.
                   degenerateOCRDates: r.ocrDateCandidates.count - r.usableOCRDates.count)
     }
@@ -270,6 +286,9 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// GH #402: degenerate OCR date captions still stored on live rows
     /// (Catalog Status information line; read-only, nothing supersedes them yet).
     var degenerateOCRDates = 0
+    /// Files Sound Prints gave up on after `AudioFingerprintAttempt.cap`
+    /// tries by this engine (counted as covered — observed — and said apart).
+    var soundGaveUp = 0
     /// Catalog ▸ Tidy Catalog…'s live counts (Rick 2026-11-01; CatalogTidy.swift).
     var tidy = CatalogTidyCounts()
     /// Catalog Status's Content indicator (Rick 2026-11-03): per FILE, over
@@ -299,6 +318,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.activeRecords == rhs.activeRecords
             && lhs.missingCopies == rhs.missingCopies
             && lhs.degenerateOCRDates == rhs.degenerateOCRDates
+            && lhs.soundGaveUp == rhs.soundGaveUp
             && lhs.tidy == rhs.tidy
             && lhs.contentFiles == rhs.contentFiles
             && lhs.offlineFilesByRoot == rhs.offlineFilesByRoot
@@ -472,7 +492,8 @@ enum AnalyzeCoverageCalculator {
             tally(.fullHashes, root: root, reachable: reachable, applies: r.hasBytes,
                   covered: r.hasFullDigest, stamp: r.fullDigestAt)
             tally(.soundPrints, root: root, reachable: reachable, applies: r.hasBytes,
-                  covered: r.hasSoundStamp, stamp: r.soundStampAt)
+                  covered: r.soundObserved, stamp: r.soundStampAt)
+            report.soundGaveUp += r.soundGaveUpCount
 
             // Duplicates: every active record is a candidate.
             tally(.duplicates, root: root, reachable: reachable, applies: true, covered: r.dupStamped)

@@ -307,8 +307,8 @@ struct CatalogProvenanceAssertionsTests {
              try Int.fetchOne(db, sql: "PRAGMA user_version"),
              try Int.fetchOne(db, sql: "SELECT count(*) FROM content"))
         }
-        #expect(after.0 == 14)
-        #expect(after.1 == 14)
+        #expect(after.0 == GRDBCatalogRepository.currentSchemaVersion)   // 14, then v10_sound_attempts → 15
+        #expect(after.1 == GRDBCatalogRepository.currentSchemaVersion)
         #expect(after.2 == 3)
     }
 
@@ -325,7 +325,7 @@ struct CatalogProvenanceAssertionsTests {
                 return String(describing: error)
             }
         }
-        #expect(words?.contains("schema version 14 is newer than this build understands (13) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
+        #expect(words?.contains("schema version \(GRDBCatalogRepository.currentSchemaVersion) is newer than this build understands (13) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
         // And this build accepts it.
         let ok: Bool = try DatabaseQueue(path: fixture.url.path).inDatabase { db in
             (try? GRDBCatalogRepository.checkSchemaVersion(db)) != nil

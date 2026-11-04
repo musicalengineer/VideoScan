@@ -90,6 +90,12 @@ struct AudioFingerprintBackfillPlan: Sendable, Equatable {
     var partialStamped = 0
     /// Never hashed by a scan: no key for the sidecar — counted, not planned.
     var noDigest = 0
+    /// Tried `AudioFingerprintAttempt.cap` times by this engine without a
+    /// print (GH #416 part 2) — skipped, by the last try's outcome. A new
+    /// engine version retries them.
+    var gaveUpHeardTooLittle = 0
+    var gaveUpFailed = 0
+    var gaveUp: Int { gaveUpHeardTooLittle + gaveUpFailed }
 
     var fileCount: Int { lanes.reduce(0) { $0 + $1.items.count } }
     var archivedCount: Int { lanes.reduce(0) { $0 + $1.archivedCount } }
@@ -116,6 +122,15 @@ enum AudioFingerprintBackfillPlanner {
                 }
                 continue
             }
+            // GH #416 part 2: tried `cap` times by THIS engine, no print —
+            // skipped (an older engine's tries count 0, so a new one retries).
+            if let attempt = gaveUp(r, digests: digests) {
+                switch attempt.outcome {
+                case .heardTooLittle: plan.gaveUpHeardTooLittle += 1
+                case .failed: plan.gaveUpFailed += 1
+                }
+                continue
+            }
             let root = MediaVolumeGatePolicy.volumeRoot(forPath: r.fullPath)
             byRoot[root, default: AudioFingerprintBackfillLane(root: root)].items.append(
                 AudioFingerprintBackfillItem(id: r.id, path: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes,
@@ -130,6 +145,17 @@ enum AudioFingerprintBackfillPlanner {
             }
             .sorted { $0.root < $1.root }
         return plan
+    }
+
+    /// The record's note when the plan gives up on it: no current stamp
+    /// (`describes`) and `cap` tries by this engine on its preferred full
+    /// digest. ONE rule for the plan and the coverage count (Codex #217 F3).
+    static func gaveUp(_ r: VideoRecord, digests: [String]? = nil) -> AudioFingerprintAttempt? {
+        guard let attempt = r.audioFingerprintAttempt else { return nil }
+        let digests = digests ?? self.digests(of: r)
+        if let stamp = r.audioFingerprint,
+           stamp.describes(sizeBytes: r.sizeBytes, digests: digests, headerHasAudio: !r.audioCodec.isEmpty) { return nil }
+        return attempt.gaveUp(digests: digests) ? attempt : nil
     }
 
     /// Not removed, not superseded, pointing at a file with a size.
@@ -211,7 +237,8 @@ enum AudioFingerprintBackfillResult: String, Sendable, Equatable, CaseIterable {
     /// stamp says so; listed, not retried.
     case partial
     /// Decoded and heard sound, but too little to make one landmark (stamp
-    /// rule 4): not stamped, never "silent"; retried next run.
+    /// rule 4): not stamped, never "silent"; one TRY recorded (GH #416
+    /// part 2) — retried until `AudioFingerprintAttempt.cap` tries.
     case heardTooLittle
     case driveNotConnected
     case missing
@@ -272,6 +299,8 @@ struct AudioFingerprintBackfillTotals: Sendable, Equatable {
     var archivedPlanned = 0
     var alreadyStamped = 0
     var noDigest = 0
+    /// Skipped by the plan after `AudioFingerprintAttempt.cap` tries.
+    var gaveUp = 0
     /// Files resolved, whatever the outcome (the "N" of "N of M").
     var done = 0
     var doneBytes: Int64 = 0
@@ -283,6 +312,14 @@ struct AudioFingerprintBackfillTotals: Sendable, Equatable {
     var counts: [AudioFingerprintBackfillResult: Int] = [:]
 
     subscript(_ r: AudioFingerprintBackfillResult) -> Int { counts[r] ?? 0 }
+
+    /// One file counted under `from` belongs under `to` (a queued stamp
+    /// whose record changed before it could be written). `done` unchanged.
+    mutating func move(_ from: AudioFingerprintBackfillResult, to: AudioFingerprintBackfillResult) {
+        guard self[from] > 0 else { return }
+        counts[from, default: 0] -= 1
+        counts[to, default: 0] += 1
+    }
 
     mutating func add(_ r: AudioFingerprintBackfillResult, files n: Int = 1, bytes: Int64) {
         counts[r, default: 0] += n
@@ -298,6 +335,7 @@ struct AudioFingerprintBackfillTotals: Sendable, Equatable {
             parts.append("\(self[r].formatted()) \(r.words)")
         }
         if alreadyStamped > 0 { parts.append("\(alreadyStamped.formatted()) already done") }
+        if gaveUp > 0 { parts.append(Self.gaveUpWords(gaveUp)) }
         if noDigest > 0 { parts.append("\(noDigest.formatted()) never hashed (scan them first)") }
         return parts.joined(separator: " · ")
     }
@@ -312,6 +350,11 @@ struct AudioFingerprintBackfillTotals: Sendable, Equatable {
         parts.append("\(MediaBytes.display(Int64(rate)))/s")
         parts.append(FullHashBackfillTotals.timeLeft(Double(max(0, plannedBytes - doneBytes)) / rate))
         return parts.joined(separator: " · ")
+    }
+
+    /// "12 skipped after 3 tries (heard too little / failed) — a new engine retries them"
+    nonisolated static func gaveUpWords(_ n: Int) -> String {
+        "\(n.formatted()) skipped after \(AudioFingerprintAttempt.cap) tries (heard too little / failed) — a new engine retries them"
     }
 
     nonisolated static func landmarksWord(_ n: Int) -> String {

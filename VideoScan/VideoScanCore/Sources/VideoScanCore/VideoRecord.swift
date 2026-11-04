@@ -750,6 +750,13 @@ public class VideoRecord: Identifiable, Decodable {
     /// version still match (`describes`).
     public var audioFingerprint: AudioFingerprintStamp?
 
+    /// GH #416 part 2: the tries Fingerprint Sound made on this content that
+    /// gave no print — heard too little, or would not decode
+    /// (AudioFingerprintAttempt.swift; `sound_attempts`, v15). Additive
+    /// optional — legacy catalogs decode nil, the DTO writes the key only
+    /// when present.
+    public var audioFingerprintAttempt: AudioFingerprintAttempt?
+
     /// Check Media (2026-10-07): the latest report card — headline plus one
     /// row per check (MediaReportCard.swift). Additive optional — legacy
     /// catalogs decode nil, the DTO writes the key only when present. The
@@ -981,6 +988,9 @@ public class VideoRecord: Identifiable, Decodable {
             audioFingerprint        = nil
             Self.decodeLog.notice("audio fingerprint stamp unreadable on \(self.filename, privacy: .public) — will be redone: \(String(describing: error), privacy: .public)")
         }
+        // GH #416 part 2 — additive optional; an unreadable note (a future
+        // outcome word) reads as absent: the file is simply tried again.
+        audioFingerprintAttempt     = try? c.decodeIfPresent(AudioFingerprintAttempt.self, forKey: .audioFingerprintAttempt)
         // Check Media report card (2026-10-07) — additive optional. A card
         // this build can't read (a future check kind) reads as absent
         // rather than failing the whole catalog load.

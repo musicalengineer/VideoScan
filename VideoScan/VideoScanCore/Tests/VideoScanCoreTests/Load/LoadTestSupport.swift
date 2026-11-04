@@ -103,6 +103,7 @@ enum KeptFields {
             ("archive copy", x.archiveCopy == y.archiveCopy),
             ("backup destinations", x.backupDestinations == y.backupDestinations),
             ("sound print (bound)", x.soundPrint == y.soundPrint),
+            ("sound attempts (bound)", x.soundAttempt == y.soundAttempt),
             ("curated (§10b)", x.curated == y.curated),
             ("curated field list", x.curatedFields == y.curatedFields),
             ("knowledge sources", x.knowledgeSources == y.knowledgeSources),
@@ -272,9 +273,13 @@ enum RichRecord {
         r.junkScore = 4
         r.junkReasons = ["short"]
         r.backupDestinations = [BackupEntry(name: "Offsite drive", kind: .offsite, date: day(-6))]
-        r.audioFingerprint = AudioFingerprintStamp(computedAt: day(-3), contentDigest: "sha256:" + digest, sizeBytes: sizeBytes,
+        // An OLDER engine's print (3) and a newer try by this one: the one
+        // shape where the store keeps both (Codex #217 F1).
+        r.audioFingerprint = AudioFingerprintStamp(computedAt: day(-3), engineVersion: 3, contentDigest: "sha256:" + digest, sizeBytes: sizeBytes,
                                                    outcome: .fingerprinted, analyzedSeconds: 63.5, complete: true,
                                                    landmarks: 812, bytes: 6_496)
+        r.audioFingerprintAttempt = AudioFingerprintAttempt(contentDigest: "sha256:" + digest, outcome: .heardTooLittle,
+                                                            attempts: 2, lastAt: day(-1), detail: "2 audible seconds")
     }
 }
 

@@ -181,11 +181,48 @@ extension GRDBTransaction {
         return nil
     }
 
+    /// The content's print, replaced by `print` only when it is not OLDER
+    /// than the stored one (Codex #218 F1): copies share the print by
+    /// digest, so a copy still carrying an obsolete print (a lower engine,
+    /// or the same engine and an earlier time) never overwrites a sibling's
+    /// newer one. nil writes nothing (CatalogRecordDiff never asks).
     func replaceSoundPrint(digest: String, _ print: CatalogRecordDTO.SoundPrintRow?) throws {
         let digest = digest.lowercased()
-        try db.execute(sql: "DELETE FROM sound_prints WHERE digest = ?", arguments: [digest])
         guard let print, print.digest.lowercased() == digest else { return }
+        let newer = try Int.fetchOne(db, sql: """
+            SELECT 1 FROM sound_prints
+             WHERE digest = ? AND (engine_version > ? OR (engine_version = ? AND computed_at > ?))
+            """, arguments: [digest, print.engineVersion, print.engineVersion, print.computedAt])
+        guard newer == nil else { return }
+        try db.execute(sql: "DELETE FROM sound_prints WHERE digest = ?", arguments: [digest])
         _ = try insertSoundPrint(print)
+        // GH #416 part 2: a print (or "no sound") ends the content's tries.
+        try db.execute(sql: "DELETE FROM sound_attempts WHERE digest = ?", arguments: [digest])
+    }
+
+    /// `sound_attempts` upsert (v15): insert; on the same digest, take the
+    /// incoming row only when its engine is NEWER, or the same engine with
+    /// at least as many tries — so a copy carrying a stale count never
+    /// lowers what a sibling recorded. Never a delete. A try beside a
+    /// stored print is written only when that print is OLDER than the try
+    /// AND by an older engine (the redo of an obsolete print); a try no
+    /// newer than the print, or beside a print by this engine or a newer
+    /// one, is a stale copy's and is not written (Codex #217 F1). True when
+    /// a row was inserted or updated.
+    @discardableResult
+    func upsertSoundAttempt(_ attempt: CatalogRecordDTO.SoundAttemptRow) throws -> Bool {
+        try db.execute(sql: """
+            INSERT INTO sound_attempts (digest, engine_version, outcome, attempts, last_at, detail)
+            SELECT ?, ?, ?, ?, ?, ?
+             WHERE NOT EXISTS (SELECT 1 FROM sound_prints WHERE digest = ?1 AND (computed_at >= ?5 OR engine_version >= ?2))
+            ON CONFLICT (digest) DO UPDATE
+               SET engine_version = excluded.engine_version, outcome = excluded.outcome, attempts = excluded.attempts,
+                   last_at = excluded.last_at, detail = excluded.detail
+             WHERE excluded.engine_version > sound_attempts.engine_version
+                OR (excluded.engine_version = sound_attempts.engine_version AND excluded.attempts >= sound_attempts.attempts)
+            """, arguments: [attempt.digest.lowercased(), attempt.engineVersion, attempt.outcome, attempt.attempts,
+                             attempt.lastAt, attempt.detail])
+        return db.changesCount > 0
     }
 
     func appendRowKnowledge(_ row: CatalogRow.RowKnowledge) throws {

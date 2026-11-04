@@ -123,6 +123,8 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
     public var archiveCopy: ArchiveCopyRow?
     public var backupDestinations: [BackupDestinationRow]
     public var soundPrint: SoundPrintRow?
+    /// `sound_attempts` (v15): bound like `soundPrint` — only for THIS row's digest.
+    public var soundAttempt: SoundAttemptRow?
     public var curated: CuratedKnowledge
     /// The §10b fields this occurrence carried (non-default), DDL order —
     /// `import_items.curated_fields`.
@@ -173,6 +175,7 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
         // print for other bytes (a tier-4 stale stamp) is not imported — the
         // next sound run redoes it. (D′ importer, 2026-10-17.)
         soundPrint = r.audioFingerprint.flatMap { SoundPrintRow($0) }.flatMap { $0.digest == state.digest ? $0 : nil }
+        soundAttempt = r.audioFingerprintAttempt.flatMap { SoundAttemptRow($0) }.flatMap { $0.digest == state.digest ? $0 : nil }
         curated = Self.curatedKnowledge(r, id: Self.canonicalID(r.id), archiveFixity: af)
         curatedFields = Self.curatedFieldList(raw: r.raw)
         knowledgeSources = Self.knowledgeSourceRows(raw: r.raw)

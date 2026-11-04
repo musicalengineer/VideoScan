@@ -61,7 +61,7 @@ struct CatalogStoreSensorTests {
         (CatalogBookkeepingSchema.statements + CatalogDataSchema.statements + CatalogLiveWritesSchema.statements
          + CatalogPendingRowsSchema.statements + CatalogCommitB22Schema.statements
          + CatalogDecisionTablesSchema.statements + CatalogProvenanceRolesSchema.statements
-         + CatalogProvenanceAssertionsSchema.statements).joined(separator: "\n")
+         + CatalogProvenanceAssertionsSchema.statements + CatalogSoundAttemptsSchema.statements).joined(separator: "\n")
     }
 
     @Test func onlyStoreFoldersImportGRDB() {
@@ -133,7 +133,7 @@ struct CatalogStoreSensorTests {
 
     @Test func everyTableOfTheDDLIsInTheSwiftSchema() throws {
         let documented = try SchemaDocument.ddl().tableNames
-        #expect(documented.count == 58)                        // 3 bookkeeping + 47 data + content_text_fts + 1 live (v1.7) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12) + provenance_assertions (v1.13)
+        #expect(documented.count == 59)                        // 3 bookkeeping + 47 data + content_text_fts + 1 live (v1.7) + 1 pending (v1.8) + 1 pending purges (v1.9) + 2 decision tables (v1.11) + provenance_roles (v1.12) + provenance_assertions (v1.13) + sound_attempts (v1.14)
         let swift = Self.swiftSchema
         for name in documented {
             let declared = swift.contains("CREATE TABLE \(name) ") || swift.contains("CREATE VIRTUAL TABLE \(name) ")

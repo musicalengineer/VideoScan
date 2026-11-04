@@ -347,6 +347,9 @@ struct CatalogCommitBody {
         if diff.footageDecisions { try tx.replaceFootageDecisions(rowID: id, digest: digest, current.curated.footageDecisions) }
         if diff.duplicate, let words = try tx.replaceDuplicateMember(fileID: id, current.duplicateMember) { written.notes.append(words) }
         if diff.soundPrint { try tx.replaceSoundPrint(digest: digest, current.soundPrint) }
+        // GH #416 part 2: the content's tries without a print, AFTER the
+        // print (the door refuses a try no newer than the stored print).
+        if diff.soundAttempt, let attempt = current.soundAttempt { try tx.upsertSoundAttempt(attempt) }
         try writeKnowledge(current, digest: digest, fields: diff.knowledge, baseline: baseline)
         if diff.pair {
             try tx.appendRowKnowledge(CatalogRow.RowKnowledge(fileID: id, digest: digest, field: CatalogLiveWritesSchema.pairField,

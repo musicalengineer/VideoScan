@@ -195,8 +195,9 @@ L = lineage / relation · V = display copy of another field. **Fate**: `col` = c
 | 127 | perceptualFingerprint | StoredPerceptualFingerprint? | P | S bound (size + recipe) | `A/Media/VideoScanModel+PerceptualFingerprints.swift:99,109,133`; R:492 (size match) | T:perceptual_prints |
 | 128 | mediaReportCard | MediaReportCard? | P | S unbound | CM:270; MediaRepairJob:212,256 | media_checks `reportCard` |
 | 129 | audioFingerprint | AudioFingerprintStamp? | P | S bound (`contentDigest`) | `A/MediaOps/VideoScanModel+AudioFingerprintBackfill.swift:48,58` ← AudioFingerprintBackfillJob:541 | T:sound_prints (sha256-keyed only) |
+| 130 | audioFingerprintAttempt | AudioFingerprintAttempt? | P | S bound (`contentDigest`) | `A/MediaOps/VideoScanModel+AudioFingerprintBackfill.swift` `applyAudioFingerprintAttempt` ← AudioFingerprintBackfillJob `tried` (GH #416 part 2, schema v15, added 2026-11-03) | T:sound_attempts (sha256-keyed only) |
 
-**Roll-up** (one role per row): D 41 · S 39 · C 14 · L 13 · B 11 · V 7 · unclear 4 = 129. **Lost on a rescan
+**Roll-up** (one role per row): D 41 · S 40 · C 14 · L 13 · B 11 · V 7 · unclear 4 = 130 (row 130 added 2026-11-03, v15). **Lost on a rescan
 today** (no R): every verify field, `contentFixity`, `audioFingerprint`, `mediaReportCard`, `archivedAt`,
 `needsReformat`, `backupDestinations`, `junkReasons`, `workspaceActive`, all pair/dup/avid/trim/cleanup fields — the
 SHA-256 among them, which is exactly why §10 keys knowledge by digest instead of trusting rescan preservation.

@@ -151,6 +151,12 @@ public enum CatalogDDL {
         public static let ddlLocation = Location("sound_prints", "outcome")
     }
 
+    /// sound_attempts.outcome (AudioFingerprintAttempt.Outcome; v15).
+    public enum SoundAttemptOutcome: String, Codable, CaseIterable, Sendable {
+        case heardTooLittle, failed
+        public static let ddlLocation = Location("sound_attempts", "outcome")
+    }
+
     /// captions.kind.
     public enum CaptionKind: String, Codable, CaseIterable, Sendable {
         case scene, ocrDate, ocrText
@@ -320,6 +326,7 @@ public enum CatalogDDL {
         (FootageVerdict.ddlLocation, FootageVerdict.allCases.map(\.rawValue)),
         (Disposition.ddlLocation, Disposition.allCases.map(\.rawValue)),
         (SoundOutcome.ddlLocation, SoundOutcome.allCases.map(\.rawValue)),
+        (SoundAttemptOutcome.ddlLocation, SoundAttemptOutcome.allCases.map(\.rawValue)),
         (CaptionKind.ddlLocation, CaptionKind.allCases.map(\.rawValue)),
         (DerivedKind.ddlLocation, DerivedKind.allCases.map(\.rawValue)),
         (MediaCheckKind.ddlLocation, MediaCheckKind.allCases.map(\.rawValue)),

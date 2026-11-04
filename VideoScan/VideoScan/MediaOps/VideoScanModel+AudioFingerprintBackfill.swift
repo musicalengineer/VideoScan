@@ -9,6 +9,10 @@
 //     touched.
 //   • `revertAudioFingerprintStamp` — the undo for a stamp whose save was
 //     not acknowledged (only when the record still holds exactly it).
+//   • `applyAudioFingerprintAttempt` / `revertAudioFingerprintAttempt` —
+//     the same compare-and-set for a try that gave no print (GH #416 part
+//     2, `sound_attempts`): one more try on the record's FULL digest; a
+//     sampled-only record gets none.
 //   • `audioFingerprintSidecarDirectory` — the sidecar lives beside
 //     catalog.json (App Support/VideoScan in production; a test catalog's
 //     scratch folder in tests), so it follows the catalog it indexes.
@@ -39,23 +43,68 @@ extension VideoScanModel {
         AudioFingerprintBackfillPlanner.plan(records: records) { self.isArchiveElement($0) }
     }
 
+    /// Would a stamp for `item` be written now (same record, path, size,
+    /// not removed, the catalog writable)? The job asks before it queues.
+    func audioFingerprintStampWouldWrite(_ item: AudioFingerprintBackfillItem) -> Bool {
+        guard !isReadOnly, let rec = record(forID: item.id) else { return false }
+        return rec.fullPath == item.path && rec.sizeBytes == item.sizeBytes && !rec.isPurged
+    }
+
+    /// The content printed (its stamp saved): no live copy of it keeps a
+    /// "gave up" note (Codex #219 F4). One pass over the records per
+    /// checkpoint; the store already deleted the row, and a record without
+    /// a note never writes one (CatalogRecordDiff), so nothing is saved.
+    func clearAudioFingerprintAttempts(forDigests digests: Set<String>) {
+        guard !digests.isEmpty else { return }
+        for r in records where r.audioFingerprintAttempt.map({ digests.contains($0.contentDigest) }) == true {
+            r.audioFingerprintAttempt = nil
+        }
+    }
+
     /// The backfill's write: compare-and-set on the planned record.
     func applyAudioFingerprintStamp(_ stamp: AudioFingerprintStamp,
                                     to item: AudioFingerprintBackfillItem) -> AudioFingerprintWrite {
-        guard !isReadOnly, let rec = record(forID: item.id),
-              rec.fullPath == item.path, rec.sizeBytes == item.sizeBytes, !rec.isPurged
-        else { return .recordChanged }
+        guard audioFingerprintStampWouldWrite(item), let rec = record(forID: item.id) else { return .recordChanged }
         rec.audioFingerprint = stamp
+        // A print (or "no sound") ends the content's tries (GH #416 part 2).
+        rec.audioFingerprintAttempt = nil
         return .written
+    }
+
+    /// One more try that gave no print, on the planned record — keyed on
+    /// the item's preferred digest, a FULL SHA-256 only. nil when nothing
+    /// was written (the record changed, read-only, or only a sampled key).
+    func applyAudioFingerprintAttempt(_ outcome: AudioFingerprintAttempt.Outcome, detail: String?,
+                                      to item: AudioFingerprintBackfillItem)
+        -> (written: AudioFingerprintAttempt, prior: AudioFingerprintAttempt?)? {
+        guard !isReadOnly, let rec = record(forID: item.id),
+              rec.fullPath == item.path, rec.sizeBytes == item.sizeBytes, !rec.isPurged,
+              let next = AudioFingerprintAttempt.after(rec.audioFingerprintAttempt, contentDigest: item.key.contentDigest,
+                                                        outcome: outcome, detail: detail)
+        else { return nil }
+        let prior = rec.audioFingerprintAttempt
+        rec.audioFingerprintAttempt = next
+        return (next, prior)
+    }
+
+    /// Undo a try whose save was NOT acknowledged — only when the record
+    /// still holds exactly what the job wrote.
+    @discardableResult
+    func revertAudioFingerprintAttempt(_ item: AudioFingerprintBackfillItem, written: AudioFingerprintAttempt,
+                                       prior: AudioFingerprintAttempt?) -> Bool {
+        guard let rec = record(forID: item.id), rec.audioFingerprintAttempt == written else { return false }
+        rec.audioFingerprintAttempt = prior
+        return true
     }
 
     /// Undo a write whose save was NOT acknowledged — only when the record
     /// still holds exactly what the job wrote. The record becomes a
     /// candidate again, so the next run looks at it again.
     func revertAudioFingerprintStamp(_ item: AudioFingerprintBackfillItem,
-                                     written: AudioFingerprintStamp) -> Bool {
+                                     written: AudioFingerprintStamp, priorAttempt: AudioFingerprintAttempt? = nil) -> Bool {
         guard let rec = record(forID: item.id), rec.audioFingerprint == written else { return false }
         rec.audioFingerprint = nil
+        if rec.audioFingerprintAttempt == nil { rec.audioFingerprintAttempt = priorAttempt }
         return true
     }
 

@@ -74,7 +74,7 @@ struct CatalogRecordDTOGoldenTests {
 
     @Test func theFullRowCarriesAll129Keys() throws {
         let row = try #require(try ImportTestSupport.catalog(ImportGoldenFixtures.full129).records.first)
-        #expect(row.raw.count == 129)
+        #expect(row.raw.count == 130)
     }
 
     @Test func theFullRowMapsEveryProbeExtraKey() throws {
@@ -144,10 +144,10 @@ struct CatalogRecordDTOContractTests {
     @Test func theMirrorHasTheContracts129Keys() throws {
         let rows = ImportTestSupport.inventory(try ImportTestSupport.text(ImportTestSupport.contractURL))
         // The contract lists the keys in its own order (by role); the mirror
-        // follows VideoRecord.CodingKeys. Same 129 keys, compared as sets.
-        #expect(rows.count == 129)
+        // follows VideoRecord.CodingKeys. Same 130 keys, compared as sets.
+        #expect(rows.count == 130)   // 129 + audioFingerprintAttempt (v15, GH #416)
         #expect(Set(rows.map(\.key)) == Set(VideoRecordJSON.Key.allCases.map(\.rawValue)))
-        #expect(VideoRecordJSON.Key.allCases.count == 129)
+        #expect(VideoRecordJSON.Key.allCases.count == 130)
     }
 
     @Test func everyKeysFateEqualsTheContract() throws {
