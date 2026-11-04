@@ -101,6 +101,11 @@ struct CatalogStatusLine: Sendable, Equatable {
     /// (the coverage tally's roots). Compared EXACTLY by the transition log
     /// (Codex closing-5): a name is never parsed back out of the prose.
     var names: [String] = []
+    /// The exact WHEN strings the builder put into the words — the check's
+    /// formatted date and its age ("2 Nov 10:41", "1 h ago"). The transition
+    /// log removes exactly these and nothing else (Codex closing-7: masking
+    /// dates by pattern also masked an event named "July 4").
+    var when: [String] = []
 }
 
 /// One of the two indicators on the totals strip.
@@ -281,14 +286,22 @@ enum CatalogStatusLinesPolicy {
     static func database(_ f: IntegrityReportFacts, soundStoreProblem: String? = nil, now: Date,
                          date: (Date) -> String) -> CatalogStatusLine {
         var line = integrity(f, now: now, date: date)
+        line.when = whenWords(f.lastCompleted, now: now, date: date)
         guard let soundStoreProblem else { return line }
         if line.state == .red {
             line.detail.append(soundStoreWords(soundStoreProblem))
         } else {
             line = CatalogStatusLine(kind: .database, state: .red, words: soundStoreWords(soundStoreProblem),
-                                     detail: ["Integrity check: \(line.words)"] + line.detail)
+                                     detail: ["Integrity check: \(line.words)"] + line.detail, when: line.when)
         }
         return line
+    }
+
+    /// The date and age a builder writes for `d` — recorded on the line as
+    /// `when` so the log can tell a new check from a new cause.
+    static func whenWords(_ d: Date?, now: Date, date: (Date) -> String) -> [String] {
+        guard let d else { return [] }
+        return [date(d), age(d, now: now)]
     }
 
     /// Rick 2026-11-02 (DECISIONS 2026-11-02): a coloured line says 1. exactly
@@ -371,6 +384,13 @@ enum CatalogStatusLinesPolicy {
 
     static func files(_ facts: CatalogFreshnessFacts, missing: MissingCopyCounts, offline: [String: Int] = [:], now: Date,
                       date: (Date) -> String) -> CatalogStatusLine {
+        var line = filesLine(facts, missing: missing, offline: offline, now: now, date: date)
+        line.when = whenWords(CatalogAuditPresenceFacts.from(facts.audit, switchedAt: facts.switchedAt).lastCompleted, now: now, date: date)
+        return line
+    }
+
+    private static func filesLine(_ facts: CatalogFreshnessFacts, missing: MissingCopyCounts, offline: [String: Int], now: Date,
+                                  date: (Date) -> String) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
             CatalogStatusLine(kind: .files, state: CatalogStatusLineState(c), words: w, detail: d)
         }
@@ -502,53 +522,34 @@ enum CatalogStatusTransitions {
         }
     }
 
-    /// What the transition log compares (Codex closing passes 3–6). Two rules,
+    /// What the transition log compares (Codex closing passes 3–7). Two rules,
     /// by what the words ARE:
     ///   Database / Files — names and facts (drives, events, files, errors):
-    ///     only the WHEN is masked — dates, clock times, ages — so a numbered
-    ///     name ("Backup 1", "Birthday 2", "X9") is always a change, and a new
-    ///     check's new count is one line per check, never per minute;
-    ///   Content — counts only ("Analyzing 999 of 2,000 files"): every number
-    ///     is masked too (`cause`), so progress ticking is not a change.
+    ///     the words exactly, minus the line's own `when` strings (the check's
+    ///     formatted date and age, recorded by the builder) — no pattern is
+    ///     applied, so no name ("Backup 1", "July 4", "X9") can be masked;
+    ///   Content — counts only ("Analyzing 999 of 2,000 files"): free-standing
+    ///     numbers are masked (`cause`), so progress ticking is not a change.
     /// Drive names also ride as data (`CatalogStatusLine.names`).
-    static func catalogCause(_ words: String) -> String { mask(words, whenMasks) }
-
-    static func cause(_ words: String) -> String { mask(mask(words, whenMasks), countMasks) }
-
-    private static func mask(_ text: String, _ masks: [(NSRegularExpression, String)]) -> String {
-        var s = text
-        for (pattern, template) in masks {
-            s = pattern.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template)
-        }
+    static func catalogCause(_ words: String, when: [String]) -> String {
+        var s = words
+        for w in when where !w.isEmpty { s = s.replacingOccurrences(of: w, with: "WHEN") }
         return s
     }
 
-    /// The month names the date formatter writes (Rick's Macs: English).
-    private static let month = "January|February|March|April|May|June|July|August|September|October|November|December"
-        + "|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
-
-    /// Ages ("45 min ago", "1 h ago", "3 days ago"), dates ("Nov 3, 2026",
-    /// "3 Nov 2026", "3 Nov"), clock times ("9:41 PM", "21:41").
-    nonisolated(unsafe) private static let whenMasks: [(NSRegularExpression, String)] = compile([
-        (#"\d[\d,]*\s*(?:min|h|days?)\s+ago"#, "AGE"),
-        (#"\b(?:\#(month))\.? \d{1,2}(?:, \d{4})?\b"#, "DATE"),
-        (#"\b\d{1,2} (?:\#(month))\.?(?: \d{4})?\b"#, "DATE"),
-        (#"\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp]\.?[Mm]\.?)?"#, "TIME"),
-    ])
+    static func cause(_ words: String) -> String {
+        countMask?.stringByReplacingMatches(in: words, range: NSRange(words.startIndex..., in: words), withTemplate: "#") ?? words
+    }
 
     /// Free-standing numbers with their separators ("1,000", "12.5"); a
-    /// number glued to a letter ("X9") stays even here.
-    nonisolated(unsafe) private static let countMasks: [(NSRegularExpression, String)] = compile([
-        (#"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#, "#"),
-    ])
+    /// number glued to a letter ("X9") stays.
+    nonisolated(unsafe) private static let countMask = try? NSRegularExpression(pattern: #"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#)
 
-    private static func compile(_ list: [(String, String)]) -> [(NSRegularExpression, String)] {
-        list.compactMap { p in (try? NSRegularExpression(pattern: p.0)).map { ($0, p.1) } }   // constants; the regressions pin them
+    static func key(_ line: CatalogStatusLine) -> String {
+        line.kind == .content ? cause(line.words) : catalogCause(line.words, when: line.when)
     }
 
-    static func key(_ words: String, _ kind: CatalogStatusLineKind) -> String {
-        kind == .content ? cause(words) : catalogCause(words)
-    }
+    static func detailKey(_ d: String, _ line: CatalogStatusLine) -> String { catalogCause(d, when: line.when) }
 
     static func lines(old: CatalogStatusLines?, new: CatalogStatusLines) -> [String] {
         var out: [String] = []
@@ -564,14 +565,14 @@ enum CatalogStatusTransitions {
             }
             if was.state != line.state {
                 out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))\(causes)")
-            } else if key(was.words, line.kind) != key(line.words, line.kind) || was.names != line.names {
+            } else if key(was) != key(line) || was.names != line.names {
                 out.append("\(title): \(word(line)) — now: \(line.words)\(causes)")
-            } else if line.kind != .content, catalogCause(was.detail.joined(separator: "\n")) != catalogCause(line.detail.joined(separator: "\n")) {
+            } else if line.kind != .content, was.detail.map({ detailKey($0, was) }) != line.detail.map({ detailKey($0, line) }) {
                 // A second cause under the same colour (the sound sidecar under a
                 // failed check) rides in the detail: its arrival and clearing are
                 // changes too (Codex closing #4). Content's detail is counts.
-                let added = line.detail.filter { d in !was.detail.contains { catalogCause($0) == catalogCause(d) } }
-                let gone = was.detail.filter { d in !line.detail.contains { catalogCause($0) == catalogCause(d) } }
+                let added = line.detail.filter { d in !was.detail.contains { detailKey($0, was) == detailKey(d, line) } }
+                let gone = was.detail.filter { d in !line.detail.contains { detailKey($0, line) == detailKey(d, was) } }
                 out.append("\(title): \(word(line)) — " + (added.map { "now also: \($0)" } + gone.map { "cleared: \($0)" }).joined(separator: " · "))
             }
         }

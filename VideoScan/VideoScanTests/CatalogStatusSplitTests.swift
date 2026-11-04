@@ -465,14 +465,15 @@ struct CatalogStatusTransitionLogTests {
         #expect(C.cause("Unknown: 30 of 30 files — not connected now: /Volumes/X8 (30 files)")
                 != C.cause("Unknown: 30 of 30 files — not connected now: /Volumes/X9 (30 files)"), "X8 → X9 is a different drive")
         #expect(C.cause("Analyzing 999 of 2,000 files") == C.cause("Analyzing 1,000 of 2,000 files"), "a count is not a cause")
-        #expect(C.cause("checked 2 Nov 10:41 (45 min ago)") == C.cause("checked 2 Nov 11:41 (1 h ago)"), "an age is not a cause")
+        #expect(C.catalogCause("checked 2 Nov 10:41 (45 min ago)", when: ["2 Nov 10:41", "45 min ago"])
+                == C.catalogCause("checked 2 Nov 11:41 (1 h ago)", when: ["2 Nov 11:41", "1 h ago"]), "the line's own WHEN is not a cause")
         #expect(C.cause("sidecar can't be opened — disk I/O error") != C.cause("sidecar can't be opened — no such file"))
         // Codex closing-4: a drive name with a space and a number is a NAME.
         // Database / Files words are names and facts: only the WHEN is masked.
-        #expect(C.catalogCause("not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)")
-                != C.catalogCause("not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)"))
-        #expect(C.catalogCause("checked 2 Nov 10:41 (45 min ago)") == C.catalogCause("checked 2 Nov 11:41 (1 h ago)"))
-        #expect(C.key("Analyzing 999 of 2,000 files", .content) == C.key("Analyzing 1,000 of 2,000 files", .content))
+        #expect(C.catalogCause("not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)", when: [])
+                != C.catalogCause("not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)", when: []))
+        #expect(C.key(CatalogStatusLine(kind: .content, state: .inProgress, words: "Analyzing 999 of 2,000 files"))
+                == C.key(CatalogStatusLine(kind: .content, state: .inProgress, words: "Analyzing 1,000 of 2,000 files")))
         let a = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 1 (30 files)")
         let b = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 2 (30 files)")
         let rest = (CatalogStatusLine(kind: .database, state: .green, words: "ok"), CatalogStatusLine(kind: .content, state: .green, words: "Up to date"))
@@ -500,19 +501,22 @@ struct CatalogStatusTransitionLogTests {
         #expect(same.isEmpty)
     }
 
-    @Test("RED Codex closing-6: a numbered event name in a Database cause is a name — 'Birthday 1' → 'Birthday 2' is one transition")
+    @Test("RED Codex closing-6/7: numbered and date-bearing event names in a Database cause are names — one transition each")
     func eventNamesAreNames() {
-        func db(_ name: String) -> CatalogStatusLine {
-            CatalogStatusLine(kind: .database, state: .red, words: "Red: event \"\(name)\": a member points at a row that no longer exists (id:7) — checked Nov 3, 2026 at 9:41 PM (12 min ago)",
-                              detail: ["Fix: open the event and remove the member"])
+        func db(_ name: String, at: String = "Nov 3, 2026 at 9:41 PM", age: String = "12 min ago") -> CatalogStatusLine {
+            CatalogStatusLine(kind: .database, state: .red, words: "Red: event \"\(name)\": a member points at a row that no longer exists (id:7) — checked \(at) (\(age))",
+                              detail: ["Fix: open the event and remove the member"], when: [at, age])
         }
         let files = CatalogStatusLine(kind: .files, state: .green, words: "3 present")
         let content = CatalogStatusLine(kind: .content, state: .green, words: "Up to date")
         let said = CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("Birthday 1"), files: files, content: content),
                                                   new: CatalogStatusLines(database: db("Birthday 2"), files: files, content: content))
         #expect(said.count == 1, "\(said)")
-        // …while the check's date, time and age moving on is still not a change.
-        var later = db("Birthday 1"); later.words = later.words.replacingOccurrences(of: "Nov 3, 2026 at 9:41 PM (12 min ago)", with: "Nov 4, 2026 at 10:02 AM (1 h ago)")
+        // Codex closing-7: a date-bearing event name is a name too.
+        #expect(CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("July 4"), files: files, content: content),
+                                               new: CatalogStatusLines(database: db("July 5"), files: files, content: content)).count == 1)
+        // …while the check's own date and age moving on is not a change.
+        let later = db("Birthday 1", at: "Nov 4, 2026 at 10:02 AM", age: "1 h ago")
         #expect(CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("Birthday 1"), files: files, content: content),
                                                new: CatalogStatusLines(database: later, files: files, content: content)).isEmpty)
     }
@@ -521,8 +525,11 @@ struct CatalogStatusTransitionLogTests {
     func causeNotCounts() {
         let a = CatalogStatusLine(kind: .content, state: .grey, words: "12 left to analyze")
         let b = CatalogStatusLine(kind: .content, state: .grey, words: "11 left to analyze")
-        let db = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 10:41 (1 h ago)")
-        let db2 = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 11:41 (2 h ago)")
+        // The builders record their WHEN (date, age) on the line; so do these.
+        let db = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 10:41 (1 h ago)",
+                                   when: ["2 Nov 10:41", "1 h ago"])
+        let db2 = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 11:41 (2 h ago)",
+                                    when: ["2 Nov 11:41", "2 h ago"])
         let files = CatalogStatusLine(kind: .files, state: .yellow, words: "Yellow: files not checked yet")
         let files2 = CatalogStatusLine(kind: .files, state: .yellow, words: "Yellow: 3 present — older than 24 hours")
         let old = CatalogStatusLines(database: db, files: files, content: a)
