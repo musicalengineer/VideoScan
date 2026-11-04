@@ -179,10 +179,16 @@ struct DuplicateDetectorDigestTests {
 
 // MARK: - LOGIC: tier 3 expected silence
 
-private func silentRow(_ path: String, seconds: Double, tagged: Bool = false) -> IntegrityRow {
+/// A Video+Audio row whose current (v4) sound print is silent: `.fingerprinted`
+/// with zero landmarks = MEASURED silence (information since 2026-11-02);
+/// `.noAudio` = the print recorded no audio track (still a decision —
+/// Fingerprint Sound again is its verb).
+private func silentRow(_ path: String, seconds: Double, tagged: Bool = false,
+                       outcome: AudioFingerprintStamp.Outcome = .fingerprinted) -> IntegrityRow {
     IntegrityRow(fullPath: path, sizeBytes: 100, durationSeconds: seconds, streamTypeRaw: StreamType.videoAndAudio.rawValue,
                  fullDigest: hex(5), audioFingerprint: AudioFingerprintStamp(computedAt: settleNow, contentDigest: "sha256:" + hex(5),
-                                                                              sizeBytes: 100, outcome: .fingerprinted, analyzedSeconds: max(seconds, 1),
+                                                                              sizeBytes: 100, outcome: outcome,
+                                                                              analyzedSeconds: outcome == .noAudio ? 0 : max(seconds, 1),
                                                                               complete: true, landmarks: 0, bytes: 0),
                  silenceCheckedByPerson: tagged)
 }
@@ -209,17 +215,38 @@ struct VerifyCatalogExpectedSilenceTests {
         #expect(out.tier.summary.contains("4 Live Photo motion clips — silent by design"), Comment(rawValue: out.tier.summary))
     }
 
-    @Test("NARROW: a long clip in a library, a short clip OUTSIDE a library, a long videocomplementoutput, an unknown duration — each still needs a decision")
+    /// The five rows the Live Photo rule must NOT pass: a long clip in a
+    /// library, a short clip outside one, a long videocomplementoutput, an
+    /// unknown duration, one just over the 3.5 s ceiling.
+    static func narrowRows(_ outcome: AudioFingerprintStamp.Outcome) -> [IntegrityRow] {
+        [silentRow(lib + "/IMG_0009.MOV", seconds: 12.3, outcome: outcome),
+         silentRow("/Volumes/Synthetic/AVCHD/BDMV/STREAM/00051.MTS", seconds: 1.0, outcome: outcome),
+         silentRow("/Volumes/Synthetic/Exports/videocomplementoutput_9.mov", seconds: 8.0, outcome: outcome),
+         silentRow(lib + "/videocomplementoutput_0.mov", seconds: 0, outcome: outcome),
+         silentRow(lib + "/IMG_0010.MOV", seconds: 3.51, outcome: outcome)]
+    }
+
+    // 2026-11-04: until b627eb445 (DECISIONS 2026-11-02) this test asserted
+    // `.needsDecision(5)` on MEASURED-silence rows; that commit made measured
+    // silence information (needsDecision false, never a colour) and flipped
+    // its sibling tests but not this one, so it was red on every build.
+    // The narrow rule is now proved on both hearings: measured silence is
+    // kept as 5 informational findings (not passed as Live Photos), and a
+    // print that recorded no audio still needs 5 decisions.
+    @Test("NARROW: a long clip in a library, a short clip OUTSIDE a library, a long videocomplementoutput, an unknown duration — none is passed as a Live Photo; measured silence is kept as information, a print with no audio still needs a decision")
     func narrowRuleStillFlags() {
-        let rows = [silentRow(Self.lib + "/IMG_0009.MOV", seconds: 12.3),
-                    silentRow("/Volumes/Synthetic/AVCHD/BDMV/STREAM/00051.MTS", seconds: 1.0),
-                    silentRow("/Volumes/Synthetic/Exports/videocomplementoutput_9.mov", seconds: 8.0),
-                    silentRow(Self.lib + "/videocomplementoutput_0.mov", seconds: 0),
-                    silentRow(Self.lib + "/IMG_0010.MOV", seconds: 3.51)]
-        let out = tier3(rows)
-        #expect(out.findings.count == 5)
-        #expect(out.tier.result == .needsDecision(5))
-        #expect(!out.tier.summary.contains("silent by design"))
+        let measured = tier3(Self.narrowRows(.fingerprinted))
+        #expect(measured.findings.count == 5, "not passed as Live Photo motion clips")
+        #expect(measured.findings.allSatisfy { $0.rule == VerifyCatalogTiers.silentPrintRule && !$0.needsDecision })
+        #expect(measured.tier.result == .ok && measured.tier.needsDecision == 0, "measured silence is information (DECISIONS 2026-11-02)")
+        #expect(measured.tier.summary.contains(VerifyCatalogTiers.measuredSilenceWords(5)), Comment(rawValue: measured.tier.summary))
+        #expect(!measured.tier.summary.contains("silent by design"), Comment(rawValue: measured.tier.summary))
+
+        let noAudio = tier3(Self.narrowRows(.noAudio))
+        #expect(noAudio.findings.count == 5 && noAudio.findings.allSatisfy(\.needsDecision))
+        #expect(noAudio.tier.result == .needsDecision(5))
+        #expect(noAudio.tier.summary.contains("5 headers say sound the print never heard"), Comment(rawValue: noAudio.tier.summary))
+        #expect(!noAudio.tier.summary.contains("silent by design"), Comment(rawValue: noAudio.tier.summary))
     }
 
     @Test("a person's \"Silent — checked\" tag passes a silent print anywhere; the projection reads the tag case-insensitively from the record")
