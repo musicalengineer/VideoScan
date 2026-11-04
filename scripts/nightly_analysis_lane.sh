@@ -11,7 +11,7 @@
 # lane. The verdict logic is scripts/analysis_lane.py (tested); this file owns
 # processes, paths and timeouts only.
 #
-# Stages (default: ratchet,census,periphery,memsafe; --stages picks; `lint` is opt-in, see below):
+# Stages (default: ratchet,census,swiftlint,periphery,memsafe; --stages picks; `lint` is opt-in, see below):
 #   ratchet    clean Debug `xcodebuild build-for-testing` with the sensor lane's
 #              flags + clean `swift build --build-tests -vv` for Core, then
 #              warning_ratchet.py check (RED = a regression overnight), progress
@@ -21,6 +21,10 @@
 #              assumeIsolated, unchecked locks, Unsafe*Pointer, unsafeBitCast,
 #              try!, as!, force-unwrap (swiftlint) per target, per-file deltas
 #              against the previous night's census (report mode; TODO ratchet).
+#   swiftlint  `swiftlint lint --strict --reporter xcode` from the repo root (the
+#              GitHub lint-strict job's command and count, off since 11/04 with the
+#              runner's old Swift) plus the warn-only run (lint-warn) for the
+#              severity split. ~2 s cached, under a minute cold; needs no build.
 #   lint       swiftlint analyze (unused_import, unused_declaration) on the clean
 #              build's compiler log — counts only. OPT-IN (--stages …,lint):
 #              measured 2026-10-25 on the M4, each file's SourceKit index request
@@ -33,13 +37,19 @@
 #   memsafe    a separate Debug build with OTHER_SWIFT_FLAGS=-strict-memory-safety
 #              (Swift 6.2+; probed first) into its own DerivedData, plus Core
 #              with -Xswiftc -strict-memory-safety; diagnostics counted.
-# Optional (--sanitizer thread|address, repeatable; or `auto` = the rota's day):
+# Optional (--sanitizer thread|address, repeatable; or `auto` = the rota's day).
+# NOT in the installed nightly since 2026-11-04: the weekly jobs
+# (install_sanitizer_weekly.sh) own the sanitizers; a lane run would double them.
 #   sanitizer  weekly_sanitizer.py --configuration Release --target all
 #              [--subset catalog]; TSan or ASan+UBSan findings = RED stage.
 #              The two kinds cannot share a build and do not share a night.
 #
+# At the end the report is published (tools/publish_metrics.py →
+# metrics/static_analysis.jsonl, numbers only, source "m4-analysis-lane");
+# VIDEOSCAN_PUBLISH_METRICS=0 or --no-publish skips it.
+#
 # Usage:
-#   scripts/nightly_analysis_lane.sh                       # the five stages
+#   scripts/nightly_analysis_lane.sh                       # the five stages, then publish
 #   scripts/nightly_analysis_lane.sh --sanitizer thread    # + a TSan pass (Core + app, Release)
 #   scripts/nightly_analysis_lane.sh --stages census,periphery --no-wait
 #   scripts/nightly_analysis_lane.sh --sanitizer auto --subset catalog
@@ -69,6 +79,13 @@
 # adds ~1.5–2.5 h (Release, Core + app); hence one kind per night, by weekday
 # (`auto`), and `--subset catalog` (545 app suites + all of Core) when short.
 #
+# Measured 2026-11-04 on the M4 (Xcode 27, idle, 3994736ea): the whole lane
+# 448 s — clean app build-for-testing 219 s, Core 36 s, census 6 s, swiftlint
+# 3 s (both runs), periphery 48 s, memsafe 136 s; publish ~20 s more. At the
+# 04:30 slot the wait above holds it until the 04:00 coverage job exits
+# (~04:45), so it ends ~04:55: before the 05:00 Sunday TSan and the 05:30
+# adversarial confirm. It overlaps the 04:30 model review (ollama, no build).
+#
 # Memory: the lane holds nothing; xcodebuild and swiftlint own their peaks.
 
 set -u
@@ -85,7 +102,8 @@ WAIT_MINUTES="${VIDEOSCAN_ANALYSIS_WAIT_MINUTES:-120}"
 GRACE="${VIDEOSCAN_ANALYSIS_TERM_GRACE_SECONDS:-10}"
 PY="${VIDEOSCAN_ANALYSIS_PYTHON:-python3}"
 
-STAGES="ratchet,census,periphery,memsafe"
+STAGES="ratchet,census,swiftlint,periphery,memsafe"
+PUBLISH=true
 SANITIZERS=""
 SUBSET="full"
 WAIT=true
@@ -95,6 +113,7 @@ while [ $# -gt 0 ]; do
         --sanitizer) SANITIZERS="$SANITIZERS $2"; shift 2 ;;
         --subset) SUBSET="$2"; shift 2 ;;
         --no-wait) WAIT=false; shift ;;
+        --no-publish) PUBLISH=false; shift ;;
         -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -141,18 +160,31 @@ log "=== Swift 6 analysis lane v$LANE_VERSION — $HOSTNAME_ — $REPO @ $COMMIT
 
 has_stage() { case ",$STAGES," in *",$1,"*) return 0 ;; esac; return 1; }
 
-# Wait for the test nightly (another xcodebuild) to finish — the fleet runs
-# this lane after it, and two builds at once double both their times.
+# Wait for the M4's other night jobs — two builds at once double both their
+# times, and the weekly sanitizer gives up ("skipped-busy") after 90 min of a
+# busy Mac. Busy = any xcodebuild, or one of the jobs below between its own
+# builds (coverage's Core `swift test` runs after its xcodebuild; the
+# adversarial confirm runs `swift test` in a sandbox).
+BUSY_JOBS="nightly_guarded.sh nightly_local_tests.sh nightly_coverage.py weekly_sanitizer.py adversarial_nightly.py"
+busy_reason() {
+    pgrep -x xcodebuild >/dev/null 2>&1 && { echo "an xcodebuild"; return 0; }
+    local j
+    for j in $BUSY_JOBS; do
+        pgrep -f "$j" >/dev/null 2>&1 && { echo "$j"; return 0; }
+    done
+    return 1
+}
 if $WAIT; then
     waited=0
-    while pgrep -x xcodebuild >/dev/null 2>&1; do
+    while why=$(busy_reason); do
         if [ "$waited" -ge $((WAIT_MINUTES * 60)) ]; then
-            log "another xcodebuild still running after ${WAIT_MINUTES} min — running anyway (times will be inflated)"
+            log "busy: $why still running after ${WAIT_MINUTES} min — running anyway (times will be inflated)"
             break
         fi
-        [ "$waited" -eq 0 ] && log "another xcodebuild is running (the test nightly?) — waiting up to ${WAIT_MINUTES} min"
+        [ "$waited" -eq 0 ] && log "busy: $why is running — waiting up to ${WAIT_MINUTES} min"
         sleep 60; waited=$((waited + 60))
     done
+    [ "$waited" -gt 0 ] && log "waited $((waited / 60)) min for the Mac to go quiet"
 fi
 
 # The sensor lane's exact build flags (scripts/sensor_lane.py run_app), minus
@@ -210,6 +242,24 @@ if has_stage census; then
     t0=$(date +%s)
     stage_py census --state "$LOGDIR/census.json"
     log "census done in $(( $(date +%s) - t0 ))s"
+fi
+
+# ── swiftlint --strict (GitHub's lint-strict + lint-warn) ───────────
+if has_stage swiftlint; then
+    add_expect swiftlint
+    t0=$(date +%s)
+    SL_STRICT="$RUN_DIR/swiftlint-strict.txt"; SL_WARN="$RUN_DIR/swiftlint-warn.txt"
+    # From the repo root, as the GitHub job ran it: .swiftlint.yml's included/excluded are relative to it.
+    run_with_process_group_watchdog "$TOOL_TIMEOUT" "$GRACE" "$SL_STRICT" \
+        /bin/bash -c 'cd "$1" && exec swiftlint lint --strict --no-cache --reporter xcode' _ "$REPO"
+    SL_STRICT_RC=$?
+    $NIGHTLY_WATCHDOG_DID_TIMEOUT && SL_STRICT_RC=124
+    run_with_process_group_watchdog "$TOOL_TIMEOUT" "$GRACE" "$SL_WARN" \
+        /bin/bash -c 'cd "$1" && exec swiftlint lint --no-cache --reporter xcode' _ "$REPO"
+    SL_WARN_RC=$?
+    $NIGHTLY_WATCHDOG_DID_TIMEOUT && SL_WARN_RC=124
+    stage_py swiftlint --strict-out "$SL_STRICT" --strict-rc "$SL_STRICT_RC" --warn-out "$SL_WARN" --warn-rc "$SL_WARN_RC"
+    log "swiftlint done in $(( $(date +%s) - t0 ))s (strict rc=$SL_STRICT_RC, warn rc=$SL_WARN_RC)"
 fi
 
 # ── lint (swiftlint analyze) ────────────────────────────────────────
@@ -313,5 +363,11 @@ ELAPSED=$(( $(date +%s) - LANE_START ))
     --latest "$LOGDIR/latest.json" --runs "$LOGDIR/runs.jsonl" --markdown "$LOGDIR/$DATE-report.md" \
     --commit "$COMMIT" --host "$HOSTNAME_" --elapsed "$ELAPSED"
 RC=$?
+# Publish (numbers only; the privacy gate is tools/publish_metrics.py's). A failed
+# publish is logged, never turns the lane red: the verdict above is the lane's.
+if $PUBLISH && [ "${VIDEOSCAN_PUBLISH_METRICS:-1}" != "0" ]; then
+    "$PY" "$REPO/tools/publish_metrics.py" --analysis-dir "$LOGDIR" > "$RUN_DIR/publish.log" 2>&1
+    log "publish: rc=$? $(grep '^OUTCOME' "$RUN_DIR/publish.log" | tail -1) (log $RUN_DIR/publish.log)"
+fi
 log "=== Swift 6 analysis lane done in ${ELAPSED}s — $([ "$RC" -eq 0 ] && echo GREEN || echo RED) — report $LOGDIR/$DATE-report.md ==="
 exit "$RC"

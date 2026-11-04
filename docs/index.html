@@ -1176,12 +1176,35 @@ function sanitizerWords(k) {
   if (k.row.status !== "ok" && k.row.status !== "findings") extra.push(esc(k.row.status));
   return `${counts} (${day(k.row.date)}, ${k.age === 0 ? "today" : `${k.age} d ago`}${extra.length ? `; ${extra.join("; ")}` : ""})`;
 }
+// Static checks come from the M4's Swift 6 analysis lane (scripts/nightly_analysis_lane.sh;
+// tools/publish_metrics.py, rows with source "m4-analysis-lane" on static_analysis.jsonl) since
+// GitHub's build jobs went off on 2026-11-04 (no Swift 6.4 on the runner). GitHub's own rows stay on
+// the stream (complexity, ratchets) but are never read here. Past STALE_HOURS the counts are not shown.
+const LANE_SOURCE = "m4-analysis-lane";
+const CODEQL_OFF = "CodeQL off: GitHub runner Swift too old; not run locally";
+function analysisRun(d) {
+  const rows = d.staticRows.filter(r => r.source === LANE_SOURCE);
+  const row = rows.length ? rows[rows.length - 1] : null;
+  const age = row ? hoursSince(row.ts) : Infinity;
+  return { rows, row, age, fresh: row != null && age <= STALE_HOURS };
+}
+const ageWords = h => h < 48 ? `${Math.max(0, Math.round(h))} h ago` : `${Math.round(h / 24)} days ago`;
+function analysisWords(L) {
+  if (!L.row) return `Static checks (M4 analysis lane): ${word("grey", "no lane run published")}`;
+  if (!L.fresh) return `Static checks (M4 analysis lane): ${word("grey", `no run in ${Math.round(L.age / 24)} days`)} (last ${day(L.row.ts)})`;
+  const st = L.row, wk = daysBefore(L.rows, 7) || {};
+  const cmp = (k, lab) => isNum(st[k]) ? `${lab} ${n(st[k])}${isNum(wk[k]) ? (st[k] === wk[k] ? " (flat)" : ` (${n(wk[k])} a week ago)`) : ""}` : `${lab} ${NO_DATA}`;
+  const red = st.status === "red" ? ` ${word("red", "lane red")}` : "";
+  return `Static checks (M4 analysis lane, ${day(st.ts)}, ${ageWords(L.age)})${red}: ${cmp("strict_warning_total", "strict warnings")}, ` +
+    `${cmp("concurrency_warnings", "concurrency")}, ${cmp("swiftlint_strict", "SwiftLint")}, ${cmp("periphery_aggressive", "Periphery")}, ` +
+    `${cmp("memory_safety_warnings", "memory safety")}`;
+}
 // Each area: state, one sentence, the one number, trend vs 7 days ago, sparkline, then the detail body.
 const AREAS = [
   { id: "tests", name: "Tests & nightly", sub: "2 AM Release run on each Mac · coverage 4 AM" },
   { id: "size", name: "Code health", sub: "Code size · complexity · technical debt" },
   { id: "debt", name: "Debt trend", sub: "CCN > 15 ratchet · over-exposure · problem files" },
-  { id: "san", name: "Sanitizers & static checks", sub: "sanitizers weekly on the M4 · static checks GitHub nightly" },
+  { id: "san", name: "Sanitizers & static checks", sub: "sanitizers weekly on the M4 · static checks nightly on the M4" },
   { id: "hallie", name: "Hallie eval", sub: "nightly replay of the frozen suite" },
   { id: "events", name: "Event recognition", sub: "events prototype v0 · captions + transcripts + dates" },
   { id: "reviews", name: "Reviews", sub: "adversarial nightly · codex" },
@@ -1286,10 +1309,9 @@ const SUMMARY = {
     };
   },
   san(d) {
-    const rows = d.staticRows, last = rows.length ? rows[rows.length - 1] : null;
-    const wk = daysBefore(rows, 7) || {};
-    if (!last && !d.sanRows.length) return NO_LINE;
-    const st = last || {};
+    const L = analysisRun(d), last = L.fresh ? L.row : null;
+    const wk = daysBefore(L.rows, 7) || {};
+    if (!L.row && !d.sanRows.length) return NO_LINE;
     // Sanitizer counts come from the M4's weekly runs only (metrics/sanitizer.jsonl), never from
     // static_analysis.jsonl, whose sanitizer fields are null since the GitHub jobs stopped building.
     const runs = sanitizerRuns(d), fresh = runs.filter(k => k.fresh);
@@ -1305,13 +1327,12 @@ const SUMMARY = {
     const sanWords = `Weekly on the M4: ${runs.map(sanitizerWords).join(" · ")}.`;
     const head = isNum(total) ? `${total} sanitizer finding${total === 1 ? "" : "s"}`
       : d.sanRows.length ? `sanitizers: no run in ${SAN_STALE_DAYS} days` : "sanitizers: no run published";
-    const cmp = (k, lab) => isNum(st[k]) ? `${lab} ${n(st[k])}${isNum(wk[k]) ? (st[k] === wk[k] ? " (flat)" : ` (${n(wk[k])} a week ago)`) : ""}` : `${lab} ${NO_DATA}`;
     return {
       state,
-      sentence: `<b>${head}.</b> ${sanWords} Static checks (GitHub nightly${last ? `, ${day(last.ts)}` : ""}): ${cmp("codeql_findings", "CodeQL")}, ${cmp("strict_warning_total", "strict warnings")}, ${cmp("swiftlint_strict", "SwiftLint")}, ${cmp("periphery_aggressive", "Periphery")}.${naWords}`,
+      sentence: `<b>${head}.</b> ${sanWords} ${analysisWords(L)}; ${word("grey", CODEQL_OFF)}.${naWords}`,
       number: isNum(total) ? `${total} finding${total === 1 ? "" : "s"}` : DASH,
       trend: last ? trend(wk.strict_warning_total, last.strict_warning_total, true, " warnings", wk.ts || null) : `<span class="trend">no data</span>`,
-      spark: lastPerDay(rows).slice(-30).map(r => isNum(r.strict_warning_total) ? r.strict_warning_total : null),
+      spark: lastPerDay(L.rows).slice(-30).map(r => isNum(r.strict_warning_total) ? r.strict_warning_total : null),
       sparkColor: C.blue,
     };
   },
@@ -1671,26 +1692,26 @@ const BODIES = {
 
   san(d) {
     const body = document.getElementById("body-san");
-    const rows = d.staticRows, last = rows.length ? rows[rows.length - 1] : {};
-    const prev = rows.length > 1 ? rows[rows.length - 2] : {};
+    // The cards read the M4 lane's newest row (none past STALE_HOURS); the charts keep the whole
+    // stream, GitHub's history before 11/04 and the lane's nights after.
+    const rows = d.staticRows, L = analysisRun(d), last = L.fresh ? L.row : {};
+    const prev = L.fresh && L.rows.length > 1 ? L.rows[L.rows.length - 2] : {};
     const extraction = r => isNum(r.codeql_extracted_files) && isNum(r.codeql_in_scope_files) && r.codeql_in_scope_files > 0
       ? +(100 * r.codeql_extracted_files / r.codeql_in_scope_files).toFixed(1) : null;
     const spec = [
-      ["CodeQL findings", "codeql_findings"], ["Strict-concurrency warnings", "concurrency_warnings"],
+      ["Strict-concurrency warnings", "concurrency_warnings"],
       ["All strict warnings", "strict_warning_total"], ["Memory-safety warnings", "memory_safety_warnings"],
       ["Periphery dead code", "periphery_aggressive"], ["SwiftLint --strict", "swiftlint_strict"],
     ];
-    const cards = rows.length ? spec.map(([label, key]) => card(label, isNum(last[key]) ? last[key] : null, prev[key], last[key], true)) : [card("Static analysis", null, null, null, false, "No nightly static-analysis rows published yet.")];
+    const why = !L.row ? "no M4 analysis lane run published" : !L.fresh ? `no run in ${Math.round(L.age / 24)} days` : null;
+    const cards = spec.map(([label, key]) => card(label, isNum(last[key]) ? last[key] : null, prev[key], last[key], true,
+      why || `M4 analysis lane, ${day(L.row.ts)} · ${ageWords(L.age)}`));
+    cards.unshift(card("CodeQL findings", null, null, null, true, CODEQL_OFF));
     // One card per sanitizer, from the newest M4 run of its kind; stale or missing is "no data yet".
     for (const k of sanitizerRuns(d)) for (const [lab, key] of k.keys) {
       const v = k.fresh && isNum(k.row[key]) ? k.row[key] : null;
       const why = !k.row ? "no run published" : !k.fresh ? `no run in ${k.age} days` : `weekly on the M4, ${day(k.row.date)}${k.row.host_restarts > 0 ? ` · host restarted ${k.row.host_restarts}×` : ""}`;
       cards.push(card(`${lab} unique findings`, v, null, null, true, why));
-    }
-    if (rows.length) {
-      const ex = extraction(last);
-      cards.push(card("CodeQL extraction", ex == null ? null : `${ex}%`, null, null, false, ""));
-      cards.push(card("CodeQL extraction errors", isNum(last.codeql_extraction_errors) ? last.codeql_extraction_errors : null, prev.codeql_extraction_errors, last.codeql_extraction_errors, true));
     }
     body.innerHTML = moved("Moved here unchanged: the Static analysis cards, its four charts (CodeQL findings and extraction are two charts now) and the findings-by-tool table. Only counts, tool names and severities are read, never titles or paths.") +
       `<div class="cards">${cards.join("")}</div><div class="charts">` +

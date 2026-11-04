@@ -267,6 +267,131 @@ class Report(unittest.TestCase):
         self.assertTrue(lane.alert_lines({"date": "x"}, now)[0].startswith("🔴"), "an unreadable row is loud")
 
 
+# ---------------------------------------------------------------- swiftlint --strict (2026-11-04)
+# The GitHub lint-strict job (off since 11/04: the hosted runner has no Swift 6.4)
+# counted `swiftlint lint --strict --reporter xcode` lines matching ": warning:|: error:"
+# into static_analysis.jsonl's swiftlint_strict. The M4 lane now owns that number;
+# these pin that it is the same count, and that a crashed or silent swiftlint is red.
+
+def sl_line(path, line, rule, sev="error"):
+    return f"{path}:{line}:9: {sev}: Some Violation: words ({rule})"
+
+
+def sl_out(lines, found=None, serious=None, files=2):
+    found = len(lines) if found is None else found
+    serious = found if serious is None else serious
+    return ("Linting Swift files in current working directory\nLinting 'A.swift' (1/2)\n" + "\n".join(lines) +
+            f"\nDone linting! Found {found} violations, {serious} serious in {files} files.\n")
+
+
+class SwiftLintStrict(unittest.TestCase):
+    def _run(self, strict_text, strict_rc=2, warn_text=None, warn_rc=0):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            s = write(d, "strict.txt", strict_text) if strict_text is not None else d / "absent.txt"
+            w = write(d, "warn.txt", warn_text) if warn_text is not None else None
+            return lane.swiftlint(s, strict_rc, w, warn_rc)
+
+    def test_the_count_is_githubs_count_and_agrees_with_swiftlints_own_total(self):
+        lines = [sl_line(A, 3, "force_unwrapping"), sl_line(A, 9, "force_unwrapping"),
+                 sl_line(REPO / "VideoScan/VideoScan/App/B.swift", 1, "line_length")]
+        warn = sl_out([l.replace(": error:", ": warning:") for l in lines[:2]] + [lines[2]], serious=1)
+        r = self._run(sl_out(lines), 2, warn, 2)
+        self.assertEqual((r["status"], r["number"]), ("ok", 3))
+        self.assertTrue(r["line"].startswith("swiftlint --strict: 3 violation(s) in 2 file(s) (force_unwrapping 2, line_length 1)"), r["line"])
+        self.assertIn("without --strict: 2 warning(s), 1 error(s)", r["line"])
+        self.assertEqual(r["extra"]["by_rule"], {"force_unwrapping": 2, "line_length": 1})
+
+    def test_a_custom_rule_with_capitals_is_counted(self):
+        # RED 2026-11-04 on the real output: custom rule `chained_sheet_isPresented`
+        # did not match [a-z0-9_]; 355 parsed against swiftlint's 359.
+        r = self._run(sl_out([sl_line(A, 3, "chained_sheet_isPresented"), sl_line(A, 4, "force_unwrapping")]), 2)
+        self.assertEqual((r["status"], r["number"]), ("ok", 2), r["line"])
+        self.assertIn("chained_sheet_isPresented 1", r["line"])
+
+    def test_no_violations_is_zero_and_green(self):
+        r = self._run(sl_out([], files=1100), 0)
+        self.assertEqual((r["status"], r["number"]), ("ok", 0))
+
+    def test_a_swiftlint_that_printed_nothing_is_red_with_no_number(self):
+        for text in (None, "", "Linting Swift files in current working directory\n"):
+            r = self._run(text, 2)
+            self.assertEqual((r["status"], r["number"]), ("red", None), text)
+            self.assertIn("RED", r["line"])
+
+    def test_a_count_that_disagrees_with_swiftlints_total_is_red(self):
+        r = self._run(sl_out([sl_line(A, 3, "force_unwrapping")], found=5), 2)
+        self.assertEqual((r["status"], r["number"]), ("red", None))
+        self.assertIn("1 parsed but swiftlint says 5", r["line"])
+
+    def test_an_exit_code_other_than_clean_or_violations_is_red(self):
+        r = self._run(sl_out([sl_line(A, 3, "force_unwrapping")]), 1)
+        self.assertEqual((r["status"], r["number"]), ("red", None))
+        self.assertIn("exited 1", r["line"])
+
+    def test_the_warn_only_run_is_detail_and_never_makes_the_stage_red(self):
+        r = self._run(sl_out([sl_line(A, 3, "force_unwrapping")]), 2, None)
+        self.assertEqual((r["status"], r["number"]), ("ok", 1))
+        self.assertIn("without --strict: not run", r["line"])
+
+
+class StaticAnalysisMetrics(unittest.TestCase):
+    """report() names the numbers with static_analysis.jsonl's field names, so
+    tools/publish_metrics.py copies them without knowing the stages."""
+
+    def test_ratchet_counts_concurrency_warnings_like_the_github_job(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            app = write(d, "app.log", "\n".join([compiled(A), warn(A, 10, DEPRECATED),
+                                                  warn(A, 11, "capture of 'x' with non-Sendable type 'Y' in a @Sendable closure"),
+                                                  warn(A, 12, "main actor-isolated property 'z' can not be referenced from a nonisolated context"),
+                                                  warn(A, 13, "expression uses unsafe constructs but is not marked with 'unsafe' [#StrictMemorySafety]"),
+                                                  "** BUILD SUCCEEDED **"]) + "\n")
+            core = write(d, "core.log", "Compile X.swift\n")
+            b = baseline(d, {(A_REL, "deprecated"): 1, (A_REL, "sendable-capture"): 1, (A_REL, "main-actor"): 1,
+                             (A_REL, "other"): 1}, 4)
+            r = lane.ratchet(app, core, 0, 0, False, b)
+            self.assertEqual(r["number"], 4)
+            self.assertEqual(r["extra"]["concurrency"], 2)
+
+    def _stage(self, d, name, status="ok", number=0, line=None, extra=None):
+        (d / f"{name}.json").write_text(json.dumps(lane.result(name, status, number, line or f"{name}: {number}", [], extra or {})))
+
+    def test_report_maps_each_number_to_its_static_analysis_field(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            st = d / "stages"; st.mkdir()
+            self._stage(st, "ratchet", number=455, extra={"concurrency": 7})
+            self._stage(st, "census", number=1386)
+            self._stage(st, "swiftlint", number=359)
+            self._stage(st, "periphery", number=21)
+            self._stage(st, "memsafe", number=466)
+            row = lane.report(st, ["ratchet", "census", "swiftlint", "periphery", "memsafe"], d / "l.json", d / "r.jsonl",
+                              None, "abc1234", "RicksM4", 10.0)
+            self.assertEqual(row["metrics"], {"strict_warning_total": 455, "concurrency_warnings": 7,
+                                              "memory_safety_warnings": 466, "swiftlint_strict": 359,
+                                              "periphery_aggressive": 21, "escape_hatches": 1386})
+            self.assertEqual(json.loads((d / "r.jsonl").read_text())["metrics"], row["metrics"])
+
+    def test_a_red_unavailable_or_missing_stage_is_null_never_zero(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            st = d / "stages"; st.mkdir()
+            self._stage(st, "ratchet", status="red", number=None)
+            self._stage(st, "memsafe", status="unavailable", number=None)
+            self._stage(st, "swiftlint", status="red", number=12)
+            row = lane.report(st, ["ratchet", "memsafe", "swiftlint", "periphery"], d / "l.json", None, None, "abc", "h", None)
+            m = row["metrics"]
+            self.assertIsNone(m["strict_warning_total"]); self.assertIsNone(m["concurrency_warnings"])
+            self.assertIsNone(m["memory_safety_warnings"]); self.assertIsNone(m["periphery_aggressive"])
+            self.assertIsNone(m["swiftlint_strict"], "a red stage's number is not published as tonight's count")
+            self.assertIsNone(m["escape_hatches"])
+
+    def test_swiftlint_is_a_default_stage_and_the_sanitizer_is_not(self):
+        self.assertIn("swiftlint", lane.LANE_STAGES)
+        self.assertFalse([s for s in lane.LANE_STAGES if s.startswith("sanitizer")])
+
+
 class CLI(unittest.TestCase):
     def test_each_stage_subcommand_prints_one_line_and_writes_its_json(self):
         with tempfile.TemporaryDirectory() as d:
