@@ -388,11 +388,13 @@
         "JobScheduleTests",
         "JobScheduleReentrancyTests",
         "JobScheduleCodex235Tests",
-        "JobScheduleCodex236Tests"
+        "JobScheduleCodex236Tests",
+        "JobScheduleCodex237Tests"
       ],
       "tests": [
         "activeJobIsNotDoubled",
         "adoptedRequestOfAHeldKindNeverStarts",
+        "catalogReleaseRequeuesTheKeptRequest",
         "contenderTouchesNothing",
         "crashLoopUnitIsQuarantined",
         "enqueueRespectsUniquenessAndHolds",
@@ -409,11 +411,14 @@
         "plansAtLaunchWithNoMessage",
         "quarantineReconcilesWithTheJob",
         "relaunchAdoptsOnePerKind",
+        "restoredFailFastAtTheEndIsAFailure",
+        "restoredFailFastMidPlanStopsAtOnce",
         "resumeRequeuesTheKeptRequest",
         "shortSystemicJobHolds",
         "stickyIgnoresUnitCounts",
         "tornFileReleasedByANewBuild",
         "tornHoldsFile",
+        "unknownBornHoldIsReleasedByALaterChange",
         "unknownGenerationIsNotAChange"
       ]
     },
@@ -36182,7 +36187,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 703,
+      "package_expected_floor": 707,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36224,6 +36229,7 @@
         "VideoScanCoreTests.JSONDuplicateKeyScannerTests",
         "VideoScanCoreTests.JobScheduleCodex235Tests",
         "VideoScanCoreTests.JobScheduleCodex236Tests",
+        "VideoScanCoreTests.JobScheduleCodex237Tests",
         "VideoScanCoreTests.JobScheduleReentrancyTests",
         "VideoScanCoreTests.JobScheduleTests",
         "VideoScanCoreTests.JobSupervisorIsolationTests",

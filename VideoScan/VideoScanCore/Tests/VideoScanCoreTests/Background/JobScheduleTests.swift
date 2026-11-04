@@ -660,3 +660,100 @@ struct JobScheduleCodex236Tests {
         await second.abandonForTest()
     }
 }
+
+@Suite("JobSchedule — Codex #237 closing reds", .serialized)
+struct JobScheduleCodex237Tests {
+    typealias T = JobScheduleTests
+
+    static func relaunch(_ cp: JobCheckpoint, request: JobRequest, root: URL, log: InMemoryBackgroundLog = InMemoryBackgroundLog()) -> JobSupervisor {
+        let checkpoints = InMemoryCheckpointStore()
+        try? checkpoints.save(cp)
+        return JobSupervisor(queue: InMemoryJobQueueStore([request]), checkpoints: checkpoints,
+                             factory: ScheduleFactory(recorder: UnitRecorder(), failing: true, failingUnits: { cp.totalUnits }),
+                             backoff: BackgroundFixtures.fullBackoff(), log: log, configuration: BackgroundFixtures.fastConfiguration(),
+                             schedule: T.schedule(ScheduleProbe(), root: root))
+    }
+
+    static func checkpoint(_ request: JobRequest, total: Int, completed: Int, run: Int, failed: Int, streak: Int) -> JobCheckpoint {
+        var cp = JobCheckpoint(jobID: request.id, totalUnits: total)
+        cp.completedUnits = completed
+        cp.unitsRun = run
+        cp.unitsFailed = failed
+        var st = FailureStreak()
+        for u in (completed - streak)..<completed { st.record("ffmpeg is missing", unit: u, systemic: true) }
+        st.save(into: &cp)
+        return cp
+    }
+
+    @Test("F1: one success then five identical failures, crash before finish — the relaunch says FAILED and holds")
+    func restoredFailFastAtTheEndIsAFailure() async throws {
+        let root = try BackgroundFixtures.scratch("c237-f1a")
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        let s = Self.relaunch(Self.checkpoint(request, total: 6, completed: 6, run: 1, failed: 5, streak: 5), request: request, root: root)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await s.snapshot(request.id)?.state.isActive == false })
+        guard case .failed? = await s.snapshot(request.id)?.state else {
+            Issue.record("relaunch said \(String(describing: await s.snapshot(request.id)?.state))"); return
+        }
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.isEmpty == false })
+        await s.abandonForTest()
+    }
+
+    @Test("F1: a restored streak at the fail-fast threshold stops the job before another unit runs")
+    func restoredFailFastMidPlanStopsAtOnce() async throws {
+        let root = try BackgroundFixtures.scratch("c237-f1b")
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        let log = InMemoryBackgroundLog()
+        let s = Self.relaunch(Self.checkpoint(request, total: 10, completed: 6, run: 1, failed: 5, streak: 5), request: request, root: root, log: log)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await s.snapshot(request.id)?.state.isActive == false })
+        guard case .failed? = await s.snapshot(request.id)?.state else { Issue.record("not failed"); return }
+        #expect(!log.lines.contains { $0.contains("unit 6 failed") }, "a unit ran after the restored streak: \(log.lines)")
+        await s.abandonForTest()
+    }
+
+    @Test("F3: a catalog release re-queues the kept refused request — no second request beside it")
+    func catalogReleaseRequeuesTheKeptRequest() async throws {
+        let root = try BackgroundFixtures.scratch("c237-f3")
+        let probe = ScheduleProbe()
+        probe.size = 0
+        let a = JobRequest(kind: GatedFactory.kind, requestedBy: "schedule")
+        let queue = InMemoryJobQueueStore([a])
+        let allow = Toggle()
+        let gate = UnitGate()
+        var sc = JobSchedule(kinds: [JobSchedule.Kind(kind: GatedFactory.kind, planSize: { probe.planned() }, makeRequest: { GatedFactory.request() })],
+                             generation: { probe.generation }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        sc.pollInterval = .milliseconds(20)
+        let s = JobSupervisor(queue: queue, checkpoints: InMemoryCheckpointStore(),
+                              factory: RefuseThenGateFactory(allow: allow, gate: gate, recorder: UnitRecorder()),
+                              backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                              configuration: BackgroundFixtures.fastConfiguration(), schedule: sc)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.first?.generation == 1 })
+        allow.on = true
+        probe.size = 3
+        probe.generation = 2
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "the kept request ran after the catalog release")
+        #expect(queue.list().requests.map(\.id) == [a.id], "no second request beside the kept one")
+        gate.open()
+        await s.abandonForTest()
+    }
+
+    @Test("F4: a hold born with an unknown generation takes the first known one; the NEXT change releases it")
+    func unknownBornHoldIsReleasedByALaterChange() async throws {
+        let root = try BackgroundFixtures.scratch("c237-f4")
+        try ScheduleHoldStore.beside(stateRoot: root).save([ScheduleHold(kind: ScheduleFactory.kind, jobID: JobID(), reason: "x",
+                                                                         build: "b1", generation: nil)])
+        let probe = ScheduleProbe()
+        probe.generation = 7
+        let recorder = UnitRecorder()
+        let s = T.supervisor(probe, root: root, recorder: recorder)
+        await s.start()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(recorder.completedUnits.isEmpty, "unknown → 7 is not a change")
+        #expect(await s.status(processIdentifier: 1, startedAt: Date()).holds?.first?.generation == 7)
+        probe.generation = 8
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 }, "7 → 8 released it")
+        await s.abandonForTest()
+    }
+}

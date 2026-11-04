@@ -509,16 +509,18 @@ public actor JobSupervisor {
                 ScheduleHold(kind: $0.kind, jobID: JobID(), reason: "the holds file was unreadable", signature: "holds.json unreadable",
                              build: schedule.buildID, generation: nil, sticky: true)
             }
-            // Move the torn file aside (kept, never deleted) and write these, so
-            // a NEW build can release them on its first look (Codex #236 F4).
+            // COPY the torn file aside (kept, never deleted), then publish these
+            // over it atomically, so a NEW build can release them — and a crash
+            // at any point leaves either the torn file (fail closed again) or the
+            // new holds, never no file (Codex #236 F4, #237 F2).
             let url = schedule.holds.url
             let aside = url.appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970))")
             do {
-                try FileManager.default.moveItem(at: url, to: aside)
+                try FileManager.default.copyItem(at: url, to: aside)
                 log.write("schedule: the unreadable holds file is kept at \(aside.path)")
                 saveHolds()
             } catch {
-                log.write("schedule: could not move the unreadable holds file aside (\(error)) — the holds last for this process")
+                log.write("schedule: could not copy the unreadable holds file aside (\(error)) — it stays; the holds last for this process")
             }
         }
     }
@@ -546,18 +548,29 @@ public actor JobSupervisor {
 
     private func releaseHolds(build: String, generation: Int?) {
         let before = holds
+        var released: [JobKind] = []
         holds = holds.compactMap { h in
             // Any record from another build goes: that build's failure says nothing about this one.
             guard h.build == build else {
-                if h.isActive { log.write("schedule: hold on \(h.kind) released — a new build (\(build))") }
+                if h.isActive { log.write("schedule: hold on \(h.kind) released — a new build (\(build))"); released.append(h.kind) }
                 return nil
             }
+            // A hold born while the generation was unknown takes the first known
+            // one as its baseline, so a later change can release it (Codex #237 F4).
+            if h.isActive, h.generation == nil, let now = generation {
+                var based = h
+                based.generation = now
+                return based
+            }
             guard h.isActive, !h.sticky, let was = h.generation, let now = generation, was != now else { return h }
+            released.append(h.kind)
             log.write("schedule: hold on \(h.kind) released — the catalog changed (generation \(h.generation.map(String.init) ?? "unknown") → \(generation.map(String.init) ?? "unknown"))")
             var released = h
             released.releasedByCatalogAt = Date()
             return released
         }
+        // A released kind's kept refused request runs again, not a new one beside it (Codex #237 F3).
+        for kind in released { requeueRetained(kind) }
         if holds != before { saveHolds(); lastPlanAt = nil; kickLanes() }
     }
 
@@ -627,7 +640,13 @@ public actor JobSupervisor {
         // relaunch write this START's OUTCOME (review 2026-10-30, fix 3a).
         guard persist(cp, id) else { return }
 
-        var turn = Turn(streak: FailureStreak(cp))
+        var turn = Turn(streak: FailureStreak(cp), failFastUnits: max(1, configuration.failFastUnits))
+        // A streak that already reached fail fast before a crash ends the job
+        // now, before another unit could reset it (Codex #237 F1).
+        if turn.reachedFailFast {
+            runs[id]?.failureWords = turn.streak.words
+            return await end(job, id, as: .failed(reason: "\(turn.streak.length) units in a row failed with the same error before a relaunch: \(turn.streak.words ?? "")"), cp, began)
+        }
         while cp.completedUnits < cp.totalUnits {
             switch await step(job, &cp, id, &turn) {
             case .killed: return
@@ -649,6 +668,9 @@ public actor JobSupervisor {
     /// systemic failures (fail fast).
     private struct Turn {
         var streak: FailureStreak
+        var failFastUnits: Int
+
+        var reachedFailFast: Bool { streak.words != nil && streak.length >= failFastUnits }
 
         /// How a loop that ran to the end of its plan ends. Every unit of the
         /// job failed with the same systemic words, fewer than `failFastUnits`
@@ -657,6 +679,9 @@ public actor JobSupervisor {
         /// checkpoint's counts and streak, so it survives a relaunch (#236 F2).
         func verdict(stopRequested: Bool, _ cp: JobCheckpoint) -> (state: JobRunState, failureWords: String?) {
             if stopRequested { return (.stopped, nil) }
+            if reachedFailFast, let words = streak.words {
+                return (.failed(reason: "\(streak.length) units in a row failed with the same error: \(words)"), words)
+            }
             guard let words = streak.words, cp.unitsRun == 0, cp.unitsSkipped == 0, cp.unitsFailed > 0,
                   streak.length == cp.unitsFailed else { return (.finished, nil) }
             return (.failed(reason: "all \(cp.unitsFailed) unit(s) failed with the same error: \(words)"), words)
