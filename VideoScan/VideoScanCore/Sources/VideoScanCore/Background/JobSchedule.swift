@@ -76,6 +76,9 @@ public struct ScheduleHold: Codable, Equatable, Sendable {
     /// The failed job (the menu's Resume names it).
     public var jobID: JobID
     public var reason: String
+    /// The failure's stable words (the error, without unit counts); a repeat
+    /// is recognised by these. Optional: absent in a file from an earlier cut.
+    public var signature: String?
     public var build: String
     public var generation: Int?
     public var heldAt: Date
@@ -85,11 +88,12 @@ public struct ScheduleHold: Codable, Equatable, Sendable {
     /// A catalog change no longer releases it (it already did once, in vain).
     public var sticky: Bool
 
-    public init(kind: JobKind, jobID: JobID, reason: String, build: String, generation: Int?, heldAt: Date = Date(),
-                releasedByCatalogAt: Date? = nil, sticky: Bool = false) {
+    public init(kind: JobKind, jobID: JobID, reason: String, signature: String? = nil, build: String, generation: Int?,
+                heldAt: Date = Date(), releasedByCatalogAt: Date? = nil, sticky: Bool = false) {
         self.kind = kind
         self.jobID = jobID
         self.reason = reason
+        self.signature = signature
         self.build = build
         self.generation = generation
         self.heldAt = heldAt
@@ -106,8 +110,9 @@ public struct ScheduleHold: Codable, Equatable, Sendable {
     }
 }
 
-/// `background/holds.json`. An unreadable file reads as no holds and the
-/// supervisor logs it (a torn file must not wedge a kind forever).
+/// `background/holds.json`. An unreadable file fails CLOSED: the supervisor
+/// holds every scheduled kind until Resume (which rewrites the file) or a new
+/// build, and logs it (Codex #235 F2).
 public final class ScheduleHoldStore: @unchecked Sendable {
     public let url: URL
     public init(url: URL) { self.url = url }

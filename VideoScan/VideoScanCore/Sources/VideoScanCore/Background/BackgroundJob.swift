@@ -39,6 +39,10 @@ public protocol BackgroundJob: Sendable {
     /// Default true; answer false for failures one bad file can cause whose
     /// words do not name the file (EraJob: a clip past its cap, a worker death).
     func failureIsSystemic(_ error: any Error) -> Bool
+    /// Is unit `index`'s output already durable (a kill after it was written,
+    /// before the checkpoint recorded it)? Asked only before quarantining a
+    /// unit the helper died in. Default false.
+    func unitIsAlreadyRecorded(_ index: Int) async -> Bool
 }
 
 extension BackgroundJob {
@@ -46,6 +50,7 @@ extension BackgroundJob {
     public func outcomeDetail() async -> String { "" }
     public func end() async {}
     public func failureIsSystemic(_ error: any Error) -> Bool { true }
+    public func unitIsAlreadyRecorded(_ index: Int) async -> Bool { false }
 }
 
 public struct NoOpJob: BackgroundJob {

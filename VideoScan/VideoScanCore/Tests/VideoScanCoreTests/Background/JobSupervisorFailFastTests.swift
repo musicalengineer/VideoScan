@@ -86,9 +86,14 @@ struct JobSupervisorFailFastTests {
         #expect(r.log.lines.filter { $0.contains("the same error as unit 0") }.count == 11, "still said once")
     }
 
-    @Test func fewerUnitsThanTheThresholdJustFinish() async {
+    /// Changed 2026-11-04 (Codex #235 F6): a short job every unit of which
+    /// failed with the same systemic words runs to its end (no early stop) and
+    /// then says FAILED — "finished" let a one-file plan retry forever.
+    @Test func fewerUnitsThanTheThresholdRunAllThenSayFailed() async {
         let r = await Self.run(["z", "z", "z"])
-        #expect(r.state == .finished)
+        #expect(r.state == .failed(reason: "all 3 unit(s) tried failed with the same error: z"))
+        let mixed = await Self.run(["z", nil, "z"])
+        #expect(mixed.state == .finished, "one unit succeeded: not a systemic failure of the job")
     }
 
     @Test func theFailureStreakIsAPureValue() {

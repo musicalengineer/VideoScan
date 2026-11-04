@@ -386,12 +386,17 @@
       "stage": "unit",
       "suites": [
         "JobScheduleTests",
-        "JobScheduleReentrancyTests"
+        "JobScheduleReentrancyTests",
+        "JobScheduleCodex235Tests"
       ],
       "tests": [
         "activeJobIsNotDoubled",
+        "adoptedRequestOfAHeldKindNeverStarts",
+        "contenderTouchesNothing",
         "crashLoopUnitIsQuarantined",
+        "enqueueRespectsUniquenessAndHolds",
         "generationChangePlans",
+        "holdIsDurableBeforeTheQueueFileGoes",
         "holdReleasedByBuildAndGeneration",
         "holdSurvivesRestartAndClearsOnResume",
         "interleavedTicksEnqueueOnce",
@@ -399,7 +404,11 @@
         "oneCrashRetries",
         "planOneHundredThousandRows",
         "plansAtLaunchWithNoMessage",
-        "tornHoldsFile"
+        "quarantineReconcilesWithTheJob",
+        "shortSystemicJobHolds",
+        "stickyIgnoresUnitCounts",
+        "tornHoldsFile",
+        "unknownGenerationIsNotAChange"
       ]
     },
     {
@@ -473,7 +482,7 @@
         "aPerFileFailureBreaksTheSystemicRunEvenWithTheSameWords",
         "aSuccessOrDifferentWordsStartTheCountOver",
         "failuresTheJobCallsPerFileNeverStopIt",
-        "fewerUnitsThanTheThresholdJustFinish",
+        "fewerUnitsThanTheThresholdRunAllThenSayFailed",
         "fiveIdenticalSystemicFailuresStopTheJobAndTheOutcomeNamesThem",
         "noFFmpegIsRefusedAtStartInWordsNeverOncePerFile",
         "theFailureStreakIsAPureValue",
@@ -36166,7 +36175,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 690,
+      "package_expected_floor": 698,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36206,6 +36215,7 @@
         "VideoScanCoreTests.ImportGateWordsTests",
         "VideoScanCoreTests.JSONDuplicateKeyScannerScaleTests",
         "VideoScanCoreTests.JSONDuplicateKeyScannerTests",
+        "VideoScanCoreTests.JobScheduleCodex235Tests",
         "VideoScanCoreTests.JobScheduleReentrancyTests",
         "VideoScanCoreTests.JobScheduleTests",
         "VideoScanCoreTests.JobSupervisorIsolationTests",

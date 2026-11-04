@@ -230,6 +230,12 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
         }
     }
 
+    /// A line by the plan's signer for this unit's digest is in the journal.
+    public func unitIsAlreadyRecorded(_ index: Int) async -> Bool {
+        guard plan.units.indices.contains(index) else { return false }
+        return journal.subjects(by: plan.signer).contains(plan.units[index].digest)
+    }
+
     public func end() async {
         await worker.close()
         try? FileManager.default.removeItem(at: Self.planURL(setup.stateRoot, setup.jobID))
