@@ -32,6 +32,11 @@ if [ -f "$REPO_ROOT/scripts/warnings_baseline.tsv" ]; then
   echo
 fi
 
+# 1c. The M4's weekly sanitizer runs (Rick 2026-11-04 "yes add it"): read from
+#     the published metrics stream, so the findings reach this Mac too. 🔴 on
+#     findings or a failed run, 🟡 if skipped or stale, silent when green.
+git -C "$REPO_ROOT" show origin/metrics:metrics/sanitizer.jsonl 2>/dev/null | python3 "$REPO_ROOT/scripts/sanitizer_alert.py" --published - || true
+
 # 2. P0 / P1 counts (3 s budget; silent if gh is unavailable)
 if command -v gh >/dev/null 2>&1; then
   p0=$(timeout 3 gh issue list -R musicalengineer/VideoScan --label P0 --state open --json number --jq 'length' 2>/dev/null || echo "?")
