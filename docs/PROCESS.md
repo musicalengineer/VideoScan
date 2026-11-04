@@ -28,6 +28,32 @@ A branch merges to `main` when all of these hold (Rick may waive any to break a 
 
 Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Everything that touches code takes the gate.
 
+## 2a. The change checklist (Rick 2026-11-03)
+
+Run it before every commit that touches code, and write the result in the commit message as one line,
+`Checklist: full` or `Checklist: tweak`, followed by `— skipped: <item> (why)` for anything not done. It exists because
+interruptions make items slip (11/03: a failure shown only in Settings, a count wired to catalog.json, wrong build
+steps given to Rick, no fresh-eyes review on two large changes).
+
+**Full** (default: any logic, data, wiring, background or catalog change):
+1. **Scope.** It does what was asked. Anything else found becomes an issue, not an edit.
+2. **Tests.** A feature has the five dimensions that apply. A fix has a test seen red on the broken code, with the red/green table in the message.
+3. **Wiring.** The real call site is exercised, not only the unit. A sensor or integration test proves the production path uses the new code with the right inputs (paths, URLs, roles, build flavour).
+4. **Truth.** Every fact the UI shows comes from evidence. Every failure shown says why.
+5. **Logging.** Long work logs START and OUTCOME. **Every failure or refusal the UI can show is also logged once, with the full reason and the file, path or ID it concerns**, and again when it clears. No silent `catch`, `try?` or `return` on a path a person would want to know about.
+6. **Robust.** Error paths, poisoned input and a relaunch are covered. Catalog writers also get the rule-8 quartet: an edit inside the debounce window, during a write hold, across a role flip, then relaunch.
+7. **Complexity and warnings.** The complexity gate is OK, with no new CCN-15 excess. The warning ratchet is green, with no new warnings.
+8. **Review.** The `reviewer` agent (fresh eyes, not the author) reviews any change over ~50 lines of logic. Codex reviews data-risk code (§5). Findings are fixed red-first or declined in writing.
+9. **Lanes.** `run_sensors.sh` is GREEN with its count quoted. `run_catalog_tests.sh` is run for catalog work. The touched suites are run by their real suite names, with the count quoted (zero tests is red).
+10. **Registered.** New tests are in `scripts/gauntlet/manifest.json` and `inventory.swift --validate` reports 0 errors.
+11. **Docs.** A ruling goes in DECISIONS (grep first). STATUS is rewritten if what is in flight changed.
+12. **Rick's steps.** Any build, run or spot-test instruction given to Rick has been checked to work (scheme, configuration, what he will see).
+13. **UI** (if visible). Apple HIG, Rick's ruled wording, light and dark mode, narrow width. The spot test is listed for Rick.
+14. **Cleanup.** The worktree and DerivedData are removed after merge.
+
+**Tweak** (wording, layout or colour only, with no logic, data or wiring change): items 1, 7, 9 and 13.
+If in doubt, it is Full.
+
 ## 3. Git
 
 - `~/dev/VideoScan` is Rick's checkout. Agents work in a `git worktree` with its own `-derivedDataPath`; the worktree and its DerivedData are removed after merge.
