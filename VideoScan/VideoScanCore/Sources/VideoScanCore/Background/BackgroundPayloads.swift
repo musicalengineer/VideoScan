@@ -131,10 +131,18 @@ public struct JobProgressSnapshot: Codable, Equatable, Sendable {
     public var state: JobRunState
     public var startedAt: Date?
     public var finishedAt: Date?
+    /// Why a `.running` job runs no unit right now — its last unit came back
+    /// `.deferred` (EraJob: a cold model while Backoff trickles). nil = not
+    /// waiting. Additive (2026-11-03, checklist F3): an older payload has no
+    /// key and decodes as nil; an older reader ignores the key, so the schema
+    /// (`BackgroundProtocolVersion.current`) does not move. Kept beside the
+    /// state, not in it: `JobRunState` is a closed enum an older build could
+    /// not decode a new case of.
+    public var waiting: String?
 
     public init(id: JobID, kind: JobKind, lane: String, title: String, subtitle: String,
                 completedUnits: Int, totalUnits: Int, skippedUnits: Int, failedUnits: Int,
-                state: JobRunState, startedAt: Date?, finishedAt: Date?) {
+                state: JobRunState, startedAt: Date?, finishedAt: Date?, waiting: String? = nil) {
         self.id = id
         self.kind = kind
         self.lane = lane
@@ -147,6 +155,18 @@ public struct JobProgressSnapshot: Codable, Equatable, Sendable {
         self.state = state
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+        self.waiting = waiting
+    }
+
+    /// True while the job holds a lane but can run no unit (see `waiting`).
+    public var isWaiting: Bool { state == .running && waiting != nil }
+
+    /// The state in words for every surface (menu bar, Settings): "waiting —
+    /// <why>" while waiting, else the state's own words. One rule, so no
+    /// surface can say "running" while no unit can start.
+    public var stateWords: String {
+        if isWaiting, let waiting { return "waiting — \(waiting)" }
+        return state.words
     }
 
     /// 0…1; 0 while the total is unknown.

@@ -103,7 +103,10 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     public static let modelDirKey = "modelDir"
     public static let catalogPathKey = "catalogPath"
     public static let orderRule = "oldest first by the best date bound (Rick's date, else embedded, else inferred, else a year in the path; unknown last)"
-    public static let deferWords = "Rick is at the keyboard (Backoff trickle) — the model loads when he is away (design §3.5)"
+    /// The wait's words — the log line and every surface's job line
+    /// ("· waiting — you're at the Mac (the model loads when you step away)"):
+    /// Backoff trickle with no model loaded (design §3.5).
+    public static let deferWords = "you're at the Mac (the model loads when you step away)"
 
     /// Everything a job needs, injected (the factory builds it from a request; tests directly).
     public struct Setup: Sendable {

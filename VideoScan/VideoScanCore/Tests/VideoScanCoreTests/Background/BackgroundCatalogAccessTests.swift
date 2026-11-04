@@ -27,6 +27,21 @@ struct BackgroundCatalogAccessTests {
         return url
     }
 
+    @Test("RED 11/03 F6: an open SQLite refuses (unreadable file) names the path — the log line says where")
+    func openRefusalNamesThePath() throws {
+        let dir = try BackgroundFixtures.scratch("unreadable")
+        let url = dir.appendingPathComponent("catalog.sqlite")
+        try Data("x".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        do {
+            _ = try BackgroundCatalogAccess.open(at: url)
+            Issue.record("an unreadable file must not open")
+        } catch let r as Refusal {
+            #expect(r.words.hasPrefix("could not open the catalog read-only at \(url.path): "), Comment(rawValue: r.words))
+        }
+    }
+
     @Test("the only flags are SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, and SQLite agrees the handle is read-only")
     func flagsAndHandle() throws {
         #expect(BackgroundCatalogAccess.openFlags == SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)

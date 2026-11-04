@@ -22,6 +22,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let log: BackgroundFileLog
     private var presentation: BackgroundMenuPresentation?
     private var timer: Timer?
+    private var saidNoApp = false
 
     init(supervisor: JobSupervisor, startedAt: Date, log: BackgroundFileLog) {
         self.supervisor = supervisor
@@ -46,7 +47,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         timer = t
     }
 
-    private func refresh(then: (@MainActor () -> Void)? = nil) {
+    private func refresh() {
         let pid = ProcessInfo.processInfo.processIdentifier
         Task { [supervisor, startedAt] in
             let status = await supervisor.status(processIdentifier: pid, startedAt: startedAt)
@@ -55,7 +56,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 if p.icon != self.presentation?.icon { self.item.button?.image = StatusMenuIcon.image(p.icon) }
                 self.item.button?.toolTip = p.tooltip
                 self.presentation = p
-                then?()
             }
         }
     }
@@ -82,6 +82,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let open = NSMenuItem(title: "Open VideoScan", action: #selector(openApp), keyEquivalent: "")
         open.target = self
         open.isEnabled = Self.appURL != nil
+        if Self.appURL == nil, !saidNoApp {
+            // Said once per process: the disabled item is never the only place it shows.
+            saidNoApp = true
+            log.write("menu bar: Open VideoScan disabled — this helper is not inside VideoScan.app (\(Bundle.main.bundleURL.path))")
+        }
         menu.addItem(open)
     }
 

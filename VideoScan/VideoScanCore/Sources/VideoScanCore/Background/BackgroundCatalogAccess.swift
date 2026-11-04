@@ -57,7 +57,7 @@ public final class BackgroundCatalogAccess: @unchecked Sendable {
         guard rc == SQLITE_OK, let handle else {
             let words = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "sqlite error \(rc)"
             if let handle { sqlite3_close_v2(handle) }
-            throw Refusal("could not open the catalog read-only: \(words)")
+            throw Refusal("could not open the catalog read-only at \(url.path): \(words)")
         }
         return BackgroundCatalogAccess(url: url, db: handle)
     }

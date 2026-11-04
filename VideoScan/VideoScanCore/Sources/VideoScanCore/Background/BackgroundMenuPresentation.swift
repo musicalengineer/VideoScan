@@ -14,8 +14,12 @@ import Foundation
 
 public struct BackgroundMenuPresentation: Equatable, Sendable {
     /// The glyph: outline lens when idle, filled lens while a job runs,
-    /// pause bars when every active job (or the whole service) is paused.
-    public enum Icon: Equatable, Sendable { case idle, working, paused }
+    /// pause bars when every active job (or the whole service) is paused,
+    /// and the outline lens with a dot ("idle, with a wait") when no unit is
+    /// being worked but a job holds its place — waiting on Backoff, or
+    /// queued — so nothing may look filled (checklist F3 and the reviewer's
+    /// queued red, 2026-11-03). Filled = a unit is actually running.
+    public enum Icon: Equatable, Sendable { case idle, working, paused, waiting }
 
     public struct JobLine: Equatable, Sendable {
         public var id: JobID
@@ -35,17 +39,21 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
     public static func from(_ s: ServiceStatus) -> Self {
         let active = s.jobs.filter { $0.state.isActive }
         let lines = active.map(jobLine)
-        let anyRunning = active.contains { $0.state == .running || $0.state == .pausing || $0.state == .queued }
+        let moving = active.filter { ($0.state == .running && !$0.isWaiting) || $0.state == .pausing }
+        let waiting = active.filter { $0.isWaiting || $0.state == .queued }
         let icon: Icon
-        if s.backoff.isPaused || (!active.isEmpty && !anyRunning) { icon = .paused }
-        else if anyRunning { icon = .working }
+        if s.backoff.isPaused || (!active.isEmpty && moving.isEmpty && waiting.isEmpty) { icon = .paused }
+        else if !moving.isEmpty { icon = .working }
+        else if !waiting.isEmpty { icon = .waiting }
         else { icon = .idle }
-        let headline = "VideoScan Background — " + backoffWords(s.backoff, jobs: active.count)
+        let headline = "VideoScan Background — "
+            + (icon == .waiting ? waitingHeadline(s.backoff) : backoffWords(s.backoff, jobs: active.count))
         let tooltip: String
         switch icon {
         case .idle: tooltip = "VideoScan Background — idle, nothing queued"
-        case .working: tooltip = "VideoScan Background — " + (lines.first?.words ?? "working")
+        case .working: tooltip = "VideoScan Background — " + (moving.first.map { jobLine($0).words } ?? "working")
         case .paused: tooltip = "VideoScan Background — paused"
+        case .waiting: tooltip = "VideoScan Background — " + (waiting.first.map { jobLine($0).words } ?? "waiting")
         }
         return Self(icon: icon, headline: headline, jobs: lines, tooltip: tooltip)
     }
@@ -60,13 +68,19 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
         }
     }
 
+    /// Every running job waits: say so, with the Mac's reason when it is
+    /// the trickle (you are at the keyboard) — never "gently", which says work.
+    static func waitingHeadline(_ b: BackoffState) -> String {
+        b == .trickle ? "waiting (you're at the Mac)" : "waiting"
+    }
+
     static func jobLine(_ j: JobProgressSnapshot) -> JobLine {
         let progress = j.totalUnits > 0
             ? "\(j.completedUnits.formatted()) of \(j.totalUnits.formatted())"
             : "\(j.completedUnits.formatted()) done"
         let paused: Bool
         if case .paused = j.state { paused = true } else { paused = false }
-        return JobLine(id: j.id, words: "\(j.title) — \(progress) · \(j.state.words)",
+        return JobLine(id: j.id, words: "\(j.title) — \(progress) · \(j.stateWords)",
                        canPause: j.state == .running || j.state == .queued,
                        canResume: paused)
     }

@@ -61,6 +61,10 @@ public actor JobSupervisor {
         var stopRequested = false
         /// paused(disk): no lane owns it until `resume` re-queues it.
         var parked = false
+        /// The last `.deferred` unit's reason while the job is still waiting
+        /// for it (checklist F3, 2026-11-03); cleared when a unit records or
+        /// the state changes. Published as `JobProgressSnapshot.waiting`.
+        var waiting: String?
     }
 
     private let queue: any JobQueueStore
@@ -277,8 +281,12 @@ public actor JobSupervisor {
         return true
     }
 
+    /// The service's answer. Reading it is NOT activity (checklist F5,
+    /// 2026-11-03): the helper's own menu bar reads it every 5 s, and a
+    /// `touch()` here kept `idleSeconds` near zero forever, so an empty
+    /// service never exited. A message from a client (the app over XPC) says
+    /// so with `noteClientActivity()` — XPCServer does, before it asks.
     public func status(processIdentifier: Int32, startedAt: Date) async -> ServiceStatus {
-        touch()
         let state = await backoff.refresh()
         return ServiceStatus(processIdentifier: processIdentifier, startedAt: startedAt, backoff: state,
                              jobs: order.compactMap { snapshot($0) }, idleSeconds: idleSeconds)
@@ -294,7 +302,8 @@ public actor JobSupervisor {
             subtitle: total > 0 ? "unit \(completed) of \(total) — \(run.state.words)" : run.state.words,
             completedUnits: completed, totalUnits: total,
             skippedUnits: cp?.unitsSkipped ?? 0, failedUnits: cp?.unitsFailed ?? 0,
-            state: run.state, startedAt: run.startedAt, finishedAt: run.finishedAt)
+            state: run.state, startedAt: run.startedAt, finishedAt: run.finishedAt,
+            waiting: run.state == .running ? run.waiting : nil)
     }
 
     // MARK: - Idle
@@ -326,6 +335,14 @@ public actor JobSupervisor {
     }
 
     private func touch() { lastActivity = clock.now }
+
+    /// A client spoke (the app's XPC status poll — 60 s while VideoScan runs
+    /// with the service on, 5 s while Settings is open). That is activity:
+    /// exiting under a client that asks again within the minute would only
+    /// trade one process for a relaunch (launchd starts the helper on the
+    /// next message) and flicker the menu item. With VideoScan closed nobody
+    /// asks, and the idle exit runs (F5).
+    public func noteClientActivity() { touch() }
 
     // MARK: - Lanes
 
@@ -407,17 +424,28 @@ public actor JobSupervisor {
         switch await performUnit(job, &cp, id) {
         case .killed: return .killed
         case .deferred(let reason):
-            if deferredSaid != reason {
-                let kind = runs[id]?.request.kind.rawValue ?? "?"
-                log.write("\(kind) \(id) waits at \(cp.completedUnits) of \(cp.totalUnits): \(reason)")
-                deferredSaid = reason
-            }
+            noteWait(id, reason: reason, at: cp, said: &deferredSaid)
             try? await Task.sleep(for: configuration.deferRetryInterval)
             return Task.isCancelled ? .killed : .next
         case .recorded:
             deferredSaid = nil
+            runs[id]?.waiting = nil
         }
         return persist(cp, id) ? .next : .killed
+    }
+
+    /// A unit came back `.deferred`: say the wait once per reason in the log,
+    /// and publish it on the row (`waiting`) once, so no surface reads the
+    /// job as working while no unit can start (F3).
+    private func noteWait(_ id: JobID, reason: String, at cp: JobCheckpoint, said: inout String?) {
+        if said != reason {
+            let kind = runs[id]?.request.kind.rawValue ?? "?"
+            log.write("\(kind) \(id) waits at \(cp.completedUnits) of \(cp.totalUnits): \(reason)")
+            said = reason
+        }
+        guard runs[id]?.waiting != reason else { return }
+        runs[id]?.waiting = reason
+        push(id, force: true)
     }
 
     /// The job's own release and words, then the one terminal door.
@@ -534,6 +562,7 @@ public actor JobSupervisor {
 
     private func setState(_ id: JobID, _ state: JobRunState) {
         runs[id]?.state = state
+        runs[id]?.waiting = nil
     }
 
     /// THE terminal transition — the one door every job leaves through, and
@@ -547,6 +576,7 @@ public actor JobSupervisor {
         run.state = state
         run.finishedAt = Date()
         run.parked = false
+        run.waiting = nil
         runs[id] = run
         log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed)
                   + (detail.isEmpty ? "" : "; \(detail)"))

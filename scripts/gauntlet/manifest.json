@@ -289,6 +289,7 @@
         "flagsAndHandle",
         "missingFile",
         "noSchemaRow",
+        "openRefusalNamesThePath",
         "writeRefused"
       ]
     },
@@ -33096,20 +33097,31 @@
         "CatalogStatusSplitLogicTests",
         "CatalogStatusSplitTruthTests",
         "CatalogStatusSplitScaleTests",
-        "CatalogStatusSplitSensorTests"
+        "CatalogStatusSplitSensorTests",
+        "CatalogStatusSplitReviewTests",
+        "CatalogStatusBackgroundClaimTests",
+        "CatalogStatusTransitionLogTests",
+        "CatalogDatabaseInfoUnknownLogTests"
       ],
       "tests": [
+        "activityRule",
+        "appearSameClear",
         "catalogEveryState",
+        "causeNotCounts",
         "contentEveryState",
         "contentHasNoAlarmColours",
         "contentIsNeverYellow",
+        "eraOnlyThroughTheSnapshot",
+        "failureRepeatRecovery",
         "filesGreyWhileADriveIsAway",
+        "helperAloneDoesNotClaimCountedProgress",
         "hundredThousandRows",
         "perFileCountsFromTheCalculator",
         "poisonedRecordDoesNotLeak",
         "sidecarIsCatalogRed",
         "snapshotIndicators",
-        "twoIndicatorsTwoDoors"
+        "twoIndicatorsTwoDoors",
+        "wiring"
       ]
     },
     {
@@ -33215,13 +33227,35 @@
       "path": "VideoScan/VideoScanTests/BackgroundRegistrationGateTests.swift",
       "stage": "unit",
       "suites": [
-        "BackgroundRegistrationGateTests"
+        "BackgroundRegistrationGateTests",
+        "BackgroundRegistrationGateReviewTests"
       ],
       "tests": [
+        "checkboxRule",
         "debugBuildToggleRefuses",
+        "fixNamesADisabledVerb",
+        "footnoteAdds",
         "launchRefusalRegistersNothing",
+        "offIsReachableWhenRefused",
         "refusalTable",
-        "sensor"
+        "sensor",
+        "toggleRefusalIsLogged"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/BackgroundServiceLoggingTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BackgroundServiceLoggingTests"
+      ],
+      "tests": [
+        "countRecoveryNamesThePath",
+        "countRefusalNamesThePath",
+        "gateIsLoggedOnce",
+        "launchdStatesAreLogged",
+        "notAnsweringIsLoggedOnAppearAndClear",
+        "settingsSaysWaiting"
       ]
     },
     {
@@ -33229,13 +33263,33 @@
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundMenuPresentationTests.swift",
       "stage": "unit",
       "suites": [
-        "BackgroundMenuPresentationTests"
+        "BackgroundMenuPresentationTests",
+        "BackgroundMenuPresentationReviewTests"
       ],
       "tests": [
+        "deferredJobIsNotShownRunning",
         "idle",
         "paused",
+        "queuedIsNotWorking",
+        "statusReadDoesNotResetIdle",
         "unknownTotal",
         "working"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/BackgroundWaitingTruthTests.swift",
+      "stage": "regression",
+      "suites": [
+        "BackgroundWaitingTruthTests"
+      ],
+      "tests": [
+        "clientMessageIsActivity",
+        "deferredUnitIsWaitingNotRunning",
+        "olderPayloadDecodes",
+        "sensorWhoTouches",
+        "statusReadsAreNotActivity",
+        "waitClearsWhenAUnitRecords"
       ]
     },
     {
@@ -33246,8 +33300,11 @@
         "BackgroundCountCatalogURLTests"
       ],
       "tests": [
+        "countFollowsTheOpenedDatabase",
         "countOpensSQLite",
+        "databaseInfoOnAViewerReadsTheSnapshot",
         "rule",
+        "viewerCountsNothing",
         "wiring"
       ]
     },
@@ -35964,9 +36021,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3293,
+      "expected_floor": 3304,
       "name": "unit",
-      "package_expected_floor": 665,
+      "package_expected_floor": 669,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36034,7 +36091,8 @@
         "VideoScanCoreTests.PythonClipWorkerTests",
         "VideoScanCoreTests.RowPreflightTests",
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
-        "VideoScanCoreTests.StateRootLockTests"
+        "VideoScanCoreTests.StateRootLockTests",
+        "VideoScanCoreTests.BackgroundMenuPresentationReviewTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -36580,7 +36638,12 @@
         "VideoScanTests/SigningIdentitySensorTests",
         "VideoScanTests/BackgroundHelperBundleSensorTests",
         "VideoScanTests/BackgroundRegistrationGateTests",
-        "VideoScanTests/BackgroundCountCatalogURLTests"
+        "VideoScanTests/BackgroundCountCatalogURLTests",
+        "VideoScanTests/CatalogStatusSplitReviewTests",
+        "VideoScanTests/CatalogStatusBackgroundClaimTests",
+        "VideoScanTests/CatalogStatusTransitionLogTests",
+        "VideoScanTests/CatalogDatabaseInfoUnknownLogTests",
+        "VideoScanTests/BackgroundRegistrationGateReviewTests"
       ]
     },
     {
@@ -36898,9 +36961,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 392,
+      "expected_floor": 398,
       "name": "regression",
-      "package_expected_floor": 286,
+      "package_expected_floor": 292,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -36944,7 +37007,8 @@
         "VideoScanCoreTests.CatalogStoreDurabilityCodex141Tests",
         "VideoScanCoreTests.CatalogStoreOpenVerdictTests",
         "VideoScanCoreTests.SQLiteWALSidecarTests",
-        "VideoScanCoreTests.RecordVolumeEvidenceTests"
+        "VideoScanCoreTests.RecordVolumeEvidenceTests",
+        "VideoScanCoreTests.BackgroundWaitingTruthTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -37044,7 +37108,8 @@
         "VideoScanTests/ConfirmedDateFilterTests",
         "VideoScanTests/ConfirmedDateFilterTruthTests",
         "VideoScanTests/ConfirmedDateFilterSensorTests",
-        "VideoScanTests/AudioFingerprintStampDurabilityTests"
+        "VideoScanTests/AudioFingerprintStampDurabilityTests",
+        "VideoScanTests/BackgroundServiceLoggingTests"
       ]
     },
     {

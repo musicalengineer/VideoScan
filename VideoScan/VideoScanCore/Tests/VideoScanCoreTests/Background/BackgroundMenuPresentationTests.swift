@@ -55,3 +55,65 @@ struct BackgroundMenuPresentationTests {
         #expect(p.jobs[0].words == "Machine era (8B) — 12 done · running")
     }
 }
+
+// MARK: - Reviewer reds (fresh-eyes review of 3c5d5e6f, 2026-11-03), lifted
+// from the review-1103 worktree (doubles renamed: BackgroundWaitingTruthTests
+// has its own DeferringJob).
+
+/// A job whose every unit defers — EraJob while Backoff says trickle and the
+/// model is not loaded (EraJob.swift:174).
+struct ReviewDeferringJob: BackgroundJob {
+    let title = "Machine era (8B)"
+    let unitCount = 3
+    func runUnit(_ index: Int) async throws -> UnitOutcome { .deferred(reason: EraJob.deferWords) }
+}
+
+struct ReviewDeferringFactory: JobFactory {
+    static let kind = JobKind(rawValue: "review-deferring")
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob { ReviewDeferringJob() }
+}
+
+@Suite("Background menu bar item — reviewer reds (2026-11-03)")
+struct BackgroundMenuPresentationReviewTests {
+
+    @Test("TRUE: an era job waiting for Rick to step away is not 'running' — the lens must not fill and the line must not say running")
+    func deferredJobIsNotShownRunning() async throws {
+        let source = FakeActivitySource(ActivitySample(secondsSinceLastInput: 5))   // Rick is typing → trickle
+        let backoff = Backoff(source: source, trickleInterval: .milliseconds(5))
+        var configuration = BackgroundFixtures.fastConfiguration()
+        configuration.deferRetryInterval = .milliseconds(20)
+        let log = InMemoryBackgroundLog()
+        let supervisor = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                                       factory: ReviewDeferringFactory(), backoff: backoff, log: log, configuration: configuration)
+        _ = await supervisor.enqueue(JobRequest(kind: ReviewDeferringFactory.kind, requestedBy: "test"))
+        let said = await BackgroundFixtures.waitUntil { log.lines.contains { $0.contains("waits at 0 of 3") } }
+        #expect(said, "the supervisor logged the wait: \(log.lines)")
+        let status = await supervisor.status(processIdentifier: 1, startedAt: Date())
+        let p = BackgroundMenuPresentation.from(status)
+        #expect(status.backoff == .trickle)
+        #expect(p.icon != .working,
+                "the filled lens means a unit is being worked; this job is waiting — JobSupervisor.swift:368 leaves .running while every unit defers")
+        #expect(!(p.jobs.first?.words.hasSuffix("running") ?? false), "menu line: \(p.jobs.first?.words ?? "-")")
+        await supervisor.abandonForTest()
+    }
+
+    @Test("a status READ is not activity: the menu bar's 5 s poll must not keep the helper alive past its idle exit")
+    func statusReadDoesNotResetIdle() async throws {
+        let supervisor = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                                       factory: ReviewDeferringFactory(), backoff: BackgroundFixtures.fullBackoff(),
+                                       log: InMemoryBackgroundLog(), configuration: BackgroundFixtures.fastConfiguration())
+        await supervisor.start()
+        try await Task.sleep(for: .milliseconds(300))
+        // StatusMenuController.swift:50 — every 5 s for the life of the process.
+        _ = await supervisor.status(processIdentifier: 1, startedAt: Date())
+        #expect(await supervisor.shouldExitWhenIdle(threshold: 0.2),
+                "JobSupervisor.swift:281 touch() on status: every poll resets idleSeconds, so IdleExitPolicy never fires")
+    }
+
+    @Test("a queued job is not working: the filled lens says a unit is being worked")
+    func queuedIsNotWorking() {
+        let p = BackgroundMenuPresentation.from(
+            BackgroundMenuPresentationTests.status(.full, [BackgroundMenuPresentationTests.job(.queued, done: 0)]))
+        #expect(p.icon != .working, "BackgroundMenuPresentation.swift:38 counts .queued as running")
+    }
+}

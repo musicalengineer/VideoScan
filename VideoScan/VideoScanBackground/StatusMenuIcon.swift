@@ -9,6 +9,8 @@
 //   idle    — outline lens
 //   working — solid lens (a job is running)
 //   paused  — pause bars in the lens
+//   waiting — outline lens with one dot (a job holds its lane but no unit
+//             can start, e.g. the era model waits for you to step away)
 //
 // (For Rick: NSBezierPath is Cocoa's 2-D path, like a Skia/Cairo path; a
 // "template" image is an alpha mask the menu bar colours itself.)
@@ -67,6 +69,9 @@ enum StatusMenuIcon {
         switch state {
         case .idle:
             break
+        case .waiting:
+            // Idle with a wait: the outline lens and one small dot — nothing filled.
+            NSBezierPath(ovalIn: NSRect(x: centre.x - 1.1, y: centre.y - 1.1, width: 2.2, height: 2.2)).fill()
         case .working:
             NSBezierPath(ovalIn: lens.insetBy(dx: 1.7, dy: 1.7)).fill()
         case .paused:
