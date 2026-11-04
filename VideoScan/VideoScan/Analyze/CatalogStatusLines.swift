@@ -101,11 +101,13 @@ struct CatalogStatusLine: Sendable, Equatable {
     /// (the coverage tally's roots). Compared EXACTLY by the transition log
     /// (Codex closing-5): a name is never parsed back out of the prose.
     var names: [String] = []
-    /// The exact WHEN strings the builder put into the words — the check's
-    /// formatted date and its age ("2 Nov 10:41", "1 h ago"). The transition
-    /// log removes exactly these and nothing else (Codex closing-7: masking
-    /// dates by pattern also masked an event named "July 4").
-    var when: [String] = []
+    /// The same line built TIMELESS — the identical builder, facts and `now`
+    /// (so the same colour), with the check's date and age written as "WHEN".
+    /// The transition log compares these (Codex closing passes 3–8: no
+    /// masking of the shown words can tell a name from a timestamp; building
+    /// the cause without the timestamp can). nil = compare `words`/`detail`.
+    var cause: String?
+    var causeDetail: [String]?
 }
 
 /// One of the two indicators on the totals strip.
@@ -285,23 +287,30 @@ enum CatalogStatusLinesPolicy {
     /// check's own verdict rides beneath (nothing said is lost).
     static func database(_ f: IntegrityReportFacts, soundStoreProblem: String? = nil, now: Date,
                          date: (Date) -> String) -> CatalogStatusLine {
-        var line = integrity(f, now: now, date: date)
-        line.when = whenWords(f.lastCompleted, now: now, date: date)
+        var line = databaseLine(f, soundStoreProblem: soundStoreProblem, now: now, date: date, timeless: false)
+        let bare = databaseLine(f, soundStoreProblem: soundStoreProblem, now: now, date: date, timeless: true)
+        line.cause = bare.words
+        line.causeDetail = bare.detail
+        return line
+    }
+
+    private static func databaseLine(_ f: IntegrityReportFacts, soundStoreProblem: String?, now: Date,
+                                     date: (Date) -> String, timeless: Bool) -> CatalogStatusLine {
+        var line = integrity(f, now: now, date: date, timeless: timeless)
         guard let soundStoreProblem else { return line }
         if line.state == .red {
             line.detail.append(soundStoreWords(soundStoreProblem))
         } else {
             line = CatalogStatusLine(kind: .database, state: .red, words: soundStoreWords(soundStoreProblem),
-                                     detail: ["Integrity check: \(line.words)"] + line.detail, when: line.when)
+                                     detail: ["Integrity check: \(line.words)"] + line.detail)
         }
         return line
     }
 
-    /// The date and age a builder writes for `d` — recorded on the line as
-    /// `when` so the log can tell a new check from a new cause.
-    static func whenWords(_ d: Date?, now: Date, date: (Date) -> String) -> [String] {
-        guard let d else { return [] }
-        return [date(d), age(d, now: now)]
+    /// The check's date and age as the words show them — or "WHEN" for the
+    /// timeless build the transition log compares.
+    static func stamp(_ d: Date, now: Date, date: (Date) -> String, timeless: Bool) -> String {
+        timeless ? "WHEN" : "\(date(d)) (\(age(d, now: now)))"
     }
 
     /// Rick 2026-11-02 (DECISIONS 2026-11-02): a coloured line says 1. exactly
@@ -315,7 +324,7 @@ enum CatalogStatusLinesPolicy {
     /// counts (`needsDecision`) are not read here at all. YELLOW = older
     /// than 24 h, stopped part way, or never ran. GREEN = completed within
     /// 24 h and found no break.
-    static func integrity(_ f: IntegrityReportFacts, now: Date, date: (Date) -> String) -> CatalogStatusLine {
+    static func integrity(_ f: IntegrityReportFacts, now: Date, date: (Date) -> String, timeless: Bool = false) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
             CatalogStatusLine(kind: .database, state: CatalogStatusLineState(c), words: w, detail: d)
         }
@@ -324,7 +333,7 @@ enum CatalogStatusLinesPolicy {
             return line(.red, "Red: the last integrity check's report can't be read — \(problem). \(checkNow) and writes a new report")
         }
         if f.predatesSwitch { return line(.yellow, "Yellow: not checked since the switch to SQLite. \(checkNow)") }
-        let when = f.lastCompleted.map { " \(date($0)) (\(age($0, now: now)))" } ?? ""
+        let when = f.lastCompleted.map { " " + stamp($0, now: now, date: date, timeless: timeless) } ?? ""
         switch f.outcome {
         case .neverRan:
             return line(.yellow, "Yellow: not checked yet. \(checkNow)")
@@ -384,13 +393,15 @@ enum CatalogStatusLinesPolicy {
 
     static func files(_ facts: CatalogFreshnessFacts, missing: MissingCopyCounts, offline: [String: Int] = [:], now: Date,
                       date: (Date) -> String) -> CatalogStatusLine {
-        var line = filesLine(facts, missing: missing, offline: offline, now: now, date: date)
-        line.when = whenWords(CatalogAuditPresenceFacts.from(facts.audit, switchedAt: facts.switchedAt).lastCompleted, now: now, date: date)
+        var line = filesLine(facts, missing: missing, offline: offline, now: now, date: date, timeless: false)
+        let bare = filesLine(facts, missing: missing, offline: offline, now: now, date: date, timeless: true)
+        line.cause = bare.words
+        line.causeDetail = bare.detail
         return line
     }
 
     private static func filesLine(_ facts: CatalogFreshnessFacts, missing: MissingCopyCounts, offline: [String: Int], now: Date,
-                                  date: (Date) -> String) -> CatalogStatusLine {
+                                  date: (Date) -> String, timeless: Bool) -> CatalogStatusLine {
         func line(_ c: FreshnessColour, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
             CatalogStatusLine(kind: .files, state: CatalogStatusLineState(c), words: w, detail: d)
         }
@@ -407,7 +418,7 @@ enum CatalogStatusLinesPolicy {
         let tally = CatalogRealityFactsBuilder.PresenceTally(facts.audit, switchedAt: facts.switchedAt)
         let present = (facts.audit?.counts[CatalogAuditResult.present.rawValue] ?? 0)
             + (facts.audit?.counts[CatalogAuditResult.cameBack.rawValue] ?? 0)
-        let when = presence.lastCompleted.map { " · checked \(date($0)) (\(age($0, now: now)))" } ?? ""
+        let when = presence.lastCompleted.map { " · checked " + stamp($0, now: now, date: date, timeless: timeless) } ?? ""
         let words = "\(present.formatted()) present where the catalog says · \(missingWords)\(when)"
         var detail = tally.unsettled.map(\.words)
         if tally.notChecked > 0 {
@@ -522,21 +533,13 @@ enum CatalogStatusTransitions {
         }
     }
 
-    /// What the transition log compares (Codex closing passes 3–7). Two rules,
-    /// by what the words ARE:
-    ///   Database / Files — names and facts (drives, events, files, errors):
-    ///     the words exactly, minus the line's own `when` strings (the check's
-    ///     formatted date and age, recorded by the builder) — no pattern is
-    ///     applied, so no name ("Backup 1", "July 4", "X9") can be masked;
-    ///   Content — counts only ("Analyzing 999 of 2,000 files"): free-standing
-    ///     numbers are masked (`cause`), so progress ticking is not a change.
+    /// What the transition log compares (Codex closing passes 3–8), by what
+    /// the words ARE:
+    ///   Database / Files — names and facts: the line's TIMELESS build
+    ///     (`CatalogStatusLine.cause` / `causeDetail`), compared exactly — no
+    ///     pattern, no substring removal, so no name can be masked;
+    ///   Content — counts only: free-standing numbers masked (`cause(_:)`).
     /// Drive names also ride as data (`CatalogStatusLine.names`).
-    static func catalogCause(_ words: String, when: [String]) -> String {
-        var s = words
-        for w in when where !w.isEmpty { s = s.replacingOccurrences(of: w, with: "WHEN") }
-        return s
-    }
-
     static func cause(_ words: String) -> String {
         countMask?.stringByReplacingMatches(in: words, range: NSRange(words.startIndex..., in: words), withTemplate: "#") ?? words
     }
@@ -546,10 +549,10 @@ enum CatalogStatusTransitions {
     nonisolated(unsafe) private static let countMask = try? NSRegularExpression(pattern: #"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#)
 
     static func key(_ line: CatalogStatusLine) -> String {
-        line.kind == .content ? cause(line.words) : catalogCause(line.words, when: line.when)
+        line.kind == .content ? cause(line.words) : (line.cause ?? line.words)
     }
 
-    static func detailKey(_ d: String, _ line: CatalogStatusLine) -> String { catalogCause(d, when: line.when) }
+    static func detailKey(_ line: CatalogStatusLine) -> [String] { line.causeDetail ?? line.detail }
 
     static func lines(old: CatalogStatusLines?, new: CatalogStatusLines) -> [String] {
         var out: [String] = []
@@ -567,12 +570,13 @@ enum CatalogStatusTransitions {
                 out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))\(causes)")
             } else if key(was) != key(line) || was.names != line.names {
                 out.append("\(title): \(word(line)) — now: \(line.words)\(causes)")
-            } else if line.kind != .content, was.detail.map({ detailKey($0, was) }) != line.detail.map({ detailKey($0, line) }) {
+            } else if line.kind != .content, detailKey(was) != detailKey(line) {
                 // A second cause under the same colour (the sound sidecar under a
                 // failed check) rides in the detail: its arrival and clearing are
                 // changes too (Codex closing #4). Content's detail is counts.
-                let added = line.detail.filter { d in !was.detail.contains { detailKey($0, was) == detailKey(d, line) } }
-                let gone = was.detail.filter { d in !line.detail.contains { detailKey($0, line) == detailKey(d, was) } }
+                let wasKeys = detailKey(was), nowKeys = detailKey(line)
+                let added = zip(line.detail, nowKeys).filter { !wasKeys.contains($0.1) }.map(\.0)
+                let gone = zip(was.detail, wasKeys).filter { !nowKeys.contains($0.1) }.map(\.0)
                 out.append("\(title): \(word(line)) — " + (added.map { "now also: \($0)" } + gone.map { "cleared: \($0)" }).joined(separator: " · "))
             }
         }

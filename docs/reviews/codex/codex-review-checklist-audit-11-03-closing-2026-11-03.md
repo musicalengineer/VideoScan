@@ -319,3 +319,53 @@ Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH 
 
 Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
 Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.
+
+---
+
+# Codex review — Checklist audit 11/03 — closing
+
+- Range: `ffdb3018..fb441439`
+- Credits spent: unavailable
+- Tokens: 113261
+- Finding count: 1
+- Verdict: fix — invariant 6 still suppresses a cause change when an event name contains the check’s exact timestamp.
+- Run: 2026-11-04T03:35:17Z (cycle #230, tools/codex_review.py)
+
+## Codex answer
+
+1. **P2 · LOGGING · invariant 6 — Exact `when` strings still erase matching text inside event names.** [CatalogStatusLines.swift:536](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogStatusLines.swift:536) replaces every occurrence throughout the headline and details, not just the generated check timestamp.
+
+   **Reproduction:** two checks report the same broken-member rule and ID, but name different events:
+   - `Birthday Nov 3, 2026 at 9:41 PM`, checked at that timestamp.
+   - `Birthday Nov 4, 2026 at 10:02 AM`, checked at that timestamp.
+
+   Both normalize to `Birthday WHEN … checked WHEN (WHEN)`. With unchanged colour and fix detail, no transition is logged despite the changed event. A read-only Python reproduction confirmed this collision.
+
+   **Regression:** extend `eventNamesAreNames` with these inputs and require one transition. Compare structured cause text separately from generated timing fields, or remove only the generated timing span.
+
+All eleven previously reported examples are fixed in source and have regression coverage. Remaining scoped changes for invariants 1–5 and 7, plus GH #417’s `silent (measured)` expectation: **read, no findings**. Main’s merged changes were excluded.
+
+The targeted Swift test attempt failed before executing tests with sandbox `permissionDenied`; supplied green counts were not independently reproduced. No files changed.
+
+Credits spent: unavailable | Finding count: 1  
+Verdict: fix — invariant 6 still suppresses a cause change when an event name contains the check’s exact timestamp.
+
+## Brief
+
+# Codex brief — closing pass on "Checklist audit 11/03 (BG + status split + count)"
+
+Range: ffdb3018..HEAD on fix/night-1103-checklist. HEAD includes a merge of origin/main (schema-B sound_attempts, 3028e9c0) — main's own changes are out of scope; review this branch's commits (first parent). Your previous closing pass (cycle on ffdb3018..9f0c5ac2) returned 4 findings — paused MFO job lit Analyzing, pausing waiter filled the lens, viewer line lost to a leftover era job, a second Database cause unlogged — fixed in 8734f8ae; your second pass (ffdb3018..8734f8ae) found 2 more — a paused dossier batch still lit Analyzing, and a sidecar failure arriving together with a failed check was not logged — fixed in d5f466ba; your third pass found the cause normalizer stripped every digit (drive X8→X9 hidden, '2,000' comma) — fixed in bdb227b5 (masks ages, times and free-standing numbers only). Your fourth pass found numbered drive names with spaces ('Backup 1'→'Backup 2') still collapsed — fixed in the head commit (path spans kept verbatim). Your fifth pass found '/Volumes/Backup (1)' → '(2)' collapsed; the head commit makes drive names STRUCTURED (CatalogStatusLine.names, compared exactly) as you recommended. Your sixth pass found a numbered event name ('Birthday 1'→'2') masked alike; the head commit changes the rule: Database/Files causes mask only dates/times/ages (never numbers), Content masks counts. Your seventh pass found a date-bearing event name ('July 4'→'July 5') masked; the head commit applies NO pattern to Database/Files words — builders record their exact date/age strings on the line (`when`) and only those are removed. Verify all eleven. Your cycle #220 found 7 findings; this branch claims to fix them plus a fresh-eyes reviewer's adds. Verify each invariant holds in the code at HEAD; report a finding only where one still fails (file:line, scenario, severity, checklist item).
+
+The 7 invariants:
+1. TRUE (data): the database a count or Catalog Database Info reads is the one the ROLE displays — master: cutover-opened else catalog.sqlite beside catalog.json; viewer: viewer-catalog/catalog.sqlite. ONE function (CatalogAuthority.databaseURL(role:opened:catalogFile:)) used by both callers. A viewer attempts no local era count; its job line says the master analyzes. "Viewer" is the sync role (catalogSync.mode / CatalogSync.launchMode), never catalogModel.isReadOnly.
+2. TRUE: no surface shows progress the running work cannot move. Content "Analyzing N of M" only when a counted analyzer runs or the helper RUNS (not queued/paused/waiting) a job of a kind in BackgroundServiceActivity.feedsCountedAnalyzers (empty today). The era job is its own detail line ("Machine era: N of M files (VideoScan Background — <state>)").
+3. TRUE: a job whose units defer is shown "waiting — <why>" with the waiting glyph (not the filled lens) in the menu bar and Settings; a queued job does not fill the lens. JobProgressSnapshot.waiting is additive (older payload decodes; schema stays 1).
+4. WORKFLOW: the checkbox is disabled only when OFF and turning ON is refused; ON in Debug or on a viewer can be unchecked (unregister called). The "not registered" Fix names a verb this build can do.
+5. PERFORMANCE: JobSupervisor.status() does not count as activity (menu bar's 5 s read); XPC status from the app does (noteClientActivity) — idle exit works with VideoScan closed.
+6. LOGGING: every Settings ▸ Background problem (launchd states, not answering, gate refusal, count failure/recovery with path) and every Catalog Status line colour/cause change and every Catalog Database Info "unknown —" fact is logged once on appear/change/clear, never per poll/recompute. BackgroundCatalogAccess open refusal names the path.
+7. TESTED: the count test uses a real schema-current catalog.sqlite with a known eligible count and requires .success through productionCountWork (master fallback, master opened-elsewhere, viewer no-count, DB Info viewer vs master).
+
+Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH #417, Rick's 11/02 ruling).
+
+Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
+Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.

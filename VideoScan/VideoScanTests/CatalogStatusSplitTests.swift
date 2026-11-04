@@ -465,13 +465,15 @@ struct CatalogStatusTransitionLogTests {
         #expect(C.cause("Unknown: 30 of 30 files — not connected now: /Volumes/X8 (30 files)")
                 != C.cause("Unknown: 30 of 30 files — not connected now: /Volumes/X9 (30 files)"), "X8 → X9 is a different drive")
         #expect(C.cause("Analyzing 999 of 2,000 files") == C.cause("Analyzing 1,000 of 2,000 files"), "a count is not a cause")
-        #expect(C.catalogCause("checked 2 Nov 10:41 (45 min ago)", when: ["2 Nov 10:41", "45 min ago"])
-                == C.catalogCause("checked 2 Nov 11:41 (1 h ago)", when: ["2 Nov 11:41", "1 h ago"]), "the line's own WHEN is not a cause")
+        // Database / Files compare their TIMELESS build: the check's date and age are not a cause.
+        let at1 = CatalogStatusLine(kind: .files, state: .green, words: "3 present · checked 2 Nov 10:41 (45 min ago)", cause: "3 present · checked WHEN")
+        let at2 = CatalogStatusLine(kind: .files, state: .green, words: "3 present · checked 2 Nov 11:41 (1 h ago)", cause: "3 present · checked WHEN")
+        #expect(C.key(at1) == C.key(at2), "the line's own WHEN is not a cause")
         #expect(C.cause("sidecar can't be opened — disk I/O error") != C.cause("sidecar can't be opened — no such file"))
         // Codex closing-4: a drive name with a space and a number is a NAME.
         // Database / Files words are names and facts: only the WHEN is masked.
-        #expect(C.catalogCause("not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)", when: [])
-                != C.catalogCause("not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)", when: []))
+        #expect(C.key(CatalogStatusLine(kind: .files, state: .grey, words: "not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)"))
+                != C.key(CatalogStatusLine(kind: .files, state: .grey, words: "not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)")))
         #expect(C.key(CatalogStatusLine(kind: .content, state: .inProgress, words: "Analyzing 999 of 2,000 files"))
                 == C.key(CatalogStatusLine(kind: .content, state: .inProgress, words: "Analyzing 1,000 of 2,000 files")))
         let a = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 1 (30 files)")
@@ -501,11 +503,12 @@ struct CatalogStatusTransitionLogTests {
         #expect(same.isEmpty)
     }
 
-    @Test("RED Codex closing-6/7: numbered and date-bearing event names in a Database cause are names — one transition each")
+    @Test("RED Codex closing-6/7/8: numbered, date-bearing and timestamp-named events in a Database cause are names — one transition each")
     func eventNamesAreNames() {
         func db(_ name: String, at: String = "Nov 3, 2026 at 9:41 PM", age: String = "12 min ago") -> CatalogStatusLine {
-            CatalogStatusLine(kind: .database, state: .red, words: "Red: event \"\(name)\": a member points at a row that no longer exists (id:7) — checked \(at) (\(age))",
-                              detail: ["Fix: open the event and remove the member"], when: [at, age])
+            let head = "Red: event \"\(name)\": a member points at a row that no longer exists (id:7) — checked "
+            return CatalogStatusLine(kind: .database, state: .red, words: head + "\(at) (\(age))",
+                                     detail: ["Fix: open the event and remove the member"], cause: head + "WHEN")
         }
         let files = CatalogStatusLine(kind: .files, state: .green, words: "3 present")
         let content = CatalogStatusLine(kind: .content, state: .green, words: "Up to date")
@@ -515,21 +518,42 @@ struct CatalogStatusTransitionLogTests {
         // Codex closing-7: a date-bearing event name is a name too.
         #expect(CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("July 4"), files: files, content: content),
                                                new: CatalogStatusLines(database: db("July 5"), files: files, content: content)).count == 1)
+        // Codex closing-8: an event NAMED with the check's own timestamp is still its name.
+        #expect(CatalogStatusTransitions.lines(
+            old: CatalogStatusLines(database: db("Birthday Nov 3, 2026 at 9:41 PM", at: "Nov 3, 2026 at 9:41 PM"), files: files, content: content),
+            new: CatalogStatusLines(database: db("Birthday Nov 4, 2026 at 10:02 AM", at: "Nov 4, 2026 at 10:02 AM", age: "1 h ago"),
+                                    files: files, content: content)).count == 1)
         // …while the check's own date and age moving on is not a change.
         let later = db("Birthday 1", at: "Nov 4, 2026 at 10:02 AM", age: "1 h ago")
         #expect(CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("Birthday 1"), files: files, content: content),
                                                new: CatalogStatusLines(database: later, files: files, content: content)).isEmpty)
     }
 
+    @Test("TRUTH: the real builders' timeless cause ignores the check's time and keeps everything else")
+    func buildersRecordTimelessCause() {
+        let t0 = Date()
+        func dbLine(_ ago: TimeInterval) -> CatalogStatusLine {
+            CatalogStatusLinesPolicy.database(IntegrityReportFacts(lastCompleted: t0.addingTimeInterval(-ago), outcome: .ok), now: t0,
+                                              date: CatalogStatusLinesPolicy.date)
+        }
+        let a = dbLine(60), b = dbLine(7_200)
+        #expect(a.words != b.words && a.cause == b.cause, "\(a.words) | \(b.words) | \(a.cause ?? "-")")
+        #expect(a.cause == "Integrity check passed WHEN")
+        let audited = CatalogFreshnessFacts(audit: CatalogAuditRunRecord(startedAt: t0.addingTimeInterval(-200), finishedAt: t0.addingTimeInterval(-100),
+                                                                         outcome: .completed, partial: false, counts: ["planned": 3, "present": 3]))
+        let f = CatalogStatusLinesPolicy.files(audited, missing: MissingCopyCounts(), now: t0, date: CatalogStatusLinesPolicy.date)
+        #expect(f.cause?.hasSuffix("· checked WHEN") == true && !(f.cause ?? "").contains("ago"), "\(f.cause ?? "-")")
+    }
+
     @Test("F6: a ticking count or age is not a change; a new cause is")
     func causeNotCounts() {
         let a = CatalogStatusLine(kind: .content, state: .grey, words: "12 left to analyze")
         let b = CatalogStatusLine(kind: .content, state: .grey, words: "11 left to analyze")
-        // The builders record their WHEN (date, age) on the line; so do these.
+        // The builders record their timeless cause on the line; so do these.
         let db = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 10:41 (1 h ago)",
-                                   when: ["2 Nov 10:41", "1 h ago"])
+                                   cause: "Integrity check passed WHEN")
         let db2 = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 11:41 (2 h ago)",
-                                    when: ["2 Nov 11:41", "2 h ago"])
+                                    cause: "Integrity check passed WHEN")
         let files = CatalogStatusLine(kind: .files, state: .yellow, words: "Yellow: files not checked yet")
         let files2 = CatalogStatusLine(kind: .files, state: .yellow, words: "Yellow: 3 present — older than 24 hours")
         let old = CatalogStatusLines(database: db, files: files, content: a)
