@@ -507,6 +507,9 @@ enum BackgroundServicePresentation {
 
     private static func job(enabled: Bool, service: ServiceStatus?, work: BackgroundWorkCount?, workProblem: String?,
                             lastNote: String?, viewer: Bool, time: (Date) -> String) -> String {
+        // A viewer first (Codex closing #3): a helper left registered from its
+        // master days may still list a job; the master runs content analysis.
+        if viewer { return viewerJob }
         if let run = work?.foregroundRun {
             return "Machine era (8B): \(run.completedUnits.formatted()) of \(run.totalUnits.formatted()) · running outside the service "
                 + "(started by hand; last unit \(time(run.updatedAt)))"
@@ -515,7 +518,6 @@ enum BackgroundServicePresentation {
             let counts = era.totalUnits > 0 ? "\(era.completedUnits.formatted()) of \(era.totalUnits.formatted())" : era.subtitle
             return "\(era.title): \(counts) · \(era.stateWords)"
         }
-        if viewer { return viewerJob }
         if let workProblem { return "Content analysis: could not count — \(workProblem)" }
         guard let work else { return "Content analysis: counting…" }
         if work.filesLeft == 0 { return "Content analysis: nothing left to analyze" }

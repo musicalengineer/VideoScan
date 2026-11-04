@@ -1,0 +1,51 @@
+# Codex review — Checklist audit 11/03 — closing
+
+- Range: `ffdb3018..9f0c5ac2`
+- Credits spent: unavailable
+- Tokens: 125886
+- Finding count: 4
+- Verdict: fix — four scoped invariants remain incomplete.
+- Run: 2026-11-04T02:34:04Z (cycle #223, tools/codex_review.py)
+
+## Codex answer
+
+Reviewed `ffdb3018..9f0c5ac2`. Four invariants still fail:
+
+1. **P0 · TRUE · invariant 2 — Paused local analysis still shows “Analyzing.”**  
+   [CatalogFreshnessSnapshot.swift:410](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogFreshnessSnapshot.swift:410) checks `state.isActive` without `isPaused`. Start Full Hashes, pause it, and leave no other analyzer running: `FullHashBackfillJob.pause()` leaves `.running`, so Content continues claiming progress indefinitely. Regression: a paused Full Hashes job must not make `contentIsWorking` true.
+
+2. **P0 · TRUE · invariant 3 — Pausing a deferred job fills the lens.**  
+   [BackgroundMenuPresentation.swift:42](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift:42) treats every `.pausing` job as moving. After a unit defers, press Pause during the 30-second retry sleep: the supervisor changes state to `.pausing`, suppresses the waiting snapshot, and the menu immediately displays `.working` although no unit runs. Regression: pause the existing deferring fixture before its retry; require the icon to remain unfilled.
+
+3. **P2 · TRUE · invariant 1 — An existing helper job overrides the viewer explanation.**  
+   [BackgroundServiceStore.swift:514](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/App/BackgroundServiceStore.swift:514) returns the local era job before checking `viewer`. Relaunch a former master as a viewer while its registered helper retains an era job: Settings shows local job counts instead of saying the master analyzes. Regression: extend `viewerCountsNothing` with an era job in the status reply and retain the `viewerJob` assertion.
+
+4. **P2 · LOGGING · invariant 6 — Additional Database causes can appear and clear silently.**  
+   [CatalogStatusLines.swift:513](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogStatusLines.swift:513) compares only state and headline words. With Database already red from an integrity failure, a sound-store failure is placed in `detail`; its appearance, changed reason and recovery produce no transition log. Regression: hold the integrity failure constant while changing `soundStoreProblem` through nil → failure → nil; require appearance and clearance logs.
+
+Remaining scoped files: **read, no findings**. Invariants 4, 5 and 7, and the GH #417 wording correction, pass code inspection.
+
+The proposed regressions were not executed: the scoped Swift test attempt failed before running tests with `permissionDenied` under the read-only sandbox. Supplied green counts were not independently reproduced. Concurrent staged changes and the manifest conflict are excluded from this verdict.
+
+Credits spent: unavailable | Finding count: 4  
+Verdict: fix — four scoped invariants remain incomplete.
+
+## Brief
+
+# Codex brief — closing pass on "Checklist audit 11/03 (BG + status split + count)"
+
+Range: ffdb3018..HEAD on fix/night-1103-checklist (3 commits). Your cycle #220 found 7 findings; this branch claims to fix them plus a fresh-eyes reviewer's adds. Verify each invariant holds in the code at HEAD; report a finding only where one still fails (file:line, scenario, severity, checklist item).
+
+The 7 invariants:
+1. TRUE (data): the database a count or Catalog Database Info reads is the one the ROLE displays — master: cutover-opened else catalog.sqlite beside catalog.json; viewer: viewer-catalog/catalog.sqlite. ONE function (CatalogAuthority.databaseURL(role:opened:catalogFile:)) used by both callers. A viewer attempts no local era count; its job line says the master analyzes. "Viewer" is the sync role (catalogSync.mode / CatalogSync.launchMode), never catalogModel.isReadOnly.
+2. TRUE: no surface shows progress the running work cannot move. Content "Analyzing N of M" only when a counted analyzer runs or the helper RUNS (not queued/paused/waiting) a job of a kind in BackgroundServiceActivity.feedsCountedAnalyzers (empty today). The era job is its own detail line ("Machine era: N of M files (VideoScan Background — <state>)").
+3. TRUE: a job whose units defer is shown "waiting — <why>" with the waiting glyph (not the filled lens) in the menu bar and Settings; a queued job does not fill the lens. JobProgressSnapshot.waiting is additive (older payload decodes; schema stays 1).
+4. WORKFLOW: the checkbox is disabled only when OFF and turning ON is refused; ON in Debug or on a viewer can be unchecked (unregister called). The "not registered" Fix names a verb this build can do.
+5. PERFORMANCE: JobSupervisor.status() does not count as activity (menu bar's 5 s read); XPC status from the app does (noteClientActivity) — idle exit works with VideoScan closed.
+6. LOGGING: every Settings ▸ Background problem (launchd states, not answering, gate refusal, count failure/recovery with path) and every Catalog Status line colour/cause change and every Catalog Database Info "unknown —" fact is logged once on appear/change/clear, never per poll/recompute. BackgroundCatalogAccess open refusal names the path.
+7. TESTED: the count test uses a real schema-current catalog.sqlite with a known eligible count and requires .success through productionCountWork (master fallback, master opened-elsewhere, viewer no-count, DB Info viewer vs master).
+
+Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH #417, Rick's 11/02 ruling).
+
+Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 104/104; Core background suites 74/74; gauntlet inventory --validate 0 errors.
+Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.

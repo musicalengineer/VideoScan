@@ -33116,9 +33116,11 @@
         "filesGreyWhileADriveIsAway",
         "helperAloneDoesNotClaimCountedProgress",
         "hundredThousandRows",
+        "pausedLocalJobIsNotWorking",
         "perFileCountsFromTheCalculator",
         "poisonedRecordDoesNotLeak",
         "sidecarIsCatalogRed",
+        "sidecarUnderRedIntegrity",
         "snapshotIndicators",
         "twoIndicatorsTwoDoors",
         "wiring"
@@ -33287,6 +33289,7 @@
         "clientMessageIsActivity",
         "deferredUnitIsWaitingNotRunning",
         "olderPayloadDecodes",
+        "pausingAWaitingJobIsNotWorking",
         "sensorWhoTouches",
         "statusReadsAreNotActivity",
         "waitClearsWhenAUnitRecords"
@@ -36084,7 +36087,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3304,
+      "expected_floor": 3306,
       "name": "unit",
       "package_expected_floor": 669,
       "package_selectors": [
@@ -37030,7 +37033,7 @@
       ],
       "expected_floor": 421,
       "name": "regression",
-      "package_expected_floor": 300,
+      "package_expected_floor": 301,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

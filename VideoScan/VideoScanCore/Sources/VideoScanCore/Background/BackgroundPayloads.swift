@@ -158,8 +158,10 @@ public struct JobProgressSnapshot: Codable, Equatable, Sendable {
         self.waiting = waiting
     }
 
-    /// True while the job holds a lane but can run no unit (see `waiting`).
-    public var isWaiting: Bool { state == .running && waiting != nil }
+    /// True while the job holds a lane but can run no unit (see `waiting`) —
+    /// also while a Pause asked during the wait has not landed yet
+    /// (`.pausing`: no unit is in flight then either; Codex closing #2).
+    public var isWaiting: Bool { (state == .running || state == .pausing) && waiting != nil }
 
     /// The state in words for every surface (menu bar, Settings): "waiting —
     /// <why>" while waiting, else the state's own words. One rule, so no

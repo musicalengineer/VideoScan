@@ -358,6 +358,21 @@ struct CatalogStatusBackgroundClaimTests {
         #expect(!(CatalogStatusIndicators(snapshot.state).content.why.first ?? "").hasPrefix("Machine era"), "no job, no line")
     }
 
+    @Test("RED Codex closing #1: a PAUSED local Full Hashes job is not 'on it' — Content must not keep claiming 'Analyzing'")
+    func pausedLocalJobIsNotWorking() async throws {
+        let sb = try ShowAgainSandbox.make("paused_fullhash"); defer { sb.cleanup() }
+        for i in 0..<40 { try sb.live("clip\(i).mov", bytes: 200_000) }
+        let center = MediaFileOperationsCenter()
+        let job = center.startFullHashBackfill(model: sb.model, marker: nil)
+        #expect(CatalogFreshnessSnapshot.jobRunning(in: center).contains(.fullHashes), "running: on it")
+        job.pause()
+        #expect(job.isPaused && job.state.isActive)
+        #expect(!CatalogFreshnessSnapshot.jobRunning(in: center).contains(.fullHashes), "paused: nothing moves the count")
+        #expect(!CatalogStatusLinesPolicy.contentIsWorking(running: CatalogFreshnessSnapshot.jobRunning(in: center), backgroundActive: false))
+        job.cancel()
+        await job.task?.value
+    }
+
     @Test("F2 LOGIC: only a RUNNING, not-waiting job of a kind that feeds a counted analyzer is active — none does today")
     func activityRule() {
         #expect(BackgroundServiceActivity.feedsCountedAnalyzers.isEmpty)
@@ -388,6 +403,24 @@ struct CatalogStatusTransitionLogTests {
         #expect(database.count == 2, "\(said)")
         #expect(database.first?.hasPrefix("Database: Unhealthy (Red: the last integrity check's report can't be read") == true, "\(said)")
         #expect(database.last?.hasPrefix("Database: Unhealthy → Synced (Integrity check passed") == true, "\(said)")
+    }
+
+    @Test("RED Codex closing #4: under a red integrity check, the sound sidecar's failure appearing and clearing is logged")
+    func sidecarUnderRedIntegrity() {
+        let snapshot = CatalogFreshnessSnapshot()
+        var said: [String] = []
+        snapshot.note = { said.append($0) }
+        let report = computed { $0.activeRecords = 3 }
+        let audit = audit(["planned": 3, "present": 3])
+        let failed = IntegrityReportFacts(problem: "integrity-latest.json can't be read: damaged")
+        snapshot.publish(report: report, facts: CatalogFreshnessFacts(audit: audit, integrity: failed))
+        let before = said.count
+        snapshot.publish(report: report, facts: CatalogFreshnessFacts(audit: audit, soundStoreProblem: "disk I/O error", integrity: failed))
+        #expect(said.count == before + 1, "\(said)")
+        #expect(said.last?.contains("disk I/O error") == true, "\(said)")
+        snapshot.publish(report: report, facts: CatalogFreshnessFacts(audit: audit, integrity: failed))
+        #expect(said.count == before + 2, "\(said)")
+        #expect(said.last?.hasPrefix("Database: Unhealthy") == true, "\(said)")
     }
 
     @Test("F6: a ticking count or age is not a change; a new cause is")

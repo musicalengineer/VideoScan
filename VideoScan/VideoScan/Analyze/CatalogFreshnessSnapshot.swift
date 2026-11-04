@@ -414,7 +414,10 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     /// The kinds with an active MFO job in the center. O(jobs).
     static func jobRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
         var s: Set<AnalyzeCycler> = []
-        for job in center.jobs where job.state.isActive {
+        // A PAUSED job is not on it (Codex closing #1): its state stays
+        // .running while nothing moves, so it lights neither "Analyzing" nor
+        // "Checking…".
+        for job in center.jobs where job.state.isActive && !job.isPaused {
             if job is ValidateCatalogJob { s.formUnion([.filePresence, .integrity]) }   // both steps, one job
             if job is CatalogAuditJob { s.insert(.filePresence) }
             else if job is FullHashBackfillJob { s.insert(.fullHashes) }

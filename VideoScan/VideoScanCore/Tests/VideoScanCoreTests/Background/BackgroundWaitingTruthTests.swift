@@ -104,6 +104,25 @@ struct BackgroundWaitingTruthTests {
         await s.drain()
     }
 
+    @Test("RED Codex closing #2: Pause pressed while a job waits out its retry — the lens stays unfilled ('pausing' is not a running unit)")
+    func pausingAWaitingJobIsNotWorking() async throws {
+        let gate = DeferGate()
+        let log = LogLines()
+        var c = BackgroundFixtures.fastConfiguration()
+        c.deferRetryInterval = .seconds(5)          // Pause lands inside the retry sleep
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                              factory: DeferringFactory(gate: gate), backoff: BackgroundFixtures.fullBackoff(trickle: .milliseconds(1)),
+                              log: log, configuration: c)
+        let id = JobID()
+        _ = await s.enqueue(JobRequest(id: id, kind: DeferringFactory.kind, requestedBy: "test"))
+        _ = await BackgroundFixtures.waitUntil { await s.snapshot(id)?.waiting != nil }
+        #expect(await s.pause(id))
+        let status = await s.status(processIdentifier: 1, startedAt: Date())
+        #expect(status.jobs.first?.state == .pausing)
+        #expect(BackgroundMenuPresentation.from(status).icon != .working, "no unit runs while it waits to pause")
+        await s.abandonForTest()
+    }
+
     @Test("COMPAT F3: a status payload from a build without `waiting` still decodes (additive field, same schema)")
     func olderPayloadDecodes() throws {
         let job = JobProgressSnapshot(id: JobID(rawValue: "J"), kind: .noop, lane: "default", title: "t", subtitle: "",

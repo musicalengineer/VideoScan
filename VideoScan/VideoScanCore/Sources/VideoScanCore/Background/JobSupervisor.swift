@@ -303,7 +303,7 @@ public actor JobSupervisor {
             completedUnits: completed, totalUnits: total,
             skippedUnits: cp?.unitsSkipped ?? 0, failedUnits: cp?.unitsFailed ?? 0,
             state: run.state, startedAt: run.startedAt, finishedAt: run.finishedAt,
-            waiting: run.state == .running ? run.waiting : nil)
+            waiting: run.state == .running || run.state == .pausing ? run.waiting : nil)
     }
 
     // MARK: - Idle

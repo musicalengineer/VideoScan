@@ -39,7 +39,7 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
     public static func from(_ s: ServiceStatus) -> Self {
         let active = s.jobs.filter { $0.state.isActive }
         let lines = active.map(jobLine)
-        let moving = active.filter { ($0.state == .running && !$0.isWaiting) || $0.state == .pausing }
+        let moving = active.filter { ($0.state == .running || $0.state == .pausing) && !$0.isWaiting }
         let waiting = active.filter { $0.isWaiting || $0.state == .queued }
         let icon: Icon
         if s.backoff.isPaused || (!active.isEmpty && moving.isEmpty && waiting.isEmpty) { icon = .paused }

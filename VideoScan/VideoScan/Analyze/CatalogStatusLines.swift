@@ -512,6 +512,13 @@ enum CatalogStatusTransitions {
                 out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))")
             } else if cause(was.words) != cause(line.words) {
                 out.append("\(title): \(word(line)) — now: \(line.words)")
+            } else if line.kind != .content, cause(was.detail.joined(separator: "\n")) != cause(line.detail.joined(separator: "\n")) {
+                // A second cause under the same colour (the sound sidecar under a
+                // failed check) rides in the detail: its arrival and clearing are
+                // changes too (Codex closing #4). Content's detail is counts.
+                let added = line.detail.filter { d in !was.detail.contains { cause($0) == cause(d) } }
+                let gone = was.detail.filter { d in !line.detail.contains { cause($0) == cause(d) } }
+                out.append("\(title): \(word(line)) — " + (added.map { "now also: \($0)" } + gone.map { "cleared: \($0)" }).joined(separator: " · "))
             }
         }
         return out

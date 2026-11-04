@@ -143,6 +143,12 @@ struct BackgroundCountCatalogURLTests {
                                                         workProblem: store.workProblem, lastNote: store.lastNote, viewer: true)
         #expect(lines.job == BackgroundServicePresentation.viewerJob)
         #expect(lines.job.contains("the master runs content analysis"))
+        // Codex closing #3: a helper left registered from the master days still
+        // lists an era job — the viewer words still win.
+        let leftover = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled,
+                                                           service: BackgroundServiceStoreTests.serviceStatus(jobs: [BackgroundServiceStoreTests.eraJob(.running)]),
+                                                           serviceProblem: nil, work: nil, workProblem: nil, lastNote: nil, viewer: true)
+        #expect(leftover.job == BackgroundServicePresentation.viewerJob, "\(leftover.job)")
     }
 
     @Test("TRUTH F1: Catalog Database Info on a viewer reads the synced snapshot, not a top-level catalog.sqlite with other rows")
