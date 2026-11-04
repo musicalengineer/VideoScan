@@ -60,8 +60,8 @@ struct HallieShellCLITests {
 
         func dependencies() -> HallieShellCLI.Dependencies {
             HallieShellCLI.Dependencies(
-                loadCatalog: { [self] url in
-                    loadedURLs.append(url)
+                loadCatalog: { [self] source in
+                    loadedURLs.append(source.databaseURL)
                     return records
                 },
                 loadProfiles: { [self] in
@@ -366,10 +366,10 @@ struct HallieShellCLITests {
         try Data("{\"records\":[]}".utf8).write(to: base.appendingPathComponent("catalog.json"))
 
         // Not switched: refused, nothing loaded.
-        #expect(await HallieShellCLI.loadCatalogReadOnly(database) == nil)
+        #expect(await HallieShellCLI.loadCatalogReadOnly(.live(database)) == nil)
 
         try Data("{}".utf8).write(to: base.appendingPathComponent(SQLiteCatalogReader.latchFileName))
-        let loaded = try #require(await HallieShellCLI.loadCatalogReadOnly(database))
+        let loaded = try #require(await HallieShellCLI.loadCatalogReadOnly(.live(database)))
         #expect(loaded.records.isEmpty)
         let designation = try #require(CatalogCommitter.designation(fromJSON: loaded.masterArchiveJSON))
         #expect(designation.targetPath == "/Volumes/FamilyArchive")

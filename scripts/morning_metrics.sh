@@ -56,9 +56,11 @@ if [ -n "$PF" ]; then
 fi
 
 # Weekly Address/Thread Sanitizer runs (2026-10-04): 🔴 on findings or a
-# failed run, 🟡 if skipped, silent when green. Local files on the M4, so
-# quiet on other hosts. Never fails the digest.
-python3 "$REPO_ROOT/scripts/sanitizer_alert.py" || true
+# failed run, 🟡 if skipped, silent when green. The runs are on the M4: there
+# the local latest-*.json files are read; elsewhere (the Ultra) the counts the
+# M4 published to metrics/sanitizer.jsonl (2026-11-04). Never fails the digest.
+SAN="$(git show origin/metrics:metrics/sanitizer.jsonl 2>/dev/null || true)"
+printf '%s' "$SAN" | python3 "$REPO_ROOT/scripts/sanitizer_alert.py" --published - || true
 
 # The Swift 6 nightly analysis lane (stage 2, 2026-10-25): one line with the
 # lane's numbers (warnings vs baseline, escape hatches, swiftlint analyze,

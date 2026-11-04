@@ -17,7 +17,8 @@
 
 ## Catalog store
 - Step G: sidecars → tables (catalog-audit, fullhash marker, ignored-content, events decisions, ledger rows, integrity runs); then delete `CatalogStore`, `CatalogSnapshot`, `CatalogLock`, `LiveReload`, the Codable DTO layer, `JSONCatalogRepository`, Core `Import/` (decided 10/20).
-- H′: `CatalogSync` ships a sealed `VACUUM INTO` copy to viewer Macs (viewers frozen at the 10/18 JSON; previewsweepd and the Hallie shell still read it).
+- H′: `CatalogSync` ships a sealed `VACUUM INTO` copy to viewer Macs (viewers frozen at the 10/18 JSON). Hallie shell and find-tag read the synced copy on a viewer since 11/04 (`CatalogAuthority.headlessSource`); previewsweepd still reads the top-level file (its launcher `PreviewService+Sweep.swift` is the sensor's one allowlisted bypass).
+- A viewer's synced copy refreshes only while VideoScan runs there (CatalogSync's in-app pull, 90 s); the M4 test host is headless, so its nightly Hallie lane reads whatever snapshot the last app session left (11/04: v14 against a v15 build). Idea: a headless pull (`--sync-from-master`) before the nightly's Hallie lane.
 - Quarantine screen listing rows with their words (#339). (ruling Q5)
 - #338 near-full disk raises high-water before COMMIT → misleading read-only reopen; verify #340 fix landed (refused SQLite launch un-froze catalog.json).
 - Stop decoding the 80 MB catalog.json and rewriting `.prev` on every launch (`CatalogAuthorityFlip`).

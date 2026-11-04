@@ -80,6 +80,36 @@ enum CatalogAuthority: Equatable, Sendable {
         case .master: return opened ?? folder.appendingPathComponent(databaseFileName)
         }
     }
+
+    /// THE catalog a HEADLESS reader opens (2026-11-04: the Hallie shell and
+    /// the find-tag daemon — processes that never build VideoScanModel, so
+    /// never run the launch above). The same rule, `databaseURL(role:…)`,
+    /// with no session (`opened` nil); on a viewer it is the master's synced
+    /// copy, opened sealed (`SQLiteCatalogReader.Source.syncedCopy`).
+    nonisolated static func headlessSource(role: CatalogSyncMode, master: String,
+                                           folder: URL) -> SQLiteCatalogReader.Source {
+        let url = databaseURL(role: role, opened: nil, catalogFile: folder.appendingPathComponent("catalog.json"))
+        switch role {
+        case .viewer: return .syncedCopy(url, master: master)
+        case .master: return .live(url)
+        }
+    }
+
+    /// Production: this Mac's role (CatalogSync's hostname rule, the same one
+    /// the app's launch uses) and ~/Library/Application Support/VideoScan.
+    /// CLI-only; never a test default.
+    nonisolated static func headlessSource(fileManager: FileManager = .default) -> SQLiteCatalogReader.Source {
+        headlessSource(role: CatalogSync.launchMode(), master: CatalogSync.masterHostname(defaults: .standard),
+                       folder: SQLiteCatalogReader.defaultDatabaseURL(fileManager: fileManager).deletingLastPathComponent())
+    }
+
+    /// An explicit `--catalog PATH`: as given, except that a path inside a
+    /// synced `viewer-catalog/` folder is opened sealed — a live read-only
+    /// open could leave an empty `-wal` beside it and break the manifest.
+    nonisolated static func explicitSource(_ url: URL) -> SQLiteCatalogReader.Source {
+        url.deletingLastPathComponent().lastPathComponent == CatalogViewerSnapshot.directoryName
+            ? .syncedCopy(url, master: CatalogSync.masterHostname(defaults: .standard)) : .live(url)
+    }
     /// Written once, by the explicit "Switch Catalog to SQLite…" door (B2,
     /// retired 2026-10-20 after the switch); nothing in the app writes it now.
     nonisolated static let latchFileName = "catalog.cutover"

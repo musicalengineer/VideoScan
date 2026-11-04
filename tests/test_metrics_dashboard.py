@@ -270,10 +270,10 @@ def full_fixtures(now, with_summary=True):
                                  "app_python_lines": 2143, "test_lines": 340574, "tooling_lines": 50080, "files_over_1000": 61,
                                  "test_count": 9550, "regression_count": 209, "open_issues": 81, "worst_file": "FamilyTreeLiveModel.swift:2996",
                                  "swift_by_folder": {"Hallie": {"lines": 68739, "files": 181}, "Core": {"lines": 42550, "files": 144}, "Tests": {"lines": 300000, "files": 1000}}}]),
-        "static_analysis.jsonl": jsonl([{"ts": iso(old), "codeql_findings": 17, "concurrency_warnings": 189, "tsan_issues": None,
+        "static_analysis.jsonl": jsonl([{"ts": iso(old), "source": "m4-analysis-lane", "codeql_findings": 17, "concurrency_warnings": 189, "tsan_issues": None,
                                          "strict_warning_total": 815, "swiftlint_strict": 430, "periphery_aggressive": 1521,
                                          "codeql_extracted_files": 900, "codeql_in_scope_files": 939},
-                                        {"ts": iso(fresh), "codeql_findings": 17, "concurrency_warnings": 193, "tsan_issues": None,
+                                        {"ts": iso(fresh), "source": "m4-analysis-lane", "codeql_findings": 17, "concurrency_warnings": 193, "tsan_issues": None,
                                          "strict_warning_total": 539, "swiftlint_strict": 387, "periphery_aggressive": 1673,
                                          "codeql_extracted_files": 1090, "codeql_in_scope_files": 1090}]),
         "testdriver.jsonl": jsonl(nightly),
@@ -450,7 +450,7 @@ def test_sprint_without_valid_nonempty_counts_has_no_completion_graphic(tmp_path
 @needs_node
 def test_summary_sparkline_does_not_join_across_missing_sample(tmp_path):
     now = datetime.now(timezone.utc)
-    rows = [{"ts": iso(now - timedelta(days=4 - i)), "strict_warning_total": value}
+    rows = [{"ts": iso(now - timedelta(days=4 - i)), "strict_warning_total": value, "source": "m4-analysis-lane"}
             for i, value in enumerate([10, 20, None, 30, 40])]
     out = run_page(tmp_path, {"static_analysis.jsonl": jsonl(rows)})
     assert out["errors"] == []
@@ -954,6 +954,47 @@ def test_passing_scoped_run_cannot_replace_full_suite_failure_or_freshness(tmp_p
 
 
 @needs_node
+def test_a_hallie_replay_that_ran_nothing_says_did_not_run_and_why_never_a_few(tmp_path):
+    """RED 2026-11-04 (Rick): both Macs' replays answered 0 of 56 — the shell refused the
+    catalog ("schema not current") — and the card read "Hallie replay incomplete (a few)".
+    "A few" was the APP lane's word (1 failed) landing after the Hallie words. A lane that
+    completed nothing says "did not run" with the reason code in words; a lane cut short
+    says how many of how many; "(a few)" stays with the app counts it describes."""
+    now = datetime.now(timezone.utc)
+    fx = full_fixtures(now)
+    s = fx["summary_latest.json"]
+    last = s["nightly"]["nights"][-1]
+    for h in ("M1", "M5"):
+        last["hosts"].pop(h, None)
+    base = {"state": "watch", "passed": 13015, "failed": 1, "total": 13079, "reason": "failed-tests:1",
+            "core_passed": 2267, "core_failed": 0, "core_status": "ok", "hallie_voice_status": "ok"}
+    last["hosts"]["M4"] = dict(base, hallie_status="incomplete",
+                               hallie_strict_pass=0, hallie_strict_expected=56, hallie_strict_completed=0,
+                               hallie_strict_status="incomplete", hallie_strict_reason="catalog-schema-not-current",
+                               hallie_advisory_pass=0, hallie_advisory_expected=826, hallie_advisory_completed=0,
+                               hallie_advisory_status="incomplete", hallie_advisory_reason="catalog-schema-not-current")
+    last["hosts"]["Ultra"] = dict(base, hallie_status="incomplete",
+                                  hallie_strict_pass=40, hallie_strict_expected=56, hallie_strict_completed=44,
+                                  hallie_strict_status="incomplete", hallie_strict_reason=None,
+                                  hallie_advisory_pass=600, hallie_advisory_expected=826, hallie_advisory_completed=826,
+                                  hallie_advisory_status="advisory", hallie_advisory_reason=None)
+    s["nightly"]["hosts"] = ["M4", "Ultra"]
+    out = run_page(tmp_path, fx, {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    assert "Hallie replay did not run: catalog schema not current" in head, head
+    assert "Hallie replay incomplete: 12 of 56 incomplete" in head, head
+    assert "13,015 passed · 1 failed (a few)" in head
+    assert "incomplete (a few" not in head and "did not run: catalog schema not current (a few" not in head
+    assert "<title>Hallie strict: did not run: catalog schema not current · 0 of 56 ran</title>" in head, head
+    assert "<title>Hallie advisory: did not run: catalog schema not current · 0 of 826 ran</title>" in head
+    assert "<title>Hallie strict: 40 of 56 · incomplete · 12 of 56 incomplete</title>" in head, head
+    # The reason is a sanitized code turned into words on the page — never a row's free text.
+    tl = out["sections"]["tl"]
+    assert "Hallie replay did not run: catalog schema not current" in tl
+
+
+@needs_node
 def test_hallie_replay_revision_is_distinct_from_nightly_test_revision(tmp_path):
     now = datetime.now(timezone.utc)
     fixtures = full_fixtures(now)
@@ -1026,3 +1067,145 @@ def test_gedcom_line_never_shows_a_name_or_markup_from_the_row(tmp_path):
 def test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes():
     page = PAGE.read_text()
     assert not re.search(r"\bon(?:click|change|submit|keydown)\s*=", page)
+
+
+# ---------------------------------------------------------------- sanitizers (2026-11-04)
+# RED 2026-11-04: the card read only static_analysis.jsonl (the GitHub nightly, whose
+# sanitizer fields are null), so the 11/01 TSan race and the 10/31 UBSan report on the
+# M4 read "sanitizers: no run". It now reads metrics/sanitizer.jsonl (tools/publish_metrics.py).
+
+def san_row(date, kind, status="findings", tests=10000, restarts=0, asan=None, ubsan=None, tsan=None, **kw):
+    return {"schemaVersion": 1, "date": date, "kind": kind, "source": "weekly", "configuration": "Debug",
+            "subset": "full", "status": status, "sha": "4fc66b944", "tests": tests, "host_restarts": restarts,
+            "reports": restarts, "asan_issues": asan, "ubsan_issues": ubsan, "tsan_issues": tsan, **kw}
+
+
+def local_day(days_ago):
+    return (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+
+
+@needs_node
+def test_sanitizer_card_shows_the_m4_weekly_runs_with_their_dates(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([
+        san_row(local_day(10), "address", status="tests-failed", asan=0, ubsan=0),
+        san_row(local_day(4), "address", tests=4292, restarts=2, asan=0, ubsan=1),
+        san_row(local_day(3), "thread", tests=10333, restarts=8, tsan=1,
+                unique_findings=["ThreadSanitizer: data race SECRET-TITLE /Users/rickb"]),
+    ])
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out["errors"] == []
+    line = out["sections"]["sum-san"]
+    assert "sanitizers weekly on the M4" in line
+    assert "dot red" in line and "2 sanitizer findings" in line and "2 findings" in line
+    assert "ASan <b>0</b> · UBSan <b>1</b>" in line and "4 d ago" in line and "host restarted 2×" in line
+    assert "TSan <b>1</b>" in line and "3 d ago" in line and "host restarted 8×" in line
+    assert "Static checks (M4 analysis lane" in line
+    body = out["sections"]["body-san"]
+    assert "TSan unique findings" in body and "weekly on the M4" in body
+    assert "c-sa-san" in out["charts"]
+    tsan = [ds for ds in out["chartData"]["c-sa-san"]["datasets"] if ds["label"] == "TSan"][0]["data"]
+    assert tsan[-1] == 1 and len(tsan) == 3
+    blob = json.dumps(out)
+    assert "SECRET-TITLE" not in blob and "/Users/rickb" not in blob
+
+
+@needs_node
+def test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(12), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(11), "thread", tsan=5)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot grey" in line and "no run in 8 days" in line
+    assert 'class="word grey">no run in 11 days' in line and 'class="word grey">no run in 12 days' in line
+    assert "<b>5</b>" not in line and "5 findings" not in line
+
+
+@needs_node
+def test_one_fresh_clean_kind_and_one_stale_is_grey_not_green(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(2), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(20), "thread", status="ok", tsan=0)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot grey" in line and "dot green" not in line
+    assert "0 sanitizer findings" in line and "no run in 20 days" in line
+
+
+@needs_node
+def test_both_kinds_fresh_and_clean_is_green(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(0), "thread", status="ok", tsan=0)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot green" in line and "0 sanitizer findings" in line and "today" in line
+
+
+@needs_node
+def test_sanitizer_rows_alone_render_without_static_rows(tmp_path):
+    out = run_page(tmp_path, {"sanitizer.jsonl": jsonl([san_row(local_day(3), "thread", tsan=1,
+                                                                  status="<script>x</script>")])})
+    assert out["errors"] == []
+    line = out["sections"]["sum-san"]
+    assert "TSan <b>1</b>" in line and "CodeQL off" in line and "<script>" not in line
+
+
+# ---------------------------------------------------------------- static checks from the M4 lane (2026-11-04)
+# RED 2026-11-04: GitHub's strict-concurrency / lint jobs are off (no Swift 6.4 on the
+# runner), so the card's "Static checks (GitHub nightly)" read whatever the last row held
+# (null, or the 0s of a build that died). The M4 analysis lane now publishes rows with
+# source "m4-analysis-lane"; the card reads only those, shows their age, goes grey past
+# 36 h, and shows CodeQL grey as off, never a count.
+
+def lane_row(hours_ago, status="ok", **kw):
+    t = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    row = {"schemaVersion": 1, "ts": iso(t), "date": t.strftime("%Y-%m-%d"), "sha": "3994736ea", "run_kind": "nightly",
+           "source": "m4-analysis-lane", "host": "M4", "status": status, "elapsed_s": 5400,
+           "strict_warning_total": 455, "concurrency_warnings": 7, "memory_safety_warnings": 466,
+           "swiftlint_strict": 359, "periphery_aggressive": 21, "escape_hatches": 1386, "codeql_findings": None}
+    row.update(kw)
+    return row
+
+
+def github_null_row(hours_ago):
+    return {"ts": iso(datetime.now(timezone.utc) - timedelta(hours=hours_ago)), "sha": "6f2934a8", "run_kind": "nightly",
+            "codeql_findings": None, "concurrency_warnings": None, "strict_warning_total": None, "swiftlint_strict": None,
+            "periphery_aggressive": None, "complexity_offenders": 512}
+
+
+@needs_node
+def test_static_checks_read_the_m4_lane_with_its_age_and_codeql_grey(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["static_analysis.jsonl"] = jsonl([lane_row(24 * 8, swiftlint_strict=380, strict_warning_total=470),
+                                               lane_row(7), github_null_row(2)])
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out["errors"] == []
+    line = out["sections"]["sum-san"]
+    assert "static checks nightly on the M4" in line and "GitHub nightly" not in line
+    assert "Static checks (M4 analysis lane" in line and "7 h ago" in line
+    assert "strict warnings 455 (470 a week ago)" in line and "SwiftLint 359 (380 a week ago)" in line
+    assert "concurrency 7" in line and "Periphery 21" in line and "memory safety 466" in line
+    assert 'class="word grey">CodeQL off: GitHub runner Swift too old; not run locally' in line
+    body = out["sections"]["body-san"]
+    assert "SwiftLint --strict" in body and "359" in body
+    assert "CodeQL off: GitHub runner Swift too old; not run locally" in body
+
+
+@needs_node
+def test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["static_analysis.jsonl"] = jsonl([lane_row(50, swiftlint_strict=4242), github_null_row(2)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert 'class="word grey">no run in 2 days' in line
+    assert "4242" not in line and "4,242" not in line
+
+
+@needs_node
+def test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["static_analysis.jsonl"] = jsonl([lane_row(3, status="red", swiftlint_strict=None)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert 'class="word red">lane red' in line and "SwiftLint no data yet" in line
+    fixtures["static_analysis.jsonl"] = jsonl([github_null_row(2)])
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "thread", status="ok", tsan=0)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert 'class="word grey">no lane run published' in line

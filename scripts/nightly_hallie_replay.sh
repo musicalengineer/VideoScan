@@ -36,6 +36,8 @@
 # `failed` in seconds with a one-line reason naming host + tag.
 set -u
 REPO=${REPO:-$HOME/dev/VideoScan}
+# This script's own folder: its helpers ship beside it (REPO may be a test stub).
+HERE=$(cd "$(dirname "$0")" && pwd)
 PY=${PY:-$REPO/venv/bin/python}
 [ -x "$PY" ] || PY=python3
 LOGDIR=${LOGDIR:-$HOME/Library/Logs/VideoScan/hallie-eval}
@@ -222,7 +224,7 @@ run_lane() {
     fi
     [ "$run_rc" -lt 128 ] || return "$run_rc"
     if [ ! -s "$run" ]; then
-        echo "{\"status\":\"failed\",\"expected\":0,\"completed\":0,\"clean\":0,\"defects\":0,\"incomplete\":0,\"runRC\":$run_rc}"
+        echo "{\"status\":\"failed\",\"expected\":0,\"completed\":0,\"clean\":0,\"defects\":0,\"incomplete\":0,\"runRC\":$run_rc,\"reason\":\"$(python3 "$HERE/hallie_replay_reason.py" "$run_log" 0 2>/dev/null)\"}"
         return 1
     fi
     "$PY" "$REPO/scripts/hallie_eval.py" grade --run "$run" $strict_flag > "$LOGDIR/nightly-$STAMP-$lane.grade.log" 2>&1
@@ -231,10 +233,20 @@ run_lane() {
     # fallback if the file is missing.
     local summary="${run%.json}.summary.json"
     if [ -s "$summary" ]; then
-        python3 - "$summary" "$run_rc" "$grade_rc" <<'PYEOF'
+        python3 - "$summary" "$run_rc" "$grade_rc" "$run_log" "$HERE" <<'PYEOF'
 import json, sys
+sys.path.insert(0, sys.argv[5])
+try:
+    from hallie_replay_reason import reason   # 2026-11-04: WHY a lane answered nothing, as a code
+except ImportError:                           # never lose the lane's summary over its reason
+    reason = lambda text, completed: None     # noqa: E731
 s = json.load(open(sys.argv[1]))
 s["runRC"] = int(sys.argv[2]); s["gradeRC"] = int(sys.argv[3])
+try:
+    log_text = open(sys.argv[4], encoding="utf-8", errors="replace").read()
+except OSError:
+    log_text = ""
+s["reason"] = reason(log_text, int(s.get("completed", 0) or 0))
 print(json.dumps(s, separators=(",", ":")))
 PYEOF
     else
@@ -315,6 +327,8 @@ def lane(js, name):
             f"hallie_{name}_pass": s.get("clean", 0),
             f"hallie_{name}_fail": s.get("defects", 0),
             f"hallie_{name}_incomplete": incomplete_count(s),
+            # A code (hallie_replay_reason.py) when the lane completed nothing; else null.
+            f"hallie_{name}_reason": s.get("reason"),
             f"hallie_{name}_yellow": (s.get("meta") or {}).get("liveReviewFlags"),
             f"hallie_{name}_run_id": s.get("runID"),
             f"hallie_{name}_flags": s.get("flags"),

@@ -13,6 +13,7 @@
 // Suite (filter by SUITE): SQLiteCatalogReaderTests
 
 import Foundation
+import SQLite3
 import Testing
 @testable import VideoScanCore
 
@@ -144,6 +145,97 @@ struct SQLiteCatalogReaderTests {
                                          report: { said.append($0) })
         #expect(await source.eligibleCandidates().isEmpty)
         #expect(said.lines.contains { $0.contains(SQLiteCatalogReader.latchFileName) })
+    }
+
+    // MARK: - A viewer's synced copy (2026-11-04, the M4's Hallie lane)
+
+    /// The master's sealed snapshot of the scene, as CatalogSync lays it out
+    /// on a viewer: `<live>/viewer-catalog/catalog.sqlite` + its latch.
+    private static func syncedCopy(of scene: ImporterScene, latch: Bool = true) async throws -> URL {
+        let folder = scene.databaseFolder.appendingPathComponent("viewer-live/viewer-catalog", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent(SQLiteCatalogReader.databaseFileName)
+        let master = GRDBCatalogRepository(host: "reader-test", durability: .volatileForTests)
+        #expect(await master.open(at: scene.databaseURL) == .readWrite)
+        #expect(master.sealedCopyBlocking(to: copy) == nil)
+        await master.close()
+        if latch { try Data("{}".utf8).write(to: folder.appendingPathComponent(SQLiteCatalogReader.latchFileName)) }
+        return copy
+    }
+
+    @Test("synced copy: the master's records, opened sealed — the synced folder is byte-for-byte untouched and nothing is created beside it")
+    func syncedCopyReadsTheMastersRecords() async throws {
+        let (scene, app) = try await Self.scene(); defer { scene.remove() }
+        let copy = try await Self.syncedCopy(of: scene)
+        let folder = copy.deletingLastPathComponent()
+        let before = try Self.folderState(folder)
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+
+        let loaded = try await SQLiteCatalogReader.load(.syncedCopy(copy, master: "RicksUltra.local")).get()
+
+        #expect(try Self.folderState(folder) == before, "a reader wrote into the synced folder")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == names,
+                "a file appeared beside the synced copy (-wal / -shm would break the manifest)")
+        #expect(Set(loaded.records.map(\.id.uuidString)) == Set(app.records.keys))
+        #expect(loaded.generation == app.snapshot.generation)
+    }
+
+    @Test("synced copy missing, or its latch missing: refused with words naming the path and 'synced copy from <master>'")
+    func syncedCopyNotArrived() async throws {
+        let (scene, _) = try await Self.scene(); defer { scene.remove() }
+        let absent = scene.databaseFolder.appendingPathComponent("nowhere/viewer-catalog/catalog.sqlite")
+        let none = SQLiteCatalogReader.preflight(.syncedCopy(absent, master: "RicksUltra.local"))?.words ?? ""
+        #expect(none.contains("synced copy from RicksUltra.local"), Comment(rawValue: none))
+        #expect(none.contains(absent.deletingLastPathComponent().path), Comment(rawValue: none))
+        #expect(none.contains("nothing synced from RicksUltra.local yet"), Comment(rawValue: none))
+
+        let unlatched = try await Self.syncedCopy(of: scene, latch: false)
+        guard case .failure(let failure) = await SQLiteCatalogReader.load(.syncedCopy(unlatched, master: "M")) else {
+            Issue.record("a synced copy without its latch was read")
+            return
+        }
+        #expect(failure.words.contains("synced copy from M"), Comment(rawValue: failure.words))
+    }
+
+    @Test("synced copy from a master on an older schema: refused — 'synced copy from <master>' and 'schema is not current', path named, not one byte changes")
+    func syncedCopyOnAnOlderSchemaIsRefused() async throws {
+        let (scene, _) = try await Self.scene(); defer { scene.remove() }
+        let copy = try await Self.syncedCopy(of: scene)
+        // The master that sealed it had not yet run this build's last migration.
+        // The C API, not GRDB: GRDB is imported only under Store/ (CatalogStoreSensorTests).
+        var db: OpaquePointer?
+        #expect(sqlite3_open(copy.path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "DELETE FROM grdb_migrations WHERE rowid = (SELECT max(rowid) FROM grdb_migrations)",
+                             nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_changes(db) == 1)
+        sqlite3_close(db)
+        let before = try Self.folderState(copy.deletingLastPathComponent())
+
+        let result = await SQLiteCatalogReader.load(.syncedCopy(copy, master: "RicksUltra.local"))
+
+        guard case .failure(let failure) = result else {
+            Issue.record("an older-schema synced copy was read")
+            return
+        }
+        #expect(failure.words.contains("\(copy.path) (the synced copy from RicksUltra.local) would not open for reading"),
+                Comment(rawValue: failure.words))
+        #expect(failure.words.contains("schema is not current"), Comment(rawValue: failure.words))
+        #expect(try Self.folderState(copy.deletingLastPathComponent()) == before)
+    }
+
+    @Test("the live words are unchanged: catalog.sqlite would not open for reading")
+    func liveSourceIsTheOldDoor() async throws {
+        let folder = try StoreFixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("catalog.sqlite")
+        try Data("{}".utf8).write(to: folder.appendingPathComponent(SQLiteCatalogReader.latchFileName))
+        try Data("not sqlite".utf8).write(to: url)
+        guard case .failure(let failure) = await SQLiteCatalogReader.load(.live(url)) else {
+            Issue.record("a garbage file was read")
+            return
+        }
+        #expect(failure.words.hasPrefix("catalog.sqlite would not open for reading"), Comment(rawValue: failure.words))
+        #expect(SQLiteCatalogReader.Source.live(url).databaseURL == url)
     }
 
     @Test("the watcher's freshness file is the high-water sidecar beside the database")

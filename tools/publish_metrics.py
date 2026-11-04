@@ -29,6 +29,21 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
     metrics/modules.jsonl         one row per day: per-module counts for the
                                   page's Module health table, published by
                                   scripts/complexity_backfill.py --modules
+    metrics/sanitizer.jsonl       one row per sanitizer run on this Mac (the weekly
+                                  ASan+UBSan / TSan jobs, scripts/weekly_sanitizer.py,
+                                  and the analysis lane's runs): date, kind, status,
+                                  test count, test-host restarts and the unique
+                                  findings per sanitizer as counts. The finding
+                                  text (paths, symbols) never leaves the Mac.
+    metrics/static_analysis.jsonl the GitHub nightly's rows (kept verbatim, never
+                                  re-validated) plus one row per night of the
+                                  M4's Swift 6 analysis lane
+                                  (scripts/nightly_analysis_lane.sh runs.jsonl,
+                                  source "m4-analysis-lane", 2026-11-04): the
+                                  warning, SwiftLint --strict, Periphery,
+                                  memory-safety and escape-hatch counts under
+                                  GitHub's field names. Lines, paths, reasons
+                                  and the host name never leave the Mac.
     metrics/events_latest.json    ONE object: the event-recognition prototype's
                                   counts (scripts/events_prototype.py
                                   --stats-json): records with captions /
@@ -69,7 +84,8 @@ worktree to origin/metrics, merge again, retry.
 Environment: VIDEOSCAN_PUBLISH_METRICS=0 makes it a no-op (exit 0).
 The last stdout line is always `OUTCOME <word>: <detail>`; callers log it.
 Memory: every input is a small local file (ledger ~10 KB, one coverage JSON
-~5 KB per day, ~40 review docs); worst case is a few MB.
+~5 KB per day, ~40 review docs, sanitizer runs.jsonl ~1 KB per run, two runs
+a week); worst case is a few MB.
 Stdlib only; runs under /usr/bin/python3 (3.9) from launchd.
 """
 from __future__ import annotations
@@ -91,6 +107,8 @@ PBXPROJ = REPO / "VideoScan" / "VideoScan.xcodeproj" / "project.pbxproj"
 LOGS = Path.home() / "Library/Logs/VideoScan"
 COVERAGE_DIR = LOGS / "coverage"
 ADV_DIR = LOGS / "adversarial-review"
+SANITIZER_DIR = LOGS / "sanitizer"
+ANALYSIS_DIR = LOGS / "swift6-analysis"
 CODEX_DIR = REPO / "docs" / "reviews" / "codex"
 DEFAULT_WT = Path.home() / "Library/Caches/VideoScan/metrics-publish-wt"
 APP_SOURCES = REPO / "VideoScan" / "VideoScan"
@@ -178,7 +196,21 @@ _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "to
           # pass / expected with the lane's status word, and the voice check's status.
           "hallie_strict_pass": "int?", "hallie_strict_expected": "int?", "hallie_strict_status": "code?",
           "hallie_advisory_pass": "int?", "hallie_advisory_expected": "int?", "hallie_advisory_status": "code?",
+          # 2026-11-04: how many of each lane RAN, and the lane's reason code when it ran
+          # none (scripts/hallie_replay_reason.py) — "0 of 56 · incomplete" read as "a few".
+          "hallie_strict_completed": "int?", "hallie_strict_reason": "code?",
+          "hallie_advisory_completed": "int?", "hallie_advisory_reason": "code?",
           "hallie_voice_status": "code?"}
+
+# Sanitizer runs (scripts/weekly_sanitizer.py's runs.jsonl). Its status words,
+# its two kinds (ASan+UBSan share a build; TSan cannot), who ran it.
+SAN_KINDS = ("address", "thread")
+SAN_STATUS = ("ok", "findings", "host-crashed", "timeout", "build-failed", "tests-failed",
+              "no-tests-ran", "skipped-busy", "other")
+SAN_SOURCES = ("weekly", "analysis-lane", "unknown")
+ANALYSIS_SOURCE = "m4-analysis-lane"
+ANALYSIS_FIELDS = ("strict_warning_total", "concurrency_warnings", "memory_safety_warnings",
+                   "swiftlint_strict", "periphery_aggressive", "escape_hatches")
 
 # One spec per stream. Every row must have EXACTLY these keys (no extras, none
 # missing). Specs: "int" / "int?" non-negative int (or null); "num" / "num?"
@@ -326,6 +358,49 @@ SCHEMAS: Dict[str, dict] = {
         # which the gate re-validates on every publish; present means a count.
         "high_priority_open": ("maybe", "int"),
     },
+    # One row per sanitizer run, keyed by (date, kind, source). The three
+    # *_issues are UNIQUE findings (deduplicated by the report's SUMMARY line)
+    # per sanitizer; null when that sanitizer was not in the run (an address
+    # run has no TSan) or nothing ran under it (build failed, skipped).
+    "sanitizer.jsonl": {
+        "schemaVersion": "int",
+        "date": "date",
+        "kind": ("enum", SAN_KINDS),
+        "source": ("enum", SAN_SOURCES),
+        "configuration": ("enum", ("Debug", "Release", "unknown")),
+        "subset": ("enum", ("full", "catalog", "unknown")),
+        "status": ("enum", SAN_STATUS),
+        "sha": "sha?",
+        "tests": "int",
+        "host_restarts": "int",
+        "reports": "int",
+        "asan_issues": "int?",
+        "ubsan_issues": "int?",
+        "tsan_issues": "int?",
+    },
+    # The M4 analysis lane's rows on static_analysis.jsonl (2026-11-04), one per
+    # night. Only rows with this `source` are ours, validated and replaced by
+    # date; GitHub's rows on the stream are kept verbatim (FOREIGN_ROWS below).
+    # Field names are GitHub's where they mean the same count; codeql_findings is
+    # always null (CodeQL is not run locally). escape_hatches is the lane's census.
+    "static_analysis.jsonl": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "date": "date",
+        "sha": "sha?",
+        "run_kind": ("enum", ("nightly",)),
+        "source": ("enum", (ANALYSIS_SOURCE,)),
+        "host": "hostlabel?",
+        "status": ("enum", ("ok", "yellow", "red")),
+        "elapsed_s": "int?",
+        "strict_warning_total": "int?",
+        "concurrency_warnings": "int?",
+        "memory_safety_warnings": "int?",
+        "swiftlint_strict": "int?",
+        "periphery_aggressive": "int?",
+        "escape_hatches": "int?",
+        "codeql_findings": ("opt", ("enum", ())),
+    },
     # Event recognition prototype v0 (scripts/events_prototype.py --stats-json):
     # ONE object, rebuilt each publish. Counts only; category names are the
     # script's CATEGORIES constants (EVENTCAT_RE), never a clip, a person or a word
@@ -349,6 +424,10 @@ GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_close
                        "main_sha", "main_date")
 HIGH_PRIORITY_LABEL = "High Priority"      # the exact GitHub label name
 
+# Streams shared with GitHub CI: rows whose `source` is ours are validated and
+# keyed (sanitizer style, one per date); every other row is GitHub's and kept
+# byte-for-byte, never re-validated. stream -> our source value.
+FOREIGN_ROWS = {"static_analysis.jsonl": ANALYSIS_SOURCE}
 # Streams whose existing rows were published by someone else (GitHub CI):
 # fresh rows are validated and appended (deduplicated by ts + sha); rows
 # already on the branch are kept exactly as they are.
@@ -732,13 +811,122 @@ def codex_rows(codex_dir: Path) -> Optional[List[dict]]:
     return [dict({"schemaVersion": SCHEMA_VERSION, "date": date}, **days[date]) for date in sorted(days)]
 
 
+# Which counts a run of each kind measures, and the SUMMARY prefix of each.
+_SAN_PREFIX = {"asan_issues": "AddressSanitizer:", "ubsan_issues": "UndefinedBehaviorSanitizer:",
+               "tsan_issues": "ThreadSanitizer:"}
+_SAN_MEASURES = {"address": ("asan_issues", "ubsan_issues"), "thread": ("tsan_issues",)}
+_SAN_PRIMARY = {"address": "asan_issues", "thread": "tsan_issues"}
+
+
+def sanitizer_row(run: dict) -> Optional[dict]:
+    """One weekly_sanitizer.py row -> one sanitized row, or None when it has no
+    kind or no start date. Copies counts and enum words only: the findings'
+    text (build paths, symbol names), the log path, failed test names and the
+    branch stay on this Mac.
+
+    A count is null when nothing ran under the sanitizer (no test and no
+    report), never a zero. Reports whose SUMMARY line was not parsed count
+    against the run's main sanitizer, so a run with reports never reads 0."""
+    kind = run.get("kind")
+    date = str(run.get("started") or "")[:10]
+    if kind not in SAN_KINDS or not DATE_RE.match(date):
+        return None
+    status = run.get("status") if run.get("status") in SAN_STATUS else "other"
+    findings = [f for f in (run.get("unique_findings") or []) if isinstance(f, str)]
+    reports, tests = _int(run.get("reports")), _int(run.get("tests"))
+    counts: Dict[str, Optional[int]] = {k: None for k in _SAN_PREFIX}
+    if reports or tests:
+        for key in _SAN_MEASURES[kind]:
+            counts[key] = sum(1 for f in findings if f.startswith(_SAN_PREFIX[key]))
+        if reports and not any(counts[k] for k in _SAN_MEASURES[kind]):
+            counts[_SAN_PRIMARY[kind]] = reports
+    sha = run.get("sha")
+    return dict({
+        "schemaVersion": SCHEMA_VERSION, "date": date, "kind": kind,
+        "source": run.get("source") if run.get("source") in SAN_SOURCES else "unknown",
+        "configuration": run.get("configuration") if run.get("configuration") in ("Debug", "Release") else "unknown",
+        "subset": run.get("subset") if run.get("subset") in ("full", "catalog") else "unknown",
+        "status": status,
+        "sha": sha if isinstance(sha, str) and SHA_RE.match(sha) else None,
+        "tests": tests, "host_restarts": _int(run.get("host_restarts")), "reports": reports,
+    }, **counts)
+
+
+def sanitizer_rows(runs: Path) -> Optional[List[dict]]:
+    """Every run in runs.jsonl, one row per (date, kind, source); a later run
+    of the same key replaces an earlier one (runs.jsonl is in run order).
+    None when this Mac has no sanitizer runs."""
+    if not runs.is_file():
+        return None
+    by_key: Dict[str, dict] = {}
+    for run in _read_jsonl(runs):
+        row = sanitizer_row(run)
+        if row is not None:
+            by_key[_sanitizer_key(row)] = row
+    return [by_key[k] for k in sorted(by_key)]
+
+
+def _sanitizer_key(row: dict) -> str:
+    return f"{row.get('date')}|{row.get('kind')}|{row.get('source')}"
+
+
+def _utc_ts(value) -> Optional[str]:
+    """An ISO timestamp with an offset -> "YYYY-MM-DDTHH:MM:SSZ", else None."""
+    try:
+        t = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        return None
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def static_analysis_row(run: dict) -> Optional[dict]:
+    """One analysis-lane report row (runs.jsonl) -> one sanitized row, or None for
+    a run without `metrics` (before 2026-11-04) or a readable time and date. Copies
+    the counts, the status word, the short SHA and the host LABEL; the headline,
+    stage lines, reasons and report path stay on this Mac."""
+    metrics = run.get("metrics")
+    ts, date = _utc_ts(run.get("ts")), run.get("date")
+    if not isinstance(metrics, dict) or ts is None or not (isinstance(date, str) and DATE_RE.match(date)):
+        return None
+    sha = run.get("commit")
+    elapsed = run.get("elapsed_s")
+    return dict({
+        "schemaVersion": SCHEMA_VERSION, "ts": ts, "date": date,
+        "sha": sha if isinstance(sha, str) and SHA_RE.match(sha) else None,
+        "run_kind": "nightly", "source": ANALYSIS_SOURCE, "host": host_label(run.get("host")),
+        "status": run.get("status") if run.get("status") in ("ok", "yellow", "red") else "red",
+        "elapsed_s": int(elapsed) if _is_num(elapsed) and elapsed >= 0 else None,
+        "codeql_findings": None,
+    }, **{k: (v if _is_int(v) else None) for k, v in ((k, metrics.get(k)) for k in ANALYSIS_FIELDS)})
+
+
+def static_analysis_rows(runs: Path) -> Optional[List[dict]]:
+    """One row per lane night (the later run of a date wins), or None when this
+    Mac has no lane runs."""
+    if not runs.is_file():
+        return None
+    by_date: Dict[str, dict] = {}
+    for run in _read_jsonl(runs):
+        row = static_analysis_row(run)
+        if row is not None:
+            by_date[row["date"]] = row
+    return [by_date[k] for k in sorted(by_date)]
+
+
 def build_streams(cov_dir: Path = COVERAGE_DIR, adv_dir: Path = ADV_DIR,
-                  codex_dir: Path = CODEX_DIR) -> Dict[str, Optional[List[dict]]]:
-    """name -> fresh rows, or None when that source is not on this machine."""
+                  codex_dir: Path = CODEX_DIR, san_dir: Optional[Path] = None,
+                  analysis_dir: Optional[Path] = None) -> Dict[str, Optional[List[dict]]]:
+    """name -> fresh rows, or None when that source is not on this machine
+    (or, for the sanitizer runs and the analysis lane, when no folder is given;
+    the CLI gives both)."""
     return {
         "coverage.jsonl": coverage_rows(cov_dir),
         "adversarial.jsonl": adversarial_rows(adv_dir / "ledger.jsonl", adv_dir / "findings.json"),
         "codex_reviews.jsonl": codex_rows(codex_dir),
+        "sanitizer.jsonl": None if san_dir is None else sanitizer_rows(san_dir / "runs.jsonl"),
+        "static_analysis.jsonl": None if analysis_dir is None else static_analysis_rows(analysis_dir / "runs.jsonl"),
     }
 
 
@@ -883,6 +1071,10 @@ def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS,
             "hallie_advisory_pass": _opt_int(row.get("hallie_advisory_pass")),
             "hallie_advisory_expected": _opt_int(row.get("hallie_advisory_expected")),
             "hallie_advisory_status": reason_code(row.get("hallie_advisory_status")),
+            "hallie_strict_completed": _opt_int(row.get("hallie_strict_completed")),
+            "hallie_strict_reason": reason_code(row.get("hallie_strict_reason")),
+            "hallie_advisory_completed": _opt_int(row.get("hallie_advisory_completed")),
+            "hallie_advisory_reason": reason_code(row.get("hallie_advisory_reason")),
             "hallie_voice_status": reason_code(row.get("hallie_voice_status")),
         }
     hosts = [h for h in order if h in seen_hosts] + sorted(seen_hosts - set(order))
@@ -1085,16 +1277,22 @@ def _day_key(row: dict) -> Optional[str]:
     return ts[:10] if isinstance(ts, str) and TS_RE.match(ts) else None
 
 
-def merge_rows(existing: List[dict], fresh: List[dict]) -> List[dict]:
-    """Union keyed by day; a fresh row replaces the published row for its day.
-    Days only on the branch (e.g. a coverage JSON since deleted locally) are kept."""
+# Streams with more than one row per day: the key a fresh row replaces by.
+ROW_KEYS: Dict[str, Callable[[dict], Optional[str]]] = {"sanitizer.jsonl": _sanitizer_key}
+
+
+def merge_rows(existing: List[dict], fresh: List[dict],
+               key: Callable[[dict], Optional[str]] = _day_key) -> List[dict]:
+    """Union keyed by day (or `key`); a fresh row replaces the published row for
+    its key. Keys only on the branch (e.g. a coverage JSON since deleted locally)
+    are kept."""
     by_date = {}
     for row in existing:
-        key = _day_key(row)
-        if key is not None:
-            by_date[key] = row
+        k = key(row)
+        if k is not None:
+            by_date[k] = row
     for row in fresh:
-        by_date[_day_key(row)] = row      # a key-less fresh row fails the gate right after
+        by_date[key(row)] = row      # a key-less fresh row fails the gate right after
     return [by_date[d] for d in sorted(by_date, key=str)]
 
 
@@ -1106,6 +1304,37 @@ def _published_folders(rows: List[dict]) -> set:
     """Every coverage folder name the rows already on the branch carry."""
     return {f["folder"] for r in rows for f in (r.get("folders") or [])
             if isinstance(f, dict) and isinstance(f.get("folder"), str) and FOLDER_RE.match(f["folder"])}
+
+
+def _merge_foreign(name: str, fresh: List[dict], existing_dir: Optional[Path], folders: Optional[set]) -> str:
+    """A stream shared with GitHub CI. GitHub's lines are kept as their exact text
+    (never re-rendered, never re-validated); our rows (source == FOREIGN_ROWS[name])
+    on the branch are merged with the fresh ones by date, a fresh row replacing,
+    and every one of ours is validated. Lines are ordered by `ts`."""
+    ours_src = FOREIGN_ROWS[name]
+    theirs: List[tuple] = []
+    ours: Dict[str, dict] = {}
+    text = ""
+    if existing_dir is not None and (existing_dir / name).is_file():
+        text = (existing_dir / name).read_text()
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            obj = None
+        if isinstance(obj, dict) and obj.get("source") == ours_src:
+            ours[str(obj.get("date"))] = obj
+        else:
+            theirs.append((str(obj.get("ts", "")) if isinstance(obj, dict) else "", line.strip()))
+    for row in fresh:
+        ours[str(row.get("date"))] = row
+    for row in ours.values():
+        validate(name, row, folders)
+    lines = theirs + [(str(r["ts"]), json.dumps(r, sort_keys=True, separators=(",", ":"))) for r in ours.values()]
+    lines.sort(key=lambda kv: kv[0])                 # stable: GitHub's own order is kept within a ts
+    return "".join(line + "\n" for _, line in lines)
 
 
 def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Optional[Path],
@@ -1120,6 +1349,9 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
             validate(name, rows, folders)
             out[name] = json.dumps(rows, sort_keys=True, separators=(",", ":")) + "\n"
             continue
+        if name in FOREIGN_ROWS:
+            out[name] = _merge_foreign(name, rows, existing_dir, folders)
+            continue
         existing = _read_jsonl(existing_dir / name) if existing_dir is not None else []
         if name in APPEND_ONLY:
             for row in rows:
@@ -1129,7 +1361,7 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
             merged.sort(key=lambda r: str(r.get("ts", "")))
             out[name] = render(merged)
             continue
-        merged = merge_rows(existing, rows)
+        merged = merge_rows(existing, rows, ROW_KEYS.get(name, _day_key))
         # A folder named by a row ALREADY on the branch passed this gate when it
         # was published; a source folder deleted since (FamilyMusic, 10/19) must
         # not wedge every later publish. New names still have to exist today.
@@ -1247,6 +1479,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--coverage-dir", default=str(COVERAGE_DIR))
     ap.add_argument("--adversarial-dir", default=str(ADV_DIR))
     ap.add_argument("--codex-dir", default=str(CODEX_DIR))
+    ap.add_argument("--sanitizer-dir", default=str(SANITIZER_DIR),
+                    help="weekly_sanitizer.py's log folder (runs.jsonl) for metrics/sanitizer.jsonl")
+    ap.add_argument("--analysis-dir", default=str(ANALYSIS_DIR),
+                    help="the Swift 6 analysis lane's log folder (runs.jsonl) for metrics/static_analysis.jsonl")
     ap.add_argument("--validate", nargs=2, metavar=("STREAM", "FILE"),
                     help="privacy-gate one CI-produced file (JSON, or JSONL when STREAM ends in .jsonl) "
                          "against SCHEMAS[STREAM]; exit 0 if it may be published, 3 if not")
@@ -1268,7 +1504,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("OUTCOME skipped: VIDEOSCAN_PUBLISH_METRICS=0")
         return 0
     fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
-                          Path(a.codex_dir).expanduser())
+                          Path(a.codex_dir).expanduser(), Path(a.sanitizer_dir).expanduser(),
+                          Path(a.analysis_dir).expanduser())
     fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
     folders = source_folders()

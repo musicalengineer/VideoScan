@@ -9,12 +9,14 @@
 # Which sanitizer runs on which weekday is the rota's "sanitizer" map, read by
 # the lane's `--sanitizer auto`.
 #
-#   bash scripts/install_analysis_lane.sh              # install at the rota slot, --sanitizer auto
-#   bash scripts/install_analysis_lane.sh --no-sanitizer   # the five analysis stages only
+#   bash scripts/install_analysis_lane.sh                   # install at the rota slot: the five stages, then publish
+#   bash scripts/install_analysis_lane.sh --with-sanitizer  # also --sanitizer auto (the rota's weekday map)
 #
-# The two weekly sanitizer agents (install_sanitizer_weekly.sh) are NOT touched
-# here. Once this lane has run green with `auto` for a week, boot them out
-# (Rick's call): launchctl bootout gui/$(id -u)/com.videoscan.sanitizer-{address,thread}.
+# No sanitizer by default (2026-11-04): the two weekly agents
+# (install_sanitizer_weekly.sh, not touched here) own the sanitizers, and a lane
+# run would double them. The lane publishes metrics/static_analysis.jsonl itself
+# (tools/publish_metrics.py), so the checkout it runs from must be able to push
+# the `metrics` branch (the same as the 04:00 coverage job's).
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,8 +25,8 @@ LABEL="com.videoscan.swift6-analysis"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LANE="$REPO_ROOT/scripts/nightly_analysis_lane.sh"
 LOGDIR="$HOME/Library/Logs/VideoScan/swift6-analysis"
-SANITIZER_ARGS=(--sanitizer auto)
-[ "${1:-}" = "--no-sanitizer" ] && SANITIZER_ARGS=()
+SANITIZER_ARGS=()
+[ "${1:-}" = "--with-sanitizer" ] && SANITIZER_ARGS=(--sanitizer auto)
 
 SLOT="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" analysis "$HOST")"
 case "$SLOT" in

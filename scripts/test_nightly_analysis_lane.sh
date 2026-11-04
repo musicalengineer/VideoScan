@@ -32,8 +32,23 @@ fail() { FAILS=$((FAILS + 1));  RESULTS+=("FAIL: $*"); echo "  FAIL: $*"; }
 
 # ── fakes ────────────────────────────────────────────────────────────
 BIN="$SANDBOX/bin"; mkdir -p "$BIN"
-# swiftlint: `lint --only-rule force_unwrapping` (census) and `analyze` both answer "[]".
-printf '%s\n' '#!/bin/sh' 'echo "[]"' > "$BIN/swiftlint"
+# swiftlint: `lint --only-rule force_unwrapping` (census) and `analyze` both answer "[]";
+# `lint [--strict] --reporter xcode` (the swiftlint stage) prints two violations and the Done line,
+# or nothing at all when FAKE_SWIFTLINT_SILENT is set.
+cat > "$BIN/swiftlint" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *"--reporter xcode"*)
+    [ -n "${FAKE_SWIFTLINT_SILENT:-}" ] && exit 1
+    sev=warning; case "$*" in *--strict*) sev=error ;; esac
+    echo "Linting Swift files in current working directory"
+    echo "$PWD/VideoScan/VideoScan/App/VideoScanApp.swift:3:9: $sev: Force Unwrapping Violation: avoid (force_unwrapping)"
+    echo "$PWD/VideoScan/VideoScan/App/VideoScanApp.swift:9:1: error: Chained Violation: x (chained_sheet_isPresented)"
+    echo "Done linting! Found 2 violations, 2 serious in 1 files." >&2
+    exit 2 ;;
+esac
+echo "[]"
+EOF
 # periphery: "[]" unless FAKE_PERIPHERY_SILENT is set (test 5: a tool that prints nothing).
 printf '%s\n' '#!/bin/sh' '[ -n "${FAKE_PERIPHERY_SILENT:-}" ] && exit 0' 'echo "[]"' > "$BIN/periphery"
 # xcrun swiftc --version / -typecheck -strict-memory-safety: supported unless FAKE_MEMSAFE_UNSUPPORTED.
@@ -91,6 +106,7 @@ run_lane() {   # run_lane <logdir> <args…>; env from the caller; output in <lo
       export VIDEOSCAN_ANALYSIS_SKIP_BUILD=1 VIDEOSCAN_ANALYSIS_DD="$logdir/dd/ratchet"
       export VIDEOSCAN_ANALYSIS_SANITIZER_LOGDIR="$logdir/sanitizer"
       export VIDEOSCAN_ANALYSIS_BUILD_TIMEOUT_SECONDS=60 VIDEOSCAN_ANALYSIS_TOOL_TIMEOUT_SECONDS=60
+      export VIDEOSCAN_PUBLISH_METRICS=0      # the harness never pushes to the metrics branch
       bash "$SCRIPT_DIR/nightly_analysis_lane.sh" --no-wait "$@" ) > "$logdir/harness-stdout.txt" 2>&1
 }
 field() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {"d": d}))' "$1" "$2" 2>/dev/null; }
@@ -102,7 +118,7 @@ echo "== Test 1: green night — numbers, latest.json, runs.jsonl, report, basel
 L1="$SANDBOX/run1"; mk_index "$L1"
 BASE_BEFORE="$(cat "$BASE2")"
 VIDEOSCAN_ANALYSIS_APP_LOG="$APP_LOG_1" VIDEOSCAN_ANALYSIS_CORE_LOG="$CORE_LOG" VIDEOSCAN_ANALYSIS_BASELINE="$BASE2" \
-    run_lane "$L1" --stages ratchet,census,lint,periphery,memsafe
+    run_lane "$L1" --stages ratchet,census,swiftlint,lint,periphery,memsafe
 RC1=$?
 OUT1="$L1/harness-stdout.txt"
 if [ "$RC1" -eq 0 ] && [ "$(field "$L1/latest.json" 'd["status"]')" = "ok" ]; then
@@ -110,7 +126,7 @@ if [ "$RC1" -eq 0 ] && [ "$(field "$L1/latest.json" 'd["status"]')" = "ok" ]; th
 else
     fail "green night: rc=$RC1 status=$(field "$L1/latest.json" 'd["status"]') — $(tail -5 "$OUT1" | tr '\n' ' ')"
 fi
-for stage in ratchet census lint periphery memsafe; do
+for stage in ratchet census swiftlint lint periphery memsafe; do
     n=$(field "$L1/latest.json" "d['stages']['$stage']['number']")
     case "$n" in ''|None|*[!0-9]*) fail "$stage printed no integer number (got '$n')" ;; *) pass "$stage printed a number ($n)" ;; esac
 done
@@ -128,6 +144,14 @@ else
 fi
 ALERT="$(python3 "$SCRIPT_DIR/analysis_lane.py" alert --latest "$L1/latest.json")"
 case "$ALERT" in 🟢*"ratchet 1"*) pass "alert prints the green headline with the numbers" ;; *) fail "alert: '$ALERT'" ;; esac
+grep -q '^swiftlint --strict: 2 violation(s) in 1 file(s) (chained_sheet_isPresented 1, force_unwrapping 1); without --strict: 1 warning(s), 1 error(s)' "$OUT1" \
+    && pass "swiftlint stage: GitHub's strict count from the repo root, plus the warn-only split" \
+    || fail "swiftlint line: $(grep '^swiftlint' "$OUT1")"
+[ "$(field "$L1/latest.json" 'd["metrics"]["swiftlint_strict"]')" = "2" ] && [ "$(field "$L1/latest.json" 'd["metrics"]["strict_warning_total"]')" = "1" ] \
+    && pass "latest.json carries the numbers under static_analysis.jsonl's field names" \
+    || fail "metrics: $(field "$L1/latest.json" 'd.get("metrics")')"
+grep -q '^\[.*\] publish:' "$OUT1" && fail "the harness run published (VIDEOSCAN_PUBLISH_METRICS=0 ignored)" \
+    || pass "VIDEOSCAN_PUBLISH_METRICS=0: the lane does not publish"
 [ -s "$L1/census.json" ] && pass "the census was persisted for tomorrow's deltas" || fail "census.json missing"
 
 # ── Test 2: a missing build log ─────────────────────────────────────
@@ -193,6 +217,32 @@ else
     fail "silent tool: rc=$RC5 $(grep -E 'periphery' "$L5/harness-stdout.txt" | tr '\n' ' ')"
 fi
 
+# ── Test 5b: swiftlint that printed nothing ─────────────────────────
+echo "== Test 5b: swiftlint exits 1 with no output → red, no number =="
+L5b="$SANDBOX/run5b"; mk_index "$L5b"
+FAKE_SWIFTLINT_SILENT=1 run_lane "$L5b" --stages swiftlint
+RC5b=$?
+if [ "$RC5b" -ne 0 ] && grep -q '^swiftlint --strict: RED — swiftlint exited 1' "$L5b/harness-stdout.txt" \
+   && [ "$(field "$L5b/latest.json" 'd["metrics"]["swiftlint_strict"]')" = "None" ]; then
+    pass "a silent swiftlint is red and publishes null, never 0"
+else
+    fail "silent swiftlint: rc=$RC5b $(grep -E '^swiftlint' "$L5b/harness-stdout.txt" | tr '\n' ' ')"
+fi
+
+# ── Test 5c: the wait covers the night jobs, not only xcodebuild ────
+echo "== Test 5c: a running coverage job (no xcodebuild) is busy =="
+L5c="$SANDBOX/run5c"; mkdir -p "$L5c" "$SANDBOX/bin-busy"
+printf '%s\n' '#!/bin/sh' 'case "$*" in *nightly_coverage.py*) exit 0 ;; esac' 'exit 1' > "$SANDBOX/bin-busy/pgrep"
+chmod +x "$SANDBOX/bin-busy/pgrep"
+( export PATH="$SANDBOX/bin-busy:$BIN:$PATH" VIDEOSCAN_ANALYSIS_REPO="$REPO" VIDEOSCAN_ANALYSIS_LOGDIR="$L5c"
+  export VIDEOSCAN_ANALYSIS_DD_ROOT="$L5c/dd" VIDEOSCAN_ANALYSIS_WAIT_MINUTES=0 VIDEOSCAN_PUBLISH_METRICS=0
+  bash "$SCRIPT_DIR/nightly_analysis_lane.sh" --stages census ) > "$L5c/harness-stdout.txt" 2>&1
+if grep -q 'busy: nightly_coverage.py still running after 0 min' "$L5c/harness-stdout.txt"; then
+    pass "the lane's wait sees the coverage job between its builds"
+else
+    fail "busy wait: $(grep -E 'busy|xcodebuild' "$L5c/harness-stdout.txt" | tr '\n' ' ')"
+fi
+
 # ── Test 6: unsupported -strict-memory-safety ───────────────────────
 echo "== Test 6: toolchain rejects -strict-memory-safety → 🟡, lane not red =="
 L6="$SANDBOX/run6"; mk_index "$L6"
@@ -235,13 +285,13 @@ inst() { : > "$RT/launchctl.log"; HOME="$RT/home" FAKE_HOST="$1" FAKE_LAUNCHCTL_
 PL="$RT/home/Library/LaunchAgents/com.videoscan.swift6-analysis.plist"
 inst RicksM4; IRC=$?
 if [ "$IRC" -eq 0 ] && [ "$(plutil -extract StartCalendarInterval.Hour raw "$PL" 2>/dev/null)" = "4" ] \
-   && [ "$(plutil -extract StartCalendarInterval.Minute raw "$PL" 2>/dev/null)" = "30" ] && grep -q '<string>auto</string>' "$PL"; then
-    pass "M4 installed at 04:30 with --sanitizer auto"
+   && [ "$(plutil -extract StartCalendarInterval.Minute raw "$PL" 2>/dev/null)" = "30" ] && ! grep -q -- '--sanitizer' "$PL"; then
+    pass "M4 installed at its rota slot without a sanitizer (the weekly jobs own them)"
 else
     fail "M4 install: rc=$IRC $(cat "$RT/out.log" | tr '\n' ' ')"
 fi
-inst RicksM4 --no-sanitizer
-grep -q '<string>auto</string>' "$PL" && fail "--no-sanitizer still passes auto" || pass "--no-sanitizer installs the five stages only"
+inst RicksM4 --with-sanitizer
+grep -q '<string>auto</string>' "$PL" && pass "--with-sanitizer opts back in to --sanitizer auto" || fail "--with-sanitizer did not pass auto"
 inst RicksM1; IRC=$?
 if [ "$IRC" -eq 0 ] && grep -q '^bootout gui/.*/com.videoscan.swift6-analysis$' "$RT/launchctl.log" && [ ! -e "$PL" ] && [ -e "$PL.off-rota" ]; then
     pass "an off-rota Mac has the job removed and the plist moved aside"

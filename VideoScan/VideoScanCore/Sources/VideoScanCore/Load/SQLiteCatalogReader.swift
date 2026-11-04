@@ -3,7 +3,8 @@
 // cutover acceptance audit gap 3): the preview helper (videoscan-preview-
 // sweep) and the Hallie shell read catalog.sqlite READ-ONLY through this one
 // door. catalog.json has been frozen since the 10/18 cutover, so a reader of
-// it sees a catalog that stopped on that day.
+// it sees a catalog that stopped on that day. On a viewer Mac the file is the
+// master's synced copy, opened sealed (`Source.syncedCopy`, 2026-11-04).
 //
 // The rules:
 //   * the file must be catalog.sqlite with `catalog.cutover` beside it — no
@@ -48,6 +49,38 @@ public enum SQLiteCatalogReader {
         public var unreadable: Int
     }
 
+    /// WHICH catalog.sqlite a non-writer reads (2026-11-04, the M4's Hallie
+    /// lane: a viewer's shell opened the top-level file left from its master
+    /// days — schema v14, never updated — while the app on that Mac shows the
+    /// master's synced copy). The app's role rule picks the case
+    /// (`CatalogAuthority.headlessSource`); this type only says how to open it.
+    ///   live        this Mac's own catalog (the master; or an explicit path):
+    ///               `openForReading`, `catalog.cutover` beside it;
+    ///   syncedCopy  a viewer's sealed snapshot from `master`
+    ///               (viewer-catalog/catalog.sqlite): `openSealedSnapshot` —
+    ///               rollback-journal, read-only, no file created beside it, so
+    ///               the synced folder stays byte-identical to the manifest.
+    /// (For Rick: an enum with payloads ≈ a tagged union / std::variant.)
+    public enum Source: Equatable, Sendable {
+        case live(URL)
+        case syncedCopy(URL, master: String)
+
+        public var databaseURL: URL {
+            switch self {
+            case .live(let url), .syncedCopy(let url, _): return url
+            }
+        }
+
+        /// How the words name the file: "catalog.sqlite" for this Mac's own,
+        /// "<path> (the synced copy from <master>)" for a viewer's.
+        public var named: String {
+            switch self {
+            case .live: return databaseFileName
+            case .syncedCopy(let url, let master): return "\(url.path) (the synced copy from \(master))"
+            }
+        }
+    }
+
     /// Daemon/CLI-only; never a test default.
     /// ~/Library/Application Support/VideoScan/catalog.sqlite
     public static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL {
@@ -82,19 +115,49 @@ public enum SQLiteCatalogReader {
         return nil
     }
 
+    /// `preflight(databaseURL:)` for either source. A synced copy that has
+    /// not arrived (no file, or no latch beside it) says "nothing synced
+    /// from <master> yet" and names the path; the top-level file of a viewer
+    /// is never the fallback.
+    public static func preflight(_ source: Source, fileManager: FileManager = .default) -> Failure? {
+        guard case .syncedCopy(let url, let master) = source else {
+            return preflight(databaseURL: source.databaseURL, fileManager: fileManager)
+        }
+        let latch = url.deletingLastPathComponent().appendingPathComponent(latchFileName)
+        guard fileManager.fileExists(atPath: url.path), fileManager.fileExists(atPath: latch.path) else {
+            return Failure("nothing synced from \(master) yet — no \(databaseFileName) with its \(latchFileName) at "
+                           + "\(url.deletingLastPathComponent().path) (the synced copy from \(master)). This Mac is a viewer: "
+                           + "VideoScan here pulls the copy from \(master) while it runs; this Mac's own top-level "
+                           + "\(databaseFileName) is not read")
+        }
+        return nil
+    }
+
     /// Preflight, read-only open, one read, close.
     public static func load(databaseURL: URL) async -> Result<Loaded, Failure> {
-        if let failure = preflight(databaseURL: databaseURL) { return .failure(failure) }
+        await load(.live(databaseURL))
+    }
+
+    /// The same for either source: the open differs (`Source`), the read
+    /// and the records are the one path. Memory: the loaded rows and their
+    /// records, about twice the catalog's row data while `loaded()` maps.
+    public static func load(_ source: Source) async -> Result<Loaded, Failure> {
+        if let failure = preflight(source) { return .failure(failure) }
         let repository = GRDBCatalogRepository()
-        if case .refused(let reason) = await repository.openForReading(at: databaseURL) {
-            return .failure(Failure("\(databaseFileName) would not open for reading: \(reason)"))
+        let opened: CatalogOpenOutcome
+        switch source {
+        case .live(let url): opened = await repository.openForReading(at: url)
+        case .syncedCopy(let url, _): opened = await repository.openSealedSnapshot(at: url)
+        }
+        if case .refused(let reason) = opened {
+            return .failure(Failure("\(source.named) would not open for reading: \(reason)"))
         }
         let snapshot: Snapshot
         do {
             snapshot = try await repository.read { reader in try Snapshot(reader) }
         } catch {
             await repository.close()
-            return .failure(Failure("\(databaseFileName) could not be read: \(error)"))
+            return .failure(Failure("\(source.named) could not be read: \(error)"))
         }
         await repository.close()
         return .success(snapshot.loaded())

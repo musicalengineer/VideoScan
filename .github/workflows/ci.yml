@@ -2,6 +2,9 @@ name: CI
 
 # Slim build + tests pipeline for every push to main.
 #
+# 2026-11-04: only `preflight` runs. The two macOS jobs are `if: false` until
+# the hosted runner has Xcode 27 / Swift 6.4 (reason at each job).
+#
 # Static-analysis tooling (SwiftLint, Periphery, CodeQL, strict concurrency)
 # lives in nightly-analysis.yml. PRs no longer run CI because Rick works
 # direct-to-main per project policy (feedback_main_branch_ok).
@@ -80,6 +83,15 @@ jobs:
   # these tests already triple on GitHub (TimingBudget: GITHUB_ACTIONS).
   core:
     name: VideoScanCore package tests
+    # OFF 2026-11-04 (if: false): cannot pass until GitHub's macOS runner has
+    # the Xcode 27 / Swift 6.4 toolchain. The hosted runner's Swift is older and
+    # dies at VideoScanCore/CatalogReality.swift:324 ("cannot convert value of
+    # type 'String.SubSequence'", nightly run 41831293396); the 11/04 pushes
+    # never got a macOS runner at all (run 41856296282, "not acquired"). Last
+    # green 10/07. The same build and tests run on the fleet (sensor lane,
+    # 2 AM nightly). Turn back on (delete the `if: false`) once a runner image
+    # ships Xcode 27.
+    if: false
     needs: preflight
     runs-on: macos-15
     timeout-minutes: 45
@@ -113,6 +125,9 @@ jobs:
 
   test:
     name: Build & Test
+    # OFF 2026-11-04 (if: false), same reason as `core` above: no Xcode 27 /
+    # Swift 6.4 on the hosted macOS runner yet.
+    if: false
     # Gated on preflight, not parallel with it: the linters were put ahead
     # of the build deliberately, "so a structural mistake doesn't burn
     # 5-10 minutes of compile", and macOS minutes bill at 10x Linux. The
