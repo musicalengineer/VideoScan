@@ -30,7 +30,7 @@ Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Ever
 
 ## 2a. The change checklist (Rick 2026-11-03)
 
-A reminder, not a gate: before a code commit, run down these six and ask "did we follow process?" Interruptions make
+A reminder, not a gate: before a code commit, run down these seven and ask "did we follow process?" Interruptions make
 items slip (11/03: a failure shown only in Settings, a count wired to catalog.json, wrong build steps given to Rick, no
 fresh-eyes review on two large changes). End the commit message with `Checklist: ✓`, or `Checklist: ✓ — skipped <item>
 (why)`. For a pure wording, layout or colour tweak, only items 3 and 5 apply.
@@ -41,6 +41,7 @@ fresh-eyes review on two large changes). End the commit message with `Checklist:
 4. **Reviewed.** Fresh eyes (the `reviewer` agent) on any sizeable logic change, Codex on data-risk code (§5).
 5. **Right for Rick.** UI follows his rulings and the HIG. Any build, run or spot-test step given to him has been checked to work.
 6. **Books kept.** New tests are registered in the gauntlet manifest. A ruling goes in DECISIONS, and STATUS is updated when it changes. The worktree is cleaned up after merge.
+7. **Performance considered.** Did we pick the efficient algorithm and use the hardware we have: unified memory, GPU/ANE, parallel lanes, another Mac over TB5? Is there a measured number where speed matters?
 
 ## 3. Git
 
