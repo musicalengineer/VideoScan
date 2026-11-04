@@ -345,3 +345,16 @@ struct Codex241Tests {
         #expect(hold["sticky"] as? Bool == false)
     }
 }
+
+@Suite("Codex #242 — the legacy wire field decodes when absent")
+struct Codex242Tests {
+    @Test("a hold written by 07c314e5d (no `sticky`) still decodes, as sticky false")
+    func holdWithoutStickyStillDecodes() throws {
+        let hold = ScheduleHold(kind: .era, jobID: JobID(rawValue: "J"), reason: "weights missing", build: "old",
+                                heldAt: Date(timeIntervalSince1970: 0))
+        var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(hold)) as? [String: Any])
+        object.removeValue(forKey: "sticky")
+        let decoded = try JSONDecoder().decode(ScheduleHold.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(decoded == hold)
+    }
+}

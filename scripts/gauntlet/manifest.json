@@ -388,7 +388,8 @@
         "FableReviewHelperTests",
         "FableReviewHelperFollowUpTests",
         "FableReviewHelperLoopTests",
-        "Codex241Tests"
+        "Codex241Tests",
+        "Codex242Tests"
       ],
       "tests": [
         "cleanExitClearsTheInFlightMark",
@@ -396,6 +397,7 @@
         "heldKindWithRetainedRequestIsReleasedByNewWork",
         "holdKeepsTheLegacyWireField",
         "holdWithVaryingWordsIsReleasedForever",
+        "holdWithoutStickyStillDecodes",
         "olderWaitingPayloadSaysWaiting",
         "pauseSurvivesARestart",
         "planSizeIsStaleAfterTheJobFinished",
@@ -36214,7 +36216,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 720,
+      "package_expected_floor": 721,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36238,6 +36240,7 @@
         "VideoScanCoreTests.CatalogRecordDTOScaleTests",
         "VideoScanCoreTests.CatalogRepositoryContractTests",
         "VideoScanCoreTests.Codex241Tests",
+        "VideoScanCoreTests.Codex242Tests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
         "VideoScanCoreTests.EraJobCLITests",
         "VideoScanCoreTests.EraJobLogicTests",

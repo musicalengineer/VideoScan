@@ -84,7 +84,19 @@ public struct ScheduleHold: Codable, Equatable, Sendable {
     public var heldAt: Date
     /// Legacy wire field, always false and unused: a reader built at
     /// 0dedf4768 requires it to decode a status with a hold (Codex #241 F5).
+    /// Encoded always; decoded when present (07c314e5d wrote none, #242).
     public var sticky = false
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(JobKind.self, forKey: .kind)
+        jobID = try c.decode(JobID.self, forKey: .jobID)
+        reason = try c.decode(String.self, forKey: .reason)
+        build = try c.decode(String.self, forKey: .build)
+        planSize = try c.decodeIfPresent(Int.self, forKey: .planSize)
+        heldAt = try c.decode(Date.self, forKey: .heldAt)
+        sticky = try c.decodeIfPresent(Bool.self, forKey: .sticky) ?? false
+    }
 
     public init(kind: JobKind, jobID: JobID, reason: String, build: String, planSize: Int? = nil, heldAt: Date = Date()) {
         self.kind = kind
