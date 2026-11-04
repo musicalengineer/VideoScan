@@ -79,6 +79,13 @@
 # adds ~1.5–2.5 h (Release, Core + app); hence one kind per night, by weekday
 # (`auto`), and `--subset catalog` (545 app suites + all of Core) when short.
 #
+# Measured 2026-11-04 on the M4 (Xcode 27, idle, 3994736ea): the whole lane
+# 448 s — clean app build-for-testing 219 s, Core 36 s, census 6 s, swiftlint
+# 3 s (both runs), periphery 48 s, memsafe 136 s; publish ~20 s more. At the
+# 04:30 slot the wait above holds it until the 04:00 coverage job exits
+# (~04:45), so it ends ~04:55: before the 05:00 Sunday TSan and the 05:30
+# adversarial confirm. It overlaps the 04:30 model review (ollama, no build).
+#
 # Memory: the lane holds nothing; xcodebuild and swiftlint own their peaks.
 
 set -u
@@ -153,18 +160,31 @@ log "=== Swift 6 analysis lane v$LANE_VERSION — $HOSTNAME_ — $REPO @ $COMMIT
 
 has_stage() { case ",$STAGES," in *",$1,"*) return 0 ;; esac; return 1; }
 
-# Wait for the test nightly (another xcodebuild) to finish — the fleet runs
-# this lane after it, and two builds at once double both their times.
+# Wait for the M4's other night jobs — two builds at once double both their
+# times, and the weekly sanitizer gives up ("skipped-busy") after 90 min of a
+# busy Mac. Busy = any xcodebuild, or one of the jobs below between its own
+# builds (coverage's Core `swift test` runs after its xcodebuild; the
+# adversarial confirm runs `swift test` in a sandbox).
+BUSY_JOBS="nightly_guarded.sh nightly_local_tests.sh nightly_coverage.py weekly_sanitizer.py adversarial_nightly.py"
+busy_reason() {
+    pgrep -x xcodebuild >/dev/null 2>&1 && { echo "an xcodebuild"; return 0; }
+    local j
+    for j in $BUSY_JOBS; do
+        pgrep -f "$j" >/dev/null 2>&1 && { echo "$j"; return 0; }
+    done
+    return 1
+}
 if $WAIT; then
     waited=0
-    while pgrep -x xcodebuild >/dev/null 2>&1; do
+    while why=$(busy_reason); do
         if [ "$waited" -ge $((WAIT_MINUTES * 60)) ]; then
-            log "another xcodebuild still running after ${WAIT_MINUTES} min — running anyway (times will be inflated)"
+            log "busy: $why still running after ${WAIT_MINUTES} min — running anyway (times will be inflated)"
             break
         fi
-        [ "$waited" -eq 0 ] && log "another xcodebuild is running (the test nightly?) — waiting up to ${WAIT_MINUTES} min"
+        [ "$waited" -eq 0 ] && log "busy: $why is running — waiting up to ${WAIT_MINUTES} min"
         sleep 60; waited=$((waited + 60))
     done
+    [ "$waited" -gt 0 ] && log "waited $((waited / 60)) min for the Mac to go quiet"
 fi
 
 # The sensor lane's exact build flags (scripts/sensor_lane.py run_app), minus

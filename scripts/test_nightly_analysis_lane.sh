@@ -229,6 +229,20 @@ else
     fail "silent swiftlint: rc=$RC5b $(grep -E '^swiftlint' "$L5b/harness-stdout.txt" | tr '\n' ' ')"
 fi
 
+# ── Test 5c: the wait covers the night jobs, not only xcodebuild ────
+echo "== Test 5c: a running coverage job (no xcodebuild) is busy =="
+L5c="$SANDBOX/run5c"; mkdir -p "$L5c" "$SANDBOX/bin-busy"
+printf '%s\n' '#!/bin/sh' 'case "$*" in *nightly_coverage.py*) exit 0 ;; esac' 'exit 1' > "$SANDBOX/bin-busy/pgrep"
+chmod +x "$SANDBOX/bin-busy/pgrep"
+( export PATH="$SANDBOX/bin-busy:$BIN:$PATH" VIDEOSCAN_ANALYSIS_REPO="$REPO" VIDEOSCAN_ANALYSIS_LOGDIR="$L5c"
+  export VIDEOSCAN_ANALYSIS_DD_ROOT="$L5c/dd" VIDEOSCAN_ANALYSIS_WAIT_MINUTES=0 VIDEOSCAN_PUBLISH_METRICS=0
+  bash "$SCRIPT_DIR/nightly_analysis_lane.sh" --stages census ) > "$L5c/harness-stdout.txt" 2>&1
+if grep -q 'busy: nightly_coverage.py still running after 0 min' "$L5c/harness-stdout.txt"; then
+    pass "the lane's wait sees the coverage job between its builds"
+else
+    fail "busy wait: $(grep -E 'busy|xcodebuild' "$L5c/harness-stdout.txt" | tr '\n' ' ')"
+fi
+
 # ── Test 6: unsupported -strict-memory-safety ───────────────────────
 echo "== Test 6: toolchain rejects -strict-memory-safety → 🟡, lane not red =="
 L6="$SANDBOX/run6"; mk_index "$L6"

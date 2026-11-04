@@ -31881,6 +31881,8 @@
       ],
       "tests": [
         "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
+        "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
+        "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
         "test_both_kinds_fresh_and_clean_is_green",
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
@@ -31909,6 +31911,7 @@
         "test_sanitizer_rows_alone_render_without_static_rows",
         "test_sprint_graphic_reports_actual_completion",
         "test_sprint_without_valid_nonempty_counts_has_no_completion_graphic",
+        "test_static_checks_read_the_m4_lane_with_its_age_and_codeql_grey",
         "test_summary_first_page_renders_every_line_and_twist",
         "test_summary_sparkline_does_not_join_across_missing_sample",
         "test_theme_defaults_dark_and_respects_saved_choice",
