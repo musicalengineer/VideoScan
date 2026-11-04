@@ -467,6 +467,15 @@ struct CatalogStatusTransitionLogTests {
         #expect(C.cause("Analyzing 999 of 2,000 files") == C.cause("Analyzing 1,000 of 2,000 files"), "a count is not a cause")
         #expect(C.cause("checked 2 Nov 10:41 (45 min ago)") == C.cause("checked 2 Nov 11:41 (1 h ago)"), "an age is not a cause")
         #expect(C.cause("sidecar can't be opened — disk I/O error") != C.cause("sidecar can't be opened — no such file"))
+        // Codex closing-4: a drive name with a space and a number is a NAME.
+        #expect(C.cause("not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)")
+                != C.cause("not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)"))
+        #expect(C.cause("not connected now: /Volumes/Backup 1 (30 files)") == C.cause("not connected now: /Volumes/Backup 1 (1,030 files)"))
+        let a = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 1 (30 files)")
+        let b = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 2 (30 files)")
+        let rest = (CatalogStatusLine(kind: .database, state: .green, words: "ok"), CatalogStatusLine(kind: .content, state: .green, words: "Up to date"))
+        #expect(C.lines(old: CatalogStatusLines(database: rest.0, files: a, content: rest.1),
+                        new: CatalogStatusLines(database: rest.0, files: b, content: rest.1)).count == 1)
     }
 
     @Test("F6: a ticking count or age is not a change; a new cause is")

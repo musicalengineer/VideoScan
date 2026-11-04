@@ -500,13 +500,30 @@ enum CatalogStatusTransitions {
     /// else (Codex closing-3: stripping every digit hid "/Volumes/X8" → "X9"
     /// and kept "2,000"'s comma). A number glued to a letter or a path
     /// ("X9", "v15") is a name and stays.
+    /// Paths are NAMES and are kept verbatim, spaces and digits included
+    /// ("/Volumes/Backup 1"; Codex closing-4): a path runs from "/" to the
+    /// " (count)", " · ", " — ", ")" or end that follows it in these words.
     static func cause(_ words: String) -> String {
-        var s = words
+        let ns = words as NSString
+        var out = ""
+        var at = 0
+        for m in pathSpan?.matches(in: words, range: NSRange(location: 0, length: ns.length)) ?? [] {
+            out += masked(ns.substring(with: NSRange(location: at, length: m.range.location - at)))
+            out += ns.substring(with: m.range)
+            at = m.range.location + m.range.length
+        }
+        return out + masked(ns.substring(from: at))
+    }
+
+    private static func masked(_ text: String) -> String {
+        var s = text
         for (pattern, mask) in causeMasks {
             s = pattern.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: mask)
         }
         return s
     }
+
+    nonisolated(unsafe) private static let pathSpan = try? NSRegularExpression(pattern: #"/[^()·—]*?(?=\s\(|\s·|\s—|\)|$)"#)
 
     /// Ages first ("45 min ago", "1 h ago", "3 days ago"), then clock times,
     /// then free-standing numbers with their separators ("1,000", "12.5").
