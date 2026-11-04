@@ -217,3 +217,64 @@ def test_main_runs_both_targets_with_fake_tools_and_writes_one_row(tmp_path, mon
     # The morning alert still reads the row (additive fields only).
     line = alert.lines_for(row, dt.datetime.fromisoformat(row["started"]) + dt.timedelta(hours=1), 8)[0]
     assert line.startswith("🔴 Thread Sanitizer") and "1 finding(s)" in line
+
+
+# ── 2026-11-04: the findings never reached the Mac Rick reads ──
+# RED: the 11/01 TSan race (8 reports, the test host restarted 8×) and the 10/31
+# UBSan report lived only in latest-*.json on the M4. sanitizer_alert.py read only
+# local files, so on the Ultra it was silent; and a "findings" line never said the
+# host had crashed, so the tests that never ran went unmentioned too.
+
+def _published(date, kind, **kw):
+    row = {"schemaVersion": 1, "date": date, "kind": kind, "source": "weekly", "configuration": "Debug",
+           "subset": "full", "status": "findings", "sha": "4fc66b944", "tests": 10333, "host_restarts": 0,
+           "reports": 0, "asan_issues": None, "ubsan_issues": None, "tsan_issues": None}
+    row.update(kw)
+    return row
+
+
+def test_a_findings_line_says_the_host_restarted():
+    line = alert.lines_for(_row("findings", unique_findings=["ThreadSanitizer: data race"], host_restarts=8), NOW, 8)[0]
+    assert line.startswith("🔴") and "1 finding(s)" in line and "test host restarted 8×" in line
+
+
+def test_published_rows_reach_a_mac_without_the_local_files(tmp_path, capsys):
+    now = dt.datetime.fromisoformat("2026-11-02T09:00:00-05:00")
+    rows = [_published("2026-10-24", "address", status="tests-failed", asan_issues=0, ubsan_issues=0),
+            _published("2026-10-31", "address", sha="30e415296", host_restarts=2, reports=2,
+                       asan_issues=0, ubsan_issues=1),
+            _published("2026-11-01", "thread", host_restarts=8, reports=8, tsan_issues=1)]
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
+    assert alert.main(["--published", str(src), "--now", now.isoformat(), "--dir", str(tmp_path / "none")]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith("🔴 Address Sanitizer (Sat Oct 31, 30e415296): 1 finding(s)")
+    assert "test host restarted 2×" in out[0] and "on the M4" in out[0]
+    assert out[1] == "     • UBSan: 1 unique finding"
+    assert out[2].startswith("🔴 Thread Sanitizer (Sun Nov 01, 4fc66b944): 1 finding(s)") and "restarted 8×" in out[2]
+    assert out[3] == "     • TSan: 1 unique finding"
+    assert len(out) == 4
+
+
+def test_published_rows_older_than_the_window_or_green_are_quiet(tmp_path, capsys):
+    now = dt.datetime.fromisoformat("2026-11-20T09:00:00-05:00")
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published("2026-11-01", "thread", tsan_issues=1)) + "\n"
+                   + json.dumps(_published("2026-11-15", "address", status="ok", asan_issues=0, ubsan_issues=0)) + "\n")
+    alert.main(["--published", str(src), "--now", now.isoformat(), "--dir", str(tmp_path / "none")])
+    assert capsys.readouterr().out == ""
+
+
+def test_local_files_win_over_published_rows_on_the_m4(tmp_path, capsys):
+    (tmp_path / "latest-thread.json").write_text(json.dumps({**_row("tests-failed"), "kind": "thread",
+                                                             "failed_tests": ["raceTest"]}))
+    src = tmp_path / "sanitizer.jsonl"
+    src.write_text(json.dumps(_published(NOW.date().isoformat(), "thread", tsan_issues=4)) + "\n")
+    alert.main(["--dir", str(tmp_path), "--published", str(src), "--now", NOW.isoformat()])
+    out = capsys.readouterr().out
+    assert "raceTest" in out and "TSan: 4" not in out
+
+
+def test_morning_digest_falls_back_to_the_published_rows():
+    script = (ROOT / "scripts" / "morning_metrics.sh").read_text()
+    assert "metrics/sanitizer.jsonl" in script and "sanitizer_alert.py\" --published -" in script

@@ -148,6 +148,8 @@ def test_close_ends_the_worker(tmp_path):
     assert wait_dead(pid)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only: ru_maxrss is bytes on macOS, KB on Linux; "
+                    "the bench runs on Apple Silicon only (Linux CI red 2026-11-04, run 41856296565)")
 def test_peak_rss_is_the_workers_not_the_parents(worker, tmp_path):
     """RED 2026-10-31: the first A2 record said peak RSS 0.04 GB — the parent's figure, while the
     8B model sat in the worker. The approach now reports the worker's peak, and the run loops ask

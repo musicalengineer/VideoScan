@@ -360,6 +360,10 @@ def test_main_resumes_and_an_interrupt_keeps_what_was_written(tmp_path, monkeypa
             raise KeyboardInterrupt  # Ctrl-C during the second file
         return {"digest": target["digest"], "kind": "raw", "status": "no-rdt", "elapsed_s": 0.1}
     monkeypatch.setattr(dvd, "probe", fake_probe)
+    # probe() is faked, so the tools are never run; without this main() stops
+    # at "dvrescue not found" (exit 2) on a Mac without Homebrew's dvrescue and
+    # on the Linux CI runner (GitHub run 41856296565, 2026-11-04).
+    monkeypatch.setattr(dvd, "_tool", lambda name: f"/fake/bin/{name}")
     out = tmp_path / "r.jsonl"
     assert dvd.main(["--db", str(db), "--resume", str(out)]) == 130
     assert len(dvd.load_results(out)) == 1 and "probed: 1" in capsys.readouterr().out

@@ -9,6 +9,7 @@ the leader's whole descendant tree.
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -28,6 +29,8 @@ time.sleep(120)
 """
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only: the watchdog samples with /usr/bin/sample "
+                     "(Linux CI red 2026-11-04, run 41856296565)")
 class WatchdogSamplesTreeTests(unittest.TestCase):
     def test_a_grandchild_in_its_own_group_is_sampled(self):
         with tempfile.TemporaryDirectory() as tmp:

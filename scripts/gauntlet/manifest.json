@@ -31869,6 +31869,8 @@
         "test_metrics_dashboard.py"
       ],
       "tests": [
+        "test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count",
+        "test_both_kinds_fresh_and_clean_is_green",
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
@@ -31879,6 +31881,7 @@
         "test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes",
         "test_module_health_table_grades_sorts_and_excludes_tests",
         "test_module_health_without_per_module_rows_uses_folder_rows",
+        "test_one_fresh_clean_kind_and_one_stale_is_grey_not_green",
         "test_only_the_two_studios_show_and_an_off_rota_mac_is_never_named",
         "test_open_bugs_tile_is_two_counts_and_github_links",
         "test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link",
@@ -31891,6 +31894,8 @@
         "test_refresh_invalid_or_unavailable_choices_cannot_submit",
         "test_refresh_statuses_are_queue_evidence_and_escape_private_progress",
         "test_refresh_uncertain_retry_reuses_key_and_accepts_already_running_request",
+        "test_sanitizer_card_shows_the_m4_weekly_runs_with_their_dates",
+        "test_sanitizer_rows_alone_render_without_static_rows",
         "test_sprint_graphic_reports_actual_completion",
         "test_sprint_without_valid_nonempty_counts_has_no_completion_graphic",
         "test_summary_first_page_renders_every_line_and_twist",
@@ -32334,6 +32339,41 @@
         "test_second_publish_with_nothing_new_commits_nothing",
         "test_unknown_stream_is_refused",
         "test_validator_rejects_anything_off_the_allowlist"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_run_python_tests.py",
+      "stage": "unit",
+      "suites": [
+        "test_run_python_tests.py"
+      ],
+      "tests": [
+        "test_nothing_under_trash_is_collected",
+        "test_the_list_is_every_tracked_test_module_outside_trash"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_publish_sanitizer_metrics.py",
+      "stage": "unit",
+      "suites": [
+        "test_publish_sanitizer_metrics.py"
+      ],
+      "tests": [
+        "test_a_clean_run_is_zero_for_what_it_measured_and_null_for_the_rest",
+        "test_a_run_where_nothing_ran_is_null_never_zero",
+        "test_cli_out_dir_writes_the_stream_from_the_sanitizer_folder",
+        "test_merge_keeps_both_kinds_of_one_day_and_branch_only_rows",
+        "test_no_finding_text_path_or_test_name_leaves_the_mac",
+        "test_one_row_per_day_kind_and_source_the_later_run_wins",
+        "test_reports_without_a_parsed_summary_still_count",
+        "test_rows_without_a_kind_or_date_are_dropped_and_no_file_is_none",
+        "test_scale_a_decade_of_weekly_runs_publishes_in_budget",
+        "test_the_gate_refuses_anything_off_the_allowlist",
+        "test_the_two_real_runs_become_counts_per_sanitizer"
       ]
     },
     {
@@ -32983,6 +33023,7 @@
         "test_weekly_sanitizer.py"
       ],
       "tests": [
+        "test_a_findings_line_says_the_host_restarted",
         "test_a_link_failure_reads_as_build_failed_not_no_tests",
         "test_a_relaunched_test_host_is_a_crash_not_a_pass",
         "test_alert_flags_failures_and_skips",
@@ -32993,8 +33034,12 @@
         "test_commands_carry_the_sanitizer_the_configuration_and_the_subset",
         "test_findings_are_counted_and_deduplicated",
         "test_findings_beat_timeout_and_failures",
+        "test_local_files_win_over_published_rows_on_the_m4",
         "test_main_runs_both_targets_with_fake_tools_and_writes_one_row",
         "test_merge_folds_targets_findings_win_and_counts_add",
+        "test_morning_digest_falls_back_to_the_published_rows",
+        "test_published_rows_older_than_the_window_or_green_are_quiet",
+        "test_published_rows_reach_a_mac_without_the_local_files",
         "test_status_precedence_without_findings",
         "test_the_real_manifest_yields_a_catalog_subset_of_hundreds_of_suites",
         "test_tsan_report_shape",
@@ -35975,6 +36020,14 @@
         },
         {
           "name": "tests/test_publish_metrics.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_run_python_tests.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_publish_sanitizer_metrics.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

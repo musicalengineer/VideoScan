@@ -1123,12 +1123,39 @@ function renderTimeline(d) {
 }
 
 // ---------------------------------------------------------------- 3. area lines
+// The sanitizers run weekly on the M4 (scripts/weekly_sanitizer.py: ASan + UBSan on Saturday,
+// TSan on Sunday) and tools/publish_metrics.py publishes each run as counts (metrics/sanitizer.jsonl).
+// The newest run of each kind is shown with its date; past SAN_STALE_DAYS it reads grey
+// "no run in N days", never its old count.
+const SAN_STALE_DAYS = 8;
+const SAN_KINDS = [
+  { kind: "address", label: "ASan + UBSan", keys: [["ASan", "asan_issues"], ["UBSan", "ubsan_issues"]] },
+  { kind: "thread", label: "TSan", keys: [["TSan", "tsan_issues"]] },
+];
+function sanitizerRuns(d) {
+  return SAN_KINDS.map(k => {
+    const rows = d.sanRows.filter(r => r.kind === k.kind);
+    const row = rows.length ? rows[rows.length - 1] : null;
+    const t = row ? toTime(row.date) : NaN;
+    const age = Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+    return { ...k, row, age, fresh: age != null && age <= SAN_STALE_DAYS };
+  });
+}
+function sanitizerWords(k) {
+  if (!k.row) return `${k.label} ${word("grey", "no run published")}`;
+  if (!k.fresh) return `${k.label} ${word("grey", `no run in ${k.age} days`)} (last ${day(k.row.date)})`;
+  const counts = k.keys.map(([lab, key]) => `${lab} ${isNum(k.row[key]) ? `<b>${k.row[key]}</b>` : "not measured"}`).join(" · ");
+  const extra = [];
+  if (k.row.host_restarts > 0) extra.push(`test host restarted ${k.row.host_restarts}×, so some tests never ran`);
+  if (k.row.status !== "ok" && k.row.status !== "findings") extra.push(esc(k.row.status));
+  return `${counts} (${day(k.row.date)}, ${k.age === 0 ? "today" : `${k.age} d ago`}${extra.length ? `; ${extra.join("; ")}` : ""})`;
+}
 // Each area: state, one sentence, the one number, trend vs 7 days ago, sparkline, then the detail body.
 const AREAS = [
   { id: "tests", name: "Tests & nightly", sub: "2 AM Release run on each Mac · coverage 4 AM" },
   { id: "size", name: "Code health", sub: "Code size · complexity · technical debt" },
   { id: "debt", name: "Debt trend", sub: "CCN > 15 ratchet · over-exposure · problem files" },
-  { id: "san", name: "Sanitizers & static checks", sub: "GitHub nightly analysis" },
+  { id: "san", name: "Sanitizers & static checks", sub: "sanitizers weekly on the M4 · static checks GitHub nightly" },
   { id: "hallie", name: "Hallie eval", sub: "nightly replay of the frozen suite" },
   { id: "events", name: "Event recognition", sub: "events prototype v0 · captions + transcripts + dates" },
   { id: "reviews", name: "Reviews", sub: "adversarial nightly · codex" },
@@ -1235,20 +1262,29 @@ const SUMMARY = {
   san(d) {
     const rows = d.staticRows, last = rows.length ? rows[rows.length - 1] : null;
     const wk = daysBefore(rows, 7) || {};
-    if (!last) return NO_LINE;
-    const hit = k => isNum(last[k]) ? last[k] : null;
-    const hits = ["ubsan_issues", "asan_issues", "tsan_issues"].map(hit);
+    if (!last && !d.sanRows.length) return NO_LINE;
+    const st = last || {};
+    // Sanitizer counts come from the M4's weekly runs only (metrics/sanitizer.jsonl), never from
+    // static_analysis.jsonl, whose sanitizer fields are null since the GitHub jobs stopped building.
+    const runs = sanitizerRuns(d), fresh = runs.filter(k => k.fresh);
+    const hit = key => { for (const k of fresh) if (isNum(k.row[key])) return k.row[key]; return null; };
+    const hits = ["asan_issues", "ubsan_issues", "tsan_issues"].map(hit);
     const total = hits.some(isNum) ? hits.reduce((a, v) => a + (v || 0), 0) : null;
-    const state = !hits.some(isNum) ? "grey" : (hit("asan_issues") > 0 || hit("tsan_issues") > 0) ? "red" : hit("ubsan_issues") > 0 ? "watch" : "green";
+    const state = !fresh.length ? "grey"
+      : (hit("asan_issues") > 0 || hit("tsan_issues") > 0) ? "red"
+      : (hit("ubsan_issues") > 0 || fresh.some(k => k.row.host_restarts > 0)) ? "watch"
+      : fresh.length < runs.length ? "grey" : "green";
     const na = d.naRun && d.naRun.done ? d.naRun.done : null;
     const naWords = na ? ` GitHub nightly analysis ${word(na.conclusion === "success" ? "green" : "red", na.conclusion || na.status)} ${day(na.updated_at)}.` : "";
-    const sanWords = `Sanitizer hits last night: UBSan ${isNum(hit("ubsan_issues")) ? hit("ubsan_issues") : "no run"} · ASan ${isNum(hit("asan_issues")) ? hit("asan_issues") : "no run"} · TSan ${isNum(hit("tsan_issues")) ? hit("tsan_issues") : "no run"}.`;
-    const cmp = (k, lab) => isNum(last[k]) ? `${lab} ${n(last[k])}${isNum(wk[k]) ? (last[k] === wk[k] ? " (flat)" : ` (${n(wk[k])} a week ago)`) : ""}` : `${lab} ${NO_DATA}`;
+    const sanWords = `Weekly on the M4: ${runs.map(sanitizerWords).join(" · ")}.`;
+    const head = isNum(total) ? `${total} sanitizer finding${total === 1 ? "" : "s"}`
+      : d.sanRows.length ? `sanitizers: no run in ${SAN_STALE_DAYS} days` : "sanitizers: no run published";
+    const cmp = (k, lab) => isNum(st[k]) ? `${lab} ${n(st[k])}${isNum(wk[k]) ? (st[k] === wk[k] ? " (flat)" : ` (${n(wk[k])} a week ago)`) : ""}` : `${lab} ${NO_DATA}`;
     return {
       state,
-      sentence: `<b>${isNum(total) ? `${total} sanitizer finding${total === 1 ? "" : "s"}` : "sanitizers: no run"}.</b> ${sanWords} ${cmp("codeql_findings", "CodeQL")}, ${cmp("strict_warning_total", "strict warnings")}, ${cmp("swiftlint_strict", "SwiftLint")}, ${cmp("periphery_aggressive", "Periphery")}.${naWords}`,
+      sentence: `<b>${head}.</b> ${sanWords} Static checks (GitHub nightly${last ? `, ${day(last.ts)}` : ""}): ${cmp("codeql_findings", "CodeQL")}, ${cmp("strict_warning_total", "strict warnings")}, ${cmp("swiftlint_strict", "SwiftLint")}, ${cmp("periphery_aggressive", "Periphery")}.${naWords}`,
       number: isNum(total) ? `${total} finding${total === 1 ? "" : "s"}` : DASH,
-      trend: trend(wk.strict_warning_total, last.strict_warning_total, true, " warnings", wk.ts || null),
+      trend: last ? trend(wk.strict_warning_total, last.strict_warning_total, true, " warnings", wk.ts || null) : `<span class="trend">no data</span>`,
       spark: lastPerDay(rows).slice(-30).map(r => isNum(r.strict_warning_total) ? r.strict_warning_total : null),
       sparkColor: C.blue,
     };
@@ -1617,9 +1653,14 @@ const BODIES = {
       ["CodeQL findings", "codeql_findings"], ["Strict-concurrency warnings", "concurrency_warnings"],
       ["All strict warnings", "strict_warning_total"], ["Memory-safety warnings", "memory_safety_warnings"],
       ["Periphery dead code", "periphery_aggressive"], ["SwiftLint --strict", "swiftlint_strict"],
-      ["UBSan hits", "ubsan_issues"], ["ASan hits", "asan_issues"], ["TSan hits", "tsan_issues"],
     ];
     const cards = rows.length ? spec.map(([label, key]) => card(label, isNum(last[key]) ? last[key] : null, prev[key], last[key], true)) : [card("Static analysis", null, null, null, false, "No nightly static-analysis rows published yet.")];
+    // One card per sanitizer, from the newest M4 run of its kind; stale or missing is "no data yet".
+    for (const k of sanitizerRuns(d)) for (const [lab, key] of k.keys) {
+      const v = k.fresh && isNum(k.row[key]) ? k.row[key] : null;
+      const why = !k.row ? "no run published" : !k.fresh ? `no run in ${k.age} days` : `weekly on the M4, ${day(k.row.date)}${k.row.host_restarts > 0 ? ` · host restarted ${k.row.host_restarts}×` : ""}`;
+      cards.push(card(`${lab} unique findings`, v, null, null, true, why));
+    }
     if (rows.length) {
       const ex = extraction(last);
       cards.push(card("CodeQL extraction", ex == null ? null : `${ex}%`, null, null, false, ""));
@@ -1628,10 +1669,25 @@ const BODIES = {
     body.innerHTML = moved("Moved here unchanged: the Static analysis cards, its four charts (CodeQL findings and extraction are two charts now) and the findings-by-tool table. Only counts, tool names and severities are read, never titles or paths.") +
       `<div class="cards">${cards.join("")}</div><div class="charts">` +
       chartBox("Compiler warnings", "c-sa-compiler") + chartBox("CodeQL findings", "c-sa-codeql") + chartBox("CodeQL extraction coverage (%)", "c-sa-extraction") +
-      chartBox("Periphery dead code and SwiftLint --strict", "c-sa-lint") + chartBox("Sanitizer hits (UBSan / ASan / TSan)", "c-sa-san") +
+      chartBox("Periphery dead code and SwiftLint --strict", "c-sa-lint") + chartBox("Sanitizer unique findings, weekly on the M4 (UBSan / ASan / TSan)", "c-sa-san") +
       tableBox("Latest findings summary, by tool", "findings-table") + "</div>";
 
-    if (!rows.length) ["c-sa-compiler", "c-sa-codeql", "c-sa-extraction", "c-sa-lint", "c-sa-san"].forEach(id => note(id, NO_DATA));
+    // Sanitizer history: one point per M4 run date (ASan/UBSan and TSan run on different days).
+    const sanByDay = new Map();
+    for (const r of d.sanRows) {
+      const cell = sanByDay.get(r.date) || { date: r.date };
+      for (const k of ["asan_issues", "ubsan_issues", "tsan_issues"]) if (isNum(r[k])) cell[k] = r[k];
+      sanByDay.set(r.date, cell);
+    }
+    const sanDays = Array.from(sanByDay.values());
+    const sanCol = key => sanDays.map(r => isNum(r[key]) ? r[key] : null);
+    if (!sanDays.length) note("c-sa-san", NO_DATA);
+    else chartOrNote("c-sa-san", "line", dateLabels(sanDays), [
+      { label: "UBSan", data: sanCol("ubsan_issues"), ...lineStyle(C.yellow), spanGaps: true },
+      { label: "ASan", data: sanCol("asan_issues"), ...lineStyle(C.red), spanGaps: true },
+      { label: "TSan", data: sanCol("tsan_issues"), ...lineStyle(C.purple), spanGaps: true },
+    ]);
+    if (!rows.length) ["c-sa-compiler", "c-sa-codeql", "c-sa-extraction", "c-sa-lint"].forEach(id => note(id, NO_DATA));
     else {
       const daily = lastPerDay(rows), labels = dateLabels(daily);
       const col = key => daily.map(r => isNum(r[key]) ? r[key] : null);
@@ -1645,11 +1701,6 @@ const BODIES = {
       chartOrNote("c-sa-lint", "line", labels, [
         { label: "Periphery", data: col("periphery_aggressive"), ...lineStyle(C.blue) },
         { label: "SwiftLint --strict", data: col("swiftlint_strict"), ...lineStyle(C.yellow) },
-      ]);
-      chartOrNote("c-sa-san", "line", labels, [
-        { label: "UBSan", data: col("ubsan_issues"), ...lineStyle(C.yellow) },
-        { label: "ASan", data: col("asan_issues"), ...lineStyle(C.red) },
-        { label: "TSan", data: col("tsan_issues"), ...lineStyle(C.purple) },
       ]);
     }
     // Findings summary (metrics/nightly_findings_latest.json). Only counts,
@@ -2152,9 +2203,10 @@ async function loadData() {
   } catch {}
 
   METRICS_SHA = LOCAL_ONLY ? null : await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, eventsText, searchText, modText, ciRun, naRun] = await Promise.all([
+  const [historyText, staticText, sanText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, eventsText, searchText, modText, ciRun, naRun] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
+    fetchText(rawUrl("sanitizer.jsonl"), local("sanitizer.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
     fetchText(rawUrl("nightly_findings_latest.json"), local("nightly_findings_latest.json")),
     fetchText(rawUrl("coverage.jsonl"), local("coverage.jsonl")),
@@ -2181,6 +2233,8 @@ async function loadData() {
     events: events && typeof events === "object" && events.schemaVersion === 1 ? events : null,
     history: sortByTs(parseJsonl(historyText)),
     staticRows: sortByTs(parseJsonl(staticText)),
+    // The M4's weekly sanitizer runs (tools/publish_metrics.py): counts and enum words only.
+    sanRows: sortByTs(parseJsonl(sanText).filter(r => r.schemaVersion === 1 && typeof r.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.kind === "address" || r.kind === "thread"))),
     tdRows, allTdRows,
     findings: parseJson(findingsText),
     covRows: sortByTs(parseJsonl(covText).filter(r => r.schemaVersion === 1 && r.total && Array.isArray(r.folders))),

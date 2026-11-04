@@ -15,6 +15,11 @@ name: Nightly Static Analysis
 #                         FLOOR: the job fails if CodeQL extracted fewer than
 #                         80% of the app + VideoScanCore Swift sources (#171).
 #   thread-sanitizer    — Disabled (if: false) since 2026-05-12.
+#
+#   2026-11-04: strict-concurrency, codeql, sanitizers, lint-strict and
+#   lint-warn are OFF (if: false, reason at each job): they build the app and
+#   the hosted runner has no Xcode 27 / Swift 6.4. source-ratchets, complexity,
+#   findings-to-issues and aggregate still run (no build).
 #   sanitizers          — Address Sanitizer (VideoScanCore `swift test`; app
 #                         unit tests only on manual dispatch with asan_app)
 #                         and Undefined Behavior Sanitizer (app unit tests),
@@ -90,7 +95,13 @@ jobs:
   # -------------------------------------------------------------------
   strict-concurrency:
     name: Swift strict concurrency (max)
-    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',strict-concurrency,') }}
+    # OFF 2026-11-04: builds the app, and GitHub's macOS runner has no Xcode 27 /
+    # Swift 6.4 yet (the build dies at VideoScanCore/CatalogReality.swift:324,
+    # run 41831293396; red every night since 10/14). Restore the line below
+    # once a runner image ships Xcode 27. The sanitizers run weekly on the M4
+    # meanwhile (scripts/weekly_sanitizer.py -> metrics/sanitizer.jsonl).
+    # if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',strict-concurrency,') }}
+    if: false
     runs-on: macos-15
     timeout-minutes: 60
     outputs:
@@ -388,7 +399,13 @@ jobs:
   # -------------------------------------------------------------------
   codeql:
     name: CodeQL (Swift, security-and-quality)
-    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',codeql,') }}
+    # OFF 2026-11-04: builds the app, and GitHub's macOS runner has no Xcode 27 /
+    # Swift 6.4 yet (the build dies at VideoScanCore/CatalogReality.swift:324,
+    # run 41831293396; red every night since 10/14). Restore the line below
+    # once a runner image ships Xcode 27. The sanitizers run weekly on the M4
+    # meanwhile (scripts/weekly_sanitizer.py -> metrics/sanitizer.jsonl).
+    # if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',codeql,') }}
+    if: false
     runs-on: macos-15
     permissions:
       contents: read
@@ -688,7 +705,13 @@ jobs:
   #     Debug. So there is no Swift Core leg for UBSan.
   sanitizers:
     name: ${{ matrix.label }} (unit tests)
-    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',sanitizers,') }}
+    # OFF 2026-11-04: builds the app, and GitHub's macOS runner has no Xcode 27 /
+    # Swift 6.4 yet (the build dies at VideoScanCore/CatalogReality.swift:324,
+    # run 41831293396; red every night since 10/14). Restore the line below
+    # once a runner image ships Xcode 27. The sanitizers run weekly on the M4
+    # meanwhile (scripts/weekly_sanitizer.py -> metrics/sanitizer.jsonl).
+    # if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',sanitizers,') }}
+    if: false
     runs-on: macos-15
     timeout-minutes: 300
     strategy:
@@ -907,7 +930,13 @@ jobs:
   # -------------------------------------------------------------------
   lint-strict:
     name: SwiftLint --strict + Periphery aggressive
-    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lint-strict,') }}
+    # OFF 2026-11-04: builds the app, and GitHub's macOS runner has no Xcode 27 /
+    # Swift 6.4 yet (the build dies at VideoScanCore/CatalogReality.swift:324,
+    # run 41831293396; red every night since 10/14). Restore the line below
+    # once a runner image ships Xcode 27. The sanitizers run weekly on the M4
+    # meanwhile (scripts/weekly_sanitizer.py -> metrics/sanitizer.jsonl).
+    # if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lint-strict,') }}
+    if: false
     runs-on: macos-15
     timeout-minutes: 40
     outputs:
@@ -1056,7 +1085,13 @@ jobs:
   # build+tests. Never fails the workflow; report is informational only.
   lint-warn:
     name: SwiftLint + Periphery (warn-only)
-    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lint-warn,') }}
+    # OFF 2026-11-04: builds the app, and GitHub's macOS runner has no Xcode 27 /
+    # Swift 6.4 yet (the build dies at VideoScanCore/CatalogReality.swift:324,
+    # run 41831293396; red every night since 10/14). Restore the line below
+    # once a runner image ships Xcode 27. The sanitizers run weekly on the M4
+    # meanwhile (scripts/weekly_sanitizer.py -> metrics/sanitizer.jsonl).
+    # if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lint-warn,') }}
+    if: false
     runs-on: macos-15
     timeout-minutes: 40
     continue-on-error: true

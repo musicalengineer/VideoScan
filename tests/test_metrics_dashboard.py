@@ -1026,3 +1026,83 @@ def test_gedcom_line_never_shows_a_name_or_markup_from_the_row(tmp_path):
 def test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes():
     page = PAGE.read_text()
     assert not re.search(r"\bon(?:click|change|submit|keydown)\s*=", page)
+
+
+# ---------------------------------------------------------------- sanitizers (2026-11-04)
+# RED 2026-11-04: the card read only static_analysis.jsonl (the GitHub nightly, whose
+# sanitizer fields are null), so the 11/01 TSan race and the 10/31 UBSan report on the
+# M4 read "sanitizers: no run". It now reads metrics/sanitizer.jsonl (tools/publish_metrics.py).
+
+def san_row(date, kind, status="findings", tests=10000, restarts=0, asan=None, ubsan=None, tsan=None, **kw):
+    return {"schemaVersion": 1, "date": date, "kind": kind, "source": "weekly", "configuration": "Debug",
+            "subset": "full", "status": status, "sha": "4fc66b944", "tests": tests, "host_restarts": restarts,
+            "reports": restarts, "asan_issues": asan, "ubsan_issues": ubsan, "tsan_issues": tsan, **kw}
+
+
+def local_day(days_ago):
+    return (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+
+
+@needs_node
+def test_sanitizer_card_shows_the_m4_weekly_runs_with_their_dates(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([
+        san_row(local_day(10), "address", status="tests-failed", asan=0, ubsan=0),
+        san_row(local_day(4), "address", tests=4292, restarts=2, asan=0, ubsan=1),
+        san_row(local_day(3), "thread", tests=10333, restarts=8, tsan=1,
+                unique_findings=["ThreadSanitizer: data race SECRET-TITLE /Users/rickb"]),
+    ])
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out["errors"] == []
+    line = out["sections"]["sum-san"]
+    assert "sanitizers weekly on the M4" in line
+    assert "dot red" in line and "2 sanitizer findings" in line and "2 findings" in line
+    assert "ASan <b>0</b> · UBSan <b>1</b>" in line and "4 d ago" in line and "host restarted 2×" in line
+    assert "TSan <b>1</b>" in line and "3 d ago" in line and "host restarted 8×" in line
+    assert "Static checks (GitHub nightly" in line and "strict warnings 539" in line
+    body = out["sections"]["body-san"]
+    assert "TSan unique findings" in body and "weekly on the M4" in body
+    assert "c-sa-san" in out["charts"]
+    tsan = [ds for ds in out["chartData"]["c-sa-san"]["datasets"] if ds["label"] == "TSan"][0]["data"]
+    assert tsan[-1] == 1 and len(tsan) == 3
+    blob = json.dumps(out)
+    assert "SECRET-TITLE" not in blob and "/Users/rickb" not in blob
+
+
+@needs_node
+def test_a_kind_older_than_eight_days_is_grey_no_run_never_its_old_count(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(12), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(11), "thread", tsan=5)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot grey" in line and "no run in 8 days" in line
+    assert 'class="word grey">no run in 11 days' in line and 'class="word grey">no run in 12 days' in line
+    assert "<b>5</b>" not in line and "5 findings" not in line
+
+
+@needs_node
+def test_one_fresh_clean_kind_and_one_stale_is_grey_not_green(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(2), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(20), "thread", status="ok", tsan=0)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot grey" in line and "dot green" not in line
+    assert "0 sanitizer findings" in line and "no run in 20 days" in line
+
+
+@needs_node
+def test_both_kinds_fresh_and_clean_is_green(tmp_path):
+    fixtures = full_fixtures(datetime.now(timezone.utc))
+    fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "address", status="ok", asan=0, ubsan=0),
+                                         san_row(local_day(0), "thread", status="ok", tsan=0)])
+    line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
+    assert "dot green" in line and "0 sanitizer findings" in line and "today" in line
+
+
+@needs_node
+def test_sanitizer_rows_alone_render_without_static_rows(tmp_path):
+    out = run_page(tmp_path, {"sanitizer.jsonl": jsonl([san_row(local_day(3), "thread", tsan=1,
+                                                                  status="<script>x</script>")])})
+    assert out["errors"] == []
+    line = out["sections"]["sum-san"]
+    assert "TSan <b>1</b>" in line and "CodeQL no data yet" in line and "<script>" not in line

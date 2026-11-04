@@ -145,8 +145,9 @@ def test_coverage_rows_keep_numbers_and_folder_names_only(sources):
 
 
 def test_missing_sources_are_none_not_empty(tmp_path):
-    streams = pm.build_streams(tmp_path / "nope", tmp_path / "nope", tmp_path / "nope")
-    assert streams == {"coverage.jsonl": None, "adversarial.jsonl": None, "codex_reviews.jsonl": None}
+    streams = pm.build_streams(tmp_path / "nope", tmp_path / "nope", tmp_path / "nope", tmp_path / "nope")
+    assert streams == {"coverage.jsonl": None, "adversarial.jsonl": None, "codex_reviews.jsonl": None,
+                       "sanitizer.jsonl": None}
 
 
 def test_adversarial_rows_are_per_night_counts(sources):
