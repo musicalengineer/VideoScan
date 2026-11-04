@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-03T12:31:02Z",
- "sha": "1c62401b",
+ "ts": "2026-11-04T12:41:18Z",
+ "sha": "6f2934a8",
  "formula_version": 1,
- "files_scored": 837,
+ "files_scored": 839,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -32,11 +32,11 @@
    "offenders": 2,
    "worst_ccn": 24,
    "new_or_worse": 1,
-   "lines": 1357,
+   "lines": 1372,
    "could_be_private": 11,
    "widened_for_split": 0,
-   "churn_7d": 9,
-   "score": 53.4
+   "churn_7d": 13,
+   "score": 57.5
   },
   {
    "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
@@ -94,6 +94,17 @@
    "score": 36.1
   },
   {
+   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 1943,
+   "could_be_private": 6,
+   "widened_for_split": 27,
+   "churn_7d": 6,
+   "score": 34.0
+  },
+  {
    "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
    "offenders": 4,
    "worst_ccn": 23,
@@ -103,17 +114,6 @@
    "widened_for_split": 4,
    "churn_7d": 2,
    "score": 32.4
-  },
-  {
-   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 1934,
-   "could_be_private": 6,
-   "widened_for_split": 27,
-   "churn_7d": 5,
-   "score": 30.8
   },
   {
    "file": "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift",
@@ -160,15 +160,15 @@
    "score": 25.5
   },
   {
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift",
+   "file": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift",
    "offenders": 1,
-   "worst_ccn": 16,
+   "worst_ccn": 25,
    "new_or_worse": 1,
-   "lines": 1602,
-   "could_be_private": 13,
+   "lines": 550,
+   "could_be_private": 5,
    "widened_for_split": 0,
-   "churn_7d": 2,
-   "score": 24.8
+   "churn_7d": 6,
+   "score": 25.3
   }
  ]
 }
