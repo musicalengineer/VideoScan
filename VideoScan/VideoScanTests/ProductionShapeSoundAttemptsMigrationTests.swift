@@ -26,7 +26,7 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         try FileManager.default.createDirectory(at: scene.folder, withIntermediateDirectories: true)
         try LiveCatalogCopy.backup(to: scene.databaseURL)
         let db = scene.databaseURL
-        let before = try Int(try sqliteTable(db, "SELECT schema_version FROM catalog_state").first?.first ?? "") ?? -1
+        let before = Int(try sqliteTable(db, "SELECT schema_version FROM catalog_state").first?.first ?? "") ?? -1
         try #require(before >= 14, "the copy is at schema \(before)")
         let tables = try sqliteTable(db, """
             SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%'
@@ -48,8 +48,8 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         await repository.close()
         #expect(opened == .readWrite, "\(opened)")
 
-        let after = try Int(try sqliteTable(db, "SELECT schema_version FROM catalog_state").first?.first ?? "") ?? -1
-        let pragma = try Int(try sqliteTable(db, "PRAGMA user_version").first?.first ?? "") ?? -1
+        let after = Int(try sqliteTable(db, "SELECT schema_version FROM catalog_state").first?.first ?? "") ?? -1
+        let pragma = Int(try sqliteTable(db, "PRAGMA user_version").first?.first ?? "") ?? -1
         #expect(after == 15 && pragma == 15, "schema \(after), user_version \(pragma)")
         let rowsAfter = try counts()
         let changed = rowsBefore.filter { rowsAfter[$0.key] != $0.value }.keys.sorted()
