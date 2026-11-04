@@ -504,14 +504,18 @@ enum CatalogStatusTransitions {
         var out: [String] = []
         for (i, line) in new.all.enumerated() {
             let title = line.kind.title
+            // Database / Files carry further causes in their detail (the sound
+            // sidecar under a failed check): said with the headline whenever the
+            // headline is said (Codex closing-2 #2). Content's detail is counts.
+            let causes = line.kind == .content || line.detail.isEmpty ? "" : " · " + line.detail.joined(separator: " · ")
             guard let was = old?.all[i] else {
-                if line.state != .green { out.append("\(title): \(word(line)) (\(line.words))") }
+                if line.state != .green { out.append("\(title): \(word(line)) (\(line.words))\(causes)") }
                 continue
             }
             if was.state != line.state {
-                out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))")
+                out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))\(causes)")
             } else if cause(was.words) != cause(line.words) {
-                out.append("\(title): \(word(line)) — now: \(line.words)")
+                out.append("\(title): \(word(line)) — now: \(line.words)\(causes)")
             } else if line.kind != .content, cause(was.detail.joined(separator: "\n")) != cause(line.detail.joined(separator: "\n")) {
                 // A second cause under the same colour (the sound sidecar under a
                 // failed check) rides in the detail: its arrival and clearing are

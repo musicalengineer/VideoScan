@@ -373,6 +373,26 @@ struct CatalogStatusBackgroundClaimTests {
         await job.task?.value
     }
 
+    @Test("RED Codex closing-2 #1: a PAUSED dossier batch with nothing in flight is not 'on it' — Content returns to 'N left'")
+    func pausedDossierIsNotWorking() async throws {
+        let snapshot = CatalogFreshnessSnapshot()
+        let dossier = DossierDashboardSnapshot()
+        snapshot.observeDossier(dossier)
+        var r = CatalogStatusSplitTruthTests.report()
+        r.byCycler[.ocr] = AnalyzeCoverageCounts(eligible: 3, covered: 1)
+        snapshot.publish(report: r, facts: CatalogStatusSplitLogicTests.freshFacts)
+        var active = DossierDashboardState()
+        active.statusIsActive = true
+        dossier.publish(active)
+        for _ in 0..<40 where !snapshot.state.isRunning(.ocr) { try await Task.sleep(for: .milliseconds(25)) }
+        #expect(CatalogStatusIndicators(snapshot.state).content.words.hasPrefix("Analyzing"))
+        active.paused = true
+        dossier.publish(active)                               // paused, no lane in flight
+        for _ in 0..<40 where snapshot.state.isRunning(.ocr) { try await Task.sleep(for: .milliseconds(25)) }
+        #expect(!snapshot.state.isRunning(.ocr), "paused and drained: nothing moves")
+        #expect(CatalogStatusIndicators(snapshot.state).content.words == "2 left to analyze")
+    }
+
     @Test("F2 LOGIC: only a RUNNING, not-waiting job of a kind that feeds a counted analyzer is active — none does today")
     func activityRule() {
         #expect(BackgroundServiceActivity.feedsCountedAnalyzers.isEmpty)
@@ -421,6 +441,22 @@ struct CatalogStatusTransitionLogTests {
         snapshot.publish(report: report, facts: CatalogFreshnessFacts(audit: audit, integrity: failed))
         #expect(said.count == before + 2, "\(said)")
         #expect(said.last?.hasPrefix("Database: Unhealthy") == true, "\(said)")
+    }
+
+    @Test("RED Codex closing-2 #2: a failed check AND an unreadable sidecar arriving together — the log names both causes")
+    func bothCausesTogether() {
+        for startHealthy in [false, true] {
+            let snapshot = CatalogFreshnessSnapshot()
+            var said: [String] = []
+            snapshot.note = { said.append($0) }
+            let report = computed { $0.activeRecords = 3 }
+            let audit = audit(["planned": 3, "present": 3])
+            if startHealthy { snapshot.publish(report: report, facts: CatalogStatusSplitLogicTests.freshFacts) }
+            snapshot.publish(report: report, facts: CatalogFreshnessFacts(audit: audit, soundStoreProblem: "disk I/O error",
+                                                                          integrity: IntegrityReportFacts(problem: "damaged report")))
+            let database = said.filter { $0.hasPrefix("Database:") }.joined(separator: "\n")
+            #expect(database.contains("damaged report") && database.contains("disk I/O error"), "healthy first \(startHealthy): \(said)")
+        }
     }
 
     @Test("F6: a ticking count or age is not a change; a new cause is")

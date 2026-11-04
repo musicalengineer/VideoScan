@@ -33106,6 +33106,7 @@
       "tests": [
         "activityRule",
         "appearSameClear",
+        "bothCausesTogether",
         "catalogEveryState",
         "causeNotCounts",
         "contentEveryState",
@@ -33116,6 +33117,7 @@
         "filesGreyWhileADriveIsAway",
         "helperAloneDoesNotClaimCountedProgress",
         "hundredThousandRows",
+        "pausedDossierIsNotWorking",
         "pausedLocalJobIsNotWorking",
         "perFileCountsFromTheCalculator",
         "poisonedRecordDoesNotLeak",
@@ -36087,7 +36089,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3306,
+      "expected_floor": 3308,
       "name": "unit",
       "package_expected_floor": 669,
       "package_selectors": [

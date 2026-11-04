@@ -397,7 +397,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     /// already equality-gated at ≤2 Hz.
     func observeDossier(_ dossier: DossierDashboardSnapshot) {
         dossierSubscription = dossier.$state
-            .map(\.statusIsActive)
+            .map(Self.dossierIsWorking)
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] active in
@@ -405,6 +405,14 @@ final class CatalogFreshnessSnapshot: ObservableObject {
                 self.dossierRunning = active ? [.sceneCaptions, .ocr, .transcribe] : []
                 self.mergeRunning()
             }
+    }
+
+    /// The dossier engine is on it: a batch is active and NOT paused with
+    /// nothing left in flight (Codex closing-2 #1: Pause leaves the status
+    /// active; once the lanes drain nothing moves the count). A paused batch
+    /// whose in-flight files are still finishing is still moving.
+    nonisolated static func dossierIsWorking(_ s: DossierDashboardState) -> Bool {
+        s.statusIsActive && !(s.paused && s.activeLanes.isEmpty)
     }
 
     private func mergeRunning() {

@@ -49,3 +49,53 @@ Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH 
 
 Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 104/104; Core background suites 74/74; gauntlet inventory --validate 0 errors.
 Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.
+
+---
+
+# Codex review — Checklist audit 11/03 — closing
+
+- Range: `ffdb3018..8734f8ae`
+- Credits spent: unavailable
+- Tokens: 133859
+- Finding count: 2
+- Verdict: fix — paused dossier progress and simultaneous Database-cause logging remain incorrect.
+- Run: 2026-11-04T02:47:21Z (cycle #224, tools/codex_review.py)
+
+## Codex answer
+
+Reviewed first-parent changes in `ffdb3018..8734f8ae`, excluding main’s changes. The four previous examples are fixed; two invariants remain incomplete.
+
+1. **P0 · TRUE · invariant 2 — Paused dossier analysis still claims “Analyzing.”**  
+   [CatalogFreshnessSnapshot.swift:400](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogFreshnessSnapshot.swift:400) observes only `statusIsActive`, ignoring `DossierDashboardState.paused`. Start dossier analysis, pause it, and let in-flight work drain with files remaining. `CaptionOrchestrator.pause()` leaves the status active, so Content indefinitely claims “Analyzing N of M” with nothing moving.  
+   **Regression:** feed `observeDossier` an active snapshot, then set `paused = true` with empty active lanes; require Content to return to “N left to analyze.”
+
+2. **P2 · LOGGING · invariant 6 — Secondary Database causes still disappear from logs when the headline also changes.**  
+   [CatalogStatusLines.swift:507](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogStatusLines.swift:507) logs only headline words on initial appearance or colour/headline changes. Detail differences are checked exclusively in the final `else if`. Launch with both a failed integrity check and an unreadable sound sidecar: the UI shows both, but the log omits the sidecar failure. Subsequent identical publications cannot recover it.  
+   **Regression:** first publish integrity failure plus `soundStoreProblem`; require the log to contain both causes. Repeat starting from healthy facts, introducing both failures together.
+
+Remaining scoped files: **read, no findings**. Invariants 1, 3, 4, 5 and 7, and GH #417’s wording, pass code inspection. Investigation stayed within changed files and direct dependencies.
+
+The targeted Core test attempt failed before executing tests with sandbox `permissionDenied`. Proposed regressions were not executed; supplied green counts were not independently reproduced.
+
+Credits spent: unavailable | Finding count: 2  
+Verdict: fix — paused dossier progress and simultaneous Database-cause logging remain incorrect.
+
+## Brief
+
+# Codex brief — closing pass on "Checklist audit 11/03 (BG + status split + count)"
+
+Range: ffdb3018..HEAD on fix/night-1103-checklist. HEAD includes a merge of origin/main (schema-B sound_attempts, 3028e9c0) — main's own changes are out of scope; review this branch's commits (first parent). Your previous closing pass (cycle on ffdb3018..9f0c5ac2) returned 4 findings — paused MFO job lit Analyzing, pausing waiter filled the lens, viewer line lost to a leftover era job, a second Database cause unlogged — fixed in the last commit; verify them too. Your cycle #220 found 7 findings; this branch claims to fix them plus a fresh-eyes reviewer's adds. Verify each invariant holds in the code at HEAD; report a finding only where one still fails (file:line, scenario, severity, checklist item).
+
+The 7 invariants:
+1. TRUE (data): the database a count or Catalog Database Info reads is the one the ROLE displays — master: cutover-opened else catalog.sqlite beside catalog.json; viewer: viewer-catalog/catalog.sqlite. ONE function (CatalogAuthority.databaseURL(role:opened:catalogFile:)) used by both callers. A viewer attempts no local era count; its job line says the master analyzes. "Viewer" is the sync role (catalogSync.mode / CatalogSync.launchMode), never catalogModel.isReadOnly.
+2. TRUE: no surface shows progress the running work cannot move. Content "Analyzing N of M" only when a counted analyzer runs or the helper RUNS (not queued/paused/waiting) a job of a kind in BackgroundServiceActivity.feedsCountedAnalyzers (empty today). The era job is its own detail line ("Machine era: N of M files (VideoScan Background — <state>)").
+3. TRUE: a job whose units defer is shown "waiting — <why>" with the waiting glyph (not the filled lens) in the menu bar and Settings; a queued job does not fill the lens. JobProgressSnapshot.waiting is additive (older payload decodes; schema stays 1).
+4. WORKFLOW: the checkbox is disabled only when OFF and turning ON is refused; ON in Debug or on a viewer can be unchecked (unregister called). The "not registered" Fix names a verb this build can do.
+5. PERFORMANCE: JobSupervisor.status() does not count as activity (menu bar's 5 s read); XPC status from the app does (noteClientActivity) — idle exit works with VideoScan closed.
+6. LOGGING: every Settings ▸ Background problem (launchd states, not answering, gate refusal, count failure/recovery with path) and every Catalog Status line colour/cause change and every Catalog Database Info "unknown —" fact is logged once on appear/change/clear, never per poll/recompute. BackgroundCatalogAccess open refusal names the path.
+7. TESTED: the count test uses a real schema-current catalog.sqlite with a known eligible count and requires .success through productionCountWork (master fallback, master opened-elsewhere, viewer no-count, DB Info viewer vs master).
+
+Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH #417, Rick's 11/02 ruling).
+
+Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
+Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.
