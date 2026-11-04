@@ -149,4 +149,14 @@ struct BackgroundMenuFailedJobTests {
         let q = BackgroundMenuPresentation.from(BackgroundMenuPresentationTests.status(.full, [failed, newer]))
         #expect(q.jobs.map(\.words) == ["Machine era (8B) — 1 of 518 · running"])
     }
+
+    /// Codex #232 F5: a queued replacement (no timestamps yet) hides the old failure.
+    @Test func aQueuedReplacementHidesTheOldFailure() {
+        var failed = BackgroundMenuPresentationTests.job(.failed(reason: "x"), done: 5, total: 523)
+        failed.finishedAt = Date()
+        var queued = BackgroundMenuPresentationTests.job(.queued, done: 0, total: 0)
+        queued.startedAt = nil
+        let p = BackgroundMenuPresentation.from(BackgroundMenuPresentationTests.status(.full, [failed, queued]))
+        #expect(p.jobs.count == 1 && p.jobs.first?.id == queued.id, "\(p.jobs.map(\.words))")
+    }
 }

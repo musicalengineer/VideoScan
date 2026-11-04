@@ -440,6 +440,7 @@
       ],
       "tests": [
         "aFailedEraJobIsShownWithItsReasonUntilAnotherOfItsKindStarts",
+        "aQueuedReplacementHidesTheOldFailure",
         "theFirstUnitsFailingWithTheSameWorkerErrorStopTheJobAndSayItOnce",
         "underLaunchdsMinimalPATHTheWorkerFindsFFprobeAndFFmpeg",
         "unitsThatFailedAreAllPlannedAgain"
@@ -454,6 +455,7 @@
         "EraJobFailFastTests"
       ],
       "tests": [
+        "aPerFileFailureBreaksTheSystemicRunEvenWithTheSameWords",
         "aSuccessOrDifferentWordsStartTheCountOver",
         "failuresTheJobCallsPerFileNeverStopIt",
         "fewerUnitsThanTheThresholdJustFinish",
@@ -471,8 +473,12 @@
         "SubprocessEnvironmentTests"
       ],
       "tests": [
+        "aToolFolderWithAColonIsRefused",
         "anExecutableOverrideWinsAndItsFolderComesFirst",
+        "anOverrideWithAnotherNameIsRefusedNotIgnored",
         "augmentedPathPutsHomebrewFirstAndNeverEndsInAColon",
+        "conflictingFoldersNeverHandTheWorkerTheWrongBinary",
+        "everyEntryIsAbsoluteAndNonEmpty",
         "mediaToolsPutsTheResolvedToolsFoldersFirstOnceEachAndKeepsEveryOtherKey",
         "noFFmpegAnywhereIsRefusedNamingTheToolAndEveryPlaceLooked"
       ]
@@ -486,7 +492,8 @@
       ],
       "tests": [
         "everyChildPATHComesFromTheOneBuilder",
-        "everyPythonClipWorkerConfigurationGetsTheMediaToolsEnvironment"
+        "everyPythonClipWorkerConfigurationGetsTheMediaToolsEnvironment",
+        "theRulesCatchTheirMutations"
       ]
     },
     {
@@ -36154,7 +36161,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 675,
+      "package_expected_floor": 680,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -37100,7 +37107,7 @@
       ],
       "expected_floor": 421,
       "name": "regression",
-      "package_expected_floor": 312,
+      "package_expected_floor": 314,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

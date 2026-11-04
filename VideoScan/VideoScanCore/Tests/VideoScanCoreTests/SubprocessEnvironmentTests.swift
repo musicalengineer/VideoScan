@@ -65,4 +65,77 @@ struct SubprocessEnvironmentTests {
             (error as? Refusal)?.words.contains("VS_FFMPEG_PATH=/nope/ffmpeg (not executable)") == true
         }
     }
+
+    // MARK: Codex #232 reds (2026-11-04)
+
+    /// Executable stand-ins named `names` in `dir` (each prints its own path).
+    static func tools(_ dir: URL, _ names: [String]) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for name in names {
+            let tool = dir.appendingPathComponent(name)
+            try Data("#!/bin/sh\necho \"$0\"\n".utf8).write(to: tool)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        }
+    }
+
+    /// The first executable `name` on `path`, as a bare-name lookup would find it.
+    static func which(_ name: String, on path: String) -> String? {
+        path.split(separator: ":").map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Codex #232 F2: ffmpeg in /A (beside an OLD ffprobe), ffprobe overridden to /B —
+    /// a PATH of /A:/B runs /A/ffprobe. Either each bare name finds its resolved
+    /// tool, or the environment is refused; never the wrong binary.
+    @Test func conflictingFoldersNeverHandTheWorkerTheWrongBinary() throws {
+        let root = try BackgroundFixtures.scratch("tools-conflict")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = root.appendingPathComponent("A"), b = root.appendingPathComponent("B")
+        try Self.tools(a, ["ffmpeg", "ffprobe"])
+        try Self.tools(b, ["ffprobe"])
+        let base = ["PATH": "/usr/bin", FFmpegLocator.ffmpegEnvVar: a.appendingPathComponent("ffmpeg").path,
+                    FFmpegLocator.ffprobeEnvVar: b.appendingPathComponent("ffprobe").path]
+        do {
+            let env = try SubprocessEnvironment.mediaTools(inheriting: base)
+            let path = env["PATH"] ?? ""
+            #expect(Self.which("ffmpeg", on: path) == a.appendingPathComponent("ffmpeg").path, "\(path)")
+            #expect(Self.which("ffprobe", on: path) == b.appendingPathComponent("ffprobe").path, "a bare ffprobe runs the stale /A/ffprobe: \(path)")
+        } catch let refusal as Refusal {
+            #expect(refusal.words.contains("ffprobe"), "\(refusal.words)")
+        }
+    }
+
+    /// Codex #232 F2: an override not named `ffmpeg` cannot be reached by a bare `ffmpeg`.
+    @Test func anOverrideWithAnotherNameIsRefusedNotIgnored() throws {
+        let root = try BackgroundFixtures.scratch("tools-name")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Self.tools(root, ["ffmpeg-custom", "ffprobe"])
+        let base = ["PATH": "/usr/bin", FFmpegLocator.ffmpegEnvVar: root.appendingPathComponent("ffmpeg-custom").path,
+                    FFmpegLocator.ffprobeEnvVar: root.appendingPathComponent("ffprobe").path]
+        #expect(throws: Refusal.self) { _ = try SubprocessEnvironment.mediaTools(inheriting: base) }
+    }
+
+    /// Codex #232 F3: every PATH entry is absolute and non-empty — no `./bin`, no trailing ":".
+    @Test func everyEntryIsAbsoluteAndNonEmpty() throws {
+        let root = try BackgroundFixtures.scratch("tools-abs")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Self.tools(root, ["ffmpeg", "ffprobe"])
+        let base = ["PATH": "./bin:/usr/bin::", FFmpegLocator.ffmpegEnvVar: root.appendingPathComponent("ffmpeg").path,
+                    FFmpegLocator.ffprobeEnvVar: root.appendingPathComponent("ffprobe").path]
+        let parts = try #require(try SubprocessEnvironment.mediaTools(inheriting: base)["PATH"])
+            .split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        #expect(parts.allSatisfy { $0.hasPrefix("/") }, "\(parts)")
+        let app = SubprocessEnvironment.augmentedPath(inheriting: "/usr/bin:")
+        #expect(!app.hasSuffix(":") && !app.contains("::"), "\(app)")
+    }
+
+    /// Codex #232 F3: a tool in a folder whose name holds ":" cannot be put on PATH — refused.
+    @Test func aToolFolderWithAColonIsRefused() throws {
+        let root = try BackgroundFixtures.scratch("tools-colon")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let odd = root.appendingPathComponent("A:B")
+        try Self.tools(odd, ["ffmpeg", "ffprobe"])
+        let base = ["PATH": "/usr/bin", FFmpegLocator.ffmpegEnvVar: odd.appendingPathComponent("ffmpeg").path,
+                    FFmpegLocator.ffprobeEnvVar: odd.appendingPathComponent("ffprobe").path]
+        #expect(throws: Refusal.self) { _ = try SubprocessEnvironment.mediaTools(inheriting: base) }
+    }
 }

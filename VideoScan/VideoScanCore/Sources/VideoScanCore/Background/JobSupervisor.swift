@@ -457,7 +457,7 @@ public actor JobSupervisor {
         }
         guard persist(cp, id) else { return .killed }
         if let words = turn.streak.words, turn.streak.length >= max(1, configuration.failFastUnits) {
-            return .failFast("units \(turn.streak.firstUnit)–\(cp.completedUnits - 1), \(turn.streak.length) in a row, all failed with the same error, "
+            return .failFast("units \(turn.streak.streakStart)–\(cp.completedUnits - 1), \(turn.streak.length) in a row, all failed with the same error, "
                              + "so the job stopped (\(cp.totalUnits - cp.completedUnits) not tried; nothing was written for them, the next plan holds them all): \(words)")
         }
         return .next
@@ -670,26 +670,33 @@ public actor JobSupervisor {
     }
 }
 
-/// The run of failures one job is in: the words, the unit it began at, and
-/// how many of its failures were systemic (`BackgroundJob.failureIsSystemic`).
-/// A success or different words start it over. Pure value; the supervisor
-/// keeps one per job loop (C++: a small struct passed by reference).
+/// The run of failures one job is in. Two runs, both reset by a success or
+/// different words: the run of IDENTICAL words (`firstUnit`, for the log's
+/// "the same error as unit N"), and inside it the run of identical SYSTEMIC
+/// failures (`streakStart`, `length`) that fail fast counts — a same-word
+/// failure the job calls per-file breaks that one (Codex #232 F6). Pure
+/// value; the supervisor keeps one per job loop (C++: a small struct passed
+/// by reference).
 struct FailureStreak: Equatable {
     private(set) var lastWords: String?
     private(set) var firstUnit = 0
+    private(set) var streakStart = 0
     private(set) var length = 0
 
     /// The words of a systemic run in progress, else nil.
     var words: String? { length >= 1 ? lastWords : nil }
 
-    /// The unit the run began at, when `words` repeats it exactly.
+    /// The unit the identical-words run began at, when `words` repeats it exactly.
     func repeats(_ words: String) -> Int? { lastWords == words ? firstUnit : nil }
 
     mutating func record(_ words: String, unit: Int, systemic: Bool) {
-        if lastWords == words {
-            if systemic { length += 1 }
+        if lastWords != words {
+            self = FailureStreak(lastWords: words, firstUnit: unit, streakStart: unit, length: systemic ? 1 : 0)
+        } else if !systemic {
+            length = 0
         } else {
-            self = FailureStreak(lastWords: words, firstUnit: unit, length: systemic ? 1 : 0)
+            if length == 0 { streakStart = unit }
+            length += 1
         }
     }
 }

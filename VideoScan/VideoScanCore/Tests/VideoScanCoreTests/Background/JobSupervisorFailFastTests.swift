@@ -99,6 +99,15 @@ struct JobSupervisorFailFastTests {
         s.record("b", unit: 5, systemic: false)
         #expect(s.words == nil && s.length == 0 && s.repeats("b") == 5)
     }
+
+    /// Codex #232 F6: a same-word failure the job calls per-file breaks the
+    /// systemic run — [T, T, F, T, T, T] is a run of 3 starting at unit 3, not 5.
+    @Test func aPerFileFailureBreaksTheSystemicRunEvenWithTheSameWords() {
+        var s = FailureStreak()
+        for (unit, systemic) in [true, true, false, true, true, true].enumerated() { s.record("w", unit: unit, systemic: systemic) }
+        #expect(s.length == 3 && s.streakStart == 3, "length \(s.length) from \(s.streakStart)")
+        #expect(s.repeats("w") == 0, "the log still says 'the same error as unit 0'")
+    }
 }
 
 @Suite("EraJob — what can stop it, and a Mac with no ffmpeg", .serialized)

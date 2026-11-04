@@ -62,7 +62,7 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
     /// Per kind, the newest job (by start, else finish) when it FAILED — a
     /// START refusal or a fail-fast stop (2026-11-03) — so the menu says why
     /// nothing runs instead of going quiet. A newer job of the kind, of any
-    /// state, replaces it. O(jobs); the status list is bounded (≤ 50 finished).
+    /// state, replaces it; an active one always does. O(jobs); the status list is bounded (≤ 50 finished).
     static func lastFailures(_ jobs: [JobProgressSnapshot]) -> [JobProgressSnapshot] {
         var newest: [JobKind: JobProgressSnapshot] = [:]
         var kinds: [JobKind] = []
@@ -75,8 +75,11 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
                 kinds.append(job.kind)
             }
         }
+        // A kind with any active job (a queued one has no timestamps yet) shows
+        // that job, never an older failure (Codex #232 F5).
+        let busy = Set(jobs.filter { $0.state.isActive }.map(\.kind))
         return kinds.compactMap { kind in
-            guard let job = newest[kind], case .failed = job.state else { return nil }
+            guard !busy.contains(kind), let job = newest[kind], case .failed = job.state else { return nil }
             return job
         }
     }
