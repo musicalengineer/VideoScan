@@ -96,7 +96,7 @@ private enum StampScene {
         }
         original.contentHash = "v1:\(label)-original"
         archive.contentHash = "v1:\(label)-archive"
-        original.contentFixity = try #require(ContentFixity.captured(path: originalURL.path, digest: digest, byteCount: Int64(size)))
+        original.contentFixity = ContentFixity.captured(path: originalURL.path, digest: digest, byteCount: Int64(size))
         archive.derivationKind = VideoRecord.archivePromotionDerivationKind
         archive.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: Int64(size))
         archive.derivedFrom = original.id     // the store requires an archive copy to name a stored source
