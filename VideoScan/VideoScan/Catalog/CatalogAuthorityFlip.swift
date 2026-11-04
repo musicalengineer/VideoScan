@@ -61,12 +61,24 @@ enum CatalogAuthority: Equatable, Sendable {
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
 
-    /// THE catalog database (2026-11-03): the one the cutover opened this
-    /// session, else catalog.sqlite beside catalog.json. `catalogStore.
-    /// fileLocation` is catalog.json — the frozen pre-SQLite file — and is
-    /// never a database (Settings ▸ Background counted against it).
-    static func databaseURL(opened: URL?, catalogFile: URL) -> URL {
-        opened ?? catalogFile.deletingLastPathComponent().appendingPathComponent(databaseFileName)
+    /// THE catalog database this Mac's role DISPLAYS (2026-11-03; role
+    /// added by checklist F1 the same night) — the one rule Settings ▸
+    /// Background's count and Catalog Database Info both call:
+    ///   master  the database the cutover opened this session, else
+    ///           catalog.sqlite beside catalog.json (`catalogStore.
+    ///           fileLocation` is catalog.json — the frozen pre-SQLite file —
+    ///           never a database);
+    ///   viewer  the master's synced snapshot, viewer-catalog/catalog.sqlite
+    ///           (CatalogViewerSnapshot) — what the viewer shows. A viewer
+    ///           never runs `decide`, so `opened` is nil there, and a
+    ///           top-level catalog.sqlite left from its master days is NOT
+    ///           what it shows (Codex 11/03 F1: the count followed it).
+    static func databaseURL(role: CatalogSyncMode, opened: URL?, catalogFile: URL) -> URL {
+        let folder = catalogFile.deletingLastPathComponent()
+        switch role {
+        case .viewer: return CatalogViewerSnapshot.databaseURL(in: folder)
+        case .master: return opened ?? folder.appendingPathComponent(databaseFileName)
+        }
     }
     /// Written once, by the explicit "Switch Catalog to SQLite…" door (B2,
     /// retired 2026-10-20 after the switch); nothing in the app writes it now.

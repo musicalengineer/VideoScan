@@ -54,14 +54,87 @@ struct BackgroundRegistrationGateTests {
         #expect(store.lastNote == R.debugBuildRefusal)
     }
 
-    @Test("SENSOR: the launch passes the gate, and the checkbox is disabled by it")
+    @Test("RED 11/03 F4 SENSOR: the launch passes the gate; the checkbox is disabled only when OFF and refused — never while ON")
     func sensor() throws {
         let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("VideoScan/App")
         let launch = try String(contentsOf: app.appendingPathComponent("VideoScanApp.swift"), encoding: .utf8)
         #expect(launch.contains("BackgroundServiceRegistrar.registerIfEnabled(refusal: BackgroundServiceRegistrar.launchRefusal())"))
         let rows = try String(contentsOf: app.appendingPathComponent("ContentAnalysisSettingsRows.swift"), encoding: .utf8)
-        #expect(rows.contains(".disabled(store.registrationRefusal != nil)"))
-        #expect(rows.contains("store.registrationRefusal ?? Self.footnote"))
+        #expect(!rows.contains(".disabled(store.registrationRefusal != nil)"), "Codex 11/03 F4: OFF was unreachable")
+        #expect(rows.contains(".disabled(store.checkboxDisabled)"))
+        #expect(rows.contains("Self.footnoteWords(refusal: store.registrationRefusal)"), "the refusal adds to the how-to")
+        #expect(rows.contains("refusal: store.registrationRefusal)"), "the helper line's Fix knows the gate")
+    }
+
+    @Test("F4 LOGIC: disabled only for OFF + refused")
+    func checkboxRule() {
+        typealias S = BackgroundServiceStore
+        #expect(S.checkboxDisabled(enabled: false, refusal: R.debugBuildRefusal))
+        #expect(S.checkboxDisabled(enabled: false, refusal: R.viewerRefusal))
+        #expect(!S.checkboxDisabled(enabled: true, refusal: R.debugBuildRefusal), "ON in Debug: unchecking must work")
+        #expect(!S.checkboxDisabled(enabled: true, refusal: R.viewerRefusal), "ON on a viewer: unchecking must work")
+        #expect(!S.checkboxDisabled(enabled: false, refusal: nil))
+        #expect(!S.checkboxDisabled(enabled: true, refusal: nil))
+    }
+
+    @Test("RED 11/03 F4: enabled from Release, then a Debug build or a viewer — the control allows OFF and unregister is called")
+    func offIsReachableWhenRefused() {
+        for (debug, viewer) in [(true, false), (false, true), (true, true)] {
+            let agent = BackgroundServiceStoreTests.FakeAgent(.enabled)
+            let (store, r) = BackgroundServiceStoreTests.make(enabled: true, agent: agent, readOnly: viewer)
+            store.isReleaseBuild = { !debug }
+            #expect(store.registrationRefusal != nil, "turning ON is refused here")
+            #expect(!store.checkboxDisabled, "debug \(debug) viewer \(viewer): the ON box can be unchecked")
+            store.setEnabled(false)
+            #expect(agent.unregisterCalls == 1)
+            #expect(!store.enabled && r.persisted == [false])
+            store.setEnabled(true)
+            #expect(agent.registerCalls == 0, "and it cannot be turned back on here")
+            #expect(store.checkboxDisabled)
+        }
+    }
+
+    @Test("the footnote: the refusal first, then the how-to — never the refusal alone")
+    func footnoteAdds() {
+        #expect(ContentAnalysisSettingsRows.footnoteWords(refusal: nil) == ContentAnalysisSettingsRows.footnote)
+        let refused = ContentAnalysisSettingsRows.footnoteWords(refusal: R.debugBuildRefusal)
+        #expect(refused.hasPrefix(R.debugBuildRefusal) && refused.hasSuffix(ContentAnalysisSettingsRows.footnote))
+    }
+}
+
+// MARK: - Reviewer reds (fresh-eyes review of 50b7fe05, 2026-11-03), lifted
+// from the review-1103 worktree. `fixNamesADisabledVerb` builds the lines the
+// way the rows do (with `refusal:`, added by this fix) and reads the store's
+// own `checkboxDisabled`.
+
+@Suite("Background registration gate — reviewer reds (2026-11-03)")
+@MainActor
+struct BackgroundRegistrationGateReviewTests {
+    typealias R = BackgroundServiceRegistrar
+
+    @Test("WORKFLOW: a Debug app with the flag ON and launchd saying notRegistered must not tell Rick to 'turn the checkbox off and on'")
+    func fixNamesADisabledVerb() async {
+        let agent = BackgroundServiceStoreTests.FakeAgent(.notRegistered)
+        let (store, _) = BackgroundServiceStoreTests.make(enabled: true, agent: agent)
+        store.isReleaseBuild = { false }
+        await store.refresh(recount: false)
+        let lines = BackgroundServicePresentation.lines(enabled: store.enabled, launchd: store.launchdStatus, service: store.service,
+                                                        serviceProblem: store.serviceProblem, work: store.work,
+                                                        workProblem: store.workProblem, lastNote: store.lastNote,
+                                                        refusal: store.registrationRefusal)
+        // Turning it back ON is what re-registers, and ON is refused in Debug.
+        #expect(!lines.helper.contains("turn the checkbox off and on"), "\(lines.helper)")
+        #expect(lines.helper.contains("in the Release build"), "\(lines.helper)")
+    }
+
+    @Test("LOGGING: the toggle's refusal is shown (lastNote) and logged")
+    func toggleRefusalIsLogged() {
+        let agent = BackgroundServiceStoreTests.FakeAgent(.notRegistered)
+        let (store, r) = BackgroundServiceStoreTests.make(enabled: false, agent: agent)
+        store.isReleaseBuild = { false }
+        store.setEnabled(true)
+        #expect(store.lastNote == R.debugBuildRefusal)
+        #expect(r.lines.contains { $0.contains(R.debugBuildRefusal) }, "\(r.lines)")
     }
 }

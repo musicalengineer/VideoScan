@@ -59,7 +59,9 @@ struct CatalogStatusWindow: View {
         self._freshness = ObservedObject(wrappedValue: model.catalogFreshness)
         self._queue = ObservedObject(wrappedValue: model.catalogStatusUpdateQueue)
         self._cutover = ObservedObject(wrappedValue: model.catalogCutover)
-        self._info = StateObject(wrappedValue: CatalogDatabaseInfoModel(sources: sources))
+        // Its "unknown — …" facts reach the log once per change (F6).
+        self._info = StateObject(wrappedValue: CatalogDatabaseInfoModel(sources: sources,
+                                                                        log: { [weak model] in model?.catalogStatusNote($0) }))
     }
 
     private var runner: AnalyzeRunner { AnalyzeRunner(model: model, orchestrator: orchestrator, center: center) }

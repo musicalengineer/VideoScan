@@ -65,7 +65,7 @@ struct CatalogDatabaseInfoSensorTests {
     @Test func theRowsLiveInTheStatusWindowAndCommandIStaysTheVolumes() throws {
         let window = try Self.code("VideoScan/Catalog/CatalogStatusWindow.swift")
         #expect(window.contains("CatalogDatabaseInfoRows(model: info)"), "the 11/01 rows, reused")
-        #expect(window.contains("CatalogDatabaseInfoModel(sources: sources)"), "the 11/01 read, reused")
+        #expect(window.contains("CatalogDatabaseInfoModel(sources: sources,"), "the 11/01 read, reused")
         #expect(!window.contains("keyboardShortcut"), "no shortcut here (⌘I is the volume's)")
         let app = try Self.code("VideoScan/App/VideoScanApp.swift")
         #expect(!app.contains("CatalogDatabaseInfoMenuItem"), "the item left the Catalog menu")

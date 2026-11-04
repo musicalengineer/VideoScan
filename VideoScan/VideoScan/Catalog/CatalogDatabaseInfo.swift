@@ -61,14 +61,17 @@ struct CatalogDatabaseInfoSources: Sendable, Equatable {
     var defaultsSuite: String?
 
     /// The live app's sources, read from the model and sync engine NOW.
+    /// The database is the one this role shows (CatalogAuthority.databaseURL:
+    /// a viewer's is the master's synced snapshot, Codex 11/03 F1).
     @MainActor
     static func live(model: VideoScanModel, sync: CatalogSync?) -> CatalogDatabaseInfoSources {
         let catalogFile = URL(fileURLWithPath: model.catalogStore.fileLocation)
         let folder = catalogFile.deletingLastPathComponent()
         let opened = model.catalogCutover.databaseURL
+        let role = sync?.mode ?? CatalogSync.launchMode()
         return CatalogDatabaseInfoSources(
-            databaseURL: CatalogAuthority.databaseURL(opened: opened, catalogFile: catalogFile),
-            databaseOpenThisSession: opened != nil,
+            databaseURL: CatalogAuthority.databaseURL(role: role, opened: opened, catalogFile: catalogFile),
+            databaseOpenThisSession: role == .viewer || opened != nil,
             catalogFile: catalogFile,
             journalFolder: folder.appendingPathComponent("background/journal", isDirectory: true),
             lastSyncFile: CatalogSyncPaths.standard().lastSyncFile,
@@ -220,8 +223,8 @@ enum CatalogDatabaseInfoLines {
         add("Schema", schema(db), "PRAGMA user_version and catalog_state.schema_version, read from the file now")
         add("Schema layout", layout(db.schemaLayout),
             "sqlite_master's tables against the tables this build's migrations create (no integrity check here — that is Validate Catalog)")
-        add("Database", .known(s.sources.databaseURL.path + (s.sources.databaseOpenThisSession ? "" : " (not opened this session)")),
-            "the catalog.sqlite this session uses, or where it would be")
+        add("Database", .known(databasePath(s.sources)),
+            "the catalog.sqlite this session shows (a viewer's is the master's synced copy), or where it would be")
         add("Size", map(s.sizes) { sizes($0) }, "stat of catalog.sqlite, -wal and -shm, now")
         add("Generation", map(db.generation) { $0.formatted() }, "generations.generation, read from the file now")
         add("Contents", map(db.contents) { $0.formatted() }, "count of content rows (one per whole-file SHA-256)")
@@ -290,6 +293,12 @@ enum CatalogDatabaseInfoLines {
         return .known("\(date(at)) → \(path)" + (b.pathExists == false ? " (nothing is at that path now)" : ""))
     }
 
+    /// The path, and what it is to this session.
+    nonisolated static func databasePath(_ s: CatalogDatabaseInfoSources) -> String {
+        if s.sessionRole == .viewer { return s.databaseURL.path + " (the master's synced copy, read-only)" }
+        return s.databaseURL.path + (s.databaseOpenThisSession ? "" : " (not opened this session)")
+    }
+
     nonisolated static func role(_ s: CatalogDatabaseInfoSources) -> CatalogDatabaseReading<String> {
         switch s.sessionRole {
         case .master?: return .known("Master — \(s.localHostname) writes the catalog")
@@ -342,9 +351,16 @@ final class CatalogDatabaseInfoModel: ObservableObject {
     @Published private(set) var readAt: Date?
     @Published private(set) var isReading = false
     private let sources: @MainActor () -> CatalogDatabaseInfoSources
+    /// The one log sink (Codex 11/03 F6): every "unknown — <why>" the window
+    /// shows is logged when it appears, changes or clears — one line per
+    /// refresh that changed any, never per refresh.
+    private let log: (String) -> Void
+    /// label → the unknown words last logged.
+    private var saidUnknown: [String: String] = [:]
 
-    init(sources: @escaping @MainActor () -> CatalogDatabaseInfoSources) {
+    init(sources: @escaping @MainActor () -> CatalogDatabaseInfoSources, log: @escaping (String) -> Void = { _ in }) {
         self.sources = sources
+        self.log = log
     }
 
     /// Read everything again, off the main actor; publish the rows.
@@ -355,6 +371,20 @@ final class CatalogDatabaseInfoModel: ObservableObject {
         lines = CatalogDatabaseInfoLines.build(snapshot)
         readAt = snapshot.readAt
         isReading = false
+        if let line = Self.unknownChanges(was: saidUnknown, now: lines, database: snapshot.sources.databaseURL.path) {
+            log(line)
+        }
+        saidUnknown = Dictionary(uniqueKeysWithValues: lines.filter { !$0.known }.map { ($0.label, $0.value) })
+    }
+
+    /// Pure: nil when the unknown facts are the ones already said.
+    nonisolated static func unknownChanges(was: [String: String], now rows: [CatalogDatabaseInfoLine], database: String) -> String? {
+        let now = Dictionary(uniqueKeysWithValues: rows.filter { !$0.known }.map { ($0.label, $0.value) })
+        guard now != was else { return nil }
+        var parts: [String] = []
+        for row in rows where !row.known && was[row.label] != row.value { parts.append("\(row.label): \(row.value)") }
+        for label in was.keys.sorted() where now[label] == nil { parts.append("\(label): known again") }
+        return "Catalog Database Info (\(database)) — " + parts.joined(separator: " · ")
     }
 
     var plainText: String { CatalogDatabaseInfoLines.plainText(lines, readAt: readAt) }

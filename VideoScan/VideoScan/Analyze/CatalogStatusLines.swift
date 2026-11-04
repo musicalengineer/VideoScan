@@ -223,17 +223,24 @@ enum CatalogStatusLinesPolicy {
     /// (the coverage pass's per-file count uses the same list).
     static var contentAnalyzers: [AnalyzeCycler] { AnalyzeCoverageReport.contentAnalyzers }
 
+    /// `backgroundDetail`: the helper's work that the Content numbers do NOT
+    /// count (the era job's "Machine era: N of M" line), shown under Content.
     static func lines(facts: CatalogFreshnessFacts, report: AnalyzeCoverageReport, now: Date, working: Bool = false,
-                      checking: Bool = false, date: (Date) -> String = Self.date) -> CatalogStatusLines {
-        CatalogStatusLines(database: database(facts.integrity, soundStoreProblem: facts.soundStoreProblem, now: now, date: date),
-                           files: files(facts, missing: report.missingCopies, offline: report.offlineFilesByRoot, now: now, date: date),
-                           content: content(report, working: working),
-                           checking: checking)
+                      checking: Bool = false, backgroundDetail: [String] = [],
+                      date: (Date) -> String = Self.date) -> CatalogStatusLines {
+        var content = content(report, working: working)
+        content.detail = backgroundDetail + content.detail
+        return CatalogStatusLines(database: database(facts.integrity, soundStoreProblem: facts.soundStoreProblem, now: now, date: date),
+                                  files: files(facts, missing: report.missingCopies, offline: report.offlineFilesByRoot, now: now, date: date),
+                                  content: content,
+                                  checking: checking)
     }
 
     /// Something is on the content work right now: an analyzer the Content
     /// line counts is running (MFO job, engine flag or the dossier engine —
-    /// the snapshot's `running` set), or the background helper has a job.
+    /// the snapshot's `running` set), or the background helper is running a
+    /// job that feeds one (BackgroundServiceActivity.isActive — never a
+    /// queued, paused or waiting job, never the era job: Codex 11/03 F2).
     static func contentIsWorking(running: Set<AnalyzeCycler>, backgroundActive: Bool) -> Bool {
         backgroundActive || !running.isDisjoint(with: contentAnalyzers)
     }
@@ -465,5 +472,48 @@ enum CatalogStatusLinesPolicy {
         }
         return line(.grey, "\(analysesLeft.formatted()) left to analyze",
                     ["\(analysesLeft.formatted()) counts analyzer-file pairs (no per-file tally in this report)"] + detail)
+    }
+}
+
+// MARK: - Transitions → the log (Codex 11/03 F6)
+
+/// What Catalog Status says changed, in words for the one log sink — one
+/// line per Database / Files / Content line whose colour or cause changed,
+/// never per recompute. "Cause" = the words with their digits taken out, so
+/// a count ticking ("Analyzing 12 of 300" → "13 of 300") or an age ("1 h
+/// ago" → "2 h ago") is not a change; a different reason is. A first
+/// judgement says only the lines that are not green ("appear"); a line that
+/// goes green says so ("clear"). Pure. (For Rick: a diff of two small
+/// structs, keyed like a debounced edge detector.)
+enum CatalogStatusTransitions {
+
+    static func word(_ line: CatalogStatusLine) -> String {
+        guard line.kind == .content else { return CatalogStatusIndicator.catalogWords(line.state) }
+        switch line.state {
+        case .green: return "Up to date"
+        case .inProgress: return "Analyzing"
+        default: return "Left to analyze"
+        }
+    }
+
+    static func cause(_ words: String) -> String {
+        String(words.unicodeScalars.filter { !CharacterSet.decimalDigits.contains($0) }.map(Character.init))
+    }
+
+    static func lines(old: CatalogStatusLines?, new: CatalogStatusLines) -> [String] {
+        var out: [String] = []
+        for (i, line) in new.all.enumerated() {
+            let title = line.kind.title
+            guard let was = old?.all[i] else {
+                if line.state != .green { out.append("\(title): \(word(line)) (\(line.words))") }
+                continue
+            }
+            if was.state != line.state {
+                out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))")
+            } else if cause(was.words) != cause(line.words) {
+                out.append("\(title): \(word(line)) — now: \(line.words)")
+            }
+        }
+        return out
     }
 }

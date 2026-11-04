@@ -178,7 +178,9 @@ struct BackgroundServiceStoreTests {
         await store.refresh(recount: true)
         #expect(r.enqueued.isEmpty, "a viewer queued \(r.enqueued.count) job(s)")
         #expect(store.enqueueCount == 0)
-        #expect(r.counts == 2, "the count still runs so the line can say how much is left")
+        // Codex 11/03 F1 (decision): a viewer counts nothing — the master runs
+        // content analysis, and this Mac's own catalog.sqlite is not what it shows.
+        #expect(r.counts == 0, "no count on a viewer")
     }
 
     /// Regression (codex-1102 review): two recounting refreshes interleaved

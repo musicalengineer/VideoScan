@@ -48,6 +48,8 @@ struct BackgroundWorkCount: Equatable, Sendable {
     /// A checkpoint under the service's folder touched within the window
     /// that is NOT one of the helper's own jobs: a run started by hand.
     var foregroundRun: JobCheckpoint?
+    /// The catalog.sqlite the count read (the recovery log line names it).
+    var catalogPath: String = ""
 }
 
 @MainActor
@@ -92,6 +94,16 @@ final class BackgroundServiceStore: ObservableObject {
     /// Why the checkbox may not turn the helper on here — nil when it may.
     var registrationRefusal: String? {
         BackgroundServiceRegistrar.registrationRefusal(isViewer: isViewer(), isReleaseBuild: isReleaseBuild())
+    }
+
+    /// The checkbox is disabled only when it is OFF and turning it ON is
+    /// refused (Codex 11/03 F4: enabled from Release, then opened in Debug or
+    /// after becoming a viewer, the box was disabled while ON — OFF was
+    /// unreachable). ON + refused stays enabled: unchecking unregisters.
+    var checkboxDisabled: Bool { Self.checkboxDisabled(enabled: enabled, refusal: registrationRefusal) }
+
+    nonisolated static func checkboxDisabled(enabled: Bool, refusal: String?) -> Bool {
+        !enabled && refusal != nil
     }
 
     private var cycle: Task<Void, Never>?
@@ -172,6 +184,7 @@ final class BackgroundServiceStore: ObservableObject {
         // Turning it OFF is always allowed; turning it ON needs the gate.
         if on, let refusal = registrationRefusal {
             lastNote = refusal
+            log("background service: not turned on — \(refusal)")
             return
         }
         guard on != enabled else { return }
@@ -232,6 +245,33 @@ final class BackgroundServiceStore: ObservableObject {
         } else {
             service = nil
         }
+        noteProblems()
+    }
+
+    // MARK: Problems → the log, once per change (Codex 11/03 F6)
+
+    /// The words last logged per problem; nil = none showing.
+    private var saidProblem: [String: String] = [:]
+
+    /// Every problem the two Settings lines can show — launchd's states, "not
+    /// answering", a failed unregister, the registration gate — is logged when
+    /// it appears, when its words change, and when it clears; never per poll.
+    private func noteProblems() {
+        note("helper", BackgroundServicePresentation.helperProblem(enabled: enabled, launchd: launchdStatus,
+                                                                    service: service, problem: serviceProblem,
+                                                                    refusal: registrationRefusal))
+        note("registration", registrationRefusal.map { "the checkbox cannot turn it on here — \($0)" })
+    }
+
+    private func note(_ key: String, _ words: String?) {
+        let was = saidProblem[key]
+        guard words != was else { return }
+        saidProblem[key] = words
+        if let words {
+            log("background service: \(words)")
+        } else if let was {
+            log("background service: cleared — \(was)")
+        }
     }
 
     /// The hand run on the line is re-read every refresh (codex-1102 F5), so
@@ -244,10 +284,19 @@ final class BackgroundServiceStore: ObservableObject {
     /// Decides on THIS count only (codex-1102 F4): a failed count clears the
     /// old one rather than letting it stand in for a fresh one.
     private func recountOnce() async {
+        // A viewer counts nothing (Codex 11/03 F1): the master runs content
+        // analysis, and this Mac's own top-level catalog.sqlite (if any) is
+        // not the catalog it shows. The job line says so; no count is shown.
+        if isViewer() {
+            work = nil; workProblem = nil
+            return
+        }
         let fresh: BackgroundWorkCount
         switch await countWork(service?.jobs.map(\.id) ?? []) {
         case .success(let c):
-            if workProblem != nil { log("content analysis count: recovered — \(c.filesLeft.formatted()) file(s) left for the era job") }
+            if workProblem != nil {
+                log("content analysis count: recovered — \(c.filesLeft.formatted()) file(s) left for the era job in \(c.catalogPath)")
+            }
             fresh = c; work = c; workProblem = nil
         case .failure(let r):
             // Said once per change, with the whole refusal: the Settings line
@@ -339,9 +388,12 @@ final class BackgroundServiceStore: ObservableObject {
             let plan = try EraPlanner.plan(catalogURL: catalogURL, journal: journal, signer: SeatedApproach.eraA2.signer,
                                            limit: nil, jobID: JobID(), isReadable: { FileManager.default.isReadableFile(atPath: $0) })
             let run = foregroundRun(stateRoot: stateRoot, knownJobs: knownJobs, now: now)
-            return .success(BackgroundWorkCount(filesLeft: plan.units.count, foregroundRun: run))
+            return .success(BackgroundWorkCount(filesLeft: plan.units.count, foregroundRun: run, catalogPath: catalogURL.path))
         } catch {
-            return .failure((error as? Refusal) ?? Refusal(String(describing: error)))
+            // The words name the catalog (Codex 11/03 F6): the log line and the
+            // Settings line say where, not only what.
+            let words = (error as? Refusal)?.words ?? String(describing: error)
+            return .failure(Refusal(words.contains(catalogURL.path) ? words : "\(catalogURL.path): \(words)"))
         }
     }
 
@@ -388,18 +440,49 @@ enum BackgroundServicePresentation {
         var job: String
     }
 
+    /// A viewer's job line (Codex 11/03 F1): nothing is counted here.
+    static let viewerJob = "Content analysis: the master runs content analysis — this Mac is a viewer, so nothing is counted here"
+
     static let loginItems = "System Settings ▸ General ▸ Login Items"
 
+    /// `refusal`: why this build may not turn the helper on (the gate) — the
+    /// "Fix:" then names a verb this build CAN do (reviewer 11/03).
     static func lines(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, serviceProblem: String?,
-                      work: BackgroundWorkCount?, workProblem: String?, lastNote: String?,
-                      time: (Date) -> String = Self.clock) -> Lines {
-        Lines(helper: helper(enabled: enabled, launchd: launchd, service: service, problem: serviceProblem),
+                      work: BackgroundWorkCount?, workProblem: String?, lastNote: String?, viewer: Bool = false,
+                      refusal: String? = nil, time: (Date) -> String = Self.clock) -> Lines {
+        Lines(helper: helper(enabled: enabled, launchd: launchd, service: service, problem: serviceProblem, refusal: refusal),
               helperIsUp: service != nil,
               needsApproval: enabled && launchd == .requiresApproval,
-              job: job(enabled: enabled, service: service, work: work, workProblem: workProblem, lastNote: lastNote, time: time))
+              job: job(enabled: enabled, service: service, work: work, workProblem: workProblem, lastNote: lastNote,
+                       viewer: viewer, time: time))
     }
 
-    private static func helper(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, problem: String?) -> String {
+    /// The helper line when it shows a problem — nil when it is healthy or
+    /// plainly off, or still asking (transient). The store logs exactly these
+    /// words on appear / change / clear (F6).
+    static func helperProblem(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, problem: String?,
+                              refusal: String? = nil) -> String? {
+        let words = helper(enabled: enabled, launchd: launchd, service: service, problem: problem, refusal: refusal)
+        if !enabled { return launchd == .enabled ? words : nil }
+        switch launchd {
+        case nil: return nil
+        case .enabled?: return service == nil && problem != nil ? words : nil
+        default: return words
+        }
+    }
+
+    /// The fix for "not registered": the checkbox, when this build may use
+    /// it; otherwise the build that may (the checkbox here only turns OFF).
+    static func reregisterFix(refusal: String?) -> String {
+        guard let refusal else { return "Fix: turn the checkbox off and on" }
+        if refusal == BackgroundServiceRegistrar.viewerRefusal {
+            return "Fix: on the master's Release build, turn Background off and on (this Mac is a viewer)"
+        }
+        return "Fix: in the Release build (scheme VideoScan-Release), turn Background off and on"
+    }
+
+    private static func helper(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, problem: String?,
+                               refusal: String?) -> String {
         let name = "VideoScan Background: "
         guard enabled else {
             if launchd == .enabled, let problem {
@@ -409,7 +492,7 @@ enum BackgroundServicePresentation {
         }
         switch launchd {
         case nil: return name + "asking launchd…"
-        case .notRegistered?: return name + "not registered — Fix: turn the checkbox off and on"
+        case .notRegistered?: return name + "not registered — " + reregisterFix(refusal: refusal)
         case .requiresApproval?: return name + "waiting for your approval in \(loginItems)"
         case .notFound?: return name + "the helper is missing from this build"
         case .enabled?:
@@ -423,15 +506,16 @@ enum BackgroundServicePresentation {
     }
 
     private static func job(enabled: Bool, service: ServiceStatus?, work: BackgroundWorkCount?, workProblem: String?,
-                            lastNote: String?, time: (Date) -> String) -> String {
+                            lastNote: String?, viewer: Bool, time: (Date) -> String) -> String {
         if let run = work?.foregroundRun {
             return "Machine era (8B): \(run.completedUnits.formatted()) of \(run.totalUnits.formatted()) · running outside the service "
                 + "(started by hand; last unit \(time(run.updatedAt)))"
         }
         if let era = service?.jobs.filter({ $0.kind == .era }).max(by: { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }) {
             let counts = era.totalUnits > 0 ? "\(era.completedUnits.formatted()) of \(era.totalUnits.formatted())" : era.subtitle
-            return "\(era.title): \(counts) · \(era.state.words)"
+            return "\(era.title): \(counts) · \(era.stateWords)"
         }
+        if viewer { return viewerJob }
         if let workProblem { return "Content analysis: could not count — \(workProblem)" }
         guard let work else { return "Content analysis: counting…" }
         if work.filesLeft == 0 { return "Content analysis: nothing left to analyze" }

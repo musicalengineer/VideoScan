@@ -266,13 +266,38 @@ final class CatalogFreshnessSnapshot: ObservableObject {
 
     init() {}
 
-    /// The background helper has a job running or queued (BackgroundServiceActivity;
-    /// false when it is off or does not answer). Content "in progress" reads it.
+    /// The background helper is running a job that feeds a counted analyzer
+    /// (BackgroundServiceActivity.isActive; false when it is off, does not
+    /// answer, or only queues / pauses / waits). Content "in progress" reads it.
     private var backgroundServiceActive = false
+    /// The helper's era job, as its own detail line under Content (nil = none).
+    private var backgroundEraLine: String?
 
     func setBackgroundServiceActive(_ active: Bool) {
         guard active != backgroundServiceActive else { return }
         backgroundServiceActive = active
+        rejudge()
+    }
+
+    /// The one log sink for line transitions (Codex 11/03 F6): the app wires
+    /// it to `catalogStatusNote` ([catalog-status]). Setting it says the
+    /// current non-green lines once, so a state judged before the wiring is
+    /// not lost.
+    var note: ((String) -> Void)? {
+        didSet { lastLogged = nil; logTransitions() }
+    }
+    /// The lines last said through `note` (nil = nothing said yet).
+    private var lastLogged: CatalogStatusLines?
+
+    private func logTransitions() {
+        guard let note, state.isComputed, let lines = state.lines else { return }
+        for line in CatalogStatusTransitions.lines(old: lastLogged, new: lines) { note(line) }
+        lastLogged = lines
+    }
+
+    func setBackgroundEraLine(_ line: String?) {
+        guard line != backgroundEraLine else { return }
+        backgroundEraLine = line
         rejudge()
     }
 
@@ -427,10 +452,12 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         new.lines = CatalogStatusLinesPolicy.lines(facts: facts, report: report, now: now,
                                                    working: CatalogStatusLinesPolicy.contentIsWorking(running: running,
                                                                                                       backgroundActive: backgroundServiceActive),
-                                                   checking: CatalogStatusLinesPolicy.catalogIsChecking(running: running))
+                                                   checking: CatalogStatusLinesPolicy.catalogIsChecking(running: running),
+                                                   backgroundDetail: backgroundEraLine.map { [$0] } ?? [])
         guard new != state else { return }
         publishCount += 1
         state = new
+        logTransitions()
     }
 }
 

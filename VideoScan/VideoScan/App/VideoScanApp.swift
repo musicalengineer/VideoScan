@@ -601,15 +601,20 @@ struct VideoScanApp: App {
             catalogModel?.log(line)
             appLog.write("[background-service] " + line)
         }
-        // catalog.sqlite — never catalogStore.fileLocation, which is the frozen
-        // catalog.json ("file is not a database", 2026-11-03).
+        // The catalog this role shows — never catalogStore.fileLocation, which
+        // is the frozen catalog.json ("file is not a database", 2026-11-03).
+        // The role is the sync engine's, decided at launch (Codex 11/03 F1: a
+        // viewer is a ROLE, not "read-only" — a master whose launch refused is
+        // read-only and is not a viewer). A viewer counts nothing: the store
+        // asks `isViewer` first and the job line says the master analyzes.
+        let role: () -> CatalogSyncMode = { [weak catalogSync] in catalogSync?.mode ?? .viewer }
         let catalogURL: () -> URL? = { [weak catalogModel] in
-            catalogModel.map { CatalogAuthority.databaseURL(opened: $0.catalogCutover.databaseURL,
+            catalogModel.map { CatalogAuthority.databaseURL(role: role(), opened: $0.catalogCutover.databaseURL,
                                                             catalogFile: URL(fileURLWithPath: $0.catalogStore.fileLocation)) }
         }
         backgroundService.countWork = BackgroundServiceStore.productionCountWork(catalogURL: catalogURL)
         backgroundService.findHandRun = BackgroundServiceStore.productionFindHandRun(catalogURL: catalogURL)
-        backgroundService.isViewer = { [weak catalogModel] in catalogModel?.isReadOnly ?? true }
+        backgroundService.isViewer = { role() == .viewer }
         if !TestEnvironment.isTestHost { backgroundService.start() }
     }
 
@@ -708,10 +713,13 @@ struct VideoScanApp: App {
                         // re-judges its relative words once a minute. The red
                         // launch line is written by the snapshot itself on its
                         // first computed state (announceAtLaunch).
+                        // Each line's colour / cause change is one [catalog-status] line (F6).
+                        catalogModel.catalogFreshness.note = { [weak catalogModel] in catalogModel?.catalogStatusNote($0) }
                         catalogModel.catalogFreshness.observeRunning(in: fileOpsCenter)
                         analyzerFollowUp.attach(center: fileOpsCenter, model: catalogModel)
-                        backgroundActivity.start { [weak catalogModel] active in
-                            catalogModel?.catalogFreshness.setBackgroundServiceActive(active)
+                        backgroundActivity.start { [weak catalogModel] reading in
+                            catalogModel?.catalogFreshness.setBackgroundServiceActive(reading.active)
+                            catalogModel?.catalogFreshness.setBackgroundEraLine(reading.eraLine)
                         }
                         wireBackgroundService()
                         // … and the dossier engine (Captions / OCR /

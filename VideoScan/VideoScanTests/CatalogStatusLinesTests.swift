@@ -438,7 +438,8 @@ struct CatalogStatusLinesTruthTests {
                 "no report beside this catalog: the Database line is the worst")
 
         // Content with work left: grey while idle (never yellow, 2026-11-03), in
-        // progress while a counted analyzer runs or the helper has a job.
+        // progress while a counted analyzer runs or the helper RUNS a job that
+        // feeds one (Codex 11/03 F2 — the input is that verdict, not "any job").
         var left = report
         left.byCycler[.fullHashes] = AnalyzeCoverageCounts(eligible: 10, covered: 2)
         left.contentFiles = AnalyzeCoverageCounts(eligible: 10, covered: 2)
@@ -449,32 +450,34 @@ struct CatalogStatusLinesTruthTests {
         #expect(snapshot.state.lines?.content.state == .inProgress)
         snapshot.setRunning([])
         snapshot.setBackgroundServiceActive(true)
-        #expect(snapshot.state.lines?.content.state == .inProgress, "the background helper is on it")
+        #expect(snapshot.state.lines?.content.state == .inProgress, "a helper job that feeds a counted analyzer is on it")
     }
 }
 
 // MARK: - The background helper's part
 
-@Suite("Catalog Status — the background helper counts as on it", .serialized)
+@Suite("Catalog Status — the background helper counts as on it only when it can move the count", .serialized)
 @MainActor
 struct BackgroundServiceActivityTests {
 
-    static func status(_ states: [JobRunState]) -> ServiceStatus {
+    static func status(_ states: [JobRunState], kind: JobKind = .noop) -> ServiceStatus {
         let jobs = states.map { s in
-            JobProgressSnapshot(id: JobRequest(kind: .noop, lane: "models", parameters: [:],
+            JobProgressSnapshot(id: JobRequest(kind: kind, lane: "models", parameters: [:],
                                                resources: JobResourceProfile(peakMemoryBytes: 1, needsResidentModel: false, secondsPerUnitEstimate: 1),
                                                requestedAt: now, requestedBy: "test").id,
-                                kind: .noop, lane: "models", title: "t", subtitle: "", completedUnits: 0, totalUnits: 1,
+                                kind: kind, lane: "models", title: "t", subtitle: "", completedUnits: 0, totalUnits: 1,
                                 skippedUnits: 0, failedUnits: 0, state: s, startedAt: nil, finishedAt: nil)
         }
         return ServiceStatus(processIdentifier: 1, startedAt: now, backoff: .full, jobs: jobs, idleSeconds: 0)
     }
 
-    @Test("LOGIC + ISOLATION: a job queued, running or paused is 'on it'; only done jobs, no answer or an unreachable helper is not")
+    @Test("LOGIC + ISOLATION (Codex 11/03 F2): no job kind the helper runs today feeds a counted analyzer — running, queued, paused, era or noop, none is 'on it'")
     func isActive() {
-        #expect(BackgroundServiceActivity.isActive(.success(Self.status([.running]))))
-        #expect(BackgroundServiceActivity.isActive(.success(Self.status([.finished, .queued]))))
-        #expect(BackgroundServiceActivity.isActive(.success(Self.status([.paused(reason: "thermal")]))))
+        for kind in [JobKind.noop, .era] {
+            #expect(!BackgroundServiceActivity.isActive(.success(Self.status([.running], kind: kind))), "\(kind)")
+            #expect(!BackgroundServiceActivity.isActive(.success(Self.status([.finished, .queued], kind: kind))))
+            #expect(!BackgroundServiceActivity.isActive(.success(Self.status([.paused(reason: "thermal")], kind: kind))))
+        }
         #expect(!BackgroundServiceActivity.isActive(.success(Self.status([.finished, .stopped, .failed(reason: "x")]))))
         #expect(!BackgroundServiceActivity.isActive(.success(Self.status([]))))
         #expect(!BackgroundServiceActivity.isActive(.failure(Refusal("VideoScan Background did not answer"))), "unreachable = not running")
@@ -484,17 +487,19 @@ struct BackgroundServiceActivityTests {
     @Test("the poller hands each answer to the snapshot; a disabled service is never asked over XPC")
     func pollerFeedsTheSnapshot() async throws {
         let activity = BackgroundServiceActivity()
-        activity.ask = { .success(Self.status([.running])) }
-        final class Box { var seen: [Bool] = [] }
+        activity.ask = { .success(Self.status([.running], kind: .era)) }
+        final class Box { var seen: [BackgroundServiceActivity.Reading] = [] }
         let box = Box()
         activity.start(every: 3_600) { box.seen.append($0) }
         for _ in 0..<50 where box.seen.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         activity.stop()
-        #expect(box.seen == [true])
+        #expect(box.seen.map(\.active) == [false], "an era job does not move the counted analyzers")
+        #expect(box.seen.first?.eraLine?.hasPrefix("Machine era: 0 of 1 files (VideoScan Background — running)") == true, "\(box.seen)")
         let src = SourceTree.strippingComments(try SourceTree.appSource(named: "BackgroundServiceActivity.swift"))
         #expect(src.contains("guard BackgroundServiceRegistrar.isEnabled else { return nil }"), "asking must never start the helper")
         let app = SourceTree.strippingComments(try SourceTree.appSource(named: "VideoScanApp.swift"))
-        #expect(app.contains("catalogModel?.catalogFreshness.setBackgroundServiceActive(active)"))
+        #expect(app.contains("catalogModel?.catalogFreshness.setBackgroundServiceActive(reading.active)"))
+        #expect(app.contains("catalogModel?.catalogFreshness.setBackgroundEraLine(reading.eraLine)"))
     }
 }
 
