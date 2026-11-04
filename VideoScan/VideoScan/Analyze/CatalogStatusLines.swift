@@ -502,42 +502,53 @@ enum CatalogStatusTransitions {
         }
     }
 
-    /// The words with their COUNTS, AGES and clock times masked — and nothing
-    /// else (Codex closing-3: stripping every digit hid "/Volumes/X8" → "X9"
-    /// and kept "2,000"'s comma). A number glued to a letter or a path
-    /// ("X9", "v15") is a name and stays.
-    /// Paths are NAMES and are kept verbatim, spaces and digits included
-    /// ("/Volumes/Backup 1"; Codex closing-4): a path runs from "/" to the
-    /// " (count)", " · ", " — ", ")" or end that follows it in these words.
-    static func cause(_ words: String) -> String {
-        let ns = words as NSString
-        var out = ""
-        var at = 0
-        for m in pathSpan?.matches(in: words, range: NSRange(location: 0, length: ns.length)) ?? [] {
-            out += masked(ns.substring(with: NSRange(location: at, length: m.range.location - at)))
-            out += ns.substring(with: m.range)
-            at = m.range.location + m.range.length
-        }
-        return out + masked(ns.substring(from: at))
-    }
+    /// What the transition log compares (Codex closing passes 3–6). Two rules,
+    /// by what the words ARE:
+    ///   Database / Files — names and facts (drives, events, files, errors):
+    ///     only the WHEN is masked — dates, clock times, ages — so a numbered
+    ///     name ("Backup 1", "Birthday 2", "X9") is always a change, and a new
+    ///     check's new count is one line per check, never per minute;
+    ///   Content — counts only ("Analyzing 999 of 2,000 files"): every number
+    ///     is masked too (`cause`), so progress ticking is not a change.
+    /// Drive names also ride as data (`CatalogStatusLine.names`).
+    static func catalogCause(_ words: String) -> String { mask(words, whenMasks) }
 
-    private static func masked(_ text: String) -> String {
+    static func cause(_ words: String) -> String { mask(mask(words, whenMasks), countMasks) }
+
+    private static func mask(_ text: String, _ masks: [(NSRegularExpression, String)]) -> String {
         var s = text
-        for (pattern, mask) in causeMasks {
-            s = pattern.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: mask)
+        for (pattern, template) in masks {
+            s = pattern.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template)
         }
         return s
     }
 
-    nonisolated(unsafe) private static let pathSpan = try? NSRegularExpression(pattern: #"/[^()·—]*?(?=\s\(|\s·|\s—|\)|$)"#)
+    /// The month names the date formatter writes (Rick's Macs: English).
+    private static let month = "January|February|March|April|May|June|July|August|September|October|November|December"
+        + "|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
 
-    /// Ages first ("45 min ago", "1 h ago", "3 days ago"), then clock times,
-    /// then free-standing numbers with their separators ("1,000", "12.5").
-    nonisolated(unsafe) private static let causeMasks: [(NSRegularExpression, String)] = [
+    /// Ages ("45 min ago", "1 h ago", "3 days ago"), dates ("Nov 3, 2026",
+    /// "3 Nov 2026", "3 Nov"), clock times ("9:41 PM", "21:41").
+    nonisolated(unsafe) private static let whenMasks: [(NSRegularExpression, String)] = compile([
         (#"\d[\d,]*\s*(?:min|h|days?)\s+ago"#, "AGE"),
-        (#"\b\d{1,2}:\d{2}\b"#, "TIME"),
+        (#"\b(?:\#(month))\.? \d{1,2}(?:, \d{4})?\b"#, "DATE"),
+        (#"\b\d{1,2} (?:\#(month))\.?(?: \d{4})?\b"#, "DATE"),
+        (#"\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp]\.?[Mm]\.?)?"#, "TIME"),
+    ])
+
+    /// Free-standing numbers with their separators ("1,000", "12.5"); a
+    /// number glued to a letter ("X9") stays even here.
+    nonisolated(unsafe) private static let countMasks: [(NSRegularExpression, String)] = compile([
         (#"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#, "#"),
-    ].compactMap { p in (try? NSRegularExpression(pattern: p.0)).map { ($0, p.1) } }   // constants; the regression test pins all three
+    ])
+
+    private static func compile(_ list: [(String, String)]) -> [(NSRegularExpression, String)] {
+        list.compactMap { p in (try? NSRegularExpression(pattern: p.0)).map { ($0, p.1) } }   // constants; the regressions pin them
+    }
+
+    static func key(_ words: String, _ kind: CatalogStatusLineKind) -> String {
+        kind == .content ? cause(words) : catalogCause(words)
+    }
 
     static func lines(old: CatalogStatusLines?, new: CatalogStatusLines) -> [String] {
         var out: [String] = []
@@ -553,14 +564,14 @@ enum CatalogStatusTransitions {
             }
             if was.state != line.state {
                 out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))\(causes)")
-            } else if cause(was.words) != cause(line.words) || was.names != line.names {
+            } else if key(was.words, line.kind) != key(line.words, line.kind) || was.names != line.names {
                 out.append("\(title): \(word(line)) — now: \(line.words)\(causes)")
-            } else if line.kind != .content, cause(was.detail.joined(separator: "\n")) != cause(line.detail.joined(separator: "\n")) {
+            } else if line.kind != .content, catalogCause(was.detail.joined(separator: "\n")) != catalogCause(line.detail.joined(separator: "\n")) {
                 // A second cause under the same colour (the sound sidecar under a
                 // failed check) rides in the detail: its arrival and clearing are
                 // changes too (Codex closing #4). Content's detail is counts.
-                let added = line.detail.filter { d in !was.detail.contains { cause($0) == cause(d) } }
-                let gone = was.detail.filter { d in !line.detail.contains { cause($0) == cause(d) } }
+                let added = line.detail.filter { d in !was.detail.contains { catalogCause($0) == catalogCause(d) } }
+                let gone = was.detail.filter { d in !line.detail.contains { catalogCause($0) == catalogCause(d) } }
                 out.append("\(title): \(word(line)) — " + (added.map { "now also: \($0)" } + gone.map { "cleared: \($0)" }).joined(separator: " · "))
             }
         }

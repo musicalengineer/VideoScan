@@ -33115,6 +33115,7 @@
         "contentIsNeverYellow",
         "drivesAreStructuredNames",
         "eraOnlyThroughTheSnapshot",
+        "eventNamesAreNames",
         "failureRepeatRecovery",
         "filesGreyWhileADriveIsAway",
         "helperAloneDoesNotClaimCountedProgress",
@@ -36091,7 +36092,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 3310,
+      "expected_floor": 3311,
       "name": "unit",
       "package_expected_floor": 669,
       "package_selectors": [

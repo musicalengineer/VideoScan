@@ -231,3 +231,47 @@ Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH 
 
 Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
 Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.
+
+---
+
+# Codex review — Checklist audit 11/03 — closing
+
+- Range: `ffdb3018..8cda1da1`
+- Credits spent: unavailable
+- Tokens: 108600
+- Finding count: 1
+- Verdict: fix — numbered event names still conceal a Catalog Status cause change.
+- Run: 2026-11-04T03:17:48Z (cycle #228, tools/codex_review.py)
+
+## Codex answer
+
+**P2 — item 6, LOGGING:** [CatalogStatusLines.swift:539](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogStatusLines.swift:539) still masks numbers inside event names.
+
+Reproduction: replace a missing-member finding for `event "Birthday 1"` with one for `event "Birthday 2"`, keeping the missing member key unchanged. Both normalize to `event "Birthday #"`. Database lines have empty `names`, and their Fix details match, so [the transition comparison](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogStatusLines.swift:556) emits nothing despite the displayed cause changing. Foundation’s regex engine reproduced the collision using HEAD’s exact patterns. A regression should require one transition between these two Database lines. Preserve event identities as structured data too.
+
+All nine prior cases are closed by code inspection. Items 1–5 and 7, their scoped files/tests, and the #417 wording: **read, no findings**. Main’s merged changes remained excluded.
+
+The focused Swift test attempt failed before executing tests with `permissionDenied`; the supplied 649/106/75 results were not independently rerun.
+
+Credits spent: unavailable | Finding count: 1  
+Verdict: fix — numbered event names still conceal a Catalog Status cause change.
+
+## Brief
+
+# Codex brief — closing pass on "Checklist audit 11/03 (BG + status split + count)"
+
+Range: ffdb3018..HEAD on fix/night-1103-checklist. HEAD includes a merge of origin/main (schema-B sound_attempts, 3028e9c0) — main's own changes are out of scope; review this branch's commits (first parent). Your previous closing pass (cycle on ffdb3018..9f0c5ac2) returned 4 findings — paused MFO job lit Analyzing, pausing waiter filled the lens, viewer line lost to a leftover era job, a second Database cause unlogged — fixed in 8734f8ae; your second pass (ffdb3018..8734f8ae) found 2 more — a paused dossier batch still lit Analyzing, and a sidecar failure arriving together with a failed check was not logged — fixed in d5f466ba; your third pass found the cause normalizer stripped every digit (drive X8→X9 hidden, '2,000' comma) — fixed in bdb227b5 (masks ages, times and free-standing numbers only). Your fourth pass found numbered drive names with spaces ('Backup 1'→'Backup 2') still collapsed — fixed in the head commit (path spans kept verbatim). Your fifth pass found '/Volumes/Backup (1)' → '(2)' collapsed; the head commit makes drive names STRUCTURED (CatalogStatusLine.names, compared exactly) as you recommended. Verify all nine. Your cycle #220 found 7 findings; this branch claims to fix them plus a fresh-eyes reviewer's adds. Verify each invariant holds in the code at HEAD; report a finding only where one still fails (file:line, scenario, severity, checklist item).
+
+The 7 invariants:
+1. TRUE (data): the database a count or Catalog Database Info reads is the one the ROLE displays — master: cutover-opened else catalog.sqlite beside catalog.json; viewer: viewer-catalog/catalog.sqlite. ONE function (CatalogAuthority.databaseURL(role:opened:catalogFile:)) used by both callers. A viewer attempts no local era count; its job line says the master analyzes. "Viewer" is the sync role (catalogSync.mode / CatalogSync.launchMode), never catalogModel.isReadOnly.
+2. TRUE: no surface shows progress the running work cannot move. Content "Analyzing N of M" only when a counted analyzer runs or the helper RUNS (not queued/paused/waiting) a job of a kind in BackgroundServiceActivity.feedsCountedAnalyzers (empty today). The era job is its own detail line ("Machine era: N of M files (VideoScan Background — <state>)").
+3. TRUE: a job whose units defer is shown "waiting — <why>" with the waiting glyph (not the filled lens) in the menu bar and Settings; a queued job does not fill the lens. JobProgressSnapshot.waiting is additive (older payload decodes; schema stays 1).
+4. WORKFLOW: the checkbox is disabled only when OFF and turning ON is refused; ON in Debug or on a viewer can be unchecked (unregister called). The "not registered" Fix names a verb this build can do.
+5. PERFORMANCE: JobSupervisor.status() does not count as activity (menu bar's 5 s read); XPC status from the app does (noteClientActivity) — idle exit works with VideoScan closed.
+6. LOGGING: every Settings ▸ Background problem (launchd states, not answering, gate refusal, count failure/recovery with path) and every Catalog Status line colour/cause change and every Catalog Database Info "unknown —" fact is logged once on appear/change/clear, never per poll/recompute. BackgroundCatalogAccess open refusal names the path.
+7. TESTED: the count test uses a real schema-current catalog.sqlite with a known eligible count and requires .success through productionCountWork (master fallback, master opened-elsewhere, viewer no-count, DB Info viewer vs master).
+
+Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH #417, Rick's 11/02 ruling).
+
+Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
+Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.

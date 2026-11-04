@@ -468,9 +468,11 @@ struct CatalogStatusTransitionLogTests {
         #expect(C.cause("checked 2 Nov 10:41 (45 min ago)") == C.cause("checked 2 Nov 11:41 (1 h ago)"), "an age is not a cause")
         #expect(C.cause("sidecar can't be opened — disk I/O error") != C.cause("sidecar can't be opened — no such file"))
         // Codex closing-4: a drive name with a space and a number is a NAME.
-        #expect(C.cause("not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)")
-                != C.cause("not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)"))
-        #expect(C.cause("not connected now: /Volumes/Backup 1 (30 files)") == C.cause("not connected now: /Volumes/Backup 1 (1,030 files)"))
+        // Database / Files words are names and facts: only the WHEN is masked.
+        #expect(C.catalogCause("not connected now: /Volumes/Backup 1 (30 files) · /Volumes/X (3 files)")
+                != C.catalogCause("not connected now: /Volumes/Backup 2 (30 files) · /Volumes/X (3 files)"))
+        #expect(C.catalogCause("checked 2 Nov 10:41 (45 min ago)") == C.catalogCause("checked 2 Nov 11:41 (1 h ago)"))
+        #expect(C.key("Analyzing 999 of 2,000 files", .content) == C.key("Analyzing 1,000 of 2,000 files", .content))
         let a = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 1 (30 files)")
         let b = CatalogStatusLine(kind: .files, state: .grey, words: "Unknown: 30 of 60 files — not connected now: /Volumes/Backup 2 (30 files)")
         let rest = (CatalogStatusLine(kind: .database, state: .green, words: "ok"), CatalogStatusLine(kind: .content, state: .green, words: "Up to date"))
@@ -496,6 +498,23 @@ struct CatalogStatusTransitionLogTests {
         let same = CatalogStatusTransitions.lines(old: CatalogStatusLines(database: other.0, files: a, content: other.1),
                                                   new: CatalogStatusLines(database: other.0, files: files("/Volumes/Backup (1)"), content: other.1))
         #expect(same.isEmpty)
+    }
+
+    @Test("RED Codex closing-6: a numbered event name in a Database cause is a name — 'Birthday 1' → 'Birthday 2' is one transition")
+    func eventNamesAreNames() {
+        func db(_ name: String) -> CatalogStatusLine {
+            CatalogStatusLine(kind: .database, state: .red, words: "Red: event \"\(name)\": a member points at a row that no longer exists (id:7) — checked Nov 3, 2026 at 9:41 PM (12 min ago)",
+                              detail: ["Fix: open the event and remove the member"])
+        }
+        let files = CatalogStatusLine(kind: .files, state: .green, words: "3 present")
+        let content = CatalogStatusLine(kind: .content, state: .green, words: "Up to date")
+        let said = CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("Birthday 1"), files: files, content: content),
+                                                  new: CatalogStatusLines(database: db("Birthday 2"), files: files, content: content))
+        #expect(said.count == 1, "\(said)")
+        // …while the check's date, time and age moving on is still not a change.
+        var later = db("Birthday 1"); later.words = later.words.replacingOccurrences(of: "Nov 3, 2026 at 9:41 PM (12 min ago)", with: "Nov 4, 2026 at 10:02 AM (1 h ago)")
+        #expect(CatalogStatusTransitions.lines(old: CatalogStatusLines(database: db("Birthday 1"), files: files, content: content),
+                                               new: CatalogStatusLines(database: later, files: files, content: content)).isEmpty)
     }
 
     @Test("F6: a ticking count or age is not a change; a new cause is")
