@@ -30640,19 +30640,30 @@
       "tests": [
         "test_a_boolean_is_not_a_number",
         "test_a_clean_build_below_the_baseline_says_lowerable_and_writes_nothing",
+        "test_a_count_that_disagrees_with_swiftlints_total_is_red",
+        "test_a_custom_rule_with_capitals_is_counted",
         "test_a_failed_build_is_red_even_with_fewer_warnings",
         "test_a_missing_build_log_is_red_with_no_number",
         "test_a_missing_stage_result_or_no_number_is_red_whatever_the_stage_said",
+        "test_a_red_unavailable_or_missing_stage_is_null_never_zero",
         "test_a_regression_overnight_is_red_and_names_the_file",
+        "test_a_swiftlint_that_printed_nothing_is_red_with_no_number",
         "test_alert_lines_red_fresh_stale_and_silent",
+        "test_an_exit_code_other_than_clean_or_violations_is_red",
         "test_an_incremental_run_does_not_probe_the_baseline",
         "test_an_unproven_fall_is_reported_not_claimed",
         "test_each_stage_subcommand_prints_one_line_and_writes_its_json",
         "test_lint_counts_repo_findings_only_and_a_missing_report_is_red",
         "test_memsafe_counts_strict_memory_safety_diagnostics_and_handles_an_unsupported_toolchain",
+        "test_no_violations_is_zero_and_green",
         "test_periphery_excludes_third_party_and_counts_kinds",
+        "test_ratchet_counts_concurrency_warnings_like_the_github_job",
+        "test_report_maps_each_number_to_its_static_analysis_field",
         "test_report_writes_latest_runs_and_markdown_with_the_numbers",
         "test_sanitizer_findings_are_red_and_a_missing_row_is_red",
+        "test_swiftlint_is_a_default_stage_and_the_sanitizer_is_not",
+        "test_the_count_is_githubs_count_and_agrees_with_swiftlints_own_total",
+        "test_the_warn_only_run_is_detail_and_never_makes_the_stage_red",
         "test_unavailable_is_yellow_not_green_and_never_red"
       ]
     },
@@ -32374,6 +32385,28 @@
         "test_scale_a_decade_of_weekly_runs_publishes_in_budget",
         "test_the_gate_refuses_anything_off_the_allowlist",
         "test_the_two_real_runs_become_counts_per_sanitizer"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_publish_static_analysis.py",
+      "stage": "unit",
+      "suites": [
+        "test_publish_static_analysis.py"
+      ],
+      "tests": [
+        "test_a_lane_night_becomes_one_row_under_the_existing_field_names",
+        "test_a_null_count_stays_null_and_a_red_night_says_red",
+        "test_a_poisoned_lane_row_already_on_the_branch_stops_the_publish",
+        "test_a_run_without_metrics_or_a_readable_time_is_dropped",
+        "test_cli_out_dir_writes_the_stream_from_the_lane_folder",
+        "test_merge_keeps_githubs_rows_verbatim_and_replaces_our_row_for_the_night",
+        "test_no_line_path_reason_or_host_name_leaves_the_mac",
+        "test_one_row_per_night_the_later_run_wins",
+        "test_scale_ten_years_of_nights_beside_github_rows_in_budget",
+        "test_the_gate_refuses_anything_off_the_allowlist",
+        "test_without_a_lane_folder_the_stream_is_left_as_published"
       ]
     },
     {
@@ -36028,6 +36061,10 @@
         },
         {
           "name": "tests/test_publish_sanitizer_metrics.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_publish_static_analysis.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {

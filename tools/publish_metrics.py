@@ -35,6 +35,15 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   test count, test-host restarts and the unique
                                   findings per sanitizer as counts. The finding
                                   text (paths, symbols) never leaves the Mac.
+    metrics/static_analysis.jsonl the GitHub nightly's rows (kept verbatim, never
+                                  re-validated) plus one row per night of the
+                                  M4's Swift 6 analysis lane
+                                  (scripts/nightly_analysis_lane.sh runs.jsonl,
+                                  source "m4-analysis-lane", 2026-11-04): the
+                                  warning, SwiftLint --strict, Periphery,
+                                  memory-safety and escape-hatch counts under
+                                  GitHub's field names. Lines, paths, reasons
+                                  and the host name never leave the Mac.
     metrics/events_latest.json    ONE object: the event-recognition prototype's
                                   counts (scripts/events_prototype.py
                                   --stats-json): records with captions /
@@ -99,6 +108,7 @@ LOGS = Path.home() / "Library/Logs/VideoScan"
 COVERAGE_DIR = LOGS / "coverage"
 ADV_DIR = LOGS / "adversarial-review"
 SANITIZER_DIR = LOGS / "sanitizer"
+ANALYSIS_DIR = LOGS / "swift6-analysis"
 CODEX_DIR = REPO / "docs" / "reviews" / "codex"
 DEFAULT_WT = Path.home() / "Library/Caches/VideoScan/metrics-publish-wt"
 APP_SOURCES = REPO / "VideoScan" / "VideoScan"
@@ -194,6 +204,9 @@ SAN_KINDS = ("address", "thread")
 SAN_STATUS = ("ok", "findings", "host-crashed", "timeout", "build-failed", "tests-failed",
               "no-tests-ran", "skipped-busy", "other")
 SAN_SOURCES = ("weekly", "analysis-lane", "unknown")
+ANALYSIS_SOURCE = "m4-analysis-lane"
+ANALYSIS_FIELDS = ("strict_warning_total", "concurrency_warnings", "memory_safety_warnings",
+                   "swiftlint_strict", "periphery_aggressive", "escape_hatches")
 
 # One spec per stream. Every row must have EXACTLY these keys (no extras, none
 # missing). Specs: "int" / "int?" non-negative int (or null); "num" / "num?"
@@ -361,6 +374,29 @@ SCHEMAS: Dict[str, dict] = {
         "ubsan_issues": "int?",
         "tsan_issues": "int?",
     },
+    # The M4 analysis lane's rows on static_analysis.jsonl (2026-11-04), one per
+    # night. Only rows with this `source` are ours, validated and replaced by
+    # date; GitHub's rows on the stream are kept verbatim (FOREIGN_ROWS below).
+    # Field names are GitHub's where they mean the same count; codeql_findings is
+    # always null (CodeQL is not run locally). escape_hatches is the lane's census.
+    "static_analysis.jsonl": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "date": "date",
+        "sha": "sha?",
+        "run_kind": ("enum", ("nightly",)),
+        "source": ("enum", (ANALYSIS_SOURCE,)),
+        "host": "hostlabel?",
+        "status": ("enum", ("ok", "yellow", "red")),
+        "elapsed_s": "int?",
+        "strict_warning_total": "int?",
+        "concurrency_warnings": "int?",
+        "memory_safety_warnings": "int?",
+        "swiftlint_strict": "int?",
+        "periphery_aggressive": "int?",
+        "escape_hatches": "int?",
+        "codeql_findings": ("opt", ("enum", ())),
+    },
     # Event recognition prototype v0 (scripts/events_prototype.py --stats-json):
     # ONE object, rebuilt each publish. Counts only; category names are the
     # script's CATEGORIES constants (EVENTCAT_RE), never a clip, a person or a word
@@ -384,6 +420,10 @@ GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_close
                        "main_sha", "main_date")
 HIGH_PRIORITY_LABEL = "High Priority"      # the exact GitHub label name
 
+# Streams shared with GitHub CI: rows whose `source` is ours are validated and
+# keyed (sanitizer style, one per date); every other row is GitHub's and kept
+# byte-for-byte, never re-validated. stream -> our source value.
+FOREIGN_ROWS = {"static_analysis.jsonl": ANALYSIS_SOURCE}
 # Streams whose existing rows were published by someone else (GitHub CI):
 # fresh rows are validated and appended (deduplicated by ts + sha); rows
 # already on the branch are kept exactly as they are.
@@ -826,15 +866,63 @@ def _sanitizer_key(row: dict) -> str:
     return f"{row.get('date')}|{row.get('kind')}|{row.get('source')}"
 
 
+def _utc_ts(value) -> Optional[str]:
+    """An ISO timestamp with an offset -> "YYYY-MM-DDTHH:MM:SSZ", else None."""
+    try:
+        t = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        return None
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def static_analysis_row(run: dict) -> Optional[dict]:
+    """One analysis-lane report row (runs.jsonl) -> one sanitized row, or None for
+    a run without `metrics` (before 2026-11-04) or a readable time and date. Copies
+    the counts, the status word, the short SHA and the host LABEL; the headline,
+    stage lines, reasons and report path stay on this Mac."""
+    metrics = run.get("metrics")
+    ts, date = _utc_ts(run.get("ts")), run.get("date")
+    if not isinstance(metrics, dict) or ts is None or not (isinstance(date, str) and DATE_RE.match(date)):
+        return None
+    sha = run.get("commit")
+    elapsed = run.get("elapsed_s")
+    return dict({
+        "schemaVersion": SCHEMA_VERSION, "ts": ts, "date": date,
+        "sha": sha if isinstance(sha, str) and SHA_RE.match(sha) else None,
+        "run_kind": "nightly", "source": ANALYSIS_SOURCE, "host": host_label(run.get("host")),
+        "status": run.get("status") if run.get("status") in ("ok", "yellow", "red") else "red",
+        "elapsed_s": int(elapsed) if _is_num(elapsed) and elapsed >= 0 else None,
+        "codeql_findings": None,
+    }, **{k: (v if _is_int(v) else None) for k, v in ((k, metrics.get(k)) for k in ANALYSIS_FIELDS)})
+
+
+def static_analysis_rows(runs: Path) -> Optional[List[dict]]:
+    """One row per lane night (the later run of a date wins), or None when this
+    Mac has no lane runs."""
+    if not runs.is_file():
+        return None
+    by_date: Dict[str, dict] = {}
+    for run in _read_jsonl(runs):
+        row = static_analysis_row(run)
+        if row is not None:
+            by_date[row["date"]] = row
+    return [by_date[k] for k in sorted(by_date)]
+
+
 def build_streams(cov_dir: Path = COVERAGE_DIR, adv_dir: Path = ADV_DIR,
-                  codex_dir: Path = CODEX_DIR, san_dir: Optional[Path] = None) -> Dict[str, Optional[List[dict]]]:
+                  codex_dir: Path = CODEX_DIR, san_dir: Optional[Path] = None,
+                  analysis_dir: Optional[Path] = None) -> Dict[str, Optional[List[dict]]]:
     """name -> fresh rows, or None when that source is not on this machine
-    (or, for the sanitizer runs, when no folder is given; the CLI gives one)."""
+    (or, for the sanitizer runs and the analysis lane, when no folder is given;
+    the CLI gives both)."""
     return {
         "coverage.jsonl": coverage_rows(cov_dir),
         "adversarial.jsonl": adversarial_rows(adv_dir / "ledger.jsonl", adv_dir / "findings.json"),
         "codex_reviews.jsonl": codex_rows(codex_dir),
         "sanitizer.jsonl": None if san_dir is None else sanitizer_rows(san_dir / "runs.jsonl"),
+        "static_analysis.jsonl": None if analysis_dir is None else static_analysis_rows(analysis_dir / "runs.jsonl"),
     }
 
 
@@ -1210,6 +1298,37 @@ def _published_folders(rows: List[dict]) -> set:
             if isinstance(f, dict) and isinstance(f.get("folder"), str) and FOLDER_RE.match(f["folder"])}
 
 
+def _merge_foreign(name: str, fresh: List[dict], existing_dir: Optional[Path], folders: Optional[set]) -> str:
+    """A stream shared with GitHub CI. GitHub's lines are kept as their exact text
+    (never re-rendered, never re-validated); our rows (source == FOREIGN_ROWS[name])
+    on the branch are merged with the fresh ones by date, a fresh row replacing,
+    and every one of ours is validated. Lines are ordered by `ts`."""
+    ours_src = FOREIGN_ROWS[name]
+    theirs: List[tuple] = []
+    ours: Dict[str, dict] = {}
+    text = ""
+    if existing_dir is not None and (existing_dir / name).is_file():
+        text = (existing_dir / name).read_text()
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            obj = None
+        if isinstance(obj, dict) and obj.get("source") == ours_src:
+            ours[str(obj.get("date"))] = obj
+        else:
+            theirs.append((str(obj.get("ts", "")) if isinstance(obj, dict) else "", line.strip()))
+    for row in fresh:
+        ours[str(row.get("date"))] = row
+    for row in ours.values():
+        validate(name, row, folders)
+    lines = theirs + [(str(r["ts"]), json.dumps(r, sort_keys=True, separators=(",", ":"))) for r in ours.values()]
+    lines.sort(key=lambda kv: kv[0])                 # stable: GitHub's own order is kept within a ts
+    return "".join(line + "\n" for _, line in lines)
+
+
 def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Optional[Path],
                     folders: Optional[set]) -> Dict[str, str]:
     """name -> full file text, merged with what is already published, every row
@@ -1221,6 +1340,9 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
         if name in SINGLE_OBJECT:
             validate(name, rows, folders)
             out[name] = json.dumps(rows, sort_keys=True, separators=(",", ":")) + "\n"
+            continue
+        if name in FOREIGN_ROWS:
+            out[name] = _merge_foreign(name, rows, existing_dir, folders)
             continue
         existing = _read_jsonl(existing_dir / name) if existing_dir is not None else []
         if name in APPEND_ONLY:
@@ -1351,6 +1473,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--codex-dir", default=str(CODEX_DIR))
     ap.add_argument("--sanitizer-dir", default=str(SANITIZER_DIR),
                     help="weekly_sanitizer.py's log folder (runs.jsonl) for metrics/sanitizer.jsonl")
+    ap.add_argument("--analysis-dir", default=str(ANALYSIS_DIR),
+                    help="the Swift 6 analysis lane's log folder (runs.jsonl) for metrics/static_analysis.jsonl")
     ap.add_argument("--validate", nargs=2, metavar=("STREAM", "FILE"),
                     help="privacy-gate one CI-produced file (JSON, or JSONL when STREAM ends in .jsonl) "
                          "against SCHEMAS[STREAM]; exit 0 if it may be published, 3 if not")
@@ -1372,7 +1496,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("OUTCOME skipped: VIDEOSCAN_PUBLISH_METRICS=0")
         return 0
     fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
-                          Path(a.codex_dir).expanduser(), Path(a.sanitizer_dir).expanduser())
+                          Path(a.codex_dir).expanduser(), Path(a.sanitizer_dir).expanduser(),
+                          Path(a.analysis_dir).expanduser())
     fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
     folders = source_folders()

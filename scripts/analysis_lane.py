@@ -12,6 +12,7 @@ report that the morning reads.
   ratchet   --app-log L --core-log L [--app-rc N --core-rc N] [--clean]    warnings vs scripts/warnings_baseline.tsv
   census    --state J                                                        escape hatches (escape_hatch_census.py)
   lint      --report J [--rc N]                                              swiftlint analyze findings
+  swiftlint --strict-out F --strict-rc N [--warn-out F --warn-rc N]          swiftlint lint --strict violations
   periphery --report J [--rc N]                                              unused declarations, third-party excluded
   memsafe   --probe-rc N --probe-out F --app-log L --core-log L [--rc …]     -strict-memory-safety diagnostics
   sanitizer --kind thread|address --row J                                    weekly_sanitizer.py's latest-<kind>.json
@@ -27,6 +28,11 @@ Stage result JSON: {"stage", "status": ok|red|unavailable, "number": int|null,
 "line": str, "detail": [str], "extra": {…}}. `unavailable` is for the one
 stage whose tool may not exist on a toolchain (-strict-memory-safety on a
 pre-6.2 swiftc): it reads 🟡 with the measured reason, never green, never red.
+
+`report` also writes `metrics`: tonight's numbers under the field names of
+metrics/static_analysis.jsonl (STATIC_FIELDS), null for a stage that is red,
+unavailable or absent, so tools/publish_metrics.py copies them without knowing
+the stages and a broken tool never publishes a zero.
 
 Memory: logs are read whole (a clean xcodebuild log is ~50–150 MB; the
 warning parser is regex over the text, same as warning_ratchet.py); the
@@ -54,7 +60,20 @@ BUILD_FAILED_RE = re.compile(r"\*\* (?:TEST )?BUILD FAILED \*\*|error: (?:emit-m
                              r"error: fatalError|xcodebuild: error:")
 MEMSAFE_TAG = "StrictMemorySafety"
 THIRD_PARTY = {".build", "DerivedData", "SourcePackages", "checkouts"}
-LANE_STAGES = ["ratchet", "census", "lint", "periphery", "memsafe"]
+# The default stages (the shell's STAGES). `lint` (swiftlint analyze) is opt-in, and
+# the sanitizers are not here: the weekly jobs own them (2026-11-04, no double runs).
+LANE_STAGES = ["ratchet", "census", "swiftlint", "periphery", "memsafe"]
+# The GitHub strict-concurrency job's buckets (nightly-analysis.yml "Count + summarise"),
+# applied to the ratchet's distinct warnings so concurrency_warnings stays comparable.
+CONC_RE = re.compile(r"sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable")
+MS_RE = re.compile(r"\[#StrictMemorySafety\]|unsafe constructs|involves unsafe|not marked with 'unsafe'|@unsafe")
+# swiftlint's xcode reporter: "/abs/File.swift:12:9: error: Name Violation: words (rule_id)".
+SWIFTLINT_RE = re.compile(r"^(/.+?\.swift):\d+:\d+: (warning|error): .*\(([A-Za-z0-9_]+)\)\s*$", re.M)   # custom rule ids carry capitals (chained_sheet_isPresented)
+SWIFTLINT_DONE_RE = re.compile(r"Done linting! Found (\d+) violations?, (\d+) serious in (\d+) files?")
+# stage -> static_analysis.jsonl field; ("ratchet", "concurrency") reads the stage's extra.
+STATIC_FIELDS = {"strict_warning_total": ("ratchet", None), "concurrency_warnings": ("ratchet", "concurrency"),
+                 "memory_safety_warnings": ("memsafe", None), "swiftlint_strict": ("swiftlint", None),
+                 "periphery_aggressive": ("periphery", None), "escape_hatches": ("census", None)}
 
 
 # ---------------------------------------------------------------- helpers
@@ -116,7 +135,9 @@ def ratchet(app_log: Path, core_log: Path, app_rc: Optional[int], core_rc: Optio
     line = (f"ratchet: {n} warning(s) in {files} file(s) — {'RED' if red else 'GREEN'} against the baseline "
             f"({base_total} recorded {meta.get('recorded', '?')})")
     detail = list(red)
-    extra: dict = {"baseline_total": base_total, "clean": clean}
+    diags = wr.parse_logs(logs)
+    concurrency = sum(1 for d in diags if CONC_RE.search(d[3]) and not MS_RE.search(d[3]))
+    extra: dict = {"baseline_total": base_total, "clean": clean, "concurrency": concurrency}
     if clean and not red and baseline.exists():
         # Dry-run `update` on a COPY: the same refusal rules the merging session will meet.
         with tempfile.TemporaryDirectory() as d:
@@ -193,6 +214,44 @@ def lint(report: Optional[Path], rc: Optional[int]) -> dict:
     line = f"swiftlint analyze: {n} finding(s) in {len(by_file)} file(s) ({rules})"
     detail = [f"{p} ({c})" for p, c in by_file.most_common(10)]
     return result(stage, "ok", n, line, detail, {"by_rule": dict(by_rule)})
+
+
+def _swiftlint_counts(path: Optional[Path]) -> Tuple[Optional[dict], Optional[str]]:
+    """Violations in one `swiftlint lint --reporter xcode` output (stdout+stderr),
+    or why the output cannot be trusted. Trusted only when swiftlint's own
+    "Done linting! Found N violations" line is there and agrees with the parse."""
+    if path is None or not path.exists():
+        return None, f"output missing: {path}"
+    text = path.read_text(errors="replace")
+    done = SWIFTLINT_DONE_RE.search(text)
+    if not done:
+        return None, f"no 'Done linting!' line (swiftlint did not finish): {path}"
+    hits = SWIFTLINT_RE.findall(text)
+    if len(hits) != int(done.group(1)):
+        return None, f"{len(hits)} parsed but swiftlint says {done.group(1)} ({path})"
+    return {"n": len(hits), "files": len({h[0] for h in hits}), "by_rule": Counter(h[2] for h in hits),
+            "warnings": sum(1 for h in hits if h[1] == "warning"), "errors": sum(1 for h in hits if h[1] == "error"),
+            "by_file": Counter(h[0] for h in hits)}, None
+
+
+def swiftlint(strict_out: Optional[Path], strict_rc: Optional[int], warn_out: Optional[Path] = None,
+              warn_rc: Optional[int] = None) -> dict:
+    """`swiftlint lint --strict --reporter xcode` from the repo root: what the GitHub
+    lint-strict job counted into swiftlint_strict (every violation line). The
+    warn-only run (GitHub's lint-warn job) is the severity split, detail only."""
+    stage = "swiftlint"
+    if strict_rc not in (None, 0, 2):           # 0 clean, 2 violations; anything else is swiftlint failing
+        return result(stage, "red", None, f"swiftlint --strict: RED — swiftlint exited {strict_rc}")
+    c, why = _swiftlint_counts(strict_out)
+    if why:
+        return result(stage, "red", None, f"swiftlint --strict: RED — {why}")
+    w, _ = (None, None) if warn_out is None or warn_rc not in (None, 0, 2) else _swiftlint_counts(warn_out)
+    split = f"without --strict: {w['warnings']} warning(s), {w['errors']} error(s)" if w else "without --strict: not run"
+    rules = ", ".join(f"{k} {v}" for k, v in sorted(c["by_rule"].items(), key=lambda kv: (-kv[1], kv[0]))) or "none"
+    line = f"swiftlint --strict: {c['n']} violation(s) in {c['files']} file(s) ({rules}); {split}"
+    detail = [f"{_ours(p) or p} ({n})" for p, n in c["by_file"].most_common(10)]
+    return result(stage, "ok", c["n"], line, detail,
+                  {"by_rule": dict(c["by_rule"]), "warn_only": {"warnings": w["warnings"], "errors": w["errors"]} if w else None})
 
 
 def periphery(report: Optional[Path], rc: Optional[int]) -> dict:
@@ -287,6 +346,17 @@ def verdict(results: Dict[str, Optional[dict]], expected: List[str]) -> Tuple[st
     return ("yellow" if yellow else "ok"), []
 
 
+def static_metrics(results: Dict[str, Optional[dict]]) -> Dict[str, Optional[int]]:
+    """Tonight's numbers under static_analysis.jsonl's names. Null unless the stage
+    is ok with an integer: a red or unavailable stage never publishes a count."""
+    out: Dict[str, Optional[int]] = {}
+    for field, (stage, key) in STATIC_FIELDS.items():
+        r = results.get(stage) or {}
+        v = r.get("number") if key is None else (r.get("extra") or {}).get(key)
+        out[field] = v if r.get("status") == "ok" and isinstance(v, int) and not isinstance(v, bool) else None
+    return out
+
+
 def report(stage_dir: Path, expected: List[str], latest: Path, runs: Optional[Path], markdown: Optional[Path],
            commit: str, host: str, elapsed_s: Optional[float]) -> dict:
     results: Dict[str, Optional[dict]] = {}
@@ -302,7 +372,7 @@ def report(stage_dir: Path, expected: List[str], latest: Path, runs: Optional[Pa
                          for s in expected)
     headline = f"{icon} Swift 6 analysis lane {status.upper()} ({commit}, {host}): {numbers}"
     today = dt.date.today().isoformat()
-    row = {"date": today, "ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "status": status,
+    row = {"metrics": static_metrics(results),"date": today, "ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "status": status,
            "commit": commit, "host": host, "elapsed_s": elapsed_s, "headline": headline, "reasons": reasons,
            "stages": {s: ({k: v for k, v in r.items() if k != "extra"} if r else None) for s, r in results.items()},
            "report": str(markdown) if markdown else None}
@@ -382,6 +452,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name in ("lint", "periphery"):
         p = sub.add_parser(name); p.add_argument("--report", type=Path, required=True); p.add_argument("--rc", type=int, default=None)
 
+    sl = sub.add_parser("swiftlint")
+    sl.add_argument("--strict-out", type=Path, required=True); sl.add_argument("--strict-rc", type=int, default=None)
+    sl.add_argument("--warn-out", type=Path, default=None); sl.add_argument("--warn-rc", type=int, default=None)
+
     m = sub.add_parser("memsafe")
     m.add_argument("--probe-rc", type=int, default=None); m.add_argument("--probe-out", type=Path, default=None)
     m.add_argument("--app-log", type=Path, default=None); m.add_argument("--core-log", type=Path, default=None)
@@ -407,6 +481,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return emit(census(a.state, a.swiftlint, with_force_unwrap=not a.no_force_unwrap), a.out_dir)
     if a.cmd == "lint":
         return emit(lint(a.report, a.rc), a.out_dir)
+    if a.cmd == "swiftlint":
+        return emit(swiftlint(a.strict_out, a.strict_rc, a.warn_out, a.warn_rc), a.out_dir)
     if a.cmd == "periphery":
         return emit(periphery(a.report, a.rc), a.out_dir)
     if a.cmd == "memsafe":
