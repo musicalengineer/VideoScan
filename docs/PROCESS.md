@@ -30,18 +30,17 @@ Docs-only commits (`docs/`) and metrics/CI publishes go straight to `main`. Ever
 
 ## 2a. The change checklist (Rick 2026-11-03)
 
-A reminder, not a gate: before a code commit, run down these seven and ask "did we follow process?" Interruptions make
-items slip (11/03: a failure shown only in Settings, a count wired to catalog.json, wrong build steps given to Rick, no
-fresh-eyes review on two large changes). End the commit message with `Checklist: ✓`, or `Checklist: ✓ — skipped <item>
-(why)`. For a pure wording, layout or colour tweak, only items 3 and 5 apply.
+Pre-flight questions before a code commit, not a gate: asked so an interruption can't make us skip one, because
+doing it right first is faster. End the commit message with `Checklist: ✓`, or `Checklist: ✓ — skipped <item> (why)`.
+What the hooks already enforce (sensor lane, complexity, SwiftLint, gauntlet manifest) is not on the list.
 
-1. **Tested where it counts.** A fix gets a test seen red first. A feature is tested on the dimensions that apply (§4). The **real call site** is exercised, not just the unit.
-2. **Logged and truthful.** Every failure the UI can show is also logged once, with its reason and the file, path or ID, and again when it clears. Long work logs START and OUTCOME. Every shown fact comes from evidence.
-3. **Green, with numbers.** The sensor lane is green with its count quoted, plus the catalog lane for catalog work. The complexity gate and warning ratchet are OK.
-4. **Reviewed.** Fresh eyes (the `reviewer` agent) on any sizeable logic change, Codex on data-risk code (§5).
-5. **Right for Rick.** UI follows his rulings and the HIG. Any build, run or spot-test step given to him has been checked to work.
-6. **Books kept.** New tests are registered in the gauntlet manifest. A ruling goes in DECISIONS, and STATUS is updated when it changes. The worktree is cleaned up after merge.
-7. **Performance considered.** Did we pick the efficient algorithm and use the hardware we have: unified memory, GPU/ANE, parallel lanes, another Mac over TB5? Is there a measured number where speed matters?
+1. **CLEAN.** Is the code cohesive and clean, or does it add tech debt? KISS.
+2. **REVIEWED.** Has it been adversarially reviewed? Fresh eyes (the `reviewer` agent), and Codex where data is at risk (§5).
+3. **TESTED.** Is it testable, are tests written, do they pass? Is the real call site exercised, not just the unit? A regression test goes red, then green.
+4. **WORKFLOW.** Especially for UI/UX: does it keep the workflow natural, or could it confuse the user? Do the build, run or spot-test steps given to Rick actually work?
+5. **LOGGING.** Does it log the right amount? Every failure the user can see is also logged, with why and where.
+6. **PERFORMANCE.** Does it leverage the silicon (unified memory, GPU/ANE, parallel lanes, another Mac over TB5), with a measured number where speed matters?
+7. **TRUE.** Is it true to the feature and to the facts on the ground (the database, the disks)? Every fact shown comes from evidence, and no path can lose or misfile media.
 
 ## 3. Git
 
