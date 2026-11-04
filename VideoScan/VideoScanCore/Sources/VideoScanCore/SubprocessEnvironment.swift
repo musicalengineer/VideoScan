@@ -76,7 +76,9 @@ public enum SubprocessEnvironment {
         // The proof: what a bare-name lookup on this PATH would run is the resolved tool.
         for tool in resolved {
             let first = path.split(separator: ":").map { "\($0)/\(tool.name)" }.first { fileManager.isExecutableFile(atPath: $0) }
-            guard let first, (first as NSString).standardizingPath == tool.path else {
+            // Same binary = same file after symlinks (Homebrew's bin/ and opt/ffmpeg/bin/
+            // are links to one Cellar file; Codex #233 F1), not the same spelling.
+            guard let first, identity(first) == identity(tool.path) else {
                 throw Refusal("\(tool.name): the resolved \(tool.path) would be shadowed on the worker's PATH by \(first ?? "nothing") "
                               + "(ffmpeg and ffprobe in different folders, each beside another copy) — put both in one folder, or set \(tool.envVar) to the one beside the other tool")
             }
@@ -84,5 +86,11 @@ public enum SubprocessEnvironment {
         var out = base
         out["PATH"] = path
         return out
+    }
+
+    /// A file's identity for "is this the binary a bare name runs": its path
+    /// with every symlink resolved.
+    static func identity(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
 }

@@ -474,6 +474,7 @@
       ],
       "tests": [
         "aToolFolderWithAColonIsRefused",
+        "anEquivalentAliasOfTheShadowingToolIsAccepted",
         "anExecutableOverrideWinsAndItsFolderComesFirst",
         "anOverrideWithAnotherNameIsRefusedNotIgnored",
         "augmentedPathPutsHomebrewFirstAndNeverEndsInAColon",
@@ -491,6 +492,7 @@
         "SubprocessPathSensorTests"
       ],
       "tests": [
+        "commentsAndStringsAreNotCode",
         "everyChildPATHComesFromTheOneBuilder",
         "everyPythonClipWorkerConfigurationGetsTheMediaToolsEnvironment",
         "theRulesCatchTheirMutations"
@@ -36161,7 +36163,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 680,
+      "package_expected_floor": 682,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",

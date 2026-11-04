@@ -55,10 +55,21 @@ struct SubprocessPathSensorTests {
     }
 
     /// The worker rule over one file's text: true when a PythonClipWorker is configured without the media-tools environment.
+    /// `text` with string literals, block comments and line comments blanked
+    /// (Codex #233 F2: documentation is not code). Strings first, so a "//"
+    /// inside one is not taken for a comment.
+    static func codeOnly(_ text: String) -> String {
+        var out = text
+        for pattern in [#""(?:\\.|[^"\\\n])*""#, #"(?s)/\*.*?\*/"#, #"//[^\n]*"#] {
+            out = out.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
+        }
+        return out
+    }
+
     /// Counted per construction, not per file (Codex #232 F7): every
     /// `PythonClipWorker.Configuration(…)` / `.repo(…)` needs its own `mediaTools(` call.
     static func configuresAWorkerWithoutMediaTools(_ text: String) -> Bool {
-        let code = text.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+        let code = codeOnly(text)
         func occurrences(_ needle: String) -> Int { code.components(separatedBy: needle).count - 1 }
         let built = occurrences("PythonClipWorker.Configuration.repo(") + occurrences("PythonClipWorker.Configuration(")
         return built > occurrences("SubprocessEnvironment.mediaTools(")
@@ -96,5 +107,14 @@ struct SubprocessPathSensorTests {
             var a = try PythonClipWorker.Configuration.repo(r, factory: f)
             a.environment = try SubprocessEnvironment.mediaTools(inheriting: e)
             """))
+    }
+
+    /// Codex #233 F2: comments and string literals are not code.
+    @Test func commentsAndStringsAreNotCode() {
+        #expect(!Self.configuresAWorkerWithoutMediaTools("/** Example: PythonClipWorker.Configuration(python: p) */"), "a doc comment")
+        #expect(!Self.configuresAWorkerWithoutMediaTools(#"let s = "PythonClipWorker.Configuration(python: p)""#), "a string")
+        #expect(Self.configuresAWorkerWithoutMediaTools("""
+            let b = PythonClipWorker.Configuration(python: p, script: s, factory: f) // TODO: SubprocessEnvironment.mediaTools(
+            """), "a trailing comment does not supply the environment")
     }
 }

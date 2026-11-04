@@ -138,4 +138,22 @@ struct SubprocessEnvironmentTests {
                     FFmpegLocator.ffprobeEnvVar: odd.appendingPathComponent("ffprobe").path]
         #expect(throws: Refusal.self) { _ = try SubprocessEnvironment.mediaTools(inheriting: base) }
     }
+
+    /// Codex #233 F1: an override that is a symlink (or a `..` spelling) of the
+    /// binary a bare name finds first is the SAME tool — accepted, not refused.
+    @Test func anEquivalentAliasOfTheShadowingToolIsAccepted() throws {
+        let root = try BackgroundFixtures.scratch("tools-alias")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = root.appendingPathComponent("A"), link = root.appendingPathComponent("L")
+        try Self.tools(a, ["ffmpeg", "ffprobe"])
+        try FileManager.default.createDirectory(at: link, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link.appendingPathComponent("ffprobe"), withDestinationURL: a.appendingPathComponent("ffprobe"))
+        let ffmpeg = a.appendingPathComponent("ffmpeg").path
+        for ffprobe in [link.appendingPathComponent("ffprobe").path, a.path + "/../A/ffprobe"] {
+            let base = ["PATH": "/usr/bin", FFmpegLocator.ffmpegEnvVar: ffmpeg, FFmpegLocator.ffprobeEnvVar: ffprobe]
+            do { _ = try SubprocessEnvironment.mediaTools(inheriting: base) } catch {
+                Issue.record("\(ffprobe) is the same binary as \(a.path)/ffprobe but was refused: \(error)")
+            }
+        }
+    }
 }
