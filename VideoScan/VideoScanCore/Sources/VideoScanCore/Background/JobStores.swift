@@ -31,6 +31,13 @@ public struct JobCheckpoint: Codable, Equatable, Sendable {
     /// optional, so a checkpoint from an older helper still decodes.
     public var inFlightUnit: Int?
     public var inFlightAttempts: Int?
+    /// The run of identical systemic failures so far (FailureStreak), so a
+    /// relaunch keeps the job's verdict instead of starting it clean (Codex
+    /// #236 F2). Additive and optional.
+    public var streakWords: String?
+    public var streakFirstUnit: Int?
+    public var streakStart: Int?
+    public var streakLength: Int?
 
     public init(jobID: JobID, totalUnits: Int, startedAt: Date = Date()) {
         self.jobID = jobID

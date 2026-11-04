@@ -307,7 +307,10 @@ actor EraCounters {
     func loadFailed(_ words: String) -> String {
         loadFailures += 1
         let message = "the worker could not load the model (\(words))"
-        if loadFailures >= 2 { failFast = message + " — twice in a row; the remaining files fail fast; the helper holds the job until Resume, a new build or a catalog change" }
+        // The remaining files fail with the SAME words, so the supervisor's streak
+        // sees one systemic error on every unit — fail fast, or the short-plan
+        // verdict — and the kind is held (Codex #236 F1).
+        if loadFailures >= 2 { failFast = message }
         return message
     }
 

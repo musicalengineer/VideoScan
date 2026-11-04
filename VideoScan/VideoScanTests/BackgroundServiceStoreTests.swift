@@ -217,7 +217,7 @@ struct BackgroundServiceStoreTests {
         #expect(Self.lines(enabled: true, launchd: nil).helper == "VideoScan Background: asking launchd…")
     }
 
-    @Test("TRUTH: the job line — the helper's era job, else its hold, else ITS plan size (the app counts nothing)")
+    @Test("TRUTH: the job line — a hold first, else the helper's era job, else ITS plan size (the app counts nothing)")
     func jobLineOrder() {
         let helperJob = Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(jobs: [Self.eraJob(.paused(reason: "thermal"), done: 12)]))
         #expect(helperJob.job == "Machine era (8B): 12 of 4,709 · paused (thermal)")
@@ -233,6 +233,15 @@ struct BackgroundServiceStoreTests {
         #expect(Self.lines(enabled: true, launchd: .enabled).job == "Content analysis: the helper is not answering — no plan to show")
         #expect(Self.lines(enabled: false, launchd: .notRegistered).job
                 == "Content analysis: off — turn the checkbox on to analyze in the background")
+    }
+
+    @Test("RED→GREEN Codex #236 F5: a hold is said even when its kept request sits queued — never just 'queued'")
+    func holdBeatsAQueuedRequest() {
+        let hold = ScheduleHold(kind: .era, jobID: JobID(), reason: "weights missing", build: "b", generation: 1)
+        let line = Self.lines(enabled: true, launchd: .enabled,
+                              service: Self.serviceStatus(jobs: [Self.eraJob(.queued, done: 0)], holds: [hold])).job
+        #expect(line.contains(hold.words), "\(line)")
+        #expect(line.contains("Resume is in the VideoScan Background menu bar item"))
     }
 
     @Test("the defaults key is the registrar's — the launch and the pane read one flag")

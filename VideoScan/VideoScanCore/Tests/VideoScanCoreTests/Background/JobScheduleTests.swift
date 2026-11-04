@@ -530,3 +530,133 @@ struct JobScheduleCodex235Tests {
         #expect(log.lines.contains { $0.hasPrefix("OUTCOME recorded \(request.id) — finished: 1 run · 1 skipped · 0 failed") }, "\(log.lines)")
     }
 }
+
+/// Refuses at START until `allow` is set (a dependency repaired), then a gated job.
+final class Toggle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _on = false
+    var on: Bool { get { lock.lock(); defer { lock.unlock() }; return _on } set { lock.lock(); _on = newValue; lock.unlock() } }
+}
+
+struct RefuseThenGateFactory: JobFactory {
+    let allow: Toggle
+    let gate: UnitGate
+    let recorder: UnitRecorder
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob {
+        guard allow.on else { throw Refusal("weights missing") }
+        return try GatedFactory(recorder: recorder, gate: gate, heldUnit: 0).makeJob(for: request)
+    }
+}
+
+@Suite("JobSchedule — Codex #236 closing reds", .serialized)
+struct JobScheduleCodex236Tests {
+    typealias T = JobScheduleTests
+
+    @Test("F1: EraJob's real load-failure words (two loads, then fail fast) make a short plan FAIL, not finish")
+    func eraLoadFailureWordsAreOneStreak() async throws {
+        let c = EraCounters()
+        let first = await c.loadFailed("broken model")
+        let second = await c.loadFailed("broken model")
+        let remaining = try #require(await c.failFast)
+        let r = await JobSupervisorFailFastTests.run([first, second, remaining])
+        guard case .failed? = r.state else { Issue.record("state \(String(describing: r.state))"); return }
+    }
+
+    @Test("F2: a crash after the last unit's checkpoint, before finish, relaunches into FAILED and a hold — not finished")
+    func failedVerdictSurvivesARelaunch() async throws {
+        let root = try BackgroundFixtures.scratch("c236-f2")
+        let probe = ScheduleProbe()
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        var cp = JobCheckpoint(jobID: request.id, totalUnits: 1)
+        cp.completedUnits = 1
+        cp.unitsFailed = 1
+        var streak = FailureStreak()
+        streak.record("ffmpeg is missing", unit: 0, systemic: true)
+        streak.save(into: &cp)
+        let checkpoints = InMemoryCheckpointStore()
+        try checkpoints.save(cp)
+        let s = JobSupervisor(queue: InMemoryJobQueueStore([request]), checkpoints: checkpoints,
+                              factory: ScheduleFactory(recorder: UnitRecorder(), failing: true, failingUnits: { 1 }),
+                              backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                              configuration: BackgroundFixtures.fastConfiguration(), schedule: T.schedule(probe, root: root))
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await s.snapshot(request.id)?.state.isActive == false })
+        guard case .failed? = await s.snapshot(request.id)?.state else {
+            Issue.record("relaunch said \(String(describing: await s.snapshot(request.id)?.state))"); return
+        }
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.isEmpty == false })
+        await s.abandonForTest()
+    }
+
+    @Test("F3a: two queue files of one scheduled kind at relaunch — one is adopted, the other removed and said")
+    func relaunchAdoptsOnePerKind() async throws {
+        let root = try BackgroundFixtures.scratch("c236-f3a")
+        let probe = ScheduleProbe()
+        probe.size = 0
+        let a = JobRequest(kind: GatedFactory.kind, requestedAt: Date(timeIntervalSince1970: 1), requestedBy: "schedule")
+        let b = JobRequest(kind: GatedFactory.kind, requestedAt: Date(timeIntervalSince1970: 2), requestedBy: "schedule")
+        let queue = InMemoryJobQueueStore([a, b])
+        let gate = UnitGate()
+        var sc = JobSchedule(kinds: [JobSchedule.Kind(kind: GatedFactory.kind, planSize: { probe.planned() }, makeRequest: { GatedFactory.request() })],
+                             generation: { 1 }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        sc.pollInterval = .milliseconds(20)
+        let log = InMemoryBackgroundLog()
+        let s = JobSupervisor(queue: queue, checkpoints: InMemoryCheckpointStore(),
+                              factory: GatedFactory(recorder: UnitRecorder(), gate: gate, heldUnit: 0), backoff: BackgroundFixtures.fullBackoff(),
+                              log: log, configuration: BackgroundFixtures.fastConfiguration(), schedule: sc)
+        await s.start()
+        #expect(await T.jobs(s).filter { $0.state.isActive }.count == 1)
+        #expect(!queue.contains(b.id) && queue.contains(a.id))
+        #expect(log.lines.contains { $0.contains("second request of a scheduled kind") }, "\(log.lines)")
+        gate.open()
+        await s.abandonForTest()
+    }
+
+    @Test("F3b: Resume after a START refusal re-queues the kept request — no second request beside it")
+    func resumeRequeuesTheKeptRequest() async throws {
+        let root = try BackgroundFixtures.scratch("c236-f3b")
+        let probe = ScheduleProbe()
+        probe.size = 0                      // nothing new to plan: only the kept request
+        let a = JobRequest(kind: GatedFactory.kind, requestedBy: "schedule")
+        let queue = InMemoryJobQueueStore([a])
+        let allow = Toggle()
+        let gate = UnitGate()
+        var sc = JobSchedule(kinds: [JobSchedule.Kind(kind: GatedFactory.kind, planSize: { probe.planned() }, makeRequest: { GatedFactory.request() })],
+                             generation: { 1 }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        sc.pollInterval = .milliseconds(20)
+        let s = JobSupervisor(queue: queue, checkpoints: InMemoryCheckpointStore(),
+                              factory: RefuseThenGateFactory(allow: allow, gate: gate, recorder: UnitRecorder()),
+                              backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                              configuration: BackgroundFixtures.fastConfiguration(), schedule: sc)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.isEmpty == false })
+        #expect(queue.contains(a.id), "a START refusal keeps its file")
+        allow.on = true
+        probe.size = 3
+        #expect(await s.resume(a.id))
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "the kept request ran")
+        let jobs = await T.jobs(s)
+        #expect(jobs.filter { $0.state.isActive }.map(\.id) == [a.id], "\(jobs.map { ($0.id, $0.state) })")
+        #expect(queue.list().requests.map(\.id) == [a.id], "no second request was queued beside it")
+        gate.open()
+        await s.abandonForTest()
+    }
+
+    @Test("F4: a torn holds file is moved aside and its fail-closed holds written, so a new build releases them")
+    func tornFileReleasedByANewBuild() async throws {
+        let root = try BackgroundFixtures.scratch("c236-f4")
+        try Data("{not json".utf8).write(to: root.appendingPathComponent("holds.json"))
+        let probe = ScheduleProbe()
+        let first = T.supervisor(probe, root: root)
+        await first.start()
+        try await Task.sleep(for: .milliseconds(150))
+        await first.abandonForTest()
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(names.contains { $0.hasPrefix("holds.json.unreadable-") }, "kept aside: \(names)")
+        let recorder = UnitRecorder()
+        let second = T.supervisor(probe, root: root, build: "b2", recorder: recorder)
+        await second.start()
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 }, "a new build released the fail-closed hold")
+        await second.abandonForTest()
+    }
+}

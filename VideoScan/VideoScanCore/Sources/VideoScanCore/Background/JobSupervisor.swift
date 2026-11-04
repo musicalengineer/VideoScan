@@ -196,7 +196,7 @@ public actor JobSupervisor {
         let (requests, ignored) = queue.list()
         for line in ignored { log.write("queue: ignored \(line)") }
         var added = 0
-        for request in requests where runs[request.id] == nil {
+        for request in onePerScheduledKind(requests) where runs[request.id] == nil {
             var run = Run(request: request, title: request.kind.rawValue)
             switch checkpoints.load(request.id) {
             case .found(let cp):
@@ -214,6 +214,30 @@ public actor JobSupervisor {
             added += 1
         }
         return added
+    }
+
+    /// At most one request per scheduled kind is adopted — one with a
+    /// checkpoint (in progress) first, else the oldest; the others are logged
+    /// and their files removed (machine-authored work items: the schedule
+    /// re-plans that work). Other kinds pass unchanged (Codex #236 F3).
+    private func onePerScheduledKind(_ requests: [JobRequest]) -> [JobRequest] {
+        guard schedule != nil else { return requests }
+        var keep: [JobKind: JobID] = [:]
+        for kind in Set(requests.map(\.kind)) where isScheduled(kind) {
+            let mine = requests.filter { $0.kind == kind }
+            if let active = runs.first(where: { $0.value.request.kind == kind && $0.value.state.isActive })?.key {
+                keep[kind] = active
+            } else {
+                keep[kind] = (mine.first { checkpoints.load($0.id) != .none } ?? mine[0]).id
+            }
+        }
+        return requests.filter { request in
+            guard let kept = keep[request.kind], kept != request.id, runs[request.id] == nil else { return true }
+            log.write("queue: \(request.kind) \(request.id) is a second request of a scheduled kind — removed (\(kept) is kept)")
+            queue.remove(request.id)
+            checkpoints.remove(request.id)
+            return false
+        }
     }
 
     /// `plan()` then run every lane that has work, then the schedule's loop.
@@ -445,6 +469,21 @@ public actor JobSupervisor {
 
     private var activeHolds: [ScheduleHold] { holds.filter(\.isActive) }
 
+    /// A refused request of `kind` whose queue file was kept (refuse, never
+    /// erase) runs again on release, instead of a fresh one queued beside it
+    /// — two requests of one kind would both be adopted at the next relaunch
+    /// (Codex #236 F3). The newest such request only.
+    private func requeueRetained(_ kind: JobKind) {
+        guard let id = order.last(where: { id in
+            guard let r = runs[id], r.request.kind == kind, case .failed = r.state else { return false }
+            return queue.contains(id)
+        }) else { return }
+        runs[id]?.state = .queued
+        runs[id]?.finishedAt = nil
+        finishedOrder.removeAll { $0 == id }
+        log.write("schedule: \(kind) \(id) re-queued from its kept queue file")
+    }
+
     /// Held, or a job of the kind is active: the schedule leaves it alone.
     private func isBusy(_ kind: JobKind) -> Bool {
         activeHolds.contains { $0.kind == kind } || runs.values.contains { $0.request.kind == kind && $0.state.isActive }
@@ -465,10 +504,21 @@ public actor JobSupervisor {
             // Fail closed (Codex #235 F2): an unreadable holds file may have held
             // anything, so every scheduled kind is held until Resume (which
             // rewrites the file) or a new build.
-            log.write("schedule: \(r.words) — holding every scheduled kind until Resume")
+            log.write("schedule: \(r.words) — holding every scheduled kind until Resume or a new build")
             holds = schedule.kinds.map {
                 ScheduleHold(kind: $0.kind, jobID: JobID(), reason: "the holds file was unreadable", signature: "holds.json unreadable",
                              build: schedule.buildID, generation: nil, sticky: true)
+            }
+            // Move the torn file aside (kept, never deleted) and write these, so
+            // a NEW build can release them on its first look (Codex #236 F4).
+            let url = schedule.holds.url
+            let aside = url.appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970))")
+            do {
+                try FileManager.default.moveItem(at: url, to: aside)
+                log.write("schedule: the unreadable holds file is kept at \(aside.path)")
+                saveHolds()
+            } catch {
+                log.write("schedule: could not move the unreadable holds file aside (\(error)) — the holds last for this process")
             }
         }
     }
@@ -519,6 +569,7 @@ public actor JobSupervisor {
         holds.removeAll { $0.kind == kind }
         saveHolds()
         log.write("schedule: hold on \(kind) released — \(words)")
+        requeueRetained(kind)
         lastPlanAt = nil
         kickLanes()        // an adopted request of the kind may now run
         Task { await self.scheduleTick() }
@@ -576,7 +627,7 @@ public actor JobSupervisor {
         // relaunch write this START's OUTCOME (review 2026-10-30, fix 3a).
         guard persist(cp, id) else { return }
 
-        var turn = Turn()
+        var turn = Turn(streak: FailureStreak(cp))
         while cp.completedUnits < cp.totalUnits {
             switch await step(job, &cp, id, &turn) {
             case .killed: return
@@ -587,7 +638,7 @@ public actor JobSupervisor {
             case .next: continue
             }
         }
-        let verdict = turn.verdict(stopRequested: runs[id]?.stopRequested == true)
+        let verdict = turn.verdict(stopRequested: runs[id]?.stopRequested == true, cp)
         runs[id]?.failureWords = verdict.failureWords
         await end(job, id, as: verdict.state, cp, began)
     }
@@ -597,18 +648,18 @@ public actor JobSupervisor {
     /// What one job's loop carries from unit to unit: the run of identical
     /// systemic failures (fail fast).
     private struct Turn {
-        var streak = FailureStreak()
-        /// Units this run actually executed (quarantined ones excluded).
-        var attempted = 0
+        var streak: FailureStreak
 
-        /// How a loop that ran to the end of its plan ends. Every unit this run
-        /// tried failed with the same systemic words, fewer than `failFastUnits`
+        /// How a loop that ran to the end of its plan ends. Every unit of the
+        /// job failed with the same systemic words, fewer than `failFastUnits`
         /// of them (a short plan): that is a failure too, or a one-file plan
-        /// with a missing tool retries forever (Codex #235 F6).
-        func verdict(stopRequested: Bool) -> (state: JobRunState, failureWords: String?) {
+        /// with a missing tool retries forever (Codex #235 F6). Read from the
+        /// checkpoint's counts and streak, so it survives a relaunch (#236 F2).
+        func verdict(stopRequested: Bool, _ cp: JobCheckpoint) -> (state: JobRunState, failureWords: String?) {
             if stopRequested { return (.stopped, nil) }
-            guard let words = streak.words, attempted > 0, streak.length == attempted else { return (.finished, nil) }
-            return (.failed(reason: "all \(attempted) unit(s) tried failed with the same error: \(words)"), words)
+            guard let words = streak.words, cp.unitsRun == 0, cp.unitsSkipped == 0, cp.unitsFailed > 0,
+                  streak.length == cp.unitsFailed else { return (.finished, nil) }
+            return (.failed(reason: "all \(cp.unitsFailed) unit(s) failed with the same error: \(words)"), words)
         }
     }
 
@@ -628,7 +679,7 @@ public actor JobSupervisor {
         case .begin: break
         }
         guard await performUnit(job, &cp, id, &turn.streak) else { return .killed }
-        turn.attempted += 1
+        turn.streak.save(into: &cp)
         cp.inFlightUnit = nil
         cp.inFlightAttempts = nil
         guard persist(cp, id) else { return .killed }
@@ -805,14 +856,14 @@ public actor JobSupervisor {
         run.finishedAt = Date()
         run.parked = false
         runs[id] = run
-        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed,
-                                   queueFileKept: keepQueueFile)
-                  + (detail.isEmpty ? "" : "; \(detail)"))
-        // The hold is durable BEFORE the queue file and checkpoint go (Codex #235 F1):
-        // a crash in between leaves both, never neither.
+        // The hold is durable FIRST — before the OUTCOME line and before the
+        // queue file and checkpoint go (Codex #235 F1, #236 F2).
         if case .failed(let reason) = state {
             hold(run.request.kind, jobID: id, reason: reason, signature: run.failureWords ?? reason, generation: lastGeneration)
         }
+        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed,
+                                   queueFileKept: keepQueueFile)
+                  + (detail.isEmpty ? "" : "; \(detail)"))
         if !keepQueueFile { queue.remove(id) }
         checkpoints.remove(id)
         touch()
@@ -871,6 +922,26 @@ struct FailureStreak: Equatable {
     private(set) var firstUnit = 0
     private(set) var streakStart = 0
     private(set) var length = 0
+
+    init(lastWords: String? = nil, firstUnit: Int = 0, streakStart: Int = 0, length: Int = 0) {
+        self.lastWords = lastWords
+        self.firstUnit = firstUnit
+        self.streakStart = streakStart
+        self.length = length
+    }
+
+    /// The streak a checkpoint carried across a relaunch (none: a clean one).
+    init(_ cp: JobCheckpoint) {
+        self.init(lastWords: cp.streakWords, firstUnit: cp.streakFirstUnit ?? 0, streakStart: cp.streakStart ?? 0,
+                  length: cp.streakLength ?? 0)
+    }
+
+    func save(into cp: inout JobCheckpoint) {
+        cp.streakWords = lastWords
+        cp.streakFirstUnit = lastWords == nil ? nil : firstUnit
+        cp.streakStart = lastWords == nil ? nil : streakStart
+        cp.streakLength = lastWords == nil ? nil : length
+    }
 
     /// The words of a systemic run in progress, else nil.
     var words: String? { length >= 1 ? lastWords : nil }

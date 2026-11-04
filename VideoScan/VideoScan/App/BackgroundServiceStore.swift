@@ -302,13 +302,15 @@ enum BackgroundServicePresentation {
         // A viewer first (Codex closing #3): a helper left registered from its
         // master days may still list a job; the master runs content analysis.
         if viewer { return viewerJob }
+        // A hold first (Codex #236 F5): a kept request of a held kind sits
+        // "queued" and must not hide why nothing runs.
+        if let hold = service?.holds?.first(where: { $0.kind == .era && $0.isActive }) {
+            return "Machine era (8B): \(hold.words) (Resume is in the VideoScan Background menu bar item)"
+        }
         if let era = service?.jobs.filter({ $0.kind == .era && $0.state.isActive })
             .max(by: { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }) {
             let counts = era.totalUnits > 0 ? "\(era.completedUnits.formatted()) of \(era.totalUnits.formatted())" : era.subtitle
             return "\(era.title): \(counts) · \(era.stateWords)"
-        }
-        if let hold = service?.holds?.first(where: { $0.kind == .era && $0.isActive }) {
-            return "Machine era (8B): \(hold.words) (Resume is in the VideoScan Background menu bar item)"
         }
         guard enabled else {
             return "Content analysis: off" + (lastNote.map { " — \($0)" } ?? " — turn the checkbox on to analyze in the background")

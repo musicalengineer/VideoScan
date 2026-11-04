@@ -91,7 +91,7 @@ struct JobSupervisorFailFastTests {
     /// then says FAILED — "finished" let a one-file plan retry forever.
     @Test func fewerUnitsThanTheThresholdRunAllThenSayFailed() async {
         let r = await Self.run(["z", "z", "z"])
-        #expect(r.state == .failed(reason: "all 3 unit(s) tried failed with the same error: z"))
+        #expect(r.state == .failed(reason: "all 3 unit(s) failed with the same error: z"))
         let mixed = await Self.run(["z", nil, "z"])
         #expect(mixed.state == .finished, "one unit succeeded: not a systemic failure of the job")
     }
