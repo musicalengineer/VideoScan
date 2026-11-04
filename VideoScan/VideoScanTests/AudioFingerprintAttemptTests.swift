@@ -470,5 +470,85 @@ struct AudioFingerprintAttemptTests {
         try await scene.relaunch()
         #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_attempts") == 0)
     }
+
+    // MARK: - Codex cycle #219 (closing pass 2, red first)
+
+    @Test("RED Codex #219 F1: a stamp is not on the record until its bytes are in the sidecar — an unrelated save before a failed sidecar write stores no print")
+    func noPrintIsStoredBeforeItsBytes() async throws {
+        let scene = try CutoverScene.make("attempt_219f1"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (r, digest) = try AttemptScene.soundFile(scene, label: "bytes1")
+        let model = scene.model
+        let job = AudioFingerprintBackfillJob(model: model)
+        job.volumeOnline = { _ in true }
+        job.tickMilliseconds = 20
+        job.passForTesting = printablePass
+        job.ffmpegPath = "/bin/ls"
+        job.sidecarPutForTesting = { _ in
+            _ = model.saveCatalogNow()          // an unrelated save lands first
+            struct DiskFull: Error {}
+            throw DiskFull()
+        }
+        job.start()
+        await job.task?.value
+        #expect(job.saveFailed)
+        _ = model.saveCatalogNow()
+        try await scene.relaunch()
+        #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_prints WHERE digest = '\(digest)'") == 0,
+                "a print without its sidecar bytes must never be stored")
+        #expect(AttemptScene.planned(scene.model).contains(r.id), "the file is looked at again")
+    }
+
+    @Test("RED Codex #219 F2: heard-too-little while the path was replaced by bytes of the same size is not a try")
+    func heardTooLittleNeedsTheSameFileToo() async throws {
+        let scene = try CutoverScene.make("attempt_219f2"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (r, _) = try AttemptScene.soundFile(scene, label: "swap2")
+        let path = r.fullPath, aside = path + ".aside", size = Int(r.sizeBytes)
+        await AttemptScene.run(scene.model, pass: { item in
+            try FileManager.default.moveItem(atPath: path, toPath: aside)
+            try Data(repeating: 0x5A, count: size).write(to: URL(fileURLWithPath: path))
+            return try await heardTooLittlePass(item)
+        })
+        #expect(r.audioFingerprintAttempt == nil)
+        try await scene.relaunch()
+        #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_attempts") == 0)
+    }
+
+    @Test("RED Codex #219 F3: ffmpeg that cannot be started (exit -1) is not a try")
+    func ffmpegThatCannotStartIsNotATry() async throws {
+        let scene = try CutoverScene.make("attempt_219f3"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (r, _) = try AttemptScene.soundFile(scene, label: "launch1")
+        for _ in 1...3 {
+            await AttemptScene.run(scene.model, pass: { _ in throw AudioPCMDecoder.Failure.decodeFailed(exitCode: -1, stderrTail: "launch failed") })
+        }
+        #expect(r.audioFingerprintAttempt == nil)
+        try await scene.relaunch()
+        #expect(AttemptScene.planned(scene.model).contains(r.id))
+    }
+
+    @Test("RED Codex #219 F4: once a copy prints, its live siblings stop saying 'gave up' without a relaunch")
+    func aPrintClearsTheSiblingsLiveGiveUp() async throws {
+        let sb = try ShowAgainSandbox.make("attempt_219f4"); defer { sb.cleanup() }
+        let digest = String(repeating: "f", count: 64)
+        func copy(_ name: String) throws -> VideoRecord {
+            let r = try sb.record(name, bytes: 2_000, onDisk: true, stage: .none)
+            r.contentHash = "v1:" + name
+            r.audioCodec = "aac"
+            r.durationSeconds = 3
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            r.contentFixity = ContentFixity.captured(path: r.fullPath, digest: digest, byteCount: 2_000)
+            r.audioFingerprintAttempt = AudioFingerprintAttempt(contentDigest: "sha256:" + digest, outcome: .failed, attempts: 2)
+            return r
+        }
+        let a = try copy("a.mov"), b = try copy("b.mov")
+        b.audioFingerprintAttempt?.attempts = 3                  // b gave up; a has a try left
+        #expect(AttemptScene.planned(sb.model) == [a.id])
+        await AttemptScene.run(sb.model, pass: printablePass)
+        #expect(a.audioFingerprint != nil)
+        #expect(AudioFingerprintBackfillPlanner.gaveUp(b) == nil, "the content printed — b no longer 'gave up'")
+        #expect(!AnalyzeCoverageInput(record: b).soundGaveUp)
+    }
 }
 

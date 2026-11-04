@@ -33287,6 +33287,7 @@
       "tests": [
         "aFileGoneDuringTheDecodeIsNotATry",
         "aNewerEngineRetries",
+        "aPrintClearsTheSiblingsLiveGiveUp",
         "aPrintEndsTheTries",
         "aRoleFlipCommitsTheTryThenRefuses",
         "aSameSizeReplacementDuringTheDecodeIsNotATry",
@@ -33300,8 +33301,11 @@
         "coverageCountsAGiveUpAsObservedAndSaysSo",
         "decodeFailureIsTriedThreeTimesThenSkipped",
         "environmentFailuresAreNotAttempts",
+        "ffmpegThatCannotStartIsNotATry",
         "heardTooLittleIsTriedThreeTimesThenSkipped",
+        "heardTooLittleNeedsTheSameFileToo",
         "missingIsNotAnAttempt",
+        "noPrintIsStoredBeforeItsBytes",
         "planningAt100kWithCappedTries",
         "theWordsSayIt"
       ]
@@ -36961,7 +36965,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 411,
+      "expected_floor": 415,
       "name": "regression",
       "package_expected_floor": 294,
       "package_selectors": [

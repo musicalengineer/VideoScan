@@ -20,9 +20,12 @@
 //     A record the catalog knows is video-only → "no sound" stamp, no decode.
 //   • DURABILITY: every `checkpointFiles` (25) stamps or `checkpointSeconds`
 //     (60 s), on Stop and at the end, the job writes the pending
-//     fingerprints to the sidecar in ONE transaction and THEN awaits an
-//     acknowledged catalog save (`saveCatalogAcknowledged`). Sidecar first,
-//     so a stamp on disk always has its bytes. A failed sidecar write or an
+//     fingerprints to the sidecar in ONE transaction, THEN puts the batch's
+//     stamps on their records, THEN awaits an acknowledged catalog save
+//     (`saveCatalogAcknowledged`). A stamp is QUEUED, not on its record,
+//     until its bytes are in the sidecar (Codex #219 F1: an unrelated save
+//     in between used to store a print whose bytes then failed to land), so
+//     a stamp on disk always has its bytes. A failed sidecar write or an
 //     unacknowledged save stops the job and UNDOES the unsaved stamps
 //     (compare-and-set), so the next run redoes exactly those files; a
 //     sidecar row without a stamp is harmless (it is found as "shared").
@@ -174,7 +177,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// if that save fails), the try each one ended, and the fingerprints
     /// behind them.
     private var unsavedStamps: [(item: AudioFingerprintBackfillItem, stamp: AudioFingerprintStamp,
-                                 priorAttempt: AudioFingerprintAttempt?)] = []
+                                 result: AudioFingerprintBackfillResult)] = []
     /// Tries written since the last acknowledged save (undone if it fails).
     private var unsavedAttempts: [(item: AudioFingerprintBackfillItem, written: AudioFingerprintAttempt,
                                    prior: AudioFingerprintAttempt?)] = []
@@ -318,13 +321,13 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// (identity before == after, at the catalog's size) was at its path the
     /// whole time: gone → missing; replaced, touched or another size →
     /// failed but not a try.
-    private func notATryUnlessTheSameFile(_ item: AudioFingerprintBackfillItem, before: FileIdentityStamp?,
-                                          _ why: String) async -> Outcome {
+    private func notATryUnlessTheSameFile(_ outcome: Outcome, _ item: AudioFingerprintBackfillItem,
+                                          before: FileIdentityStamp?) async -> Outcome {
         guard let after = await identity(item.path) else { return .missing }
         guard let before, after == before, after.size == item.sizeBytes else {
-            return .failed(why + " — the file at the path changed during the read or is not the catalogued size, so this is not counted as a try")
+            return .failed(outcome.triedWords + " — the file at the path changed during the read or is not the catalogued size, so this is not counted as a try")
         }
-        return .decodeFailed(why)
+        return outcome
     }
 
     /// A stat off the main actor.
@@ -418,7 +421,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         var outcome = await decodeOne(item)
         reading[root] = nil
         await releaseGates(held)
-        if case .decodeFailed(let why) = outcome { outcome = await notATryUnlessTheSameFile(item, before: before, why) }
+        if outcome.countsAsATry { outcome = await notATryUnlessTheSameFile(outcome, item, before: before) }
         return outcome
     }
 
@@ -459,6 +462,10 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
             // 9 of 10 decoded fine when retried.
             guard item.headerHasAudio else { return .noAudio(fromCatalog: false) }
             return .decodeFailed(Self.decodeGaveNoSamplesWords(codec: item.audioCodec))
+        } catch AudioPCMDecoder.Failure.decodeFailed(let code, let tail) where code < 0 {
+            // ProcessRunner's -1: ffmpeg was never started — the tool's
+            // fault, not the file's (Codex #219 F3).
+            return .failed("ffmpeg could not be started (exit \(code)): \(tail.trimmingCharacters(in: .whitespacesAndNewlines)) — not counted as a try")
         } catch AudioPCMDecoder.Failure.decodeFailed(let code, let tail) {
             return .decodeFailed("ffmpeg could not decode it (exit \(code)): \(tail.trimmingCharacters(in: .whitespacesAndNewlines))")
         } catch AudioPCMDecoder.Failure.timedOut {
@@ -610,7 +617,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         case .fingerprint(let fingerprint):
             let stamp = AudioFingerprintStamp.fingerprinted(fingerprint, contentDigest: item.key.contentDigest, sizeBytes: item.sizeBytes)
             totals.readBytes += item.sizeBytes
-            guard stamped(stamp, item, lane: lane, model: model) else { return }
+            guard queued(stamp, as: Self.printedResult(stamp), item, lane: lane, model: model) else { return }
             pendingEntries[item.key] = AudioFingerprintStore.Entry(key: item.key, fingerprint: fingerprint, sourcePath: item.path,
                                                                    computedAt: stamp.computedAt)
             totals.landmarks += stamp.landmarks
@@ -638,13 +645,13 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                                               contentDigest: key.contentDigest, sizeBytes: key.sizeBytes, outcome: .fingerprinted,
                                               analyzedSeconds: summary.analyzedSeconds, complete: summary.complete,
                                               landmarks: summary.landmarks, bytes: summary.bytes)
-            guard stamped(stamp, item, lane: lane, model: model) else { return }
+            guard queued(stamp, as: .shared, item, lane: lane, model: model) else { return }
             totals.add(.shared, bytes: item.sizeBytes)
             addSample(item, lane: lane, .shared, "same bytes as \((summary.sourcePath as NSString).lastPathComponent) — stamped without reading")
         case .noAudio(let fromCatalog):
             let stamp = AudioFingerprintStamp.noAudio(contentDigest: item.key.contentDigest, sizeBytes: item.sizeBytes)
             if !fromCatalog { totals.readBytes += item.sizeBytes }
-            guard stamped(stamp, item, lane: lane, model: model) else { return }
+            guard queued(stamp, as: .noAudio, item, lane: lane, model: model) else { return }
             totals.add(.noAudio, bytes: item.sizeBytes)
             addSample(item, lane: lane, .noAudio, Self.noSoundWords(fromCatalog: fromCatalog))
         case .missing:
@@ -668,19 +675,48 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         }
     }
 
-    /// Compare-and-set the stamp on the planned record. False (and a
-    /// "changed meanwhile" row) when the record moved or changed.
-    private func stamped(_ stamp: AudioFingerprintStamp, _ item: AudioFingerprintBackfillItem,
-                         lane: AudioFingerprintBackfillLane, model: VideoScanModel) -> Bool {
-        let priorAttempt = model.record(forID: item.id)?.audioFingerprintAttempt
-        guard model.applyAudioFingerprintStamp(stamp, to: item) == .written else {
+    /// Queue the stamp for the planned record — written onto it at the
+    /// next checkpoint, once its bytes are in the sidecar. False (and a
+    /// "changed meanwhile" row) when the record already moved or changed.
+    private func queued(_ stamp: AudioFingerprintStamp, as result: AudioFingerprintBackfillResult,
+                        _ item: AudioFingerprintBackfillItem, lane: AudioFingerprintBackfillLane, model: VideoScanModel) -> Bool {
+        guard model.audioFingerprintStampWouldWrite(item) else {
             totals.add(.recordChanged, bytes: item.sizeBytes)
             addProblem(filename: item.filename, path: item.path, drive: lane.label, archived: item.isArchived, .recordChanged,
-                       "moved, rescanned or changed in the catalog during the run — not written; the next run looks again")
+                       Self.changedMeanwhileWords)
             return false
         }
-        unsavedStamps.append((item, stamp, priorAttempt))
+        unsavedStamps.append((item, stamp, result))
         return true
+    }
+
+    /// A printed stamp's row: whole recording, or the decoder's cap.
+    nonisolated static func printedResult(_ stamp: AudioFingerprintStamp) -> AudioFingerprintBackfillResult {
+        stamp.complete ? .fingerprinted : .partial
+    }
+
+    nonisolated static let changedMeanwhileWords =
+        "moved, rescanned or changed in the catalog during the run — not written; the next run looks again"
+
+    /// Put a sidecar-durable batch's stamps on their records (compare-and-
+    /// set). A record that changed since it was queued is moved in the
+    /// tally to "changed meanwhile". Returns what was written.
+    private func applyQueued(_ stamps: [(item: AudioFingerprintBackfillItem, stamp: AudioFingerprintStamp,
+                                         result: AudioFingerprintBackfillResult)], model: VideoScanModel)
+        -> [(item: AudioFingerprintBackfillItem, stamp: AudioFingerprintStamp, priorAttempt: AudioFingerprintAttempt?)] {
+        var applied: [(item: AudioFingerprintBackfillItem, stamp: AudioFingerprintStamp, priorAttempt: AudioFingerprintAttempt?)] = []
+        for s in stamps {
+            let prior = model.record(forID: s.item.id)?.audioFingerprintAttempt
+            if model.applyAudioFingerprintStamp(s.stamp, to: s.item) == .written {
+                applied.append((s.item, s.stamp, prior))
+                continue
+            }
+            totals.move(s.result, to: .recordChanged)
+            let drive = FullHashBackfillPlanner.label(forRoot: MediaVolumeGatePolicy.volumeRoot(forPath: s.item.path))
+            addProblem(filename: s.item.filename, path: s.item.path, drive: drive, archived: s.item.isArchived, .recordChanged,
+                       Self.changedMeanwhileWords)
+        }
+        return applied
     }
 
     /// Record one try that gave no print (compare-and-set, full digest
@@ -797,17 +833,21 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         do {
             if let sidecarPutForTesting { try sidecarPutForTesting(batch) } else { try store?.put(batch) }
         } catch {
-            failSave(model: model, why: "the fingerprint file could not be written (\(error))", undo: stamps, attempts: attempts)
+            failSave(model: model, why: "the fingerprint file could not be written (\(error))", undo: [], notWritten: n, attempts: attempts)
             return false
         }
+        let applied = applyQueued(stamps, model: model)
         let ok: Bool
         if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
         guard ok else {
             model.saveCatalogDebounced()
-            failSave(model: model, why: "the catalog save was NOT confirmed", undo: stamps, attempts: attempts)
+            failSave(model: model, why: "the catalog save was NOT confirmed", undo: applied, notWritten: 0, attempts: attempts)
             return false
         }
-        storedCount += n
+        // The content printed: no live copy of it is "giving up" any more
+        // (Codex #219 F4) — the store already dropped its sound_attempts row.
+        model.clearAudioFingerprintAttempts(forDigests: Set(applied.map(\.stamp.contentDigest)))
+        storedCount += applied.count
         saveCount += 1
         lastSave = Date()
         return true
@@ -815,10 +855,12 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
 
     /// Undo the stamps the failed save would have carried (compare-and-set)
     /// and stop: nothing more is put at risk. Media was never touched.
+    /// `notWritten`: queued stamps that never reached their records.
     private func failSave(model: VideoScanModel, why: String,
                           undo: [(item: AudioFingerprintBackfillItem, stamp: AudioFingerprintStamp, priorAttempt: AudioFingerprintAttempt?)],
+                          notWritten: Int,
                           attempts: [(item: AudioFingerprintBackfillItem, written: AudioFingerprintAttempt, prior: AudioFingerprintAttempt?)]) {
-        var undone = 0
+        var undone = notWritten
         for p in undo where model.revertAudioFingerprintStamp(p.item, written: p.stamp, priorAttempt: p.priorAttempt) { undone += 1 }
         for a in attempts.reversed() { model.revertAudioFingerprintAttempt(a.item, written: a.written, prior: a.prior) }
         saveFailed = true
@@ -835,7 +877,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
             // Files finished after the failed save: their bytes never reached
             // the sidecar, so their stamps (and tries) come off too (the next
             // run redoes them).
-            for p in unsavedStamps { _ = model.revertAudioFingerprintStamp(p.item, written: p.stamp, priorAttempt: p.priorAttempt) }
+            // Queued stamps never reached their records: nothing to undo.
             for a in unsavedAttempts.reversed() { model.revertAudioFingerprintAttempt(a.item, written: a.written, prior: a.prior) }
             unsavedStamps.removeAll()
             unsavedAttempts.removeAll()
@@ -884,6 +926,23 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
 }
 
 private extension AudioFingerprintBackfillJob.Outcome {
+    /// The two outcomes that are the FILE's and record a try.
+    var countsAsATry: Bool {
+        switch self {
+        case .heardTooLittle, .decodeFailed: return true
+        default: return false
+        }
+    }
+
+    /// The words of a countable outcome, for the "not counted" line.
+    var triedWords: String {
+        switch self {
+        case .decodeFailed(let why): return why
+        case .heardTooLittle(_, let audible): return "heard sound (\(audible) audible s) but too little to fingerprint"
+        default: return ""
+        }
+    }
+
     var isFailure: Bool {
         switch self {
         case .failed, .decodeFailed: return true

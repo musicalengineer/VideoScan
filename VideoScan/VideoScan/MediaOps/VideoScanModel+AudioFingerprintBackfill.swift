@@ -43,12 +43,28 @@ extension VideoScanModel {
         AudioFingerprintBackfillPlanner.plan(records: records) { self.isArchiveElement($0) }
     }
 
+    /// Would a stamp for `item` be written now (same record, path, size,
+    /// not removed, the catalog writable)? The job asks before it queues.
+    func audioFingerprintStampWouldWrite(_ item: AudioFingerprintBackfillItem) -> Bool {
+        guard !isReadOnly, let rec = record(forID: item.id) else { return false }
+        return rec.fullPath == item.path && rec.sizeBytes == item.sizeBytes && !rec.isPurged
+    }
+
+    /// The content printed (its stamp saved): no live copy of it keeps a
+    /// "gave up" note (Codex #219 F4). One pass over the records per
+    /// checkpoint; the store already deleted the row, and a record without
+    /// a note never writes one (CatalogRecordDiff), so nothing is saved.
+    func clearAudioFingerprintAttempts(forDigests digests: Set<String>) {
+        guard !digests.isEmpty else { return }
+        for r in records where r.audioFingerprintAttempt.map({ digests.contains($0.contentDigest) }) == true {
+            r.audioFingerprintAttempt = nil
+        }
+    }
+
     /// The backfill's write: compare-and-set on the planned record.
     func applyAudioFingerprintStamp(_ stamp: AudioFingerprintStamp,
                                     to item: AudioFingerprintBackfillItem) -> AudioFingerprintWrite {
-        guard !isReadOnly, let rec = record(forID: item.id),
-              rec.fullPath == item.path, rec.sizeBytes == item.sizeBytes, !rec.isPurged
-        else { return .recordChanged }
+        guard audioFingerprintStampWouldWrite(item), let rec = record(forID: item.id) else { return .recordChanged }
         rec.audioFingerprint = stamp
         // A print (or "no sound") ends the content's tries (GH #416 part 2).
         rec.audioFingerprintAttempt = nil

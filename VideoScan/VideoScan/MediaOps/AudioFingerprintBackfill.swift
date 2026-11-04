@@ -313,6 +313,14 @@ struct AudioFingerprintBackfillTotals: Sendable, Equatable {
 
     subscript(_ r: AudioFingerprintBackfillResult) -> Int { counts[r] ?? 0 }
 
+    /// One file counted under `from` belongs under `to` (a queued stamp
+    /// whose record changed before it could be written). `done` unchanged.
+    mutating func move(_ from: AudioFingerprintBackfillResult, to: AudioFingerprintBackfillResult) {
+        guard self[from] > 0 else { return }
+        counts[from, default: 0] -= 1
+        counts[to, default: 0] += 1
+    }
+
     mutating func add(_ r: AudioFingerprintBackfillResult, files n: Int = 1, bytes: Int64) {
         counts[r, default: 0] += n
         done += n
