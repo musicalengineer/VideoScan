@@ -459,12 +459,22 @@ struct CatalogStatusTransitionLogTests {
         }
     }
 
+    @Test("RED Codex closing-3: a different drive is a cause change; a count crossing a thousands separator is not")
+    func causeKeepsNamesDropsCounts() {
+        typealias C = CatalogStatusTransitions
+        #expect(C.cause("Unknown: 30 of 30 files — not connected now: /Volumes/X8 (30 files)")
+                != C.cause("Unknown: 30 of 30 files — not connected now: /Volumes/X9 (30 files)"), "X8 → X9 is a different drive")
+        #expect(C.cause("Analyzing 999 of 2,000 files") == C.cause("Analyzing 1,000 of 2,000 files"), "a count is not a cause")
+        #expect(C.cause("checked 2 Nov 10:41 (45 min ago)") == C.cause("checked 2 Nov 11:41 (1 h ago)"), "an age is not a cause")
+        #expect(C.cause("sidecar can't be opened — disk I/O error") != C.cause("sidecar can't be opened — no such file"))
+    }
+
     @Test("F6: a ticking count or age is not a change; a new cause is")
     func causeNotCounts() {
         let a = CatalogStatusLine(kind: .content, state: .grey, words: "12 left to analyze")
         let b = CatalogStatusLine(kind: .content, state: .grey, words: "11 left to analyze")
-        let db = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed D1 (1 h ago)")
-        let db2 = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed D2 (2 h ago)")
+        let db = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 10:41 (1 h ago)")
+        let db2 = CatalogStatusLine(kind: .database, state: .green, words: "Integrity check passed 2 Nov 11:41 (2 h ago)")
         let files = CatalogStatusLine(kind: .files, state: .yellow, words: "Yellow: files not checked yet")
         let files2 = CatalogStatusLine(kind: .files, state: .yellow, words: "Yellow: 3 present — older than 24 hours")
         let old = CatalogStatusLines(database: db, files: files, content: a)

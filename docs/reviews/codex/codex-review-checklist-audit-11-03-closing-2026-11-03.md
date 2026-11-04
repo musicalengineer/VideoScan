@@ -99,3 +99,45 @@ Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH 
 
 Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
 Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.
+
+---
+
+# Codex review — Checklist audit 11/03 — closing
+
+- Range: `ffdb3018..d5f466ba`
+- Credits spent: unavailable
+- Tokens: 110245
+- Finding count: 1
+- Verdict: fix — invariant 6 still suppresses genuine cause changes and logs some count-only changes.
+- Run: 2026-11-04T02:54:22Z (cycle #225, tools/codex_review.py)
+
+## Codex answer
+
+1. **P2 — LOGGING, invariant 6:** [CatalogStatusLines.swift:499](/Users/rickb/dev/VideoScan-wt/night-1103/VideoScan/VideoScan/Analyze/CatalogStatusLines.swift:499) removes every digit when comparing causes, including digits in drive names and error details. Reproduce with an unchanged audit while `/Volumes/X8` reconnects and `/Volumes/X9` becomes unavailable, both holding 30 files. The Files line changes which drive needs connecting, but the normalized strings match, so no transition is logged. Conversely, `Analyzing 999 of 2,000 files` → `1,000 of 2,000` logs a false cause change because the comma survives. Compare structured causes, excluding only count/age fields. A regression should require one transition for the drive change and none for the count change.
+
+All six previously reported scenarios: fixes verified in code and regression coverage read. Remaining scoped changes for invariants 1–5 and 7, plus GH #417’s `silent (measured)` expectation: **read, no findings**. Main’s merged changes were excluded.
+
+Swift test execution stopped before running tests: the read-only sandbox denied compiler/cache access. Supplied green counts were not independently reproduced. The normalization counterexamples were confirmed with a read-only Python reproduction; no files changed.
+
+Credits spent: unavailable | Finding count: 1  
+Verdict: fix — invariant 6 still suppresses genuine cause changes and logs some count-only changes.
+
+## Brief
+
+# Codex brief — closing pass on "Checklist audit 11/03 (BG + status split + count)"
+
+Range: ffdb3018..HEAD on fix/night-1103-checklist. HEAD includes a merge of origin/main (schema-B sound_attempts, 3028e9c0) — main's own changes are out of scope; review this branch's commits (first parent). Your previous closing pass (cycle on ffdb3018..9f0c5ac2) returned 4 findings — paused MFO job lit Analyzing, pausing waiter filled the lens, viewer line lost to a leftover era job, a second Database cause unlogged — fixed in 8734f8ae; your second pass (ffdb3018..8734f8ae) found 2 more — a paused dossier batch still lit Analyzing, and a sidecar failure arriving together with a failed check was not logged — fixed in d5f466ba. Verify all six. Your cycle #220 found 7 findings; this branch claims to fix them plus a fresh-eyes reviewer's adds. Verify each invariant holds in the code at HEAD; report a finding only where one still fails (file:line, scenario, severity, checklist item).
+
+The 7 invariants:
+1. TRUE (data): the database a count or Catalog Database Info reads is the one the ROLE displays — master: cutover-opened else catalog.sqlite beside catalog.json; viewer: viewer-catalog/catalog.sqlite. ONE function (CatalogAuthority.databaseURL(role:opened:catalogFile:)) used by both callers. A viewer attempts no local era count; its job line says the master analyzes. "Viewer" is the sync role (catalogSync.mode / CatalogSync.launchMode), never catalogModel.isReadOnly.
+2. TRUE: no surface shows progress the running work cannot move. Content "Analyzing N of M" only when a counted analyzer runs or the helper RUNS (not queued/paused/waiting) a job of a kind in BackgroundServiceActivity.feedsCountedAnalyzers (empty today). The era job is its own detail line ("Machine era: N of M files (VideoScan Background — <state>)").
+3. TRUE: a job whose units defer is shown "waiting — <why>" with the waiting glyph (not the filled lens) in the menu bar and Settings; a queued job does not fill the lens. JobProgressSnapshot.waiting is additive (older payload decodes; schema stays 1).
+4. WORKFLOW: the checkbox is disabled only when OFF and turning ON is refused; ON in Debug or on a viewer can be unchecked (unregister called). The "not registered" Fix names a verb this build can do.
+5. PERFORMANCE: JobSupervisor.status() does not count as activity (menu bar's 5 s read); XPC status from the app does (noteClientActivity) — idle exit works with VideoScan closed.
+6. LOGGING: every Settings ▸ Background problem (launchd states, not answering, gate refusal, count failure/recovery with path) and every Catalog Status line colour/cause change and every Catalog Database Info "unknown —" fact is logged once on appear/change/clear, never per poll/recompute. BackgroundCatalogAccess open refusal names the path.
+7. TESTED: the count test uses a real schema-current catalog.sqlite with a known eligible count and requires .success through productionCountWork (master fallback, master opened-elsewhere, viewer no-count, DB Info viewer vs master).
+
+Also: P0TruthRegressionTests now expects "Video+Audio · silent (measured)" (GH #417, Rick's 11/02 ruling).
+
+Evidence: sensor lane GREEN (649 tests) at HEAD; touched app suites 106/106; Core background suites 75/75; gauntlet inventory --validate 0 errors.
+Output contract: one finding per still-failing invariant with file:line, scenario, P0–P3, item. End with `Credits spent: … | Finding count: N` and `Verdict: merge|fix|block`. Stay within the changed files plus direct call sites.

@@ -496,9 +496,25 @@ enum CatalogStatusTransitions {
         }
     }
 
+    /// The words with their COUNTS, AGES and clock times masked — and nothing
+    /// else (Codex closing-3: stripping every digit hid "/Volumes/X8" → "X9"
+    /// and kept "2,000"'s comma). A number glued to a letter or a path
+    /// ("X9", "v15") is a name and stays.
     static func cause(_ words: String) -> String {
-        String(words.unicodeScalars.filter { !CharacterSet.decimalDigits.contains($0) }.map(Character.init))
+        var s = words
+        for (pattern, mask) in causeMasks {
+            s = pattern.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: mask)
+        }
+        return s
     }
+
+    /// Ages first ("45 min ago", "1 h ago", "3 days ago"), then clock times,
+    /// then free-standing numbers with their separators ("1,000", "12.5").
+    nonisolated(unsafe) private static let causeMasks: [(NSRegularExpression, String)] = [
+        (#"\d[\d,]*\s*(?:min|h|days?)\s+ago"#, "AGE"),
+        (#"\b\d{1,2}:\d{2}\b"#, "TIME"),
+        (#"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#, "#"),
+    ].compactMap { p in (try? NSRegularExpression(pattern: p.0)).map { ($0, p.1) } }   // constants; the regression test pins all three
 
     static func lines(old: CatalogStatusLines?, new: CatalogStatusLines) -> [String] {
         var out: [String] = []
