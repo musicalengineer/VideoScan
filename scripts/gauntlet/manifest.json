@@ -495,6 +495,7 @@
         "commentsAndStringsAreNotCode",
         "everyChildPATHComesFromTheOneBuilder",
         "everyPythonClipWorkerConfigurationGetsTheMediaToolsEnvironment",
+        "multiLineStringsAndNestedCommentsAreNotCode",
         "theRulesCatchTheirMutations"
       ]
     },
@@ -36163,7 +36164,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 682,
+      "package_expected_floor": 683,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",

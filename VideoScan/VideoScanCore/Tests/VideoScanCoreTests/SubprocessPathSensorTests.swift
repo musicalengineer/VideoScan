@@ -55,15 +55,51 @@ struct SubprocessPathSensorTests {
     }
 
     /// The worker rule over one file's text: true when a PythonClipWorker is configured without the media-tools environment.
-    /// `text` with string literals, block comments and line comments blanked
-    /// (Codex #233 F2: documentation is not code). Strings first, so a "//"
-    /// inside one is not taken for a comment.
+    /// `text` with string literals (plain, multi-line, raw `#"…"#`), block
+    /// comments (nested) and line comments blanked to spaces, newlines kept
+    /// (Codex #233 F2, #234: documentation is not code). A tiny Swift lexer;
+    /// string interpolation is blanked with its string (it cannot hold a
+    /// worker configuration that matters here). O(n) over the characters.
     static func codeOnly(_ text: String) -> String {
-        var out = text
-        for pattern in [#""(?:\\.|[^"\\\n])*""#, #"(?s)/\*.*?\*/"#, #"//[^\n]*"#] {
-            out = out.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
+        let c = Array(text)
+        var out = c
+        var i = 0
+        func blank(_ from: Int, _ to: Int) {
+            for k in from..<min(to, c.count) where c[k] != "\n" { out[k] = " " }
         }
-        return out
+        func at(_ k: Int, _ word: String) -> Bool {
+            let w = Array(word)
+            return k + w.count <= c.count && Array(c[k..<(k + w.count)]) == w
+        }
+        while i < c.count {
+            if at(i, "//") {
+                var e = i
+                while e < c.count, c[e] != "\n" { e += 1 }
+                blank(i, e); i = e
+            } else if at(i, "/*") {
+                var depth = 0, e = i
+                repeat {
+                    if at(e, "/*") { depth += 1; e += 2 } else if at(e, "*/") { depth -= 1; e += 2 } else { e += 1 }
+                } while depth > 0 && e < c.count
+                blank(i, e); i = e
+            } else if c[i] == "#" || c[i] == "\"" {
+                var hashes = 0, q = i
+                while q < c.count, c[q] == "#" { hashes += 1; q += 1 }
+                guard q < c.count, c[q] == "\"" else { i = q; continue }
+                let multi = at(q, "\"\"\"")
+                let close = (multi ? "\"\"\"" : "\"") + String(repeating: "#", count: hashes)
+                var e = q + (multi ? 3 : 1)
+                while e < c.count, !at(e, close) {
+                    if !multi, c[e] == "\n" { break }
+                    e += (hashes == 0 && c[e] == "\\") ? 2 : 1
+                }
+                e = min(c.count, e + (at(e, close) ? close.count : 0))
+                blank(i, e); i = e
+            } else {
+                i += 1
+            }
+        }
+        return String(out)
     }
 
     /// Counted per construction, not per file (Codex #232 F7): every
@@ -116,5 +152,17 @@ struct SubprocessPathSensorTests {
         #expect(Self.configuresAWorkerWithoutMediaTools("""
             let b = PythonClipWorker.Configuration(python: p, script: s, factory: f) // TODO: SubprocessEnvironment.mediaTools(
             """), "a trailing comment does not supply the environment")
+    }
+
+    /// Codex #234: a multi-line string and a nested block comment are not code either.
+    @Test func multiLineStringsAndNestedCommentsAreNotCode() {
+        let q = String(repeating: "\"", count: 3)
+        let multi = "let example = \(q)\nSubprocessEnvironment.mediaTools(inheriting: e)\n\(q)\n"
+            + "let b = PythonClipWorker.Configuration(python: p, script: s, factory: f)\n"
+        #expect(Self.configuresAWorkerWithoutMediaTools(multi), "the call inside a multi-line string supplies nothing")
+        let nested = "/* outer /* inner */ SubprocessEnvironment.mediaTools(inheriting: e) */\n"
+            + "let b = PythonClipWorker.Configuration(python: p, script: s, factory: f)\n"
+        #expect(Self.configuresAWorkerWithoutMediaTools(nested), "the call inside a nested comment supplies nothing")
+        #expect(Self.codeOnly("a /* x /* y */ z */ b").filter { !$0.isWhitespace } == "ab")
     }
 }
