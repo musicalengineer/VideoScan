@@ -344,4 +344,77 @@ struct AudioFingerprintAttemptTests {
         #expect(back.detail?.contains("Invalid data found") == true, "\(back.detail ?? "nil")")
         #expect(abs(back.lastAt.timeIntervalSince(live.lastAt)) < 1)
     }
+
+    // MARK: - Codex cycle #217 (red first)
+
+    @Test("RED Codex #217 F1: two copies, one digest — a sibling's later try never erases the content's print, and no try is kept beside a current print")
+    func aSiblingsTryNeverErasesThePrint() async throws {
+        let scene = try CutoverScene.make("attempt_f1"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (a, digest) = try AttemptScene.soundFile(scene, label: "copyA")
+        let b = try scene.freshCopy(of: .healthy, path: scene.folder.appendingPathComponent("media/copyB.mov").path)
+        try FileManager.default.copyItem(atPath: a.fullPath, toPath: b.fullPath)
+        b.sizeBytes = a.sizeBytes; b.audioFingerprint = nil; b.audioCodec = "aac"; b.durationSeconds = 3
+        b.streamTypeRaw = StreamType.videoAndAudio.rawValue; b.contentHash = "v1:copyB"
+        b.contentFixity = ContentFixity.captured(path: b.fullPath, digest: digest, byteCount: b.sizeBytes)
+        scene.model.records.append(b)
+        try #require(scene.model.saveCatalogNow())
+        let items = scene.model.audioFingerprintBackfillPlan().lanes.flatMap(\.items)
+        let itemA = try #require(items.first { $0.id == a.id }), itemB = try #require(items.first { $0.id == b.id })
+        for _ in 1...2 {
+            _ = scene.model.applyAudioFingerprintAttempt(.failed, detail: "exit 1", to: itemA)
+            _ = scene.model.applyAudioFingerprintAttempt(.failed, detail: "exit 1", to: itemB)
+        }
+        try #require(scene.model.saveCatalogNow())
+        // A prints; B (still carrying no print) fails a third time, then saves.
+        let stamp = AudioFingerprintStamp(contentDigest: "sha256:" + digest, sizeBytes: a.sizeBytes, outcome: .fingerprinted,
+                                          analyzedSeconds: 3, complete: true, landmarks: 40, bytes: 200)
+        #expect(scene.model.applyAudioFingerprintStamp(stamp, to: itemA) == .written)
+        try #require(scene.model.saveCatalogNow())
+        _ = scene.model.applyAudioFingerprintAttempt(.failed, detail: "exit 1", to: itemB)
+        try #require(scene.model.saveCatalogNow())
+        try await scene.relaunch()
+        #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_prints WHERE digest = '\(digest)'") == 1, "A's print survives B's save")
+        #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_attempts WHERE digest = '\(digest)'") == 0,
+                "a try beside a current print is stale")
+        let planned = AttemptScene.planned(scene.model)
+        #expect(!planned.contains(a.id) && !planned.contains(b.id), "both copies carry the print after a relaunch")
+    }
+
+    @Test("RED Codex #217 F2: a file that disappears between the check and the decode is not a try (ffmpeg's 'No such file')")
+    func aFileGoneDuringTheDecodeIsNotATry() async throws {
+        let scene = try CutoverScene.make("attempt_f2"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (r, _) = try AttemptScene.soundFile(scene, label: "moved1")
+        let path = r.fullPath, aside = path + ".aside"
+        await AttemptScene.run(scene.model, pass: { _ in
+            try FileManager.default.moveItem(atPath: path, toPath: aside)
+            throw AudioPCMDecoder.Failure.decodeFailed(exitCode: 254, stderrTail: "\(path): No such file or directory")
+        })
+        #expect(r.audioFingerprintAttempt == nil, "the file was gone, not undecodable")
+        try FileManager.default.moveItem(atPath: aside, toPath: path)
+        try await scene.relaunch()
+        #expect(AttemptScene.planned(scene.model).contains(r.id))
+    }
+
+    @Test("RED Codex #217 F3: a record with an obsolete stamp the plan redoes, and 3 current tries, is counted 'gave up' — the note says it")
+    func anObsoleteStampDoesNotHideAGiveUp() throws {
+        let sb = try ShowAgainSandbox.make("attempt_f3"); defer { sb.cleanup() }
+        let digest = String(repeating: "e", count: 64)
+        let r = try sb.record("obsolete.mov", bytes: 2_000, onDisk: true, stage: .none)
+        r.contentHash = "v1:obsolete"
+        r.audioCodec = "aac"
+        r.contentFixity = ContentFixity.captured(path: r.fullPath, digest: digest, byteCount: 2_000)
+        r.audioFingerprint = AudioFingerprintStamp(engineVersion: AudioFingerprintStamp.noAudioOnDecodeFailureVersion,
+                                                   contentDigest: "sha256:" + digest, sizeBytes: 2_000, outcome: .noAudio,
+                                                   analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
+        r.audioFingerprintAttempt = AudioFingerprintAttempt(contentDigest: "sha256:" + digest, outcome: .failed, attempts: 3)
+        #expect(sb.model.audioFingerprintBackfillPlan().gaveUp == 1)
+        let report = AnalyzeCoverageCalculator.compute(inputs: [AnalyzeCoverageInput(record: r)], volumes: [], mountedRoots: [],
+                                                       scope: AnalysisScope())
+        #expect(report.soundGaveUp == 1)
+        let row = CatalogFreshnessRows.row(.soundPrints, report: report, facts: CatalogFreshnessFacts(), running: [])
+        #expect(row.note?.contains("1 gave up after 3 tries") == true, "\(row.note ?? "nil")")
+    }
 }
+

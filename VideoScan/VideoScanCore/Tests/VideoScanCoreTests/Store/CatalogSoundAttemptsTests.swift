@@ -111,7 +111,7 @@ struct CatalogSoundAttemptsTests {
         #expect(try stored(fixture, 1)?.attempts == 1, "a newer engine starts again")
     }
 
-    @Test("writing the content's sound print deletes its tries; a try no newer than that print is stale and not written")
+    @Test("writing the content's sound print deletes its tries; a try beside a print by this engine, or no newer than it, is stale; the redo of an older engine's print is recorded")
     func aPrintEndsTheTries() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
@@ -128,9 +128,45 @@ struct CatalogSoundAttemptsTests {
         await again.close()
         #expect(try stored(fixture, 1) == nil, "a try older than the content's print is stale")
         let later = try await open(fixture)
-        await write(later) { try $0.upsertSoundAttempt(Self.row(1, attempts: 1, at: 1_762_000_200)) }   // a redo after the print
+        await write(later) { try $0.upsertSoundAttempt(Self.row(1, attempts: 1, at: 1_762_000_200)) }   // newer, same engine as the print
         await later.close()
-        #expect(try stored(fixture, 1)?.attempts == 1, "a try newer than the print is recorded")
+        #expect(try stored(fixture, 1) == nil, "beside a print by this engine a try is a stale copy's (Codex #217 F1)")
+        // The redo of an OBSOLETE print (an older engine's) is a real try.
+        let old = CatalogRecordDTO.SoundPrintRow(digest: Self.hex(1), engineVersion: 3, outcome: "fingerprinted", analyzedS: 60,
+                                                 complete: true, landmarks: 0, blobBytes: 0, computedAt: 1_762_000_300)
+        let redo = try await open(fixture)
+        await write(redo) { try $0.replaceSoundPrint(digest: Self.hex(1), old) }
+        await write(redo) { try $0.upsertSoundAttempt(Self.row(1, attempts: 1, at: 1_762_000_400)) }
+        await redo.close()
+        #expect(try stored(fixture, 1)?.attempts == 1, "a try newer than an older engine's print is recorded")
+    }
+
+    @Test("Codex #217 F1: a copy WITHOUT a print or a note never differs from the store's print or note (never a delete); one WITH a new print does")
+    func aCopyWithoutAPrintNeverErasesIt() throws {
+        let digest = Self.hex(5)
+        func record(print: Bool, note: Bool) throws -> CatalogRecordDTO {
+            let r = VideoRecord()
+            r.fullPath = "/Volumes/X/b.mov"
+            r.sizeBytes = 100
+            r.contentFixity = ContentFixity(digest: digest, byteCount: 100, stamp: FileIdentityStamp(device: 1, inode: 2, size: 100, mtimeNs: 3))
+            if print {
+                r.audioFingerprint = AudioFingerprintStamp(computedAt: Date(timeIntervalSince1970: 1_762_000_100), contentDigest: "sha256:" + digest,
+                                                           sizeBytes: 100, outcome: .fingerprinted, analyzedSeconds: 3, complete: true,
+                                                           landmarks: 40, bytes: 200)
+            }
+            if note {
+                r.audioFingerprintAttempt = AudioFingerprintAttempt(contentDigest: "sha256:" + digest, outcome: .failed, attempts: 2,
+                                                                    lastAt: Date(timeIntervalSince1970: 1_762_000_000))
+            }
+            return try CatalogRecordDTO(record: r, migrationLoadedAt: 0)
+        }
+        let stored = try record(print: true, note: true)
+        let bare = CatalogRecordDiff(stored: stored, current: try record(print: false, note: false))
+        #expect(!bare.soundPrint, "a copy loaded before its sibling printed must not erase the print")
+        #expect(!bare.soundAttempt)
+        var newer = try record(print: true, note: false)
+        newer.soundPrint?.computedAt += 50
+        #expect(CatalogRecordDiff(stored: stored, current: newer).soundPrint, "a new print replaces the old one")
     }
 
     // MARK: - ROUND TRIP: record → DTO → load

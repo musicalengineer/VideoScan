@@ -25,6 +25,10 @@ public struct CatalogRecordDiff: Sendable, Equatable {
     public var backups = false
     public var footageDecisions = false
     public var duplicate = false
+    /// The record carries a sound print the store does not hold. A record
+    /// WITHOUT one never differs (Codex #217 F1): copies share the
+    /// content's print by digest, so a copy loaded before a sibling printed
+    /// must not erase it — only a new print replaces a print.
     public var soundPrint = false
     /// The record carries a `sound_attempts` note the store does not hold.
     /// A record WITHOUT one never differs (only a sound print ends the
@@ -54,7 +58,7 @@ public struct CatalogRecordDiff: Sendable, Equatable {
         backups = stored.backupDestinations != current.backupDestinations
         footageDecisions = stored.curated.footageDecisions != current.curated.footageDecisions
         duplicate = stored.duplicateMember != current.duplicateMember
-        soundPrint = stored.soundPrint != current.soundPrint
+        soundPrint = current.soundPrint != nil && stored.soundPrint != current.soundPrint
         soundAttempt = current.soundAttempt != nil && stored.soundAttempt != current.soundAttempt
         knowledge = CatalogDDL.KnowledgeField.allCases.filter {
             CatalogRecordDTO.knowledgeValue($0, raw: stored.raw) != CatalogRecordDTO.knowledgeValue($0, raw: current.raw)

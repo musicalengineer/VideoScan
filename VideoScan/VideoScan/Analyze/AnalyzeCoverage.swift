@@ -177,8 +177,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   hasSoundStamp: r.audioFingerprint != nil,
                   soundStampAt: r.audioFingerprint?.computedAt,
                   // The plan's own rule (one O(1) check a row).
-                  soundGaveUp: r.audioFingerprint == nil
-                      && (r.audioFingerprintAttempt?.gaveUp(digests: AudioFingerprintBackfillPlanner.digests(of: r)) ?? false),
+                  soundGaveUp: AudioFingerprintBackfillPlanner.gaveUp(r) != nil,
                   // O(this row's OCR dates); rows without any skip the verdict.
                   degenerateOCRDates: r.ocrDateCandidates.count - r.usableOCRDates.count)
     }

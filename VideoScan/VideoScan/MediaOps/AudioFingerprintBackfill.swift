@@ -124,7 +124,7 @@ enum AudioFingerprintBackfillPlanner {
             }
             // GH #416 part 2: tried `cap` times by THIS engine, no print —
             // skipped (an older engine's tries count 0, so a new one retries).
-            if let attempt = r.audioFingerprintAttempt, attempt.gaveUp(digests: digests) {
+            if let attempt = gaveUp(r, digests: digests) {
                 switch attempt.outcome {
                 case .heardTooLittle: plan.gaveUpHeardTooLittle += 1
                 case .failed: plan.gaveUpFailed += 1
@@ -145,6 +145,17 @@ enum AudioFingerprintBackfillPlanner {
             }
             .sorted { $0.root < $1.root }
         return plan
+    }
+
+    /// The record's note when the plan gives up on it: no current stamp
+    /// (`describes`) and `cap` tries by this engine on its preferred full
+    /// digest. ONE rule for the plan and the coverage count (Codex #217 F3).
+    static func gaveUp(_ r: VideoRecord, digests: [String]? = nil) -> AudioFingerprintAttempt? {
+        guard let attempt = r.audioFingerprintAttempt else { return nil }
+        let digests = digests ?? self.digests(of: r)
+        if let stamp = r.audioFingerprint,
+           stamp.describes(sizeBytes: r.sizeBytes, digests: digests, headerHasAudio: !r.audioCodec.isEmpty) { return nil }
+        return attempt.gaveUp(digests: digests) ? attempt : nil
     }
 
     /// Not removed, not superseded, pointing at a file with a size.

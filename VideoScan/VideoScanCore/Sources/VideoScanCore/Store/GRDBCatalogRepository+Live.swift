@@ -193,15 +193,18 @@ extension GRDBTransaction {
     /// `sound_attempts` upsert (v15): insert; on the same digest, take the
     /// incoming row only when its engine is NEWER, or the same engine with
     /// at least as many tries — so a copy carrying a stale count never
-    /// lowers what a sibling recorded. Never a delete. A try no newer than
-    /// the content's stored print is stale (a copy loaded before the print
-    /// was made) and is not written. True when a row was inserted or updated.
+    /// lowers what a sibling recorded. Never a delete. A try beside a
+    /// stored print is written only when that print is OLDER than the try
+    /// AND by an older engine (the redo of an obsolete print); a try no
+    /// newer than the print, or beside a print by this engine or a newer
+    /// one, is a stale copy's and is not written (Codex #217 F1). True when
+    /// a row was inserted or updated.
     @discardableResult
     func upsertSoundAttempt(_ attempt: CatalogRecordDTO.SoundAttemptRow) throws -> Bool {
         try db.execute(sql: """
             INSERT INTO sound_attempts (digest, engine_version, outcome, attempts, last_at, detail)
             SELECT ?, ?, ?, ?, ?, ?
-             WHERE NOT EXISTS (SELECT 1 FROM sound_prints WHERE digest = ?1 AND computed_at >= ?5)
+             WHERE NOT EXISTS (SELECT 1 FROM sound_prints WHERE digest = ?1 AND (computed_at >= ?5 OR engine_version >= ?2))
             ON CONFLICT (digest) DO UPDATE
                SET engine_version = excluded.engine_version, outcome = excluded.outcome, attempts = excluded.attempts,
                    last_at = excluded.last_at, detail = excluded.detail
