@@ -757,3 +757,87 @@ struct JobScheduleCodex237Tests {
         await s.abandonForTest()
     }
 }
+
+@Suite("JobSchedule — Codex #238 closing reds", .serialized)
+struct JobScheduleCodex238Tests {
+    typealias T = JobScheduleTests
+
+    @Test("F1: Resume on an adopted request whose checkpoint carries the held fail-fast streak runs work — no instant re-fail")
+    func resumeForgetsTheHeldStreak() async throws {
+        let root = try BackgroundFixtures.scratch("c238-f1")
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        var cp = JobCheckpoint(jobID: request.id, totalUnits: 3)
+        cp.completedUnits = 3
+        cp.unitsFailed = 3
+        var st = FailureStreak()
+        for u in 0..<3 { st.record("ffmpeg is missing", unit: u, systemic: true) }
+        st.save(into: &cp)
+        let checkpoints = InMemoryCheckpointStore()
+        try checkpoints.save(cp)
+        try ScheduleHoldStore.beside(stateRoot: root).save([ScheduleHold(kind: ScheduleFactory.kind, jobID: request.id, reason: "ffmpeg is missing",
+                                                                         signature: "ffmpeg is missing", build: "b1", generation: 1)])
+        let recorder = UnitRecorder()
+        let probe = ScheduleProbe()
+        var config = BackgroundFixtures.fastConfiguration()
+        config.failFastUnits = 3
+        let s = JobSupervisor(queue: InMemoryJobQueueStore([request]), checkpoints: checkpoints,
+                              factory: ScheduleFactory(recorder: recorder), backoff: BackgroundFixtures.fullBackoff(),
+                              log: InMemoryBackgroundLog(), configuration: config, schedule: T.schedule(probe, root: root))
+        await s.start()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(recorder.completedUnits.isEmpty, "held: nothing runs")
+        #expect(await s.resume(request.id))
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 }, "the dependency is back: work runs")
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds == [] }, "no hold came back")
+        await s.abandonForTest()
+    }
+
+    @Test("F1 mid-plan: Resume forgets the held streak of a half-done adopted job; its remaining units run")
+    func resumeMidPlanRunsTheRest() async throws {
+        let root = try BackgroundFixtures.scratch("c238-f1b")
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        var cp = JobCheckpoint(jobID: request.id, totalUnits: 6)
+        cp.completedUnits = 3
+        cp.unitsFailed = 3
+        var st = FailureStreak()
+        for u in 0..<3 { st.record("ffmpeg is missing", unit: u, systemic: true) }
+        st.save(into: &cp)
+        let checkpoints = InMemoryCheckpointStore()
+        try checkpoints.save(cp)
+        try ScheduleHoldStore.beside(stateRoot: root).save([ScheduleHold(kind: ScheduleFactory.kind, jobID: request.id, reason: "ffmpeg is missing",
+                                                                         signature: "ffmpeg is missing", build: "b1", generation: 1)])
+        let recorder = UnitRecorder()
+        var config = BackgroundFixtures.fastConfiguration()
+        config.failFastUnits = 3
+        let s = JobSupervisor(queue: InMemoryJobQueueStore([request]), checkpoints: checkpoints,
+                              factory: ScheduleFactory(recorder: recorder), backoff: BackgroundFixtures.fullBackoff(),
+                              log: InMemoryBackgroundLog(), configuration: config, schedule: T.schedule(ScheduleProbe(), root: root))
+        await s.start()
+        #expect(await s.resume(request.id))
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits == [3, 4, 5] }, "\(recorder.completedUnits)")
+        await s.abandonForTest()
+    }
+
+    @Test("F2: a factory refusal on a CLI enqueue holds the scheduled kind; the next tick does not retry it")
+    func cliRefusalHolds() async throws {
+        let root = try BackgroundFixtures.scratch("c238-f2")
+        let probe = ScheduleProbe()
+        let allow = Toggle()
+        let gate = UnitGate()
+        var sc = JobSchedule(kinds: [JobSchedule.Kind(kind: GatedFactory.kind, planSize: { probe.planned() }, makeRequest: { GatedFactory.request() })],
+                             generation: { 1 }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        sc.planInterval = .milliseconds(30)
+        sc.pollInterval = .milliseconds(20)
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                              factory: RefuseThenGateFactory(allow: allow, gate: gate, recorder: UnitRecorder()),
+                              backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                              configuration: BackgroundFixtures.fastConfiguration(), schedule: sc)
+        guard case .refused = await s.enqueue(JobRequest(kind: GatedFactory.kind, requestedBy: "cli")) else { Issue.record("accepted"); return }
+        #expect(await s.status(processIdentifier: 1, startedAt: Date()).holds?.isEmpty == false, "the refusal held the kind")
+        allow.on = true
+        await s.start()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!gate.isHeld, "a tick retried a held kind without a release")
+        await s.abandonForTest()
+    }
+}

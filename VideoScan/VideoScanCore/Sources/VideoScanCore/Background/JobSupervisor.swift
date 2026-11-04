@@ -304,6 +304,9 @@ public actor JobSupervisor {
         } catch {
             let words = (error as? Refusal)?.words ?? String(describing: error)
             log.write("enqueue refused: \(words)")
+            // The job itself refused (a missing dependency): a scheduled kind is
+            // held, whoever asked — schedule, CLI or XPC (Codex #238 F2).
+            if isScheduled(request.kind) { hold(request.kind, jobID: request.id, reason: words, signature: words, generation: lastGeneration) }
             return .refused(Refusal(words))
         }
         do {
@@ -460,11 +463,7 @@ public actor JobSupervisor {
         // Re-check after the await: the actor is re-entrant there, and a second
         // tick (Resume releases a hold and plans at once) may have queued the kind.
         if isBusy(k.kind) { return }
-        let request = k.makeRequest()
-        if case .refused(let refusal) = enqueue(request), !isBusy(k.kind) {
-            // A refusal by the job itself (the factory): hold. Not the admission rules above.
-            hold(k.kind, jobID: request.id, reason: refusal.words, signature: refusal.words, generation: generation)
-        }
+        _ = enqueue(k.makeRequest())   // a factory refusal holds the kind inside enqueue
     }
 
     private var activeHolds: [ScheduleHold] { holds.filter(\.isActive) }
@@ -473,6 +472,30 @@ public actor JobSupervisor {
     /// erase) runs again on release, instead of a fresh one queued beside it
     /// — two requests of one kind would both be adopted at the next relaunch
     /// (Codex #236 F3). The newest such request only.
+    /// A release means "try again": the persisted failure streak of the kind's
+    /// queued (adopted) runs goes, or the restored-streak guard would fail
+    /// them again before any unit runs (Codex #238 F1). The guard still
+    /// covers a crash before a hold was published (no hold, nothing released).
+    private func forgetStreaks(_ kind: JobKind) {
+        for (id, run) in runs where run.request.kind == kind && run.state == .queued {
+            guard var cp = run.checkpoint, cp.streakWords != nil else { continue }
+            if cp.completedUnits >= cp.totalUnits {
+                // Nothing left in it to try: drop the spent work item (its OUTCOME
+                // was written at adoption) and let the release's plan queue fresh work.
+                queue.remove(id)
+                checkpoints.remove(id)
+                runs[id] = nil
+                order.removeAll { $0 == id }
+                log.write("schedule: \(kind) \(id) — every unit was tried before the hold; dropped, the release plans fresh work")
+                continue
+            }
+            FailureStreak().save(into: &cp)
+            runs[id]?.checkpoint = cp
+            try? checkpoints.save(cp)
+            log.write("schedule: \(kind) \(id) — its failure streak is forgotten with the hold; it tries again from unit \(cp.completedUnits)")
+        }
+    }
+
     private func requeueRetained(_ kind: JobKind) {
         guard let id = order.last(where: { id in
             guard let r = runs[id], r.request.kind == kind, case .failed = r.state else { return false }
@@ -570,7 +593,7 @@ public actor JobSupervisor {
             return released
         }
         // A released kind's kept refused request runs again, not a new one beside it (Codex #237 F3).
-        for kind in released { requeueRetained(kind) }
+        for kind in released { forgetStreaks(kind); requeueRetained(kind) }
         if holds != before { saveHolds(); lastPlanAt = nil; kickLanes() }
     }
 
@@ -582,6 +605,7 @@ public actor JobSupervisor {
         holds.removeAll { $0.kind == kind }
         saveHolds()
         log.write("schedule: hold on \(kind) released — \(words)")
+        forgetStreaks(kind)
         requeueRetained(kind)
         lastPlanAt = nil
         kickLanes()        // an adopted request of the kind may now run
