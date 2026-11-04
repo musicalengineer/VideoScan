@@ -546,7 +546,7 @@ enum CatalogStatusTransitions {
 
     /// Free-standing numbers with their separators ("1,000", "12.5"); a
     /// number glued to a letter ("X9") stays.
-    nonisolated(unsafe) private static let countMask = try? NSRegularExpression(pattern: #"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#)
+    private static let countMask = try? NSRegularExpression(pattern: #"(?<![\p{L}\p{N}/_.-])\d[\d,.]*(?![\p{L}\p{N}])"#)
 
     static func key(_ line: CatalogStatusLine) -> String {
         line.kind == .content ? cause(line.words) : (line.cause ?? line.words)
