@@ -478,6 +478,26 @@ struct CatalogStatusTransitionLogTests {
                         new: CatalogStatusLines(database: rest.0, files: b, content: rest.1)).count == 1)
     }
 
+    @Test("RED Codex closing-5: the drives a Files line names are compared as names — '/Volumes/Backup (1)' → '(2)' is one transition")
+    func drivesAreStructuredNames() {
+        let facts = CatalogFreshnessFacts(audit: CatalogAuditRunRecord(startedAt: Date().addingTimeInterval(-120), finishedAt: Date().addingTimeInterval(-60),
+                                                                       outcome: .completed, partial: false,
+                                                                       counts: ["planned": 60, "present": 30, "notAsked": 30]))
+        func files(_ drive: String) -> CatalogStatusLine {
+            CatalogStatusLinesPolicy.files(facts, missing: MissingCopyCounts(), offline: [drive: 30], now: Date(), date: { _ in "D" })
+        }
+        let a = files("/Volumes/Backup (1)"), b = files("/Volumes/Backup (2)")
+        #expect(a.state == .grey && b.state == .grey, "\(a.words)")
+        #expect(a.names == ["/Volumes/Backup (1)"])
+        let other = (CatalogStatusLine(kind: .database, state: .green, words: "ok"), CatalogStatusLine(kind: .content, state: .green, words: "Up to date"))
+        let said = CatalogStatusTransitions.lines(old: CatalogStatusLines(database: other.0, files: a, content: other.1),
+                                                  new: CatalogStatusLines(database: other.0, files: b, content: other.1))
+        #expect(said.count == 1 && said[0].contains("/Volumes/Backup (2)"), "\(said)")
+        let same = CatalogStatusTransitions.lines(old: CatalogStatusLines(database: other.0, files: a, content: other.1),
+                                                  new: CatalogStatusLines(database: other.0, files: files("/Volumes/Backup (1)"), content: other.1))
+        #expect(same.isEmpty)
+    }
+
     @Test("F6: a ticking count or age is not a change; a new cause is")
     func causeNotCounts() {
         let a = CatalogStatusLine(kind: .content, state: .grey, words: "12 left to analyze")

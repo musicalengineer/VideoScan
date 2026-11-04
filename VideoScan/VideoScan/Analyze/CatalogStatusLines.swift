@@ -97,6 +97,10 @@ struct CatalogStatusLine: Sendable, Equatable {
     var words: String
     /// Further lines under it (what is unsettled, what is not counted).
     var detail: [String] = []
+    /// The entities the words name — the drives a Files line asks to connect
+    /// (the coverage tally's roots). Compared EXACTLY by the transition log
+    /// (Codex closing-5): a name is never parsed back out of the prose.
+    var names: [String] = []
 }
 
 /// One of the two indicators on the totals strip.
@@ -415,7 +419,9 @@ enum CatalogStatusLinesPolicy {
         if large(notAsked) || large(tally.notChecked) {
             let share = "\(notAsked.formatted()) of \(tally.planned.formatted()) files were on drives not connected at the last check"
             if offline.values.contains(where: { $0 > 0 }) {
-                return line(.grey, "Unknown: \(share) — not connected now: \(drivesWords(offline)). Fix: connect them, then Check Now…", detail)
+                var grey = line(.grey, "Unknown: \(share) — not connected now: \(drivesWords(offline)). Fix: connect them, then Check Now…", detail)
+                grey.names = offline.filter { $0.value > 0 }.keys.sorted()
+                return grey
             }
             return line(.yellow, "Yellow: \(words) — \(share); every drive is connected now. \(checkNow)", detail)
         }
@@ -547,7 +553,7 @@ enum CatalogStatusTransitions {
             }
             if was.state != line.state {
                 out.append("\(title): \(word(was)) → \(word(line)) (\(line.words))\(causes)")
-            } else if cause(was.words) != cause(line.words) {
+            } else if cause(was.words) != cause(line.words) || was.names != line.names {
                 out.append("\(title): \(word(line)) — now: \(line.words)\(causes)")
             } else if line.kind != .content, cause(was.detail.joined(separator: "\n")) != cause(line.detail.joined(separator: "\n")) {
                 // A second cause under the same colour (the sound sidecar under a
