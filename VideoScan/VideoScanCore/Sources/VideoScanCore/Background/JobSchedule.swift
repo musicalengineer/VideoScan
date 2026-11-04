@@ -82,6 +82,9 @@ public struct ScheduleHold: Codable, Equatable, Sendable {
     /// after the hold sets it; a later plan of a different size releases it.
     public var planSize: Int?
     public var heldAt: Date
+    /// Legacy wire field, always false and unused: a reader built at
+    /// 0dedf4768 requires it to decode a status with a hold (Codex #241 F5).
+    public var sticky = false
 
     public init(kind: JobKind, jobID: JobID, reason: String, build: String, planSize: Int? = nil, heldAt: Date = Date()) {
         self.kind = kind

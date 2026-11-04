@@ -240,3 +240,108 @@ struct FableReviewHelperLoopTests {
         await s.abandonForTest()
     }
 }
+
+/// Refuses every admission and counts them (a dependency that stays missing).
+struct CountingRefusalFactory: JobFactory {
+    static let kind = JobKind(rawValue: "refusing")
+    let made: ScheduleProbe
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob {
+        _ = made.planned()
+        throw Refusal("weights missing")
+    }
+}
+
+@Suite("Codex #241 — the Fable delta's reds", .serialized)
+struct Codex241Tests {
+    typealias F = FableReviewHelperTests
+
+    @Test("F1: an older helper's running job with `waiting` is said waiting, never running")
+    func olderWaitingPayloadSaysWaiting() {
+        var job = JobProgressSnapshot(id: JobID(rawValue: "J"), kind: .era, lane: "model", title: "Machine era (8B)", subtitle: "",
+                                      completedUnits: 3, totalUnits: 9, skippedUnits: 0, failedUnits: 0,
+                                      state: .running, startedAt: Date(), finishedAt: nil)
+        job.waiting = "you're at the Mac"
+        #expect(job.stateWords == "waiting — you're at the Mac")
+    }
+
+    @Test("F2: a measurement begun under an earlier hold never sets the baseline of a newer hold")
+    func staleMeasurementIsDropped() async throws {
+        let root = try BackgroundFixtures.scratch("c241-f2")
+        let old = ScheduleHold(kind: CountingRefusalFactory.kind, jobID: JobID(rawValue: "H1"), reason: "x", build: "b1")
+        try ScheduleHoldStore.beside(stateRoot: root).save([old])
+        let calls = ScheduleProbe()
+        let sizes = ScheduleProbe()
+        let made = ScheduleProbe()
+        let gen = ScheduleProbe()
+        let gate = DispatchSemaphore(value: 0)
+        let kind = JobSchedule.Kind(kind: CountingRefusalFactory.kind,
+                                    planSize: { let n = sizes.size; _ = calls.planned(); if calls.plans == 1 { gate.wait() }; return n },
+                                    makeRequest: { JobRequest(kind: CountingRefusalFactory.kind, requestedBy: "schedule") })
+        var sc = JobSchedule(kinds: [kind], generation: { gen.generation }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        sc.pollInterval = .milliseconds(20)
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                              factory: CountingRefusalFactory(made: made), backoff: BackgroundFixtures.fullBackoff(),
+                              log: InMemoryBackgroundLog(), configuration: BackgroundFixtures.fastConfiguration(), schedule: sc)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { calls.plans == 1 }, "tick A is measuring under H1")
+        sizes.size = 4
+        #expect(await s.resume(old.jobID))
+        #expect(await BackgroundFixtures.waitUntil { await s.status(processIdentifier: 1, startedAt: Date()).holds?.first.map { $0.jobID != old.jobID } == true },
+                "tick B was refused and made a new hold")
+        gate.signal()                                     // tick A returns its stale 3
+        try await Task.sleep(for: .milliseconds(100))
+        gen.generation = 2                                 // a later tick: work unchanged at 4
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(made.plans == 1, "re-admitted \(made.plans) times without a release")
+        await s.abandonForTest()
+    }
+
+    @Test("F3: a held kind with a retained queued request is still measured — new work releases it and one fresh job runs")
+    func heldKindWithRetainedRequestIsReleasedByNewWork() async throws {
+        let root = try BackgroundFixtures.scratch("c241-f3")
+        let probe = ScheduleProbe()
+        let request = JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule")
+        try ScheduleHoldStore.beside(stateRoot: root).save([ScheduleHold(kind: ScheduleFactory.kind, jobID: request.id, reason: "x",
+                                                                         build: "b1", planSize: 3)])
+        let recorder = UnitRecorder()
+        let queue = InMemoryJobQueueStore([request])
+        let s = JobSupervisor(queue: queue, checkpoints: InMemoryCheckpointStore(),
+                              factory: ScheduleFactory(recorder: recorder), backoff: BackgroundFixtures.fullBackoff(),
+                              log: InMemoryBackgroundLog(), configuration: BackgroundFixtures.fastConfiguration(),
+                              schedule: JobScheduleTests.schedule(probe, root: root))
+        await s.start()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(recorder.completedUnits.isEmpty)
+        probe.size = 4
+        probe.generation = 2
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 }, "new work released the hold")
+        #expect(!queue.contains(request.id), "the retained request was dropped, a fresh one ran")
+        await s.abandonForTest()
+    }
+
+    @Test("F4: two queue files of one scheduled kind at relaunch — one adopted (the one with a checkpoint), the other removed")
+    func relaunchAdoptsOnePerKind() async throws {
+        let root = try BackgroundFixtures.scratch("c241-f4")
+        let a = JobRequest(kind: ScheduleFactory.kind, requestedAt: Date(timeIntervalSince1970: 1), requestedBy: "schedule")
+        let b = JobRequest(kind: ScheduleFactory.kind, requestedAt: Date(timeIntervalSince1970: 2), requestedBy: "cli --run")
+        let checkpoints = InMemoryCheckpointStore()
+        try checkpoints.save(JobCheckpoint(jobID: b.id, totalUnits: 3))
+        let queue = InMemoryJobQueueStore([a, b])
+        let log = InMemoryBackgroundLog()
+        let s = JobSupervisor(queue: queue, checkpoints: checkpoints, factory: ScheduleFactory(recorder: UnitRecorder()),
+                              backoff: BackgroundFixtures.fullBackoff(), log: log,
+                              schedule: JobScheduleTests.schedule(ScheduleProbe(), root: root))
+        #expect(await s.plan() == 1)
+        #expect(queue.contains(b.id) && !queue.contains(a.id))
+        #expect(log.lines.contains { $0.contains("second request of a scheduled kind") }, "\(log.lines)")
+    }
+
+    @Test("F5: a status with a hold still carries `sticky` on the wire (a 0dedf4768 reader requires it)")
+    func holdKeepsTheLegacyWireField() throws {
+        let status = ServiceStatus(processIdentifier: 1, startedAt: Date(), backoff: .full, jobs: [], idleSeconds: 0,
+                                   holds: [ScheduleHold(kind: .era, jobID: JobID(rawValue: "J"), reason: "x", build: "b")])
+        let object = try #require(try JSONSerialization.jsonObject(with: try BackgroundPayloadCodec.encode(status)) as? [String: Any])
+        let hold = try #require(((object["body"] as? [String: Any])?["holds"] as? [[String: Any]])?.first)
+        #expect(hold["sticky"] as? Bool == false)
+    }
+}

@@ -159,8 +159,13 @@ public struct JobProgressSnapshot: Codable, Equatable, Sendable {
         self.waiting = waiting
     }
 
-    /// The state in words for every surface (menu bar, Settings).
-    public var stateWords: String { state.words }
+    /// The state in words for every surface (menu bar, Settings). An older
+    /// helper (11/03) may still send `waiting` on a running job: say it, never
+    /// "running" while no unit can start (Codex #241 F1, rule 1).
+    public var stateWords: String {
+        if state == .running || state == .pausing, let waiting { return "waiting — \(waiting)" }
+        return state.words
+    }
 
     /// 0…1; 0 while the total is unknown.
     public var fraction: Double {

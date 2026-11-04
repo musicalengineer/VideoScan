@@ -387,14 +387,20 @@
       "suites": [
         "FableReviewHelperTests",
         "FableReviewHelperFollowUpTests",
-        "FableReviewHelperLoopTests"
+        "FableReviewHelperLoopTests",
+        "Codex241Tests"
       ],
       "tests": [
         "cleanExitClearsTheInFlightMark",
         "finishedJobIsNotRequeuedAtOnce",
+        "heldKindWithRetainedRequestIsReleasedByNewWork",
+        "holdKeepsTheLegacyWireField",
         "holdWithVaryingWordsIsReleasedForever",
+        "olderWaitingPayloadSaysWaiting",
         "pauseSurvivesARestart",
         "planSizeIsStaleAfterTheJobFinished",
+        "relaunchAdoptsOnePerKind",
+        "staleMeasurementIsDropped",
         "statusCarriesTheBuild",
         "zeroProgressJobIsRunAgainForever"
       ]
@@ -36208,7 +36214,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 715,
+      "package_expected_floor": 720,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36231,6 +36237,7 @@
         "VideoScanCoreTests.CatalogRecordDTORecordTests",
         "VideoScanCoreTests.CatalogRecordDTOScaleTests",
         "VideoScanCoreTests.CatalogRepositoryContractTests",
+        "VideoScanCoreTests.Codex241Tests",
         "VideoScanCoreTests.DisplayValueDerivationTests",
         "VideoScanCoreTests.EraJobCLITests",
         "VideoScanCoreTests.EraJobLogicTests",

@@ -198,7 +198,7 @@ public actor JobSupervisor {
         let (requests, ignored) = queue.list()
         for line in ignored { log.write("queue: ignored \(line)") }
         var added = 0
-        for request in requests where runs[request.id] == nil {
+        for request in onePerScheduledKind(requests) where runs[request.id] == nil {
             var run = Run(request: request, title: request.kind.rawValue)
             switch checkpoints.load(request.id) {
             case .found(let cp):
@@ -216,6 +216,27 @@ public actor JobSupervisor {
             added += 1
         }
         return added
+    }
+
+    /// At most one request per scheduled kind is adopted (a dead `--run era`
+    /// can leave a second one; Codex #236 F3, #241 F4): an already-known one,
+    /// else one with a checkpoint, else the oldest. The others are logged and
+    /// their files removed.
+    private func onePerScheduledKind(_ requests: [JobRequest]) -> [JobRequest] {
+        guard schedule != nil else { return requests }
+        var keep: [JobKind: JobID] = [:]
+        for kind in Set(requests.map(\.kind)) where isScheduled(kind) {
+            let mine = requests.filter { $0.kind == kind }
+            keep[kind] = runs.first { $0.value.request.kind == kind && $0.value.state.isActive }?.key
+                ?? (mine.first { checkpoints.load($0.id) != .none } ?? mine[0]).id
+        }
+        return requests.filter { request in
+            guard let kept = keep[request.kind], kept != request.id, runs[request.id] == nil else { return true }
+            log.write("queue: \(request.kind) \(request.id) is a second request of a scheduled kind — removed (\(kept) is kept)")
+            queue.remove(request.id)
+            checkpoints.remove(request.id)
+            return false
+        }
     }
 
     /// `plan()` then run every lane that has work, then the schedule's loop.
@@ -420,8 +441,14 @@ public actor JobSupervisor {
     }
 
     private func planKind(_ k: JobSchedule.Kind) async {
-        if hasActiveJob(k.kind) { return }
+        // A held kind is measured even with a retained (adopted) request of it
+        // queued: only the measurement can release it (Codex #241 F3).
+        let heldBefore = holds.first { $0.kind == k.kind }?.jobID
+        if heldBefore == nil, hasActiveJob(k.kind) { return }
         guard let size = await planSize(k) else { return }
+        // The hold may have changed during the await (Resume, a new refusal):
+        // this measurement belongs to the hold it started under, or to none (#241 F2).
+        guard holds.first(where: { $0.kind == k.kind })?.jobID == heldBefore else { return }
         // A held kind is planned too: a different plan size is new work, and
         // new work releases the hold (Fable review 11/04). The first plan after
         // the hold sets the size it is measured against.
