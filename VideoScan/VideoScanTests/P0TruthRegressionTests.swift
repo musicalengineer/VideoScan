@@ -281,7 +281,9 @@ struct P0TruthRegressionTests {
         let plain = try catalog.require(.mtimeYearsBeforeCatalogue)
 
         let silentFact = CatalogFileFacts.stream(silent)
-        #expect(silentFact.value == "Video+Audio · silent", "the header is not 'has sound' when the print heard nothing: \(silentFact.value)")
+        // Rick 2026-11-02 (b627eb44, DECISIONS): measured silence is a fact
+        // about the file — the column says "silent (measured)" (GH #417).
+        #expect(silentFact.value == "Video+Audio · silent (measured)", "the header is not 'has sound' when the print heard nothing: \(silentFact.value)")
         #expect(silentFact.evidence == .soundPrint)
         #expect(silentFact.help.contains("the sound print"), Comment(rawValue: silentFact.help))
 
