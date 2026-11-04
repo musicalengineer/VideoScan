@@ -136,7 +136,7 @@ struct BackgroundServiceStoreTests {
 
     @Test("a hold in the helper's answer is logged once when it appears and once when it clears")
     func holdLoggedOnChange() async {
-        let hold = ScheduleHold(kind: .era, jobID: JobID(rawValue: "J"), reason: "ffmpeg is missing", build: "b", generation: 1)
+        let hold = ScheduleHold(kind: .era, jobID: JobID(rawValue: "J"), reason: "ffmpeg is missing", build: "b")
         let (store, r) = Self.make(enabled: true, agent: FakeAgent(.enabled), status: .success(Self.serviceStatus(holds: [hold])))
         await store.refresh()
         await store.refresh()
@@ -221,9 +221,9 @@ struct BackgroundServiceStoreTests {
     func jobLineOrder() {
         let helperJob = Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(jobs: [Self.eraJob(.paused(reason: "thermal"), done: 12)]))
         #expect(helperJob.job == "Machine era (8B): 12 of 4,709 · paused (thermal)")
-        let hold = ScheduleHold(kind: .era, jobID: JobID(), reason: "the worker could not load the model", build: "b", generation: 3)
+        let hold = ScheduleHold(kind: .era, jobID: JobID(), reason: "the worker could not load the model", build: "b")
         #expect(Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(holds: [hold])).job
-                == "Machine era (8B): held after a failure: the worker could not load the model — Resume, a new build or a catalog change clears it (Resume is in the VideoScan Background menu bar item)")
+                == "Machine era (8B): held after a failure: the worker could not load the model — Resume, a new build or new work clears it (Resume is in the VideoScan Background menu bar item)")
         #expect(Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(planned: ["era": 3_878])).job
                 == "Content analysis: 3,878 files to analyze (the helper's plan)")
         #expect(Self.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(planned: ["era": 0])).job
@@ -237,11 +237,28 @@ struct BackgroundServiceStoreTests {
 
     @Test("RED→GREEN Codex #236 F5: a hold is said even when its kept request sits queued — never just 'queued'")
     func holdBeatsAQueuedRequest() {
-        let hold = ScheduleHold(kind: .era, jobID: JobID(), reason: "weights missing", build: "b", generation: 1)
+        let hold = ScheduleHold(kind: .era, jobID: JobID(), reason: "weights missing", build: "b")
         let line = Self.lines(enabled: true, launchd: .enabled,
                               service: Self.serviceStatus(jobs: [Self.eraJob(.queued, done: 0)], holds: [hold])).job
         #expect(line.contains(hold.words), "\(line)")
         #expect(line.contains("Resume is in the VideoScan Background menu bar item"))
+    }
+
+    @Test("TRUTH (Fable review): a running helper of another build says so, with the fix — never a plain 'running'")
+    func olderHelperIsSaid() {
+        var service = Self.serviceStatus()
+        service.build = "VideoScan Background 100 1"
+        let older = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled, service: service, serviceProblem: nil,
+                                                        lastNote: nil, bundledBuild: "VideoScan Background 200 2")
+        #expect(older.helper == "VideoScan Background: older helper running (pid 4242) — turn the checkbox off and on to start this build's")
+        #expect(BackgroundServicePresentation.helperProblem(enabled: true, launchd: .enabled, service: service, problem: nil,
+                                                            bundledBuild: "VideoScan Background 200 2") == older.helper, "logged once as a problem")
+        let same = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled, service: service, serviceProblem: nil,
+                                                       lastNote: nil, bundledBuild: "VideoScan Background 100 1")
+        #expect(same.helper.hasPrefix("VideoScan Background: running"))
+        let unknown = BackgroundServicePresentation.lines(enabled: true, launchd: .enabled, service: Self.serviceStatus(), serviceProblem: nil,
+                                                          lastNote: nil, bundledBuild: "VideoScan Background 200 2")
+        #expect(unknown.helper.hasPrefix("VideoScan Background: running"), "an older payload without a build is not called older")
     }
 
     @Test("the defaults key is the registrar's — the launch and the pane read one flag")

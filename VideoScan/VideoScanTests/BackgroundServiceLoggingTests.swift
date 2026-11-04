@@ -1,11 +1,11 @@
 // BackgroundServiceLoggingTests.swift — Codex 11/03 F6 (LOGGING) for
 // Settings ▸ Background: every problem the two lines can show is also in the
 // log — once when it appears, once when its words change, once when it
-// clears — never once per 5 s poll. Plus F3's words on the Settings job line
-// (a waiting era job says "waiting", not "running").
+// clears — never once per 5 s poll. (F3's "waiting" words went with the
+// keyboard backoff: no helper since 2026-11-04 waits.)
 //
 // Dimensions: LOGIC (failure → repeated failure → recovery = exactly two
-// lines; launchd states; the registration gate), TRUTH (the Settings job line reads the snapshot's own wait).
+// lines; launchd states; the registration gate).
 
 import Foundation
 import ServiceManagement
@@ -55,14 +55,5 @@ struct BackgroundServiceLoggingTests {
         await store.refresh()
         #expect(r.lines == ["background service: the checkbox cannot turn it on here — \(BackgroundServiceRegistrar.viewerRefusal)"],
                 "\(r.lines)")
-    }
-
-    @Test("F3 TRUTH: the Settings job line says the snapshot's wait, never 'running'")
-    func settingsSaysWaiting() {
-        var era = T.eraJob(.running, done: 0)
-        era.waiting = "you're at the Mac"   // an older helper's payload (this one never waits)
-        let lines = T.lines(enabled: true, launchd: .enabled, service: T.serviceStatus(jobs: [era]))
-        #expect(lines.job == "Machine era (8B): 0 of 4,709 · waiting — you're at the Mac")
-        #expect(!lines.job.hasSuffix("running"))
     }
 }

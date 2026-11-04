@@ -64,6 +64,7 @@ struct AppSupportSideStoreInventoryTests {
         "plan.json": .logOrReport,                            // delete-duplicates/<job>/ and Angel Prepare job memory
         "findtagd.log": .logOrReport,
         "background.log": .logOrReport,                       // ~/Library/Logs/VideoScan: VideoScan Background's own log (step 0, 2026-10-30)
+        "paused.json": .logOrReport,                          // background/: kinds paused from the menu bar, kept across a restart (2026-11-04)
         "holds.json": .logOrReport,                           // background/: the helper's job memory — kinds held after a failure (2026-11-04, JobSchedule.swift)
         "refused.jsonl": .logOrReport,                        // background/journal/: the lines catalog.sqlite refused, with the rule (JournalApplier, step 1)
         "previewsweepd.log": .logOrReport,

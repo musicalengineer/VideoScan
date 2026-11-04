@@ -159,18 +159,8 @@ public struct JobProgressSnapshot: Codable, Equatable, Sendable {
         self.waiting = waiting
     }
 
-    /// True while the job holds a lane but can run no unit (see `waiting`) —
-    /// also while a Pause asked during the wait has not landed yet
-    /// (`.pausing`: no unit is in flight then either; Codex closing #2).
-    public var isWaiting: Bool { (state == .running || state == .pausing) && waiting != nil }
-
-    /// The state in words for every surface (menu bar, Settings): "waiting —
-    /// <why>" while waiting, else the state's own words. One rule, so no
-    /// surface can say "running" while no unit can start.
-    public var stateWords: String {
-        if isWaiting, let waiting { return "waiting — \(waiting)" }
-        return state.words
-    }
+    /// The state in words for every surface (menu bar, Settings).
+    public var stateWords: String { state.words }
 
     /// 0…1; 0 while the total is unknown.
     public var fraction: Double {
@@ -195,10 +185,13 @@ public struct ServiceStatus: Codable, Equatable, Sendable {
     /// The last plan size per kind (raw value → units), the helper's own
     /// count of work left. Additive, like `holds`.
     public var planned: [String: Int]?
+    /// The running helper's build (JobSchedule.buildID), so the app can say
+    /// an older helper is still running after a rebuild. Additive.
+    public var build: String?
 
     public init(protocolVersion: Int = BackgroundProtocolVersion.current, processIdentifier: Int32,
                 startedAt: Date, backoff: BackoffState, jobs: [JobProgressSnapshot], idleSeconds: Double,
-                holds: [ScheduleHold]? = nil, planned: [String: Int]? = nil) {
+                holds: [ScheduleHold]? = nil, planned: [String: Int]? = nil, build: String? = nil) {
         self.protocolVersion = protocolVersion
         self.processIdentifier = processIdentifier
         self.startedAt = startedAt
@@ -207,6 +200,7 @@ public struct ServiceStatus: Codable, Equatable, Sendable {
         self.idleSeconds = idleSeconds
         self.holds = holds
         self.planned = planned
+        self.build = build
     }
 
     /// One line for the CLI and the log.

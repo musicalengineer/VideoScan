@@ -54,6 +54,10 @@ final class BackgroundServiceStore: ObservableObject {
     var isViewer: () -> Bool
     /// The build flavour, injectable so tests (which run Debug) can say Release.
     var isReleaseBuild: () -> Bool = { true }
+    /// The build id of the helper bundled in THIS app (JobSchedule.buildID of
+    /// its executable). Compared with the running helper's `ServiceStatus.build`:
+    /// a rebuild leaves the old helper running until a re-tick (Fable 11/04).
+    var bundledHelperBuild: () -> String? = { nil }
     var log: (String) -> Void
 
     /// Why the checkbox may not turn the helper on here — nil when it may.
@@ -101,6 +105,11 @@ final class BackgroundServiceStore: ObservableObject {
             isViewer: isViewer,
             log: log)
         store.isReleaseBuild = { BackgroundServiceRegistrar.isReleaseBuild }
+        let helper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/LoginItems/VideoScan Background.app/Contents/MacOS/VideoScan Background")
+        let bundled = FileManager.default.fileExists(atPath: helper.path) ? JobSchedule.buildID(executable: helper) : nil
+        // Only the Release build registers the helper, so only it can call the running one older.
+        store.bundledHelperBuild = { BackgroundServiceRegistrar.isReleaseBuild ? bundled : nil }
         return store
     }
 
@@ -164,9 +173,9 @@ final class BackgroundServiceStore: ObservableObject {
     private func noteProblems() {
         note("helper", BackgroundServicePresentation.helperProblem(enabled: enabled, launchd: launchdStatus,
                                                                     service: service, problem: serviceProblem,
-                                                                    refusal: registrationRefusal))
+                                                                    refusal: registrationRefusal, bundledBuild: bundledHelperBuild()))
         note("registration", registrationRefusal.map { "the checkbox cannot turn it on here — \($0)" })
-        note("hold", service?.holds?.first(where: \.isActive).map { "\($0.kind) \($0.words)" })
+        note("hold", service?.holds?.first.map { "\($0.kind) \($0.words)" })
     }
 
     private func note(_ key: String, _ words: String?) {
@@ -243,8 +252,9 @@ enum BackgroundServicePresentation {
     /// `refusal`: why this build may not turn the helper on (the gate) — the
     /// "Fix:" then names a verb this build CAN do (reviewer 11/03).
     static func lines(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, serviceProblem: String?,
-                      lastNote: String?, viewer: Bool = false, refusal: String? = nil) -> Lines {
-        Lines(helper: helper(enabled: enabled, launchd: launchd, service: service, problem: serviceProblem, refusal: refusal),
+                      lastNote: String?, viewer: Bool = false, refusal: String? = nil, bundledBuild: String? = nil) -> Lines {
+        Lines(helper: helper(enabled: enabled, launchd: launchd, service: service, problem: serviceProblem, refusal: refusal,
+                             bundledBuild: bundledBuild),
               helperIsUp: service != nil,
               needsApproval: enabled && launchd == .requiresApproval,
               job: job(enabled: enabled, service: service, lastNote: lastNote, viewer: viewer))
@@ -254,9 +264,11 @@ enum BackgroundServicePresentation {
     /// plainly off, or still asking (transient). The store logs exactly these
     /// words on appear / change / clear (F6).
     static func helperProblem(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, problem: String?,
-                              refusal: String? = nil) -> String? {
-        let words = helper(enabled: enabled, launchd: launchd, service: service, problem: problem, refusal: refusal)
+                              refusal: String? = nil, bundledBuild: String? = nil) -> String? {
+        let words = helper(enabled: enabled, launchd: launchd, service: service, problem: problem, refusal: refusal,
+                           bundledBuild: bundledBuild)
         if !enabled { return launchd == .enabled ? words : nil }
+        if isOlder(service, than: bundledBuild) { return words }
         switch launchd {
         case nil: return nil
         case .enabled?: return service == nil && problem != nil ? words : nil
@@ -274,8 +286,14 @@ enum BackgroundServicePresentation {
         return "Fix: in the Release build (scheme VideoScan-Release), turn Background off and on"
     }
 
+    /// The running helper is another build than the one in this app.
+    static func isOlder(_ service: ServiceStatus?, than bundledBuild: String?) -> Bool {
+        guard let running = service?.build, let bundledBuild else { return false }
+        return running != bundledBuild
+    }
+
     private static func helper(enabled: Bool, launchd: SMAppService.Status?, service: ServiceStatus?, problem: String?,
-                               refusal: String?) -> String {
+                               refusal: String?, bundledBuild: String? = nil) -> String {
         let name = "VideoScan Background: "
         guard enabled else {
             if launchd == .enabled, let problem {
@@ -289,6 +307,9 @@ enum BackgroundServicePresentation {
         case .requiresApproval?: return name + "waiting for your approval in \(loginItems)"
         case .notFound?: return name + "the helper is missing from this build"
         case .enabled?:
+            if let service, isOlder(service, than: bundledBuild) {
+                return name + "older helper running (pid \(service.processIdentifier)) — turn the checkbox off and on to start this build's"
+            }
             if let service {
                 return name + "running · pid \(service.processIdentifier) · \(service.backoff.words)"
             }
@@ -304,7 +325,7 @@ enum BackgroundServicePresentation {
         if viewer { return viewerJob }
         // A hold first (Codex #236 F5): a kept request of a held kind sits
         // "queued" and must not hide why nothing runs.
-        if let hold = service?.holds?.first(where: { $0.kind == .era && $0.isActive }) {
+        if let hold = service?.holds?.first(where: { $0.kind == .era }) {
             return "Machine era (8B): \(hold.words) (Resume is in the VideoScan Background menu bar item)"
         }
         if let era = service?.jobs.filter({ $0.kind == .era && $0.state.isActive })

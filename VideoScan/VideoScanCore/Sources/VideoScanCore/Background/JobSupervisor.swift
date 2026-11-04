@@ -87,9 +87,6 @@ public actor JobSupervisor {
         var stopRequested = false
         /// paused(disk): no lane owns it until `resume` re-queues it.
         var parked = false
-        /// The stable words of a failure (the error, not its unit counts) —
-        /// what a hold compares to call a repeat sticky (Codex #235 F5).
-        var failureWords: String?
     }
 
     private let queue: any JobQueueStore
@@ -122,7 +119,12 @@ public actor JobSupervisor {
     private var scheduleTask: Task<Void, Never>?
     private var lastPlanAt: ContinuousClock.Instant?
     private var lastGeneration: Int?
-    private var generationSeen = false
+    /// Scheduled kinds Rick paused (paused.json): a restart keeps them paused.
+    private var pausedKinds: Set<JobKind> = []
+    /// Kinds whose job just ended: the next tick re-measures the plan (so the
+    /// size shown is current) but does not queue — a plan that did not shrink
+    /// would otherwise re-run the same job back to back (Fable review 11/04).
+    private var measureOnly: Set<JobKind> = []
     /// Every hold record, active or released-by-catalog (`holds.json`).
     private var holds: [ScheduleHold] = []
     private var holdsLoaded = false
@@ -196,7 +198,7 @@ public actor JobSupervisor {
         let (requests, ignored) = queue.list()
         for line in ignored { log.write("queue: ignored \(line)") }
         var added = 0
-        for request in onePerScheduledKind(requests) where runs[request.id] == nil {
+        for request in requests where runs[request.id] == nil {
             var run = Run(request: request, title: request.kind.rawValue)
             switch checkpoints.load(request.id) {
             case .found(let cp):
@@ -216,36 +218,14 @@ public actor JobSupervisor {
         return added
     }
 
-    /// At most one request per scheduled kind is adopted — one with a
-    /// checkpoint (in progress) first, else the oldest; the others are logged
-    /// and their files removed (machine-authored work items: the schedule
-    /// re-plans that work). Other kinds pass unchanged (Codex #236 F3).
-    private func onePerScheduledKind(_ requests: [JobRequest]) -> [JobRequest] {
-        guard schedule != nil else { return requests }
-        var keep: [JobKind: JobID] = [:]
-        for kind in Set(requests.map(\.kind)) where isScheduled(kind) {
-            let mine = requests.filter { $0.kind == kind }
-            if let active = runs.first(where: { $0.value.request.kind == kind && $0.value.state.isActive })?.key {
-                keep[kind] = active
-            } else {
-                keep[kind] = (mine.first { checkpoints.load($0.id) != .none } ?? mine[0]).id
-            }
-        }
-        return requests.filter { request in
-            guard let kept = keep[request.kind], kept != request.id, runs[request.id] == nil else { return true }
-            log.write("queue: \(request.kind) \(request.id) is a second request of a scheduled kind — removed (\(kept) is kept)")
-            queue.remove(request.id)
-            checkpoints.remove(request.id)
-            return false
-        }
-    }
-
     /// `plan()` then run every lane that has work, then the schedule's loop.
     /// Without the root it plans nothing and tries again after `ownerRetryInterval`.
     public func start() {
         plan()
         guard ownershipRefusal == nil else { scheduleOwnerRetry(); return }
         loadHolds()        // before any lane: an adopted request of a held kind must not start (Codex #235 F3)
+        // A paused kind stays paused across a restart (Rick 11/04).
+        for (id, run) in runs where pausedKinds.contains(run.request.kind) && run.state.isActive { runs[id]?.pauseRequested = true }
         kickLanes()
         startSchedule()
     }
@@ -277,36 +257,30 @@ public actor JobSupervisor {
 
     // MARK: - Verbs (XPC)
 
+    /// The XPC / CLI verb. A scheduled kind is the helper's own business
+    /// (Rick 11/04): refused here; only the schedule admits it.
     public func enqueue(_ request: JobRequest) -> EnqueueReply {
+        if isScheduled(request.kind) {
+            let words = "enqueue refused: VideoScan Background schedules \(request.kind) itself (use --run \(request.kind) for a hand run)"
+            log.write(words)
+            return .refused(Refusal(words))
+        }
+        return admit(request)
+    }
+
+    /// Admission: ownership, the job's own refusal (factory), the queue file.
+    private func admit(_ request: JobRequest) -> EnqueueReply {
         if runs[request.id] != nil { return .refused(Refusal("job \(request.id) is already known")) }
         guard claimRoot() else {
             let words = "enqueue refused: \(ownershipRefusal ?? "the state root is owned by another process")"
             log.write(words)
             return .refused(Refusal(words))
         }
-        // A scheduled kind: one active job at a time, and none while held — from
-        // the schedule, the CLI or XPC alike (Codex #235 F4).
-        if isScheduled(request.kind) {
-            loadHolds()
-            if let h = activeHolds.first(where: { $0.kind == request.kind }) {
-                let words = "enqueue refused: \(request.kind) is \(h.words)"
-                log.write(words)
-                return .refused(Refusal(words))
-            }
-            if runs.values.contains(where: { $0.request.kind == request.kind && $0.state.isActive }) {
-                let words = "enqueue refused: a \(request.kind) job is already active (the helper runs one per kind)"
-                log.write(words)
-                return .refused(Refusal(words))
-            }
-        }
         do {
             _ = try factory.makeJob(for: request)
         } catch {
             let words = (error as? Refusal)?.words ?? String(describing: error)
             log.write("enqueue refused: \(words)")
-            // The job itself refused (a missing dependency): a scheduled kind is
-            // held, whoever asked — schedule, CLI or XPC (Codex #238 F2).
-            if isScheduled(request.kind) { hold(request.kind, jobID: request.id, reason: words, signature: words, generation: lastGeneration) }
             return .refused(Refusal(words))
         }
         do {
@@ -316,9 +290,11 @@ public actor JobSupervisor {
             log.write("enqueue refused: \(words)")
             return .refused(Refusal(words))
         }
-        runs[request.id] = Run(request: request, title: request.kind.rawValue)
+        var run = Run(request: request, title: request.kind.rawValue)
+        run.pauseRequested = pausedKinds.contains(request.kind)
+        runs[request.id] = run
         order.append(request.id)
-        log.write("queued \(request.kind) \(request.id) (lane \(request.lane), by \(request.requestedBy))")
+        log.write("queued \(request.kind) \(request.id) (lane \(request.lane), by \(request.requestedBy))" + (run.pauseRequested ? " — paused, as its kind is" : ""))
         kickLanes()
         return .accepted(request.id)
     }
@@ -330,18 +306,20 @@ public actor JobSupervisor {
         if run.state == .running { run.state = .pausing }
         runs[id] = run
         log.write("pause requested for \(run.request.kind) \(id)")
+        if isScheduled(run.request.kind), pausedKinds.insert(run.request.kind).inserted { savePaused() }
         return true
     }
 
     @discardableResult
     public func resume(_ id: JobID) -> Bool {
         // Resume on a held kind's failed job (the menu's line) releases the hold.
-        if let hold = holds.first(where: { $0.isActive && $0.jobID == id }) {
+        if let hold = holds.first(where: { $0.jobID == id }) {
             releaseHold(hold.kind, words: "Resume")
             return true
         }
         guard var run = runs[id], run.state.isActive else { return false }
         run.pauseRequested = false
+        if pausedKinds.remove(run.request.kind) != nil { savePaused() }
         // Resume before the pause landed: the row must not keep saying "pausing…".
         if run.state == .pausing { run.state = .running }
         if run.parked {
@@ -375,9 +353,10 @@ public actor JobSupervisor {
         let state = await backoff.refresh()
         var status = ServiceStatus(processIdentifier: processIdentifier, startedAt: startedAt, backoff: state,
                                    jobs: order.compactMap { snapshot($0) }, idleSeconds: idleSeconds)
-        if schedule != nil {
-            status.holds = activeHolds
+        if let schedule {
+            status.holds = holds
             status.planned = planned
+            status.build = schedule.buildID
         }
         return status
     }
@@ -419,109 +398,112 @@ public actor JobSupervisor {
         }
     }
 
-    /// One look: read the generation, release what a new build or a catalog
-    /// change releases, and plan when due (first tick, `planInterval` since
-    /// the last plan, a generation change, or a released hold).
+    /// One look: read the generation, release what a new build releases, and
+    /// plan when due (first tick, `planInterval` since the last plan, a
+    /// generation change, a finished job, or a released hold).
     public func scheduleTick() async {
         guard let schedule, claimRoot() else { return }   // never plan for a root another process owns (Codex #235 F8)
         loadHolds()
         // An unreadable generation (nil) is not evidence of a change (Codex #235 F7): keep the last known one.
         let generation = schedule.generation() ?? lastGeneration
-        let changed = generationSeen && generation != nil && lastGeneration != nil && generation != lastGeneration
+        let changed = generation != nil && lastGeneration != nil && generation != lastGeneration
         if changed {
             log.write("schedule: catalog generation \(lastGeneration.map(String.init) ?? "unknown") → \(generation.map(String.init) ?? "unknown") — planning")
         }
-        generationSeen = true
         lastGeneration = generation
-        releaseHolds(build: schedule.buildID, generation: generation)
+        releaseOtherBuilds(schedule.buildID)
         let due = lastPlanAt.map { clock.now - $0 >= schedule.planInterval } ?? true
         guard due || changed else { return }
         lastPlanAt = clock.now
         planCount += 1
-        for kind in schedule.kinds { await planKind(kind, generation: generation) }
+        for kind in schedule.kinds { await planKind(kind) }
     }
 
-    private func planKind(_ k: JobSchedule.Kind, generation: Int?) async {
+    private func planKind(_ k: JobSchedule.Kind) async {
+        if hasActiveJob(k.kind) { return }
+        guard let size = await planSize(k) else { return }
+        // A held kind is planned too: a different plan size is new work, and
+        // new work releases the hold (Fable review 11/04). The first plan after
+        // the hold sets the size it is measured against.
+        if let i = holds.firstIndex(where: { $0.kind == k.kind }) {
+            guard let was = holds[i].planSize else { holds[i].planSize = size; saveHolds(); return }
+            guard size != was else { return }
+            release(k.kind, words: "the work changed (the plan went from \(was) to \(size) units)")
+        }
+        if measureOnly.remove(k.kind) != nil { return }
+        // Re-check after the await: the actor is re-entrant there, and a second
+        // tick (Resume releases a hold and plans at once) may have queued the kind.
+        guard size > 0, !isBusy(k.kind) else { return }
+        let request = k.makeRequest()
+        if case .refused(let refusal) = admit(request) {
+            hold(k.kind, jobID: request.id, reason: refusal.words)
+        }
+    }
+
+    /// The kind's plan size, off the actor (a plan reads the catalog, ≈ 1 s at
+    /// 100k rows; status must still answer). nil when it could not plan (said once).
+    private func planSize(_ k: JobSchedule.Kind) async -> Int? {
         let name = k.kind.rawValue
-        if isBusy(k.kind) { return }
-        let size: Int
         do {
-            // Off the actor: a plan reads the catalog (≈ 1 s at 100k rows); status must still answer.
-            let planSize = k.planSize
-            size = try await Task.detached(priority: .utility) { try planSize() }.value
+            let plan = k.planSize
+            let size = try await Task.detached(priority: .utility) { try plan() }.value
+            if planProblem.removeValue(forKey: name) != nil { log.write("schedule: planning \(name) works again") }
+            if planned[name] != size { log.write("schedule: plan \(name) — \(size) unit(s) to do") }
+            planned[name] = size
+            return size
         } catch {
             let words = (error as? Refusal)?.words ?? String(describing: error)
             if planProblem[name] != words { log.write("schedule: could not plan \(name) — \(words)") }
             planProblem[name] = words
             planned[name] = nil
-            return
+            return nil
         }
-        if planProblem.removeValue(forKey: name) != nil { log.write("schedule: planning \(name) works again") }
-        if planned[name] != size { log.write("schedule: plan \(name) — \(size) unit(s) to do") }
-        planned[name] = size
-        guard size > 0 else { return }
-        // Re-check after the await: the actor is re-entrant there, and a second
-        // tick (Resume releases a hold and plans at once) may have queued the kind.
-        if isBusy(k.kind) { return }
-        _ = enqueue(k.makeRequest())   // a factory refusal holds the kind inside enqueue
     }
 
-    private var activeHolds: [ScheduleHold] { holds.filter(\.isActive) }
-
-    /// A release means "try again, fresh" (Codex #236 F3, #238 F1, #239):
-    /// every retained work item of the kind — a queued (adopted) request with
-    /// its checkpoint, or a refused request whose queue file was kept — is
-    /// dropped (queue file and checkpoint; its OUTCOME is already in the log),
-    /// and the release's plan queues ONE new job: a fresh checkpoint, fresh
-    /// counts and a fresh frozen plan. Re-using an old work item carried its
-    /// streak, its counts or its unit indices into a different plan.
+    /// A release means "try again, fresh" (Codex #236 F3, #238 F1, #239): an
+    /// adopted queued request of the kind (and its checkpoint) is dropped —
+    /// its OUTCOME is already in the log — and the release's plan queues ONE
+    /// new job with a fresh checkpoint, counts and frozen plan.
     private func dropRetainedWork(_ kind: JobKind) {
-        for (id, run) in runs where run.request.kind == kind {
-            let retained: Bool
-            switch run.state {
-            case .queued: retained = true
-            case .failed: retained = queue.contains(id)
-            default: retained = false
-            }
-            guard retained else { continue }
+        for (id, run) in runs where run.request.kind == kind && run.state == .queued {
             queue.remove(id)
             checkpoints.remove(id)
             runs[id] = nil
             order.removeAll { $0 == id }
-            finishedOrder.removeAll { $0 == id }
             log.write("schedule: \(kind) \(id) — its old work item is dropped with the hold (\(run.checkpoint.map { "at \($0.completedUnits) of \($0.totalUnits)" } ?? "never started")); the release plans fresh work")
         }
     }
 
+    private func hasActiveJob(_ kind: JobKind) -> Bool {
+        runs.values.contains { $0.request.kind == kind && $0.state.isActive }
+    }
+
     /// Held, or a job of the kind is active: the schedule leaves it alone.
     private func isBusy(_ kind: JobKind) -> Bool {
-        activeHolds.contains { $0.kind == kind } || runs.values.contains { $0.request.kind == kind && $0.state.isActive }
+        holds.contains { $0.kind == kind } || hasActiveJob(kind)
     }
 
     private func isScheduled(_ kind: JobKind) -> Bool {
         schedule?.kinds.contains { $0.kind == kind } ?? false
     }
 
+    /// holds.json and paused.json, once per process. Unreadable fails closed:
+    /// every scheduled kind held (or paused) until Resume or a new build.
     private func loadHolds() {
         guard !holdsLoaded, let schedule else { return }
         holdsLoaded = true
         switch schedule.holds.load() {
         case .success(let h):
             holds = h
-            for hold in h where hold.isActive { log.write("schedule: \(hold.kind) is \(hold.words)") }
+            for hold in h { log.write("schedule: \(hold.kind) is \(hold.words)") }
         case .failure(let r):
-            // Fail closed (Codex #235 F2): an unreadable holds file may have held
-            // anything, so every scheduled kind is held until Resume (which
-            // rewrites the file) or a new build.
             log.write("schedule: \(r.words) — holding every scheduled kind until Resume or a new build")
             holds = schedule.kinds.map {
-                ScheduleHold(kind: $0.kind, jobID: JobID(), reason: "the holds file was unreadable", signature: "holds.json unreadable",
-                             build: schedule.buildID, generation: nil, sticky: true)
+                ScheduleHold(kind: $0.kind, jobID: JobID(), reason: "the holds file was unreadable", build: schedule.buildID)
             }
             // COPY the torn file aside (kept, never deleted), then publish these
-            // over it atomically, so a NEW build can release them — and a crash
-            // at any point leaves either the torn file (fail closed again) or the
-            // new holds, never no file (Codex #236 F4, #237 F2).
+            // over it atomically: a crash at any point leaves the torn file (fail
+            // closed again) or the new holds, never no file (Codex #236 F4, #237 F2).
             let url = schedule.holds.url
             let aside = url.appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970))")
             do {
@@ -532,6 +514,12 @@ public actor JobSupervisor {
                 log.write("schedule: could not copy the unreadable holds file aside (\(error)) — it stays; the holds last for this process")
             }
         }
+        switch schedule.holds.loadPaused() {
+        case .success(let kinds): pausedKinds = Set(kinds)
+        case .failure(let r):
+            log.write("schedule: \(r.words) — every scheduled kind starts paused; Resume clears it")
+            pausedKinds = Set(schedule.kinds.map(\.kind))
+        }
     }
 
     private func saveHolds() {
@@ -540,67 +528,69 @@ public actor JobSupervisor {
         }
     }
 
-    /// A scheduled kind failed: hold it. A repeat of the words a catalog
-    /// change already released once is sticky (see JobSchedule.swift).
-    private func hold(_ kind: JobKind, jobID: JobID, reason: String, signature: String, generation: Int?) {
-        guard let schedule, schedule.kinds.contains(where: { $0.kind == kind }) else { return }
+    private func savePaused() {
+        do { try schedule?.holds.savePaused(pausedKinds.sorted { $0.rawValue < $1.rawValue }) } catch {
+            log.write("schedule: could not write the paused file (\(error)) — the pause lasts until this process ends")
+        }
+    }
+
+    /// A scheduled kind failed: hold it, measured against the next plan.
+    private func hold(_ kind: JobKind, jobID: JobID, reason: String) {
+        guard let schedule, isScheduled(kind) else { return }
         loadHolds()
-        let previous = holds.first { $0.kind == kind }
-        let sticky = previous.map { ($0.signature ?? $0.reason) == signature && ($0.sticky || $0.releasedByCatalogAt != nil) } ?? false
         holds.removeAll { $0.kind == kind }
-        let h = ScheduleHold(kind: kind, jobID: jobID, reason: reason, signature: signature, build: schedule.buildID,
-                             generation: generation, sticky: sticky)
+        let h = ScheduleHold(kind: kind, jobID: jobID, reason: reason, build: schedule.buildID)
         holds.append(h)
         saveHolds()
         log.write("schedule: \(kind) \(h.words)")
     }
 
-    private func releaseHolds(build: String, generation: Int?) {
-        let before = holds
-        var released: [JobKind] = []
-        holds = holds.compactMap { h in
-            // Any record from another build goes: that build's failure says nothing about this one.
-            guard h.build == build else {
-                if h.isActive { log.write("schedule: hold on \(h.kind) released — a new build (\(build))"); released.append(h.kind) }
-                return nil
-            }
-            // A hold born while the generation was unknown takes the first known
-            // one as its baseline, so a later change can release it (Codex #237 F4).
-            if h.isActive, h.generation == nil, let now = generation {
-                var based = h
-                based.generation = now
-                return based
-            }
-            guard h.isActive, !h.sticky, let was = h.generation, let now = generation, was != now else { return h }
-            released.append(h.kind)
-            log.write("schedule: hold on \(h.kind) released — the catalog changed (generation \(h.generation.map(String.init) ?? "unknown") → \(generation.map(String.init) ?? "unknown"))")
-            var released = h
-            released.releasedByCatalogAt = Date()
-            return released
-        }
-        // A released kind's kept refused request runs again, not a new one beside it (Codex #237 F3).
-        for kind in released { dropRetainedWork(kind) }
-        if holds != before { saveHolds(); lastPlanAt = nil; kickLanes() }
+    private func release(_ kind: JobKind, words: String) {
+        measureOnly.remove(kind)
+        holds.removeAll { $0.kind == kind }
+        saveHolds()
+        log.write("schedule: hold on \(kind) released — \(words)")
+        dropRetainedWork(kind)
+        lastPlanAt = nil
+        kickLanes()
+    }
+
+    /// A hold made by another build says nothing about this one.
+    private func releaseOtherBuilds(_ build: String) {
+        for h in holds where h.build != build { release(h.kind, words: "a new build (\(build))") }
     }
 
     /// Rick pressed Resume: forget the hold and plan now.
     public func releaseHold(_ kind: JobKind, words: String) {
         guard claimRoot() else { return }
         loadHolds()
-        guard holds.contains(where: { $0.kind == kind && $0.isActive }) else { return }
-        holds.removeAll { $0.kind == kind }
-        saveHolds()
-        log.write("schedule: hold on \(kind) released — \(words)")
-        dropRetainedWork(kind)
-        lastPlanAt = nil
-        kickLanes()        // an adopted request of the kind may now run
+        guard holds.contains(where: { $0.kind == kind }) else { return }
+        release(kind, words: words)
         Task { await self.scheduleTick() }
+    }
+
+    /// SIGTERM (unregister, logout, `launchctl kickstart -k`): a clean exit is
+    /// not a crash — stop the lanes and clear every in-flight mark, so three
+    /// restarts never quarantine a unit (Fable review 11/04). The unit in
+    /// flight runs again at the next launch.
+    public func prepareForExit() {
+        for task in laneTasks.values { task.cancel() }
+        laneTasks.removeAll()
+        scheduleTask?.cancel()
+        scheduleTask = nil
+        for (id, run) in runs {
+            guard var cp = run.checkpoint, cp.inFlightUnit != nil else { continue }
+            cp.inFlightUnit = nil
+            cp.inFlightAttempts = nil
+            runs[id]?.checkpoint = cp
+            try? checkpoints.save(cp)
+        }
     }
 
     // MARK: - Lanes
 
     private func kickLanes() {
-        let held = Set(activeHolds.map(\.kind))
+        let held = Set(holds.map(\.kind))
         let lanes = Set(order.compactMap { runs[$0] }.filter { $0.state == .queued && !held.contains($0.request.kind) }.map(\.request.lane))
         for lane in lanes where laneTasks[lane] == nil {
             laneTasks[lane] = Task { await self.runLane(lane) }
@@ -610,7 +600,7 @@ public actor JobSupervisor {
     private func nextQueued(in lane: String) -> JobID? {
         order.first { id in
             guard let run = runs[id] else { return false }
-            return run.state == .queued && run.request.lane == lane && !activeHolds.contains { $0.kind == run.request.kind }
+            return run.state == .queued && run.request.lane == lane && !holds.contains { $0.kind == run.request.kind }
         }
     }
 
@@ -653,22 +643,17 @@ public actor JobSupervisor {
         // A streak that already reached fail fast before a crash ends the job
         // now, before another unit could reset it (Codex #237 F1).
         if turn.reachedFailFast {
-            runs[id]?.failureWords = turn.streak.words
             return await end(job, id, as: .failed(reason: "\(turn.streak.length) units in a row failed with the same error before a relaunch: \(turn.streak.words ?? "")"), cp, began)
         }
         while cp.completedUnits < cp.totalUnits {
             switch await step(job, &cp, id, &turn) {
             case .killed: return
             case .stop: return await end(job, id, as: .stopped, cp, began)
-            case .failFast(let reason):
-                runs[id]?.failureWords = turn.streak.words
-                return await end(job, id, as: .failed(reason: reason), cp, began)
+            case .failFast(let reason): return await end(job, id, as: .failed(reason: reason), cp, began)
             case .next: continue
             }
         }
-        let verdict = turn.verdict(stopRequested: runs[id]?.stopRequested == true, cp)
-        runs[id]?.failureWords = verdict.failureWords
-        await end(job, id, as: verdict.state, cp, began)
+        await end(job, id, as: turn.verdict(stopRequested: runs[id]?.stopRequested == true, cp), cp, began)
     }
 
     private enum Step { case next, stop, killed, failFast(String) }
@@ -681,19 +666,18 @@ public actor JobSupervisor {
 
         var reachedFailFast: Bool { streak.words != nil && streak.length >= failFastUnits }
 
-        /// How a loop that ran to the end of its plan ends. Every unit of the
-        /// job failed with the same systemic words, fewer than `failFastUnits`
-        /// of them (a short plan): that is a failure too, or a one-file plan
-        /// with a missing tool retries forever (Codex #235 F6). Read from the
-        /// checkpoint's counts and streak, so it survives a relaunch (#236 F2).
-        func verdict(stopRequested: Bool, _ cp: JobCheckpoint) -> (state: JobRunState, failureWords: String?) {
-            if stopRequested { return (.stopped, nil) }
+        /// How a loop that ran to the end of its plan ends, from the
+        /// checkpoint's counts and streak (so it survives a relaunch, #236 F2):
+        /// a restored fail-fast streak, or ZERO progress — every unit failed,
+        /// nothing written, systemic or not (Fable review 11/04: a job of only
+        /// timeouts "finished" and was re-planned forever) — is a failure.
+        func verdict(stopRequested: Bool, _ cp: JobCheckpoint) -> JobRunState {
+            if stopRequested { return .stopped }
             if reachedFailFast, let words = streak.words {
-                return (.failed(reason: "\(streak.length) units in a row failed with the same error: \(words)"), words)
+                return .failed(reason: "\(streak.length) units in a row failed with the same error: \(words)")
             }
-            guard let words = streak.words, cp.unitsRun == 0, cp.unitsSkipped == 0, cp.unitsFailed > 0,
-                  streak.length == cp.unitsFailed else { return (.finished, nil) }
-            return (.failed(reason: "all \(cp.unitsFailed) unit(s) failed with the same error: \(words)"), words)
+            guard cp.unitsRun == 0, cp.unitsSkipped == 0, cp.totalUnits > 0, cp.unitsFailed == cp.totalUnits else { return .finished }
+            return .failed(reason: "all \(cp.totalUnits) unit(s) failed; nothing written" + (streak.words.map { " (last error: \($0))" } ?? ""))
         }
     }
 
@@ -742,7 +726,7 @@ public actor JobSupervisor {
         } catch {
             let words = (error as? Refusal)?.words ?? String(describing: error)
             log.write("START \(run.request.kind) \(id) — refused: \(words)")
-            finish(id, as: .failed(reason: words), checkpoint: nil, elapsed: nil, keepQueueFile: true)
+            finish(id, as: .failed(reason: words), checkpoint: nil, elapsed: nil)
             return nil
         }
     }
@@ -879,15 +863,13 @@ public actor JobSupervisor {
 
     /// THE terminal transition — the one door every job leaves through, and
     /// the one place the OUTCOME line is written (≈ the RAII guard's
-    /// destructor: a START cannot end without it). The checkpoint goes; the
-    /// queue file goes too, except for a job this build REFUSED at START
-    /// (`keepQueueFile`) — that file is the app's intent and is kept for a
-    /// build that knows the kind (refuse, never erase). A job that failed fast
-    /// mid-run is not a refusal: its file goes, or every relaunch would
-    /// resurrect it. A FAILED scheduled kind is held (JobSchedule.swift).
+    /// destructor: a START cannot end without it). The checkpoint and the
+    /// queue file go (since 2026-11-04 the app enqueues nothing, so no queue
+    /// file is anyone's kept intent). A FAILED scheduled kind is held
+    /// (JobSchedule.swift); any end of a scheduled kind re-plans at the next
+    /// tick, so the plan size shown is never the one from before the job.
     /// The run stays in the status list for a while.
-    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?, detail: String = "",
-                        keepQueueFile: Bool = false) {
+    private func finish(_ id: JobID, as state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?, detail: String = "") {
         guard var run = runs[id] else { return }
         run.state = state
         run.finishedAt = Date()
@@ -895,14 +877,17 @@ public actor JobSupervisor {
         runs[id] = run
         // The hold is durable FIRST — before the OUTCOME line and before the
         // queue file and checkpoint go (Codex #235 F1, #236 F2).
-        if case .failed(let reason) = state {
-            hold(run.request.kind, jobID: id, reason: reason, signature: run.failureWords ?? reason, generation: lastGeneration)
-        }
-        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed,
-                                   queueFileKept: keepQueueFile)
+        if case .failed(let reason) = state { hold(run.request.kind, jobID: id, reason: reason) }
+        log.write(Self.outcomeLine(kind: run.request.kind.rawValue, id: id, state: state, checkpoint: cp, elapsed: elapsed)
                   + (detail.isEmpty ? "" : "; \(detail)"))
-        if !keepQueueFile { queue.remove(id) }
+        queue.remove(id)
         checkpoints.remove(id)
+        if isScheduled(run.request.kind) {
+            // The plan size shown must be re-measured now (Fable review 11/04) —
+            // measured, not re-queued: the next interval or commit queues.
+            measureOnly.insert(run.request.kind)
+            lastPlanAt = nil
+        }
         touch()
         push(id, force: true)
         finishedOrder.append(id)
@@ -915,8 +900,7 @@ public actor JobSupervisor {
     }
 
     /// The OUTCOME line for a terminal state, with the counts when there are any.
-    static func outcomeLine(kind: String, id: JobID, state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?,
-                            queueFileKept: Bool = true) -> String {
+    static func outcomeLine(kind: String, id: JobID, state: JobRunState, checkpoint cp: JobCheckpoint?, elapsed: Duration?) -> String {
         let counts = cp.map { "\($0.unitsRun) run · \($0.unitsSkipped) skipped · \($0.unitsFailed) failed" } ?? "0 run · 0 skipped · 0 failed"
         let time = elapsed.map { " in \(seconds($0))" } ?? ""
         switch state {
@@ -926,7 +910,7 @@ public actor JobSupervisor {
             let place = cp.map { "at \($0.completedUnits) of \($0.totalUnits)" } ?? "before it started"
             return "OUTCOME \(kind) \(id) — stopped \(place): \(counts)\(time)"
         case .failed(let reason):
-            return "OUTCOME \(kind) \(id) — failed: \(reason); \(counts)\(time)" + (queueFileKept ? "; the queue file is kept" : "")
+            return "OUTCOME \(kind) \(id) — failed: \(reason); \(counts)\(time)"
         case .queued, .running, .pausing, .paused:
             return "OUTCOME \(kind) \(id) — \(state.words): \(counts)\(time)"
         }

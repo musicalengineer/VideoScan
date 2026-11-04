@@ -296,25 +296,16 @@ Swift protocol); the journal is a write-ahead log the app replays into the catal
   For each scheduled kind with no active job and no hold, it asks the planner for the plan size (the job's own planner;
   EraPlanner for era), reports that size in `ServiceStatus.planned`, and enqueues a job when the plan is not empty.
   It runs only while it owns the state root (StateRootLock).
-- **Failures hold.** A scheduled kind whose job ends `.failed` (after `failFastUnits = 5` identical systemic
-  failures, or a START or enqueue refusal) is held in `background/holds.json`. The hold survives a restart and is released by:
-  - Resume on its menu line;
-  - a new build (the executable's size and mtime);
-  - a catalog generation change, honoured once per reason: the same failure after that is sticky.
+- **Failures hold.** A scheduled kind whose job ends `.failed` is held in `background/holds.json`:
+  - after `failFastUnits = 5` identical systemic failures;
+  - when every unit failed, whatever the cause ("nothing written");
+  - after a START or admission refusal.
 
-  The menu bar and Settings say why. This answers Codex #232 F4.
-
-  Codex #235–#239 hardening:
-  - A release drops the kind's retained work items (a queued checkpoint, a kept refused request) and plans one fresh job.
-  - A factory refusal from any caller holds.
-  - The failure streak lives in the checkpoint, so the verdict survives a relaunch.
-  - Relaunch adopts one request per scheduled kind.
-  - A torn `holds.json` fails closed. It is copied aside, then the holds are rewritten.
-  - An unknown generation is never a change.
-  - A job's frozen plan is removed only after its checkpoint.
-- **Crash loops.** Before each unit, the checkpoint records that unit as in flight. A unit found in flight at 3
-  relaunches is quarantined: counted failed, skipped, and logged. launchd only throttles, so this is what stops a crash
-  loop on one file.
+  The hold survives a restart and is released by Resume on its menu line, by a new build (the executable's size and mtime), or by new work. New work means the plan size differs from the first plan measured after the hold. A catalog commit that adds no work does not release it. (Fable review 2026-11-04: failure words carry a stderr tail that differs per spawn, so no words-based rule is stable.) A release drops the kind's old work item and plans one fresh job. The menu bar and Settings say why. This answers Codex #232 F4.
+- **Pause** from the menu bar is kept per kind in `background/paused.json`. A restart adopts the job still paused, and Resume clears it.
+- **Only the helper enqueues a scheduled kind.** XPC and the CLI refuse `era`, and the CLI keeps `--run era` for hand runs. A queue file goes with its job's OUTCOME.
+- **Crash loops.** Before each unit, the checkpoint records that unit as in flight. A unit found in flight at 3 relaunches is quarantined: counted failed, skipped, and logged. A clean SIGTERM (unregister, logout) clears the mark first, so it never counts. The failure streak lives in the checkpoint, so the verdict survives a relaunch.
+- **An older helper is said.** `ServiceStatus.build` names the running build. When it differs from the helper bundled in the app, Settings says "older helper running — turn the checkbox off and on".
 - **Full Disk Access (note, 2026-11-04).** DTS (forum threads 694948, 661178) says TCC treats the containing app as
   the responsible code for a helper embedded in it, so the grant is the app's. This is not verified on the Ultra; the
   §0 point 6 wording stands until it is.

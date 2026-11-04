@@ -42,7 +42,7 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
     }
 
     public var icon: Icon
-    /// The first, disabled line: "VideoScan Background — trickle (you're working)".
+    /// The first, disabled line: "VideoScan Background — full speed".
     public var headline: String
     public var jobs: [JobLine]
     /// The tooltip on the menu bar item.
@@ -50,16 +50,16 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
 
     public static func from(_ s: ServiceStatus) -> Self {
         let active = s.jobs.filter { $0.state.isActive }
-        let holds = (s.holds ?? []).filter(\.isActive)
+        let holds = s.holds ?? []
         let heldKinds = Set(holds.map(\.kind))
         let failures = lastFailures(s.jobs).filter { !heldKinds.contains($0.kind) }.map(jobLine)
         let held = holds.map { holdLine($0, jobs: s.jobs) }
-        let moving = active.filter { ($0.state == .running || $0.state == .pausing) && !$0.isWaiting }
-        let waiting = active.filter { $0.isWaiting || $0.state == .queued }
+        let moving = active.filter { $0.state == .running || $0.state == .pausing }
+        let waiting = active.filter { $0.state == .queued }
         let icon = Icon.decide(servicePaused: s.backoff.isPaused, active: active.count, moving: moving.count,
                                waiting: waiting.count, held: held.count)
         let headline = "VideoScan Background — "
-            + (icon == .waiting ? (waiting.isEmpty ? "held after a failure" : waitingHeadline(s.backoff))
+            + (icon == .waiting ? (waiting.isEmpty ? "held after a failure" : "queued")
                                 : backoffWords(s.backoff, jobs: active.count))
         let first: String?
         switch icon {
@@ -97,21 +97,14 @@ public struct BackgroundMenuPresentation: Equatable, Sendable {
         }
     }
 
-    /// "idle" · "full speed" · "paused (thermal)"; "gently (you're at the
-    /// Mac)" only from an older helper (no trickle since 2026-11-04).
+    /// "idle" · "full speed" · "paused (thermal)". An older helper's
+    /// `.trickle` decodes and reads "full speed" (no keyboard backoff since 2026-11-04).
     static func backoffWords(_ b: BackoffState, jobs: Int) -> String {
         if jobs == 0, !b.isPaused { return "idle" }
         switch b {
-        case .full: return "full speed"
-        case .trickle: return "gently (you're at the Mac)"
+        case .full, .trickle: return "full speed"
         case .paused(let reason): return "paused (\(reason))"
         }
-    }
-
-    /// Every running job waits: say so, with the Mac's reason when it is
-    /// the trickle (you are at the keyboard) — never "gently", which says work.
-    static func waitingHeadline(_ b: BackoffState) -> String {
-        b == .trickle ? "waiting (you're at the Mac)" : "waiting"
     }
 
     /// "Machine era (8B) — held after a failure: … — Resume, …" with Resume.

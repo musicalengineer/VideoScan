@@ -30,7 +30,7 @@ struct BackgroundMenuPresentationTests {
     func working() {
         let p = BackgroundMenuPresentation.from(Self.status(.trickle, [Self.job(.running)]))
         #expect(p.icon == .working)
-        #expect(p.headline == "VideoScan Background — gently (you're at the Mac)")
+        #expect(p.headline == "VideoScan Background — full speed", "an older helper's .trickle reads full speed: no keyboard backoff since 11/04")
         #expect(p.jobs.map(\.words) == ["Machine era (8B) — 1,203 of 4,709 · running"])
         #expect(p.jobs[0].canPause && !p.jobs[0].canResume)
         #expect(p.tooltip.contains("1,203 of 4,709"))
@@ -54,7 +54,7 @@ struct BackgroundMenuPresentationTests {
         var failed = Self.job(.failed(reason: "the worker could not load the model"))
         failed.finishedAt = Date()
         var s = Self.status(.full, [failed])
-        s.holds = [ScheduleHold(kind: .era, jobID: failed.id, reason: "the worker could not load the model", build: "b1", generation: 7)]
+        s.holds = [ScheduleHold(kind: .era, jobID: failed.id, reason: "the worker could not load the model", build: "b1")]
         let p = BackgroundMenuPresentation.from(s)
         #expect(p.icon == .waiting)
         #expect(p.headline == "VideoScan Background — held after a failure")
@@ -62,15 +62,15 @@ struct BackgroundMenuPresentationTests {
         #expect(p.jobs[0].id == failed.id)
         #expect(p.jobs[0].canResume && !p.jobs[0].canPause)
         #expect(p.jobs[0].words.contains("held after a failure: the worker could not load the model"))
-        #expect(p.jobs[0].words.contains("Resume, a new build or a catalog change clears it"))
+        #expect(p.jobs[0].words.contains("Resume, a new build or new work clears it"))
     }
 
     @Test("HOLD after a restart: no job is listed, the hold still has its line and Resume, titled by kind")
     func heldKindAfterRestart() {
         var s = Self.status(.full, [])
-        s.holds = [ScheduleHold(kind: .era, jobID: JobID(rawValue: "old"), reason: "x", build: "b1", generation: nil, sticky: true)]
+        s.holds = [ScheduleHold(kind: .era, jobID: JobID(rawValue: "old"), reason: "x", build: "b1")]
         let p = BackgroundMenuPresentation.from(s)
-        #expect(p.jobs.map(\.words) == ["Machine era (8B) — held after a failure: x — Resume or a new build clears it"])
+        #expect(p.jobs.map(\.words) == ["Machine era (8B) — held after a failure: x — Resume, a new build or new work clears it"])
         #expect(p.jobs[0].canResume)
     }
 

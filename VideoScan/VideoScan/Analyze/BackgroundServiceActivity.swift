@@ -40,7 +40,7 @@ final class BackgroundServiceActivity {
     /// the counted analyzers.
     nonisolated static func isActive(_ reply: Result<ServiceStatus, Refusal>?) -> Bool {
         guard case .success(let status)? = reply else { return false }
-        return status.jobs.contains { $0.state == .running && !$0.isWaiting && feedsCountedAnalyzers.contains($0.kind) }
+        return status.jobs.contains { $0.state == .running && feedsCountedAnalyzers.contains($0.kind) }
     }
 
     /// The era job's own line under Content (nil = no era job not done):

@@ -1,0 +1,242 @@
+// FableReviewHelperTests.swift — Fable's review reds for feat/helper-owns-schedule
+// (0dedf4768), each run red on that tip, then green. The varying-words test
+// is restated for the rule that replaced "sticky" (a hold is released by
+// Resume, a new build, or a CHANGED PLAN SIZE — never by a catalog commit alone).
+
+import Foundation
+import Testing
+@testable import VideoScanCore
+
+// MARK: doubles
+
+/// Every unit fails the way a clip timeout / worker death does: words that do
+/// not name the file, `failureIsSystemic == false`. The supervisor's streak
+/// ignores these, so the job ends `.finished` with 0 run.
+struct AllNonSystemicJob: BackgroundJob {
+    let title = "every unit times out"
+    let unitCount = 2
+    func runUnit(_ index: Int) async throws -> UnitOutcome {
+        throw Refusal("analyze_clip exceeded 180 s; the worker was killed and the GPU freed")
+    }
+    func failureIsSystemic(_ error: any Error) -> Bool { false }
+}
+
+struct AllNonSystemicFactory: JobFactory {
+    static let kind = JobKind(rawValue: "timeouts")
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob { AllNonSystemicJob() }
+}
+
+final class SpawnCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+}
+
+/// A model-load failure as EraJob really words it: `Refusal` (systemic) whose
+/// text ends with the worker's stderr tail — and a tail differs per spawn
+/// (progress-bar rates, timings). Within ONE job the words are fixed, so the
+/// job fails fast; across jobs they differ.
+struct VaryingTailJob: BackgroundJob {
+    let title = "load fails, stderr tail differs per spawn"
+    let unitCount = 6
+    let spawn: Int
+    func runUnit(_ index: Int) async throws -> UnitOutcome {
+        throw Refusal("the worker could not load the model (the worker died during load — last words: "
+                      + "Fetching 10 files: 100%|██████████| 10/10 [00:00<00:00, \(spawn * 137).\(spawn)it/s])")
+    }
+}
+
+struct VaryingTailFactory: JobFactory {
+    static let kind = JobKind(rawValue: "varying")
+    let spawns: SpawnCounter
+    func makeJob(for request: JobRequest) throws -> any BackgroundJob { VaryingTailJob(spawn: spawns.next()) }
+}
+
+@Suite("Fable review — helper owns its schedule", .serialized)
+struct FableReviewHelperTests {
+
+    static func schedule(kind: JobKind, probe: ScheduleProbe, root: URL,
+                         planInterval: Duration) -> JobSchedule {
+        var s = JobSchedule(kinds: [JobSchedule.Kind(kind: kind, planSize: { probe.planned() },
+                                                     makeRequest: { JobRequest(kind: kind, requestedBy: "schedule") })],
+                            generation: { probe.generation }, buildID: "b1",
+                            holds: ScheduleHoldStore.beside(stateRoot: root))
+        s.planInterval = planInterval
+        s.pollInterval = .milliseconds(20)
+        return s
+    }
+
+    static func jobs(_ s: JobSupervisor) async -> [JobProgressSnapshot] {
+        await s.status(processIdentifier: 1, startedAt: Date()).jobs
+    }
+
+    // Pins JobSupervisor.swift:889-915 (`finish`) — a scheduled kind's job ends
+    // and neither `planned[kind]` nor `lastPlanAt` is touched, so for up to
+    // `planInterval` (10 min in production) `status.planned` repeats the plan
+    // size from BEFORE the job ran. BackgroundServiceStore.swift:321 prints it
+    // as "Content analysis: N files to analyze (the helper's plan)".
+    @Test("TRUTH: after the job finished its whole plan, status still reports the pre-run plan size")
+    func planSizeIsStaleAfterTheJobFinished() async throws {
+        let root = try BackgroundFixtures.scratch("fable-stale-plan")
+        let probe = ScheduleProbe()                       // plan size 3
+        let recorder = UnitRecorder()
+        let s = JobScheduleTests.supervisor(probe, root: root, recorder: recorder)   // planInterval 1 h
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 })
+        #expect(await BackgroundFixtures.waitUntil { await Self.jobs(s).first?.state == .finished })
+        probe.size = 0                                    // a fresh plan would now say: nothing left
+        try await Task.sleep(for: .milliseconds(250))     // a dozen poll ticks
+        let planned = await s.status(processIdentifier: 1, startedAt: Date()).planned?[ScheduleFactory.kind.rawValue]
+        #expect(planned == nil || planned == 0,
+                "finish() never invalidates the plan: Settings says '3 files to analyze (the helper's plan)' for up to planInterval after they were all done (got \(String(describing: planned)))")
+        #expect(await Self.jobs(s).count == 1, "re-measured, not re-queued: no job runs back to back")
+        await s.abandonForTest()
+    }
+
+    // Pins JobSupervisor.swift:689-697 (`Turn.verdict`) — a job whose EVERY
+    // unit failed non-systemically (timeouts, worker deaths) ends `.finished`
+    // with 0 run, so nothing holds the kind; the planner finds the same units
+    // (nothing was journaled) and queues the same job again at the next plan —
+    // every planInterval, or every catalog commit, forever, each run paying a
+    // model load plus N clip timeouts. The menu bar says "working" throughout.
+    @Test("LIFECYCLE: a job that made no progress is re-planned and re-run forever")
+    func zeroProgressJobIsRunAgainForever() async throws {
+        let root = try BackgroundFixtures.scratch("fable-zero-progress")
+        let probe = ScheduleProbe()                       // plan size 3 (> 0: work "left")
+        let log = InMemoryBackgroundLog()
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                              factory: AllNonSystemicFactory(), backoff: BackgroundFixtures.fullBackoff(),
+                              log: log, configuration: BackgroundFixtures.fastConfiguration(),
+                              schedule: Self.schedule(kind: AllNonSystemicFactory.kind, probe: probe, root: root,
+                                                      planInterval: .milliseconds(50)))
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await Self.jobs(s).first?.state.isActive == false }, "\(log.lines)")
+        try await Task.sleep(for: .milliseconds(400))     // eight plan intervals
+        let status = await s.status(processIdentifier: 1, startedAt: Date())
+        #expect(status.jobs.count == 1 || status.holds?.isEmpty == false,
+                "0 run · 0 skipped · 2 failed is not progress; the kind should hold (or at least not be re-queued): \(status.jobs.map(\.state))")
+        await s.abandonForTest()
+    }
+
+    // Pins JobSupervisor.swift:549 (`hold`, the signature compare) with
+    // EraJob.swift:185 + PythonClipWorker.swift:51 (load-failure words carry the
+    // 64 KB stderr tail). The design says a catalog change releases a hold ONCE
+    // per failure; a repeat with "the same words" is sticky. The words are never
+    // the same when the tail moves, so every catalog commit releases the hold
+    // and buys another spawn + model load, without end.
+    @Test("LIFECYCLE: a hold whose failure words vary (stderr tail) is not released by catalog commits — only by a changed plan")
+    func holdWithVaryingWordsIsReleasedForever() async throws {
+        let root = try BackgroundFixtures.scratch("fable-varying-words")
+        let probe = ScheduleProbe()
+        let spawns = SpawnCounter()
+        let log = InMemoryBackgroundLog()
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                              factory: VaryingTailFactory(spawns: spawns), backoff: BackgroundFixtures.fullBackoff(),
+                              log: log, configuration: BackgroundFixtures.fastConfiguration(),
+                              schedule: Self.schedule(kind: VaryingTailFactory.kind, probe: probe, root: root,
+                                                      planInterval: .seconds(3600)))
+        @Sendable func failedJobs() async -> Int {
+            await Self.jobs(s).filter { if case .failed = $0.state { true } else { false } }.count
+        }
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await failedJobs() == 1 }, "first failure holds: \(log.lines)")
+        probe.generation = 2                              // a commit that adds no work
+        try await Task.sleep(for: .milliseconds(200))
+        probe.generation = 3                              // another
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await failedJobs() == 1, "a catalog commit released the hold: \(log.lines.filter { $0.contains("released") })")
+        probe.size = 4                                    // the work changed: one more file to analyze
+        probe.generation = 4
+        #expect(await BackgroundFixtures.waitUntil { await failedJobs() == 2 }, "a changed plan releases it once: \(log.lines)")
+        await s.abandonForTest()
+    }
+}
+
+@Suite("Fable review — pause, clean exit, build", .serialized)
+struct FableReviewHelperFollowUpTests {
+
+    @Test("PAUSE survives a restart: the relaunched supervisor adopts the job paused and runs no unit until Resume")
+    func pauseSurvivesARestart() async throws {
+        let root = try BackgroundFixtures.scratch("fable-pause")
+        let probe = ScheduleProbe()
+        let recorder = UnitRecorder()
+        let queue = InMemoryJobQueueStore()
+        let checkpoints = InMemoryCheckpointStore()
+        func supervisor() -> JobSupervisor {
+            JobSupervisor(queue: queue, checkpoints: checkpoints,
+                          factory: RecordingFactory(recorder: recorder, units: 50, sleepPerUnit: .milliseconds(20)),
+                          backoff: BackgroundFixtures.fullBackoff(), log: InMemoryBackgroundLog(),
+                          configuration: BackgroundFixtures.fastConfiguration(),
+                          schedule: FableReviewHelperTests.schedule(kind: RecordingFactory.kind, probe: probe, root: root,
+                                                                    planInterval: .seconds(3600)))
+        }
+        let first = supervisor()
+        await first.start()
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count >= 2 })
+        let id = try #require(await FableReviewHelperTests.jobs(first).first?.id)
+        #expect(await first.pause(id))
+        #expect(await BackgroundFixtures.waitUntil { await first.snapshot(id)?.state == .paused(reason: JobSupervisor.userPauseReason) })
+        await first.abandonForTest()
+        let ranBefore = recorder.completedUnits.count
+
+        let second = supervisor()
+        await second.start()
+        let stillPaused = await BackgroundFixtures.waitUntil { await second.snapshot(id)?.state == .paused(reason: JobSupervisor.userPauseReason) }
+        let state = await second.snapshot(id)?.state
+        #expect(stillPaused, "after a restart the job is \(String(describing: state))")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(recorder.completedUnits.count == ranBefore, "a unit ran while paused")
+        #expect(await FableReviewHelperTests.jobs(second).count == 1, "no second job was planned beside the paused one")
+        #expect(await second.resume(id))
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count > ranBefore }, "Resume runs it again")
+        #expect(ScheduleHoldStore.beside(stateRoot: root).loadPaused() == .success([]), "Resume clears the persisted pause")
+        await second.abandonForTest()
+    }
+
+    @Test("SIGTERM is not a crash: prepareForExit clears the in-flight mark, so a clean restart never counts toward quarantine")
+    func cleanExitClearsTheInFlightMark() async throws {
+        let recorder = UnitRecorder()
+        let gate = UnitGate()
+        let checkpoints = InMemoryCheckpointStore()
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: checkpoints,
+                              factory: GatedFactory(recorder: recorder, gate: gate, heldUnit: 1), backoff: BackgroundFixtures.fullBackoff(),
+                              log: InMemoryBackgroundLog(), configuration: BackgroundFixtures.fastConfiguration())
+        let request = GatedFactory.request()
+        _ = await s.enqueue(request)
+        #expect(await BackgroundFixtures.waitUntil { gate.isHeld }, "unit 1 is in flight")
+        guard case .found(let during) = checkpoints.load(request.id) else { Issue.record("no checkpoint"); return }
+        #expect(during.inFlightUnit == 1)
+        await s.prepareForExit()
+        guard case .found(let after) = checkpoints.load(request.id) else { Issue.record("no checkpoint"); return }
+        #expect(after.inFlightUnit == nil && after.inFlightAttempts == nil, "the clean exit left an in-flight mark")
+        gate.open()
+    }
+
+    @Test("TRUTH: the status names the running helper's build, so the app can say an older helper is running")
+    func statusCarriesTheBuild() async throws {
+        let root = try BackgroundFixtures.scratch("fable-build")
+        let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                              factory: ScheduleFactory(recorder: UnitRecorder()), backoff: BackgroundFixtures.fullBackoff(),
+                              log: InMemoryBackgroundLog(),
+                              schedule: FableReviewHelperTests.schedule(kind: ScheduleFactory.kind, probe: ScheduleProbe(), root: root,
+                                                                        planInterval: .seconds(3600)))
+        #expect(await s.status(processIdentifier: 1, startedAt: Date()).build == "b1")
+    }
+}
+
+@Suite("Fable review — no back-to-back reruns", .serialized)
+struct FableReviewHelperLoopTests {
+    @Test("a finished job whose plan did not shrink is re-measured, never re-queued at once (no tight loop)")
+    func finishedJobIsNotRequeuedAtOnce() async throws {
+        let root = try BackgroundFixtures.scratch("fable-no-loop")
+        let probe = ScheduleProbe()                       // the plan stays at 3: the job "succeeded" but wrote nothing
+        let recorder = UnitRecorder()
+        let s = JobScheduleTests.supervisor(probe, root: root, recorder: recorder)   // planInterval 1 h
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(recorder.completedUnits.count == 3, "the job was re-run back to back \(recorder.completedUnits.count / 3) times")
+        #expect(await s.status(processIdentifier: 1, startedAt: Date()).planned?[ScheduleFactory.kind.rawValue] == 3, "but the plan was re-measured")
+        await s.abandonForTest()
+    }
+}

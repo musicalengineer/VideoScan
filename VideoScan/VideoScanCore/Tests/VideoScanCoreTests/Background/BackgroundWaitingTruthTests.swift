@@ -2,14 +2,14 @@
 // review (Codex cycle #220) after 2026-11-04 removed the keyboard backoff,
 // the deferred unit and the idle exit (Rick: the helper owns its schedule).
 // Those tests (F3 deferral, F5 idle exit) went with the behaviour; what
-// stays is that the `waiting` field still decodes and still reads as
-// waiting — an older helper may still send it.
+// stays is that the `waiting` field still decodes (an older helper may still
+// send it); no surface reads it since the Fable review 11/04.
 
 import Foundation
 import Testing
 @testable import VideoScanCore
 
-@Suite("Background truth — an older helper's `waiting` still decodes and still says waiting")
+@Suite("Background truth — an older helper's `waiting` still decodes")
 struct BackgroundWaitingTruthTests {
 
     @Test("COMPAT F3: a status payload from a build without `waiting` still decodes (additive field, same schema)")
@@ -26,17 +26,5 @@ struct BackgroundWaitingTruthTests {
         let decoded = try BackgroundPayloadCodec.decode(JobProgressSnapshot.self, from: old)
         #expect(decoded.waiting == nil)
         #expect(decoded == job)
-    }
-
-    @Test("TRUE: a payload with `waiting` set (an older helper) is never shown running — outline glyph, waiting words")
-    func olderWaitingPayloadIsNotRunning() {
-        var job = JobProgressSnapshot(id: JobID(rawValue: "J"), kind: .era, lane: "model", title: "Machine era (8B)", subtitle: "",
-                                      completedUnits: 3, totalUnits: 9, skippedUnits: 0, failedUnits: 0,
-                                      state: .running, startedAt: Date(), finishedAt: nil)
-        job.waiting = "you're at the Mac"
-        let p = BackgroundMenuPresentation.from(ServiceStatus(processIdentifier: 1, startedAt: Date(), backoff: .trickle,
-                                                              jobs: [job], idleSeconds: 0))
-        #expect(p.icon == .waiting)
-        #expect(p.jobs.first?.words.hasSuffix("waiting — you're at the Mac") == true, "\(p.jobs.first?.words ?? "-")")
     }
 }

@@ -335,7 +335,7 @@ struct CatalogStatusSplitReviewTests {
 @MainActor
 struct CatalogStatusBackgroundClaimTests {
 
-    @Test("RED 11/03 F2: an era job running, queued, user-paused or waiting never lights 'Analyzing'; its own line rides under Content")
+    @Test("RED 11/03 F2: an era job running, queued or user-paused never lights 'Analyzing'; its own line rides under Content")
     func eraOnlyThroughTheSnapshot() {
         let snapshot = CatalogFreshnessSnapshot()
         snapshot.publish(report: CatalogStatusSplitTruthTests.report(), facts: CatalogStatusSplitLogicTests.freshFacts)
@@ -343,7 +343,6 @@ struct CatalogStatusBackgroundClaimTests {
             (.running, nil, "Machine era: 120 of 4,709 files (VideoScan Background — running)"),
             (.queued, nil, "Machine era: 120 of 4,709 files (VideoScan Background — queued)"),
             (.paused(reason: "user"), nil, "Machine era: 120 of 4,709 files (VideoScan Background — paused (user))"),
-            (.running, "you're at the Mac", "Machine era: 120 of 4,709 files (VideoScan Background — waiting — you're at the Mac)"),
         ]
         for (state, waiting, eraWords) in cases {
             let reading = BackgroundServiceActivity.Reading(eraOnly(state, waiting: waiting))

@@ -377,7 +377,26 @@
         "startAndOutcome",
         "status",
         "unitThrowingCancellationErrorIsAFailedUnit",
-        "unknownKindQueueFileHasItsOutcomeAndKeepsItsFile"
+        "unknownKindQueueFileHasItsOutcome"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/FableReviewHelperTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FableReviewHelperTests",
+        "FableReviewHelperFollowUpTests",
+        "FableReviewHelperLoopTests"
+      ],
+      "tests": [
+        "cleanExitClearsTheInFlightMark",
+        "finishedJobIsNotRequeuedAtOnce",
+        "holdWithVaryingWordsIsReleasedForever",
+        "pauseSurvivesARestart",
+        "planSizeIsStaleAfterTheJobFinished",
+        "statusCarriesTheBuild",
+        "zeroProgressJobIsRunAgainForever"
       ]
     },
     {
@@ -395,17 +414,16 @@
       ],
       "tests": [
         "activeJobIsNotDoubled",
+        "admissionRefusalHolds",
         "adoptedRequestOfAHeldKindNeverStarts",
-        "catalogReleaseRequeuesTheKeptRequest",
-        "cliRefusalHolds",
         "contenderTouchesNothing",
         "crashLoopUnitIsQuarantined",
-        "enqueueRespectsUniquenessAndHolds",
+        "enqueueOfAScheduledKindIsRefused",
         "eraLoadFailureWordsAreOneStreak",
         "failedVerdictSurvivesARelaunch",
         "generationChangePlans",
         "holdIsDurableBeforeTheQueueFileGoes",
-        "holdReleasedByBuildAndGeneration",
+        "holdReleasedByBuildAndNewWork",
         "holdSurvivesRestartAndClearsOnResume",
         "interleavedTicksEnqueueOnce",
         "olderCheckpointDecodes",
@@ -414,7 +432,6 @@
         "plansAtLaunchWithNoMessage",
         "quarantineReconcilesWithTheJob",
         "refusedRequestWithAStreakRunsFreshOnResume",
-        "relaunchAdoptsOnePerKind",
         "releasedAttemptFailingAgainHolds",
         "restoredFailFastAtTheEndIsAFailure",
         "restoredFailFastMidPlanStopsAtOnce",
@@ -422,10 +439,8 @@
         "resumeMidPlanRunsTheRest",
         "resumeRequeuesTheKeptRequest",
         "shortSystemicJobHolds",
-        "stickyIgnoresUnitCounts",
         "tornFileReleasedByANewBuild",
         "tornHoldsFile",
-        "unknownBornHoldIsReleasedByALaterChange",
         "unknownGenerationIsNotAChange"
       ]
     },
@@ -8333,6 +8348,7 @@
         "holdLoggedOnChange",
         "jobLineOrder",
         "notAnswering",
+        "olderHelperIsSaid",
         "oneKey",
         "requiresApprovalAsksNothing",
         "sameValueIsNoOp",
@@ -33368,8 +33384,7 @@
       "tests": [
         "gateIsLoggedOnce",
         "launchdStatesAreLogged",
-        "notAnsweringIsLoggedOnAppearAndClear",
-        "settingsSaysWaiting"
+        "notAnsweringIsLoggedOnAppearAndClear"
       ]
     },
     {
@@ -33398,8 +33413,7 @@
         "BackgroundWaitingTruthTests"
       ],
       "tests": [
-        "olderPayloadDecodes",
-        "olderWaitingPayloadIsNotRunning"
+        "olderPayloadDecodes"
       ]
     },
     {
@@ -36194,7 +36208,7 @@
       ],
       "expected_floor": 3312,
       "name": "unit",
-      "package_expected_floor": 712,
+      "package_expected_floor": 715,
       "package_selectors": [
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36222,6 +36236,9 @@
         "VideoScanCoreTests.EraJobLogicTests",
         "VideoScanCoreTests.EraJobRunTests",
         "VideoScanCoreTests.EraPlannerEraNoneTests",
+        "VideoScanCoreTests.FableReviewHelperFollowUpTests",
+        "VideoScanCoreTests.FableReviewHelperLoopTests",
+        "VideoScanCoreTests.FableReviewHelperTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.ImportComparatorScaleTests",

@@ -83,10 +83,16 @@ final class BackgroundService: @unchecked Sendable {
     private func installSignalHandlers() {
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         signal(SIGTERM, SIG_IGN)
-        source.setEventHandler { [log] in
+        source.setEventHandler { [log, supervisor] in
             log.write("service received SIGTERM — exiting 0 (launchd leaves it down); work resumes from its checkpoints at the next launch")
-            log.close()
-            exit(0)
+            // A clean exit is not a crash: clear the in-flight marks first, so
+            // three restarts never quarantine a unit (Fable review 11/04).
+            // ExitTimeOut (30 s) bounds this before launchd sends SIGKILL.
+            Task {
+                await supervisor.prepareForExit()
+                log.close()
+                exit(0)
+            }
         }
         source.resume()
         termSource = source

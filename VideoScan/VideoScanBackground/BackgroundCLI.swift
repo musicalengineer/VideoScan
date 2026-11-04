@@ -7,7 +7,6 @@
 //
 //   "…/VideoScan Background" --status
 //   "…/VideoScan Background" --enqueue noop [units] [sleepMilliseconds]
-//   "…/VideoScan Background" --enqueue era [limit N] [repo PATH] [python PATH] [catalog PATH]
 //   "…/VideoScan Background" --pause <id> | --resume <id> | --stop <id>
 //
 // And one FOREGROUND mode (background service step 1): `--run era …
@@ -24,23 +23,24 @@ enum BackgroundCLI {
     enum Verb {
         case status
         case enqueueNoop(units: Int, sleepMilliseconds: Int)
-        case enqueueEra(EraCLIArguments)
         case runEra(EraCLIArguments)
         case refused(String)
         case pause(String), resume(String), stop(String)
     }
 
-    static let usage = "usage: --status | --enqueue noop [units] [sleepMilliseconds] | --enqueue \(EraCLIArguments.usage) | --run \(EraCLIArguments.usage) | --pause <id> | --resume <id> | --stop <id>"
+    static let usage = "usage: --status | --enqueue noop [units] [sleepMilliseconds] | --run \(EraCLIArguments.usage) | --pause <id> | --resume <id> | --stop <id>"
 
     static func verb(in arguments: [String]) -> Verb? {
         guard let first = arguments.first, first.hasPrefix("--") else { return nil }
         let rest = Array(arguments.dropFirst())
         switch first {
         case "--status": return .status
-        case "--enqueue" where rest.first == "era", "--run" where rest.first == "era":
+        case "--enqueue" where rest.first == "era":
+            // The helper schedules era itself (Rick 2026-11-04); a hand run is --run era.
+            return .refused("--enqueue era is gone: VideoScan Background schedules the era job itself — use --run era for a hand run")
+        case "--run" where rest.first == "era":
             do {
-                let parsed = try EraCLIArguments.parse(Array(rest.dropFirst()))
-                return first == "--run" ? .runEra(parsed) : .enqueueEra(parsed)
+                return .runEra(try EraCLIArguments.parse(Array(rest.dropFirst())))
             } catch {
                 return .refused((error as? Refusal)?.words ?? "\(error)")
             }
@@ -90,19 +90,6 @@ enum BackgroundCLI {
                         once.resume(with: Result {
                             switch try BackgroundPayloadCodec.decode(EnqueueReply.self, from: reply) {
                             case .accepted(let id): return "queued noop \(id) — \(units) units, \(sleep) ms each"
-                            case .refused(let refusal): throw refusal
-                            }
-                        })
-                    }
-                case .enqueueEra(let arguments):
-                    let request = arguments.request(requestedBy: "cli")
-                    guard let data = try? BackgroundPayloadCodec.encode(request) else {
-                        once.resume(throwing: Refusal("could not encode the request")); return
-                    }
-                    proxy.enqueue(data) { reply in
-                        once.resume(with: Result {
-                            switch try BackgroundPayloadCodec.decode(EnqueueReply.self, from: reply) {
-                            case .accepted(let id): return "queued era \(id) — \(arguments.limit.map { "\($0) files" } ?? "every uncached video file"), oldest first"
                             case .refused(let refusal): throw refusal
                             }
                         })

@@ -192,8 +192,10 @@ struct JobSupervisorTests {
     }
     // MARK: - Reviewer reds (2026-10-30), now green
 
-    @Test("a queue file naming a JobKind this build does not know gets START…refused and its OUTCOME, and the file is kept (refuse, never erase)")
-    func unknownKindQueueFileHasItsOutcomeAndKeepsItsFile() async throws {
+    /// Changed 2026-11-04 (Fable review): the app enqueues nothing, so no queue
+    /// file is anyone's kept intent — a refused one goes with its OUTCOME.
+    @Test("a queue file naming a JobKind this build does not know gets START…refused and its OUTCOME, and the file goes")
+    func unknownKindQueueFileHasItsOutcome() async throws {
         let newer = JobRequest(kind: JobKind(rawValue: "caption"), requestedBy: "app-v2")
         let queue = InMemoryJobQueueStore([newer])
         let log = InMemoryBackgroundLog()
@@ -202,9 +204,9 @@ struct JobSupervisorTests {
         await supervisor.drain()
 
         #expect(log.lines.contains { $0.hasPrefix("START caption \(newer.id) — refused") }, "\(log.lines)")
-        #expect(log.lines.contains { $0.hasPrefix("OUTCOME caption \(newer.id) — failed:") && $0.contains("the queue file is kept") }, "\(log.lines)")
+        #expect(log.lines.contains { $0.hasPrefix("OUTCOME caption \(newer.id) — failed:") }, "\(log.lines)")
         #expect(log.startCount == log.outcomeCount, "\(log.lines)")
-        #expect(queue.contains(newer.id), "the request is the app's intent; a build that knows the kind will run it")
+        #expect(!queue.contains(newer.id), "a refused file is not kept: nobody re-plans it from the file")
         #expect(await supervisor.snapshot(newer.id)?.state == .failed(reason: "VideoScan Background does not know the job kind `caption` (this build knows: noop, era)"))
     }
 
