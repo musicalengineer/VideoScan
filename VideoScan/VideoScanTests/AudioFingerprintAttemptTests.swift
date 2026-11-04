@@ -416,5 +416,59 @@ struct AudioFingerprintAttemptTests {
         let row = CatalogFreshnessRows.row(.soundPrints, report: report, facts: CatalogFreshnessFacts(), running: [])
         #expect(row.note?.contains("1 gave up after 3 tries") == true, "\(row.note ?? "nil")")
     }
+
+    // MARK: - Codex cycle #218 (closing pass, red first)
+
+    @Test("RED Codex #218 F1: a sibling carrying an OBSOLETE print never replaces the content's current print, and its try is not kept")
+    func aStaleSiblingPrintNeverReplacesTheCurrentOne() async throws {
+        let scene = try CutoverScene.make("attempt_f1b"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (a, digest) = try AttemptScene.soundFile(scene, label: "oldA")
+        let b = try scene.freshCopy(of: .healthy, path: scene.folder.appendingPathComponent("media/oldB.mov").path)
+        try FileManager.default.copyItem(atPath: a.fullPath, toPath: b.fullPath)
+        b.sizeBytes = a.sizeBytes; b.audioCodec = "aac"; b.durationSeconds = 3
+        b.streamTypeRaw = StreamType.videoAndAudio.rawValue; b.contentHash = "v1:oldB"
+        b.contentFixity = ContentFixity.captured(path: b.fullPath, digest: digest, byteCount: b.sizeBytes)
+        let obsolete = AudioFingerprintStamp(computedAt: Date(timeIntervalSince1970: 1_760_000_000),
+                                             engineVersion: AudioFingerprintStamp.noAudioOnDecodeFailureVersion,
+                                             contentDigest: "sha256:" + digest, sizeBytes: a.sizeBytes, outcome: .noAudio,
+                                             analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
+        a.audioFingerprint = obsolete
+        b.audioFingerprint = obsolete
+        scene.model.records.append(b)
+        try #require(scene.model.saveCatalogNow())
+        let items = scene.model.audioFingerprintBackfillPlan().lanes.flatMap(\.items)
+        let itemA = try #require(items.first { $0.id == a.id }), itemB = try #require(items.first { $0.id == b.id })
+        for _ in 1...2 { _ = scene.model.applyAudioFingerprintAttempt(.failed, detail: "exit 1", to: itemB) }
+        try #require(scene.model.saveCatalogNow())
+        let current = AudioFingerprintStamp(contentDigest: "sha256:" + digest, sizeBytes: a.sizeBytes, outcome: .fingerprinted,
+                                            analyzedSeconds: 3, complete: true, landmarks: 40, bytes: 200)
+        #expect(scene.model.applyAudioFingerprintStamp(current, to: itemA) == .written)
+        try #require(scene.model.saveCatalogNow())
+        _ = scene.model.applyAudioFingerprintAttempt(.failed, detail: "exit 1", to: itemB)   // B still holds the v2 stamp
+        try #require(scene.model.saveCatalogNow())
+        let print = try sqliteTable(scene.databaseURL, "SELECT engine_version, outcome FROM sound_prints WHERE digest = '\(digest)'")
+        #expect(print == [["\(AudioFingerprintStamp.currentEngineVersion)", "fingerprinted"]], "the current print stands: \(print)")
+        #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_attempts WHERE digest = '\(digest)'") == 0)
+        try await scene.relaunch()
+        let planned = AttemptScene.planned(scene.model)
+        #expect(!planned.contains(a.id) && !planned.contains(b.id))
+    }
+
+    @Test("RED Codex #218 F2: the path replaced during the decode by OTHER bytes of the same size is not a try")
+    func aSameSizeReplacementDuringTheDecodeIsNotATry() async throws {
+        let scene = try CutoverScene.make("attempt_f2b"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let (r, _) = try AttemptScene.soundFile(scene, label: "swap1")
+        let path = r.fullPath, aside = path + ".aside", size = Int(r.sizeBytes)
+        await AttemptScene.run(scene.model, pass: { _ in
+            try FileManager.default.moveItem(atPath: path, toPath: aside)
+            try Data(repeating: 0x5A, count: size).write(to: URL(fileURLWithPath: path))
+            throw AudioPCMDecoder.Failure.decodeFailed(exitCode: 1, stderrTail: "Invalid data found when processing input")
+        })
+        #expect(r.audioFingerprintAttempt == nil, "other bytes at the path say nothing about the catalogued content")
+        try await scene.relaunch()
+        #expect(try AttemptScene.count(scene, "SELECT count(*) FROM sound_attempts") == 0)
+    }
 }
 

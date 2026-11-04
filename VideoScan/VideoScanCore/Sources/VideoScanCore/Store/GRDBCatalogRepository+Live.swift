@@ -181,10 +181,20 @@ extension GRDBTransaction {
         return nil
     }
 
+    /// The content's print, replaced by `print` only when it is not OLDER
+    /// than the stored one (Codex #218 F1): copies share the print by
+    /// digest, so a copy still carrying an obsolete print (a lower engine,
+    /// or the same engine and an earlier time) never overwrites a sibling's
+    /// newer one. nil writes nothing (CatalogRecordDiff never asks).
     func replaceSoundPrint(digest: String, _ print: CatalogRecordDTO.SoundPrintRow?) throws {
         let digest = digest.lowercased()
-        try db.execute(sql: "DELETE FROM sound_prints WHERE digest = ?", arguments: [digest])
         guard let print, print.digest.lowercased() == digest else { return }
+        let newer = try Int.fetchOne(db, sql: """
+            SELECT 1 FROM sound_prints
+             WHERE digest = ? AND (engine_version > ? OR (engine_version = ? AND computed_at > ?))
+            """, arguments: [digest, print.engineVersion, print.engineVersion, print.computedAt])
+        guard newer == nil else { return }
+        try db.execute(sql: "DELETE FROM sound_prints WHERE digest = ?", arguments: [digest])
         _ = try insertSoundPrint(print)
         // GH #416 part 2: a print (or "no sound") ends the content's tries.
         try db.execute(sql: "DELETE FROM sound_attempts WHERE digest = ?", arguments: [digest])

@@ -119,12 +119,12 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     var gatesFor: @MainActor (String) -> [MediaVolumeGate] = { _ in [] }
     var volumeOnline: @Sendable (String) -> Bool = { VolumeReachability.isVolumeReachable(path: $0) }
     var fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
-    /// After a decode ffmpeg could not do: is the SAME file still there
-    /// (path present, catalog size)? If not, the failure was the world's
-    /// (moved, replaced, drive hiccup), never a try (Codex #217 F2).
-    var stillOnDisk: @Sendable (String, Int64) -> Bool = { path, size in
-        ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value == size
-    }
+    /// The file's identity at a path (device, inode, size, mtime) — taken
+    /// before a decode and again after one ffmpeg could not do: the failure
+    /// is the FILE's only when the same file was there throughout (Codex
+    /// #217 F2 / #218 F2: moved, replaced — even by bytes of the same size
+    /// — or a drive hiccup is never a try). nil = nothing at the path.
+    var fileIdentity: @Sendable (String) -> FileIdentityStamp? = { FileIdentityStamp.capture(path: $0) }
     /// TEST SEAM: replaces the ffmpeg pass. nil in production.
     var passForTesting: Pass?
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
@@ -315,16 +315,29 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     }
 
     /// A decode ffmpeg could not do is the FILE's only while the same file
-    /// is still at its path (Codex #217 F2): gone → missing; another size →
-    /// failed but not a try. Off the main actor — a stat.
-    private func notATryUnlessTheSameFile(_ item: AudioFingerprintBackfillItem, _ why: String) async -> Outcome {
-        let (exists, same) = (fileExists, stillOnDisk)
-        let (path, size) = (item.path, item.sizeBytes)
-        guard await CheckCopiesJob.offMain({ exists(path) }) else { return .missing }
-        guard await CheckCopiesJob.offMain({ same(path, size) }) else {
-            return .failed(why + " — the file on disk is not the catalogued size, so this is not counted as a try")
+    /// (identity before == after, at the catalog's size) was at its path the
+    /// whole time: gone → missing; replaced, touched or another size →
+    /// failed but not a try.
+    private func notATryUnlessTheSameFile(_ item: AudioFingerprintBackfillItem, before: FileIdentityStamp?,
+                                          _ why: String) async -> Outcome {
+        guard let after = await identity(item.path) else { return .missing }
+        guard let before, after == before, after.size == item.sizeBytes else {
+            return .failed(why + " — the file at the path changed during the read or is not the catalogued size, so this is not counted as a try")
         }
         return .decodeFailed(why)
+    }
+
+    /// A stat off the main actor.
+    private func identity(_ path: String) async -> FileIdentityStamp? {
+        await Self.statOffMain(fileIdentity, path)
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated private static func statOffMain(_ probe: @Sendable (String) -> FileIdentityStamp?,
+                                                _ path: String) async -> FileIdentityStamp? {
+        probe(path)
     }
 
     private func rootIsOnline(_ root: String) async -> Bool {
@@ -397,6 +410,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         // The budget slot is RESERVED by waitForBudget before any await
         // (codex QA P2: the gate acquire suspends, and every lane used to
         // pass the budget check with nothing in flight yet).
+        let before = await identity(item.path)
         guard await waitForBudget(item) else { return nil }
         defer { inFlight[item.id] = nil }
         guard let held = await acquireGates(for: item.path) else { return nil }
@@ -404,7 +418,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         var outcome = await decodeOne(item)
         reading[root] = nil
         await releaseGates(held)
-        if case .decodeFailed(let why) = outcome { outcome = await notATryUnlessTheSameFile(item, why) }
+        if case .decodeFailed(let why) = outcome { outcome = await notATryUnlessTheSameFile(item, before: before, why) }
         return outcome
     }
 

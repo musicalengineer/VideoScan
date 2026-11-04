@@ -289,8 +289,9 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, Ca
     /// Duplicate analysis is rebuildable: a member the DDL cannot hold is
     /// left out and named in the returned words.
     func replaceDuplicateMember(fileID: String, _ member: CatalogRecordDTO.DuplicateMemberRow?) throws -> String?
-    /// The content's sound print; writing one (non-nil) also ends the
-    /// content's `sound_attempts` row — a print is no longer an attempt.
+    /// The content's sound print, replaced only by one that is not older
+    /// (engine, then time); writing one also ends the content's
+    /// `sound_attempts` row — a print is no longer an attempt. nil: nothing.
     func replaceSoundPrint(digest: String, _ print: CatalogRecordDTO.SoundPrintRow?) throws
     /// The content's tries without a print (v15). Upsert that never lowers
     /// a count: a newer engine replaces; the same engine keeps the larger

@@ -115,7 +115,7 @@ struct CatalogSoundAttemptsTests {
     func aPrintEndsTheTries() async throws {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
-        try seedContent(fixture, count: 1)
+        try seedContent(fixture, count: 2)
         let repository = try await open(fixture)
         await write(repository) { try $0.upsertSoundAttempt(Self.row(1, attempts: 2, at: 1_762_000_000)) }
         let print = CatalogRecordDTO.SoundPrintRow(digest: Self.hex(1), engineVersion: 4, outcome: "fingerprinted", analyzedS: 60,
@@ -132,13 +132,19 @@ struct CatalogSoundAttemptsTests {
         await later.close()
         #expect(try stored(fixture, 1) == nil, "beside a print by this engine a try is a stale copy's (Codex #217 F1)")
         // The redo of an OBSOLETE print (an older engine's) is a real try.
-        let old = CatalogRecordDTO.SoundPrintRow(digest: Self.hex(1), engineVersion: 3, outcome: "fingerprinted", analyzedS: 60,
+        let old = CatalogRecordDTO.SoundPrintRow(digest: Self.hex(2), engineVersion: 3, outcome: "fingerprinted", analyzedS: 60,
                                                  complete: true, landmarks: 0, blobBytes: 0, computedAt: 1_762_000_300)
         let redo = try await open(fixture)
-        await write(redo) { try $0.replaceSoundPrint(digest: Self.hex(1), old) }
-        await write(redo) { try $0.upsertSoundAttempt(Self.row(1, attempts: 1, at: 1_762_000_400)) }
+        await write(redo) { try $0.replaceSoundPrint(digest: Self.hex(2), old) }
+        await write(redo) { try $0.upsertSoundAttempt(Self.row(2, attempts: 1, at: 1_762_000_400)) }
+        // Codex #218 F1: an OLDER print never replaces a newer one.
+        await write(redo) { try $0.replaceSoundPrint(digest: Self.hex(1), old.withDigest(Self.hex(1))) }
         await redo.close()
-        #expect(try stored(fixture, 1)?.attempts == 1, "a try newer than an older engine's print is recorded")
+        #expect(try stored(fixture, 2)?.attempts == 1, "a try newer than an older engine's print is recorded")
+        let kept = try DatabaseQueue(path: fixture.url.path).inDatabase { db in
+            try Int.fetchOne(db, sql: "SELECT engine_version FROM sound_prints WHERE digest = ?", arguments: [Self.hex(1)])
+        }
+        #expect(kept == 4, "the engine-4 print stands against an engine-3 copy's")
     }
 
     @Test("Codex #217 F1: a copy WITHOUT a print or a note never differs from the store's print or note (never a delete); one WITH a new print does")
@@ -289,4 +295,8 @@ struct CatalogSoundAttemptsTests {
         }
         #expect(words?.contains("schema version 15 is newer than this build understands (14) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
     }
+}
+
+private extension CatalogRecordDTO.SoundPrintRow {
+    func withDigest(_ d: String) -> Self { var c = self; c.digest = d; return c }
 }
