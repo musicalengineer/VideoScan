@@ -34,13 +34,13 @@ Pre-flight questions before a code commit, not a gate: asked so an interruption 
 doing it right first is faster. End the commit message with `Checklist: ✓`, or `Checklist: ✓ — skipped <item> (why)`.
 What the hooks already enforce (sensor lane, complexity, SwiftLint, gauntlet manifest) is not on the list.
 
-1. **CLEAN.** Is the code cohesive and clean, or does it add tech debt? KISS.
+1. **CLEAN.** Is the code clean, coherent, and robust, or is it messy, adding tech debt? Clean design is sometimes harder but it's worth it. KISS.
 2. **REVIEWED.** Has it been adversarially reviewed? Fresh eyes (the `reviewer` agent), and Codex where data is at risk (§5).
 3. **TESTED.** Is it testable, are tests written, do they pass? Is the real call site exercised, not just the unit? A regression test goes red, then green.
-4. **WORKFLOW.** Especially for UI/UX: does it keep the workflow natural, or could it confuse the user? Do the build, run or spot-test steps given to Rick actually work?
-5. **LOGGING.** Does it log the right amount? Every failure the user can see is also logged, with why and where.
-6. **PERFORMANCE.** Does it leverage the silicon (unified memory, GPU/ANE, parallel lanes, another Mac over TB5), with a measured number where speed matters?
-7. **TRUE.** Is it true to the feature and to the facts on the ground (the database, the disks)? Every fact shown comes from evidence, and no path can lose or misfile media.
+4. **WORKFLOW.** For UI/UX: Is the workflow natural or might it confuse the user? The workflow should allow user to make progress not go round in circles.
+5. **LOGGING.** Does it log well? Every failure the user can see is also logged, with why and where.
+6. **PERFORMANCE.** Does it leverage the silicon (unified memory, GPU/ANE, parallel lanes, another Mac), with a measured number where speed matters?
+7. **TRUE.** Is it true to the feature, the facts (database, the disks)? Every fact shown comes from evidence, and no path can lose or misfile media.
 
 ## 3. Git
 
