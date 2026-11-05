@@ -1,7 +1,9 @@
 # The file dossier view — everything we know about one file, in three layers
 
-*Rick said "design it" on 2026-11-05. Status: for Rick's OK. This is the per-file view in `background_service.md` §6 (view 2),
-reached the way Rick asked for it.*
+Status: in flight — 2026-11-05. Phase 1 (layers 1 and 2) is on `feat/file-dossier-view`.
+
+*Rick said "design it" on 2026-11-05 and made his UI calls the same day (§8). This is the per-file view in
+`background_service.md` §6 (view 2), reached the way Rick asked for it.*
 
 ## 1. What Rick asked for
 
