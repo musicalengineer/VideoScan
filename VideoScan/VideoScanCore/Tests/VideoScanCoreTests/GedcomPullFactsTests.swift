@@ -386,7 +386,6 @@ struct GedcomPullFactsTests {
         #expect(facts.map(\.status) == [.verified, .notOnDisk, .verified])
         let lines = GedcomPullLine.lines(from: facts)
         #expect(lines.map(\.text) == ["Alphasurname GEDCOM 26 Aug 2026", "Betasurname GEDCOM 28 Aug 2026"])
-        for fact in facts { print(fact.logLine(ingest: manifest.createdAt, generation: manifest.generation)) }
         #expect(facts[0].logLine(ingest: manifest.createdAt, generation: manifest.generation)
             .contains("label=Alphasurname header=26 Aug 2026 05:07:30 file=tree-20generations.ged"))
         #expect(facts[0].logLine(ingest: manifest.createdAt, generation: manifest.generation)

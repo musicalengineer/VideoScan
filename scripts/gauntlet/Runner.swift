@@ -124,32 +124,90 @@ func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
           verdict != "Failed" || failed > 0 else { return nil }
     return ["passed": passed, "failed": failed, "skipped": skipped, "known_issues": known]
 }
-// The package adapter's counts (2026-10-18): `swift test` prints no result
-// bundle, so its console is read with the nightly's per-test rules
-// (scripts/nightly_local_tests.sh parse_test_counts): one terminal line per
-// test — "✔/✘ Test … passed/failed after", "━ Test … passed after … known
-// issue(s)", "➜ Test … skipped", XCTest "Test Case '…' passed/failed/skipped"
-// — never an issue line or a run/suite summary. nil when the log holds no run
-// summary at all (the command never got as far as running tests).
-func countsFromTestLog(_ text: String) -> [String: Int]? {
-    var passed = 0, failed = 0, skipped = 0, known = 0
-    var sawSummary = false
-    let runSummary = try! NSRegularExpression(pattern: #"Test run with [0-9]+ test"#)
-    for raw in text.components(separatedBy: "\n") {
-        let line = raw.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\u{200B}")))
-        let range = NSRange(line.startIndex..., in: line)
-        if runSummary.firstMatch(in: line, range: range) != nil || line.hasPrefix("Executed ") { sawSummary = true; continue }
-        if line.contains(" recorded an issue ") || line.contains(" recorded a known issue ") { continue }
-        if line.hasPrefix("Test Case '") {
-            if line.contains("' passed (") { passed += 1 } else if line.contains("' failed (") { failed += 1 } else if line.contains("' skipped (") { skipped += 1 }
-            continue
-        }
-        if line.hasPrefix("✔ Test ") && line.contains(" passed after ") { passed += 1 }
-        else if line.hasPrefix("━ Test ") && line.contains(" passed after ") && line.contains(" known issue") { known += 1 }
-        else if line.hasPrefix("✘ Test ") && line.contains(" failed after ") { failed += 1 }
-        else if line.hasPrefix("➜ Test ") && line.contains(" skipped") { skipped += 1 }
+// The package adapter's counts (2026-11-05). The console is for humans: a
+// concurrent test's stdout can split a result line (M4 deep run at 2c8fa9777
+// counted 774 of 775) or forge one. Swift Testing is counted from its event
+// stream (`swift test --event-stream-output-path`: one JSON record a line,
+// written by the testing library to its own file, so test stdout never
+// touches it); XCTest, which has no stream and runs serially, from its own
+// "Test Case '-[…]' passed/failed/skipped (" lines, matched anywhere in a line.
+// One count per test function (a parameterized test is one, its cases are
+// not), the same unit the floors are declared in. nil = counts unavailable
+// (a RED stage): no runEnded, a torn record, or an event for an undeclared id.
+// Memory: the stream is read whole; ~6 records per test, ~300 B each, so a
+// 1,000-test stage is ~2 MB and the 20k-test scale sensor ~40 MB.
+func countsFromPackageRun(eventStream: String, console: String) -> [String: Int]? {
+    guard var counts = SwiftTestingTally(eventStream: eventStream)?.counts else { return nil }
+    let xctest = try! NSRegularExpression(pattern: #"Test Case '-\[[^\]]+\]' (passed|failed|skipped) \("#)
+    for match in xctest.matches(in: console, range: NSRange(console.startIndex..., in: console)) {
+        let word = (console as NSString).substring(with: match.range(at: 1))
+        counts[word == "passed" ? "passed" : word == "failed" ? "failed" : "skipped", default: 0] += 1
     }
-    return sawSummary ? ["passed": passed, "failed": failed, "skipped": skipped, "known_issues": known] : nil
+    return counts
+}
+
+/// Swift Testing outcomes per function id, from one event stream. Sets, so a
+/// repeated event never double counts (like a std::set keyed by test id).
+struct SwiftTestingTally {
+    var kinds: [String: String] = [:]                                  // id -> "function" / "suite"
+    var ended = Set<String>(), skipped = Set<String>(), failed = Set<String>(), known = Set<String>()
+    var unattributedFailures = 0
+
+    /// nil = unavailable: a torn record, an event for an undeclared id, no runEnded.
+    init?(eventStream: String) {
+        var events: [[String: Any]] = []
+        for line in eventStream.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let payload = object["payload"] as? [String: Any] else { return nil }
+            if object["kind"] as? String == "test", let id = payload["id"] as? String { kinds[id] = payload["kind"] as? String ?? "" }
+            if object["kind"] as? String == "event" { events.append(payload) }
+        }
+        var sawRunEnded = false
+        for payload in events {
+            if payload["kind"] as? String == "runEnded" { sawRunEnded = true; continue }
+            guard record(payload) else { return nil }
+        }
+        guard sawRunEnded else { return nil }
+    }
+
+    /// Fold one event in; false when it names a test the stream never declared.
+    mutating func record(_ payload: [String: Any]) -> Bool {
+        let id = payload["testID"] as? String
+        if let id, kinds[id] == nil { return false }
+        guard let id, kinds[id] == "function" else {
+            // Not a function (suite / run level): only a failure matters, and it is RED.
+            if Self.isFailure(payload) { unattributedFailures += 1 }
+            return true
+        }
+        switch payload["kind"] as? String ?? "" {
+        case "issueRecorded":
+            if Self.isFailure(payload) { failed.insert(id) } else if (payload["issue"] as? [String: Any])?["isKnown"] as? Bool == true { known.insert(id) }
+        case "testEnded": ended.insert(id)
+        case "testSkipped": skipped.insert(id)
+        case "testCancelled", "testCaseCancelled": failed.insert(id)       // cancelled is not a pass
+        default: break
+        }
+        return true
+    }
+
+    /// A failing issue or a cancel. Stream v0 has no isFailure: any issue not known fails there.
+    static func isFailure(_ payload: [String: Any]) -> Bool {
+        switch payload["kind"] as? String ?? "" {
+        case "testCancelled", "testCaseCancelled": return true
+        case "issueRecorded":
+            let issue = payload["issue"] as? [String: Any] ?? [:]
+            return !(issue["isKnown"] as? Bool ?? false) && (issue["isFailure"] as? Bool ?? true)
+        default: return false
+        }
+    }
+
+    /// A failure wins over a known issue; a failure counts ended or not.
+    var counts: [String: Int] {
+        let knownOnly = ended.subtracting(failed).intersection(known)
+        return ["passed": ended.subtracting(failed).subtracting(knownOnly).subtracting(skipped).count,
+                "failed": failed.count + unattributedFailures,
+                "skipped": skipped.subtracting(failed).count, "known_issues": knownOnly.count]
+    }
 }
 func stageResult(_ name: String, _ status: String, _ reason: String?, floor: Int = 0) -> [String: Any] {
     ["name": name, "status": status, "reason": reason as Any? ?? NSNull(), "exit_code": NSNull(), "elapsed_s": 0.0, "expected": floor, "passed": NSNull(), "failed": NSNull(), "skipped": NSNull(), "incomplete": status == "passed" ? 0 : 1, "artifacts": []]
@@ -364,14 +422,17 @@ struct GauntletRunner {
             return output
         }
         let filters = selectors.flatMap { ["--filter", NSRegularExpression.escapedPattern(for: $0) + "/"] }
-        let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch] + filters
         let log = run.appendingPathComponent("\(name)-package.log")
+        let events = run.appendingPathComponent("\(name)-package-events.jsonl")
+        let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch,
+                   "--event-stream-output-path", events.path] + filters
         do {
             let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
             if execution.contaminated { contaminated = true }
             output["exit_code"] = execution.code
             output["elapsed_s"] = execution.elapsed
-            let counts = countsFromTestLog((try? String(contentsOf: log, encoding: .utf8)) ?? "")
+            let counts = countsFromPackageRun(eventStream: (try? String(contentsOf: events, encoding: .utf8)) ?? "",
+                                              console: (try? String(contentsOf: log, encoding: .utf8)) ?? "")
             let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
             output["status"] = verdict.0
             output["reason"] = verdict.1 as Any? ?? NSNull()
@@ -459,7 +520,7 @@ struct GauntletRunner {
             let package = runPackageSuites(name, selectors: packageSelectors,
                                            floor: entry["package_expected_floor"] as? Int ?? 1, timeout: timeout)
             mergePackage(package, into: &output, xcodeRan: !selectors.isEmpty)
-            artifacts += ["package-build.log", "\(name)-package.log"]
+            artifacts += ["package-build.log", "\(name)-package.log", "\(name)-package-events.jsonl"]
         }
         // Safe subset passed, but the stage still holds unadapted suites
         // (AMBER-class); an AMBER stage keeps its status and says both.
@@ -567,6 +628,14 @@ struct GauntletRunner {
 }
 
 func main() throws -> Int32 {
+    // Test seam: count one package run's outputs, print the counts (or null).
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    if arguments.first == "--count-package-output", arguments.count == 3 {
+        let read = { (path: String) in (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+        let counts = countsFromPackageRun(eventStream: read(arguments[1]), console: read(arguments[2]))
+        print(counts.map { String(data: try! json($0), encoding: .utf8)! } ?? "null")
+        return counts == nil ? 1 : 0
+    }
     let script = URL(fileURLWithPath: #filePath).standardizedFileURL
     let repo = script.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     var runner = GauntletRunner(repo: repo, arguments: Array(CommandLine.arguments.dropFirst()))
