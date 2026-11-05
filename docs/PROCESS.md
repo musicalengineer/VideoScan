@@ -46,7 +46,8 @@ What the hooks already enforce (sensor lane, complexity, SwiftLint, gauntlet man
 
 - `~/dev/VideoScan` is Rick's checkout. Agents work in a `git worktree` with its own `-derivedDataPath`; the worktree and its DerivedData are removed after merge.
 - Branch for anything beyond a one-line tweak: `feature/…`, `fix/…`, `refactor/…`, `test/…`, `experiment/…`.
-- Push `main` without asking. Never force-push or rewrite history (CLAUDE.md rule 11).- Conventional, honest commit messages (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`). A fix's message carries its red/green table.
+- Push `main` without asking. Never force-push or rewrite history (CLAUDE.md rule 11).
+- Conventional, honest commit messages (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`). A fix's message carries its red/green table.
 - Never delete files; move to `.trash/`. Rick empties it.
 - Tag before anything structural: `git tag pre-<thing>-<date>`.
 - CLEANUP after merge, after merging a branch which passes all related tests and/or gets the OK from Rick should be deleted, worktrees etc, deleted.
