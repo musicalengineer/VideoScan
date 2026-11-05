@@ -173,17 +173,20 @@ class GauntletPackageAdapterTests(unittest.TestCase):
     def test_package_known_issue_and_missing_summary_are_not_passes(self):
         self.config['package'] = {'unit': {'known': 1}, 'regression': {'no_summary': True}}
         self.run_runner()
-        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertEqual(self.stage('unit')['status'], 'amber')       # tracked: AMBER, not a pass
         self.assertIn('known issue', self.stage('unit')['reason'])
         self.assertEqual(self.stage('unit')['known_issues'], 1)
         self.assertEqual(self.stage('regression')['status'], 'failed')
         self.assertIn('counts unavailable', self.stage('regression')['reason'])
 
     def test_below_package_floor_fails(self):
-        self.manifest['stages'][0]['package_expected_floor'] = 9
+        # A declared test that does not execute (floor 2, one ran). A floor set
+        # above the declarations is refused at preflight instead (below).
+        self.config['package'] = {'unit': {'xctest': 0, 'passed': 1}}
         self.run_runner()
+        self.assertEqual(self.result['inventory_errors'], [])
         self.assertEqual(self.stage('unit')['status'], 'failed')
-        self.assertIn('below expected floor 9', self.stage('unit')['reason'])
+        self.assertIn('below expected floor 2', self.stage('unit')['reason'])
 
     def test_package_build_failure_never_passes_and_skips_package_runs(self):
         self.config['package_build_exit'] = 3
@@ -191,8 +194,9 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(self.result['package_build_exit_code'], 3)
         self.assertEqual([c['args'][0] for c in self.swift_calls], ['build'])
         unit = self.stage('unit')
-        self.assertNotEqual(unit['status'], 'passed')
+        self.assertEqual(unit['status'], 'failed')            # a build failure is RED, never AMBER
         self.assertIn('package build exit 3', unit['reason'])
+        self.assertEqual(self.result['status'], 'failed')
         self.assertEqual(self.stage('integration')['status'], 'passed')
 
     def test_package_only_stage_runs(self):
@@ -206,6 +210,10 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         regression = self.stage('regression')
         self.assertEqual(regression['status'], 'blocked')      # safe subset passed, one suite held back
         self.assertEqual(regression['package']['status'], 'passed')
+        # Blocked-only is AMBER (Rick 2026-11-05): exit 0, the reasons counted.
+        self.assertEqual(self.result['status'], 'amber')
+        self.assertEqual(self.completed.returncode, 0)
+        self.assertIn('1 stage blocked (1 unadapted suites)', self.result['amber_reasons'])
         self.assertEqual(regression['passed'], 3)
 
     def test_mismatched_package_selectors_fail_preflight(self):
@@ -214,6 +222,19 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(self.completed.returncode, 1)
         self.assertEqual(self.swift_calls, [])
         self.assertTrue(any('package selector/assignment mismatch: unit' in e for e in self.result['inventory_errors']))
+
+    def test_a_floor_above_the_declarations_fails_preflight(self):
+        # M4 deep gauntlet 2026-11-05 (52c3a85e7): feat/helper-owns-schedule deleted
+        # 6 package + 3 app regression tests (and 7 unit) but left the floors, so
+        # every M4 run was "below expected floor" while inventory said 0 errors.
+        # The floor is the declaration count (resolve_floor_conflicts.py): a
+        # deleted test lowers it in the same commit, or preflight says so.
+        self.manifest['stages'][1]['package_expected_floor'] = 3
+        self.manifest['stages'][1]['expected_floor'] = 3
+        self.run_runner('--dry-run')
+        self.assertNotEqual(self.completed.returncode, 0)
+        self.assertIn('package_expected_floor above declaration count: regression (3 > 2', self.completed.stdout)
+        self.assertIn('; expected_floor above declaration count: regression (3 > 2', self.completed.stdout)
 
     def test_unblocked_package_suite_without_selectors_fails_preflight(self):
         del self.manifest['stages'][1]['package_selectors']

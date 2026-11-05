@@ -359,6 +359,8 @@ const EXPECTED_SEARCH_QUERIES = [
 ];
 // POI replays and gauntlet runs share testdriver.jsonl but are not product test runs.
 const isTestRunRow = row => row.source !== "poi-cycle-metrics" && row.source !== "gauntlet";
+// A gauntlet run's colour (Rick 2026-11-05): GREEN all passed · AMBER known issues / blocked / not run · RED a failure. Rows before AMBER say "incomplete".
+function gauntletWord(status) { return ({ passed: "GREEN", amber: "AMBER", failed: "RED", incomplete: "incomplete (before AMBER)" })[status] || "incomplete"; }
 const STALE_HOURS = 36;
 const NO_DATA = "no data yet";
 const DASH = "—";
@@ -809,7 +811,7 @@ function manualTestResults(d) {
   const latest = new Map();
   for (const row of rows) latest.set(row.machine, row);
   const knownStages = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"];
-  const states = { passed: "passed", failed: "failed", not_run: "not run", blocked: "blocked", incomplete: "incomplete" };
+  const states = { passed: "passed", failed: "failed", not_run: "not run", blocked: "blocked", amber: "amber (known issues)", incomplete: "incomplete" };
   const body = [...latest.values()].map(row => {
     const machine = REFRESH_MACHINES[row.machine] || (row.machine === "m1" ? "M1" : "Unknown system");
     const stages = Array.isArray(row.stages) ? row.stages : [];
@@ -1398,7 +1400,7 @@ const SUMMARY = {
     if (!s && !g) return { ...NO_LINE, sentence: "No catalog-search benchmark or gauntlet run published yet. Launch p95 and safety-sensor counts (#310) are not published yet." };
     const age = s ? Math.round(hoursSince(s.ts) / 24) : null;
     const bench = s ? `Catalog search at ${n(s.records)} records: <b>${s.donnaMedian.toFixed(1)} ms</b> median for “donna” (${esc(hostLabel(s.host) || "?")}, ${day(s.ts)}${age > 7 ? ` — ${age} days old` : ""}).` : "No catalog-search benchmark published.";
-    const gaunt = g ? ` Gauntlet: ${esc(g.status || "incomplete")} on the ${esc(String(g.machine || "?").toUpperCase())}, ${day(g.ts)}.` : "";
+    const gaunt = g ? ` Gauntlet: ${esc(gauntletWord(g.status))} on the ${esc(String(g.machine || "?").toUpperCase())}, ${day(g.ts)}.` : "";
     return {
       state: "grey",
       sentence: `${bench}${gaunt} Launch p95 and the delete/archive safety-sensor counts #310 asks for are not published yet.`,
@@ -2103,7 +2105,7 @@ function renderBenchmarks(allTdRows, searchText, d) {
   if (gauntletRows.length) {
     const last = gauntletRows[gauntletRows.length - 1];
     document.getElementById("gauntlet-status").textContent =
-      `Latest: ${last.status || "incomplete"} · ${last.machine || "unknown"} · ${last.ts} · UI not run (phase 2)`;
+      `Latest: ${gauntletWord(last.status)} · ${last.machine || "unknown"} · ${last.ts} · UI not run (phase 2)`;
     const stages = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"];
     const colors = ["#58a6ff", "#bc8cff", "#3fb950", "#d29922", "#db6d28", "#f85149", "#8b949e"];
     const datasets = stages.map((name, index) => ({
@@ -2122,7 +2124,7 @@ function renderBenchmarks(allTdRows, searchText, d) {
       type: "bar", data: { labels: dateLabels(gauntletRows), datasets: [
         { label: "passed stages", backgroundColor: "#3fb950", data: gauntletRows.map(row => (row.stages || []).filter(stage => stage.status === "passed").length) },
         { label: "failed stages", backgroundColor: "#f85149", data: gauntletRows.map(row => (row.stages || []).filter(stage => stage.status === "failed").length) },
-        { label: "not run / blocked / incomplete", backgroundColor: "#d29922", data: gauntletRows.map(row => (row.stages || []).filter(stage => !["passed", "failed"].includes(stage.status)).length) },
+        { label: "amber: known issues / blocked / not run", backgroundColor: "#d29922", data: gauntletRows.map(row => (row.stages || []).filter(stage => !["passed", "failed"].includes(stage.status)).length) },
       ] }, options: gauntletOptions,
     });
   } else {

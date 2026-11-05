@@ -64,9 +64,19 @@ func number(_ value: Any?) -> Double {
     return max(0, number.doubleValue)
 }
 
+/// GREEN "passed" / AMBER "amber" / RED "failed" (Rick 2026-11-05). A row
+/// queued before AMBER existed carries "incomplete" and keeps it.
+func runStatus(_ result: [String: Any], _ stages: [[String: Any]]) -> String {
+    let declared = result["status"] as? String
+    if declared == "failed" || stages.contains(where: { $0["status"] as? String == "failed" }) { return "failed" }
+    guard ["passed", "amber"].contains(declared ?? "") else { return "incomplete" }
+    // ui is forced "not_run" above: a run is GREEN only if every stage passed.
+    return stages.allSatisfy { $0["status"] as? String == "passed" } ? "passed" : "amber"
+}
+
 func sanitized(_ result: [String: Any]) throws -> [String: Any] {
     let names = ["unit", "regression", "integration", "performance", "hallie", "stress", "ui"]
-    let statuses = ["passed", "failed", "not_run", "blocked", "incomplete"]
+    let statuses = ["passed", "failed", "not_run", "blocked", "amber", "incomplete"]
     let timestampFormatter = ISO8601DateFormatter()
     let fractionalFormatter = ISO8601DateFormatter()
     fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -90,7 +100,7 @@ func sanitized(_ result: [String: Any]) throws -> [String: Any] {
     var row: [String: Any] = ["schemaVersion": 1, "source": "gauntlet", "run_id": id, "ts": ts,
         "configuration": "Release", "dirty": result["dirty"] as? Bool ?? true,
         "elapsed_s": number(result["elapsed_s"]), "build_s": number(result["build_s"]), "stages": stages,
-        "status": stages.contains { $0["status"] as? String == "failed" } || result["status"] as? String == "failed" ? "failed" : "incomplete",
+        "status": runStatus(result, stages),
         "ui_label": "UI not run (phase 2)"]
     let machine = result["machine"] as? String ?? "unknown"
     row["machine"] = ["m4", "m5", "m1"].contains(machine) ? machine : "unknown"

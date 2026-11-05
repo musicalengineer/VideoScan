@@ -150,7 +150,13 @@ do {
             let packageSelectors = stage["package_selectors"] as? [String] ?? []
             if Set(packageSelectors) != expectedPackageSelectors || Set(packageSelectors).count != packageSelectors.count { errors.append("package selector/assignment mismatch: \(name)") }
             let packageDeclarations = packageRunnable.reduce(0) { $0 + ($1["tests"] as? [String] ?? []).count }
-            if !packageRunnable.isEmpty && (stage["package_expected_floor"] as? Int ?? 0) < max(1, packageDeclarations) { errors.append("package_expected_floor below declaration count: \(name)") }
+            // The floor IS the declaration count (resolve_floor_conflicts.py):
+            // below it a test could go missing unseen; above it, a deleted test
+            // left its floor behind and every run is "below expected floor"
+            // (M4 2026-11-05: 6 package + 3 app regression, 7 unit).
+            let packageFloor = stage["package_expected_floor"] as? Int ?? 0
+            if !packageRunnable.isEmpty && packageFloor < max(1, packageDeclarations) { errors.append("package_expected_floor below declaration count: \(name)") }
+            if !packageRunnable.isEmpty && packageFloor > max(1, packageDeclarations) { errors.append("package_expected_floor above declaration count: \(name) (\(packageFloor) > \(packageDeclarations); a removed test lowers it)") }
             for selector in packageSelectors {
                 let suite = String(selector.dropFirst(packageModule.count + 1))
                 let fragments = assignments.filter { $0["kind"] as? String == "package" && ($0["suites"] as? [String] ?? []).contains(suite) }
@@ -161,7 +167,9 @@ do {
             let selectors = stage["selectors"] as? [String] ?? []
             if Set(selectors) != expectedSelectors || Set(selectors).count != selectors.count { errors.append("selector/assignment mismatch: \(name)") }
             let declarations = runnable.reduce(0) { $0 + ($1["tests"] as? [String] ?? []).count }
-            if (stage["expected_floor"] as? Int ?? 0) < max(1, declarations) { errors.append("expected_floor below declaration count: \(name)") }
+            let floor = stage["expected_floor"] as? Int ?? 0
+            if floor < max(1, declarations) { errors.append("expected_floor below declaration count: \(name)") }
+            if !runnable.isEmpty && floor > declarations { errors.append("expected_floor above declaration count: \(name) (\(floor) > \(declarations); a removed test lowers it)") }
             for selector in selectors {
                 let suite = String(selector.dropFirst("VideoScanTests/".count))
                 let fragments = assignments.filter { $0["kind"] as? String == "xcode" && ($0["suites"] as? [String] ?? []).contains(suite) }

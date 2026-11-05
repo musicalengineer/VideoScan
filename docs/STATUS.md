@@ -28,7 +28,7 @@
 - **Checklist proposal:** under TESTED, add "**Does it settle?** For any retry, schedule or loop: what bounds it, and is there a test that it finishes?" This needs your OK, since it's a PROCESS change.
 - **#415**, see above.
 - **M4 Ollama:** set `OLLAMA_HOST` so the Ultra can use it over TB5 (needs its Ollama restarted).
-- **The catalog lane is RED by its own rule on 7 `withKnownIssue` tests** (#356, #358, #338/#357 family). Fix those, or rule that a tracked known issue is amber.
+- **The catalog lane is RED by its own rule on 7 `withKnownIssue` tests** (#356, #358, #338/#357 family). For the gauntlet this is ruled (DECISIONS 2026-11-05: such a run is AMBER); does the same rule apply to `run_catalog_tests.sh`?
 - Carried over: #327's two rulings; #332; the older defaults list (git `bb39167a:docs/STATUS.md`).
 
 ## Next
