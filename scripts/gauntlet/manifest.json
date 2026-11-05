@@ -31553,6 +31553,7 @@
         "test_gauntlet_package_adapter.py"
       ],
       "tests": [
+        "test_a_floor_above_the_declarations_fails_preflight",
         "test_below_package_floor_fails",
         "test_mismatched_package_selectors_fail_preflight",
         "test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env",
@@ -36459,7 +36460,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3324,
+      "expected_floor": 3317,
       "name": "unit",
       "package_expected_floor": 742,
       "package_selectors": [
@@ -37423,9 +37424,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 426,
+      "expected_floor": 423,
       "name": "regression",
-      "package_expected_floor": 331,
+      "package_expected_floor": 325,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

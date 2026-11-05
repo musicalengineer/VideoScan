@@ -230,7 +230,7 @@ struct MachineEraStoreLogicTests {
         var terms: [String: CatalogSearchIndex.ObservationTerms] = [:]
         store.onConvergence = { heard.append($0) }
         store.onSearchTerms = { terms = $0.byPath }
-        store.attach(load: { eras }, records: { recs })
+        Self.attachQuiet(store, load: { eras }, records: { recs })
         #expect(await store.refresh())
         #expect(store.convergence == MachineEraConvergence(total: 2, agree: 1))       // per content: the copy is not counted twice
         #expect(heard.last == MachineEraConvergence(total: 2, agree: 1))
@@ -248,7 +248,7 @@ struct MachineEraStoreLogicTests {
         guess.userDateConfidence = UserDateConfidence.estimated.rawValue      // Rick's best guess is still Rick's date
         let junk = Self.record(2)
         junk.userDate = "sometime"                                              // malformed: not a confirmed date
-        store.attach(load: { [Self.hex(1): [Self.era(1991, 1995)], Self.hex(2): [Self.era(1991, 1995)]] }, records: { [guess, junk] })
+        Self.attachQuiet(store, load: { [Self.hex(1): [Self.era(1991, 1995)], Self.hex(2): [Self.era(1991, 1995)]] }, records: { [guess, junk] })
         await store.refresh()
         #expect(store.convergence == MachineEraConvergence(total: 1, agree: 1))
         store.detach()
@@ -260,7 +260,7 @@ struct MachineEraStoreLogicTests {
         var notes: [String] = []
         store.note = { notes.append($0) }
         let recs = [Self.record(1)]
-        store.attach(load: {
+        Self.attachQuiet(store, load: {
             if failing.on { throw CutoverFailure(words: "disk went away") }
             return [Self.hex(1): [Self.era(1991, 1995)]]
         }, records: { recs })
@@ -274,19 +274,36 @@ struct MachineEraStoreLogicTests {
         store.detach()
     }
 
+    /// M4 gauntlet 2026-11-05: this test yielded once and hoped the first
+    /// refresh had started; when the second ran first it took generation 1
+    /// and the gate's FIRST (stale) load, so "second" was false and
+    /// "firstResult" true (1 in 200 here). Now the order is forced: the second
+    /// refresh is issued only after the first is inside its load (it took its
+    /// generation before calling it), and the stale load returns only after
+    /// the second has published.
     @Test func aStaleRefreshNeverOverwritesANewerOne() async {
         let store = MachineEraStore()
         let gate = SlowFirst()
         let recs = [Self.record(1)]
-        store.attach(load: { await gate.load() }, records: { recs })
-        async let first = store.refresh()           // slow: returns 1960–1965 after the second
-        await Task.yield()
-        let second = await store.refresh()          // fast: 1991–1995
+        Self.attachQuiet(store, load: { await gate.load() }, records: { recs })
+        async let first = store.refresh()           // stale: 1960–1965, held until the second has published
+        await gate.firstLoadStarted()
+        let second = await store.refresh()          // fresh: 1991–1995
+        await gate.releaseFirst()
         let firstResult = await first
         #expect(second)
         #expect(!firstResult)
         #expect(store.shown(for: recs[0])?.text.contains("1991–1995") == true)
+        #expect(await gate.calls == 2)
         store.detach()
+    }
+
+    /// `attach` also schedules a debounced refresh (1 s); a test that awaits
+    /// its own `refresh()` cancels it, so a stalled host cannot interleave a
+    /// third refresh that supersedes the one under test.
+    static func attachQuiet(_ store: MachineEraStore, load: @escaping MachineEraStore.Load, records: @escaping () -> [VideoRecord]) {
+        store.attach(load: load, records: records)
+        store.pendingRefresh?.cancel()
     }
 
     // MARK: The index's observation layer
@@ -375,7 +392,7 @@ struct MachineEraStoreLogicTests {
         let store = MachineEraStore()
         store.onSearchTerms = { index.setObservations($0) }
         let frozen = eras
-        store.attach(load: { frozen }, records: { recs })
+        Self.attachQuiet(store, load: { frozen }, records: { recs })
         let load = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let words = MachineEraStore.termsByDigest(eras)
@@ -400,15 +417,37 @@ private final class FailSwitch: @unchecked Sendable {
     var on = false
 }
 
-/// The first load is slow and stale; the second is fast and new.
+/// The first load is stale and held until the test releases it; the second
+/// is fresh and immediate. `firstLoadStarted` returns once the first load has
+/// begun (so its refresh already holds the older generation).
+/// (For Rick: two one-shot latches — like a pair of std::promise<void>.)
 private actor SlowFirst {
-    private var calls = 0
+    private(set) var calls = 0
+    private var started = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var released = false
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
     func load() async -> [String: [MachineEra]] {
         calls += 1
-        if calls == 1 {
-            try? await Task.sleep(for: .milliseconds(300))
-            return [String(format: "%064x", 1): [MachineEra(lo: 1960, hi: 1965, by: machineBy, at: 0, seq: 1)]]
+        guard calls == 1 else {
+            return [String(format: "%064x", 1): [MachineEra(lo: 1991, hi: 1995, by: machineBy, at: 0, seq: 2)]]
         }
-        return [String(format: "%064x", 1): [MachineEra(lo: 1991, hi: 1995, by: machineBy, at: 0, seq: 2)]]
+        started = true
+        startedWaiter?.resume()
+        startedWaiter = nil
+        if !released { await withCheckedContinuation { releaseWaiter = $0 } }
+        return [String(format: "%064x", 1): [MachineEra(lo: 1960, hi: 1965, by: machineBy, at: 0, seq: 1)]]
+    }
+
+    func firstLoadStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiter = $0 }
+    }
+
+    func releaseFirst() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }

@@ -180,10 +180,13 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertIn('counts unavailable', self.stage('regression')['reason'])
 
     def test_below_package_floor_fails(self):
-        self.manifest['stages'][0]['package_expected_floor'] = 9
+        # A declared test that does not execute (floor 2, one ran). A floor set
+        # above the declarations is refused at preflight instead (below).
+        self.config['package'] = {'unit': {'xctest': 0, 'passed': 1}}
         self.run_runner()
+        self.assertEqual(self.result['inventory_errors'], [])
         self.assertEqual(self.stage('unit')['status'], 'failed')
-        self.assertIn('below expected floor 9', self.stage('unit')['reason'])
+        self.assertIn('below expected floor 2', self.stage('unit')['reason'])
 
     def test_package_build_failure_never_passes_and_skips_package_runs(self):
         self.config['package_build_exit'] = 3
@@ -214,6 +217,19 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(self.completed.returncode, 1)
         self.assertEqual(self.swift_calls, [])
         self.assertTrue(any('package selector/assignment mismatch: unit' in e for e in self.result['inventory_errors']))
+
+    def test_a_floor_above_the_declarations_fails_preflight(self):
+        # M4 deep gauntlet 2026-11-05 (52c3a85e7): feat/helper-owns-schedule deleted
+        # 6 package + 3 app regression tests (and 7 unit) but left the floors, so
+        # every M4 run was "below expected floor" while inventory said 0 errors.
+        # The floor is the declaration count (resolve_floor_conflicts.py): a
+        # deleted test lowers it in the same commit, or preflight says so.
+        self.manifest['stages'][1]['package_expected_floor'] = 3
+        self.manifest['stages'][1]['expected_floor'] = 3
+        self.run_runner('--dry-run')
+        self.assertNotEqual(self.completed.returncode, 0)
+        self.assertIn('package_expected_floor above declaration count: regression (3 > 2', self.completed.stdout)
+        self.assertIn('; expected_floor above declaration count: regression (3 > 2', self.completed.stdout)
 
     def test_unblocked_package_suite_without_selectors_fails_preflight(self):
         del self.manifest['stages'][1]['package_selectors']
