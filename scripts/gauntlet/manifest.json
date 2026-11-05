@@ -33895,6 +33895,50 @@
       "tests": [
         "aSteadyStreamOfCommitsStillReachesTheOpenDossier"
       ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_dossier_demo.py",
+      "stage": "unit",
+      "suites": [
+        "test_dossier_demo.py"
+      ],
+      "tests": [
+        "test_a_hard_date_bounds_its_setup_sibling_with_the_chain",
+        "test_a_hard_date_outside_its_siblings_window_is_flagged",
+        "test_a_transfer_setup_never_bounds_a_sibling",
+        "test_camera_native_with_device_tags_is_a_recording_date_and_without_is_weak",
+        "test_dv_32khz_four_channel_reads_as_consumer_camcorder",
+        "test_dv_creation_time_is_the_capture_stamp",
+        "test_era_vs_hard_date_verdicts",
+        "test_event_candidates_need_closeness_and_a_second_witness",
+        "test_hard_date_ranking_rick_then_dv_clock_then_camera_tag",
+        "test_model_json_decoder_accepts_fenced_json_and_normalises",
+        "test_model_json_decoder_fails_closed",
+        "test_mtime_silence_and_upscaled_transfer_rows",
+        "test_no_network_module_and_no_direct_catalog_access",
+        "test_no_video_stream_is_said_plainly",
+        "test_parse_ffprobe_garbage_is_empty",
+        "test_parse_ffprobe_sums_dv_audio_pairs_and_skips_cover_art",
+        "test_parse_mediainfo_reads_measured_scan",
+        "test_pick_clustered_takes_siblings_from_each_folder_and_skips_singletons",
+        "test_pick_is_reproducible_with_a_seed",
+        "test_pick_spreads_buckets_folders_and_decades_and_checks_each_file_once",
+        "test_plan_excludes_short_audio_removed_and_duplicate_content",
+        "test_plan_keeps_family_names_that_merely_contain_a_junk_word",
+        "test_plan_puts_preferred_buckets_first_and_ricks_dated_files_first_in_a_bucket",
+        "test_plan_skips_software_splashes_and_partial_downloads",
+        "test_plan_takes_ricks_dated_files_across_buckets_before_any_undated_file",
+        "test_prores_creation_time_is_a_transfer_stamp_not_a_capture_date",
+        "test_re_recording_from_dv_clock_and_from_ricks_date",
+        "test_same_folder_counts_as_close_but_weak_event_words_do_not_count",
+        "test_scale_100k_rows_pick_and_cluster_within_budget",
+        "test_sentinel_and_impossible_dates_are_rejected",
+        "test_setups_cluster_across_encoder_versions_and_split_on_audio_mode",
+        "test_stamp_year_needs_two_stills_or_the_only_one",
+        "test_unknown_event_word_reads_as_unknown_and_keeps_the_raw"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -36600,6 +36644,10 @@
         },
         {
           "name": "tests/test_hallie_replay_reason.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_dossier_demo.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
