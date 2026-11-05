@@ -1,4 +1,4 @@
-# VideoScan Background — the analyzer service
+# VideoScan Background Service — Automated Intelligence Gathering for Legacy Family Media
 
 Status: in flight — 2026-11-04: **the helper owns its schedule** (DECISIONS 2026-11-04; §3.2, §3.5 below). Earlier: 2026-11-01. Step 0 is built (the helper, its launchd job, XPC control, a no-op job; off unless `background.service.enabled` is set, no Settings toggle yet). Step 1 merged on 2026-11-01 (`0656aee6`): the seated 8B era/OCR job, the observation journal, `JournalApplier` through the commit door, schema v14 `provenance_assertions` (DECISIONS 2026-10-31, 2026-11-01). The corpus run proceeds in Rick's windows on the Ultra (STATUS). Step 2, captions on the 8B, is §4.
 
@@ -6,13 +6,127 @@ VideoScan Background is the helper process that keeps analysing after the app qu
 
 *The design as written on 2026-10-30, with §0.5–§0.7 added 10/30–10/31 (Rick said "design it"); the italic note below is its original preface.*
 
-
 *Rick said "design it" on 2026-10-30: "The app is essentially the UI/UX… peel off services into a BG process that
 can keep running, persist after we quit the app… We need a persistent service or process that survives app reboots.
 I don't like the idea of having an option to launch the app in the BG but I am open to these trade-offs… we can't
 lose the app for 2 weeks while we completely refactor it into a front-end backend." This is the VideoScan answer.
 It builds on `docs/design/machine_intelligence.md` (the first job the service hosts) and ARCHITECTURE §4 (MFO,
 Analyze cyclers, the one commit door). Not yet built.*
+# 
+
+## Part 1: Structural & Technical Data (The Computational Layer)
+These elements represent immutable deterministic facts embedded directly within the file container, metadata headers, or raw stream layouts. They are parsed without guessing via specialized low-level software engines.
+
+### 1.1 File & Container Overheads
+*   **Encapsulation/Wrapper Format:** The overall file container archetype (e.g., .avi, .mov, .wmv, .mpg, .flv, .3gp, .rm). This provides historical constraints on what encoders were available at the time of creation.
+*   **Overall Byte Structure & Allocation:** Exact size metrics down to the byte level and its correlation to overall playing duration (Master Bitrate). High byte-variability implies Variable Bitrate (VBR) schemes, common in early compression pipelines.
+*   **Multiplexer Software Identity:** Embedded metadata strings indicating the software or library that rendered the file (e.g., VirtualDubMod 1.5, Lavf52.31.0, MEncoder, Sony Vegas 4.0).
+*   **Creation/Modification Epochs:** Standard operating system filesystem timestamps. *Caveat: Often corrupted during bulk drag-and-drop actions, making them indicators of 'file transfer history' rather than 'capture date'.*
+
+### 1.2 Video Stream Parameters
+*   **FourCC (Four Character Code) Identifier:** The exact 4-byte sequence identifying the decompressed video codec payload (e.g., DIVX, XVID, DX50, MP4V, WMV1, MJPG). 
+*   **Native Pixel Array Geometries:** The precise matrix dimensions (e.g., 720x480 for NTSC DVD/DV, 352x240 for VCD, 640x480 for early digital cameras).
+*   **Pixel Aspect Ratio (PAR) Distortion:** The ratio of width to height of an individual pixel. Pre-2010 clips heavily leverage non-square pixels (e.g., PAR 0.909 or 1.212 for NTSC) requiring transformation to display correctly as a 4:3 or 16:9 image (Display Aspect Ratio).
+*   **Scan Typology & Interlacing Mechanics:** Flags indicating if the stream is Interlaced (Top Field First / Bottom Field First) or Progressive. This reveals if the capture mechanism was an analog tube/CCD tape scanner or a native digital frame progressive sensor.
+*   **Temporal Sampling Frequency (Frame Rate):** The frame rate mode (Constant vs. Variable) and explicit values (e.g., 29.970, 25.000, 15.000). Low fractional or integer frame rates (e.g., 10fps or 15fps) directly anchor a clip to early webcam or early phone architectures.
+*   **Color Primaries & Quantization Space:** The color matrix standard applied (typically legacy BT.601 for standard definition, rather than modern BT.709 or BT.2020).
+*   **GOP (Group of Pictures) Layout:** The exact spatial sequence and distance between anchor I-frames (Keyframes), P-frames, and B-frames. Long GOP gaps indicate highly compressed distribution streams rather than master tape captures.
+
+### 1.3 Audio Stream Parameters
+*   **Codec Format Signatures:** Codec type identifiers (e.g., uncompressed PCM, MP3, AC-3, WMA2, early AAC-LC).
+*   **Sampling Frequency Space:** The acoustic sample rate (e.g., 11025Hz, 22050Hz for extreme web compression; 32000Hz for MiniDV long-play; 44100Hz or 48000Hz for CD/DVD quality).
+*   **Quantization Resolution:** Integer bit-depth values denoting amplitude steps per sample (e.g., 8-bit, 12-bit non-linear, 16-bit).
+*   **Channel Mapping Layout:** Topography configurations (e.g., 1.0 Mono, 2.0 Joint-Stereo, discrete dual-mono track allocations).
+
+### 1.4 Native & Camera Embedded Tags
+*   **EXIF/MakerNotes Video Extensions:** Specific tags injected by early consumer digicams (e.g., Canon, Sony, Panasonic), containing active camera specifications during runtime (e.g., shutter speed, focus distance, lens aperture).
+*   **Subcode Tape Metadata:** Embedded time/date blocks written line-by-line during tape exposure (MiniDV/Digital8). When extracted properly via firewire utilities, this yields frame-accurate real-world timestamps (YYYY-MM-DD HH:MM:SS) completely immune to filesystem manipulation.
+*   **SMPTE Production Timecode Tracks:** Timecode matrices detailing project relative runtime bounds (e.g., 01:00:15:12).
+
+---
+
+## Part 2: Extracted Patterns, Visual Elements, & Audio Events (The Perceptual Layer)
+These elements represent data that cannot be read from a file header. They must be extracted by processing the decoded audio/video streams using AI architectures, machine vision models, and signal processing algorithms.
+
+### 2.1 Video Stream Patterns & Visual Elements
+*   **Optical Temporal Interlacing Artifacts:** Comb-like visual artifacts present along moving edges. Deinterlacing algorithms can identify whether a clip was natively interlaced (tapes) or telecined (film-to-video conversion).
+*   **Compression Profile Deficiencies & Noise:** Quantitative detection of Macroblocking (8x8 pixel block grids from harsh MPEG-1/MPEG-2 compression), Mosquito noise around text, and analog tape tracking distortions (snow, skewing, head switching noise at the bottom 4-8 lines).
+*   **Burned-In Temporal Graphics (OCR):** The geometric coordinates, color values (usually bright safety orange, phosphor green, or neon white), and alphanumeric text of date/time stamps physically stamped into the video frame matrix by consumer camcorders.
+*   **Face Clusters & Biometric Geometry:** Spatiotemporal face tracking sequences. The pipeline extracts deep facial vector embeddings to map unique individuals, grouping them into unidentified clusters (e.g., Cluster_A, Cluster_B) before human classification.
+*   **Object and Material Classification:** Identifiable material markers such as CRT televisions, analog stereo stacks, cassette tapes, specific toy lineups, classic vehicle classes, and desktop beige computer towers.
+*   **Aesthetic & Environmental Era Archetypes:** Distinct fashion markers (hair volumes, shoulder pads, stone-washed denim styles) and residential room design elements (popcorn ceilings, wood-paneled walls, floral wallpaper motifs).
+*   **Lighting and Scene Composition Scans:** Shot transitions, pan speed thresholds, and lighting profile indicators (e.g., yellow incandescent bulbs vs. natural light) to pinpoint indoors vs. outdoors.
+
+### 2.2 Audio Stream Patterns & Acoustic Events
+*   **Noise Floor & Acoustic Signature Profiling:** Consistent underlying frequencies, specifically the 50Hz (PAL) or 60Hz (NTSC) electromagnetic hum radiated by old CRT televisions nearby, high-frequency tape-head hiss, or mechanical lens motor hum inside a camcorder.
+*   **Speech and Dialogue Transcripts:** Word sequences parsed via models robust against heavy room echo and low bit-depth distortion.
+*   **Speaker Diarization Vectors:** Voice characteristics mapped to differentiate individuals speaking over one another, even when visual angles mask their faces.
+*   **Sonic Event Detections (Acoustic Anchors):** Categorized background sound classes, such as wrapping paper crinkling, glassware clinking, children screaming, specific pop music tracks playing on background radios, or the signature mechanical clicking of a camera flash warming up.
+
+---
+
+## Part 3: Algorithmic Triangulation & Corpus-Wide Extrapolation (The Intelligence Layer)
+This represents the apex of the pipeline: taking the raw data (Part 1) and perceptual observations (Part 2) across a large folder of multiple media files to deduce human contexts, provenance, chronology, and life stories via comparative relational algorithms.
+
+### 3.1 Chronological Pinpointing & Age Trajectory Interpolation
+*   **The Logic:** If a filesystem date says 2008 but an old video file exhibits extreme macroblocking, a 4:3 aspect ratio, DivX 3.11 FourCC metadata, and a background CRT television, the file is structurally flagged as an early-era export. 
+*   **Age Tracking Triangulation:** The system matches human face clusters across the entire corpus. By evaluating a child's facial morphing progress via a vision model, it estimates relative age brackets. For instance:
+    *   Cluster_01 (Child A) is visually classified by an LLM as a toddler (~2 years old) in Video_X.
+    *   Cluster_01 is classified as an early elementary student (~6 years old) in Video_Y.
+    *   If Video_Y contains an explicit structural MiniDV subcode date of 1996-12-25, the pipeline mathematically locks Child A's birth year to approximately 1992.
+    *   Consequently, Video_X (where Child A is a toddler) is instantly back-dated to 1994, overriding any broken OS filesystem dates.
+
+### 3.2 Event Architecture Synthesis
+*   **The Logic:** Combining audio cues, object classes, and date contexts to classify the exact nature of an event without a human manual label.
+*   **Example 1: The Birthday Matrix:**
+    *   *Acoustic Indicators:* Dialogue transcript reads "make a wish", "blow them out"; audio parser detects a chorus singing "Happy Birthday" with high confidence.
+    *   *Visual Indicators:* Vision models spot localized candle flames, a circular frosted cake object, and a group of faces clustered tightly looking downward toward a table surface.
+    *   *Extrapolation:* The pipeline locks this file as an explicit Birthday Event. It tracks which face cluster is seated directly behind the cake coordinates. If that cluster matches Child_B, the pipeline catalogs this video as "Child B's Birthday". By pulling the calculated age profile of Child B, it maps the exact ordinal birthday (e.g., "Child B's 7th Birthday Party").
+*   **Example 2: The Christmas Matrix:**
+    *   *Visual Cues:* High occurrences of deep red/green color cluster ratios, a pine/coniferous tree shape adorned with highly reflective geometric points (ornaments), and cardboard boxes wrapped in pattern-heavy materials sitting at ground level.
+    *   *Acoustic Cues:* Distinct crackling of paper tearing at high amplitude, acoustic presence of holiday music.
+    *   *Extrapolation:* Grouping all files matching this multi-modal signature within a localized temporal window yields a high-probability calendar placement of late December for that sequence block.
+
+### 3.3 Provenance & Operator Identification (Who Filmed It?)
+*   **The Logic:** Tracking who is *not* in the scene, paired with tracking device physical signatures, determines the creator/operator.
+*   **Exclusionary Mapping:** If an aggregate directory of family clips consistently features 5 distinct people, but Person X is biometrically tracked in 95% of them while Person Y is visually present in only 5% but can be continuously heard from a zero-distance perspective (highest voice amplitude, lowest reverberation profile), the system tags Person Y as the "Primary Operator/Videographer".
+*   **Hardware Lineage Tracking:** The pipeline parses the camera noise profiles (Part 2) and EXIF data (Part 1). If a collection spans 15 years, the system clusters files by technical commonalities:
+    *   *Camera Archetype 1:* 4:3 ratio, NTSC interlaced, 60Hz hum, high tape hiss. (Assigned to the 1990s Family Camcorder).
+    *   *Camera Archetype 2:* 640x480 progressive AVI files, MJPG codec, Canon PowerShot S50 maker notes. (Assigned to the early 2000s pocket camera).
+    *   By cross-referencing which operator profile matches which hardware archetype cluster, the pipeline builds an automated lineage of family technology ownership over multiple decades.
+
+---
+
+## Part 4: Automated Engineering Execution Matrix
+To implement this concept as an efficient background process running silently on hardware, execution should follow an asymmetrical, multi-tiered pipeline. This minimizes computational expenses by matching heavy processing only with files that require it.
+
+```
+[Raw Archive Directory] 
+         │
+         ▼
+ ┌───────────────┐
+ │    Tier 1     │ ──► [Parse Container Metadata (ffprobe / ExifTool)]
+ └───────────────┘     Extracts raw codecs, frames, PAR, hardware tags.
+         │
+         ▼
+ ┌───────────────┐
+ │    Tier 2     │ ──► [Acoustic & Visual Keyframe Down-Sampling]
+ └───────────────┘     Runs Whisper audio parser & extracts 1 frame per 2 seconds.
+         │
+         ▼
+ ┌───────────────┐
+ │    Tier 3     │ ──► [Biometric Clustering & OCR Processing]
+ └───────────────┘     InsightFace clusters family vectors; Tesseract targets date stamps.
+         │
+         ▼
+ ┌───────────────┐
+ │    Tier 4     │ ──► [Targeted LLM Context Synthesis]
+ └───────────────┘     Passes ultra-condensed technical/biometric summaries and 
+                       3 keyframes to Qwen2.5-VL (3B/7B) to output the final 
+                       human-readable provenance, event categorization, and estimated year.
+```
+
+This tiered strategy ensures that 90% of the heavy math is processed via lightweight, deterministic local libraries, using expensive multi-modal LLM reasoning only as the final "narrative engine" to assemble the definitive family history ledger.
 
 ## 0. In one page
 
