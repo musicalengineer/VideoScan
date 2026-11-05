@@ -12,6 +12,10 @@
 //              journal-applied era shows with its signer, and the read
 //              changes nothing (generation and records the same); a file
 //              the catalog does not hold is "not stored", never empty.
+//   LOGIC      (review 11/05) a nil file cancels the read in flight; going
+//              away tears down the change subscription; an edit reaches the
+//              open dossier after its commit (stale at 1 s, fresh by ~3–4 s);
+//              the view is Equatable on (file, door); one loader per model.
 //   LOGIC      the store: a newer request drops an older answer (never one
 //              file's dossier beside another's); a failed read is shown in
 //              words and logged once per reason; a change signal re-reads;
@@ -72,6 +76,7 @@ struct FileDossierProductionTests {
         #expect(era.value == "1991–1995" && era.source == "8B era, unconfirmed" && era.standing == .observation)
 
         #expect(try await loader.load(UUID()) == nil, "a file the catalog does not hold reads as not stored")
+        #expect(FileDossierLoader.production(model: scene.model).id == loader.id, "one loader per model, never rebuilt per body")
         #expect(await repository.generation == generation, "READ ONLY: no commit")
         #expect(scene.model.records.count == count)
     }
@@ -137,6 +142,77 @@ struct FileDossierStoreTests {
         let open = CompletedActivityRow(item: item, now: .distantPast, isExpanded: true, onShowInCatalog: { _ in })
         #expect(closed != open, "the ▸/▾ follows the click (the row is .equatable())")
         #expect(closed == CompletedActivityRow(item: item, now: Date(), onShowInCatalog: { _ in }))
+    }
+
+    @Test func aNilFileCancelsTheReadInFlight() async throws {
+        final class Ran: @unchecked Sendable { var finished = false }     // set only if the read was NOT cancelled
+        let ran = Ran()
+        let a = UUID()
+        let loader = Self.loader { id in
+            try await Task.sleep(for: .milliseconds(300))
+            ran.finished = true
+            return Self.dossier(id, "A.mov")
+        }
+        let store = FileDossierStore()
+        let first = Task { await store.show(fileID: a, loader: loader) }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.show(fileID: nil, loader: loader)
+        await first.value
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(!ran.finished, "the read begun for A was cancelled, not left to run")
+        #expect(store.shown == .notStored && store.reads == 0, "never shown under no file")
+    }
+
+    @Test func disappearingTearsDownTheChangeSubscription() async throws {
+        let subject = PassthroughSubject<Void, Never>()
+        let store = FileDossierStore()
+        await store.show(fileID: UUID(), loader: Self.loader({ id in Self.dossier(id, "A.mov") }, changes: subject.eraseToAnyPublisher()))
+        #expect(store.isListening)
+        store.cancel()
+        #expect(!store.isListening)
+        subject.send(())
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(store.reads == 1, "no read after the view went away")
+    }
+
+    /// Edit at t0; the committer writes it at t0 + 2 s (its debounce). Through
+    /// the production timing (`afterCommit`) the open dossier still shows the
+    /// committed (old) lines at 1 s and the edit by about 3–4 s.
+    @Test(.timeLimit(.minutes(1)))
+    func anEditShowsAfterItIsCommitted() async throws {
+        final class Catalog: @unchecked Sendable {        // the fake catalog.sqlite (main actor only)
+            var name = "Old.mov"
+        }
+        let db = Catalog()
+        let edits = PassthroughSubject<Void, Never>()
+        let loader = Self.loader({ id in Self.dossier(id, await MainActor.run { db.name }) },
+                                 changes: FileDossierLoader.afterCommit(edits.eraseToAnyPublisher()))
+        let store = FileDossierStore()
+        await store.show(fileID: UUID(), loader: loader)
+        let start = ContinuousClock.now
+        #expect(FileDossierLoader.commitSample == CatalogCommitter.debounce + .seconds(1), "sampled one period after the committer's debounce")
+        edits.send(())                                       // the edit (in memory)
+        let commit = Task { try await Task.sleep(for: CatalogCommitter.debounce); db.name = "New.mov" }
+        try await Task.sleep(for: .seconds(1))
+        guard case .loaded(let early) = store.shown else { Issue.record("\(store.shown)"); return }
+        #expect(early.filename == "Old.mov", "within 1 s the catalog still holds the old row")
+        var fresh = false
+        while ContinuousClock.now - start < .seconds(6) {
+            if case .loaded(let d) = store.shown, d.filename == "New.mov" { fresh = true; break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        _ = try await commit.value
+        let took = ContinuousClock.now - start
+        #expect(fresh, "the committed edit reaches the open dossier")
+        #expect(took < .seconds(5), "by about 3–4 s: \(took)")
+    }
+
+    @Test func theViewIsEqualForTheSameFileThroughTheSameDoor() {
+        let loader = Self.loader { _ in nil }
+        let id = UUID()
+        #expect(FileDossierView(fileID: id, loader: loader) == FileDossierView(fileID: id, loader: loader))
+        #expect(FileDossierView(fileID: id, loader: loader) != FileDossierView(fileID: UUID(), loader: loader))
+        #expect(FileDossierView(fileID: id, loader: loader) != FileDossierView(fileID: id, loader: Self.loader { _ in nil }))
     }
 
     @Test func aChangeSignalReReads() async throws {
@@ -258,17 +334,19 @@ struct FileDossierSensorTests {
         // 1. The inspector: the host passes the door; the section shows the one view.
         #expect(try code("CatalogHelpers.swift").contains("fileDossiers: FileDossierLoader.production(model: model)"))
         #expect(try code("InspectorPanel+Sections.swift").contains("InspectorDossierView(record: rec, loader: fileDossiers)"))
-        #expect(try code("InspectorDossierView.swift").contains("FileDossierView(fileID: record.id, loader: loader)"))
-        // 2. The Dossier window: a completed row opens in place.
-        #expect(try code("DossierDashboardView.swift").contains("FileDossierView(fileID: opened, loader: FileDossierLoader.production(model: model))"))
+        #expect(try code("InspectorDossierView.swift").contains("FileDossierView(fileID: record.id, loader: loader).equatable()"))
+        // 2. The Dossier window: a completed row opens in place; the door is taken once, at init.
+        #expect(try code("DossierDashboardView.swift").contains("FileDossierView(fileID: opened, loader: dossiers).equatable()"))
+        #expect(try code("DossierDashboardView.swift").contains("self.dossiers = FileDossierLoader.production(model: model)"))
         // 4. The Media File Operations window: an Analyze / Transcribe / Captions
         //    row expands to the file's dossier (Rick: "click on the file in the MFO window").
-        #expect(try code("AnalyzeJob.swift").contains("FileDossierView(fileID: record.id, loader: FileDossierLoader.production(model: model))"))
+        #expect(try code("AnalyzeJob.swift").contains("FileDossierView(fileID: record.id, loader: dossiers).equatable()"))
+        #expect(try code("AnalyzeJob.swift").contains("self.dossiers = FileDossierLoader.production(model: model)"))
         #expect(try code("AnalyzeJob.swift").contains("MediaFileOperationOwnDetail"))
         #expect(try code("MediaFileOperations.swift").contains(#"static let analyze = Self("analyze", hasDetailView: true,"#))
         // 3. The Results sheet.
         #expect(try code("AnalysisResultsStore.swift").contains("dossiers: FileDossierLoader.production(model: model)"))
-        #expect(try code("AnalysisResultsSheet.swift").contains("FileDossierView(fileID: row.recordID, loader: loader)"))
+        #expect(try code("AnalysisResultsSheet.swift").contains("FileDossierView(fileID: row.recordID, loader: loader).equatable()"))
 
         // Nobody else builds the view, a loader, or reads a dossier.
         var views: [String] = [], loaders: [String] = [], reads: [String] = []

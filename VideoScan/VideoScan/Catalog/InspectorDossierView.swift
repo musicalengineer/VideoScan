@@ -20,6 +20,6 @@ struct InspectorDossierView: View {
     let loader: FileDossierLoader
 
     var body: some View {
-        FileDossierView(fileID: record.id, loader: loader)
+        FileDossierView(fileID: record.id, loader: loader).equatable()
     }
 }

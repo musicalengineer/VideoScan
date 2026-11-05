@@ -44,10 +44,12 @@ public struct FileDossier: Sendable, Equatable {
         }
     }
 
-    /// What a line is: a stored fact, a machine observation (unconfirmed),
-    /// or a reading that is not there yet (its value says why).
+    /// What a line is: a stored fact; a machine observation or inference
+    /// (unconfirmed); a reader that is PROVEN to have run on this file and
+    /// found nothing; or a reading that is not there (not run, or no proof
+    /// it ran — its value says which).
     public enum Standing: String, Sendable, Equatable {
-        case fact, observation, missing
+        case fact, observation, nothingFound, missing
     }
 
     /// One item of a line's body (a caption at a frame time, the transcript).

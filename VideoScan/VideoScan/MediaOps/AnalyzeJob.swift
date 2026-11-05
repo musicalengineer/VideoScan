@@ -65,6 +65,8 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnD
     let stages: Set<AnalyzeStage>
 
     private weak var model: VideoScanModel?
+    /// The file dossier's door for this row's detail, taken once at init.
+    private let dossiers: FileDossierLoader
     private weak var orchestrator: CaptionOrchestrator?
 
     let canPause = false
@@ -118,6 +120,7 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnD
          stages: Set<AnalyzeStage> = AnalyzeStage.all) {
         self.record = record
         self.model = model
+        self.dossiers = FileDossierLoader.production(model: model)
         self.orchestrator = orchestrator
         self.stages = stages
         self.subtitleText = "Queued for \(Self.verb(for: stages).lowercased())…"
@@ -356,9 +359,6 @@ extension AnalyzeJob {
     /// Through the one door (FileDossierLoader.production); it reads stored
     /// facts only and refills as this job's captions and transcript land.
     var detailView: AnyView {
-        guard let model else {
-            return AnyView(Text("The catalog is not open — nothing to read.").font(.caption).foregroundStyle(.secondary))
-        }
-        return AnyView(FileDossierView(fileID: record.id, loader: FileDossierLoader.production(model: model)))
+        AnyView(FileDossierView(fileID: record.id, loader: dossiers).equatable())
     }
 }

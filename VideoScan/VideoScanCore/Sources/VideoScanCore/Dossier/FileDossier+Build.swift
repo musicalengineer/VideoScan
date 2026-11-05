@@ -9,6 +9,10 @@
 // (with their model), the usable OCR dates (GH #402: degenerate reads are
 // not evidence), the OCR text, and the dossier run's date and stack.
 //
+// Which reader ran (review 11/05): every channel is keyed on its OWN
+// evidence, never the shared dossier footer (`dossierProcessedAt` is also
+// stamped by the transcript-only and captions-only passes). See `Ran`.
+//
 // Rulings honoured here: a machine era is never a date and `era.none` is
 // never an era (DECISIONS 2026-11-01); a machine claim is an `.observation`
 // with its signer, never a `.fact`; the assertions' `confidence` column is
@@ -44,7 +48,8 @@ extension FileDossier {
             return Section(layer: .technical, summary: why, lines: lines)
         }
         var lines = TechnicalReading.interpret(facts, now: now).map {
-            Line(label: $0.label, value: $0.value, reading: $0.suggests, source: $0.source, standing: .fact)
+            Line(label: $0.label, value: $0.value, reading: $0.suggests, source: $0.source,
+                 standing: $0.isInference ? .observation : .fact)
         }
         if facts.codec == "dvvideo" {
             let at = (lines.firstIndex { $0.label == "Audio" }).map { $0 + 1 } ?? lines.count
@@ -73,20 +78,56 @@ extension FileDossier {
 
     // MARK: Layer 2 — Patterns & events
 
+    /// What the stored stamps PROVE ran on this file, per reader.
+    struct Ran {
+        var hasVideo: Bool
+        var hasAudio: Bool
+        /// The scene captioner: `caption_runs` (sceneCaptionModel / Date) — the full pass and Captions-only both write it.
+        var captions: Bool
+        /// The on-screen (OCR) reader runs only inside the FULL dossier pass
+        /// (applyDossier), which stamps the run and the captions with ONE
+        /// instant. The captions-only and transcript-only passes stamp the
+        /// footer too (stampDossierProvenance), so the footer alone proves
+        /// nothing; only a "vlm+whisper" footer at the captions' own instant
+        /// can come from the full pass. A VLM-only full pass cannot be told
+        /// apart from Captions-only, so it is "not known", never "none found".
+        var ocr: Bool
+        /// Words for "nothing stored" when the reader is not proven to have run.
+        var ocrUnknownReason: String?
+
+        init(_ r: VideoRecord) {
+            hasVideo = r.streamTypeRaw == "Video+Audio" || r.streamTypeRaw == "Video only"
+            hasAudio = r.streamTypeRaw == "Video+Audio" || r.streamTypeRaw == "Audio only"
+            captions = r.sceneCaptionDate != nil || r.sceneCaptionModel != nil
+            var full = false
+            if let at = r.dossierProcessedAt, let captioned = r.sceneCaptionDate, let model = r.sceneCaptionModel,
+               Int64(at.timeIntervalSince1970) == Int64(captioned.timeIntervalSince1970),
+               r.dossierProcessedBy?.hasPrefix(model + "+") == true {
+                full = true
+            }
+            ocr = full
+            ocrUnknownReason = !full && captions
+                ? "the scene captions ran, but no stamp shows the on-screen reader ran on this file (it stores nothing when it finds nothing)"
+                : nil
+        }
+
+        /// The words for a channel that needs a picture.
+        var noPicture: String { hasAudio ? "no picture (audio only)" : "no picture (no audio or video stream)" }
+    }
+
     static func patternsSection(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading], unreadable: String?) -> Section {
-        let hasVideo = r.streamTypeRaw == "Video+Audio" || r.streamTypeRaw == "Video only"
-        let hasAudio = r.streamTypeRaw == "Video+Audio" || r.streamTypeRaw == "Audio only"
+        let ran = Ran(r)
         let eras = MachineEraResolver.eras(fromRowsOfOneSubject: assertions)
-        var lines: [Line] = [eraLine(eras.first, others: Array(eras.dropFirst()), assertions: assertions, userDate: r.userDate, hasVideo: hasVideo)]
+        var lines: [Line] = [eraLine(eras.first, others: Array(eras.dropFirst()), assertions: assertions, userDate: r.userDate, ran: ran)]
         if let mine = userDateLine(r) { lines.append(mine) }
         lines.append(inferredDateLine(r))
-        lines.append(sceneLine(r, hasVideo: hasVideo))
-        lines.append(speechLine(r, hasAudio: hasAudio))
+        lines.append(sceneLine(r, ran: ran))
+        lines.append(speechLine(r, hasAudio: ran.hasAudio))
         lines.append(peopleLine(r))
         if let machine = recognizedLine(r) { lines.append(machine) }
-        lines.append(ocrDatesLine(r, hasVideo: hasVideo))
+        lines.append(ocrLine("On-screen dates", r.usableOCRDates, r, ran: ran, source: "burn-in reader"))
         if let burned = burnedInLine(assertions) { lines.append(burned) }
-        lines.append(ocrTextLine(r, hasVideo: hasVideo))
+        lines.append(ocrLine("On-screen text", r.ocrText, r, ran: ran, source: "on-screen text reader"))
         lines.append(dossierRunLine(r))
         if let unreadable {
             lines.append(Line(label: "Stored analysis", value: "could not be read", reading: unreadable,
@@ -109,7 +150,7 @@ extension FileDossier {
     // MARK: Era
 
     static func eraLine(_ era: MachineEra?, others: [MachineEra], assertions: [CatalogRow.ProvenanceAssertionReading],
-                        userDate: String?, hasVideo: Bool) -> Line {
+                        userDate: String?, ran: Ran) -> Line {
         if let era {
             var reading: String?
             if let year = MachineEraResolver.rickYear(userDate) {
@@ -119,20 +160,39 @@ extension FileDossier {
             return Line(label: "Era", value: era.rangeText, reading: reading, source: "\(era.modelShortName) era, unconfirmed",
                         evidence: MachineEraResolver.inspectorHelp(era: era, others: others), standing: .observation)
         }
+        // Rick's veto: the analyzer DID reach the file; he refused what it said.
+        if let rejected = rejectedEra(assertions) {
+            return Line(label: "Era", value: "rejected by you",
+                        reading: "the \(MachineEraResolver.modelShortName(by: rejected.by)) analyzer said \(rejected.value.replacingOccurrences(of: "-", with: "–")); you rejected it",
+                        source: "Rick", evidence: "Era \(rejected.value) by \(rejected.by), \(eventDay(rejected.at)); rejected by you.", standing: .fact)
+        }
         // `era.none` is the analyzer's "looked, nothing usable" — words, never an era.
         if let none = newest(assertions, field: "era.none") {
-            let evidence = object(none.evidenceJSON)
+            let evidence = MachineEraResolver.object(none.evidenceJSON)
             let reason = evidence["reason"] as? String
             let gaveUp = evidence["gaveUp"] as? Bool ?? false
             return Line(label: "Era", value: gaveUp ? "no era: the analyzer gave up" : "no usable era", reading: reason,
                         source: "\(MachineEraResolver.modelShortName(by: none.by)) era",
-                        evidence: "By \(none.by), \(TechnicalReading.day(Date(timeIntervalSince1970: TimeInterval(none.at))))."
-                            + (reason.map { " \($0)" } ?? ""),
-                        standing: .missing)
+                        evidence: "By \(none.by), \(eventDay(none.at))." + (reason.map { " \($0)" } ?? ""),
+                        standing: gaveUp ? .missing : .nothingFound)
         }
-        return Line(label: "Era", value: hasVideo ? "not analyzed yet" : "no picture to read",
-                    reading: hasVideo ? "VideoScan Background has not reached this file" : nil,
+        // A fused row whose value is not a year range: stored, but unreadable.
+        if let bad = live(assertions, field: MachineEraResolver.fusedField).max(by: { $0.seq < $1.seq }) {
+            return Line(label: "Era", value: "unreadable", reading: "the stored era value \"\(bad.value)\" is not a year range",
+                        source: "\(MachineEraResolver.modelShortName(by: bad.by)) era", standing: .missing)
+        }
+        return Line(label: "Era", value: ran.hasVideo ? "not analyzed yet" : "no picture to read",
+                    reading: ran.hasVideo ? "VideoScan Background has not reached this file" : nil,
                     source: "era analyzer", standing: .missing)
+    }
+
+    /// The newest machine `era.fused` row (a readable range) that Rick rejected afterwards.
+    static func rejectedEra(_ rows: [CatalogRow.ProvenanceAssertionReading]) -> CatalogRow.ProvenanceAssertionReading? {
+        let field = MachineEraResolver.fusedField
+        return rows.filter { f in
+            f.field == field && f.state == "inferred" && MachineEraResolver.isMachine(f.by) && MachineEraResolver.range(f.value) != nil
+                && rows.contains { $0.field == field && $0.state == "rejected" && $0.value == f.value && $0.seq > f.seq }
+        }.max { $0.seq < $1.seq }
     }
 
     static func userDateLine(_ r: VideoRecord) -> Line? {
@@ -150,7 +210,7 @@ extension FileDossier {
                         source: source, evidence: nonEmpty(r.inferredDateReason), standing: .observation)
         }
         if let reason = nonEmpty(r.inferredDateReason) {
-            return Line(label: "Inferred date", value: "none", reading: reason, source: source, standing: .missing)
+            return Line(label: "Inferred date", value: "none", reading: reason, source: source, standing: .nothingFound)
         }
         return Line(label: "Inferred date", value: "not inferred yet", source: "date triangulator", standing: .missing)
     }
@@ -163,16 +223,19 @@ extension FileDossier {
 
     // MARK: Captions, OCR, transcript
 
-    static func sceneLine(_ r: VideoRecord, hasVideo: Bool) -> Line {
+    static func sceneLine(_ r: VideoRecord, ran: Ran) -> Line {
         let model = r.sceneCaptionModel ?? "VLM"
+        let evidence = r.sceneCaptionDate.map { "Captioned by \(model) on \(TechnicalReading.dayAndTime($0))." }
         guard !r.sceneCaptions.isEmpty else {
-            return Line(label: "Scene", value: hasVideo ? "not described yet" : "no picture (audio only)",
+            if ran.captions {
+                return Line(label: "Scene", value: "no scenes described", source: model, evidence: evidence, standing: .nothingFound)
+            }
+            return Line(label: "Scene", value: ran.hasVideo ? "not described yet" : ran.noPicture,
                         source: "scene captions", standing: .missing)
         }
         return Line(label: "Scene", value: count(r.sceneCaptions.count, "frame") + " described",
                     reading: r.sceneCaptions.first.map { String($0.text.prefix(120)) }, source: model,
-                    evidence: r.sceneCaptionDate.map { "Captioned by \(model) on \(TechnicalReading.day($0))." },
-                    standing: .observation, body: r.sceneCaptions.map { TimedText(at: $0.timestamp, text: $0.text) })
+                    evidence: evidence, standing: .observation, body: r.sceneCaptions.map { TimedText(at: $0.timestamp, text: $0.text) })
     }
 
     static func speechLine(_ r: VideoRecord, hasAudio: Bool) -> Line {
@@ -180,34 +243,27 @@ extension FileDossier {
         guard let text = r.audioTranscript else {
             return Line(label: "Speech", value: hasAudio ? "not transcribed yet" : "no audio track", source: "transcript", standing: .missing)
         }
-        let evidence = r.audioTranscriptDate.map { "Transcribed by \(model) on \(TechnicalReading.day($0))." }
-        if text.isEmpty {
-            return Line(label: "Speech", value: "no speech found", source: model, evidence: evidence, standing: .observation)
+        let evidence = r.audioTranscriptDate.map { "Transcribed by \(model) on \(TechnicalReading.dayAndTime($0))." }
+        if text.isEmpty {     // '' = Whisper ran and heard no speech (transcripts table)
+            return Line(label: "Speech", value: "no speech found", source: model, evidence: evidence, standing: .nothingFound)
         }
         return Line(label: "Speech", value: "“" + String(text.prefix(80)) + (text.count > 80 ? "…”" : "”"),
                     reading: "\(text.count) characters", source: model, evidence: evidence, standing: .observation,
                     body: [TimedText(at: nil, text: text)])
     }
 
-    static func ocrDatesLine(_ r: VideoRecord, hasVideo: Bool) -> Line {
-        let usable = r.usableOCRDates
-        guard !usable.isEmpty else {
-            return Line(label: "On-screen dates", value: r.dossierProcessedAt != nil ? "none read" : (hasVideo ? "not read yet" : "no picture"),
-                        source: "burn-in reader", standing: .missing)
+    /// The on-screen dates / text line. "none found" only when the reader is
+    /// PROVEN to have run (Ran.ocr); otherwise it says what is known.
+    static func ocrLine(_ label: String, _ reads: [SceneCaption], _ r: VideoRecord, ran: Ran, source: String) -> Line {
+        guard reads.isEmpty else {
+            return Line(label: label, value: count(reads.count, "read"), reading: reads.first?.text,
+                        source: r.sceneCaptionModel ?? "VLM", standing: .observation,
+                        body: reads.map { TimedText(at: $0.timestamp, text: $0.text) })
         }
-        return Line(label: "On-screen dates", value: count(usable.count, "read"), reading: usable.first?.text,
-                    source: r.sceneCaptionModel ?? "VLM", standing: .observation,
-                    body: usable.map { TimedText(at: $0.timestamp, text: $0.text) })
-    }
-
-    static func ocrTextLine(_ r: VideoRecord, hasVideo: Bool) -> Line {
-        guard !r.ocrText.isEmpty else {
-            return Line(label: "On-screen text", value: r.dossierProcessedAt != nil ? "none read" : (hasVideo ? "not read yet" : "no picture"),
-                        source: "on-screen text reader", standing: .missing)
-        }
-        return Line(label: "On-screen text", value: count(r.ocrText.count, "read"), reading: r.ocrText.first?.text,
-                    source: r.sceneCaptionModel ?? "VLM", standing: .observation,
-                    body: r.ocrText.map { TimedText(at: $0.timestamp, text: $0.text) })
+        if !ran.hasVideo { return Line(label: label, value: ran.noPicture, source: source, standing: .missing) }
+        if ran.ocr { return Line(label: label, value: "none found", source: r.sceneCaptionModel ?? "VLM", standing: .nothingFound) }
+        if let why = ran.ocrUnknownReason { return Line(label: label, value: "not known", reading: why, source: source, standing: .missing) }
+        return Line(label: label, value: "not read yet", source: source, standing: .missing)
     }
 
     /// The era job's `ocr.date` observations (8B burn-in reads), newest first.
@@ -217,8 +273,7 @@ extension FileDossier {
         var values: [String] = []
         for row in rows where !values.contains(row.value) { values.append(row.value) }
         let body = rows.map { row -> TimedText in
-            TimedText(at: object(row.evidenceJSON)["atS"] as? Double,
-                      text: "\(row.value) — \(row.by), \(TechnicalReading.day(Date(timeIntervalSince1970: TimeInterval(row.at))))")
+            TimedText(at: MachineEraResolver.object(row.evidenceJSON)["atS"] as? Double, text: "\(row.value) — \(row.by), \(eventDay(row.at))")
         }
         return Line(label: "Burned-in date", value: values.joined(separator: ", "),
                     source: "\(MachineEraResolver.modelShortName(by: first.by)) date reader, unconfirmed",
@@ -248,8 +303,10 @@ extension FileDossier {
         guard let at = r.dossierProcessedAt else {
             return Line(label: "Dossier run", value: "not run yet", source: "dossier pipeline", standing: .missing)
         }
-        return Line(label: "Dossier run", value: TechnicalReading.day(at), source: r.dossierProcessedBy ?? "dossier pipeline",
-                    evidence: r.dossierProcessedBy.map { "Processed \(TechnicalReading.day(at)) by \($0)." }, standing: .fact)
+        // The old footer's date AND time of day, in the local zone (a wall-clock event on this Mac).
+        let when = TechnicalReading.dayAndTime(at)
+        return Line(label: "Dossier run", value: when, source: r.dossierProcessedBy ?? "dossier pipeline",
+                    evidence: r.dossierProcessedBy.map { "Processed \(when) by \($0)." }, standing: .fact)
     }
 
     // MARK: Helpers
@@ -267,9 +324,8 @@ extension FileDossier {
         live(rows, field: field).max { $0.seq < $1.seq }
     }
 
-    static func object(_ json: String) -> [String: Any] {
-        (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
-    }
+    /// A row's `at` (when the helper observed it, on this Mac) as a local day.
+    static func eventDay(_ at: Int64) -> String { TechnicalReading.day(Date(timeIntervalSince1970: TimeInterval(at))) }
 
     static func nonEmpty(_ s: String?) -> String? {
         guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }

@@ -86,6 +86,24 @@ struct TechnicalReadingTests {
         #expect(TechnicalReading.classifyCreationTime(TechnicalFacts(), now: Self.now).kind == .none)
     }
 
+    /// Review 11/05: a make/model tag survives a re-wrap, so a camera tag's
+    /// date is an inference, never "is the recording date".
+    @Test func aCameraTagDateIsAnInferenceNeverAStatedFact() throws {
+        let phone = TechnicalFacts(hasVideo: true, codec: "hevc", make: "Apple", model: "iPhone XS",
+                                   creationTime: Self.at("2019-07-05T01:14:00Z"), creationSource: "quicktime:com.apple.quicktime.creationdate")
+        let line = try #require(Self.lines(phone)["Creation time"])
+        #expect(line.isInference && line.value == "2019-07-05 UTC")
+        #expect(line.suggests.hasPrefix("almost certainly the recording date (device tags present)"))
+        #expect(!line.suggests.contains("is the recording date"))
+        let r = VideoRecord()
+        r.streamTypeRaw = "Video+Audio"; r.videoCodec = "hevc"; r.originMake = "Apple"
+        r.embeddedCreationDate = Self.at("2019-07-05T01:14:00Z"); r.embeddedCreationSource = "format:creation_time"
+        let built = FileDossier.build(record: r, digest: nil, assertions: [], now: Self.now)
+        #expect(built.technical.line("Creation time")?.standing == .observation)
+        let bare = TechnicalFacts(hasVideo: true, codec: "h264", creationTime: Self.at("2012-05-01T00:00:00Z"))
+        #expect(Self.lines(bare)["Creation time"]?.isInference == false)
+    }
+
     @Test func mtimeSilenceAndAnUpscaledTransfer() {
         let f = TechnicalFacts(container: "matroska", hasVideo: true, codec: "ffv1", width: 1280, height: 720,
                                modified: Self.at("2026-07-01T09:00:00Z"))

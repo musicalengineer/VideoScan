@@ -22,7 +22,15 @@
 import SwiftUI
 import VideoScanCore
 
-struct FileDossierView: View {
+struct FileDossierView: View, Equatable {
+
+    /// Equal for the same file through the same door (review 11/05): with
+    /// `.equatable()`, a parent's 2 Hz re-render (the Dossier window) never
+    /// re-renders an open dossier's long transcript; the store's own
+    /// publishes still update it.
+    static func == (a: FileDossierView, b: FileDossierView) -> Bool {
+        a.fileID == b.fileID && a.loader.id == b.loader.id
+    }
 
     /// The file's catalog id (`files.id` = VideoRecord.id); nil = not in this catalog.
     let fileID: UUID?
@@ -97,7 +105,7 @@ struct FileDossierLineView: View {
                     .frame(width: 104, alignment: .leading)
                 Text(line.value)
                     .font(.system(size: 12))
-                    .foregroundStyle(line.standing == .missing ? Color.secondary : Color.primary)
+                    .foregroundStyle(line.standing == .missing || line.standing == .nothingFound ? Color.secondary : Color.primary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 6)

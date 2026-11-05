@@ -271,7 +271,7 @@ struct FileDossierSheet: View {
                 Button("Show in Catalog") { _ = onShowInCatalog(); dismiss() }
             }
             ScrollView {
-                FileDossierView(fileID: row.recordID, loader: loader)
+                FileDossierView(fileID: row.recordID, loader: loader).equatable()
                     .padding(.trailing, 8)
             }
             HStack {

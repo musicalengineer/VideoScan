@@ -107,20 +107,22 @@ struct FileDossierTests {
     @Test func eraNoneIsNeverAnEraAndAGiveUpSaysWhy() throws {
         let none = try #require(Self.build(Self.dvRecord(), [Self.row(1, "era.none", "none", evidence: #"{"reason":"no era window passed"}"#)])
             .patterns.line("Era"))
-        #expect(none.value == "no usable era" && none.reading == "no era window passed" && none.standing == .missing)
+        #expect(none.value == "no usable era" && none.reading == "no era window passed" && none.standing == .nothingFound, "looked, found nothing")
         #expect(!none.value.contains("none") || none.value == "no usable era")
         let gave = try #require(Self.build(Self.dvRecord(), [Self.row(1, "era.none", "none",
                                                                       evidence: #"{"reason":"gave up after 3 tries: frames would not decode","gaveUp":true}"#)])
             .patterns.line("Era"))
-        #expect(gave.value == "no era: the analyzer gave up" && gave.reading?.hasPrefix("gave up after 3 tries") == true)
+        #expect(gave.value == "no era: the analyzer gave up" && gave.reading?.hasPrefix("gave up after 3 tries") == true && gave.standing == .missing)
         // An era from one signer beats another's era.none.
         let both = Self.build(Self.dvRecord(), [Self.row(1, "era.none", "none"), Self.row(2, "era.fused", "1991-1993", by: "machine:other-32b/era-v1@r1")])
         #expect(both.patterns.line("Era")?.value == "1991–1993")
     }
 
-    @Test func aRejectedEraIsNotShown() {
+    @Test func aRejectedEraIsNotShownAsAnEraAndSaysYouRejectedIt() throws {
         let rows = [Self.row(1, "era.fused", "1990-1995"), Self.row(2, "era.fused", "1990-1995", by: "rick", state: "rejected")]
-        #expect(Self.build(Self.dvRecord(), rows).patterns.line("Era")?.value == "not analyzed yet")
+        let era = try #require(Self.build(Self.dvRecord(), rows).patterns.line("Era"))
+        #expect(era.value == "rejected by you" && era.source == "Rick" && era.standing == .fact)
+        #expect(era.reading == "the 8B analyzer said 1990–1995; you rejected it")
     }
 
     @Test func burnedInDatesAreObservationsNewestFirst() throws {
@@ -153,9 +155,27 @@ struct FileDossierTests {
         audio.streamTypeRaw = "Audio only"
         #expect(Self.build(audio).patterns.line("Scene")?.value == "no picture (audio only)")
         #expect(Self.build(audio).patterns.line("Era")?.value == "no picture to read")
-        let ran = Self.dvRecord()
-        ran.dossierProcessedAt = Self.now
-        #expect(Self.build(ran).patterns.line("On-screen text")?.value == "none read")
+        // Review 11/05: the shared footer proves nothing about the on-screen reader.
+        let transcriptOnly = Self.dvRecord()
+        transcriptOnly.dossierProcessedAt = Self.now
+        #expect(Self.build(transcriptOnly).patterns.line("On-screen text")?.value == "not read yet")
+        // Captions ran (Captions-only or a VLM-only full pass): not known, with why.
+        let captionsOnly = Self.dvRecord()
+        captionsOnly.sceneCaptionModel = "qwen3-vl"; captionsOnly.sceneCaptionDate = Self.now
+        captionsOnly.dossierProcessedAt = Self.now; captionsOnly.dossierProcessedBy = "qwen3-vl"
+        let unknown = Self.build(captionsOnly).patterns
+        #expect(unknown.line("On-screen text")?.value == "not known" && unknown.line("On-screen text")?.standing == .missing)
+        #expect(unknown.line("Scene")?.value == "no scenes described" && unknown.line("Scene")?.standing == .nothingFound)
+        // The full vlm+whisper pass at the captions' own instant: the reader ran and found nothing.
+        let full = Self.dvRecord()
+        full.sceneCaptionModel = "qwen3-vl"; full.sceneCaptionDate = Self.now
+        full.dossierProcessedAt = Self.now; full.dossierProcessedBy = "qwen3-vl+whisper-medium"
+        let found = Self.build(full).patterns
+        #expect(found.line("On-screen text")?.value == "none found" && found.line("On-screen text")?.standing == .nothingFound)
+        #expect(found.line("On-screen dates")?.value == "none found")
+        let noStreams = Self.dvRecord()
+        noStreams.streamTypeRaw = "No A/V streams"
+        #expect(Self.build(noStreams).patterns.line("Scene")?.value == "no picture (no audio or video stream)")
     }
 
     // MARK: LOGIC — the old inspector's floor
@@ -188,7 +208,9 @@ struct FileDossierTests {
         #expect(ocr.body == [.init(at: 5, text: "DEC 25 1990")], "GH #402: a degenerate read is not evidence")
         #expect(p.line("On-screen text")?.body == [.init(at: 8, text: "MERRY XMAS")])
         let run = try #require(p.line("Dossier run"))
-        #expect(run.value == "2026-06-09" && run.source == "qwen3-vl+whisper-medium")
+        let local = DateFormatter()
+        local.dateFormat = "yyyy-MM-dd HH:mm"            // the local zone, with the old footer's time of day
+        #expect(run.value == local.string(from: TechnicalReadingTests.at("2026-06-09T10:00:00Z")) && run.source == "qwen3-vl+whisper-medium")
 
         r.inferredRecordDate = nil
         #expect(Self.build(r).patterns.line("Inferred date")?.value == "none", "examined, nothing found: says so with the reason")
@@ -207,7 +229,7 @@ struct FileDossierTests {
         var k = DossierFixture.Knowledge(captionModel: "qwen3-vl-test", transcript: "open that one next", transcriptModel: "whisper-medium",
                                          dossierBy: "vlm+whisper", userDate: "1990")
         k.captions = [("scene", 3, "a decorated tree"), ("scene", 61.5, "a dog"), ("ocrDate", 5, "DEC 25 1990"), ("ocrText", 8, "MERRY XMAS")]
-        k.inferred = (662_083_200, 0.62, "catch-up", "OCR consensus")      // 1990-12-25
+        k.inferred = (662_126_400, 0.62, "catch-up", "OCR consensus")      // 1990-12-25 12:00 UTC (the 25th in every US zone)
         k.people = [("Ann", "confirmed"), ("Bo", "detected"), ("Cy", "suspected")]
         k.assertions = [("era.yearRange", "1990-1995", Self.by8B, "inferred", #"{"frameTimesS":[5,12.5],"window":[0,60]}"#),
                         ("era.fused", "1990-1995", Self.by8B, "inferred", #"{"validEraWindows":1,"windows":[[0,60]]}"#),
@@ -226,7 +248,7 @@ struct FileDossierTests {
         #expect(t.line("Frame rate")?.value == "29.97")
         #expect(t.line("Scan")?.value == "interlaced, bottom field first (as flagged)")
         #expect(t.line("Audio")?.value == "first audio stream: pcm_s16le 32000 Hz 2 ch")
-        #expect(t.line("Creation time")?.value == "2003-02-11" && t.line("Creation time")?.source == "embedded tag (format:creation_time)")
+        #expect(t.line("Creation time")?.value == "2003-02-11 UTC" && t.line("Creation time")?.source == "embedded tag (format:creation_time)")
         #expect(t.line("File modified")?.value == "2003-02-11")
         #expect(t.line("Duration / rate")?.value == "2 h 39 m, 28.8 Mb/s")
         #expect(t.summary == "DV camcorder/deck capture, NTSC 720×480, 32 kHz audio (the 12-bit 4-ch camcorder mode) · 2 h 39 m")
@@ -300,7 +322,8 @@ struct FileDossierTests {
         let rows = [Self.row(1, "era.fused", "garbage"), Self.row(2, "era.fused", "1980-1984", by: "machine:mystery-model@r9", evidence: "not json")]
         let era = try #require(Self.build(Self.dvRecord(), rows).patterns.line("Era"))
         #expect(era.value == "1980–1984" && era.source == "mystery-model era, unconfirmed")
-        #expect(Self.build(Self.dvRecord(), [Self.row(1, "era.fused", "garbage")]).patterns.line("Era")?.value == "not analyzed yet")
+        let bad = Self.build(Self.dvRecord(), [Self.row(1, "era.fused", "garbage")]).patterns.line("Era")
+        #expect(bad?.value == "unreadable" && bad?.reading == "the stored era value \"garbage\" is not a year range", "a stored row is never 'not analyzed'")
     }
 
     @Test func aCorruptStoredRowStillBuildsAndSaysWhy() async throws {

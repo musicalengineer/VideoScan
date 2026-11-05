@@ -33764,6 +33764,7 @@
         "TechnicalReadingTests"
       ],
       "tests": [
+        "aCameraTagDateIsAnInferenceNeverAStatedFact",
         "aDVCaptureIsAHighConstantRate",
         "aDVCreationTimeIsTheCaptureStamp",
         "aProResCreationTimeIsATransferStampNotACaptureDate",
@@ -33789,7 +33790,7 @@
         "aCorruptStoredRowStillBuildsAndSaysWhy",
         "aDVFileCarriesTheDVClockLineUntilTheAnalyzerExists",
         "aFourChannelDVFileNeverReadsAsPlainTwoChannels",
-        "aRejectedEraIsNotShown",
+        "aRejectedEraIsNotShownAsAnEraAndSaysYouRejectedIt",
         "anEraAgreesOrDisagreesWithRicksYear",
         "anUnknownSignerIsNamedAndAMalformedValueIsIgnored",
         "burnedInDatesAreObservationsNewestFirst",
@@ -33818,12 +33819,43 @@
         "aDossierWindowRowReRendersWhenItsDossierOpens",
         "aMissingRowAndAFailedReadSaySoAndAFailureIsLoggedOnce",
         "aNewerRequestDropsAnOlderAnswer",
+        "aNilFileCancelsTheReadInFlight",
         "allGroupsStartCollapsedAndTheColoursAreGreyAndBlue",
+        "anEditShowsAfterItIsCommitted",
+        "disappearingTearsDownTheChangeSubscription",
         "fourChannelDVSaysFirstStream",
         "productionDoorMatchesTheLoadedRecord",
         "technicalReadings",
         "theFourCallSitesGoThroughOneDoor",
-        "theViewAndTheStoreAreReadOnlyAndDoNoRecordsWork"
+        "theViewAndTheStoreAreReadOnlyAndDoNoRecordsWork",
+        "theViewIsEqualForTheSameFileThroughTheSameDoor"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Dossier/FileDossierReviewTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileDossierReviewTests"
+      ],
+      "tests": [
+        "aFileWithNoStreamsIsNotCalledAudioOnly",
+        "aLocalEveningMtimeShowsTheSameDayAsTheInspector",
+        "aRejectedEraDoesNotSayTheAnalyzerNeverReachedTheFile",
+        "aTranscriptOnlyRunDoesNotClaimTheBurnInReaderFoundNothing",
+        "anUnknownBitRateIsNotShownAsZero",
+        "anUnknownFrameRateIsNotShownAsZero"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileDossierStoreReviewTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FileDossierStoreReviewTests"
+      ],
+      "tests": [
+        "aSteadyStreamOfCommitsStillReachesTheOpenDossier"
       ]
     }
   ],
@@ -36531,7 +36563,7 @@
       ],
       "expected_floor": 3324,
       "name": "unit",
-      "package_expected_floor": 768,
+      "package_expected_floor": 775,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsReportReviewTests",
         "VideoScanCoreTests.AnalysisResultsReportTests",
@@ -36567,6 +36599,7 @@
         "VideoScanCoreTests.FableReviewHelperLoopTests",
         "VideoScanCoreTests.FableReviewHelperTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
+        "VideoScanCoreTests.FileDossierReviewTests",
         "VideoScanCoreTests.FileDossierTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.ImportComparatorScaleTests",
@@ -37495,7 +37528,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 436,
+      "expected_floor": 441,
       "name": "regression",
       "package_expected_floor": 331,
       "package_selectors": [
@@ -37656,6 +37689,7 @@
         "VideoScanTests/HallieViewerCatalogTests",
         "VideoScanTests/FileDossierProductionTests",
         "VideoScanTests/FileDossierStoreTests",
+        "VideoScanTests/FileDossierStoreReviewTests",
         "VideoScanTests/FileDossierMediaMatrixTests",
         "VideoScanTests/FileDossierPartialFieldTests",
         "VideoScanTests/FileDossierSensorTests"

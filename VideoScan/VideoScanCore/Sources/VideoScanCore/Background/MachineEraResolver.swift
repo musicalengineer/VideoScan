@@ -177,7 +177,9 @@ public enum MachineEraResolver {
                           frameTimesS: unique, frameCount: unique.count, burnedInYears: evidence["burnedInYears"] as? [Int] ?? [])
     }
 
-    private static func object(_ json: String) -> [String: Any] {
+    /// An assertion's evidence JSON as an object; [:] for anything else
+    /// (shared with FileDossier's lines, one parser for one column).
+    static func object(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
     }
 

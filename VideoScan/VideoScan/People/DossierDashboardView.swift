@@ -53,9 +53,13 @@ struct DossierDashboardView: View {
 
     @AppStorage(CaptionOrchestrator.autoResumePrefsKey) private var autoResume: Bool = false
 
+    /// The file dossier's door, taken once here, never in the body (one loader per model).
+    private let dossiers: FileDossierLoader
+
     init(model: VideoScanModel, orchestrator: CaptionOrchestrator) {
         self.model = model
         self.orchestrator = orchestrator
+        self.dossiers = FileDossierLoader.production(model: model)
         // Property-wrapper backing init (`_snapshot` ≈ the wrapper
         // struct itself, not the wrapped value — C++ analogy: member
         // initializer for the wrapper object).
@@ -342,7 +346,7 @@ struct DossierDashboardView: View {
                             // The file dossier view, in place under its row
                             // (the MFO window's expand-to-detail pattern).
                             if let opened = expandedFiles[item.id] {
-                                FileDossierView(fileID: opened, loader: FileDossierLoader.production(model: model))
+                                FileDossierView(fileID: opened, loader: dossiers).equatable()
                                     .padding(.leading, 30)
                                     .padding(.bottom, 6)
                             }

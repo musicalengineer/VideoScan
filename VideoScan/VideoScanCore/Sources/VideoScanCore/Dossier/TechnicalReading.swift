@@ -98,12 +98,16 @@ public struct TechnicalReadingLine: Sendable, Equatable {
     public var suggests: String
     /// Who read it, in words ("ffprobe", "file system", "embedded tag").
     public var source: String
+    /// The line's value is itself an inference (a camera tag's date read as
+    /// the recording date), never a stored fact.
+    public var isInference: Bool
 
-    public init(label: String, value: String, suggests: String, source: String) {
+    public init(label: String, value: String, suggests: String, source: String, isInference: Bool = false) {
         self.label = label
         self.value = value
         self.suggests = suggests
         self.source = source
+        self.isInference = isInference
     }
 }
 
@@ -221,19 +225,20 @@ public enum TechnicalReading {
     public static func classifyCreationTime(_ f: TechnicalFacts, now: Date) -> (kind: CreationKind, why: String) {
         guard let raw = f.creationTime else { return (.none, "no embedded creation date") }
         guard let when = EmbeddedDateSanity.accept(raw, now: now) else {
-            return (.rejected, "\(day(raw)) is a sentinel or impossible date (1904/1970/2000-01-01, pre-1980 or future): not evidence")
+            return (.rejected, "\(day(raw, in: utc)) is a sentinel or impossible date (1904/1970/2000-01-01, pre-1980 or future): not evidence")
         }
         let codec = f.codec ?? ""
         if let name = transferCodecs[codec] {
-            return (.transfer, "\(name) files are transfers: \(day(when)) is when the carrier was digitised, not when it was shot")
+            return (.transfer, "\(name) files are transfers: \(day(when, in: utc)) is when the carrier was digitised, not when it was shot")
         }
         if codec == "dvvideo" {
-            return (.capture, "\(day(when)) is when the DV was copied to a computer; the DV clock (below) is the recording date")
+            return (.capture, "\(day(when, in: utc)) is when the DV was copied to a computer; the DV clock (below) is the recording date")
         }
         if f.appleCreationDate || f.make != nil || f.model != nil {
-            return (.camera, "camera-native file with device tags: \(day(when)) is the recording date")
+            // A make/model tag survives a re-wrap, so this is an inference, never a stated fact.
+            return (.camera, "almost certainly the recording date (device tags present); a re-wrap can carry the tags over")
         }
-        return (.weak, "\(day(when)) could be the camera's clock or an export; no device tag says which, so it is a weak date")
+        return (.weak, "\(day(when, in: utc)) could be the camera's clock or an export; no device tag says which, so it is a weak date")
     }
 
     /// Layer-1 facts → lines, in the demo's order. Pure.
@@ -266,13 +271,19 @@ public enum TechnicalReading {
         }
         let (kind, why) = classifyCreationTime(f, now: now)
         if kind != .none, let when = f.creationTime {
-            add("Creation time", day(when), why, "embedded tag" + (f.creationSource.map { " (\($0))" } ?? ""))
+            // UTC, labelled — as the inspector's Timestamps ▸ Embedded row shows it.
+            rows.append(TechnicalReadingLine(label: "Creation time", value: day(when, in: utc) + " UTC", suggests: why,
+                                             source: "embedded tag" + (f.creationSource.map { " (\($0))" } ?? ""),
+                                             isInference: kind == .camera))
         }
         if let d = f.duration, d > 0 {
-            let mbps = (f.bitRate ?? 0) / 1e6
-            add("Duration / rate", String(format: "%@, %.1f Mb/s", durationWords(d), mbps), durationRateWords(f, codec: codec, mbps: mbps))
+            // An unknown total bit rate is "not recorded", never 0.0 Mb/s.
+            let rate = f.bitRate.flatMap { $0 > 0 ? $0 / 1e6 : nil }
+            add("Duration / rate", durationWords(d) + (rate.map { String(format: ", %.1f Mb/s", $0) } ?? ", bit rate not recorded"),
+                durationRateWords(f, codec: codec, mbps: rate ?? 0))
         }
         if let m = f.modified {
+            // A wall-clock event on Rick's Mac: the local day, as the inspector's Modified row.
             add("File modified", day(m), "file-system date: the transfer/copy history only, never the shoot", "file system")
         }
         return rows
@@ -380,7 +391,8 @@ public enum TechnicalReading {
         }
         if codec == "mjpeg", let h = f.height, h <= 480 { return "digital still camera movie mode (Motion JPEG \(size))" }
         if codec == "mpeg2video", let h = f.height, h <= 576 { return "DVD / DVD-camcorder MPEG-2 \(size)" }
-        return "\(codec.isEmpty ? "?" : codec) \(size) \(fpsText(f.fps ?? 0)) fps in \(f.container ?? "?")"
+        // An unknown frame rate is left out, never "0 fps".
+        return "\(codec.isEmpty ? "?" : codec) \(size)" + (f.fps.map { " \(fpsText($0)) fps" } ?? "") + " in \(f.container ?? "?")"
     }
 
     // MARK: Words
@@ -397,10 +409,26 @@ public enum TechnicalReading {
         fps == fps.rounded() ? String(Int(fps)) : String(format: "%g", fps)
     }
 
-    /// "2003-02-11" (UTC — the stored instant's calendar day, never the viewer's zone guess).
-    public static func day(_ date: Date) -> String {
-        let c = EmbeddedDateSanity.utcGregorian.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    static let utc = TimeZone(identifier: "UTC") ?? .gmt
+
+    /// "2003-02-11" in `zone` — the local zone for wall-clock events on this
+    /// Mac (file dates, when a pass ran), as the inspector's Timestamps show
+    /// them; UTC (labelled by the caller) for an embedded tag's instant.
+    public static func day(_ date: Date, in zone: TimeZone = .current) -> String {
+        format(date, "%04d-%02d-%02d", [.year, .month, .day], zone)
+    }
+
+    /// "2026-06-09 18:40" in the local zone — when a pass ran (the old view's time of day).
+    public static func dayAndTime(_ date: Date, in zone: TimeZone = .current) -> String {
+        format(date, "%04d-%02d-%02d %02d:%02d", [.year, .month, .day, .hour, .minute], zone)
+    }
+
+    private static func format(_ date: Date, _ pattern: String, _ units: Set<Calendar.Component>, _ zone: TimeZone) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = zone
+        let c = cal.dateComponents(units, from: date)
+        let values = [c.year, c.month, c.day, c.hour, c.minute].compactMap { $0 }.prefix(units.count)
+        return String(format: pattern, arguments: values.map { $0 as CVarArg })
     }
 }
 
