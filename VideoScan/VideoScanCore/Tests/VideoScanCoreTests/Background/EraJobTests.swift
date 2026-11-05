@@ -390,7 +390,7 @@ struct EraJobRunTests {
         let words = await first.outcomeDetail()
         await first.end()
         #expect(try EraFixture.lines(root).isEmpty)
-        #expect(words.contains("1 retried next run (generation errors or frames that would not rip)"), "\(words)")
+        #expect(words.contains("tried again next run: 0 frames would not decode, 1 model never answered"), "\(words)")
         let second = try EraJob(EraFixture.setup(fixture, root: root))
         #expect(second.plan.units.map(\.digest) == [EraFixture.hex(1)])
         await second.end()
@@ -422,7 +422,7 @@ struct EraJobRunTests {
         let words = await first.outcomeDetail()
         await first.end()
         #expect(try EraFixture.lines(root).isEmpty)
-        #expect(words.contains("1 retried next run"), "\(words)")
+        #expect(words.contains("tried again next run: 1 frames would not decode"), "\(words)")
         let second = try EraJob(EraFixture.setup(fixture, root: root))
         #expect(second.plan.units.map(\.digest) == [EraFixture.hex(1)])
         await second.end()
@@ -455,7 +455,7 @@ struct EraJobRunTests {
         _ = await supervisor.enqueue(JobRequest(kind: .era, requestedBy: "test"))
         await supervisor.drain()
         let outcome = log.lines.first { $0.hasPrefix("OUTCOME era") } ?? ""
-        #expect(outcome.contains("finished: 1 run · 0 skipped · 2 failed"), "\(outcome)")
+        #expect(outcome.contains("finished: 3 run · 0 skipped · 0 failed"), "a counted try is progress (Fable review 11/04): \(outcome)")
         #expect(outcome.contains("1 timeout, 1 worker death"), "\(outcome)")
         #expect(Set(try EraFixture.lines(root).map(\.subjectID)) == [EraFixture.hex(3)])
     }

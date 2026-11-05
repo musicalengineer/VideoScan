@@ -242,3 +242,41 @@ def test_media_matrix_every_container_yields_frames_through_the_service(tmp_path
     assert record["frames_failed"] == [], "every frame ripped"
     assert record["footer"]["frames_ok"] == sum(len(w["frame_times_s"]) for w in record["header"]["windows"]) + 5
     assert seen and all(n > 1000 for n in seen), "real PNGs went to the model"
+
+
+# --- 2026-11-04: frames that will not decode say why ---------------------------
+# 402 files (Avid MXF essences, reference movies) never ripped a frame and the
+# helper re-ran them forever with no reason anywhere.  The service's ripper now
+# keeps ffmpeg's own last stderr line on every `frame_failed` record; EraJob puts
+# it on the give-up line ("gave up after 3 tries: … (ffmpeg: …)").
+
+@pytest.mark.skipif(_shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_an_undecodable_file_fails_every_frame_with_ffmpegs_words(tmp_path):
+    garbage = tmp_path / "garbage.mov"
+    garbage.write_bytes(bytes((i * 2654435761 >> 13) & 0xFF for i in range(200_000)))
+    service = bench.ClipService(FakeA2())             # the real ReasonedRipper
+    record = service.analyze_clip(str(garbage), 30.0)  # the catalog once said 30 s
+    assert record["footer"]["frames_ok"] == 0
+    assert record["frames_failed"], "every planned frame failed"
+    assert all(f.get("reason") for f in record["frames_failed"]), record["frames_failed"][:2]
+    assert record["window_results"] == [], "no frame, no model call"
+    assert record["summary"]["fused_years"] is None
+
+
+@pytest.mark.skipif(_shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_the_reasoned_ripper_says_none_on_success_and_words_on_failure(tmp_path):
+    good = tmp_path / "good.mp4"
+    made = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=160x120:rate=25",
+                           "-c:v", "libx264", "-pix_fmt", "yuv420p", str(good)], capture_output=True, text=True, timeout=60)
+    assert made.returncode == 0, made.stderr
+    ripper = bench.ReasonedRipper()
+    assert ripper(str(good), 1.0, tmp_path / "ok.png", 2.0) is True and ripper.last_error is None
+    assert ripper(str(tmp_path / "missing.mov"), 1.0, tmp_path / "no.png", 2.0) is False
+    assert ripper.last_error and len(ripper.last_error) <= 300
+
+
+def test_an_injected_bool_ripper_adds_no_reason():
+    """COMPAT: a test or benchmark ripper that returns a bool only leaves the record as it was."""
+    service = bench.ClipService(FakeA2(), ripper=lambda p, a, d, du: False, duration_of=lambda p, d: d)
+    record = service.analyze_clip("/synthetic/x.mov", 120.0)
+    assert record["frames_failed"] and all("reason" not in f for f in record["frames_failed"])

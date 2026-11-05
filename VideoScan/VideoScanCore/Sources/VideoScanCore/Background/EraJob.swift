@@ -42,6 +42,21 @@
 // The worker's environment comes from `SubprocessEnvironment.mediaTools` in
 // `EraJob.setup`, so ffmpeg/ffprobe are found under launchd or the job is
 // refused at START (2026-11-03: 523 units failed on a bare `ffmpeg`).
+// Every planned file reaches a verdict in a bounded number of runs
+// (2026-11-04: 402 files that never rip a frame were re-run forever): a unit
+// that ends with no verdict — frames that would not rip, windows the model
+// never answered, a clip past its cap, a worker death — is one try in
+// EraAttemptStore; the third try writes one `era.none` "gave up after 3
+// tries: <why>" line, which caches the file like any verdict. A try is
+// counted against the FILE only when the Mac is shown to work (EraCanary,
+// Fable review 11/04): ffmpeg rips a synthetic clip at START (else the job is
+// refused) and again before a "no frame would decode" try; the model answers
+// that clip before a timeout / death / unanswered try is counted (once per
+// job, again after three in a row) — else nothing is counted and the job
+// stops, so a broken tool or model can never give up good files. A counted
+// try is progress (the unit is done), so the try limit, not the supervisor's
+// zero-progress hold, bounds a file. A file that is not there is never a try.
+// Each such unit says so in one log line (`note`).
 // No keyboard backoff (2026-11-04): units run back to back and the model
 // stays loaded in the worker for the whole job; the worker child runs at
 // utility QoS (PythonClipWorker.makeProcess).
@@ -120,10 +135,13 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
         public var now: @Sendable () -> Date
         /// Test seam: runs after a unit's journal append, before it returns.
         public var afterJournalAppend: (@Sendable (Int) async -> Void)?
+        /// One log line per unit that ends without a verdict (the helper's log sink).
+        public var note: @Sendable (String) -> Void
 
         public init(jobID: JobID, catalogURL: URL, stateRoot: URL, worker: PythonClipWorker.Configuration, limit: Int? = nil,
                     isReadable: @escaping @Sendable (String) -> Bool = { FileManager.default.isReadableFile(atPath: $0) },
-                    now: @escaping @Sendable () -> Date = { Date() }, afterJournalAppend: (@Sendable (Int) async -> Void)? = nil) {
+                    now: @escaping @Sendable () -> Date = { Date() }, afterJournalAppend: (@Sendable (Int) async -> Void)? = nil,
+                    note: @escaping @Sendable (String) -> Void = { _ in }) {
             self.jobID = jobID
             self.catalogURL = catalogURL
             self.stateRoot = stateRoot
@@ -132,6 +150,7 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
             self.isReadable = isReadable
             self.now = now
             self.afterJournalAppend = afterJournalAppend
+            self.note = note
         }
     }
 
@@ -142,12 +161,19 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     public let worker: PythonClipWorker
     private let setup: Setup
     private let counters = EraCounters()
+    /// Tries per (signer, file) with no verdict; refused in words when unreadable.
+    public let attempts: EraAttemptStore
+    /// "The file, or the Mac?": the tool is proven at START; the model when a try needs it (EraCanary.swift).
+    public let canary: EraCanary
+    private var workerEnvironment: [String: String] { setup.worker.environment ?? ProcessInfo.processInfo.environment }
 
     /// Load the frozen plan for this job id, or build and freeze it.
     public init(_ setup: Setup) throws {
         self.setup = setup
         journal = ObservationJournal(directory: setup.stateRoot.appendingPathComponent("journal", isDirectory: true), now: setup.now)
         worker = PythonClipWorker(configuration: setup.worker, descriptor: SeatedApproach.eraA2)
+        attempts = try EraAttemptStore(stateRoot: setup.stateRoot)
+        canary = try EraCanary(environment: setup.worker.environment ?? ProcessInfo.processInfo.environment, stateRoot: setup.stateRoot)
         let planURL = Self.planURL(setup.stateRoot, setup.jobID)
         if let data = try? Data(contentsOf: planURL), let frozen = try? JSONDecoder().decode(EraPlan.self, from: data),
            frozen.jobID == setup.jobID.rawValue {
@@ -197,25 +223,120 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
         do {
             data = try await worker.analyzeClip(path: unit.path, durationS: unit.durationS)
         } catch let error as PythonClipWorkerError {
-            switch error {
-            case .timeout: await counters.count(.timeout)
-            case .died: await counters.count(.workerDeath)
-            default: await counters.count(.other)
-            }
-            throw error
+            return try await crashed(error, unit, index, info)
         }
         let at = Int64(setup.now().timeIntervalSince1970)
         let mapped = try EraRecordMapper.lines(record: data, digest: unit.digest, info: info, job: setup.jobID.rawValue, unit: index, at: at)
-        // A verdict of "no usable era" is cached for good; never reach it on a
-        // file that went away while the model looked (frames that would not rip).
-        if mapped.eraNone, !setup.isReadable(unit.path) {
-            await counters.count(.unreadable)
-            throw Refusal("unreadable: \(unit.path) — the file went away during analysis; nothing written, retried next run")
+        // Neither a verdict nor a try on a file that went away while the model
+        // looked (frames that would not rip because the drive left).
+        if mapped.eraNone || mapped.retryNextRun { try await vanishedIsNotATry(unit) }
+        let answered = EraRecordMapper.answeredCalls(data)
+        if answered > 0 { await counters.modelAnswered() }
+        if mapped.retryNextRun {
+            await counters.wrote(mapped, digest: unit.digest, signer: info.signer, seconds: started.duration(to: .now))
+            let kind = try await noVerdictKind(data, mapped, answered: answered, unit)
+            _ = try await noVerdict(unit, index, info, reason: EraRecordMapper.retryReason(data), kind: kind)
+            return .done
         }
         try journal.append(mapped.lines)
         await counters.wrote(mapped, digest: unit.digest, signer: info.signer, seconds: started.duration(to: .now))
+        try attempts.clear(digest: unit.digest, signer: info.signer)
         await setup.afterJournalAppend?(index)
         return .done
+    }
+
+    /// The worker never answered for this file (a clip past its cap, a death):
+    /// a model-side try, counted only once the model is shown to work. Any
+    /// other worker error can be systemic — fail-fast holds the kind, never a try.
+    private func crashed(_ error: PythonClipWorkerError, _ unit: EraCandidate, _ index: Int,
+                         _ info: PythonClipWorker.LoadInfo) async throws -> UnitOutcome {
+        let reason: String
+        let failure: EraCounters.Failure
+        switch error {
+        case .timeout: reason = "the clip ran past its cap (\(error))"; failure = .timeout
+        case .died: reason = "the worker died on it (\(error))"; failure = .workerDeath
+        default: await counters.count(.other); throw error
+        }
+        try await vanishedIsNotATry(unit)
+        await counters.count(failure)
+        try await proveTheModel(before: unit)
+        // A counted try is progress: the try store, not the supervisor's zero-progress hold, bounds the file (Fable review F2).
+        _ = try await noVerdict(unit, index, info, reason: reason, kind: .crash)
+        return .done
+    }
+
+    /// Whose fault is a record with no verdict? The model's when a window or
+    /// still was never answered (proven working first unless this unit's own
+    /// answers prove it); else the file's frames — after ffmpeg is shown to
+    /// still rip the synthetic clip when not one frame ripped.
+    private func noVerdictKind(_ data: Data, _ mapped: EraRecordMapper.Mapped, answered: Int, _ unit: EraCandidate) async throws -> NoVerdict {
+        if mapped.generationErrors > 0 || EraRecordMapper.stillErrorCount(data) > 0 {
+            if answered == 0 { try await proveTheModel(before: unit) }
+            return .model
+        }
+        if EraRecordMapper.framesRipped(data) == 0, let why = canary.toolWorks(environment: workerEnvironment) {
+            throw await systemic("ffmpeg can no longer rip a still from the synthetic clip (\(why)) — the tool, not \(unit.path); "
+                                 + "nothing counted against any file, the job stops")
+        }
+        return .frames
+    }
+
+    enum NoVerdict { case frames, model, crash }
+
+    /// The unit ended with no verdict: one try. Below the limit it says so and
+    /// the file is planned again; on the limit it writes the give-up line
+    /// (true: the unit is done). The try is durable before anything is said.
+    private func noVerdict(_ unit: EraCandidate, _ index: Int, _ info: PythonClipWorker.LoadInfo, reason: String, kind: NoVerdict) async throws -> Bool {
+        let at = Int64(setup.now().timeIntervalSince1970)
+        let tries = try attempts.record(digest: unit.digest, signer: info.signer, reason: reason, at: at)
+        guard tries >= EraAttemptStore.maxTries else {
+            await counters.retried(kind)
+            setup.note("era \(setup.jobID) unit \(index): no verdict, try \(tries) of \(EraAttemptStore.maxTries), planned again: \(unit.path) — \(reason)")
+            return false
+        }
+        let line = try EraRecordMapper.giveUpLine(digest: unit.digest, info: info, job: setup.jobID.rawValue, unit: index, at: at,
+                                                  tries: tries, reason: reason)
+        try journal.append([line])
+        try attempts.clear(digest: unit.digest, signer: info.signer)
+        await counters.gaveUp(digest: unit.digest, signer: info.signer)
+        setup.note("era \(setup.jobID) unit \(index): GAVE UP after \(tries) tries (era.none written, not planned again): \(unit.path) — \(reason)")
+        await setup.afterJournalAppend?(index)
+        return true
+    }
+
+    /// Before a model-side no-verdict is counted against a file: the model
+    /// must answer the synthetic clip — once per job, and again after three
+    /// model-side no-verdicts in a row. If it does not, nothing is counted and
+    /// every remaining unit fails fast with the same words (the kind holds).
+    private func proveTheModel(before unit: EraCandidate) async throws {
+        if await counters.modelIsProven { return }
+        var why = "it answered nothing"
+        do {
+            _ = try await worker.load()
+            let record = try await worker.analyzeClip(path: canary.clip.path, durationS: 2)
+            if EraCanary.modelAnswered(record) {
+                await counters.modelAnswered()
+                setup.note("era \(setup.jobID): the model answered the synthetic clip — no-verdicts in this job count against their files")
+                return
+            }
+        } catch {
+            why = "\(error)"
+        }
+        throw await systemic("the model did not answer a 2 s synthetic clip either (\(why)) — the worker, not \(unit.path); "
+                             + "nothing counted against any file, the job stops")
+    }
+
+    /// Every remaining unit fails with these words (fail fast → the kind holds); said once.
+    private func systemic(_ words: String) async -> Refusal {
+        await counters.stop(words)
+        setup.note("era \(setup.jobID): \(words)")
+        return Refusal(words)
+    }
+
+    private func vanishedIsNotATry(_ unit: EraCandidate) async throws {
+        guard !setup.isReadable(unit.path) else { return }
+        await counters.count(.unreadable)
+        throw Refusal("unreadable: \(unit.path) — the file went away during analysis; nothing written, not counted as a try")
     }
 
     public func outcomeDetail() async -> String {
@@ -305,7 +426,13 @@ actor EraCounters {
     private var observed: [String: Set<String>] = [:]   // signer → digests with lines (journal + this run)
     private var windowsInvalid = 0
     private var eraNone = 0
-    private var retriedNextRun = 0
+    private var retriedFrames = 0
+    private var retriedModel = 0
+    private var retriedCrash = 0
+    private var givenUp = 0
+    /// The model answered in this job (a unit or the synthetic clip); reset after three model-side no-verdicts in a row.
+    private var proven = false
+    private var modelSideStreak = 0
 
     func loaded(_ info: PythonClipWorker.LoadInfo) {
         self.info = info
@@ -337,11 +464,38 @@ actor EraCounters {
         }
     }
 
+    var modelIsProven: Bool { proven }
+
+    func modelAnswered() {
+        proven = true
+        modelSideStreak = 0
+    }
+
+    func retried(_ kind: EraJob.NoVerdict) {
+        switch kind {
+        case .frames: retriedFrames += 1
+        case .model: retriedModel += 1; noteModelSide()
+        case .crash: retriedCrash += 1; noteModelSide()
+        }
+    }
+
+    private func noteModelSide() {
+        modelSideStreak += 1
+        if modelSideStreak >= 3 { proven = false; modelSideStreak = 0 }   // three in a row: prove the model again
+    }
+
+    func stop(_ words: String) { if failFast == nil { failFast = words } }
+
+    func gaveUp(digest: String, signer: String) {
+        givenUp += 1
+        assertions += 1
+        observed[signer, default: []].insert(digest)
+    }
+
     func wrote(_ mapped: EraRecordMapper.Mapped, digest: String, signer: String, seconds s: Duration) {
         assertions += mapped.lines.count
         windowsInvalid += mapped.windowsInvalid
         if mapped.eraNone { eraNone += 1 }
-        if mapped.retryNextRun { retriedNextRun += 1 }
         analyzed += 1
         seconds += Double(s.components.seconds) + Double(s.components.attoseconds) / 1e18
         // Only a unit that wrote a line is cached (the journal is the cache).
@@ -354,8 +508,10 @@ actor EraCounters {
         return "approach \(info?.signer ?? "not loaded") · model \(info?.model ?? "–") · \(analyzed) analyzed · "
             + "\(assertions) assertions written · skipped (cached) \(planCached) at plan + \(cachedAtRun) at run · "
             + "failed: \(timeouts) timeout, \(deaths) worker death, \(unreadable) unreadable, \(other) other · "
-            + "\(windowsInvalid) windows refused by the Swift contract · no usable era: \(eraNone) era.none, "
-            + "\(retriedNextRun) retried next run (generation errors or frames that would not rip) · \(perClip) s/clip · worker peak RSS \(rss)"
+            + "\(windowsInvalid) windows refused by the Swift contract · no usable era: \(eraNone) era.none · "
+            + "no verdict, tried again next run: \(retriedFrames) frames would not decode, \(retriedModel) model never answered, "
+            + "\(retriedCrash) timeout or worker death · \(givenUp) given up at the \(EraAttemptStore.maxTries)-try limit · "
+            + "\(perClip) s/clip · worker peak RSS \(rss)"
     }
 }
 
@@ -469,6 +625,65 @@ public enum EraRecordMapper {
     /// make it a date (DECISIONS 2026-11-01). It exists for the caching rule.
     public static let noneField = "era.none"
     public static let noneValue = "none"
+
+    /// Why a record is not a verdict, in words for the log and the give-up
+    /// line: frames that would not decode (with ffmpeg's own words when the
+    /// worker kept them) and answers the model never gave (with the first error).
+    public static func retryReason(_ record: Data) -> String {
+        guard let o = (try? JSONSerialization.jsonObject(with: record)) as? [String: Any] else { return "the clip record is not a JSON object" }
+        var parts: [String] = []
+        let failed = o["frames_failed"] as? [[String: Any]] ?? []
+        if !failed.isEmpty {
+            let ok = (o["footer"] as? [String: Any])?["frames_ok"] as? Int ?? 0
+            var words = "\(failed.count) of \(failed.count + ok) frames would not decode"
+            if let why = failed.lazy.compactMap({ $0["reason"] as? String }).first(where: { !$0.isEmpty }) { words += " (ffmpeg: \(why))" }
+            parts.append(words)
+        }
+        let windowErrors = (o["window_results"] as? [[String: Any]] ?? []).compactMap { w -> String? in
+            guard w["family"] as? String == "era", let e = w["error"] as? String else { return nil }
+            return e
+        }
+        let stillErrors = (o["results"] as? [[String: Any]] ?? []).compactMap { r -> String? in
+            guard r["prompt_kind"] as? String == "date", let e = r["error"] as? String else { return nil }
+            return e
+        }
+        if let first = (windowErrors + stillErrors).first {
+            parts.append("\(windowErrors.count) era window(s) and \(stillErrors.count) date still(s) the model never answered (\(first))")
+        }
+        return parts.isEmpty ? "no verdict (the record says neither a range nor a failure)" : parts.joined(separator: "; ")
+    }
+
+    /// The give-up verdict: `era.none`, value "none" — never an era, never a
+    /// date — with the tries and the last reason (2026-11-04).
+    public static func giveUpLine(digest: String, info: PythonClipWorker.LoadInfo, job: String, unit: Int, at: Int64,
+                                  tries: Int, reason: String) throws -> ObservationLine {
+        guard let subject = ProvenanceAssertionSubject.contentID(digest) else { throw Refusal("\(digest) is not a whole-file SHA-256") }
+        let c = Context(subject: subject, info: info, job: job, unit: unit, at: at)
+        let evidence: [String: Any] = [
+            "meaning": "tried \(tries) times by this signer with no verdict; no usable era — not an era and not a date",
+            "reason": "gave up after \(tries) tries: \(reason)", "tries": tries, "gaveUp": true,
+            "promptHash": c.approach.promptHash, "host": c.approach.host.label,
+        ]
+        return try c.line(noneField, noneValue, confidence: 0, evidence: evidence)
+    }
+
+    /// Model calls (era windows and date stills) that came back answered — no `error`.
+    public static func answeredCalls(_ record: Data) -> Int {
+        guard let o = (try? JSONSerialization.jsonObject(with: record)) as? [String: Any] else { return 0 }
+        let calls = (o["window_results"] as? [[String: Any]] ?? []) + (o["results"] as? [[String: Any]] ?? [])
+        return calls.filter { $0["error"] == nil || $0["error"] is NSNull }.count
+    }
+
+    /// Stills ripped (the footer's `frames_ok`).
+    public static func framesRipped(_ record: Data) -> Int {
+        guard let o = (try? JSONSerialization.jsonObject(with: record)) as? [String: Any] else { return 0 }
+        return (o["footer"] as? [String: Any])?["frames_ok"] as? Int ?? 0
+    }
+
+    public static func stillErrorCount(_ record: Data) -> Int {
+        guard let o = (try? JSONSerialization.jsonObject(with: record)) as? [String: Any] else { return 0 }
+        return stillErrors(o)
+    }
 
     /// OCR stills the model never answered (`error` set).
     static func stillErrors(_ o: [String: Any]) -> Int {

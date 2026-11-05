@@ -704,6 +704,14 @@ def rip_frame(path: str, at_s: float, dest: Path, duration_s: float) -> bool:
     """One still, letterboxed into 448×448 (aspect kept, black bars) — the shape the
     app hands the model (`processing.resize = 448×448`).  Input-seek (-ss before -i),
     one frame, PNG.  Returns False when ffmpeg cannot decode that instant."""
+    return rip_frame_why(path, at_s, dest, duration_s) is None
+
+
+def rip_frame_why(path: str, at_s: float, dest: Path, duration_s: float) -> Optional[str]:
+    """`rip_frame`, saying why: None when the still was written, else ffmpeg's own
+    last stderr line (or its exit status) — the words the background service keeps
+    when it gives a file up (2026-11-04: 402 Avid MXF / reference movies retried
+    forever with no reason anywhere)."""
     clamped = max(0.0, min(at_s, max(0.0, duration_s - 0.05)))
     vf = ("scale={s}:{s}:force_original_aspect_ratio=decrease,"
           "pad={s}:{s}:(ow-iw)/2:(oh-ih)/2:color=black").format(s=FRAME_SIDE)
@@ -711,7 +719,23 @@ def rip_frame(path: str, at_s: float, dest: Path, duration_s: float) -> bool:
         ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-ss", "{:.3f}".format(clamped),
          "-i", path, "-frames:v", "1", "-vf", vf, str(dest)],
         capture_output=True, text=True, timeout=300, check=False)
-    return result.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
+    if result.returncode == 0 and dest.is_file() and dest.stat().st_size > 0:
+        return None
+    lines = [line.strip() for line in (result.stderr or "").splitlines() if line.strip()]
+    return (lines[-1] if lines else "ffmpeg exited {} and wrote no frame".format(result.returncode))[:300]
+
+
+class ReasonedRipper:
+    """`default_ripper` that remembers why its last rip failed (`last_error`), so
+    `analyze_clip_into` can put ffmpeg's words on the ``frame_failed`` record.
+    C++ reading: a functor with one member."""
+
+    def __init__(self) -> None:
+        self.last_error: Optional[str] = None
+
+    def __call__(self, path: str, at_s: float, dest: Path, duration_s: float) -> bool:
+        self.last_error = rip_frame_why(path, at_s, dest, duration_s)
+        return self.last_error is None
 
 
 def ffmpeg_version() -> Optional[str]:
@@ -1613,6 +1637,14 @@ def default_ripper(path: str, at_s: float, dest: Path, duration_s: float) -> boo
     return rip_frame(path, at_s, dest, duration_s)
 
 
+def _with_rip_reason(record: Dict[str, Any], ripper: Any) -> Dict[str, Any]:
+    """A ``frame_failed`` record plus ``reason`` when the ripper says why (ReasonedRipper)."""
+    reason = getattr(ripper, "last_error", None)
+    if reason:
+        record["reason"] = reason
+    return record
+
+
 def _peak_rss_of(approach: Any) -> int:
     """`approach.peak_rss_bytes()` when the approach measures its own process
     (the watchdog's worker), else this process."""
@@ -1832,9 +1864,9 @@ def analyze_clip_into(entry: Dict[str, Any], corpora: Iterable[str], approach: A
             rip_s_window += rip_s
             if not ok:
                 rip_failures += 1
-                emit({
+                emit(_with_rip_reason({
                     "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
-                    "window_index": window["index"], "at_s": at_s, "rip_s": round(rip_s, 3)})
+                    "window_index": window["index"], "at_s": at_s, "rip_s": round(rip_s, 3)}, ripper))
             else:
                 frames_ok += 1
                 pngs.append(png)
@@ -1882,10 +1914,10 @@ def analyze_clip_into(entry: Dict[str, Any], corpora: Iterable[str], approach: A
         rip_s = time.perf_counter() - rip_started
         if not ok:
             rip_failures += 1
-            emit({
+            emit(_with_rip_reason({
                 "record_type": "frame_failed", "digest": digest, "frame_index": frame_index,
                 "window_index": None, "sampler": OCR_SAMPLER_STILLS, "at_s": at_s,
-                "rip_s": round(rip_s, 3)})
+                "rip_s": round(rip_s, 3)}, ripper))
         else:
             frames_ok += 1
             ask_date(png, frame_index, None, at_s, rip_s, OCR_SAMPLER_STILLS)
@@ -2047,13 +2079,13 @@ class ClipService:
     per file.  C++ reading: a facade over an Approach and `analyze_clip_into`."""
 
     def __init__(self, approach: Any = None, frames_per_window: int = CLIP_SERVICE_FRAMES_PER_WINDOW,
-                 ripper: Callable[[str, float, Path, float], bool] = default_ripper,
+                 ripper: Optional[Callable[[str, float, Path, float], bool]] = None,
                  duration_of: Callable[[str, float], float] = lambda p, d: d if d > 0 else probe_duration(p),
                  ocr_stills: int = A2_OCR_STILLS,
                  technical_of: Callable[[str], Dict[str, Any]] = probe_technical):
         self.approach = approach if approach is not None else A2Python()
         self.frames_per_window = int(frames_per_window)
-        self.ripper = ripper
+        self.ripper = ripper if ripper is not None else ReasonedRipper()
         self.duration_of = duration_of
         self.ocr_stills = int(ocr_stills)
         self.technical_of = technical_of

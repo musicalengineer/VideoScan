@@ -43,7 +43,7 @@ final class BackgroundService: @unchecked Sendable {
         // alive keeps this service to status-only until it finishes (StateRootLock.swift).
         supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                    checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
-                                   factory: DefaultJobFactory(stateRoot: root), backoff: backoff, log: log,
+                                   factory: DefaultJobFactory(stateRoot: root, log: log), backoff: backoff, log: log,
                                    ownership: FileStateRootLock(root: root, owner: "service \(Self.bundleIdentifier)"),
                                    schedule: Self.schedule(stateRoot: root, catalog: DefaultJobFactory.productionCatalogURL))
         server = XPCServer(machServiceName: Self.machServiceName, supervisor: supervisor, log: log,

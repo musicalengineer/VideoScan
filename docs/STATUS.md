@@ -1,63 +1,46 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-04 (Wednesday, overnight). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-04 (Wednesday evening). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
-0. **Night 11/03 — the checklist audit is merged (main `f393a3ba`).** Rick: "use the checklist on our most recent changes … I'm leaving you and codex to have at it." Codex reviewed `ffdb3018` (BG helper, menu bar, Catalog/Content split, count fix, gate). Verdict was fix, with **7 findings, all real and all fixed**, each red first. The closing Codex pass on the fixes took 9 rounds and ended **merge, 0 findings**. The reviewer agent added 6 red tests, and all of them are green now.
-   - **F1 (P0) A viewer counted the wrong catalog.** A viewer now counts nothing: its job line says the master runs content analysis, and Catalog Database Info reads `viewer-catalog/catalog.sqlite` ("the master's synced copy"). There is one rule, `CatalogAuthority.databaseURL(role:opened:catalogFile:)`. "Is viewer" now comes from one source, the sync role.
-   - **F2 (P0) "Analyzing N of M" showed while only the era job ran.** The era job is not one of the counted analyzers, so Content never lights blue for it. It gets its own line: "Machine era: N of M files (VideoScan Background — state)". A paused job or a paused dossier batch no longer lights "Analyzing" either.
-   - **F3 (P0) The menu bar said "running" while the job was waiting for you to step away.** Jobs now have a `waiting` state: "waiting — you're at the Mac (the model loads when you step away)". It has its own glyph, an outline lens with a dot. The protocol stays v1, and an older payload still decodes.
-   - **F4 (P1) OFF was unreachable from a disabled checkbox.** The box is disabled only when it is OFF and ON is refused. The "not registered" fix now names the Release build.
-   - **F5 (P2) The menu's own status poll kept the helper from ever idle-exiting.** Reading status is no longer activity; only an XPC client call counts.
-   - **F6 (P2) Logging.** Every problem the Settings lines, Catalog Status (`[catalog-status]`) and Database Info can show is logged when it appears, changes and clears, never per poll. Count failures name the catalog path. The helper logs when "Open VideoScan" is disabled.
-   - **F7 (P2)** The count test runs against a real schema-current catalog.sqlite.
-   - **#417 fixed:** the P0 truth test expects "silent (measured)". Lanes on the merged tree: sensor lane GREEN 649 (my own run on the tip; the app half printed 628 of 629, the same overwritten-line glitch as 11/02 — 0 failed) · Core touched 75 / 0 · App touched suites 112 / 0 · gauntlet inventory 0 errors.
-1. **Landed 11/03 (day), on main:**
-   - **Signing (`18eafce6`):** the app and helper are signed with Rick's Apple Development team (V9SVEQF26M), so a rebuild no longer gets the helper killed at spawn (EX_CONFIG 78, stale LWCR). This was proven on a toy agent.
-   - **Helper scheme and icon (`09c9f821`):** a "VideoScan Background" scheme builds the helper alone, with a teal icon.
-   - **Release-only gate (`50b7fe05`):** only the Release build on the master registers the helper.
-   - **Menu bar item (`3c5d5e6f`):** a template glyph that shows what the helper is doing, with Pause/Resume and Open VideoScan. The helper is `.accessory`, so it has no Dock icon of its own.
-   - **Status split (`9926898d`):** two indicators. Catalog is Synced / Stale / Unhealthy / Unknown. Content is "Up to date", "N left to analyze" or "Analyzing N of M".
-   - **Count fix (`28a14a5b`):** the count reads catalog.sqlite, not catalog.json.
-   - **Version 5.4.**
-   - **The checklist** (PROCESS §2a, CLAUDE.md rule 9).
-2. **#416 is closed. Sound prints are no longer recomputed every run.**
-   - **Part 1:** stamps key on the row's stored digest, archive fixity included.
-   - **Part 2, schema B (Rick's option B):** migration **v15 `sound_attempts`** (schema 14 → 15). A file that hears too little or will not decode is tried 3 times per engine, then given up, and coverage counts it as covered. Codex cycles #217–#219 were all fixed.
-   - **Backup before v15** (integrity ok, 23,060 files, 6,360 prints): `~/Library/Application Support/VideoScan/backups/pre-v15-sound-attempts-2026-11-03/catalog.sqlite`. The app migrates on its next launch.
-3. **Helper on the Ultra:** the helper registered at 14:55 and is running the era job, 523 files, overnight in trickle. It waits while you are at the keyboard.
+0. **Evening 11/04 — the era job's endless loop is fixed (branch `fix/era-unrippable-retry-loop`).**
+   - **What Rick saw:** the helper at full speed with nothing to show for it. `background.log` 18:37–18:50 told the story. Run 1 found an era for 0 of 523 files, said "no usable era" for 121, and left 402 as "retried next run". The schedule then re-planned the same 402 within seconds, and it would have done so forever. Those 402 never rip a frame: Avid MXF essences (audio-only, raw video), QuickTime reference movies, `.m4p`.
+   - **The cause:** a file with no verdict was retried every run with no limit. Timeouts and worker deaths had no memory across runs either. No test asked whether the service ever finishes; one test even locked in the unlimited retry.
+   - **The fix:** a file with no verdict gets 3 tries (`EraAttemptStore`, `background/attempts/era.jsonl`, append-only). The third try writes one `era.none` line, "gave up after 3 tries: <why>", and the planner skips the file from then on. When frames won't rip, the reason carries ffmpeg's own words (`bench.py` `ReasonedRipper`). Every try and every give-up writes one line to `background.log`.
+   - **"The file, or the Mac?"** (`EraCanary`): a try counts against a file only when the Mac is shown to work. ffmpeg must rip a synthetic clip at START, and again before any "no frame would decode" try; if it can't, the job is refused, so a broken `brew upgrade` can't give up good files. Before a timeout, death or unanswered try is counted, the model must answer that clip. If it doesn't, nothing is counted and the job holds.
+   - **Tests:** 17 new.
+     - `EraJobConvergenceTests` (13). The real schedule must settle a mixed catalog (plan 0, idle, ≤ 3 analyses per file); before the fix it never settled. The real-media matrix runs mp4, mov, mkv, mxf and avi/dv through bench.py's real ripper with a fake model.
+     - `EraJobRetryReviewTests` (4), from the reviewer: broken ffmpeg, a timeout-only plan, the OUTCOME words, and scale.
+     - Plus 3 Python tests on the rip reason.
+     - Every red was seen before its fix.
+   - **Lanes on the final tree:** background Core suites 212 / 0 · bench.py Python 185 / 0 · sensor lane GREEN 679 · Debug build OK · gauntlet inventory 0 errors. The new suites sit in the gauntlet regression stage (floor +17).
+   - **Not covered:** a worker killed by the OS for memory (SIGKILL / jetsam) still counts as a try if the model then answers the synthetic clip. The worker doesn't record the exit signal yet. Open item below.
+1. **11/04 day:** the helper owns its schedule (DECISIONS 11/04). There's no keyboard backoff on the Ultra: the worker runs at utility QoS. Pause/Resume is in the menu bar, and a pause survives a restart.
+2. **11/03:** team signing (#415 test pending), the Release-only gate, the menu bar item, the Catalog/Content split, sound attempts v15 (#416 closed), and the checklist audit (merged `f393a3ba`).
 
-## Spot tests for Rick (Release once to install the helper, then Debug)
-- **Menu bar** (Release helper running): with you at the Mac, the icon is an outline lens with a dot and the job reads "waiting — you're at the Mac…". Step away and it turns solid ("running"). Pause shows bars.
-- **Main window strip:** Content stays grey "N left to analyze" while only the era job runs; it should never be blue for era. Click it and Content Analysis shows the "Machine era: N of M files" line.
-- **Settings ▸ Background in a Debug build:** the checkbox is still enabled while ON, and unticking it logs and unregisters.
-  - **Watch for:** the Debug app unregistering the *Debug* copy may not unregister the Release one. If it fails, the line says so and the log has the words.
-  - Re-tick from Release afterwards.
-- **Log check, no screenshots:** `~/Library/Logs/VideoScan/videoscan.log` shows one `background service:` line per problem change and `[catalog-status]` lines only when a colour or cause changes.
+## Spot tests for Rick (Release, to install the new helper)
+- **Rebuild Release, then Resume the era job in the menu bar** (you paused it at dinner). With the current catalog the first run plans the 402, and every file that won't rip logs "no verdict, try 1 of 3". After the third run they are "GAVE UP after 3 tries", and the plan is 0. Check `~/Library/Logs/VideoScan/background.log`.
+  - Each run takes about 11 minutes. The schedule re-plans when the catalog generation changes, or every 10 minutes.
+- **Spot-check one give-up:** the inspector shows no Machine era line for it (era.none is never an era). Its reason is in the log line.
+- **#415 at the same time:** the rebuild should keep the helper running with no re-tick.
 
 ## Waiting on Rick
-- **#415, the rebuild test:** rebuild Release with the helper running. It should keep running with no re-tick (team signing). If it does, close #415.
-- **Restart the helper with `launchctl kickstart -k`** for that test, or by quit-and-reopen: your call, since it kills a process.
-- **M4 Ollama:** set `OLLAMA_HOST` so the Ultra can use it over TB5. This needs its Ollama restarted.
-- **Menu bar icon when the helper is idle:** hide it, or keep it? The default is to keep it; the helper exits after 10 idle minutes anyway, and the icon goes with it.
-- **The catalog lane is RED by its own rule on 7 `withKnownIssue` tests** (none failed; the gauntlet classifies the same way). They are not from this work:
-  - `CatalogQuitCornerTests` case 3 ×2 (#356);
-  - `CatalogOpenCornerTests` case 9 (#358);
-  - four disk-full/witness pins (#338/#357 family).
-  - Options: fix those bugs, or rule that a tracked known issue is amber, not red (already listed: "gauntlet runner policy").
-- Carried over: #327's two rulings; #332 (play two or three archived titles); the cleanup proposal; the other older defaults in the 11/02 list (git `bb39167a:docs/STATUS.md`).
+- **Checklist proposal:** under TESTED, add "**Does it settle?** For any retry, schedule or loop: what bounds it, and is there a test that it finishes?" This needs your OK, since it's a PROCESS change.
+- **#415**, see above.
+- **M4 Ollama:** set `OLLAMA_HOST` so the Ultra can use it over TB5 (needs its Ollama restarted).
+- **The catalog lane is RED by its own rule on 7 `withKnownIssue` tests** (#356, #358, #338/#357 family). Fix those, or rule that a tracked known issue is amber.
+- Carried over: #327's two rulings; #332; the older defaults list (git `bb39167a:docs/STATUS.md`).
 
 ## Next
-1. #418: the two P2s from schema B.
-2. Helper throughput while you work, and jobs on the M4 over TB5 (BACKLOG 11/03).
-3. Catalog Status "Fix…" button (Disk Utility shape); the first verb removes an event member whose row is gone.
-4. #413 (P1): dossier propagation groups copies by partialMD5.
-5. #412, #408, Hallie shell on a viewer (BACKLOG H′); DV datecode bound; prompt r4 stays rejected (r3 seated).
+1. The worker records its exit signal, so a memory kill (jetsam) is never counted as a try against a file (from the 11/04 review).
+2. The `CaptionRunnerError error 2` lines on Avid MXF at 17:57 in `videoscan.log`: the dossier engine likely has the same class of problem. Check whether it loops too.
+3. Content Analysis results sheet (BACKLOG 11/04).
+4. #418: the two P2s from schema B.
+5. Helper throughput, and jobs on the M4 over TB5 (BACKLOG 11/03).
+6. #413 (P1), #412, #408.
 
 ## In flight / cleanup
-- Worktrees to prune after Rick's word (move to `.trash/`):
-  - from today: night-1103, review-1103, fix-416, status-split, bg-owner-lock;
-  - plus the 11/02 list (git `bb39167a:docs/STATUS.md`).
+- `fix/era-unrippable-retry-loop`: delete it and its worktree (`~/dev/VideoScan-wt/era-retry`, DerivedData `~/dev/VideoScan-wt/.dd-era-retry`, scratch build `~/dev/VideoScan-wt/.build-core-era-retry`) after Rick's spot test (PROCESS §3).
 - Open: #384 · #389 · #377 · #379 · #380 · #381 · #338 · #339 · #337 (VideoScanModel split).
 
 ## Dates

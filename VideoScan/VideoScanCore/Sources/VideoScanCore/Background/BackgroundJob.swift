@@ -112,14 +112,17 @@ public protocol JobFactory: Sendable {
 public struct DefaultJobFactory: JobFactory {
     public let stateRoot: URL?
     public let catalogURL: URL
+    /// Where a job's per-unit lines go (the helper's log); nil: nowhere (tests, hand runs that pass none).
+    public let log: (any BackgroundLogSink)?
 
     public static var productionCatalogURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/VideoScan/catalog.sqlite")
     }
 
-    public init(stateRoot: URL? = nil, catalogURL: URL = DefaultJobFactory.productionCatalogURL) {
+    public init(stateRoot: URL? = nil, catalogURL: URL = DefaultJobFactory.productionCatalogURL, log: (any BackgroundLogSink)? = nil) {
         self.stateRoot = stateRoot
         self.catalogURL = catalogURL
+        self.log = log
     }
 
     public func makeJob(for request: JobRequest) throws -> any BackgroundJob {
@@ -127,7 +130,9 @@ public struct DefaultJobFactory: JobFactory {
         case .noop: return try NoOpJob(request: request)
         case .era:
             guard let stateRoot else { throw Refusal("era: this service has no state folder for its journal") }
-            return try EraJob(try EraJob.setup(for: request, stateRoot: stateRoot, catalogURL: catalogURL))
+            var setup = try EraJob.setup(for: request, stateRoot: stateRoot, catalogURL: catalogURL)
+            if let log { setup.note = { log.write($0) } }
+            return try EraJob(setup)
         default: throw Refusal("VideoScan Background does not know the job kind `\(request.kind)` (this build knows: noop, era)")
         }
     }
@@ -175,7 +180,7 @@ extension EraJob {
         let snapshots = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/huggingface/hub/models--mlx-community--Qwen3-VL-8B-Instruct-4bit/snapshots")
         let names = (try? FileManager.default.contentsOfDirectory(atPath: snapshots.path)) ?? []
-        return names.sorted().last.map { snapshots.appendingPathComponent($0).path }
+        return names.max().map { snapshots.appendingPathComponent($0).path }
     }
 
     /// A request for the CLI's `--enqueue era`.

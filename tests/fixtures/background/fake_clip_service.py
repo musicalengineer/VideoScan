@@ -10,12 +10,15 @@ REAL worker loop (bench.py `worker_command`) carries every request.  Behaviour b
   "generr" → every era window is a generation error (the model never answered), no date
              ("generr-stamp": the same, beside five stills that read the stamp)
   "ripfail" → every frame failed to rip: no window, no still, three frame_failed records
+  "flaky"  → "ripfail" for the first two analyze calls of that path (counted in FAKE_CLIP_LOG),
+             then as below — a file that recovers before the try limit
   "tools" → first runs `ffprobe -version` then `ffmpeg -version` BY BARE NAME, exactly as
             bench.py's probe_duration / rip_frame do, so a worker started with a PATH that has
             no Homebrew raises FileNotFoundError (the 2026-11-03 launchd bug); then as below
   else    → three era windows 1990-1994 / 1991-1995 / 1991-1995
 FAKE_CLIP_LOG (env): a file each load / analyze_clip appends one line to (the tests count loads).
 FAKE_LOAD_SECONDS (env): load sleeps this long first.
+FAKE_ALL_HANG (env): every analyze_clip hangs — a model that answers nothing (EraCanary's model check).
 """
 import json
 import os
@@ -39,6 +42,15 @@ def _era(window, lo, hi, stamp):
                        "cues": cues, "selfConfidence": 0.7})
 
 
+def _analyses(path):
+    """How many `analyze <path>` lines FAKE_CLIP_LOG holds (this call's included)."""
+    log = os.environ.get("FAKE_CLIP_LOG")
+    if not log or not os.path.exists(log):
+        return 0
+    with open(log, encoding="utf-8") as stream:
+        return sum(1 for line in stream if line.rstrip("\n") == "analyze " + path)
+
+
 class FakeClipService:
     def load(self):
         seconds = float(os.environ.get("FAKE_LOAD_SECONDS") or 0)
@@ -52,6 +64,8 @@ class FakeClipService:
 
     def analyze_clip(self, path, duration_s, context=None):
         _note("analyze " + path)
+        if os.environ.get("FAKE_ALL_HANG"):   # the model answers nothing, whatever the file (synthetic canary included)
+            time.sleep(600)
         if "hang" in path:
             time.sleep(600)
         if "die" in path:
@@ -63,6 +77,8 @@ class FakeClipService:
         if "tools" in path:
             for tool in ("ffprobe", "ffmpeg"):
                 subprocess.run([tool, "-version"], capture_output=True, timeout=30, check=True)
+        if "flaky" in path and _analyses(path) <= 2:
+            path = path.replace("flaky", "ripfail")
         if "ripfail" in path:
             return {"header": {"record_type": "clip", "duration_s": float(duration_s or 100.0), "windows": []},
                     "window_results": [], "results": [],
@@ -115,3 +131,61 @@ def make_service():
 
 def make_wrong_id_service():
     return WrongIdService()
+
+
+# --- Real frames, fake model -------------------------------------------------
+# `make_real_rip_service`: bench.py's OWN ClipService — real ffprobe, real
+# ffmpeg frame rips, the real sampler and record shape — with a fake approach
+# in place of the 8B, so a media-matrix test proves what the service does with
+# files that decode and files that do not, in seconds, with no weights.
+# The worker runs bench.py as __main__ under `python -I` (no script dir on
+# sys.path), so the module is reached through sys.modules, never `import bench`.
+
+class FakeEraApproach:
+    """Answers every era window with a valid r3 contract (1990–1995) and every
+    date still with NONE.  Duck-types bench.py's Approach for ClipService."""
+    id = "fake-era"
+    model_id = "mlx-community/Qwen3-VL-8B-Instruct-4bit"
+
+    def load(self):
+        _note("load")
+        return {"model": self.model_id, "pid": os.getpid()}
+
+    def seed(self, value):
+        pass
+
+    def answer(self, png, kind):
+        return "NONE", {}
+
+    def answer_window(self, pngs, family, window, context=None):
+        w = [window["start_s"], window["end_s"]]
+        return json.dumps({"family": "era", "window": w, "yearRange": [1990, 1995], "rationale": "synthetic",
+                           "cues": [{"kind": "technical", "text": "synthetic test pattern", "atS": w[0]}],
+                           "selfConfidence": 0.6}), {}
+
+    def after_clip(self):
+        pass
+
+
+class _NotingClipService:
+    """bench.ClipService plus the FAKE_CLIP_LOG line per analyze (tests count tries)."""
+    def __init__(self, inner):
+        self.inner = inner
+
+    def load(self):
+        return self.inner.load()
+
+    def analyze_clip(self, path, duration_s, context=None):
+        _note("analyze " + path)
+        return self.inner.analyze_clip(path, duration_s, context)
+
+    def after_clip(self):
+        self.inner.after_clip()
+
+    def __getattr__(self, name):          # any other worker verb goes to the real service
+        return getattr(self.inner, name)
+
+
+def make_real_rip_service():
+    bench = sys.modules["__main__"]
+    return _NotingClipService(bench.ClipService(approach=FakeEraApproach()))

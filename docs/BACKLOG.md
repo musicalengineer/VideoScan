@@ -196,6 +196,7 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
   sampler, perceptual video hash and SigLIP embeddings as dedup tiers 2–3, constraint propagation from birthdates; events stay rulings
   (not DBSCAN); cloud offload stays a §9 ruling and never carries family pixels (rule 13).
 - Analyze tab: a row/button to start the era job (today: `--enqueue era` / `--run era` from the helper binary only).
+- Content Analysis ▸ a read-only **results sheet** for the helper's work (Rick 2026-11-04, "how can we see what it produced?"): counts by outcome (era found · no usable era · given up after 3 tries, with the reason · still to do), a clickable file list per outcome, and the "agrees with your confirmed date within 5 y" number — today the only per-file view is the inspector's Machine era line, and era.none / give-ups show nowhere.
 
 ## To file as issues (found 2026-10-31 → 2026-11-01)
 - Found while mapping files (2026-10-31 night, docs workers): `previewSweepEnabled` sits in the prefs plist but no code reads it (stale key);

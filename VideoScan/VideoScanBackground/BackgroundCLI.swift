@@ -133,7 +133,7 @@ enum BackgroundCLI {
         let catalog = arguments.catalogPath.map { URL(fileURLWithPath: $0) } ?? DefaultJobFactory.productionCatalogURL
         let supervisor = JobSupervisor(queue: FileJobQueueStore(directory: root.appendingPathComponent("queue", isDirectory: true)),
                                        checkpoints: FileCheckpointStore(directory: root.appendingPathComponent("checkpoints", isDirectory: true)),
-                                       factory: DefaultJobFactory(stateRoot: root, catalogURL: catalog),
+                                       factory: DefaultJobFactory(stateRoot: root, catalogURL: catalog, log: log),
                                        backoff: backoff, log: log,
                                        ownership: FileStateRootLock(root: root, owner: "cli --run era"))
         log.write("foreground --run era — state in \(root.path), catalog \(catalog.path) (read-only)")
