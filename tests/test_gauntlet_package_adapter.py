@@ -33,6 +33,30 @@ if tool == 'swift':
     filters = [args[i + 1] for i, a in enumerate(args) if a == '--filter']
     stage = re.match(r'VideoScanCoreTests\\\.(\w+?)PkgTests/', filters[0]).group(1).lower()
     s = config.get('package', {}).get(stage, {})
+    # Swift Testing's event stream (what the runner counts), written beside
+    # the console the way the real library writes it: one JSON record a line.
+    events = []
+    def ev(kind, test_id=None, **extra):
+        payload = dict(kind=kind, messages=[], **extra)
+        if test_id: payload['testID'] = test_id
+        events.append(dict(kind='event', version='6.4.0', payload=payload))
+    def ran(name, issue=None):
+        tid = f'VideoScanCoreTests.{stage}/{name}()/A.swift:1:1'
+        events.insert(0, dict(kind='test', version='6.4.0', payload=dict(id=tid, kind='function', name=name + '()')))
+        ev('testStarted', tid)
+        if issue is not None: ev('issueRecorded', tid, issue=issue)
+        ev('testEnded', tid)
+    if not s.get('no_summary'):
+        for n in range(s.get('passed', 2)): ran(f'ok{n}')
+        for n in range(s.get('failed', 0)): ran(f'bad{n}', dict(isKnown=False, isFailure=True))
+        for n in range(s.get('known', 0)): ran(f'kn{n}', dict(isKnown=True, isFailure=False))
+        for name in s.get('stream_only', []): ran(name)
+        ev('runEnded')
+    if '--event-stream-output-path' in args:
+        with open(args[args.index('--event-stream-output-path') + 1], 'w') as f:
+            f.writelines(json.dumps(e) + '\n' for e in events)
+    for line in s.get('console', []):
+        print(line)
     if not s.get('no_summary'):
         for n in range(s.get('xctest', 1)):
             print(f"Test Case '-[VideoScanCoreTests.X test{n}]' passed (0.001 seconds).")
@@ -187,6 +211,39 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(self.result['inventory_errors'], [])
         self.assertEqual(self.stage('unit')['status'], 'failed')
         self.assertIn('below expected floor 2', self.stage('unit')['reason'])
+
+    # M4 deep gauntlet 2026-11-05 (2c8fa9777, unit-package.log 1370-1375): a
+    # FamilyTree test's stdout print landed inside a concurrent test's result
+    # line, so the console scraper saw 774 of 775 and called the stage RED.
+    M4_SPLIT = [
+        '✔ Test theMarkerInTheAppsExactShapeDecodes() passed after 0.366 seconds.',
+        '✔ Test refused[family-tree] gedcom pull label=Alphasurname header=26 Aug 2026 05:07:30 '
+        'file=tree-20generations.ged size=427 mtime=2026-11-05T20:58:06Z program=getmyancestors '
+        'sha=f7821da7 ingest=2026-11-05T20:58:06Z generation=gen-20261105T205806-1270',
+        'LinesLandWithTheirReasonAndAreNotADayFile() passed after 0.366 seconds.',
+    ]
+
+    def test_interleaved_stdout_never_loses_a_passed_test(self):
+        self.config['package'] = {'unit': {'xctest': 0, 'passed': 0, 'console': self.M4_SPLIT,
+                                           'stream_only': ['theMarkerInTheAppsExactShapeDecodes',
+                                                           'refusedLinesLandWithTheirReasonAndAreNotADayFile']}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['package']['passed'], 2, unit)
+        self.assertEqual(unit['package']['status'], 'passed', unit)
+        runs = [c for c in self.swift_calls if c['args'][0] == 'test']
+        self.assertIn('--event-stream-output-path', runs[0]['args'])
+
+    def test_a_printed_lookalike_result_line_is_never_counted(self):
+        # The other direction: a test that prints a result-shaped line must not
+        # stand in for a declared test that never ran (floor 2, one ran).
+        self.config['package'] = {'unit': {'xctest': 0, 'passed': 1,
+                                           'console': ['✔ Test ghost() passed after 0.001 seconds.']}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['package']['passed'], 1, unit)
+        self.assertEqual(unit['status'], 'failed')
+        self.assertIn('below expected floor 2', unit['reason'])
 
     def test_package_build_failure_never_passes_and_skips_package_runs(self):
         self.config['package_build_exit'] = 3

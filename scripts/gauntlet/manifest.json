@@ -31592,7 +31592,9 @@
       ],
       "tests": [
         "test_a_floor_above_the_declarations_fails_preflight",
+        "test_a_printed_lookalike_result_line_is_never_counted",
         "test_below_package_floor_fails",
+        "test_interleaved_stdout_never_loses_a_passed_test",
         "test_mismatched_package_selectors_fail_preflight",
         "test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env",
         "test_package_build_failure_never_passes_and_skips_package_runs",
@@ -31600,6 +31602,28 @@
         "test_package_known_issue_and_missing_summary_are_not_passes",
         "test_package_only_stage_runs",
         "test_unblocked_package_suite_without_selectors_fails_preflight"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
+      "kind": "python",
+      "path": "tests/test_gauntlet_event_stream.py",
+      "stage": "regression",
+      "suites": [
+        "test_gauntlet_event_stream.py"
+      ],
+      "tests": [
+        "test_a_duplicate_ended_event_never_double_counts",
+        "test_a_known_issue_beside_a_real_failure_is_a_failure",
+        "test_cancelled_and_unattributed_failures_are_failures",
+        "test_isolation_poisoned_streams_are_unavailable_never_a_count",
+        "test_logic_pass_fail_known_skip_and_suites_not_counted",
+        "test_parameterized_cases_count_once_per_function",
+        "test_real_failure_is_counted_as_failed",
+        "test_real_run_counts_functions_known_issues_and_xctest_exactly",
+        "test_scale_20k_functions_counted_within_budget",
+        "test_version_zero_issue_without_isFailure_is_a_failure_and_a_warning_is_not",
+        "test_xctest_lines_count_anywhere_in_a_line_and_add_to_swift_testing"
       ]
     },
     {
@@ -37630,6 +37654,10 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeSoundAttemptsMigrationTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "tests/test_gauntlet_event_stream.py",
+          "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         }
       ],
       "expected_floor": 438,
