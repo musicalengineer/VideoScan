@@ -1,7 +1,9 @@
 // FileDossier+Build.swift (VideoScanCore/Dossier) — the pure builder: one
 // stored record and its content's provenance assertions → the three layers.
 // Every line names its source; a reading that is not there says why in
-// words ("not transcribed yet", "no audio track"), never a blank.
+// words ("not transcribed yet", "no audio track"), never a blank — and a
+// blank is never read as absence: an unprobed record's lines say "not
+// probed yet", never "no audio track" (Codex 11/05).
 //
 // Floor (Rick's brief): nothing InspectorDossierView showed is lost — the
 // inferred date (its range, confidence and written reason, or "none —
@@ -80,6 +82,11 @@ extension FileDossier {
 
     /// What the stored stamps PROVE ran on this file, per reader.
     struct Ran {
+        /// Why the streams are not known (never probed / the probe failed), in
+        /// the Patterns lines' words; nil = probed. Codex 11/05: an unprobed
+        /// record read as "no audio, no video" and its lines said "no audio
+        /// track" / "no picture" with no evidence. Unknown reads as unknown.
+        var streamsUnknown: String?
         var hasVideo: Bool
         var hasAudio: Bool
         /// The scene captioner: `caption_runs` (sceneCaptionModel / Date) — the full pass and Captions-only both write it.
@@ -96,6 +103,7 @@ extension FileDossier {
         var ocrUnknownReason: String?
 
         init(_ r: VideoRecord) {
+            streamsUnknown = FileDossier.streamsUnknown(r)
             hasVideo = r.streamTypeRaw == "Video+Audio" || r.streamTypeRaw == "Video only"
             hasAudio = r.streamTypeRaw == "Video+Audio" || r.streamTypeRaw == "Audio only"
             captions = r.sceneCaptionDate != nil || r.sceneCaptionModel != nil
@@ -111,18 +119,22 @@ extension FileDossier {
                 : nil
         }
 
-        /// The words for a channel that needs a picture.
-        var noPicture: String { hasAudio ? "no picture (audio only)" : "no picture (no audio or video stream)" }
+        /// The words for a channel that needs a picture (the probe's words when it did not tell).
+        var noPicture: String {
+            streamsUnknown ?? (hasAudio ? "no picture (audio only)" : "no picture (no audio or video stream)")
+        }
+        /// The words for a channel that needs sound.
+        var noSound: String { streamsUnknown ?? "no audio track" }
     }
 
     static func patternsSection(_ r: VideoRecord, assertions: [CatalogRow.ProvenanceAssertionReading], unreadable: String?) -> Section {
         let ran = Ran(r)
-        let eras = MachineEraResolver.eras(fromRowsOfOneSubject: assertions)
-        var lines: [Line] = [eraLine(eras.first, others: Array(eras.dropFirst()), assertions: assertions, userDate: r.userDate, ran: ran)]
+        let verdict = EraVerdict(assertions)
+        var lines: [Line] = [eraLine(verdict, userDate: r.userDate, ran: ran)]
         if let mine = userDateLine(r) { lines.append(mine) }
         lines.append(inferredDateLine(r))
         lines.append(sceneLine(r, ran: ran))
-        lines.append(speechLine(r, hasAudio: ran.hasAudio))
+        lines.append(speechLine(r, ran: ran))
         lines.append(peopleLine(r))
         if let machine = recognizedLine(r) { lines.append(machine) }
         lines.append(ocrLine("On-screen dates", r.usableOCRDates, r, ran: ran, source: "burn-in reader"))
@@ -133,13 +145,30 @@ extension FileDossier {
             lines.append(Line(label: "Stored analysis", value: "could not be read", reading: unreadable,
                               source: "catalog.sqlite", standing: .missing))
         }
-        return Section(layer: .patterns, summary: patternsSummary(r, era: eras.first), lines: lines)
+        return Section(layer: .patterns, summary: patternsSummary(r, era: verdict), lines: lines)
+    }
+
+    /// Why the streams are unknown, in words ("not probed yet", "probe failed: <why>"); nil = probed.
+    /// Which records are unprobed is `notProbed`'s rule; these are the short words.
+    static func streamsUnknown(_ r: VideoRecord) -> String? {
+        guard notProbed(r) != nil else { return nil }
+        if r.streamTypeRaw.isEmpty { return "not probed yet" }
+        let why = r.isPlayable.trimmingCharacters(in: .whitespaces)
+        return "probe failed" + (why.isEmpty || why == "Yes" ? "" : ": \(why)")
     }
 
     /// "1990–1995 (8B, unconfirmed) · 12 scenes described · speech · 2 people", or "nothing analyzed yet".
-    static func patternsSummary(_ r: VideoRecord, era: MachineEra?) -> String {
+    /// The era part says what the analyzer concluded even when it found no era
+    /// (Codex 11/05: "nothing analyzed yet" was said over an era.none or a give-up).
+    static func patternsSummary(_ r: VideoRecord, era: EraVerdict) -> String {
         var parts: [String] = []
-        if let era { parts.append("\(era.rangeText) (\(era.modelShortName), unconfirmed)") }
+        switch era {
+        case .era(let e, _): parts.append("\(e.rangeText) (\(e.modelShortName), unconfirmed)")
+        case .rejected: parts.append("era rejected by you")
+        case .none(_, let gaveUp): parts.append(gaveUp ? "era: given up after \(EraAttemptStore.maxTries) tries" : "no usable era")
+        case .unreadable: parts.append("era unreadable")
+        case .notYet: break
+        }
         if !r.sceneCaptions.isEmpty { parts.append(count(r.sceneCaptions.count, "scene") + " described") }
         if let t = r.audioTranscript { parts.append(t.isEmpty ? "no speech" : "speech") }
         let people = r.confirmedByUserPeople.count
@@ -149,9 +178,36 @@ extension FileDossier {
 
     // MARK: Era
 
-    static func eraLine(_ era: MachineEra?, others: [MachineEra], assertions: [CatalogRow.ProvenanceAssertionReading],
-                        userDate: String?, ran: Ran) -> Line {
-        if let era {
+    /// What the era analyzers' rows say about this content — ONE classification,
+    /// read by the Era line and the summary (they cannot disagree). Order: an
+    /// era stands; else Rick rejected one; else `era.none` (given up or not);
+    /// else an unreadable fused value; else nothing yet.
+    enum EraVerdict {
+        case era(MachineEra, others: [MachineEra])
+        case rejected(CatalogRow.ProvenanceAssertionReading)
+        case none(CatalogRow.ProvenanceAssertionReading, gaveUp: Bool)
+        case unreadable(CatalogRow.ProvenanceAssertionReading)
+        case notYet
+
+        init(_ assertions: [CatalogRow.ProvenanceAssertionReading]) {
+            let eras = MachineEraResolver.eras(fromRowsOfOneSubject: assertions)
+            if let first = eras.first {
+                self = .era(first, others: Array(eras.dropFirst()))
+            } else if let rejected = FileDossier.rejectedEra(assertions) {
+                self = .rejected(rejected)
+            } else if let none = FileDossier.newest(assertions, field: "era.none") {
+                self = .none(none, gaveUp: MachineEraResolver.object(none.evidenceJSON)["gaveUp"] as? Bool ?? false)
+            } else if let bad = FileDossier.live(assertions, field: MachineEraResolver.fusedField).max(by: { $0.seq < $1.seq }) {
+                self = .unreadable(bad)
+            } else {
+                self = .notYet
+            }
+        }
+    }
+
+    static func eraLine(_ verdict: EraVerdict, userDate: String?, ran: Ran) -> Line {
+        switch verdict {
+        case .era(let era, let others):
             var reading: String?
             if let year = MachineEraResolver.rickYear(userDate) {
                 reading = MachineEraResolver.closeEnough(era: era, rickYear: year) ? "agrees with your date (\(year))"
@@ -159,31 +215,31 @@ extension FileDossier {
             }
             return Line(label: "Era", value: era.rangeText, reading: reading, source: "\(era.modelShortName) era, unconfirmed",
                         evidence: MachineEraResolver.inspectorHelp(era: era, others: others), standing: .observation)
-        }
-        // Rick's veto: the analyzer DID reach the file; he refused what it said.
-        if let rejected = rejectedEra(assertions) {
+        case .rejected(let rejected):
+            // Rick's veto: the analyzer DID reach the file; he refused what it said.
             return Line(label: "Era", value: "rejected by you",
                         reading: "the \(MachineEraResolver.modelShortName(by: rejected.by)) analyzer said \(rejected.value.replacingOccurrences(of: "-", with: "–")); you rejected it",
                         source: "Rick", evidence: "Era \(rejected.value) by \(rejected.by), \(eventDay(rejected.at)); rejected by you.", standing: .fact)
-        }
-        // `era.none` is the analyzer's "looked, nothing usable" — words, never an era.
-        if let none = newest(assertions, field: "era.none") {
-            let evidence = MachineEraResolver.object(none.evidenceJSON)
-            let reason = evidence["reason"] as? String
-            let gaveUp = evidence["gaveUp"] as? Bool ?? false
+        case .none(let none, let gaveUp):
+            // `era.none` is the analyzer's "looked, nothing usable" — words, never an era.
+            let reason = MachineEraResolver.object(none.evidenceJSON)["reason"] as? String
             return Line(label: "Era", value: gaveUp ? "no era: the analyzer gave up" : "no usable era", reading: reason,
                         source: "\(MachineEraResolver.modelShortName(by: none.by)) era",
                         evidence: "By \(none.by), \(eventDay(none.at))." + (reason.map { " \($0)" } ?? ""),
                         standing: gaveUp ? .missing : .nothingFound)
-        }
-        // A fused row whose value is not a year range: stored, but unreadable.
-        if let bad = live(assertions, field: MachineEraResolver.fusedField).max(by: { $0.seq < $1.seq }) {
+        case .unreadable(let bad):
+            // A fused row whose value is not a year range: stored, but unreadable.
             return Line(label: "Era", value: "unreadable", reading: "the stored era value \"\(bad.value)\" is not a year range",
                         source: "\(MachineEraResolver.modelShortName(by: bad.by)) era", standing: .missing)
+        case .notYet:
+            if let unknown = ran.streamsUnknown {
+                return Line(label: "Era", value: unknown, reading: "the era analyzer reads only files probed as video",
+                            source: "era analyzer", standing: .missing)
+            }
+            return Line(label: "Era", value: ran.hasVideo ? "not analyzed yet" : "no picture to read",
+                        reading: ran.hasVideo ? "VideoScan Background has not reached this file" : nil,
+                        source: "era analyzer", standing: .missing)
         }
-        return Line(label: "Era", value: ran.hasVideo ? "not analyzed yet" : "no picture to read",
-                    reading: ran.hasVideo ? "VideoScan Background has not reached this file" : nil,
-                    source: "era analyzer", standing: .missing)
     }
 
     /// The newest machine `era.fused` row (a readable range) that Rick rejected afterwards.
@@ -191,7 +247,7 @@ extension FileDossier {
         let field = MachineEraResolver.fusedField
         return rows.filter { f in
             f.field == field && f.state == "inferred" && MachineEraResolver.isMachine(f.by) && MachineEraResolver.range(f.value) != nil
-                && rows.contains { $0.field == field && $0.state == "rejected" && $0.value == f.value && $0.seq > f.seq }
+                && MachineEraResolver.isRejected(f, among: rows)
         }.max { $0.seq < $1.seq }
     }
 
@@ -238,10 +294,10 @@ extension FileDossier {
                     evidence: evidence, standing: .observation, body: r.sceneCaptions.map { TimedText(at: $0.timestamp, text: $0.text) })
     }
 
-    static func speechLine(_ r: VideoRecord, hasAudio: Bool) -> Line {
+    static func speechLine(_ r: VideoRecord, ran: Ran) -> Line {
         let model = r.audioTranscriptModel ?? "Whisper"
         guard let text = r.audioTranscript else {
-            return Line(label: "Speech", value: hasAudio ? "not transcribed yet" : "no audio track", source: "transcript", standing: .missing)
+            return Line(label: "Speech", value: ran.hasAudio ? "not transcribed yet" : ran.noSound, source: "transcript", standing: .missing)
         }
         let evidence = r.audioTranscriptDate.map { "Transcribed by \(model) on \(TechnicalReading.dayAndTime($0))." }
         if text.isEmpty {     // '' = Whisper ran and heard no speech (transcripts table)
@@ -313,10 +369,9 @@ extension FileDossier {
 
     /// Machine `inferred` rows of `field` that Rick has not rejected since (same value).
     static func live(_ rows: [CatalogRow.ProvenanceAssertionReading], field: String) -> [CatalogRow.ProvenanceAssertionReading] {
-        let rejected = rows.filter { $0.field == field && $0.state == "rejected" }
-        return rows.filter { row in
+        rows.filter { row in
             row.field == field && row.state == "inferred" && MachineEraResolver.isMachine(row.by)
-                && !rejected.contains { $0.value == row.value && $0.seq > row.seq }
+                && !MachineEraResolver.isRejected(row, among: rows)
         }
     }
 

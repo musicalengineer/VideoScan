@@ -119,6 +119,23 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(ms.gauntlet_verdict(None, 0), ('RED', 'no result.json'))
         self.assertEqual(ms.gauntlet_verdict(self._result('amber'), 1)[0], 'RED', 'a non-zero runner exit is red')
 
+    def test_gauntlet_failed_package_build_is_red_whatever_the_stages_say(self):
+        # Codex 2026-11-05 (P1): a package build that left a surviving child
+        # exits 125 with contamination; Runner.swift then blocked every stage
+        # and wrote AMBER. The shape Codex fed gauntlet_verdict: RED regardless.
+        r = self._result('amber', unit=dict(status='blocked', reason='unreaped process contamination'),
+                         regression=dict(status='blocked', reason='unreaped process contamination'))
+        r['package_build_exit_code'] = 125
+        r['amber_reasons'] = ['2 stages without an adapter (unit, regression)']
+        self.assertEqual(ms.gauntlet_verdict(r, 0), ('RED', 'package build exit 125'))
+        r = self._result('amber')
+        r['build_exit_code'] = 65
+        self.assertEqual(ms.gauntlet_verdict(r, 0), ('RED', 'build exit 65'))
+        r = self._result('passed')
+        r['package_build_exit_code'] = 0
+        r['build_exit_code'] = 0
+        self.assertEqual(ms.gauntlet_verdict(r, 0)[0], 'GREEN', 'exit 0 builds stay green')
+
     def test_gauntlet_pre_amber_result_reads_as_amber(self):
         r = self._result('incomplete', hallie=dict(status='blocked'))
         r['stages'].append(dict(name='hallie', status='blocked', blocked_details=[{}]))

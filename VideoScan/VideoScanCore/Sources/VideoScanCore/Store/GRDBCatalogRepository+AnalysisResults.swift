@@ -5,9 +5,11 @@
 //
 // One classification, used by the counts and by the lists (so a list can
 // never disagree with its count): per (by, content) over inferred rows,
-//   found  = an `era.fused` row whose value is "YYYY-YYYY";
-//   gaveUp = not found, and an `era.none` row with evidence.gaveUp = true;
-//   none   = not found, an `era.none` row, not gaveUp.
+//   found    = the signer's newest readable `era.fused` row, not rejected by
+//              Rick afterwards (MachineEraResolver's selection and veto rule);
+//   rejected = that row, rejected by Rick afterwards (Codex 11/05);
+//   gaveUp   = neither, and an `era.none` row with evidence.gaveUp = true;
+//   none     = neither, an `era.none` row, not gaveUp.
 // A content with rows by the signer but none of the three (only ocr.date, or
 // a malformed fused value) is "analyzed" and in no list; the report shows it
 // as "other" so the numbers add up.
@@ -19,10 +21,13 @@
 // EraPlanner.answeredInJournal); the file of a
 // content rides files_by_digest. Measured (AnalysisResultsReportTests'
 // scale test, M5 Ultra, Debug): 100k contents (≈ 200k rows, 20k dated) —
-// the whole report plus one 10k list ≈ 0.8 s; the budget is 2 s.
+// the whole report plus one 10k list ≈ 1.1 s with the veto check (0.8 s
+// before it); a 100k "still to do" page ≈ 0.13 s; the budget is 2 s.
 //
 // Memory: the counts are one row per signer; a list holds at most `limit`
-// rows (≈ 250 B each); the dated stream holds one content's fused rows.
+// rows (≈ 250 B each) — "still to do" included: its LIMIT is in SQL (plus
+// one row per journal-answered content, which the caller drops); the dated
+// stream holds one content's fused rows.
 
 import Foundation
 import GRDB
@@ -30,15 +35,23 @@ import GRDB
 extension GRDBReader: CatalogAnalysisResultsReading {
 
     /// The per-(by, content) classification; `signerFilter` narrows it ("AND by = ?1") or is empty.
+    /// `fseq`/`fvalue` = the signer's NEWEST readable `era.fused` row — MachineEraResolver's
+    /// selection — and `rejected` = Rick vetoed that value afterwards (`rejectedLaterSQL`, the
+    /// twin of the resolver's and the dossier's `isRejected`; Codex 11/05). Precedence, as the
+    /// dossier's Era line: found, then rejected, then given up, then no usable era.
     private static func verdicts(signerFilter: String) -> String {
         """
-        SELECT by, subject_id,
-               max(field = 'era.fused' AND \(MachineEraResolver.eraValueSQL("value"))) AS found,
-               max(CASE WHEN field = 'era.none' THEN coalesce(json_extract(evidence_json, '$.gaveUp'), 0) = 1 ELSE 0 END) AS gave,
-               max(field = 'era.none') AS none
-          FROM provenance_assertions
-         WHERE subject_kind = 'content' AND state = 'inferred' \(signerFilter)
-         GROUP BY by, subject_id
+        SELECT v.by, v.subject_id, v.gave, v.none, nf.value AS fvalue,
+               (nf.seq IS NOT NULL AND NOT \(MachineEraResolver.rejectedLaterSQL("nf"))) AS found,
+               (nf.seq IS NOT NULL AND \(MachineEraResolver.rejectedLaterSQL("nf"))) AS rejected
+          FROM (SELECT by, subject_id,
+                       max(CASE WHEN field = 'era.fused' AND \(MachineEraResolver.eraValueSQL("value")) THEN seq END) AS fseq,
+                       max(CASE WHEN field = 'era.none' THEN coalesce(json_extract(evidence_json, '$.gaveUp'), 0) = 1 ELSE 0 END) AS gave,
+                       max(field = 'era.none') AS none
+                  FROM provenance_assertions
+                 WHERE subject_kind = 'content' AND state = 'inferred' \(signerFilter)
+                 GROUP BY by, subject_id) v
+          LEFT JOIN provenance_assertions nf ON nf.seq = v.fseq
         """
     }
 
@@ -50,11 +63,13 @@ extension GRDBReader: CatalogAnalysisResultsReading {
 
     func analyzerOutcomeCounts() throws -> [CatalogRow.AnalyzerOutcomeCounts] {
         try Row.fetchAll(db, sql: """
-            SELECT by, count(*), sum(found), sum(NOT found AND gave), sum(NOT found AND NOT gave AND none)
+            SELECT by, count(*), sum(found), sum(NOT found AND NOT rejected AND gave),
+                   sum(NOT found AND NOT rejected AND NOT gave AND none), sum(rejected)
               FROM (\(Self.verdicts(signerFilter: "")))
              GROUP BY by ORDER BY by
             """).map { row in
-            CatalogRow.AnalyzerOutcomeCounts(signer: row[0], analyzed: row[1], eraFound: row[2], eraNone: row[4], gaveUp: row[3])
+            CatalogRow.AnalyzerOutcomeCounts(signer: row[0], analyzed: row[1], eraFound: row[2], rejected: row[5],
+                                             eraNone: row[4], gaveUp: row[3])
         }
     }
 
@@ -122,16 +137,12 @@ extension GRDBReader: CatalogAnalysisResultsReading {
         let which: String
         let detail: String
         switch kind {
-        case .eraFound:
-            which = "p.found"
-            detail = """
-                (SELECT a.value FROM provenance_assertions a
-                  WHERE a.subject_kind = 'content' AND a.subject_id = p.subject_id AND a.by = ?1 AND a.state = 'inferred'
-                    AND a.field = 'era.fused' AND \(MachineEraResolver.eraValueSQL("a.value"))
-                  ORDER BY a.seq DESC LIMIT 1), NULL
-                """
+        case .eraFound, .rejected:
+            which = kind == .eraFound ? "p.found" : "p.rejected"
+            detail = "p.fvalue, NULL"
         case .eraNone, .gaveUp:
-            which = kind == .gaveUp ? "NOT p.found AND p.gave" : "NOT p.found AND NOT p.gave AND p.none"
+            let notEra = "NOT p.found AND NOT p.rejected"
+            which = kind == .gaveUp ? "\(notEra) AND p.gave" : "\(notEra) AND NOT p.gave AND p.none"
             detail = """
                 NULL, (SELECT json_extract(a.evidence_json, '$.reason') FROM provenance_assertions a
                         WHERE a.subject_kind = 'content' AND a.subject_id = p.subject_id AND a.by = ?1 AND a.state = 'inferred'
@@ -145,6 +156,21 @@ extension GRDBReader: CatalogAnalysisResultsReading {
               FROM (\(Self.verdicts(signerFilter: "AND by = ?1"))) p
               LEFT JOIN files f ON f.id = (\(Self.standingFile))
              WHERE \(which)
+             ORDER BY f.filename IS NULL, f.filename COLLATE NOCASE, f.full_path, p.subject_id
+             LIMIT ?2
+            """, arguments: [signer, limit]).map(Self.file)
+    }
+
+    func eraUnansweredFiles(signer: String, limit: Int) throws -> [CatalogRow.AnalyzerOutcomeFile] {
+        try Row.fetchAll(db, sql: """
+            SELECT p.subject_id, f.id, f.full_path, f.filename,
+                   NOT EXISTS (SELECT 1 FROM files l WHERE l.content_digest = p.subject_id AND l.removal_state IS NULL),
+                   NULL, NULL
+              FROM (SELECT DISTINCT f.content_digest AS subject_id FROM files f
+                     WHERE \(EraPlanner.plannedFilesPredicate)
+                       AND NOT EXISTS (SELECT 1 FROM provenance_assertions a
+                                        WHERE a.subject_kind = 'content' AND a.subject_id = f.content_digest AND a.by = ?1)) p
+              LEFT JOIN files f ON f.id = (\(Self.standingFile))
              ORDER BY f.filename IS NULL, f.filename COLLATE NOCASE, f.full_path, p.subject_id
              LIMIT ?2
             """, arguments: [signer, limit]).map(Self.file)

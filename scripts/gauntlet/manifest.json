@@ -30819,6 +30819,7 @@
       "tests": [
         "test_known_speech_is_transcribed",
         "test_media_matrix_is_heard",
+        "test_missing_model_refuses_online_and_never_dials_out",
         "test_missing_model_says_so",
         "test_the_smoke_uses_the_apps_arguments"
       ]
@@ -31592,6 +31593,7 @@
       ],
       "tests": [
         "test_a_floor_above_the_declarations_fails_preflight",
+        "test_a_package_build_that_leaves_a_child_behind_is_red_not_amber",
         "test_below_package_floor_fails",
         "test_mismatched_package_selectors_fail_preflight",
         "test_one_package_build_and_one_filtered_run_per_stage_with_isolated_env",
@@ -32013,6 +32015,7 @@
         "test_gauntlet_all_passed_is_green",
         "test_gauntlet_blocked_only_is_amber_and_the_runners_words_win",
         "test_gauntlet_cli_exits_0_green_3_amber_1_red",
+        "test_gauntlet_failed_package_build_is_red_whatever_the_stages_say",
         "test_gauntlet_failure_beside_known_issues_is_red",
         "test_gauntlet_floor_miss_inventory_build_timeout_and_no_result_are_red",
         "test_gauntlet_known_issues_only_is_amber_with_counts",
@@ -32024,6 +32027,22 @@
         "test_ui_on_m4_ships_the_commit_and_bootstraps_a_gui_agent",
         "test_usage_errors_exit_2",
         "test_zero_tests_is_red"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
+      "kind": "python",
+      "path": "tests/test_m4_run_deep_lane.py",
+      "stage": "regression",
+      "suites": [
+        "test_m4_run_deep_lane.py"
+      ],
+      "tests": [
+        "test_amber_result_with_a_non_zero_runner_exit_is_red",
+        "test_amber_run_is_outcome_amber_with_the_reasons_and_exit_0",
+        "test_green_run_is_outcome_green_and_exit_0",
+        "test_no_gauntlet_line_is_red_never_green",
+        "test_red_run_is_outcome_red_and_exit_1"
       ]
     },
     {
@@ -33348,10 +33367,25 @@
         "eraWordsArePeoplesWordsThenTheRange",
         "everyNumberEqualsAnIndependentCountAndEveryListItsCount",
         "oneHundredThousandContentsBuildWithinBudget",
+        "oneHundredThousandStillToDoListsOnePageWithinBudget",
         "paceCountsEachFileOnceAtItsFirstVerdict",
         "theAgreementIsCatalogStatussConvergenceOnTheSameCatalog",
         "theETAIsPlainAndNeverMadeUp",
         "theReadOnlySnapshotNeverCompactsWhereTheJobWould"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/AnalysisResultsRejectionTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AnalysisResultsRejectionTests"
+      ],
+      "tests": [
+        "aRejectedValueIsItsOwnOutcomeCountedAndListedFromOneClassification",
+        "aValueRickRejectedIsNotEraFoundInTheCountOrTheList",
+        "eraFoundIsWhatTheResolverShows",
+        "stillToDoNeverReadsMoreRowsThanItShows"
       ]
     },
     {
@@ -33365,6 +33399,17 @@
         "aTryWhoseVerdictLandedIsNotInProgress",
         "anEraTheResolverRefusesIsNotEraFound",
         "stillToDoIsWhatThePlannerWouldPlanWhenTheJournalHoldsUnappliedVerdicts"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/AnalysisResultsReportCoverageTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AnalysisResultsReportCoverageTests"
+      ],
+      "tests": [
+        "anEraRickRejectedIsNotListedAsAPlainEraFound"
       ]
     },
     {
@@ -33900,6 +33945,32 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Dossier/FileDossierUnknownTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileDossierUnknownTests"
+      ],
+      "tests": [
+        "aFailedProbeWithoutAReasonStillSaysItFailed",
+        "aProbedFileStillSaysWhatItLacks",
+        "anUnprobedOrFailedProbeNeverClaimsNoAudioOrNoPicture",
+        "theSummaryOfARejectedEraSaysSoNeverTheEra",
+        "theSummarySaysTheAnalyzerRan"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Dossier/FileDossierCoverageTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileDossierCoverageTests"
+      ],
+      "tests": [
+        "anAudioStreamWithNoCodecNameIsNeverCalledSilent"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FileDossierStoreReviewTests.swift",
       "stage": "regression",
@@ -33907,6 +33978,7 @@
         "FileDossierStoreReviewTests"
       ],
       "tests": [
+        "aNewLoaderBringsItsOwnChangeSignal",
         "aSteadyStreamOfCommitsStillReachesTheOpenDossier"
       ]
     },
@@ -33921,6 +33993,7 @@
       "tests": [
         "test_a_hard_date_bounds_its_setup_sibling_with_the_chain",
         "test_a_hard_date_outside_its_siblings_window_is_flagged",
+        "test_a_run_writes_only_under_its_output_root_and_never_dials_out",
         "test_a_transfer_setup_never_bounds_a_sibling",
         "test_camera_native_with_device_tags_is_a_recording_date_and_without_is_weak",
         "test_dv_32khz_four_channel_reads_as_consumer_camcorder",
@@ -33951,6 +34024,8 @@
         "test_sentinel_and_impossible_dates_are_rejected",
         "test_setups_cluster_across_encoder_versions_and_split_on_audio_mode",
         "test_stamp_year_needs_two_stills_or_the_only_one",
+        "test_the_guard_refuses_an_output_root_outside_scratch",
+        "test_the_output_root_is_the_repos_scratch",
         "test_unknown_event_word_reads_as_unknown_and_keeps_the_raw"
       ]
     }
@@ -36667,8 +36742,10 @@
       ],
       "expected_floor": 3317,
       "name": "unit",
-      "package_expected_floor": 775,
+      "package_expected_floor": 787,
       "package_selectors": [
+        "VideoScanCoreTests.AnalysisResultsRejectionTests",
+        "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
         "VideoScanCoreTests.AnalysisResultsReportReviewTests",
         "VideoScanCoreTests.AnalysisResultsReportTests",
         "VideoScanCoreTests.AuditMarkerJSONTests",
@@ -36703,8 +36780,10 @@
         "VideoScanCoreTests.FableReviewHelperLoopTests",
         "VideoScanCoreTests.FableReviewHelperTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
+        "VideoScanCoreTests.FileDossierCoverageTests",
         "VideoScanCoreTests.FileDossierReviewTests",
         "VideoScanCoreTests.FileDossierTests",
+        "VideoScanCoreTests.FileDossierUnknownTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.ImportComparatorScaleTests",
         "VideoScanCoreTests.ImportComparatorTests",
@@ -37624,6 +37703,10 @@
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         },
         {
+          "name": "tests/test_m4_run_deep_lane.py",
+          "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
+        },
+        {
           "name": "VideoScan/VideoScanTests/ProductionShapeSoundStampTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         },
@@ -37632,7 +37715,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 438,
+      "expected_floor": 439,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [

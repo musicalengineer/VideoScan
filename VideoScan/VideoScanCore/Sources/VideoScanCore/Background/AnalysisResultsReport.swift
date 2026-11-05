@@ -4,13 +4,16 @@
 //
 // One sentence: per analyzer — keyed by its signer, so a second analyzer
 // just appears — how many files it found an era for, found no usable era
-// in, gave up on after 3 tries (with the reason), is still trying, and has
+// in, gave up on after 3 tries (with the reason), had its era rejected by
+// Rick (counted apart: a vetoed value is never "found"), is still trying, and has
 // still to do; how often its era agrees with Rick's confirmed date within
 // 5 years; and its pace over the last hour and the last 24 hours.
 //
 // Where each number comes from (rule 1: evidence, not a remembered field):
-//   found / no usable era / given up   provenance_assertions, classified in
-//                                      SQL (GRDBCatalogRepository+AnalysisResults)
+//   found / rejected by you /          provenance_assertions, classified in
+//   no usable era / given up           SQL (GRDBCatalogRepository+AnalysisResults)
+//                                      with MachineEraResolver's selection and
+//                                      veto rule (its SQL twin)
 //   tries in progress                  background/attempts/era.jsonl through
 //                                      EraAttemptStore.snapshot — READ ONLY
 //                                      (never compacts); unreadable → nil and
@@ -54,14 +57,15 @@ import Foundation
 
 public struct AnalysisResultsReport: Sendable, Equatable {
 
-    /// The five lists the sheet offers, in its order.
+    /// The six lists the sheet offers, in its order.
     public enum Outcome: String, Sendable, CaseIterable, Identifiable {
-        case eraFound, eraNone, gaveUp, inProgress, stillToDo
+        case eraFound, rejected, eraNone, gaveUp, inProgress, stillToDo
         public var id: String { rawValue }
 
         public var title: String {
             switch self {
             case .eraFound: return "Era found"
+            case .rejected: return "Rejected by you"
             case .eraNone: return "No usable era"
             case .gaveUp: return "Given up after \(EraAttemptStore.maxTries) tries"
             case .inProgress: return "Tries in progress"
@@ -88,6 +92,8 @@ public struct AnalysisResultsReport: Sendable, Equatable {
         public var isSeated: Bool
         public var analyzed: Int
         public var eraFound: Int
+        /// The analyzer's era, which Rick rejected afterwards: never "Era found" (Codex 11/05).
+        public var rejected: Int
         public var eraNone: Int
         public var gaveUp: Int
         /// nil = the try counts could not be read (`AnalysisResultsReport.triesProblem` says why).
@@ -98,13 +104,15 @@ public struct AnalysisResultsReport: Sendable, Equatable {
         public var agreement: MachineEraConvergence
         public var rate: Rate
 
-        public init(signer: String, modelShortName: String, isSeated: Bool, analyzed: Int, eraFound: Int, eraNone: Int, gaveUp: Int,
+        public init(signer: String, modelShortName: String, isSeated: Bool, analyzed: Int, eraFound: Int, rejected: Int = 0,
+                    eraNone: Int, gaveUp: Int,
                     triesInProgress: Int?, stillToDo: Int?, agreement: MachineEraConvergence, rate: Rate) {
             self.signer = signer
             self.modelShortName = modelShortName
             self.isSeated = isSeated
             self.analyzed = analyzed
             self.eraFound = eraFound
+            self.rejected = rejected
             self.eraNone = eraNone
             self.gaveUp = gaveUp
             self.triesInProgress = triesInProgress
@@ -113,14 +121,15 @@ public struct AnalysisResultsReport: Sendable, Equatable {
             self.rate = rate
         }
 
-        /// Analyzed, but in none of the three verdict lists (only an ocr.date
+        /// Analyzed, but in none of the four verdict lists (only an ocr.date
         /// row, or a malformed fused value) — shown so the numbers add up.
-        public var other: Int { max(0, analyzed - eraFound - eraNone - gaveUp) }
+        public var other: Int { max(0, analyzed - eraFound - rejected - eraNone - gaveUp) }
 
         /// The count beside an outcome; nil = not known (said in words).
         public func count(_ outcome: Outcome) -> Int? {
             switch outcome {
             case .eraFound: return eraFound
+            case .rejected: return rejected
             case .eraNone: return eraNone
             case .gaveUp: return gaveUp
             case .inProgress: return triesInProgress
@@ -171,7 +180,7 @@ public struct AnalysisResultsReport: Sendable, Equatable {
                             last24Hours: try reader.analyzerFirstVerdicts(signer: c.signer, since: now - 86_400))
             analyzers.append(Analyzer(
                 signer: c.signer, modelShortName: MachineEraResolver.modelShortName(by: c.signer), isSeated: seated,
-                analyzed: c.analyzed, eraFound: c.eraFound, eraNone: c.eraNone, gaveUp: c.gaveUp,
+                analyzed: c.analyzed, eraFound: c.eraFound, rejected: c.rejected, eraNone: c.eraNone, gaveUp: c.gaveUp,
                 triesInProgress: trying,
                 stillToDo: toDo, agreement: agreements[c.signer] ?? MachineEraConvergence(total: 0, agree: 0), rate: rate))
         }
@@ -278,18 +287,27 @@ public struct AnalysisResultsReport: Sendable, Equatable {
         var rows: [FileRow]
         var truncated: Bool
         switch outcome {
-        case .eraFound, .eraNone, .gaveUp:
-            let kind: CatalogRow.AnalyzerVerdictKind = outcome == .eraFound ? .eraFound : outcome == .eraNone ? .eraNone : .gaveUp
+        case .eraFound, .rejected, .eraNone, .gaveUp:
+            let kind: CatalogRow.AnalyzerVerdictKind
+            switch outcome {
+            case .eraFound: kind = .eraFound
+            case .rejected: kind = .rejected
+            case .eraNone: kind = .eraNone
+            default: kind = .gaveUp
+            }
             let found = try reader.analyzerOutcomeFiles(signer: signer, kind: kind, limit: limit + 1)
             truncated = found.count > limit
             rows = found.prefix(limit).map { row(outcome, $0) }
         case .stillToDo:
+            // The LIMIT is in SQL (review 11/05: this used to read every unanswered
+            // content, then cut). A journal-answered content is dropped here, so ask for
+            // `limit + 1 + |journal|`: enough to fill the list and know it was cut.
+            // Memory: at most limit + 1 + |journal| rows (≈ 300 B each).
             let inJournal = journal.map { EraPlanner.answeredInJournal($0, signer: signer) } ?? []
-            let digests = try stillToDo(reader: reader, signer: signer, inJournal: inJournal)
-            rows = try reader.analyzerFiles(digests: digests).map { row(outcome, $0) }
-            rows.sort { ($0.filename.lowercased(), $0.path, $0.digest) < ($1.filename.lowercased(), $1.path, $1.digest) }
-            truncated = rows.count > limit
-            rows = Array(rows.prefix(limit))
+            let page = try reader.eraUnansweredFiles(signer: signer, limit: limit + 1 + inJournal.count)
+            let kept = page.filter { !inJournal.contains($0.digest) }
+            truncated = kept.count > limit
+            rows = kept.prefix(limit).map { row(outcome, $0) }
         case .inProgress:
             let inJournal = journal.map { EraPlanner.answeredInJournal($0, signer: signer) } ?? []
             let tries = try attempts.map { try inProgress(reader: reader, signer: signer, attempts: $0, inJournal: inJournal) } ?? [:]
@@ -313,6 +331,7 @@ public struct AnalysisResultsReport: Sendable, Equatable {
         let value: String
         switch outcome {
         case .eraFound: value = f.value.map(eraWords) ?? ""
+        case .rejected: value = "rejected by you: " + (f.value.map(eraWords) ?? "")
         case .eraNone: value = "no usable era"
         case .gaveUp: value = "given up"
         case .inProgress: value = ""

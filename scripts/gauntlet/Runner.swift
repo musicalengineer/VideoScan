@@ -343,8 +343,14 @@ struct GauntletRunner {
         let build = try command(cmd, log: run.appendingPathComponent("package-build.log"), timeout: 3600, environment: buildEnvironment)
         result["package_build_s"] = build.elapsed; result["package_build_exit_code"] = build.code
         if build.contaminated { contaminated = true }
-        packageBuildOK = build.code == 0
-        if build.code != 0 { packageBuildReason = build.timedOut ? "package build watchdog timeout" : "package build exit \(build.code)" }
+        packageBuildOK = build.code == 0 && !build.contaminated
+        if packageBuildOK != true {
+            packageBuildReason = build.timedOut ? "package build watchdog timeout"
+                : "package build exit \(build.code)" + (build.contaminated ? " (unreaped process contamination)" : "")
+            // RED, never AMBER (Codex 11/05): contamination blocks every stage
+            // before runPackageSuites could fail one, so the run itself fails here.
+            fatalReason = fatalReason ?? packageBuildReason
+        }
     }
 
     /// One stage's package suites: `swift test --skip-build` on the build
@@ -487,7 +493,11 @@ struct GauntletRunner {
             if let modes = entry["modes"] { outputs[index]["modes"] = modes }
         }
         result["stages"] = outputs; result["elapsed_s"] = monotonic() - totalStart
-        let failed = fatalReason != nil || outputs.contains { $0["status"] as? String == "failed" }
+        // Defence in depth (Codex 11/05): a build that did not exit 0, or any
+        // contamination, is RED whatever the stage rows say.
+        let buildFailed = (result["build_exit_code"] as? Int32).map { $0 != 0 } ?? false
+            || (result["package_build_exit_code"] as? Int32).map { $0 != 0 } ?? false || packageBuildOK == false
+        let failed = fatalReason != nil || buildFailed || contaminated || outputs.contains { $0["status"] as? String == "failed" }
         // GREEN = every stage passed; RED = a failure (test, floor, inventory,
         // build, watchdog); AMBER = only tracked known issues, unadapted
         // ("blocked") suites and stages not run (Rick 2026-11-05).

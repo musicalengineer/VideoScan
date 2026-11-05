@@ -996,6 +996,16 @@ def find_whisper() -> tuple[str, Path] | None:
 # ============================================================================ I/O: catalog
 
 
+def out_root_or_refuse() -> Path:
+    """OUT_ROOT, refused (SystemExit) unless it lies under <ROOT>/.scratch, the
+    git-ignored scratch (Codex 11/05: a mutated OUT_ROOT went unnoticed). Read at
+    call time, so the guard follows the module's ROOT and OUT_ROOT."""
+    out, scratch = OUT_ROOT.resolve(), (ROOT / ".scratch").resolve()
+    if out != scratch and scratch not in out.parents:
+        raise SystemExit(f"refusing to write outside {scratch}: OUT_ROOT is {out}")
+    return out
+
+
 def catalog_open():
     import_helpers()
     import catalog_db  # noqa: E402
@@ -1038,7 +1048,7 @@ class Demo:
         self.items: list[dict] = []
         self.notes: list[str] = []          # stage-level failures and skips, for the report
         self.stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.out = OUT_ROOT / self.stamp
+        self.out = out_root_or_refuse() / self.stamp
         self.frames = self.out / "frames"
         self.models_used: dict[str, str] = {}
 

@@ -29,17 +29,21 @@ extension CatalogRow {
         public var signer: String
         /// Contents with at least one inferred row by this signer (the planner's "cached").
         public var analyzed: Int
-        /// Contents with an `era.fused` row whose value MachineEraResolver.range accepts.
+        /// Contents whose newest readable `era.fused` row by this signer (MachineEraResolver's
+        /// selection) stands — Rick has not rejected it.
         public var eraFound: Int
-        /// Not found, and an `era.none` row with no `gaveUp` in its evidence.
+        /// Contents whose newest readable `era.fused` row Rick rejected afterwards (Codex 11/05).
+        public var rejected: Int
+        /// Neither found nor rejected, and an `era.none` row with no `gaveUp` in its evidence.
         public var eraNone: Int
-        /// Not found, and an `era.none` row whose evidence says `gaveUp: true` (EraRecordMapper.giveUpLine).
+        /// Neither found nor rejected, and an `era.none` row whose evidence says `gaveUp: true` (EraRecordMapper.giveUpLine).
         public var gaveUp: Int
 
-        public init(signer: String, analyzed: Int, eraFound: Int, eraNone: Int, gaveUp: Int) {
+        public init(signer: String, analyzed: Int, eraFound: Int, rejected: Int = 0, eraNone: Int, gaveUp: Int) {
             self.signer = signer
             self.analyzed = analyzed
             self.eraFound = eraFound
+            self.rejected = rejected
             self.eraNone = eraNone
             self.gaveUp = gaveUp
         }
@@ -55,7 +59,7 @@ extension CatalogRow {
         public var filename: String?
         /// Every file of the content is removed from the catalog.
         public var removed: Bool
-        /// eraFound: the fused value ("1991-1995"); else nil.
+        /// eraFound / rejected: the fused value ("1991-1995"); else nil.
         public var value: String?
         /// eraNone / gaveUp: the verdict's `evidence.reason`, verbatim; else nil.
         public var reason: String?
@@ -74,7 +78,7 @@ extension CatalogRow {
 
     /// Which list a Results row belongs to (the SQL's classification).
     public enum AnalyzerVerdictKind: String, Sendable, CaseIterable {
-        case eraFound, eraNone, gaveUp
+        case eraFound, rejected, eraNone, gaveUp
     }
 }
 
@@ -97,6 +101,10 @@ public protocol CatalogAnalysisResultsReading {
                                               _ rows: [CatalogRow.ProvenanceAssertionReading]) throws -> Void) throws
     /// The files of one verdict kind for `signer`, by file name, at most `limit`.
     func analyzerOutcomeFiles(signer: String, kind: CatalogRow.AnalyzerVerdictKind, limit: Int) throws -> [CatalogRow.AnalyzerOutcomeFile]
+    /// The first `limit` contents of `eraUnansweredInCatalog(signer:)` with their standing files,
+    /// ordered as the other lists (file name, path, digest) — the LIMIT is in SQL, so a 100k
+    /// "still to do" never materialises 100k rows. Memory: `limit` rows.
+    func eraUnansweredFiles(signer: String, limit: Int) throws -> [CatalogRow.AnalyzerOutcomeFile]
     /// The standing file of each digest (as in the lists), for digests known from elsewhere (the try counts).
     func analyzerFiles(digests: [String]) throws -> [CatalogRow.AnalyzerOutcomeFile]
 }

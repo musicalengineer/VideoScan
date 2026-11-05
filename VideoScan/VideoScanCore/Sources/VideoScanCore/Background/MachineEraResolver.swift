@@ -117,9 +117,8 @@ public enum MachineEraResolver {
             if let kept = newest[row.by], kept.seq > row.seq { continue }
             newest[row.by] = row
         }
-        let rejected = rows.filter { $0.field == fusedField && $0.state == "rejected" }
         return newest.values
-            .filter { fused in !rejected.contains { $0.value == fused.value && $0.seq > fused.seq } }
+            .filter { fused in !isRejected(fused, among: rows) }
             .sorted { $0.seq > $1.seq }
             .compactMap { era(fused: $0, windows: rows) }
     }
@@ -158,6 +157,25 @@ public enum MachineEraResolver {
         return "(\(column) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]' AND \(lo) <= \(hi)"
             + " AND \(lo) BETWEEN \(yearBounds.lowerBound) AND \(yearBounds.upperBound)"
             + " AND \(hi) BETWEEN \(yearBounds.lowerBound) AND \(yearBounds.upperBound))"
+    }
+
+    // MARK: Rick's veto — ONE rule, a Swift form and its SQL twin
+
+    /// Rick rejected `row` afterwards: a `rejected` row on the same field and
+    /// value with a higher seq, among one subject's `rows`. The resolver, the
+    /// dossier and (through `rejectedLaterSQL`) the Results sheet all ask this.
+    public static func isRejected(_ row: CatalogRow.ProvenanceAssertionReading,
+                                  among rows: [CatalogRow.ProvenanceAssertionReading]) -> Bool {
+        rows.contains { $0.field == row.field && $0.state == "rejected" && $0.value == row.value && $0.seq > row.seq }
+    }
+
+    /// The SQL twin of `isRejected` for an assertion row aliased `alias`
+    /// (subject_kind, subject_id, field, value, seq columns). Codex 11/05: the
+    /// Results sheet classified without it and listed a vetoed era as found.
+    public static func rejectedLaterSQL(_ alias: String) -> String {
+        "EXISTS (SELECT 1 FROM provenance_assertions rj WHERE rj.subject_kind = \(alias).subject_kind"
+            + " AND rj.subject_id = \(alias).subject_id AND rj.field = \(alias).field AND rj.state = 'rejected'"
+            + " AND rj.value = \(alias).value AND rj.seq > \(alias).seq)"
     }
 
     static func isMachine(_ by: String) -> Bool { by.hasPrefix("machine:") && by.count > "machine:".count }

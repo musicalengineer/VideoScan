@@ -359,6 +359,27 @@ struct AnalysisResultsReportTests {
         await repository.close()
     }
 
+    /// Review 11/05 (C): a 100k "still to do" is listed with its LIMIT in SQL —
+    /// one 10k page, never 100k rows read then cut — inside the same budget.
+    @Test(.tags(.scale), .timeLimit(.minutes(5)))
+    func oneHundredThousandStillToDoListsOnePageWithinBudget() async throws {
+        let count = 100_000
+        let fixture = try await EraFixture.catalog((1...count).map { .init(n: $0, path: "/V/\($0 % 100)/clip-\($0).mov") })
+        defer { fixture.remove() }
+        let repository = try await Self.open(fixture)
+        let load = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
+        var list: AnalysisResultsReport.FileList?
+        let took = try await clock.measure {
+            list = try await repository.read { try AnalysisResultsReport.files(reader: $0, signer: Self.seated, outcome: .stillToDo, attempts: nil) }
+        }
+        #expect(list?.rows.count == AnalysisResultsReport.listLimit && list?.truncated == true)
+        print("AnalysisResultsReport scale: 100k still to do, one 10k page in \(took)")
+        expectWithinTimingBudget("100k still to do: one 10k list", measured: took,
+                                 budget: TimingBudget.debugCeiling(.seconds(2)), loadBefore: load)
+        await repository.close()
+    }
+
     // MARK: ISOLATION
 
     @Test func anUnreadableTryCountFileLeavesTheReportStandingAndTheFileUntouched() async throws {

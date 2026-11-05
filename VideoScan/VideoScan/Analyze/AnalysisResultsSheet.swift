@@ -152,6 +152,8 @@ struct AnalysisResultsSheet: View {
         switch outcome {
         case .eraFound: return "The analyzer gave an era from the pictures alone. It is not a date and files nothing. "
             + "Includes files whose every copy has since been removed from the catalog (shown greyed)."
+        case .rejected: return "The analyzer gave an era and you rejected it. It is shown only here, as what was said and refused; "
+            + "it is never counted as an era found and never shown as the file's era."
         case .eraNone: return "The analyzer looked at the whole file and found no usable era. Not a failure; it will not look again."
         case .gaveUp: return "Three tries ended with no answer (frames that would not decode, a model that never answered). The reason is the last try's."
         case .inProgress: return "Files tried at least once with no answer yet; after the third try the analyzer gives up and says why."

@@ -35,6 +35,11 @@ public struct TechnicalFacts: Sendable, Equatable {
     /// The container as the catalog stores it (ffprobe's long name), for the line's value.
     public var containerName: String?
     public var hasVideo: Bool
+    /// The stream list's word on sound: true/false from the catalog's
+    /// stream_type; nil = not told (a caller whose parser lists streams, as
+    /// the demo's, marks no audio stream by a nil `audioCodec`). An audio
+    /// stream with no codec name is NOT a silent file (coverage review 11/05).
+    public var hasAudio: Bool?
     /// ffprobe codec_name, lowercased ("dvvideo", "prores", "h264").
     public var codec: String?
     public var width: Int?
@@ -60,7 +65,7 @@ public struct TechnicalFacts: Sendable, Equatable {
     /// The file system's modification date.
     public var modified: Date?
 
-    public init(container: String? = nil, containerName: String? = nil, hasVideo: Bool = true, codec: String? = nil,
+    public init(container: String? = nil, containerName: String? = nil, hasVideo: Bool = true, hasAudio: Bool? = nil, codec: String? = nil,
                 width: Int? = nil, height: Int? = nil, fps: Double? = nil, fieldOrder: String? = nil,
                 audioCodec: String? = nil, audioRate: Int? = nil, audioChannels: Int? = nil,
                 encoder: String? = nil, make: String? = nil, model: String? = nil,
@@ -69,6 +74,7 @@ public struct TechnicalFacts: Sendable, Equatable {
         self.container = container
         self.containerName = containerName
         self.hasVideo = hasVideo
+        self.hasAudio = hasAudio
         self.codec = codec?.lowercased()
         self.width = width
         self.height = height
@@ -325,6 +331,16 @@ public enum TechnicalReading {
 
     private static func audioRows(_ f: TechnicalFacts, codec: String) -> [TechnicalReadingLine] {
         let acodec = (f.audioCodec ?? "").lowercased()
+        if acodec.isEmpty, f.hasAudio == true {
+            // The stream list counted sound; only its codec has no name (an MXF
+            // header fallback, an ffprobe-unnamed codec). Never "silent".
+            var value = "first audio stream: codec not named"
+            let details = [f.audioChannels.map { "\($0) ch" }, f.audioRate.map { "\($0) Hz" }].compactMap { $0 }
+            if !details.isEmpty { value += ", " + details.joined(separator: " ") }
+            return [TechnicalReadingLine(label: "Audio", value: value,
+                                         suggests: "audio present; the probe could not name its codec",
+                                         source: firstAudioStream)]
+        }
         guard !acodec.isEmpty else {
             return f.hasVideo ? [TechnicalReadingLine(label: "Audio", value: "none",
                                                      suggests: "silent file: a film scan, a video-only essence (its audio may be a sibling file)",
@@ -334,25 +350,22 @@ public enum TechnicalReading {
         var value = "first audio stream: " + acodec
         if let rate { value += " \(rate) Hz" }
         if let ch = f.audioChannels { value += " \(ch) ch" }
-        let s: String
+        return [TechnicalReadingLine(label: "Audio", value: value, suggests: audioWords(rate: rate, audioCodec: acodec, videoCodec: codec),
+                                     source: firstAudioStream)]
+    }
+
+    /// What a named audio stream's rate and codec suggest (the demo's audio column). Pure.
+    private static func audioWords(rate: Int?, audioCodec acodec: String, videoCodec codec: String) -> String {
         if rate == 32000 && codec == "dvvideo" {
-            s = "32 kHz in DV: the camcorder's 12-bit 4-channel mode: a consumer DV/Digital8 camcorder"
-        } else if rate == 32000 {
-            s = "32 kHz: a DV 12-bit mode carried through a transfer"
-        } else if rate == 48000 && acodec.hasPrefix("pcm") {
-            s = "48 kHz PCM: DV 16-bit mode or any modern capture"
-        } else if rate == 44100 {
-            s = "44.1 kHz: a CD-era computer capture card or export"
-        } else if let rate, rate <= 22050 {
-            s = "≤ 22 kHz: a web export, an early digicam or a phone"
-        } else if acodec == "aac" {
-            s = "AAC: a phone, a camera or an export"
-        } else if acodec == "ac3" {
-            s = "AC-3: DVD audio"
-        } else {
-            s = "audio present"
+            return "32 kHz in DV: the camcorder's 12-bit 4-channel mode: a consumer DV/Digital8 camcorder"
         }
-        return [TechnicalReadingLine(label: "Audio", value: value, suggests: s, source: firstAudioStream)]
+        if rate == 32000 { return "32 kHz: a DV 12-bit mode carried through a transfer" }
+        if rate == 48000 && acodec.hasPrefix("pcm") { return "48 kHz PCM: DV 16-bit mode or any modern capture" }
+        if rate == 44100 { return "44.1 kHz: a CD-era computer capture card or export" }
+        if let rate, rate <= 22050 { return "≤ 22 kHz: a web export, an early digicam or a phone" }
+        if acodec == "aac" { return "AAC: a phone, a camera or an export" }
+        if acodec == "ac3" { return "AC-3: DVD audio" }
+        return "audio present"
     }
 
     private static func encoderWords(_ enc: String) -> String {
@@ -445,6 +458,7 @@ extension TechnicalFacts {
         self.init(container: TechnicalReading.containerKey(container: r.container, ext: r.ext),
                   containerName: text(r.container),
                   hasVideo: stream == "Video+Audio" || stream == "Video only",
+                  hasAudio: stream == "Video+Audio" || stream == "Audio only",
                   codec: text(r.videoCodec),
                   width: size?.0, height: size?.1,
                   fps: TechnicalReading.rate(r.frameRate),

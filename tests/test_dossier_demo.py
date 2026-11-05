@@ -9,7 +9,9 @@ Synthetic data only: no models, no media, no catalog.
     across a transfer setup); era vs hard date; re-recording; event candidates.
   * PICKING: exclusions, one per digest, bucket spread, `usable` called once per candidate, seed-stable.
   * SCALE: picking and clustering 100k synthetic rows inside a time budget.
-  * GUARDS: no network module imported; the catalog is never named or opened directly.
+  * GUARDS: no network module imported; the catalog is never named or opened directly;
+    OUT_ROOT is the repo's .scratch (a guard refuses anything else) and a run writes
+    only there and opens no socket (runtime, Codex 11/05).
 """
 from __future__ import annotations
 
@@ -355,6 +357,56 @@ def test_no_network_module_and_no_direct_catalog_access():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "catalog.sqlite" not in text and "catalog_db.connect()" in text
     assert 'os.environ["HF_HUB_OFFLINE"] = "1"' in text
+
+
+def test_the_output_root_is_the_repos_scratch():
+    # Codex 2026-11-05: OUT_ROOT mutated to /tmp/OUTSIDE-SCRATCH left every test green.
+    out = dd.out_root_or_refuse()
+    assert out == (dd.ROOT / ".scratch" / "dossier-demo").resolve(), out
+
+
+def test_the_guard_refuses_an_output_root_outside_scratch(tmp_path, monkeypatch):
+    outside = tmp_path / "OUTSIDE-SCRATCH"
+    monkeypatch.setattr(dd, "OUT_ROOT", outside)
+    monkeypatch.setattr(dd, "catalog_open", _no_catalog)
+    with pytest.raises(SystemExit, match="refusing to write outside"):
+        dd.main(["--files", str(tmp_path / "none.mov"), "--skip-models", "--no-color"])
+    assert not outside.exists()
+
+
+def _no_catalog():
+    raise RuntimeError("no catalog in this test")
+
+
+def test_a_run_writes_only_under_its_output_root_and_never_dials_out(tmp_path, monkeypatch):
+    """Runtime confinement (Codex 11/05): every file a run makes is under OUT_ROOT,
+    and no socket is opened (the trap records any attempt)."""
+    import socket
+    repo = tmp_path / "repo"
+    out_root = repo / ".scratch" / "dossier-demo"
+    media = tmp_path / "media"
+    media.mkdir()
+    clip = media / "clip.mov"
+    clip.write_bytes(b"not really a movie")
+    monkeypatch.setattr(dd, "ROOT", repo)
+    monkeypatch.setattr(dd, "OUT_ROOT", out_root)
+    monkeypatch.setattr(dd, "catalog_open", _no_catalog)
+    dials = []
+
+    def refuse(*args, **kwargs):
+        dials.append(args[1:3])
+        raise OSError("network trapped by the test")
+    for name in ("create_connection", "getaddrinfo"):
+        monkeypatch.setattr(socket, name, refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    before = {p for p in tmp_path.rglob("*")}
+    assert dd.main(["--files", str(clip), "--skip-models", "--no-color"]) == 0
+    made = [p for p in tmp_path.rglob("*") if p not in before and p.is_file()]
+    assert made, "the run wrote no report"
+    assert all(out_root in p.parents for p in made), [str(p) for p in made if out_root not in p.parents]
+    assert {p.name for p in made} >= {"dossier.md", "dossier.html"}
+    assert dials == [], dials
 
 
 def test_pick_clustered_takes_siblings_from_each_folder_and_skips_singletons():

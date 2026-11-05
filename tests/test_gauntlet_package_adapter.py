@@ -29,6 +29,11 @@ if tool == 'swift':
     with open(os.environ['FAKE_CALLS'] + '.swift', 'a') as f:
         f.write(json.dumps({'args': args, 'env': {k: os.environ.get(k, '') for k in ('HOME', 'TMPDIR', 'VS_UI_TEST')}}) + '\n')
     if args[0] == 'build':
+        if config.get('package_build_orphan'):
+            # A child that outlives the build in its process group (Codex 11/05).
+            import subprocess
+            subprocess.Popen(['/bin/sleep', '20'], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         sys.exit(config.get('package_build_exit', 0))
     filters = [args[i + 1] for i, a in enumerate(args) if a == '--filter']
     stage = re.match(r'VideoScanCoreTests\\\.(\w+?)PkgTests/', filters[0]).group(1).lower()
@@ -198,6 +203,18 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertIn('package build exit 3', unit['reason'])
         self.assertEqual(self.result['status'], 'failed')
         self.assertEqual(self.stage('integration')['status'], 'passed')
+
+    def test_a_package_build_that_leaves_a_child_behind_is_red_not_amber(self):
+        # Codex 2026-11-05 (P1): exit 125 + contamination blocked every stage
+        # before runPackageSuites could say the build failed; the run was
+        # AMBER, exit 0. A package build exit != 0 or contamination is RED.
+        self.config['package_build_orphan'] = True
+        self.run_runner()
+        self.assertEqual(self.result['package_build_exit_code'], 125)
+        self.assertEqual(self.result['status'], 'failed', self.result)
+        self.assertEqual(self.completed.returncode, 1)
+        self.assertIn('GAUNTLET FAILED', self.completed.stdout)
+        self.assertIn('package build', self.result.get('reason', ''))
 
     def test_package_only_stage_runs(self):
         self.manifest['assignments'] = [a for a in self.manifest['assignments']

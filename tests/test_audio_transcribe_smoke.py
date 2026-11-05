@@ -24,6 +24,9 @@ never family media.
   test_missing_model_says_so        forces that empty, offline cache and
       expects the scripts to refuse in words, exit non-zero (per-file) or
       answer ok:false (worker), and download nothing.
+  test_missing_model_refuses_online_and_never_dials_out  the same with the
+      offline flags UNSET and every socket call trapped (Codex 11/05): red
+      if a script ever hands mlx_whisper the repo id again.
   test_media_matrix_is_heard        the same sentence in mov/h264, mp4/h264,
       mov/prores, mkv/ffv1, mxf/mpeg2 and avi/dv, through one warm worker.
   test_the_smoke_uses_the_apps_arguments  the arguments here are the Swift
@@ -138,6 +141,49 @@ def test_missing_model_says_so(engine, known_speech, tmp_path):
     empty.mkdir()
     hidden = app_env({"HF_HUB_OFFLINE": "1", "HF_HOME": str(empty), "HF_HUB_CACHE": str(empty)})
     got = transcribe(engine, known_speech, hidden, tmp_path)
+    assert not got["ok"], f"a Mac without the model produced a transcript: {got['text']!r}"
+    if engine == "per-file":
+        assert got["rc"] == 6, f"expected exit 6 (model missing), got {got['rc']}: {got['error']}"
+    assert "whisper-medium-mlx-q4 is not on this Mac" in got["error"], got["error"]
+    assert list(empty.iterdir()) == [], "the script tried to fetch the model into the cache"
+
+
+# Loaded by the child through PYTHONPATH (sitecustomize runs at interpreter
+# start): every way to dial out is refused and written down.
+NET_TRAP = """
+import os, socket
+_log = os.environ["VS_NET_TRAP_LOG"]
+open(_log + ".loaded", "w").close()
+def _refuse(*args, **kwargs):
+    with open(_log, "a") as f:
+        f.write(repr(args[1:3]) + "\\n")
+    raise OSError("network trapped by the smoke test")
+socket.create_connection = _refuse
+socket.getaddrinfo = _refuse
+socket.socket.connect = _refuse
+socket.socket.connect_ex = _refuse
+"""
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_missing_model_refuses_online_and_never_dials_out(engine, known_speech, tmp_path):
+    """Codex 2026-11-05 (P2): test_missing_model_says_so forces HF_HUB_OFFLINE, so a
+    script that went back to handing mlx_whisper the repo id (a silent ~244 MB
+    download online) would still pass it. Here the offline flags are UNSET and
+    the network is trapped: the script must refuse in words and never dial out."""
+    empty = tmp_path / "empty-hf-cache"
+    empty.mkdir()
+    trap = tmp_path / "net-trap"
+    trap.mkdir()
+    (trap / "sitecustomize.py").write_text(NET_TRAP, encoding="utf-8")
+    log = tmp_path / "dials.log"
+    env = app_env({"HF_HOME": str(empty), "HF_HUB_CACHE": str(empty), "PYTHONPATH": str(trap),
+                   "VS_NET_TRAP_LOG": str(log)})
+    for flag in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
+        env.pop(flag, None)
+    got = transcribe(engine, known_speech, env, tmp_path)
+    assert (tmp_path / "dials.log.loaded").is_file(), "the network trap never loaded; this test proves nothing"
+    assert not log.exists(), f"RED — the {engine} script tried the network for a missing model: {log.read_text()}"
     assert not got["ok"], f"a Mac without the model produced a transcript: {got['text']!r}"
     if engine == "per-file":
         assert got["rc"] == 6, f"expected exit 6 (model missing), got {got['rc']}: {got['error']}"

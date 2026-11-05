@@ -150,6 +150,9 @@ final class FileDossierStore: ObservableObject {
     /// Show `fileID`'s dossier (nil = the file has no catalog id). Called from
     /// the view's `.task(id:)`, so a new selection cancels the old read.
     func show(fileID: UUID?, loader: FileDossierLoader) async {
+        // A different loader brings its own change signal (review 11/05): drop
+        // the old subscription, or the new loader's commits never re-read.
+        if self.loader?.id != loader.id { changes = nil }
         self.loader = loader
         if changes == nil {
             // Throttle, latest (review 11/05): a steady stream still reads, at most once a second.

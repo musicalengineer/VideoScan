@@ -185,7 +185,7 @@ struct TechnicalReadingTests {
         r.audioSampleRate = "32000 Hz"; r.audioChannels = "2"; r.totalBitrate = "28800 kbps"; r.durationSeconds = 9540
         r.originEncoder = "  "
         let f = TechnicalFacts(record: r)
-        #expect(f == TechnicalFacts(container: "dv", containerName: "DV (Digital Video)", hasVideo: true, codec: "dvvideo",
+        #expect(f == TechnicalFacts(container: "dv", containerName: "DV (Digital Video)", hasVideo: true, hasAudio: true, codec: "dvvideo",
                                     width: 720, height: 480, fps: 29.97, fieldOrder: "bb", audioCodec: "pcm_s16le",
                                     audioRate: 32000, audioChannels: 2, duration: 9540, bitRate: 28_800_000))
         #expect(TechnicalReading.oneLiner(f) == "DV camcorder/deck capture, NTSC 720×480, 32 kHz audio (the 12-bit 4-ch camcorder mode)")

@@ -31,4 +31,26 @@ struct FileDossierStoreReviewTests {
         }
         #expect(store.reads >= 2, "no re-read during 4 s of steady commits: \(store.reads)")
     }
+
+    // Coverage review 11/05 (D): FileDossierStore.swift:154-159 subscribed to
+    // the FIRST loader's `changes` only; a later `show` with a different
+    // loader kept listening to the old one, so the new loader's commits never
+    // re-read the open dossier.
+    @Test(.timeLimit(.minutes(1)))
+    func aNewLoaderBringsItsOwnChangeSignal() async throws {
+        let first = PassthroughSubject<Void, Never>(), second = PassthroughSubject<Void, Never>()
+        let store = FileDossierStore()
+        let id = UUID()
+        let load: FileDossierLoader.Load = { id in FileDossierStoreTests.dossier(id, "A.mov") }
+        await store.show(fileID: id, loader: FileDossierStoreTests.loader(load, changes: first.eraseToAnyPublisher()))
+        await store.show(fileID: id, loader: FileDossierStoreTests.loader(load, changes: second.eraseToAnyPublisher()))
+        let before = store.reads
+        second.send(())
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(store.reads > before, "the second loader's change did not re-read the dossier")
+        let after = store.reads
+        first.send(())
+        try await Task.sleep(for: .milliseconds(1_500))
+        #expect(store.reads == after, "the replaced loader's signal still drives reads")
+    }
 }

@@ -101,6 +101,12 @@ def gauntlet_verdict(result, rc, timed_out=False):
         return RED, 'watchdog timeout'
     if not isinstance(result, dict):
         return RED, 'no result.json'
+    # Defence in depth (Codex 2026-11-05): a build that did not exit 0 is RED
+    # whatever the stage statuses say (a contaminated package build once read AMBER).
+    for key, name in (('build_exit_code', 'build'), ('package_build_exit_code', 'package build')):
+        code = result.get(key)
+        if code not in (None, 0):
+            return RED, f'{name} exit {code}'
     stages = result.get('stages') or []
     failed = [s for s in stages if s.get('status') == 'failed']
     status = result.get('status')
