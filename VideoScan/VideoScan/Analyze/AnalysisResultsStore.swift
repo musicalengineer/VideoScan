@@ -22,6 +22,12 @@
 // Logging: one line per load and per failure through the one sink
 // (model.log + appLog), never per render.
 //
+// Cancellation: the report and list reads are held as Task handles; a newer
+// request cancels the older one, and the sheet's onDisappear (Done, closing
+// the window) cancels both via `cancel()`. The production closures check
+// cancellation before each read (cheap); a read already inside SQLite runs
+// to its end and its result is dropped.
+//
 // Memory: one report (a few dozen Ints per analyzer) and one file list of at
 // most AnalysisResultsReport.listLimit rows (≈ 300 B each → 3 MB worst case);
 // a new selection replaces the list.
@@ -52,23 +58,37 @@ final class AnalysisResultsStore: ObservableObject {
     @Published private(set) var filesFailure: String?
     /// Words under a row a click could not reveal (removed, or not in this session's catalog).
     @Published private(set) var revealProblem: String?
-    /// The journal's waiting / refused line (JournalApplierWords), captured at open; nil = not counted yet.
-    let journalWords: String?
+    /// The journal's waiting / refused line (JournalApplierWords), re-read at every load; nil = not counted yet.
+    @Published private(set) var journalWords: String?
 
     private let loadReport: LoadReport
     private let loadFiles: LoadFiles
     private let reveal: (UUID) -> Bool
     private let note: (String) -> Void
+    private let readJournalWords: () -> String?
     /// The newest list request; an older one that lands later is dropped.
     private var issued = 0
+    /// The reads in flight: a newer request, Done, or the sheet closing cancels them
+    /// (review 11/04: a superseded 10k-row read must not run to the end).
+    private var reportTask: Task<AnalysisResultsReport, Error>?
+    private var listTask: Task<AnalysisResultsReport.FileList, Error>?
 
     init(loadReport: @escaping LoadReport, loadFiles: @escaping LoadFiles, reveal: @escaping (UUID) -> Bool,
-         note: @escaping (String) -> Void = { _ in }, journalWords: String? = nil) {
+         note: @escaping (String) -> Void = { _ in }, journalWords: @escaping () -> String? = { nil }) {
         self.loadReport = loadReport
         self.loadFiles = loadFiles
         self.reveal = reveal
         self.note = note
-        self.journalWords = journalWords
+        self.readJournalWords = journalWords
+    }
+
+    /// Stop every read in flight (the sheet calls it when it goes away).
+    func cancel() {
+        issued += 1
+        reportTask?.cancel()
+        listTask?.cancel()
+        reportTask = nil
+        listTask = nil
     }
 
     /// The real thing: this session's catalog.sqlite reader, the helper's
@@ -78,19 +98,28 @@ final class AnalysisResultsStore: ObservableObject {
         let repository = model.catalogCutover.committer?.repository
         let stateRoot = URL(fileURLWithPath: model.catalogStore.fileLocation).deletingLastPathComponent()
             .appendingPathComponent("background", isDirectory: true)
+        // The helper's journal: the second half of the planner's "answered" rule.
+        let journal = ObservationJournal(directory: EraPlanner.journalDirectory(stateRoot: stateRoot))
         let notOpen = Refusal("catalog.sqlite is not open in this session — there is nothing to read")
         return AnalysisResultsStore(
             loadReport: {
                 guard let repository else { throw notOpen }
+                try Task.checkCancellation()
                 let attempts = AnalysisResultsReport.readAttempts(stateRoot: stateRoot)
                 let now = Int64(Date().timeIntervalSince1970)
-                return try await repository.read { try AnalysisResultsReport.build(reader: $0, attempts: attempts, now: now) }
+                try Task.checkCancellation()
+                return try await repository.read {
+                    try AnalysisResultsReport.build(reader: $0, attempts: attempts, journal: journal, now: now)
+                }
             },
             loadFiles: { signer, outcome in
                 guard let repository else { throw notOpen }
-                let attempts = outcome == .inProgress ? try? AnalysisResultsReport.readAttempts(stateRoot: stateRoot).get() : nil
+                try Task.checkCancellation()
+                // Unreadable try counts are the list's failure in words, never "No files" (review 11/04).
+                let attempts = outcome == .inProgress ? try AnalysisResultsReport.readAttempts(stateRoot: stateRoot).get() : nil
+                try Task.checkCancellation()
                 return try await repository.read {
-                    try AnalysisResultsReport.files(reader: $0, signer: signer, outcome: outcome, attempts: attempts)
+                    try AnalysisResultsReport.files(reader: $0, signer: signer, outcome: outcome, attempts: attempts, journal: journal)
                 }
             },
             reveal: { [weak model] id in
@@ -102,7 +131,7 @@ final class AnalysisResultsStore: ObservableObject {
                 model?.log("Content Analysis ▸ Results: " + line)
                 appLog.write("[analysis-results] " + line)
             },
-            journalWords: model.journalApplier.counts.map(JournalApplierWords.statusLine))
+            journalWords: { [weak model] in model?.journalApplier.counts.map(JournalApplierWords.statusLine) })
     }
 
     /// The analyzer on screen (the seated one first).
@@ -116,10 +145,15 @@ final class AnalysisResultsStore: ObservableObject {
     func load() async {
         loading = true
         defer { loading = false }
+        journalWords = readJournalWords()
         let started = ContinuousClock.now
         let load = loadReport
+        reportTask?.cancel()
+        let task = Task.detached(priority: .userInitiated) { try await load() }
+        reportTask = task
         do {
-            let built = try await Task.detached(priority: .userInitiated) { try await load() }.value
+            let built = try await task.value
+            guard !task.isCancelled else { return }
             report = built
             failure = nil
             if signer == nil || !built.analyzers.contains(where: { $0.signer == signer }) { signer = built.analyzers.first?.signer }
@@ -128,6 +162,7 @@ final class AnalysisResultsStore: ObservableObject {
                  + "\(took.formatted(.units(allowed: [.milliseconds])))"
                  + (built.triesProblem.map { " — tries in progress unavailable: \($0)" } ?? ""))
         } catch {
+            guard !task.isCancelled else { return }
             failure = "\(error)"
             note("could not be read — \(error)")
             return
@@ -156,8 +191,11 @@ final class AnalysisResultsStore: ObservableObject {
         filesLoading = true
         revealProblem = nil
         defer { if mine == issued { filesLoading = false } }
+        listTask?.cancel()                         // the older read stops; its result would be dropped anyway
+        let task = Task.detached(priority: .userInitiated) { try await load(signer, outcome) }
+        listTask = task
         do {
-            let list = try await Task.detached(priority: .userInitiated) { try await load(signer, outcome) }.value
+            let list = try await task.value
             guard mine == issued else { return }
             files = list
             filesFailure = nil

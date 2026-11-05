@@ -33303,6 +33303,19 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/AnalysisResultsReportReviewTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AnalysisResultsReportReviewTests"
+      ],
+      "tests": [
+        "aTryWhoseVerdictLandedIsNotInProgress",
+        "anEraTheResolverRefusesIsNotEraFound",
+        "stillToDoIsWhatThePlannerWouldPlanWhenTheJournalHoldsUnappliedVerdicts"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AnalyzerRunsTests.swift",
       "stage": "unit",
@@ -33463,13 +33476,16 @@
       "stage": "unit",
       "suites": [
         "AnalysisResultsStoreTests",
-        "AnalysisResultsSheetSensorTests"
+        "AnalysisResultsSheetSensorTests",
+        "AnalysisResultsStoreReviewTests"
       ],
       "tests": [
         "aFailedReadSaysSo",
         "aStaleListIsDropped",
+        "anOlderListRequestIsCancelledWhenANewerOneIsIssued",
         "noModelExtensionAndRevealIsTheExistingDoor",
         "selectionAndReveal",
+        "theInProgressListSaysUnavailableWhenTheTryCountsAreUnreadable",
         "thePanelOpensTheSheet",
         "theProductionStoreShowsWhatTheCatalogHolds",
         "theSheetAndTheStoreDoNoRecordsWork",
@@ -36443,10 +36459,11 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3322,
+      "expected_floor": 3324,
       "name": "unit",
-      "package_expected_floor": 739,
+      "package_expected_floor": 742,
       "package_selectors": [
+        "VideoScanCoreTests.AnalysisResultsReportReviewTests",
         "VideoScanCoreTests.AnalysisResultsReportTests",
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
@@ -36870,6 +36887,7 @@
         "VideoScanTests/MachineEraStoreTruthTests",
         "VideoScanTests/AnalysisResultsStoreTests",
         "VideoScanTests/AnalysisResultsSheetSensorTests",
+        "VideoScanTests/AnalysisResultsStoreReviewTests",
         "VideoScanTests/MachineNoteAuthorTests",
         "VideoScanTests/MachineNoteWriterTests",
         "VideoScanTests/MapKitLinkSensorTests",

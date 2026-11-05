@@ -14,7 +14,9 @@
 //
 // Cost: the counts GROUP BY over provenance_assertions once (≈ 6 rows per
 // analyzed content); "still to do" probes provenance_assertions_by_subject's
-// (subject_kind, subject_id) prefix per planned content; the file of a
+// (subject_kind, subject_id) prefix per planned content and returns the
+// digests (the journal half of the planner's rule is subtracted in Swift,
+// EraPlanner.answeredInJournal); the file of a
 // content rides files_by_digest. Measured (AnalysisResultsReportTests'
 // scale test, M5 Ultra, Debug): 100k contents (≈ 200k rows, 20k dated) —
 // the whole report plus one 10k list ≈ 0.8 s; the budget is 2 s.
@@ -31,7 +33,7 @@ extension GRDBReader: CatalogAnalysisResultsReading {
     private static func verdicts(signerFilter: String) -> String {
         """
         SELECT by, subject_id,
-               max(field = 'era.fused' AND value GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]') AS found,
+               max(field = 'era.fused' AND \(MachineEraResolver.eraValueSQL("value"))) AS found,
                max(CASE WHEN field = 'era.none' THEN coalesce(json_extract(evidence_json, '$.gaveUp'), 0) = 1 ELSE 0 END) AS gave,
                max(field = 'era.none') AS none
           FROM provenance_assertions
@@ -56,13 +58,28 @@ extension GRDBReader: CatalogAnalysisResultsReading {
         }
     }
 
-    func eraStillToDo(signer: String) throws -> Int {
-        try Int.fetchOne(db, sql: """
-            SELECT count(DISTINCT f.content_digest) FROM files f
+    func eraUnansweredInCatalog(signer: String) throws -> [String] {
+        try String.fetchAll(db, sql: """
+            SELECT DISTINCT f.content_digest FROM files f
              WHERE \(EraPlanner.plannedFilesPredicate)
                AND NOT EXISTS (SELECT 1 FROM provenance_assertions a
                                 WHERE a.subject_kind = 'content' AND a.subject_id = f.content_digest AND a.by = ?)
-            """, arguments: [signer]) ?? 0
+            """, arguments: [signer])
+    }
+
+    func analyzerAnswered(signer: String, digests: [String]) throws -> Set<String> {
+        var out = Set<String>()
+        var start = 0
+        while start < digests.count {
+            let chunk = Array(digests[start..<min(start + 500, digests.count)])
+            start += chunk.count
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+            out.formUnion(try String.fetchAll(db, sql: """
+                SELECT DISTINCT subject_id FROM provenance_assertions
+                 WHERE subject_kind = 'content' AND by = ? AND subject_id IN (\(marks))
+                """, arguments: StatementArguments([signer] + chunk)))
+        }
+        return out
     }
 
     func analyzerFirstVerdicts(signer: String, since: Int64) throws -> Int {
@@ -110,7 +127,7 @@ extension GRDBReader: CatalogAnalysisResultsReading {
             detail = """
                 (SELECT a.value FROM provenance_assertions a
                   WHERE a.subject_kind = 'content' AND a.subject_id = p.subject_id AND a.by = ?1 AND a.state = 'inferred'
-                    AND a.field = 'era.fused' AND a.value GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]'
+                    AND a.field = 'era.fused' AND \(MachineEraResolver.eraValueSQL("a.value"))
                   ORDER BY a.seq DESC LIMIT 1), NULL
                 """
         case .eraNone, .gaveUp:
@@ -129,19 +146,6 @@ extension GRDBReader: CatalogAnalysisResultsReading {
               LEFT JOIN files f ON f.id = (\(Self.standingFile))
              WHERE \(which)
              ORDER BY f.filename IS NULL, f.filename COLLATE NOCASE, f.full_path, p.subject_id
-             LIMIT ?2
-            """, arguments: [signer, limit]).map(Self.file)
-    }
-
-    func eraStillToDoFiles(signer: String, limit: Int) throws -> [CatalogRow.AnalyzerOutcomeFile] {
-        try Row.fetchAll(db, sql: """
-            SELECT p.subject_id, f.id, f.full_path, f.filename, 0, NULL, NULL
-              FROM (SELECT DISTINCT f.content_digest AS subject_id FROM files f
-                     WHERE \(EraPlanner.plannedFilesPredicate)
-                       AND NOT EXISTS (SELECT 1 FROM provenance_assertions a
-                                        WHERE a.subject_kind = 'content' AND a.subject_id = f.content_digest AND a.by = ?1)) p
-              LEFT JOIN files f ON f.id = (\(Self.standingFile))
-             ORDER BY f.filename COLLATE NOCASE, f.full_path, p.subject_id
              LIMIT ?2
             """, arguments: [signer, limit]).map(Self.file)
     }

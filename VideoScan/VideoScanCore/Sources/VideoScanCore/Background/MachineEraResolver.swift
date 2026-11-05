@@ -135,12 +135,29 @@ public enum MachineEraResolver {
         return out
     }
 
-    /// "1991-1995" → (1991, 1995); nil unless two years, lo ≤ hi.
+    /// The years an era may name. `range` and `eraValueSQL` both read it:
+    /// one rule for "is this an era" in Swift and in SQL (rule 4).
+    public static let yearBounds = 1800...2200
+
+    /// "1991-1995" → (1991, 1995); nil unless two 4-digit years in
+    /// `yearBounds`, lo ≤ hi — exactly what `eraValueSQL` accepts.
     public static func range(_ value: String) -> (lo: Int, hi: Int)? {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count == 2, let lo = Int(parts[0]), let hi = Int(parts[1]), lo <= hi,
-              (1800...2200).contains(lo), (1800...2200).contains(hi) else { return nil }
+        guard parts.count == 2, parts.allSatisfy({ $0.utf8.count == 4 && $0.utf8.allSatisfy { (48...57).contains($0) } }),
+              let lo = Int(parts[0]), let hi = Int(parts[1]), lo <= hi,
+              yearBounds.contains(lo), yearBounds.contains(hi) else { return nil }
         return (lo, hi)
+    }
+
+    /// The SQL twin of `range(_:) != nil` for a value column ("value",
+    /// "a.value"): two 4-digit years in `yearBounds`, lo ≤ hi. The Results
+    /// sheet's "Era found" uses it, so it can never count an era the
+    /// inspector, search or Catalog Status refuse.
+    public static func eraValueSQL(_ column: String) -> String {
+        let lo = "CAST(substr(\(column), 1, 4) AS INTEGER)", hi = "CAST(substr(\(column), 6, 4) AS INTEGER)"
+        return "(\(column) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]' AND \(lo) <= \(hi)"
+            + " AND \(lo) BETWEEN \(yearBounds.lowerBound) AND \(yearBounds.upperBound)"
+            + " AND \(hi) BETWEEN \(yearBounds.lowerBound) AND \(yearBounds.upperBound))"
     }
 
     static func isMachine(_ by: String) -> Bool { by.hasPrefix("machine:") && by.count > "machine:".count }

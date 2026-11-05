@@ -170,7 +170,7 @@ public final class EraJob: BackgroundJob, @unchecked Sendable {
     /// Load the frozen plan for this job id, or build and freeze it.
     public init(_ setup: Setup) throws {
         self.setup = setup
-        journal = ObservationJournal(directory: setup.stateRoot.appendingPathComponent("journal", isDirectory: true), now: setup.now)
+        journal = ObservationJournal(directory: EraPlanner.journalDirectory(stateRoot: setup.stateRoot), now: setup.now)
         worker = PythonClipWorker(configuration: setup.worker, descriptor: SeatedApproach.eraA2)
         attempts = try EraAttemptStore(stateRoot: setup.stateRoot)
         canary = try EraCanary(environment: setup.worker.environment ?? ProcessInfo.processInfo.environment, stateRoot: setup.stateRoot)
@@ -525,6 +525,20 @@ public enum EraPlanner {
     public static let plannedFilesPredicate =
         "f.content_digest IS NOT NULL AND f.removal_state IS NULL AND f.stream_type IN ('Video+Audio', 'Video only')"
 
+    /// Where the helper's journal lives under its state root (the app's
+    /// JournalApplier reads the same folder beside the catalog).
+    public static func journalDirectory(stateRoot: URL) -> URL {
+        stateRoot.appendingPathComponent("journal", isDirectory: true)
+    }
+
+    /// The planner's "cached" rule, journal half: a content with any journal
+    /// line by `signer` (applied or not) is answered. The other half is any
+    /// catalog row by `signer`. The Results sheet subtracts both, through
+    /// this function, so "still to do" is what the next plan would plan.
+    public static func answeredInJournal(_ journal: ObservationJournal, signer: String) -> Set<String> {
+        journal.subjects(by: signer)
+    }
+
     /// The frozen unit list (see the file header). Refuses a catalog whose
     /// schema is newer than this build reads.
     public static func plan(catalogURL: URL, journal: ObservationJournal, signer: String, limit: Int?, jobID: JobID,
@@ -551,7 +565,7 @@ public enum EraPlanner {
                                          inferredYear: row[5].flatMap { Int($0) }, pathYear: EraJob.pathYear(path))
             byDigest[digest, default: []].append(candidate)
         }
-        var cached = journal.subjects(by: signer)
+        var cached = answeredInJournal(journal, signer: signer)
         let hasTable = try !catalog.strings("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'provenance_assertions'").isEmpty
         if hasTable {
             let quoted = signer.replacingOccurrences(of: "'", with: "''")

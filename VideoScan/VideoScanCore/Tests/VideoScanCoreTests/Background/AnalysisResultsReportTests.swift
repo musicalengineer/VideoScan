@@ -147,7 +147,8 @@ struct AnalysisResultsReportTests {
 
     static func report(_ repository: GRDBCatalogRepository, _ root: URL) async throws -> AnalysisResultsReport {
         let attempts = AnalysisResultsReport.readAttempts(stateRoot: root)
-        return try await repository.read { try AnalysisResultsReport.build(reader: $0, attempts: attempts, now: now) }
+        let journal = ObservationJournal(directory: EraPlanner.journalDirectory(stateRoot: root))
+        return try await repository.read { try AnalysisResultsReport.build(reader: $0, attempts: attempts, journal: journal, now: now) }
     }
 
     // MARK: LOGIC

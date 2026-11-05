@@ -29,7 +29,7 @@ extension CatalogRow {
         public var signer: String
         /// Contents with at least one inferred row by this signer (the planner's "cached").
         public var analyzed: Int
-        /// Contents with an `era.fused` row whose value is two 4-digit years.
+        /// Contents with an `era.fused` row whose value MachineEraResolver.range accepts.
         public var eraFound: Int
         /// Not found, and an `era.none` row with no `gaveUp` in its evidence.
         public var eraNone: Int
@@ -82,8 +82,12 @@ extension CatalogRow {
 public protocol CatalogAnalysisResultsReading {
     /// Every machine signer with an inferred content row, its outcome counts; signer order.
     func analyzerOutcomeCounts() throws -> [CatalogRow.AnalyzerOutcomeCounts]
-    /// Contents of live video files (EraPlanner.plannedFilesPredicate) with no row by `signer` — the planner's "not cached".
-    func eraStillToDo(signer: String) throws -> Int
+    /// Contents of live video files (EraPlanner.plannedFilesPredicate) with no catalog row by `signer` — the
+    /// catalog half of the planner's "not cached"; the caller subtracts the journal half (EraPlanner.answeredInJournal).
+    /// Memory: one digest (64 B) per such content.
+    func eraUnansweredInCatalog(signer: String) throws -> [String]
+    /// Which of `digests` have any catalog row by `signer`.
+    func analyzerAnswered(signer: String, digests: [String]) throws -> Set<String>
     /// Contents whose FIRST row by `signer` has `at >= since` (files analyzed since then).
     func analyzerFirstVerdicts(signer: String, since: Int64) throws -> Int
     /// For each content with a live file and Rick's date (`user_dates.value`): that
@@ -93,8 +97,6 @@ public protocol CatalogAnalysisResultsReading {
                                               _ rows: [CatalogRow.ProvenanceAssertionReading]) throws -> Void) throws
     /// The files of one verdict kind for `signer`, by file name, at most `limit`.
     func analyzerOutcomeFiles(signer: String, kind: CatalogRow.AnalyzerVerdictKind, limit: Int) throws -> [CatalogRow.AnalyzerOutcomeFile]
-    /// Contents still to do for `signer` (as `eraStillToDo` counts them), by file name, at most `limit`.
-    func eraStillToDoFiles(signer: String, limit: Int) throws -> [CatalogRow.AnalyzerOutcomeFile]
     /// The standing file of each digest (as in the lists), for digests known from elsewhere (the try counts).
     func analyzerFiles(digests: [String]) throws -> [CatalogRow.AnalyzerOutcomeFile]
 }

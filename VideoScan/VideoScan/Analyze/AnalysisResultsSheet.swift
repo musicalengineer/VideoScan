@@ -57,6 +57,7 @@ struct AnalysisResultsSheet: View {
         .padding(20)
         .frame(minWidth: 960, minHeight: 600)
         .task { await store.load() }
+        .onDisappear { store.cancel() }
         .accessibilityIdentifier("analysisResults.sheet")
     }
 
@@ -117,11 +118,12 @@ struct AnalysisResultsSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 fact("Agrees with your confirmed date within 5 years", AnalysisResultsReport.agreementWords(a.agreement),
                      help: "Files with your date and an era from this analyzer whose era's middle year is within 5 years of "
-                        + "your year and whose range is at most 10 years wide — the same rule as Catalog Status.")
+                        + "your year and whose range is at most 10 years wide — the same closeness rule as Catalog Status.")
                 fact("Pace", AnalysisResultsReport.rateWords(a.rate),
                      help: "Files that got their first answer from this analyzer in the last hour and the last 24 hours.")
                 fact("Still to do", AnalysisResultsReport.etaWords(stillToDo: a.stillToDo, rate: a.rate),
-                     help: "Video files in the catalog this analyzer has not answered yet, including files on drives that are not connected.")
+                     help: "Video files in the catalog this analyzer has not answered yet (answers waiting in the journal count as answered), "
+                        + "including files on drives that are not connected.")
                 if a.other > 0 {
                     fact("Other answers", "\(a.other.formatted()) file\(a.other == 1 ? "" : "s") with an answer that is none of the above",
                          help: "For example a date read off the screen but no era.")
@@ -145,7 +147,8 @@ struct AnalysisResultsSheet: View {
 
     static func outcomeHelp(_ outcome: AnalysisResultsReport.Outcome) -> String {
         switch outcome {
-        case .eraFound: return "The analyzer gave an era from the pictures alone. It is not a date and files nothing."
+        case .eraFound: return "The analyzer gave an era from the pictures alone. It is not a date and files nothing. "
+            + "Includes files whose every copy has since been removed from the catalog (shown greyed)."
         case .eraNone: return "The analyzer looked at the whole file and found no usable era. Not a failure; it will not look again."
         case .gaveUp: return "Three tries ended with no answer (frames that would not decode, a model that never answered). The reason is the last try's."
         case .inProgress: return "Files tried at least once with no answer yet; after the third try the analyzer gives up and says why."
@@ -219,7 +222,7 @@ struct AnalysisResultsSheet: View {
             Button("Refresh") { Task { await store.load() } }
                 .disabled(store.loading)
                 .accessibilityIdentifier("analysisResults.refresh")
-            Button("Done") { dismiss() }
+            Button("Done") { store.cancel(); dismiss() }
                 .keyboardShortcut(.cancelAction)
         }
     }

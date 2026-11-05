@@ -14,11 +14,17 @@
 //   tries in progress                  background/attempts/era.jsonl through
 //                                      EraAttemptStore.snapshot — READ ONLY
 //                                      (never compacts); unreadable → nil and
-//                                      the words say why
+//                                      the words say why. A try whose verdict
+//                                      already landed (catalog row or journal
+//                                      line) is not "in progress" (review 11/04)
 //   still to do                        the era planner's own predicate
 //                                      (EraPlanner.plannedFilesPredicate) minus
-//                                      contents with any row by the signer —
-//                                      the planner's "cached" rule. Only for
+//                                      the planner's "cached" rule, both halves:
+//                                      a catalog row by the signer OR a journal
+//                                      line by it, applied or not
+//                                      (EraPlanner.answeredInJournal) — so a
+//                                      verdict waiting in the journal is not
+//                                      "to do" (review 11/04). Only for
 //                                      the seated analyzer: nothing plans an
 //                                      older signer, so it has no "to do".
 //                                      NOT the totals strip's number: the strip
@@ -138,10 +144,12 @@ public struct AnalysisResultsReport: Sendable, Equatable {
     // MARK: Build
 
     /// The whole report from one read snapshot. `attempts` is the try counts'
-    /// read (a failure becomes words, never a guess); `seatedSigner` always
-    /// appears, even before its first verdict.
+    /// read (a failure becomes words, never a guess); `journal` is the
+    /// helper's journal (nil = none: a viewer, a test without one);
+    /// `seatedSigner` always appears, even before its first verdict.
     public static func build(reader: any CatalogAnalysisResultsReading, attempts: Result<EraAttemptSnapshot, Refusal>,
-                             seatedSigner: String = SeatedApproach.eraA2.signer, now: Int64) throws -> AnalysisResultsReport {
+                             journal: ObservationJournal?, seatedSigner: String = SeatedApproach.eraA2.signer,
+                             now: Int64) throws -> AnalysisResultsReport {
         var counts = try reader.analyzerOutcomeCounts()
         if !counts.contains(where: { $0.signer == seatedSigner }) {
             counts.insert(CatalogRow.AnalyzerOutcomeCounts(signer: seatedSigner, analyzed: 0, eraFound: 0, eraNone: 0, gaveUp: 0), at: 0)
@@ -156,13 +164,15 @@ public struct AnalysisResultsReport: Sendable, Equatable {
         var analyzers: [Analyzer] = []
         for c in counts {
             let seated = c.signer == seatedSigner
-            let toDo: Int? = seated ? try reader.eraStillToDo(signer: c.signer) : nil
+            let inJournal = journal.map { EraPlanner.answeredInJournal($0, signer: c.signer) } ?? []
+            let toDo: Int? = seated ? try stillToDo(reader: reader, signer: c.signer, inJournal: inJournal).count : nil
+            let trying = try snapshot.map { try inProgress(reader: reader, signer: c.signer, attempts: $0, inJournal: inJournal).count }
             let rate = Rate(lastHour: try reader.analyzerFirstVerdicts(signer: c.signer, since: now - 3_600),
                             last24Hours: try reader.analyzerFirstVerdicts(signer: c.signer, since: now - 86_400))
             analyzers.append(Analyzer(
                 signer: c.signer, modelShortName: MachineEraResolver.modelShortName(by: c.signer), isSeated: seated,
                 analyzed: c.analyzed, eraFound: c.eraFound, eraNone: c.eraNone, gaveUp: c.gaveUp,
-                triesInProgress: snapshot.map { $0.attempts(signer: c.signer).count },
+                triesInProgress: trying,
                 stillToDo: toDo, agreement: agreements[c.signer] ?? MachineEraConvergence(total: 0, agree: 0), rate: rate))
         }
         analyzers.sort { ($0.isSeated ? 0 : 1, $0.signer) < ($1.isSeated ? 0 : 1, $1.signer) }
@@ -177,6 +187,23 @@ public struct AnalysisResultsReport: Sendable, Equatable {
         } catch {
             return .failure(Refusal("the try counts could not be read (\(error))"))
         }
+    }
+
+    /// The planner's "not cached" for `signer`: planned contents with no
+    /// catalog row by it, minus those with a journal line by it.
+    static func stillToDo(reader: any CatalogAnalysisResultsReading, signer: String, inJournal: Set<String>) throws -> [String] {
+        try reader.eraUnansweredInCatalog(signer: signer).filter { !inJournal.contains($0) }
+    }
+
+    /// The signer's try entries whose content has no verdict yet (no catalog
+    /// row and no journal line by the signer). An entry left behind by a
+    /// crash between "verdict appended" and "try cleared" is not in progress.
+    static func inProgress(reader: any CatalogAnalysisResultsReading, signer: String, attempts: EraAttemptSnapshot,
+                           inJournal: Set<String>) throws -> [String: EraAttempt] {
+        let tries = attempts.attempts(signer: signer)
+        guard !tries.isEmpty else { return [:] }
+        let answered = try reader.analyzerAnswered(signer: signer, digests: tries.keys.sorted()).union(inJournal)
+        return tries.filter { !answered.contains($0.key) }
     }
 
     /// Per signer: N of M contents (Rick's date AND that signer's shown era)
@@ -243,9 +270,11 @@ public struct AnalysisResultsReport: Sendable, Equatable {
     /// The default cap of a list (Table copes; the words say when it is hit).
     public static let listLimit = 10_000
 
-    /// The files of one outcome for one signer, by file name.
+    /// The files of one outcome for one signer, by file name. Pass the helper's
+    /// `journal` (the app does; AnalysisResultsSheetSensorTests pins it): without
+    /// it, "still to do" and "in progress" see only the catalog half of the rule.
     public static func files(reader: any CatalogAnalysisResultsReading, signer: String, outcome: Outcome,
-                             attempts: EraAttemptSnapshot?, limit: Int = listLimit) throws -> FileList {
+                             attempts: EraAttemptSnapshot?, journal: ObservationJournal? = nil, limit: Int = listLimit) throws -> FileList {
         var rows: [FileRow]
         var truncated: Bool
         switch outcome {
@@ -255,11 +284,15 @@ public struct AnalysisResultsReport: Sendable, Equatable {
             truncated = found.count > limit
             rows = found.prefix(limit).map { row(outcome, $0) }
         case .stillToDo:
-            let found = try reader.eraStillToDoFiles(signer: signer, limit: limit + 1)
-            truncated = found.count > limit
-            rows = found.prefix(limit).map { row(outcome, $0) }
+            let inJournal = journal.map { EraPlanner.answeredInJournal($0, signer: signer) } ?? []
+            let digests = try stillToDo(reader: reader, signer: signer, inJournal: inJournal)
+            rows = try reader.analyzerFiles(digests: digests).map { row(outcome, $0) }
+            rows.sort { ($0.filename.lowercased(), $0.path, $0.digest) < ($1.filename.lowercased(), $1.path, $1.digest) }
+            truncated = rows.count > limit
+            rows = Array(rows.prefix(limit))
         case .inProgress:
-            let tries = attempts?.attempts(signer: signer) ?? [:]
+            let inJournal = journal.map { EraPlanner.answeredInJournal($0, signer: signer) } ?? []
+            let tries = try attempts.map { try inProgress(reader: reader, signer: signer, attempts: $0, inJournal: inJournal) } ?? [:]
             let byDigest = Dictionary(try reader.analyzerFiles(digests: tries.keys.sorted()).map { ($0.digest, $0) },
                                       uniquingKeysWith: { a, _ in a })
             rows = tries.map { digest, attempt in

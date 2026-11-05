@@ -206,6 +206,11 @@ struct AnalysisResultsSheetSensorTests {
         #expect(src.contains("repository.read {"), "reads through the session's repository reader")
         #expect(src.contains("AnalysisResultsReport.readAttempts"), "the try counts through the read-only snapshot")
         #expect(src.contains("Task.detached"), "loads off the main actor")
+        // Review 11/04: both halves of the planner's "answered" rule reach the report and every list.
+        #expect(src.contains("attempts: attempts, journal: journal, now: now"), "the report reads the helper's journal")
+        #expect(src.contains("attempts: attempts, journal: journal)"), "the lists read the helper's journal")
+        #expect(src.contains("EraPlanner.journalDirectory(stateRoot: stateRoot)"), "the journal folder is the helper's own")
+        #expect(!src.contains("try?"), "no swallowed read error shown as an empty fact")
     }
 
     @Test func noModelExtensionAndRevealIsTheExistingDoor() throws {
@@ -221,5 +226,63 @@ struct AnalysisResultsSheetSensorTests {
         let panel = try code("AnalyzePanelView.swift")
         #expect(panel.contains("Button(\"Results…\")"))
         #expect(panel.contains("AnalysisResultsSheet(store: AnalysisResultsStore.production(model: model))"))
+    }
+}
+
+// MARK: - Review red tests (feat/results-sheet f2b42abd0) — appended by the reviewer; the scene helper above is file-private.
+
+private actor ReviewFlag {
+    var value = false
+    func set() { value = true }
+}
+
+@Suite("Content Analysis ▸ Results — review (red on f2b42abd0)", .serialized)
+@MainActor
+struct AnalysisResultsStoreReviewTests {
+
+    /// MINOR — pins AnalysisResultsStore.swift:150-170 (`loadList`): a superseded
+    /// list request is dropped on arrival but never cancelled; its detached
+    /// read (up to a 10k-row list) runs to the end. Five quick clicks = five
+    /// concurrent pool reads; Done does not stop the one in flight either.
+    @Test func anOlderListRequestIsCancelledWhenANewerOneIsIssued() async throws {
+        let report = AnalysisResultsReport(analyzers: [
+            .init(signer: seatedBy, modelShortName: "8B", isSeated: true, analyzed: 0, eraFound: 0, eraNone: 0, gaveUp: 0,
+                  triesInProgress: 0, stillToDo: 0, agreement: .init(total: 0, agree: 0), rate: .init(lastHour: 0, last24Hours: 0)),
+        ], builtAt: 1)
+        let cancelled = ReviewFlag()
+        let store = AnalysisResultsStore(
+            loadReport: { report },
+            loadFiles: { signer, outcome in
+                if outcome == .eraNone {
+                    do { try await Task.sleep(for: .milliseconds(300)) } catch is CancellationError { await cancelled.set() }
+                }
+                return .init(signer: signer, outcome: outcome, rows: [], truncated: false)
+            },
+            reveal: { _ in true })
+        await store.load()
+        let slow = Task { await store.select(outcome: .eraNone) }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.select(outcome: .gaveUp)
+        await slow.value
+        #expect(store.files?.outcome == .gaveUp)
+        #expect(await cancelled.value, "the superseded eraNone read was left running to completion")
+    }
+
+    /// MINOR — pins AnalysisResultsStore.swift:91 (`try? …readAttempts(…).get()`):
+    /// when the try counts are unreadable the COUNT says "unavailable" but the
+    /// LIST says "No files" — a swallowed error shown as an empty fact.
+    @Test func theInProgressListSaysUnavailableWhenTheTryCountsAreUnreadable() async throws {
+        let (scene, _, _) = try await resultsScene("results_review_tries")
+        defer { scene.cleanup() }
+        let model = scene.model
+        let url = EraAttemptStore.url(stateRoot: scene.folder.appendingPathComponent("background", isDirectory: true))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not json at all\n".utf8).write(to: url)
+        let store = AnalysisResultsStore.production(model: model)
+        await store.load()
+        #expect(store.report?.triesProblem != nil, "the count side says unavailable")
+        await store.select(outcome: .inProgress)
+        #expect(store.filesFailure != nil, "the list side must say so too, not 'No files'")
+        await closeScene(model)
     }
 }
