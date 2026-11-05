@@ -21,8 +21,13 @@
 // dossier.
 //
 // Refresh: the store re-reads (debounced 1 s) when stored analysis may have
-// changed — a catalog edit (.videoScanCatalogMutated) or a journal pass that
-// moved the machine eras — so the view fills in as results land.
+// changed — an inspector edit (.videoScanCatalogMutated), a journal pass that
+// moved the machine eras, or any save funnel (`catalogMutationRevision`,
+// bumped by the dossier writeback too). A funnel's rows reach catalog.sqlite
+// only after the committer's debounce (CatalogCommitter.debounce, 2 s), so
+// that signal waits for the burst to end plus that debounce plus 1 s. The
+// view fills in as results land (an Analyze row's dossier, as its captions
+// and transcript commit).
 //
 // Logging: one line per failure (deduplicated) and per slow read (> 250 ms)
 // through the one sink; a normal read is ~2 ms (Core's scale test) and is
@@ -55,6 +60,9 @@ struct FileDossierLoader {
     static func production(model: VideoScanModel) -> FileDossierLoader {
         let catalogEdits = NotificationCenter.default.publisher(for: .videoScanCatalogMutated).map { _ in () }
         let eras = model.machineEras.$eras.dropFirst().map { _ in () }
+        let committed = model.$catalogMutationRevision.dropFirst()
+            .debounce(for: .seconds(TimingBudget.seconds(CatalogCommitter.debounce) + 1), scheduler: DispatchQueue.main)
+            .map { _ in () }
         return FileDossierLoader(
             load: { [weak model] fileID in
                 let repository = await MainActor.run { model?.catalogCutover.committer?.repository }
@@ -67,7 +75,7 @@ struct FileDossierLoader {
                 model?.log("File dossier: " + line)
                 appLog.write("[file-dossier] " + line)
             },
-            changes: catalogEdits.merge(with: eras).eraseToAnyPublisher())
+            changes: catalogEdits.merge(with: eras, committed).eraseToAnyPublisher())
     }
 }
 

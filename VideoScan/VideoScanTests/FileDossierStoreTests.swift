@@ -19,7 +19,10 @@
 //   MEDIA      ffmpeg-made mp4/h264, mov/prores, mkv/ffv1+pcm, mxf/mpeg2,
 //              avi/dv → ffprobe → the scan's OWN mapping (ScanEngine
 //              .extractMetadata → VideoRecord.apply) → Technical's lines.
-//   SENSOR     FileDossierSensorTests: the three call sites go through one
+//   TRUTH      a real DV file with two stereo pairs (4 channels) → ffprobe →
+//              the scan keeps the first stream → Audio says "first audio
+//              stream: … 2 ch", never a bare "2 ch" (rule 1).
+//   SENSOR     FileDossierSensorTests: the four call sites go through one
 //              door; only the store reads; no records walk, no write, no
 //              model extension; all groups start collapsed; no yellow.
 //   SCALE      Core (100k files, one open ≈ 2 ms). WRITER quartet N/A — a reader.
@@ -201,14 +204,48 @@ struct FileDossierMediaMatrixTests {
         #expect(t.line("Video codec")?.reading?.contains(c.codec) == true, "\(c.name): \(t.line("Video codec").debugDescription)")
         #expect(t.line("Frame size")?.reading?.contains(c.size) == true, "\(c.name): \(t.line("Frame size").debugDescription)")
         #expect(t.summary.hasPrefix(c.oneLiner), "\(c.name): \(t.summary)")
-        #expect(t.line("Audio")?.value.hasPrefix(record.audioCodec) == true)
+        #expect(t.line("Audio")?.value.hasPrefix("first audio stream: " + record.audioCodec) == true)
         #expect(t.line("Duration / rate") != nil)
         #expect(t.lines.allSatisfy { $0.standing == .fact || $0.label == "DV clock" })
         #expect((t.line("DV clock") != nil) == (record.videoCodec == "dvvideo"), "only DV carries the DV clock line")
     }
 }
 
-// MARK: - SENSOR: one door, three call sites
+// MARK: - TRUTH: a 4-channel DV file through the real probe
+
+@Suite("File dossier — a partial probe field never reads as the whole", .serialized)
+@MainActor
+struct FileDossierPartialFieldTests {
+
+    @Test("a DV file with two stereo pairs (4 channels) never reads as plain \"2 ch\"", .timeLimit(.minutes(2)))
+    func fourChannelDVSaysFirstStream() async throws {
+        try #require(CleanupTestMedia.toolsAvailable, "ffmpeg/ffprobe are required project dependencies (Brewfile)")
+        let dir = try CleanupTestMedia.makeScratchDir("dossier4ch")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("test_dossier_dv_4ch.avi")
+        try CleanupTestMedia.runFFmpeg([
+            "-f", "lavfi", "-i", "testsrc=size=720x480:rate=30000/1001:duration=2",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=32000",
+            "-f", "lavfi", "-i", "sine=frequency=880:duration=2:sample_rate=32000",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a", "-ac", "2",
+            "-c:v", "dvvideo", "-pix_fmt", "yuv411p", "-c:a", "pcm_s16le", "-shortest"], output: url.path)
+        let (probe, stderr) = await ScanEngine.runFFProbe(url: url)
+        let output = try #require(probe, "ffprobe failed: \(stderr)")
+        let audioStreams = (output.streams ?? []).filter { $0.codec_type == "audio" }
+        #expect(audioStreams.count == 2 && audioStreams.allSatisfy { $0.channels == 2 }, "the fixture really carries 4 channels in two pairs")
+        let record = VideoRecord()
+        record.filename = url.lastPathComponent
+        record.ext = "avi"
+        record.apply(ScanEngine.extractMetadata(probe: output))
+        #expect(record.audioChannels == "2", "the scan keeps the first stream only — the premise of this test")
+        let audio = try #require(FileDossier.build(record: record, digest: nil, assertions: [], now: Date()).technical.line("Audio"))
+        #expect(audio.value == "first audio stream: pcm_s16le 32000 Hz 2 ch", "\(audio.value)")
+        #expect(audio.value.range(of: #"^\S+ \d+ Hz \d+ ch$"#, options: .regularExpression) == nil, "never the bare total form")
+        #expect(audio.source == "ffprobe (first audio stream)")
+    }
+}
+
+// MARK: - SENSOR: one door, four call sites
 
 @Suite("File dossier — sensors")
 struct FileDossierSensorTests {
@@ -217,13 +254,18 @@ struct FileDossierSensorTests {
         SourceTree.strippingComments(try SourceTree.appSource(named: file))
     }
 
-    @Test func theThreeCallSitesGoThroughOneDoor() throws {
+    @Test func theFourCallSitesGoThroughOneDoor() throws {
         // 1. The inspector: the host passes the door; the section shows the one view.
         #expect(try code("CatalogHelpers.swift").contains("fileDossiers: FileDossierLoader.production(model: model)"))
         #expect(try code("InspectorPanel+Sections.swift").contains("InspectorDossierView(record: rec, loader: fileDossiers)"))
         #expect(try code("InspectorDossierView.swift").contains("FileDossierView(fileID: record.id, loader: loader)"))
         // 2. The Dossier window: a completed row opens in place.
         #expect(try code("DossierDashboardView.swift").contains("FileDossierView(fileID: opened, loader: FileDossierLoader.production(model: model))"))
+        // 4. The Media File Operations window: an Analyze / Transcribe / Captions
+        //    row expands to the file's dossier (Rick: "click on the file in the MFO window").
+        #expect(try code("AnalyzeJob.swift").contains("FileDossierView(fileID: record.id, loader: FileDossierLoader.production(model: model))"))
+        #expect(try code("AnalyzeJob.swift").contains("MediaFileOperationOwnDetail"))
+        #expect(try code("MediaFileOperations.swift").contains(#"static let analyze = Self("analyze", hasDetailView: true,"#))
         // 3. The Results sheet.
         #expect(try code("AnalysisResultsStore.swift").contains("dossiers: FileDossierLoader.production(model: model)"))
         #expect(try code("AnalysisResultsSheet.swift").contains("FileDossierView(fileID: row.recordID, loader: loader)"))
@@ -237,7 +279,7 @@ struct FileDossierSensorTests {
             if text.range(of: #"FileDossierLoader\(\s*load:"#, options: .regularExpression) != nil { loaders.append(name) }
             if text.contains("FileDossier.read(") { reads.append(name) }
         }
-        #expect(Set(views) == ["InspectorDossierView.swift", "DossierDashboardView.swift", "AnalysisResultsSheet.swift"], "\(views)")
+        #expect(Set(views) == ["InspectorDossierView.swift", "DossierDashboardView.swift", "AnalysisResultsSheet.swift", "AnalyzeJob.swift"], "\(views)")
         #expect(loaders == ["FileDossierStore.swift"], "one door: \(loaders)")
         #expect(reads == ["FileDossierStore.swift"], "one read: \(reads)")
     }

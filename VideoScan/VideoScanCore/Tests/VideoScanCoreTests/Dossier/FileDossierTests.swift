@@ -11,7 +11,9 @@
 //              dossier run) is all carried.
 //   TRUTH      a catalog with every table filled → FileDossier.read through
 //              the repository's reader: every line equals its stored row
-//              (value, source, evidence, body); the read changes nothing.
+//              (value, source, evidence, body); the read changes nothing;
+//              a field the catalog keeps for ONE stream (audio channels)
+//              says so and never reads as the file's total (rule 1).
 //   SCALE      100k files (each with captions, transcript, era) → opening
 //              one dossier inside the budget (first measurement 1.7 ms on
 //              the M5 Ultra, Debug; the design's ceiling was 100 ms; 20 ms).
@@ -223,11 +225,11 @@ struct FileDossierTests {
         #expect(t.line("Frame size")?.value == "720×480")
         #expect(t.line("Frame rate")?.value == "29.97")
         #expect(t.line("Scan")?.value == "interlaced, bottom field first (as flagged)")
-        #expect(t.line("Audio")?.value == "pcm_s16le 32000 Hz 2 ch")
+        #expect(t.line("Audio")?.value == "first audio stream: pcm_s16le 32000 Hz 2 ch")
         #expect(t.line("Creation time")?.value == "2003-02-11" && t.line("Creation time")?.source == "embedded tag (format:creation_time)")
         #expect(t.line("File modified")?.value == "2003-02-11")
         #expect(t.line("Duration / rate")?.value == "2 h 39 m, 28.8 Mb/s")
-        #expect(t.summary == "DV camcorder/deck capture, NTSC 720×480, 12-bit 4-ch audio (consumer camcorder) · 2 h 39 m")
+        #expect(t.summary == "DV camcorder/deck capture, NTSC 720×480, 32 kHz audio (the 12-bit 4-ch camcorder mode) · 2 h 39 m")
 
         let p = d.patterns
         #expect(p.line("Era")?.value == "1990–1995" && p.line("Era")?.reading == "agrees with your date (1990)")
@@ -249,6 +251,33 @@ struct FileDossierTests {
         #expect(bare.patterns.lines.allSatisfy { $0.standing == .missing })
         #expect(bare.patterns.summary == "nothing analyzed yet")
         #expect(try DossierFixture.fingerprint(fixture) == before, "READ ONLY: the generation and every count unchanged")
+        await repository.close()
+    }
+
+    // MARK: TRUTH — a partial field is never shown as the whole
+
+    /// A consumer DV tape carries two stereo pairs (4 channels); the catalog
+    /// keeps only the FIRST audio stream ("2"). Rule 1: the line must never
+    /// read as the file's total — it says which stream it describes.
+    @Test func aFourChannelDVFileNeverReadsAsPlainTwoChannels() async throws {
+        let fixture = try await DossierFixture.catalog([DossierFixture.File(n: 4, path: "/V/tapes/Four_channel.dv")])
+        defer { fixture.remove() }
+        let repository = try await DossierFixture.open(fixture)
+        let now = Self.now
+        let d = try #require(try await repository.read { try FileDossier.read(reader: $0, fileID: DossierFixture.fileID(4), now: now) })
+        let audio = try #require(d.technical.line("Audio"))
+        #expect(audio.value == "first audio stream: pcm_s16le 32000 Hz 2 ch", "\(audio.value)")
+        #expect(audio.value.range(of: #"^\S+ \d+ Hz \d+ ch$"#, options: .regularExpression) == nil, "never the bare total form")
+        #expect(audio.source == "ffprobe (first audio stream)")
+        // The video lines say which stream they read too.
+        for label in ["Video codec", "Frame size", "Frame rate", "Scan"] {
+            #expect(d.technical.line(label)?.source == "ffprobe (first video stream)", "\(label)")
+        }
+        // Whole-file facts keep the plain source.
+        #expect(d.technical.line("Container")?.source == "ffprobe")
+        #expect(d.technical.line("Duration / rate")?.source == "ffprobe")
+        // The summary names the 32 kHz MODE, never a counted 4 channels.
+        #expect(d.technical.summary.contains("32 kHz audio (the 12-bit 4-ch camcorder mode)"))
         await repository.close()
     }
 

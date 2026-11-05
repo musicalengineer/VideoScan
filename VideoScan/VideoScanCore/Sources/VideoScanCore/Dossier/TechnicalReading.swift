@@ -13,6 +13,13 @@
 // and display aspect, average frame rate (VFR), codec profile, audio bit
 // depth, mediainfo's measured scan / standard / recorded date, GPS.
 //
+// Rule 1 (a partial field is never the whole): the scan keeps ONE video
+// stream (the first that is not cover art) and ONE audio stream (the first);
+// a consumer DV tape's second stereo pair is not in the catalog. So every
+// line read from a stream names it — source "ffprobe (first video stream)" /
+// "(first audio stream)", and the audio value starts "first audio stream:" —
+// and the 32 kHz DV rule names a MODE, never a counted 4 channels.
+//
 // Pure: facts in, lines out; `now` is injected so every date rule is
 // table-testable. Never reads a file, never runs a tool.
 //
@@ -37,7 +44,8 @@ public struct TechnicalFacts: Sendable, Equatable {
     public var fieldOrder: String?
     public var audioCodec: String?
     public var audioRate: Int?
-    /// The first audio stream's channels (the catalog keeps one stream).
+    /// The FIRST audio stream's channels — the catalog keeps one stream, so
+    /// this is never the file's total (a DV tape's second pair is not here).
     public var audioChannels: Int?
     public var encoder: String?
     public var make: String?
@@ -100,6 +108,10 @@ public struct TechnicalReadingLine: Sendable, Equatable {
 }
 
 public enum TechnicalReading {
+
+    /// Sources for lines read from one stream (rule 1: say which).
+    public static let firstVideoStream = "ffprobe (first video stream)"
+    public static let firstAudioStream = "ffprobe (first audio stream)"
 
     // MARK: Vocabulary (the demo's tables, verbatim)
 
@@ -236,15 +248,15 @@ public enum TechnicalReading {
         let codec = f.codec ?? ""
         if !codec.isEmpty {
             add("Video codec", codec, transferCodecs[codec].map { "\($0): a lossless/master TRANSFER codec; says nothing about when the footage was shot" }
-                ?? codecWords[codec] ?? "camera-native or export codec")
+                ?? codecWords[codec] ?? "camera-native or export codec", firstVideoStream)
         } else if !f.hasVideo {
             add("Video", "none", "no playable video stream: a reference movie, an essence-less MXF or audio only")
         }
-        if let w = f.width, let h = f.height { add("Frame size", "\(w)×\(h)", frameSizeWords(w, h, codec: codec)) }
-        if let fps = f.fps { add("Frame rate", fpsText(fps), frameRateWords(fps)) }
+        if let w = f.width, let h = f.height { add("Frame size", "\(w)×\(h)", frameSizeWords(w, h, codec: codec), firstVideoStream) }
+        if let fps = f.fps { add("Frame rate", fpsText(fps), frameRateWords(fps), firstVideoStream) }
         if let scan = scan(f) {
             let order = fieldOrderWords(f)
-            add("Scan", scan + (order.isEmpty ? "" : ", " + order) + " (as flagged)", scanWords(scan, f, codec: codec))
+            add("Scan", scan + (order.isEmpty ? "" : ", " + order) + " (as flagged)", scanWords(scan, f, codec: codec), firstVideoStream)
         }
         rows += audioRows(f, codec: codec)
         if let enc = f.encoder { add("Encoder / muxer", String(enc.prefix(60)), encoderWords(enc), "embedded tag") }
@@ -305,10 +317,10 @@ public enum TechnicalReading {
         guard !acodec.isEmpty else {
             return f.hasVideo ? [TechnicalReadingLine(label: "Audio", value: "none",
                                                      suggests: "silent file: a film scan, a video-only essence (its audio may be a sibling file)",
-                                                     source: "ffprobe")] : []
+                                                     source: "ffprobe")] : []      // stream_type: no audio stream at all (a whole-file fact)
         }
         let rate = f.audioRate
-        var value = acodec
+        var value = "first audio stream: " + acodec
         if let rate { value += " \(rate) Hz" }
         if let ch = f.audioChannels { value += " \(ch) ch" }
         let s: String
@@ -329,7 +341,7 @@ public enum TechnicalReading {
         } else {
             s = "audio present"
         }
-        return [TechnicalReadingLine(label: "Audio", value: value, suggests: s, source: "ffprobe")]
+        return [TechnicalReadingLine(label: "Audio", value: value, suggests: s, source: firstAudioStream)]
     }
 
     private static func encoderWords(_ enc: String) -> String {
@@ -356,7 +368,8 @@ public enum TechnicalReading {
         if !f.hasVideo { return "no playable video (reference movie / essence-less MXF / audio)" }
         if codec == "dvvideo" {
             let standard = f.height == 576 ? "PAL" : "NTSC"
-            let mode = f.audioRate == 32000 ? ", 12-bit 4-ch audio (consumer camcorder)" : ""
+            // The MODE the 32 kHz rate implies, never a counted 4 channels (rule 1).
+            let mode = f.audioRate == 32000 ? ", 32 kHz audio (the 12-bit 4-ch camcorder mode)" : ""
             return "DV camcorder/deck capture, \(standard) \(size)\(mode)"
         }
         if let name = transferCodecs[codec] {

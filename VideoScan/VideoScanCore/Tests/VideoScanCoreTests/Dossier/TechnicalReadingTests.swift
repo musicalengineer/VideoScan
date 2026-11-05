@@ -170,7 +170,7 @@ struct TechnicalReadingTests {
         #expect(f == TechnicalFacts(container: "dv", containerName: "DV (Digital Video)", hasVideo: true, codec: "dvvideo",
                                     width: 720, height: 480, fps: 29.97, fieldOrder: "bb", audioCodec: "pcm_s16le",
                                     audioRate: 32000, audioChannels: 2, duration: 9540, bitRate: 28_800_000))
-        #expect(TechnicalReading.oneLiner(f) == "DV camcorder/deck capture, NTSC 720×480, 12-bit 4-ch audio (consumer camcorder)")
+        #expect(TechnicalReading.oneLiner(f) == "DV camcorder/deck capture, NTSC 720×480, 32 kHz audio (the 12-bit 4-ch camcorder mode)")
         #expect(TechnicalReading.durationWords(9540) == "2 h 39 m")
         #expect(TechnicalReading.durationWords(252) == "4 m 12 s")
         #expect(TechnicalReading.durationWords(38) == "38 s")

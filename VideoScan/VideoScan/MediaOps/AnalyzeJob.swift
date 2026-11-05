@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import os
+import SwiftUI
 
 // MARK: - AnalyzeJob
 //
@@ -52,7 +53,7 @@ enum AnalyzeStage: String, Hashable, Sendable {
 }
 
 @MainActor
-final class AnalyzeJob: @MainActor MediaFileOperationJob {
+final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDetail {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .analyze
@@ -343,5 +344,21 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
         subtitleText = "Cancelled"
         isIndeterminateValue = false
         orchestratorForwarder = nil
+    }
+}
+
+// MARK: - The row's detail: the file's dossier
+
+extension AnalyzeJob {
+    /// A click on the row opens the file dossier view under it, as every
+    /// expanding MFO row does (Rick 2026-11-05: "click on the file in the MFO
+    /// window and see 1. tech data 2. patterns, events 3. corpus wide").
+    /// Through the one door (FileDossierLoader.production); it reads stored
+    /// facts only and refills as this job's captions and transcript land.
+    var detailView: AnyView {
+        guard let model else {
+            return AnyView(Text("The catalog is not open — nothing to read.").font(.caption).foregroundStyle(.secondary))
+        }
+        return AnyView(FileDossierView(fileID: record.id, loader: FileDossierLoader.production(model: model)))
     }
 }

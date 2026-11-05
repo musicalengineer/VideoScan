@@ -147,7 +147,9 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     /// Operations window owns per-file operations; the Analyze
     /// Dashboard owns batch volume-wide operations. Watching one
     /// file's analyze tick along belongs here.
-    static let analyze = Self("analyze", hasDetailView: false,
+    // Expands to the file's dossier (Rick 2026-11-05: "click on the file in
+    // the MFO window"); AnalyzeJob's detail is FileDossierView.
+    static let analyze = Self("analyze", hasDetailView: true,
         style: .init(badge: "Analyze", logVerb: "analyze", fill: .init(0.00, 0.42, 0.58)))
 
     // Pass C — Transcode's mint matches the workspaceActive tint
