@@ -95,8 +95,9 @@ Event candidates stop using "same folder" alone; a folder records how Rick filed
 2. **The §5 fixes plus layer 3:** the setup index, families, windows and event candidates, each line with its chain.
 3. **The DV clock analyzer** (`background_service.md` §7 step 2) fills the DV clock line.
 
-## 8. For Rick (UI calls)
+## 8. Rick's calls (2026-11-05)
 
-1. Open state: all three groups collapsed, or Technical open?
-2. Clicking a row in the Dossier window: a side panel in that window, or open the inspector on the file?
-3. Corpus lines name the sibling files. Fine as it is, or show counts with names on hover?
+1. **All three groups start collapsed.**
+2. **Clicking a file in the Dossier window does what the other MFO verbs' windows already do** with a clicked file. If
+   that proves awkward, we move it to the inspector.
+3. **Corpus lines: show what we have** (the sibling files by name), then Rick looks and decides.
