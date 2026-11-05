@@ -54,11 +54,22 @@ class GauntletPublishTests(unittest.TestCase):
         self.assertNotIn('SECRET', completed.stdout)
         row = json.loads(completed.stdout)
         self.assertEqual(row['source'], 'gauntlet')
-        self.assertEqual(row['status'], 'incomplete')
+        self.assertEqual(row['status'], 'amber')          # ui not run is AMBER, never a pass (Rick 2026-11-05)
         self.assertEqual(row['ui_label'], 'UI not run (phase 2)')
         self.assertEqual(row['stages'][1]['status'], 'not_run')
         self.assertEqual(row['stages'][1]['reason'], 'phase 2')
         self.assertFalse((self.root / 'pending-metrics.jsonl').exists())
+
+    def test_run_status_is_green_amber_red_and_old_rows_still_read(self):
+        # Rick 2026-11-05: AMBER = known issues / blocked / not run; RED = a failure.
+        for declared, stage, want in [('amber', 'passed', 'amber'), ('failed', 'passed', 'failed'),
+                                      ('amber', 'failed', 'failed'), ('incomplete', 'blocked', 'incomplete'),
+                                      ('passed', 'amber', 'amber')]:
+            self.result.update(status=declared)
+            self.result['stages'][0]['status'] = stage
+            row = json.loads(self.publish('--dry-run').stdout)
+            self.assertEqual(row['status'], want, (declared, stage))
+            self.assertEqual(row['stages'][0]['status'], stage)
 
     def test_queue_only_is_durable_and_sanitized(self):
         completed = self.publish('--queue-only')
@@ -114,7 +125,7 @@ class GauntletDashboardTests(unittest.TestCase):
         harness = r"""
 const fs = require('fs');
 const html = fs.readFileSync(process.argv[1], 'utf8');
-const predicate = html.match(/const isTestRunRow = .*;/)[0];
+const predicate = html.match(/const isTestRunRow = .*;/)[0] + '\n' + html.match(/function gauntletWord.*/)[0];
 const start = html.indexOf('  const gauntletRows =');
 const end = html.indexOf('  // Dedicated catalog-search', start);
 const allTdRows = [{source:'gauntlet', schemaVersion:1, status:'incomplete', machine:'m4',
@@ -139,6 +150,7 @@ eval(predicate + '\n' + html.slice(start,end) + '\n' +
         output = json.loads(completed.stdout)
         self.assertFalse(output['nightly'])
         self.assertIn('UI not run (phase 2)', output['label'])
+        self.assertIn('Latest: incomplete (before AMBER)', output['label'])   # an old row still reads
         duration = output['charts']['chart-gauntlet-duration']['data']['datasets']
         self.assertEqual(next(d for d in duration if d['label'] == 'unit')['data'], [12])
         self.assertEqual(next(d for d in duration if d['label'] == 'ui')['data'], [None])
@@ -146,6 +158,18 @@ eval(predicate + '\n' + html.slice(start,end) + '\n' +
         outcomes = output['charts']['chart-gauntlet-outcome']['data']['datasets']
         self.assertEqual(next(d for d in outcomes if d['label'] == 'passed stages')['data'], [0])
         self.assertEqual(next(d for d in outcomes if 'not run' in d['label'])['data'], [2])
+
+    def test_dashboard_names_the_run_green_amber_red(self):
+        # Rick 2026-11-05: known issues / blocked / ui not run are AMBER, a failure is RED.
+        harness = r"""
+const html = require('fs').readFileSync(process.argv[1], 'utf8');
+eval(html.match(/function gauntletWord.*/)[0]);
+console.log(JSON.stringify(['passed', 'amber', 'failed', 'incomplete', undefined].map(gauntletWord)));
+"""
+        completed = subprocess.run(['node', '-e', harness, str(REPO / 'docs/index.html')],
+                                   text=True, capture_output=True, check=True, timeout=10)
+        self.assertEqual(json.loads(completed.stdout),
+                         ['GREEN', 'AMBER', 'RED', 'incomplete (before AMBER)', 'incomplete'])
 
 
 if __name__ == '__main__':

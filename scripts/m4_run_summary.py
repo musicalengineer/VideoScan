@@ -15,8 +15,23 @@ rule 9: a lane that ran nothing proves nothing).
 
 Usage:
     m4_run_summary.py PLAN LOG RC SECONDS [--timeout] [--tsv PATH]
-Exit status: 0 GREEN, 1 RED, 2 usage error.
+    m4_run_summary.py --gauntlet RESULT_JSON RC SECONDS [--timeout]
+Exit status: 0 GREEN, 1 RED, 2 usage error, 3 AMBER (--gauntlet only).
+
+--gauntlet reads the deep lane's result.json (scripts/gauntlet/Runner.swift)
+and prints ONE line (Rick 2026-11-05, DECISIONS):
+
+    deep: GREEN — every stage passed
+    deep: AMBER 7 known issues (regression 7); 6 stages blocked (912 unadapted suites); ui not run (phase 2)
+    deep: RED regression failed: 1 test failure
+
+RED = a test failed, a floor was missed, inventory errored, a build failed,
+the watchdog fired, or there is no result. AMBER = only tracked known issues,
+unadapted ("blocked") suites and stages not run. GREEN = everything passed.
+A result.json from before AMBER (status "incomplete") reads as AMBER: it had
+no failure.
 """
+import json
 import argparse
 import re
 import sys
@@ -56,7 +71,79 @@ def summarize(plan, rows, rc, seconds, timed_out):
     return green, line
 
 
+GREEN, AMBER, RED = 'GREEN', 'AMBER', 'RED'
+
+
+def _amber_reasons(result):
+    """The runner's own words when it wrote them; else counted here (old runs)."""
+    if result.get('amber_reasons'):
+        return list(result['amber_reasons'])
+    stages = result.get('stages') or []
+    reasons = []
+    known = [(s.get('name', '?'), int(s.get('known_issues') or 0)) for s in stages if int(s.get('known_issues') or 0) > 0]
+    if known:
+        total = sum(n for _, n in known)
+        reasons.append(f"{total} known issue{'s' if total != 1 else ''} ("
+                       + ", ".join(f"{name} {n}" for name, n in known) + ")")
+    held = [s for s in stages if s.get('status') in ('blocked', 'amber', 'incomplete') and s.get('blocked_details')]
+    if held:
+        reasons.append(f"{len(held)} stage{'s' if len(held) != 1 else ''} blocked "
+                       f"({sum(len(s['blocked_details']) for s in held)} unadapted suites)")
+    for s in stages:
+        if s.get('status') == 'not_run':
+            reasons.append(f"{s.get('name', '?')} not run ({s.get('reason') or '?'})")
+    return reasons
+
+
+def gauntlet_verdict(result, rc, timed_out=False):
+    """(GREEN|AMBER|RED, words) for one deep run's result.json (dict or None)."""
+    if timed_out:
+        return RED, 'watchdog timeout'
+    if not isinstance(result, dict):
+        return RED, 'no result.json'
+    stages = result.get('stages') or []
+    failed = [s for s in stages if s.get('status') == 'failed']
+    status = result.get('status')
+    if status == 'failed' or failed or result.get('inventory_errors') or rc not in (0,):
+        words = [f"{s.get('name', '?')} failed: {s.get('reason') or '?'}" for s in failed]
+        if result.get('inventory_errors'):
+            words.append(f"inventory: {len(result['inventory_errors'])} error(s)")
+        if result.get('reason') and not failed:
+            words.append(str(result['reason']))
+        if not words:
+            words.append(f"rc={rc}")
+        return RED, '; '.join(words)
+    if status == 'passed' and all(s.get('status') == 'passed' for s in stages):
+        return GREEN, 'every stage passed'
+    if status in ('amber', 'incomplete', 'passed'):
+        return AMBER, '; '.join(_amber_reasons(result)) or 'not every stage passed'
+    return RED, f"unknown status {status!r}"
+
+
+def gauntlet_main(argv):
+    ap = argparse.ArgumentParser(prog='m4_run_summary.py --gauntlet')
+    ap.add_argument('result')
+    ap.add_argument('rc', type=int)
+    ap.add_argument('seconds', type=int)
+    ap.add_argument('--timeout', action='store_true')
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        return 2
+    try:
+        with open(a.result, encoding='utf-8') as f:
+            result = json.load(f)
+    except (OSError, ValueError):
+        result = None
+    verdict, words = gauntlet_verdict(result, a.rc, a.timeout)
+    sha = str((result or {}).get('commit') or '')[:9]
+    print(f"deep: {verdict} {words} (sha={sha or '?'}, {a.seconds}s, results={a.result})")
+    return {GREEN: 0, AMBER: 3, RED: 1}[verdict]
+
+
 def main(argv):
+    if argv[:1] == ['--gauntlet']:
+        return gauntlet_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('plan')
     ap.add_argument('log')

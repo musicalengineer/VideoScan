@@ -110,8 +110,9 @@ func classify(exitCode: Int32, counts: [String: Int]?, floor: Int) -> (String, S
     if counts["skipped", default: 0] > 0 { return ("failed", "unexpected skipped tests") }
     let known = counts["known_issues", default: 0]
     if counts["passed", default: 0] + counts["failed", default: 0] + known < max(1, floor) { return ("failed", "executed count below expected floor \(max(1, floor))") }
-    // A withKnownIssue is a tracked bug, never a pass — but say so by name.
-    if known > 0 { return ("failed", "\(known) known issue\(known == 1 ? "" : "s") (withKnownIssue) — expected failures are not passes") }
+    // A withKnownIssue is a tracked bug, never a pass — and never a failure
+    // either: AMBER (Rick 2026-11-05, DECISIONS). Said by name and count.
+    if known > 0 { return ("amber", "\(known) known issue\(known == 1 ? "" : "s") (withKnownIssue) — tracked, not a pass") }
     return ("passed", nil)
 }
 func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
@@ -352,7 +353,8 @@ struct GauntletRunner {
     mutating func runPackageSuites(_ name: String, selectors: [String], floor: Int, timeout: Double) -> [String: Any] {
         var output: [String: Any] = ["selectors": selectors.count, "expected": floor, "status": "failed", "reason": NSNull(), "exit_code": NSNull()]
         guard packageBuildOK == true else {
-            output["status"] = "blocked"; output["reason"] = packageBuildReason ?? "package build did not run"
+            // A package build that failed is RED (Rick 2026-11-05), never "blocked".
+            output["status"] = "failed"; output["reason"] = packageBuildReason ?? "package build did not run"
             return output
         }
         let filters = selectors.flatMap { ["--filter", NSRegularExpression.escapedPattern(for: $0) + "/"] }
@@ -393,7 +395,8 @@ struct GauntletRunner {
         let selectors = entry["selectors"] as? [String] ?? []
         let blocked = entry["blocked"] as? [[String: Any]] ?? []
         let missingTools = (entry["requires_tools"] as? [String] ?? []).filter { !fm.isExecutableFile(atPath: $0) }
-        if !missingTools.isEmpty { return stageResult(name, "blocked", "required fixture tools unavailable", floor: floor) }
+        // A missing tool is a broken host, not an unadapted suite: RED, not AMBER.
+        if !missingTools.isEmpty { return stageResult(name, "failed", "required fixture tools unavailable: \(missingTools.joined(separator: ", "))", floor: floor) }
         let packageSelectors = entry["package_selectors"] as? [String] ?? []
         if selectors.isEmpty && packageSelectors.isEmpty { return stageResult(name, "blocked", blocked.isEmpty ? "no safe phase 1 adapter" : "unsafe or unadapted suites: \(blocked.count)", floor: floor) }
         return nil
@@ -452,9 +455,12 @@ struct GauntletRunner {
             mergePackage(package, into: &output, xcodeRan: !selectors.isEmpty)
             artifacts += ["package-build.log", "\(name)-package.log"]
         }
-        // Safe subset passed, but the stage still holds unadapted suites.
+        // Safe subset passed, but the stage still holds unadapted suites
+        // (AMBER-class); an AMBER stage keeps its status and says both.
         if output["status"] as? String == "passed" && !blocked.isEmpty {
             output["status"] = "blocked"; output["reason"] = "safe subset passed; unsafe or unadapted suites: \(blocked.count)"
+        } else if output["status"] as? String == "amber" && !blocked.isEmpty {
+            output["reason"] = "\(output["reason"] as? String ?? "amber"); unsafe or unadapted suites: \(blocked.count)"
         }
         output["incomplete"] = output["status"] as? String == "passed" ? 0 : 1
         output["elapsed_s"] = monotonic() - start
@@ -482,10 +488,35 @@ struct GauntletRunner {
         }
         result["stages"] = outputs; result["elapsed_s"] = monotonic() - totalStart
         let failed = fatalReason != nil || outputs.contains { $0["status"] as? String == "failed" }
-        result["status"] = failed ? "failed" : outputs.allSatisfy { $0["status"] as? String == "passed" } ? "passed" : "incomplete"
+        // GREEN = every stage passed; RED = a failure (test, floor, inventory,
+        // build, watchdog); AMBER = only tracked known issues, unadapted
+        // ("blocked") suites and stages not run (Rick 2026-11-05).
+        result["status"] = failed ? "failed" : outputs.allSatisfy { $0["status"] as? String == "passed" } ? "passed" : "amber"
+        result["amber_reasons"] = failed ? [] : amberReasons(outputs)
         if let fatalReason { result["reason"] = fatalReason }
         result["publish"] = "queued"
         if interrupted != 0 { result["interrupted_signal"] = interrupted; interrupted = 0 }
+    }
+
+    /// Why a run is AMBER, with counts: "7 known issues (regression 7)",
+    /// "6 stages blocked (912 suites)", "ui not run (phase 2)".
+    func amberReasons(_ stages: [[String: Any]]) -> [String] {
+        var reasons: [String] = []
+        let known = stages.compactMap { stage -> (String, Int)? in
+            let n = stage["known_issues"] as? Int ?? 0
+            return n > 0 ? (stage["name"] as? String ?? "?", n) : nil
+        }
+        let total = known.reduce(0) { $0 + $1.1 }
+        if total > 0 { reasons.append("\(total) known issue\(total == 1 ? "" : "s") (\(known.map { "\($0.0) \($0.1)" }.joined(separator: ", ")))") }
+        let held = stages.filter { ["blocked", "amber"].contains($0["status"] as? String ?? "") && !($0["blocked_details"] as? [Any] ?? []).isEmpty }
+        let suites = held.reduce(0) { $0 + ($1["blocked_details"] as? [Any] ?? []).count }
+        if !held.isEmpty { reasons.append("\(held.count) stage\(held.count == 1 ? "" : "s") blocked (\(suites) unadapted suites)") }
+        let empty = stages.filter { $0["status"] as? String == "blocked" && ($0["blocked_details"] as? [Any] ?? []).isEmpty }
+        if !empty.isEmpty { reasons.append("\(empty.count) stage\(empty.count == 1 ? "" : "s") without an adapter (\(empty.compactMap { $0["name"] as? String }.joined(separator: ", ")))") }
+        for stage in stages where stage["status"] as? String == "not_run" {
+            reasons.append("\(stage["name"] as? String ?? "?") not run (\(stage["reason"] as? String ?? "?"))")
+        }
+        return reasons
     }
 
     mutating func publishResults() throws -> Int32 {
@@ -499,8 +530,11 @@ struct GauntletRunner {
         var row = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]); row.append(0x0a)
         try append(row, to: resultsRoot.appendingPathComponent("history.jsonl"), root: resultsRoot)
         let labels = outputs.map { "\($0["name"]!)=\(($0["status"] as! String).uppercased())" }.joined(separator: " ")
-        print("GAUNTLET \((result["status"] as! String).uppercased()) sha=\(String((result["commit"] as! String).prefix(8))) total=\(Int(monotonic() - totalStart))s \(labels) UI not run (phase 2) results=\(resultPath.path) publish=\(result["publish"]!)")
-        return result["status"] as? String == "passed" ? 0 : 1
+        let amber = (result["amber_reasons"] as? [String] ?? []).joined(separator: "; ")
+        let status = result["status"] as! String
+        print("GAUNTLET \(status.uppercased()) sha=\(String((result["commit"] as! String).prefix(8))) total=\(Int(monotonic() - totalStart))s \(labels) UI not run (phase 2)\(status == "amber" ? " amber=\"\(amber)\"" : "") results=\(resultPath.path) publish=\(result["publish"]!)")
+        // AMBER is not a failure for a caller (exit 0); the line says AMBER.
+        return ["passed", "amber"].contains(status) ? 0 : 1
     }
 
     mutating func execute() throws -> Int32 {

@@ -173,7 +173,7 @@ class GauntletPackageAdapterTests(unittest.TestCase):
     def test_package_known_issue_and_missing_summary_are_not_passes(self):
         self.config['package'] = {'unit': {'known': 1}, 'regression': {'no_summary': True}}
         self.run_runner()
-        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertEqual(self.stage('unit')['status'], 'amber')       # tracked: AMBER, not a pass
         self.assertIn('known issue', self.stage('unit')['reason'])
         self.assertEqual(self.stage('unit')['known_issues'], 1)
         self.assertEqual(self.stage('regression')['status'], 'failed')
@@ -194,8 +194,9 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(self.result['package_build_exit_code'], 3)
         self.assertEqual([c['args'][0] for c in self.swift_calls], ['build'])
         unit = self.stage('unit')
-        self.assertNotEqual(unit['status'], 'passed')
+        self.assertEqual(unit['status'], 'failed')            # a build failure is RED, never AMBER
         self.assertIn('package build exit 3', unit['reason'])
+        self.assertEqual(self.result['status'], 'failed')
         self.assertEqual(self.stage('integration')['status'], 'passed')
 
     def test_package_only_stage_runs(self):
@@ -209,6 +210,10 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         regression = self.stage('regression')
         self.assertEqual(regression['status'], 'blocked')      # safe subset passed, one suite held back
         self.assertEqual(regression['package']['status'], 'passed')
+        # Blocked-only is AMBER (Rick 2026-11-05): exit 0, the reasons counted.
+        self.assertEqual(self.result['status'], 'amber')
+        self.assertEqual(self.completed.returncode, 0)
+        self.assertIn('1 stage blocked (1 unadapted suites)', self.result['amber_reasons'])
         self.assertEqual(regression['passed'], 3)
 
     def test_mismatched_package_selectors_fail_preflight(self):

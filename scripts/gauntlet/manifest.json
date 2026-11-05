@@ -31573,11 +31573,13 @@
         "test_gauntlet_publish.py"
       ],
       "tests": [
+        "test_dashboard_names_the_run_green_amber_red",
         "test_dashboard_separates_nightly_and_keeps_blocked_stage_duration",
         "test_dry_run_sanitizes_private_fields_and_forces_honest_ui",
         "test_failed_git_publication_keeps_queue",
         "test_invalid_identity_refused_before_queue_write",
         "test_queue_only_is_durable_and_sanitized",
+        "test_run_status_is_green_amber_red_and_old_rows_still_read",
         "test_symlink_lock_refused_without_touching_target",
         "test_symlink_queue_refused_without_touching_target",
         "test_untrusted_machine_commit_and_negative_times_are_sanitized"
@@ -31592,11 +31594,14 @@
         "test_gauntlet_runner.py"
       ],
       "tests": [
+        "test_a_failure_beside_known_issues_is_red",
+        "test_a_floor_miss_is_red_even_with_only_known_issues_elsewhere",
         "test_build_failure_blocks_stages_and_records_code",
         "test_dry_run_prints_plan_without_building_or_writing_results",
         "test_exited_leader_with_live_descendant_blocks_next_stage",
         "test_failure_preserves_exit_and_continues_using_one_build",
         "test_known_issue_is_counted_and_named_not_a_pass",
+        "test_known_issues_only_make_the_run_amber_with_counts",
         "test_missing_structured_counts_and_skips_fail",
         "test_omitted_blocked_assignment_projection_fails_preflight",
         "test_poisoned_home_and_roots_replaced_in_child_and_xctestrun",
@@ -31967,6 +31972,13 @@
         "test_dead_holder_lock_is_reclaimed",
         "test_deep_on_the_ultra_stays_local_and_says_it_runs_as_m5",
         "test_free_lock_is_taken_and_released",
+        "test_gauntlet_all_passed_is_green",
+        "test_gauntlet_blocked_only_is_amber_and_the_runners_words_win",
+        "test_gauntlet_cli_exits_0_green_3_amber_1_red",
+        "test_gauntlet_failure_beside_known_issues_is_red",
+        "test_gauntlet_floor_miss_inventory_build_timeout_and_no_result_are_red",
+        "test_gauntlet_known_issues_only_is_amber_with_counts",
+        "test_gauntlet_pre_amber_result_reads_as_amber",
         "test_green_needs_rc_zero_no_failures_and_a_pass",
         "test_live_holder_refuses_and_latest_is_untouched",
         "test_status_dry_run_prints_the_probe",
@@ -32420,6 +32432,7 @@
         "test_cycle_only_cli_preserves_invalid_stream_status",
         "test_dashboard_filters_cycle_replay_from_product_tests_without_rendering_it",
         "test_morning_delta_uses_product_runs_not_newer_replay",
+        "test_morning_names_gauntlet_runs_green_amber_red_never_as_a_host",
         "test_morning_replay_updates_sensor_not_host_or_green_run_state"
       ]
     },

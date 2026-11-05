@@ -114,7 +114,12 @@ sensor_rows.sort(key=lambda r: str(r.get("ts","")))
 
 # A dedicated POI replay is sensor evidence, not evidence that product tests
 # ran. Keep it out of every host/latest/green/delta calculation.
-test_rows = [r for r in sensor_rows if r.get("source") != "poi-cycle-metrics"]
+test_rows = [r for r in sensor_rows if r.get("source") not in ("poi-cycle-metrics", "gauntlet")]
+# Gauntlet runs share the file but are not nightlies (no host, no total): one
+# line each, GREEN / AMBER / RED (Rick 2026-11-05). A row from before AMBER
+# says "incomplete" and is shown as such.
+GAUNTLET_WORD = {"passed": "GREEN", "amber": "AMBER", "failed": "RED"}
+gauntlet_rows = [r for r in sensor_rows if r.get("source") == "gauntlet"]
 
 # Person metrics ride additively on nightly-local rows. Manual TestDriver rows
 # may omit them, so retain the newest metric-bearing row. No row yet is the
@@ -219,6 +224,13 @@ for h in order:
     if h in latest: emit(h)
 for h in latest:
     if h not in seen and h not in order: emit(h)
+
+latest_gauntlet = {}
+for r in gauntlet_rows:
+    latest_gauntlet[str(r.get("machine") or "?").upper()] = r
+for m, r in sorted(latest_gauntlet.items()):
+    word = GAUNTLET_WORD.get(r.get("status"), "incomplete (before AMBER)")
+    print(f"Gauntlet {m}: {word} {str(r.get('commit') or '')[:9]} {r['_date']}")
 
 readiness = float(person.get("person_eval_readiness_pct") or 0)
 band = person.get("person_eval_readiness_band") or "red"

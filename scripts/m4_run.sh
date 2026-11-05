@@ -48,7 +48,7 @@
 # bundles per run (~50–300 MB each, kept; prune <root>/out by hand), and the
 # watchdog budgets below in wall time.
 #
-# Exit: 0 started (or --wait: run GREEN) · 1 run RED / host error · 2 usage ·
+# Exit: 0 started (or --wait: run GREEN or AMBER — the OUTCOME line says which) · 1 run RED / host error · 2 usage ·
 #       3 busy · 4 testbed worktree not usable · 5 nightly window.
 #
 # Tests: tests/test_m4_run.py (argument parsing, dry-run plans, the lock, the
@@ -258,7 +258,8 @@ wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
         line="$(on_host "grep '^OUTCOME' '$out/run.log' 2>/dev/null || true")"
         if [ -n "$line" ]; then
             on_host "$(status_snippet)"
-            case "$line" in "OUTCOME GREEN"*) exit 0 ;; *) exit 1 ;; esac
+            # AMBER is not a failure for a --wait caller (exit 0); the line says AMBER.
+            case "$line" in "OUTCOME GREEN"*|"OUTCOME AMBER"*) exit 0 ;; *) exit 1 ;; esac
         fi
     done
     die "gave up waiting after ${WAIT_BUDGET}s; the run may still be going — scripts/m4_run.sh status --host $HOST"
@@ -378,7 +379,7 @@ host_ui() {
 }
 
 host_deep() {
-    local t0 rc secs line
+    local t0 rc secs line verdict_line
     t0=$(date +%s)
     run_bounded "$DEEP_BUDGET" "$OUT/gauntlet.log" "$H_WT" \
         scripts/run_gauntlet.sh --away --machine "$H_MACHINE" --queue-only
@@ -386,13 +387,23 @@ host_deep() {
     secs=$(( $(date +%s) - t0 ))
     echo "gauntlet exit=$rc secs=$secs"
     line="$(grep -E '^GAUNTLET ' "$OUT/gauntlet.log" | tail -1)"
-    [ "$rc" = 124 ] && line="TIMEOUT after ${secs}s ${line}"
-    if [ "$rc" = 0 ]; then
-        echo "deep: GREEN ${line:-(no GAUNTLET line)}" >>"$OUT/summary.txt"
-    else
-        echo "deep: RED rc=$rc ${line:-(no GAUNTLET line; see gauntlet.log)}" >>"$OUT/summary.txt"
-        VERDICT=RED
-    fi
+    # The verdict comes from the run's result.json (GREEN / AMBER / RED, Rick
+    # 2026-11-05): known issues, unadapted suites and ui-not-run are AMBER.
+    local result="${line##* results=}" flag=() vrc
+    result="${result%% *}"
+    [ "$rc" = 124 ] && flag=(--timeout)
+    verdict_line="$(python3 "$H_ROOT/bin/m4_run_summary.py" --gauntlet "${result:-/nonexistent}" "$rc" "$secs" \
+        ${flag[@]+"${flag[@]}"})"
+    vrc=$?
+    echo "$verdict_line" >>"$OUT/summary.txt"
+    echo "  ${line:-(no GAUNTLET line; see gauntlet.log)}" >>"$OUT/summary.txt"
+    case "$vrc" in
+        0) ;;
+        3) [ "$VERDICT" = GREEN ] && VERDICT=AMBER
+           # "deep: AMBER <reasons> (sha=…)" → the reasons, for the OUTCOME line.
+           AMBER_WHY="${verdict_line#deep: AMBER }"; AMBER_WHY="${AMBER_WHY% (sha=*}" ;;
+        *) VERDICT=RED ;;
+    esac
 }
 
 host_main() {   # __host <lane> <sha> <stamp>
@@ -412,14 +423,16 @@ host_main() {   # __host <lane> <sha> <stamp>
     fi
     : >"$OUT/summary.txt"
     VERDICT=GREEN
+    AMBER_WHY=""
     case "$lane" in
         deep) host_deep ;;
         ui)   host_ui ;;
         all)  host_deep; host_ui ;;
     esac
-    echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}"
+    [ "$VERDICT" = AMBER ] || AMBER_WHY=""
+    echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${AMBER_WHY:+ — $AMBER_WHY}"
     sed 's/^/  /' "$OUT/summary.txt"
-    [ "$VERDICT" = GREEN ]
+    [ "$VERDICT" != RED ]
 }
 
 # ── Arguments ─────────────────────────────────────────────────────────────

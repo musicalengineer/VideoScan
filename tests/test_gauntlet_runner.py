@@ -135,12 +135,15 @@ else:
         self.assertTrue(any('unassigned' in e for e in self.result['inventory_errors']))
 
     def test_ui_not_run_cannot_be_reported_as_pass(self):
+        # Rick 2026-11-05: ui not run is AMBER (exit 0), never GREEN.
         self.run_runner()
-        self.assertEqual(self.result['status'], 'incomplete')
+        self.assertEqual(self.result['status'], 'amber')
+        self.assertEqual(self.result['amber_reasons'], ['ui not run (phase 2)'])
         self.assertEqual(self.stage('ui')['status'], 'not_run')
         self.assertEqual(self.stage('ui')['reason'], 'phase 2')
-        self.assertNotEqual(self.completed.returncode, 0)
+        self.assertEqual(self.completed.returncode, 0)
         self.assertIn('UI not run (phase 2)', self.completed.stdout)
+        self.assertIn('GAUNTLET AMBER', self.completed.stdout)
         self.assertNotIn('GAUNTLET PASSED', self.completed.stdout)
         self.assertEqual(len(self.completed.stdout.splitlines()), 1)
 
@@ -199,13 +202,38 @@ else:
     def test_known_issue_is_counted_and_named_not_a_pass(self):
         # 2026-09-28 baseline: one withKnownIssue (#567) made the Hallie stage
         # report "counts unavailable". It stays not-a-pass, but says why.
+        # Rick 2026-11-05: a tracked known issue is AMBER, not RED.
         self.config.update(unit={'passed': 5, 'known': 1})
         self.run_runner()
         unit = self.stage('unit')
-        self.assertEqual(unit['status'], 'failed')
+        self.assertEqual(unit['status'], 'amber')
         self.assertIn('1 known issue', unit['reason'])
         self.assertEqual(unit['known_issues'], 1)
         self.assertEqual(unit['passed'], 5)
+
+    def test_known_issues_only_make_the_run_amber_with_counts(self):
+        self.config.update(unit={'passed': 5, 'known': 1}, regression={'passed': 2, 'known': 2})
+        self.run_runner()
+        self.assertEqual(self.result['status'], 'amber')
+        self.assertEqual(self.completed.returncode, 0)
+        self.assertEqual(self.result['amber_reasons'], ['3 known issues (unit 1, regression 2)', 'ui not run (phase 2)'])
+        self.assertIn('GAUNTLET AMBER', self.completed.stdout)
+        self.assertIn('amber="3 known issues (unit 1, regression 2); ui not run (phase 2)"', self.completed.stdout)
+
+    def test_a_failure_beside_known_issues_is_red(self):
+        self.config.update(unit={'passed': 1, 'failed': 1}, regression={'passed': 2, 'known': 1})
+        self.run_runner()
+        self.assertEqual(self.result['status'], 'failed')
+        self.assertEqual(self.result['amber_reasons'], [])
+        self.assertEqual(self.completed.returncode, 1)
+        self.assertIn('GAUNTLET FAILED', self.completed.stdout)
+
+    def test_a_floor_miss_is_red_even_with_only_known_issues_elsewhere(self):
+        self.config.update(unit={'passed': 1}, regression={'passed': 2, 'known': 1})
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertEqual(self.result['status'], 'failed')
+        self.assertEqual(self.completed.returncode, 1)
 
     def test_build_failure_blocks_stages_and_records_code(self):
         self.config['build_exit'] = 23

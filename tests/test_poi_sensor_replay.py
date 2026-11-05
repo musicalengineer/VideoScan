@@ -109,6 +109,26 @@ class POISensorReplayTests(unittest.TestCase):
         self.assertIn("POI cycle sensor: ok | latest C5 (grade) | production C3", output)
         self.assertIn("CRITICAL: no green nightly run for today yet", output)
 
+    def test_morning_names_gauntlet_runs_green_amber_red_never_as_a_host(self):
+        # Rick 2026-11-05: an AMBER gauntlet run is not a failure; an old row still reads.
+        script = MORNING.read_text()
+        match = re.search(r"python3 - <<'PY'\n(.*?)\nPY\s*$", script, re.DOTALL)
+        ts = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        rows = [{"ts": ts, "source": "nightly-local", "host": "M4", "status": "ok", "passed": 5, "failed": 0, "total": 5},
+                {"ts": ts, "source": "gauntlet", "machine": "m5", "status": "incomplete", "commit": "a" * 40},
+                {"ts": ts, "source": "gauntlet", "machine": "m4", "status": "amber", "commit": "b" * 40},
+                {"ts": ts, "source": "gauntlet", "machine": "m1", "status": "failed", "commit": "c" * 40}]
+        env = os.environ.copy()
+        env["TD_ROWS"] = "\n".join(json.dumps(row) for row in rows)
+        env["TD_SA"] = ""
+        output = subprocess.run([sys.executable, "-c", match.group(1)], env=env,
+                                check=True, capture_output=True, text=True).stdout
+        self.assertIn("Gauntlet M4: AMBER bbbbbbbbb", output)
+        self.assertIn("Gauntlet M1: RED ccccccccc", output)
+        self.assertIn("Gauntlet M5: incomplete (before AMBER)", output)
+        self.assertNotIn("?    ", output)            # never a host row
+        self.assertNotIn("FAILED (", output)
+
     def test_morning_delta_uses_product_runs_not_newer_replay(self):
         script = MORNING.read_text()
         match = re.search(r"python3 - <<'PY'\n(.*?)\nPY\s*$", script, re.DOTALL)

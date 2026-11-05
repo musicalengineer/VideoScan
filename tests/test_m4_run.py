@@ -78,6 +78,66 @@ class SummaryTests(unittest.TestCase):
 
 class ArgumentTests(unittest.TestCase):
 
+    # Rick 2026-11-05: GREEN everything passed · AMBER only known issues /
+    # blocked suites / not run · RED a failure, floor miss, inventory or build.
+    @staticmethod
+    def _result(status, **stage_overrides):
+        stages = [dict(name=n, status='passed', known_issues=0, blocked_details=[])
+                  for n in ('unit', 'regression', 'integration', 'ui')]
+        for s in stages:
+            s.update(stage_overrides.get(s['name'], {}))
+        return dict(status=status, commit='b' * 40, stages=stages, inventory_errors=[])
+
+    def test_gauntlet_all_passed_is_green(self):
+        self.assertEqual(ms.gauntlet_verdict(self._result('passed'), 0)[0], 'GREEN')
+
+    def test_gauntlet_known_issues_only_is_amber_with_counts(self):
+        r = self._result('amber', regression=dict(status='amber', known_issues=7), ui=dict(status='not_run', reason='phase 2'))
+        verdict, words = ms.gauntlet_verdict(r, 0)
+        self.assertEqual(verdict, 'AMBER')
+        self.assertEqual(words, '7 known issues (regression 7); ui not run (phase 2)')
+
+    def test_gauntlet_blocked_only_is_amber_and_the_runners_words_win(self):
+        r = self._result('amber', integration=dict(status='blocked', blocked_details=[{}, {}]))
+        self.assertEqual(ms.gauntlet_verdict(r, 0), ('AMBER', '1 stage blocked (2 unadapted suites)'))
+        r['amber_reasons'] = ['6 stages blocked (912 unadapted suites)']
+        self.assertEqual(ms.gauntlet_verdict(r, 0), ('AMBER', '6 stages blocked (912 unadapted suites)'))
+
+    def test_gauntlet_failure_beside_known_issues_is_red(self):
+        r = self._result('failed', unit=dict(status='failed', reason='test failures'),
+                         regression=dict(status='amber', known_issues=7))
+        self.assertEqual(ms.gauntlet_verdict(r, 1), ('RED', 'unit failed: test failures'))
+
+    def test_gauntlet_floor_miss_inventory_build_timeout_and_no_result_are_red(self):
+        r = self._result('failed', regression=dict(status='failed', reason='executed count below expected floor 426'))
+        self.assertEqual(ms.gauntlet_verdict(r, 1)[0], 'RED')
+        r = self._result('amber'); r['inventory_errors'] = ['x']
+        self.assertEqual(ms.gauntlet_verdict(r, 0)[0], 'RED')
+        r = self._result('failed'); r['reason'] = 'build exit 65'
+        self.assertEqual(ms.gauntlet_verdict(r, 1), ('RED', 'build exit 65'))
+        self.assertEqual(ms.gauntlet_verdict(self._result('amber'), 0, timed_out=True)[0], 'RED')
+        self.assertEqual(ms.gauntlet_verdict(None, 0), ('RED', 'no result.json'))
+        self.assertEqual(ms.gauntlet_verdict(self._result('amber'), 1)[0], 'RED', 'a non-zero runner exit is red')
+
+    def test_gauntlet_pre_amber_result_reads_as_amber(self):
+        r = self._result('incomplete', hallie=dict(status='blocked'))
+        r['stages'].append(dict(name='hallie', status='blocked', blocked_details=[{}]))
+        self.assertEqual(ms.gauntlet_verdict(r, 1 - 1)[0], 'AMBER')
+
+    def test_gauntlet_cli_exits_0_green_3_amber_1_red(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / 'result.json'
+            for status, extra, want in [('passed', {}, 0),
+                                        ('amber', dict(regression=dict(status='amber', known_issues=7)), 3),
+                                        ('failed', dict(unit=dict(status='failed', reason='x')), 1)]:
+                import json as _json
+                path.write_text(_json.dumps(self._result(status, **extra)))
+                rc = 0 if want != 1 else 1
+                done = subprocess.run([sys.executable, str(SUMMARY), '--gauntlet', str(path), str(rc), '9'],
+                                      capture_output=True, text=True, timeout=30)
+                self.assertEqual(done.returncode, want, done.stdout)
+                self.assertTrue(done.stdout.startswith('deep: ' + {0: 'GREEN', 3: 'AMBER', 1: 'RED'}[want]))
+
     def test_usage_errors_exit_2(self):
         for args in ([], ['bogus'], ['ui', '--host', 'm9'], ['deep', '--only', 'X'],
                      ['ui', '--plan-timeout', 'soon'], ['ui', '--only', 'X;rm'], ['ui', 'extra'],
