@@ -1,10 +1,11 @@
 # The file dossier view — everything we know about one file, in three layers
 
-Status: in flight — 2026-11-05. Rick approved the design; phase 1 (§7 step 1: layers 1 and 2, the three call sites) is
-built on `feat/file-dossier-view`, waiting for his spot test. Layer 3 (§5) and the DV clock (§7 step 3) are next.
+Status: in flight — 2026-11-05. Phase 1 (layers 1 and 2) is on `feat/file-dossier-view`: built with four call sites
+(the inspector, the Dossier window, the Results sheet, and the Analyze row in Media File Operations), waiting for Rick's
+spot test. Layer 3 (§5) and the DV clock (§7 step 3) are next.
 
-*Rick said "design it" on 2026-11-05. This is the per-file view in `background_service.md` §6 (view 2), reached the way
-Rick asked for it.*
+*Rick said "design it" on 2026-11-05 and made his UI calls the same day (§8). This is the per-file view in
+`background_service.md` §6 (view 2), reached the way Rick asked for it.*
 
 ## 1. What Rick asked for
 
