@@ -8347,6 +8347,7 @@
         "codableRoundTripLegacy",
         "codableRoundTripPopulated",
         "emptyModelIDRejected",
+        "failureReasonSurvivesLocalizedDescription",
         "mlxWhisperStubReturnsNotImplemented",
         "pythonStubFailsLaunchOnMissingInterpreter",
         "pythonStubFailsLaunchOnMissingScript",
@@ -30810,6 +30811,21 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_audio_transcribe_smoke.py",
+      "stage": "integration",
+      "suites": [
+        "test_audio_transcribe_smoke.py"
+      ],
+      "tests": [
+        "test_known_speech_is_transcribed",
+        "test_media_matrix_is_heard",
+        "test_missing_model_says_so",
+        "test_the_smoke_uses_the_apps_arguments"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_av_sync.py",
       "stage": "integration",
       "suites": [
@@ -30881,6 +30897,28 @@
         "test_held_records_are_included_from_their_payload",
         "test_purged_rows_are_not_records_but_removed_ones_carry_their_marker",
         "test_scale_20k_rows"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
+      "path": "tests/test_check_models.py",
+      "stage": "unit",
+      "suites": [
+        "test_check_models.py"
+      ],
+      "tests": [
+        "test_a_complete_snapshot_is_present",
+        "test_a_copy_without_refs_uses_the_newest_snapshot",
+        "test_a_dangling_weights_symlink_is_missing",
+        "test_a_half_finished_download_is_missing",
+        "test_a_local_folder_passes_through",
+        "test_a_short_shard_set_is_missing_but_a_stale_index_is_ignored",
+        "test_an_absent_repo_says_where_it_looked",
+        "test_an_empty_weights_file_or_no_config_is_missing",
+        "test_cache_location_follows_huggingface_hub_precedence",
+        "test_the_cli_is_red_when_anything_is_missing",
+        "test_the_list_names_the_three_models_and_the_apps_own_vlm_copy"
       ]
     },
     {
@@ -36091,6 +36129,10 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_check_models.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_migrate_data.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -37705,6 +37747,10 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyVideoMediaMatrixTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "tests/test_audio_transcribe_smoke.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
           "name": "tests/test_av_sync.py",

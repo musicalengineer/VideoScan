@@ -1117,6 +1117,103 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
+# Test 14b (2026-11-05): the MODEL lane. The M5 Ultra ran a week without the
+# Whisper weights and every test used a fake. A fake repo (check_models.py
+# printing a chosen answer, venv/bin/python printing a chosen pytest summary)
+# drives the REAL run_model_smoke_lane. Pins: all present + smoke green keeps
+# the row green; a missing model, a red smoke, a smoke that ran zero tests and
+# a lane that never ran each turn a green row red (model-smoke-<why>); a red
+# app verdict keeps its reason; only model_smoke_* keys merge; the lane runs
+# before the app build and its verdict folds in after classification.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 14b: model lane (required weights + real-model audio smoke) =="
+MS_REPO="$SANDBOX/ms-repo"
+mkdir -p "$MS_REPO/scripts" "$MS_REPO/venv/bin" "$MS_REPO/tests"
+cat > "$MS_REPO/scripts/check_models.py" <<'MSC'
+import os, sys
+print(os.environ["MS_FAKE_MODELS"])
+sys.exit(int(os.environ["MS_FAKE_MODELS_RC"]))
+MSC
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" > "$MS_FAKE_ARGS"' 'printf "%s\n" "$MS_FAKE_SMOKE"' 'exit "$MS_FAKE_SMOKE_RC"' > "$MS_REPO/venv/bin/python"
+chmod +x "$MS_REPO/venv/bin/python"
+MS_ALL='{"host":"T","ok":true,"models":[],"missing":[]}'
+MS_ONE='{"host":"T","ok":false,"models":[],"missing":["mlx-community/whisper-medium-mlx-q4 (hf-hub)"]}'
+run_model_case() {   # models_json models_rc smoke_text smoke_rc app_status app_reason → fields
+    (
+        # shellcheck disable=SC1090
+        source "$CORE_LIB"
+        log() { :; }
+        export MS_FAKE_MODELS="$1" MS_FAKE_MODELS_RC="$2" MS_FAKE_SMOKE="$3" MS_FAKE_SMOKE_RC="$4"
+        export MS_FAKE_ARGS="$SANDBOX/ms-args.txt"
+        NIGHTLY_MODEL_SMOKE_LOG="$SANDBOX/ms-run.log"
+        PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
+        run_model_smoke_lane "$MS_REPO" > /dev/null
+        STATUS="$5"; REASON="$6"
+        apply_model_smoke_verdict
+        with_person_metrics "{\"status\":\"$STATUS\",\"reason\":\"$REASON\",\"passed\":7,\"total\":7}" \
+            | python3 "$SANDBOX/row_fields.py" status reason passed model_smoke_status model_smoke_reason \
+                model_smoke_missing model_smoke_audio_passed model_smoke_audio_failed
+    )
+}
+if ! grep -q '^run_model_smoke_lane()' "$CORE_LIB"; then
+    fail "run_model_smoke_lane could not be extracted from nightly_local_tests.sh"
+else
+    got=$(run_model_case "$MS_ALL" 0 "5 passed in 4.08s" 0 ok "")
+    [ "$got" = "ok||7|ok||[]|5|0" ] && pass "all models present + smoke 5/5: the row stays green" \
+        || fail "green model lane: got '$got'"
+    args=$(cat "$SANDBOX/ms-args.txt" 2>/dev/null)
+    [ "$args" = "-m pytest -q -p no:cacheprovider -rA $MS_REPO/tests/test_audio_transcribe_smoke.py" ] \
+        && pass "the smoke runs the real-model pytest from the checkout with the repo venv" \
+        || fail "smoke arguments changed: '$args'"
+    got=$(run_model_case "$MS_ONE" 1 "2 failed, 3 passed in 3s" 1 ok "")
+    [ "$got" = "failed|model-smoke-missing:1|7|failed|missing:1|['mlx-community/whisper-medium-mlx-q4 (hf-hub)']|3|2" ] \
+        && pass "a missing model turns a green row red (model-smoke-missing:1) and names it" \
+        || fail "missing model: got '$got'"
+    got=$(run_model_case "$MS_ALL" 0 "2 failed, 3 passed in 3s" 1 ok "")
+    [ "$got" = "failed|model-smoke-audio-failed:2|7|failed|audio-failed:2|[]|3|2" ] \
+        && pass "a red audio smoke with every model present still turns the row red" \
+        || fail "red smoke: got '$got'"
+    got=$(run_model_case "$MS_ALL" 0 "no tests ran in 0.01s" 5 ok "")
+    [ "$got" = "failed|model-smoke-audio-zero-tests:rc=5|7|failed|audio-zero-tests:rc=5|[]|0|0" ] \
+        && pass "a smoke that ran zero tests is red, never green" \
+        || fail "zero-test smoke: got '$got'"
+    got=$(run_model_case "$MS_ONE" 1 "5 passed in 4s" 0 failed "failed-tests:2")
+    case "$got" in
+        "failed|failed-tests:2|7|failed|missing:1|"*) pass "an already-red app verdict keeps its reason; model_smoke_* still say why" ;;
+        *) fail "app reason was rewritten by the model lane: '$got'" ;;
+    esac
+    notrun=$(
+        # shellcheck disable=SC1090
+        source "$CORE_LIB"
+        STATUS="ok"; REASON=""
+        MODEL_SMOKE_STATUS="not-run"; MODEL_SMOKE_REASON="lane-not-reached"
+        apply_model_smoke_verdict
+        printf '%s|%s' "$STATUS" "$REASON"
+    )
+    [ "$notrun" = "failed|model-smoke-lane-not-reached" ] && pass "a model lane that never ran cannot leave the row green" \
+        || fail "not-run model lane: got '$notrun'"
+    tampered=$(
+        # shellcheck disable=SC1090
+        source "$CORE_LIB"
+        PERSON_METRICS_JSON='{"person_eval_status":"not-configured"}'
+        MODEL_SMOKE_JSON='{"model_smoke_status":"ok","status":"ok","reason":"tampered","failed":0}'
+        with_person_metrics '{"status":"failed","reason":"failed-tests:2","failed":2}' \
+            | python3 "$SANDBOX/row_fields.py" status reason failed model_smoke_status
+    )
+    [ "$tampered" = "failed|failed-tests:2|2|ok" ] && pass "only model_smoke_* keys merge; the lane cannot overwrite status/reason/counts" \
+        || fail "model lane merge broke the row contract: '$tampered'"
+fi
+MS_CALL_LINE=$(grep -n '^run_model_smoke_lane "\$REPO"$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
+MS_VERDICT_LINE=$(grep -n '^apply_model_smoke_verdict$' "$SCRIPT_DIR/nightly_local_tests.sh" | cut -d: -f1)
+if [ -n "$MS_CALL_LINE" ] && [ -n "$BUILD_CALL_LINE" ] && [ "$MS_CALL_LINE" -lt "$BUILD_CALL_LINE" ] &&
+   [ -n "$MS_VERDICT_LINE" ] && [ -n "$CLASSIFY_LINE" ] && [ "$MS_VERDICT_LINE" -gt "$CLASSIFY_LINE" ]; then
+    pass "the model lane runs before the app build and its verdict folds in after classification"
+else
+    fail "model lane wiring moved (lane=$MS_CALL_LINE build=$BUILD_CALL_LINE classify=$CLASSIFY_LINE verdict=$MS_VERDICT_LINE)"
+fi
+
+# ───────────────────────────────────────────────────────────────────
 # Test 15 (2026-10-21, GH #360 item 5): machine setup is the machine, not a
 # test result. Fake automationmodetool / xcodebuild / xcrun drive the REAL
 # check_machine_setup; the M5's real 10/21 log line drives the REAL

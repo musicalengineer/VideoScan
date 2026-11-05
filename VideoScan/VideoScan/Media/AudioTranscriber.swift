@@ -141,6 +141,16 @@ enum AudioTranscriberError: Error, CustomStringConvertible {
     }
 }
 
+/// The orchestrator logs a failure as `error.localizedDescription`. Without
+/// LocalizedError that is Foundation's "The operation couldn't be completed.
+/// (VideoScan.AudioTranscriberError error 4.)" and the reason — e.g. the
+/// script's "model … is not on this Mac" — is lost (2026-11-05).
+/// LocalizedError ≈ overriding std::exception::what(): the generic catch site
+/// now prints the specific message.
+extension AudioTranscriberError: LocalizedError {
+    var errorDescription: String? { description }
+}
+
 // MARK: - Shared logger
 
 private let transcribeLogger = Logger(subsystem: "Rick-Breen.VideoScan",
