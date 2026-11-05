@@ -1,5 +1,5 @@
 // BackgroundServiceRegistrar.swift — the app's side of VideoScan Background
-// (docs/design/background_service.md §3.2, §3.3; step 0).
+// (docs/design/background_service.md §14.2, §14.3; step 0).
 //
 // Two small things, both OFF by default so Rick's normal launch changes
 // nothing (the user-defaults key `background.service.enabled`, false until
@@ -48,7 +48,7 @@ enum BackgroundServiceRegistrar {
 
     private static var agent: any BackgroundAgentService { SMAppService.agent(plistName: plistName) }
 
-    /// What launchd says — never assumed (design §2 caveat).
+    /// What launchd says — never assumed (design §13 caveat).
     static var status: SMAppService.Status { agent.status }
 
     static func statusWords(_ status: SMAppService.Status) -> String {

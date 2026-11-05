@@ -1,6 +1,6 @@
 // BackgroundServiceStore.swift — Settings ▸ Background's Content Analysis
 // rows: the one place the app turns VideoScan Background on and off
-// (docs/design/background_service.md §2 caveat, §3.2).
+// (docs/design/background_service.md §13 caveat, §14.2).
 //
 // Two jobs since 2026-11-04 (Rick: the helper owns its schedule): register /
 // unregister the launchd agent and show launchd's REAL status

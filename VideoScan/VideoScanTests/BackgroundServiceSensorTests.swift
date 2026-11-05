@@ -1,5 +1,5 @@
 // BackgroundServiceSensorTests.swift — VideoScan Background can never write
-// the catalog (docs/design/background_service.md §3.6, §6 sensors;
+// the catalog (docs/design/background_service.md §14.6, §17 sensors;
 // hard rule 6: one committer).
 //
 // SENSOR 1 — no committer in the helper:

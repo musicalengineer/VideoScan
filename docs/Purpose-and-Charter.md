@@ -110,7 +110,7 @@ A starting point for the top-level shape:
 ## Claude Feedback — the background analyzer service (2026-10-30)
 Rick, 2026-10-30: "The app is essentially the UI/UX… peel off services into a BG process that can keep running,
 persist after we quit the app… I don't like the idea of having an option to launch the app in the BG… we can't lose
-the app for 2 weeks." Built as `VideoScan Background.app`, a launchd helper that never writes the catalog (a journal the app's one committer applies), moving one engine at a time so the app is never down; step 1, the 8B era job, merged 2026-11-01. How it works and what moves next: `docs/design/background_service.md` (§0–§0.7, §3, §4).
+the app for 2 weeks." Built as `VideoScan Background.app`, a launchd helper that never writes the catalog (a journal the app's one committer applies), moving one engine at a time so the app is never down; step 1, the 8B era job, merged 2026-11-01. How it works and what moves next: `docs/design/background_service.md` (§8–§11, §14, §15; the dossier deep dive is §1–§7).
 
 ## Hallie: deterministic tool-calling and the persona (advisory starting point)
 To let the LLM query the media database and family tree without hallucinated answers, the client enforces native JSON tool-calling schemas: the model returns `tool_calls`, the client validates arguments against typed Swift functions, dispatches the work to the background database queue, and feeds the result back as a tool message for the natural-language reply. Example tools: `query_family_tree` (structured GEDCOM relations, e.g. "who are the four sons of Rick Breen?"), `search_media_catalog(keyword, decade?)`. (Built this way: Hallie's QueryAST → deterministic executors; DECISIONS 2026-08-14.)

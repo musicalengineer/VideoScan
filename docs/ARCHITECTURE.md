@@ -188,7 +188,7 @@ Size (non-test Swift, 2026-10-18): app 348K + Core 65K = 413K; Hallie 74K, Share
 
 *Words used two ways, or before they are defined (Codex docs review F17, 2026-11-01). One line each; the specialist doc named owns the detail.*
 
-- **Observation** — a fact a machine produced (by an engine or model, with `by`, when and evidence); it never outranks a human fact and never supports the inference that produced it (`docs/design/background_service.md` §0.7).
+- **Observation** — a fact a machine produced (by an engine or model, with `by`, when and evidence); it never outranks a human fact and never supports the inference that produced it (`docs/design/background_service.md` §11).
 - **Assertion** — a stored claim about one field of one subject, with a state: `inferred` (an observation that earned a catalog row) or `confirmed / corrected / rejected` (Rick's decision on it); the rows of `provenance_assertions` (§10.5).
 - **Decision** — (1) a fact Rick set (`user_*`, stars, people tags, events, archive), which outranks every observation; (2) a project ruling, one dated line in `docs/DECISIONS.md`. Say which.
 - **MFO job vs Analyze cycler** — an MFO (Media File Operations) job is work a person started on chosen files or a volume: it starts, shows N of M with Pause/Stop, and finishes. A cycler is continuous metadata maintenance with no "done", only "current"; duration alone does not decide (§10.6; `docs/design/catalog.md` §5.5 "The governing distinction").
