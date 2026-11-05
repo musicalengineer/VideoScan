@@ -355,3 +355,15 @@ def test_no_network_module_and_no_direct_catalog_access():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "catalog.sqlite" not in text and "catalog_db.connect()" in text
     assert 'os.environ["HF_HUB_OFFLINE"] = "1"' in text
+
+
+def test_pick_clustered_takes_siblings_from_each_folder_and_skips_singletons():
+    cands = [
+        {"directory": "/a", "n": 1}, {"directory": "/b", "n": 2}, {"directory": "/a", "n": 3},
+        {"directory": "/c", "n": 4}, {"directory": "/b", "n": 5}, {"directory": "/a", "n": 6},
+        {"directory": "/b", "n": 7},
+    ]
+    got = dd.pick_clustered(cands, 4, 2, lambda r: True)
+    assert [r["n"] for r in got] == [1, 3, 2, 5]           # /a ×2, /b ×2; /c has one file, skipped
+    got = dd.pick_clustered(cands, 10, 3, lambda r: r["n"] != 3)
+    assert [r["n"] for r in got] == [1, 6, 2, 5, 7]         # an unusable file is passed over

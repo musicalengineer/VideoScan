@@ -833,6 +833,29 @@ def pick(candidates: list[dict], n: int, usable: Callable[[dict], bool]) -> list
     return chosen
 
 
+def pick_clustered(candidates: list[dict], n: int, per_folder: int, usable: Callable[[dict], bool]) -> list[dict]:
+    """Siblings on purpose (Rick 2026-11-05: layer 3 needs dots to connect): walk the ordered candidates
+    folder by folder (a new folder each time, in the diverse order), taking up to `per_folder` usable
+    files from each folder that has at least two, until n."""
+    by_folder: dict = defaultdict(list)
+    for idx, rec in enumerate(candidates):
+        by_folder[rec.get("directory")].append(idx)
+    chosen: list[dict] = []
+    seen_folders: set = set()
+    for idx, rec in enumerate(candidates):
+        folder = rec.get("directory")
+        if folder in seen_folders or len(by_folder[folder]) < 2:
+            continue
+        seen_folders.add(folder)
+        got = [candidates[i] for i in by_folder[folder] if usable(candidates[i])][:per_folder]
+        if len(got) < 2:
+            continue
+        chosen.extend(got[: n - len(chosen)])
+        if len(chosen) >= n:
+            break
+    return chosen
+
+
 # ============================================================================ terminal
 
 
@@ -1058,7 +1081,11 @@ class Demo:
                         return bool(s.get("width")) and int(s.get("nb_read_packets") or 0) > 0
                     except Exception:  # noqa: BLE001 — unreachable / stalled / undecodable: not a candidate
                         return False
-                chosen = pick(plan_candidates(records, seed), self.args.n, usable)
+                ordered = plan_candidates(records, seed)
+                if self.args.per_folder:
+                    chosen = pick_clustered(ordered, self.args.n, self.args.per_folder, usable)
+                else:
+                    chosen = pick(ordered, self.args.n, usable)
         del records, by_path
         gc.collect()
         for rec in chosen:
@@ -1644,6 +1671,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n", type=int, default=10, help="how many files to pick (default 10)")
     ap.add_argument("--seed", type=int, default=None, help="make the pick reproducible (printed when omitted)")
     ap.add_argument("--files", nargs="+", help="analyse these files instead of picking from the catalog")
+    ap.add_argument("--per-folder", type=int, default=0,
+                    help="pick siblings: up to K files from each folder (gives layer 3 dots to connect)")
     ap.add_argument("--skip-models", action="store_true", help="layers 1 and 3 only (no 8B, no Whisper)")
     ap.add_argument("--no-color", action="store_true")
     args = ap.parse_args(argv)
