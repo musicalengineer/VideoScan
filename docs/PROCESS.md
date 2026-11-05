@@ -20,7 +20,7 @@ Short on purpose. `CLAUDE.md` holds the hard rules; this is the procedure around
 
 A branch merges to `main` when all of these hold (Rick may waive any to break a logjam):
 
-1. **Fresh main first.** Merge latest `main` into the branch; the suite is green there.
+1. **A recent branch.** Branch from current `main`. There is no separate merge-main step: when `main` has moved, the merge commit is the tree the sensor lane (3) must pass before `pre-push` lets it through (Rick 2026-11-05). The flow: feature A on branch A → tests → related suites and the sensor lane green → checklist → Rick says "merge feature A, I'll spot test" → merge → delete the branch, worktree and DerivedData (§3). The nightly keeps `main` solid.
 2. **Tests exist.** Feature → the five dimensions that apply. Fix → a regression test seen red on the broken code, then green (red/green table in the commit or PR).
 3. **Sensor lane GREEN** on the exact tree being merged: `scripts/run_sensors.sh --derived-data <dd>`. Catalog work also runs `scripts/run_catalog_tests.sh`. A zero-test run is red.
 4. **Independent review** on data-risk code (map: `docs/ARCHITECTURE.md` §Data-risk): the `safety-critical` skill was followed and a scoped Codex pass closed (each finding fixed with a pinning test, or declined in writing). Other code: `reviewer` agent when the change is large; otherwise tests plus Rick's spot test.
@@ -46,8 +46,7 @@ What the hooks already enforce (sensor lane, complexity, SwiftLint, gauntlet man
 
 - `~/dev/VideoScan` is Rick's checkout. Agents work in a `git worktree` with its own `-derivedDataPath`; the worktree and its DerivedData are removed after merge.
 - Branch for anything beyond a one-line tweak: `feature/…`, `fix/…`, `refactor/…`, `test/…`, `experiment/…`.
-- Push `main` without asking. Never force-push or rewrite history (CLAUDE.md rule 11). No routine "merge `main` into the branch" step: good tests make it overkill (Rick, 2026-11-04); use judgement on a long-lived branch.
-- Conventional, honest commit messages (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`). A fix's message carries its red/green table.
+- Push `main` without asking. Never force-push or rewrite history (CLAUDE.md rule 11).- Conventional, honest commit messages (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`). A fix's message carries its red/green table.
 - Never delete files; move to `.trash/`. Rick empties it.
 - Tag before anything structural: `git tag pre-<thing>-<date>`.
 - CLEANUP after merge, after merging a branch which passes all related tests and/or gets the OK from Rick should be deleted, worktrees etc, deleted.
