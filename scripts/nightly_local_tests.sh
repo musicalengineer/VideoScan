@@ -107,10 +107,19 @@
 #       "zero-tests-ran", and the log says what to check. UI tests stay out of
 #       the nightly (-skip-testing:VideoScanUITests): a UI runner can never zero
 #       the unit count.
+#
+#   2026-11-05 (model-smoke-r1):
+#     - The MODEL lane, before the app build: scripts/check_models.py (every
+#       required weights folder on this Mac) and the real-model audio smoke
+#       tests/test_audio_transcribe_smoke.py (a generated clip saying a known
+#       sentence, through the app's real Whisper path). The M5 Ultra ran a
+#       week without the Whisper weights and every test used a fake. Additive
+#       model_smoke_* row fields; a missing model or a red smoke turns a green
+#       row red with reason model-smoke-<why>.
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-10-22-core-lane-stall-r1"
+NIGHTLY_SCRIPT_VERSION="2026-11-05-model-smoke-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -138,6 +147,9 @@ PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason"
 # ran says "not-run" in the row rather than showing nothing at all.
 HALLIE_REPLAY_JSON='{"hallie_replay_status":"not-run","hallie_strict_status":"not-run","hallie_advisory_status":"not-run"}'
 HALLIE_VOICE_JSON='{"hallie_voice_status":"not-run"}'
+MODEL_SMOKE_STATUS="not-run"
+MODEL_SMOKE_REASON="lane-not-reached"
+MODEL_SMOKE_JSON='{"model_smoke_status":"not-run","model_smoke_reason":"lane-not-reached"}'
 # 2026-09-11: the clean DEBUG build of the test target took 1,645 s on the M4 on
 # 9/10 and was killed at 1,800 s on 9/11 (M1 too, same tree) — the night published
 # ZERO tests. 3,600 s is MITIGATION so a build within normal variance cannot trip
@@ -318,7 +330,7 @@ refresh_person_metrics() {
 # Merge additive person fields into any normal/failure nightly JSON row. Python
 # owns JSON escaping so private dataset names cannot corrupt the public JSONL.
 with_person_metrics() {
-    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" VOICE_ROW="${HALLIE_VOICE_JSON:-}" CORE_ROW="${CORE_TEST_JSON:-}" python3 -c '
+    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" HALLIE_ROW="${HALLIE_REPLAY_JSON:-}" VOICE_ROW="${HALLIE_VOICE_JSON:-}" CORE_ROW="${CORE_TEST_JSON:-}" MODEL_ROW="${MODEL_SMOKE_JSON:-}" python3 -c '
 import json, os
 base = json.loads(os.environ["BASE_ROW"])
 base.update(json.loads(os.environ["PERSON_ROW"]))
@@ -338,6 +350,10 @@ base.update({k: v for k, v in voice.items() if k.startswith("hallie_voice_")})
 # verdict reaches status/reason through apply_core_package_verdict, never here.
 core = json.loads(os.environ.get("CORE_ROW") or "{}")
 base.update({k: v for k, v in core.items() if k.startswith("core_")})
+# The model lane (2026-11-05): only its own model_smoke_* keys; its verdict
+# reaches status/reason through apply_model_smoke_verdict, never here.
+models = json.loads(os.environ.get("MODEL_ROW") or "{}")
+base.update({k: v for k, v in models.items() if k.startswith("model_smoke_")})
 print(json.dumps(base, separators=(",", ":")))
 '
 }
@@ -475,6 +491,82 @@ apply_core_package_verdict() {
     if [ "$STATUS" = "ok" ] && [ "${CORE_STATUS:-not-run}" != "ok" ]; then
         STATUS="failed"
         REASON="core-${CORE_REASON:-not-run}"
+    fi
+}
+
+# ── Model lane (2026-11-05) ─────────────────────────────────────────
+# Rick: "a real media file with real audio with a known audio track as a
+# standard test ... red/green so we detect breaks like this in future." The M5
+# Ultra ran a week without mlx-community/whisper-medium-mlx-q4 and no test
+# noticed: every transcription test used a fake. Two checks, both on THIS Mac:
+#   1. scripts/check_models.py --json — every required weights folder present
+#      (the one list lives there; it never downloads);
+#   2. tests/test_audio_transcribe_smoke.py — a generated clip that says a
+#      known sentence, through the app's real Whisper path (venv-mlx, the
+#      worker and the per-file script, the app's arguments); a missing model
+#      FAILS it, never skips it.
+# Runs before the app build (minutes, not hours; a broken build still proves
+# the models). Additive model_smoke_* keys; apply_model_smoke_verdict turns a
+# green row red (reason model-smoke-<why>). Watchdog: 600 s for the smoke.
+# Args: repo. Sets MODEL_SMOKE_STATUS, MODEL_SMOKE_REASON, MODEL_SMOKE_JSON.
+run_model_smoke_lane() {
+    local repo="$1"
+    local py="$repo/venv/bin/python"
+    local models_json smoke_log="${NIGHTLY_MODEL_SMOKE_LOG:-/tmp/nightly-model-smoke.log}"
+    local smoke_rc models_rc passed failed
+    [ -x "$py" ] || py=python3
+    models_json=$(python3 "$repo/scripts/check_models.py" --json)
+    models_rc=$?
+    log "Model check: $(printf '%s' "$models_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("all present" if d["ok"] else "MISSING " + ", ".join(d["missing"]))' 2>/dev/null || echo "check_models.py failed rc=$models_rc")"
+    run_with_process_group_watchdog 600 "${NIGHTLY_WATCHDOG_TERM_GRACE_SECONDS:-10}" "$smoke_log" \
+        "$py" -m pytest -q -p no:cacheprovider -rA "$repo/tests/test_audio_transcribe_smoke.py"
+    smoke_rc=$?
+    passed=$(sed -n 's/.* \([0-9][0-9]*\) passed.*/\1/p; s/^\([0-9][0-9]*\) passed.*/\1/p' "$smoke_log" | tail -1)
+    failed=$(sed -n 's/.* \([0-9][0-9]*\) failed.*/\1/p; s/^\([0-9][0-9]*\) failed.*/\1/p' "$smoke_log" | tail -1)
+    log "Audio smoke: ${passed:-0} passed / ${failed:-0} failed (rc=$smoke_rc)"
+    [ "$smoke_rc" -ne 0 ] && grep -E '^E +AssertionError' "$smoke_log" | head -4 | while read -r line; do log "  $line"; done
+    MODEL_SMOKE_JSON=$(MODELS_JSON="$models_json" MODELS_RC="$models_rc" SMOKE_RC="$smoke_rc" \
+        SMOKE_PASSED="${passed:-0}" SMOKE_FAILED="${failed:-0}" SMOKE_TIMED_OUT="${NIGHTLY_WATCHDOG_DID_TIMEOUT:-false}" python3 -c '
+import json, os
+e = os.environ
+try:
+    models = json.loads(e["MODELS_JSON"])
+    missing = list(models.get("missing", []))
+    models_ok = bool(models.get("ok")) and e["MODELS_RC"] == "0"
+except Exception:
+    missing, models_ok = ["check_models.py gave no answer"], False
+passed, failed, rc = int(e["SMOKE_PASSED"]), int(e["SMOKE_FAILED"]), int(e["SMOKE_RC"])
+if not models_ok:
+    status, reason = "failed", "missing:" + str(len(missing))
+elif e["SMOKE_TIMED_OUT"] == "true":
+    status, reason = "failed", "audio-timeout:600s"
+elif passed == 0:
+    status, reason = "failed", "audio-zero-tests:rc=" + str(rc)
+elif failed or rc != 0:
+    status, reason = "failed", "audio-failed:" + str(failed or rc)
+else:
+    status, reason = "ok", ""
+print(json.dumps({"model_smoke_status": status, "model_smoke_reason": reason,
+                  "model_smoke_missing": missing, "model_smoke_audio_passed": passed,
+                  "model_smoke_audio_failed": failed, "model_smoke_audio_rc": rc},
+                 separators=(",", ":")))
+' 2>/dev/null)
+    if [ -z "$MODEL_SMOKE_JSON" ]; then
+        MODEL_SMOKE_JSON='{"model_smoke_status":"failed","model_smoke_reason":"row-builder-failed"}'
+    fi
+    MODEL_SMOKE_STATUS=$(printf '%s' "$MODEL_SMOKE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["model_smoke_status"])' 2>/dev/null || echo failed)
+    MODEL_SMOKE_REASON=$(printf '%s' "$MODEL_SMOKE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["model_smoke_reason"])' 2>/dev/null || echo row-builder-failed)
+    log "Model lane: $MODEL_SMOKE_STATUS${MODEL_SMOKE_REASON:+ ($MODEL_SMOKE_REASON)}"
+    return 0
+}
+
+# Fold the model lane into the verdict, like the Core lane: a green app run on
+# a Mac missing a model (or whose real-model smoke is red) is NOT green; an
+# already-red verdict keeps its own reason (model_smoke_* still say why).
+apply_model_smoke_verdict() {
+    if [ "$STATUS" = "ok" ] && [ "${MODEL_SMOKE_STATUS:-not-run}" != "ok" ]; then
+        STATUS="failed"
+        REASON="model-smoke-${MODEL_SMOKE_REASON:-not-run}"
     fi
 }
 
@@ -1036,6 +1128,9 @@ fi
 run_core_package_tests "$REPO/VideoScan/VideoScanCore" \
     "$HOME/Library/Caches/videoscan-nightly-core-build"
 
+# ── Model lane: required weights + real-model audio smoke (2026-11-05) ──
+run_model_smoke_lane "$REPO"
+
 # ── Build ───────────────────────────────────────────────────────────
 # DerivedData lives under ~/Library/Caches, NOT /tmp. macOS garbage-collects
 # /tmp and can leave a half-populated explicit-modules cache, which surfaces
@@ -1168,6 +1263,7 @@ classify_nightly_test_result \
     "$TEST_TIMED_OUT" "$NIGHTLY_TEST_TIMEOUT_SECONDS" \
     "$TOTAL" "$FAILED" "$UI_RUNNER_HUNG" "$TEST_RC" "${CRASHED:-0}"
 apply_core_package_verdict
+apply_model_smoke_verdict
 
 orchestrate_post_test_result "$TEST_TIMED_OUT" "$TOTAL"
 POST_TEST_ROUTE_RC=$?

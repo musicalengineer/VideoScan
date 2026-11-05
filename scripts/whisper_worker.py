@@ -13,8 +13,12 @@ the load cost is paid exactly once, on the first request.
 Protocol — one JSON object per line, both directions:
 
     request  (stdin):  {"id": "<uuid>", "path": "/abs/file", "language": null}
-    response (stdout): {"id": "<uuid>", "ok": true,  "text": "..."}
+    response (stdout): {"id": "<uuid>", "ok": true,  "text": "...", "language": "en"}
                     or {"id": "<uuid>", "ok": false, "error": "..."}
+
+The weights must already be on this Mac: a missing model answers every
+request ok:false, "model <repo> is not on this Mac (…)", and never
+downloads (scripts/check_models.py lists what is required).
 
 Rules the Swift side (WhisperWorkerTranscriber) relies on:
   * stdout is protocol-pure — EXACTLY one JSON line per request,
@@ -40,6 +44,11 @@ import json
 import sys
 import time
 from pathlib import Path
+
+# Weights resolve from the local cache only, never a download: a missing
+# model answers ok:false "model … is not on this Mac". Resolved per request
+# (a stat of a few files), so weights copied in mid-batch are picked up.
+from check_models import resolve_model  # scripts/ is sys.path[0] when run as a script
 
 
 WORKER_CACHE_LIMIT_BYTES = 1024 * 1024 * 1024  # MLX buffer-cache ceiling
@@ -69,9 +78,16 @@ def handle_request(req: dict, model: str) -> dict:
     if not Path(path).is_file():
         return {"id": req_id, "ok": False, "error": f"file not found: {path}"}
 
+    model_path, model_words = resolve_model(model)
+    if model_path is None:
+        log(f"error: {model_words}")
+        return {"id": req_id, "ok": False, "error": model_words}
+
     import mlx_whisper  # cached module; import cost paid at startup
 
-    kwargs = {"path_or_hf_repo": model}
+    # The local folder, never the repo id (no network). ModelHolder keys
+    # its cache on this string, so the model still loads once per worker.
+    kwargs = {"path_or_hf_repo": model_path}
     language = req.get("language")
     if language:
         kwargs["language"] = language
@@ -88,8 +104,10 @@ def handle_request(req: dict, model: str) -> dict:
 
     text = (result.get("text") if isinstance(result, dict) else None) or ""
     text = text.strip()
-    log(f"transcribed {Path(path).name} in {time.time() - t0:.1f}s — {len(text)} chars")
-    return {"id": req_id, "ok": True, "text": text}
+    language = result.get("language") if isinstance(result, dict) else None
+    log(f"transcribed {Path(path).name} in {time.time() - t0:.1f}s — {len(text)} chars, language {language}")
+    # "language" is additive: the Swift WorkerResponse decoder ignores it.
+    return {"id": req_id, "ok": True, "text": text, "language": language}
 
 
 def main() -> int:
@@ -120,7 +138,13 @@ def main() -> int:
     import mlx.core as mx
     mx.set_cache_limit(WORKER_CACHE_LIMIT_BYTES)
 
-    log(f"ready — model {args.model} (loads on first request, then cached)")
+    # Say at spawn, once, in the app log (stderr is relayed there), when the
+    # weights are not on this Mac; each request then answers the same words.
+    model_path, model_words = resolve_model(args.model)
+    if model_path is None:
+        log(f"error: {model_words}")
+    else:
+        log(f"ready — model {model_words} (loads on first request, then cached)")
 
     for line in sys.stdin:
         line = line.strip()

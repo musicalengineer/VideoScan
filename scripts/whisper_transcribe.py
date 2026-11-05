@@ -19,6 +19,9 @@ Setup on a new machine (one-time):
     venv-mlx/bin/pip install -r scripts/requirements-mlx.txt
     venv-mlx/bin/pip install mlx-whisper
 
+The weights must already be on this Mac (scripts/check_models.py says
+which are); the script refuses, exit 6, rather than download them.
+
 Then call from the Swift app, or by hand:
 
     venv-mlx/bin/python scripts/whisper_transcribe.py <audio-or-video> \
@@ -30,6 +33,17 @@ import argparse
 import sys
 import time
 from pathlib import Path
+
+# Weights resolve from the local cache only, never a download (exit 6 with
+# "model … is not on this Mac" instead). 2026-11-05: the M5 Ultra ran a week
+# without this model and nothing said so.
+from check_models import resolve_model  # scripts/ is sys.path[0] when run as a script
+
+# Exit codes the Swift side surfaces in the log (AudioTranscriberError
+# .subprocessFailed carries exit code + stderr tail): 2 input missing,
+# 3 mlx_whisper missing, 4 transcription failed, 5 output unwritable,
+# 6 model weights not on this Mac.
+EXIT_MODEL_MISSING = 6
 
 
 def main() -> int:
@@ -57,6 +71,11 @@ def main() -> int:
         print(f"error: {args.input} not found", file=sys.stderr)
         return 2
 
+    model_path, model_words = resolve_model(args.model)
+    if model_path is None:
+        print(f"error: {model_words}", file=sys.stderr)
+        return EXIT_MODEL_MISSING
+
     # Late import — if the user runs this from the wrong venv, the
     # error message says so before we try to do anything else.
     try:
@@ -66,12 +85,11 @@ def main() -> int:
         print("hint: pip install mlx-whisper (in venv-mlx)", file=sys.stderr)
         return 3
 
-    print(f"[whisper] loading {args.model} ...", flush=True)
+    print(f"[whisper] loading {model_words} ...", flush=True)
     t0 = time.time()
-    # mlx_whisper.transcribe loads the model on demand and caches it
-    # to ~/.cache/huggingface. First call pays the download cost
-    # (~244 MB for medium-q4), subsequent calls are warm-start.
-    kwargs = {"path_or_hf_repo": args.model}
+    # The local snapshot folder, never the repo id: mlx_whisper only calls
+    # snapshot_download (network) when the path does not exist.
+    kwargs = {"path_or_hf_repo": model_path}
     if args.language:
         kwargs["language"] = args.language
     try:
@@ -83,7 +101,9 @@ def main() -> int:
 
     text = (result.get("text") if isinstance(result, dict) else None) or ""
     text = text.strip()
+    language = (result.get("language") if isinstance(result, dict) else None) or "unknown"
     print(f"[whisper] transcribed in {elapsed:.1f}s — {len(text)} chars", flush=True)
+    print(f"[whisper] language={language}", flush=True)
 
     try:
         args.out.parent.mkdir(parents=True, exist_ok=True)

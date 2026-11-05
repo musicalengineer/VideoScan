@@ -54,6 +54,35 @@ struct AudioTranscriberTests {
         }
     }
 
+    // MARK: - Always-on: a failure's log line says why
+
+    /// Regression (2026-11-05, the M5 Ultra ran a week without the Whisper
+    /// weights). The Dossier orchestrator logs a Whisper failure as
+    /// `error.localizedDescription`. AudioTranscriberError was only
+    /// CustomStringConvertible, so that read "The operation couldn't be
+    /// completed. (VideoScan.AudioTranscriberError error 4.)" and the
+    /// script's words — "model … is not on this Mac" — never reached the
+    /// orchestrator's line. Every case must carry its description through.
+    @Test("Every AudioTranscriberError keeps its reason in localizedDescription")
+    func failureReasonSurvivesLocalizedDescription() {
+        let missing = "model mlx-community/whisper-medium-mlx-q4 is not on this Mac (not in /tmp/empty)"
+        let cases: [AudioTranscriberError] = [
+            .notImplemented(engine: "MLXWhisper"),
+            .modelLoadFailed(reason: missing),
+            .audioUnreadable(path: "/Volumes/X/a.mov"),
+            .subprocessLaunchFailed(reason: "Python interpreter missing: /nope"),
+            .subprocessFailed(exitCode: 6, stderrTail: missing),
+            .deadlineExceeded(seconds: 60),
+            .underlying(CocoaError(.fileNoSuchFile)),
+        ]
+        for err in cases {
+            let asLogged = (err as Error).localizedDescription  // what the orchestrator logs
+            #expect(asLogged == err.description, "logged as: \(asLogged)")
+        }
+        let logged = (AudioTranscriberError.subprocessFailed(exitCode: 6, stderrTail: missing) as Error).localizedDescription
+        #expect(logged.contains("whisper-medium-mlx-q4 is not on this Mac"))
+    }
+
     // MARK: - Always-on: Python subprocess stub-fail smoke
 
     /// With a bogus python path the runner should surface
