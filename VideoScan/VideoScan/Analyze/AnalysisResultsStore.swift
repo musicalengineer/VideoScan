@@ -66,6 +66,9 @@ final class AnalysisResultsStore: ObservableObject {
     private let reveal: (UUID) -> Bool
     private let note: (String) -> Void
     private let readJournalWords: () -> String?
+    /// The file dossier's one door (FileDossierLoader.production) for "Show
+    /// Dossier"; nil = the button is absent (tests that do not need it).
+    let dossiers: FileDossierLoader?
     /// The newest list request; an older one that lands later is dropped.
     private var issued = 0
     /// The reads in flight: a newer request, Done, or the sheet closing cancels them
@@ -74,12 +77,14 @@ final class AnalysisResultsStore: ObservableObject {
     private var listTask: Task<AnalysisResultsReport.FileList, Error>?
 
     init(loadReport: @escaping LoadReport, loadFiles: @escaping LoadFiles, reveal: @escaping (UUID) -> Bool,
-         note: @escaping (String) -> Void = { _ in }, journalWords: @escaping () -> String? = { nil }) {
+         note: @escaping (String) -> Void = { _ in }, journalWords: @escaping () -> String? = { nil },
+         dossiers: FileDossierLoader? = nil) {
         self.loadReport = loadReport
         self.loadFiles = loadFiles
         self.reveal = reveal
         self.note = note
         self.readJournalWords = journalWords
+        self.dossiers = dossiers
     }
 
     /// Stop every read in flight (the sheet calls it when it goes away).
@@ -131,7 +136,8 @@ final class AnalysisResultsStore: ObservableObject {
                 model?.log("Content Analysis ▸ Results: " + line)
                 appLog.write("[analysis-results] " + line)
             },
-            journalWords: { [weak model] in model?.journalApplier.counts.map(JournalApplierWords.statusLine) })
+            journalWords: { [weak model] in model?.journalApplier.counts.map(JournalApplierWords.statusLine) },
+            dossiers: FileDossierLoader.production(model: model))
     }
 
     /// The analyzer on screen (the seated one first).

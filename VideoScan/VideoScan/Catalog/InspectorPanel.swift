@@ -62,6 +62,9 @@ struct InspectorPanel: View {
     /// digest (resolved by the CALLER, O(1)). nil store = no line (previews).
     var provenanceRoles: ProvenanceRoleStore?
     var contentDigest: String?
+    /// The file dossier's one door (FileDossierLoader.production), passed by
+    /// the host; nil = no Dossier section (previews).
+    var fileDossiers: FileDossierLoader?
 
     // The sections, top to bottom. Each builder lives in
     // InspectorPanel+Sections.swift and decides its own visibility through
@@ -88,7 +91,7 @@ struct InspectorPanel: View {
                     whenSection(rec)
                     whereSection(rec)
                     historySection(rec)
-                    dossierSection(rec)          // only once dossier-processed
+                    dossierSection(rec)          // the file dossier view (every file)
                     timestampsSection(rec)
                     correlationSection(rec)      // only when paired / scored
                     trimSection(rec)             // only on trims and their sources

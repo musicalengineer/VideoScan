@@ -5,7 +5,8 @@
 // tries in progress · still to do), "agrees with your confirmed date within
 // 5 years", the pace and a plain ETA; and the files of the selected outcome
 // in a Table — double-click (or Show in Catalog) selects the file in the
-// Catalog through the existing door.
+// Catalog through the existing door; Show Dossier opens the file dossier view
+// (docs/design/file_dossier_view.md, through its one door) over the sheet.
 //
 // Plain and conventional on purpose (Rick owns the look): an outcome list on
 // the left, a Table on the right, Refresh and Done at the bottom.
@@ -26,6 +27,8 @@ struct AnalysisResultsSheet: View {
     @StateObject private var store: AnalysisResultsStore
     @Environment(\.dismiss) private var dismiss
     @State private var selection: AnalysisResultsReport.FileRow.ID?
+    /// The row whose file dossier is open (Show Dossier).
+    @State private var dossierRow: AnalysisResultsReport.FileRow?
 
     init(store: @autoclosure @escaping () -> AnalysisResultsStore) {
         _store = StateObject(wrappedValue: store())
@@ -176,6 +179,9 @@ struct AnalysisResultsSheet: View {
             }
             .contextMenu(forSelectionType: AnalysisResultsReport.FileRow.ID.self) { ids in
                 Button("Show in Catalog") { show(ids.first) }.disabled(ids.count != 1)
+                if store.dossiers != nil {
+                    Button("Show Dossier") { showDossier(ids.first) }.disabled(ids.count != 1)
+                }
             } primaryAction: { ids in
                 show(ids.first)
             }
@@ -198,11 +204,27 @@ struct AnalysisResultsSheet: View {
                     Text(problem).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if store.dossiers != nil {
+                    Button("Show Dossier") { showDossier(selection) }
+                        .disabled(selection == nil)
+                        .help("Everything the catalog knows about this file: technical facts, patterns and events.")
+                        .accessibilityIdentifier("analysisResults.showDossier")
+                }
                 Button("Show in Catalog") { show(selection) }
                     .disabled(selection == nil)
                     .accessibilityIdentifier("analysisResults.showInCatalog")
             }
         }
+        .sheet(item: $dossierRow) { row in
+            if let loader = store.dossiers {
+                FileDossierSheet(row: row, loader: loader, onShowInCatalog: { store.reveal(row) })
+            }
+        }
+    }
+
+    private func showDossier(_ id: AnalysisResultsReport.FileRow.ID?) {
+        guard let id, let row = store.files?.rows.first(where: { $0.id == id }) else { return }
+        dossierRow = row
     }
 
     private func show(_ id: AnalysisResultsReport.FileRow.ID?) {
@@ -225,5 +247,40 @@ struct AnalysisResultsSheet: View {
             Button("Done") { store.cancel(); dismiss() }
                 .keyboardShortcut(.cancelAction)
         }
+    }
+}
+
+/// The Results sheet's file dossier, over the sheet: the file's name, the
+/// three groups, Show in Catalog and Done (the design's mock, §3).
+struct FileDossierSheet: View {
+    let row: AnalysisResultsReport.FileRow
+    let loader: FileDossierLoader
+    let onShowInCatalog: () -> Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.filename).font(.headline).textSelection(.enabled)
+                    Text(row.path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(row.path)
+                }
+                Spacer()
+                // Closes either way: when the file cannot be shown, the Results sheet
+                // says why under its list.
+                Button("Show in Catalog") { _ = onShowInCatalog(); dismiss() }
+            }
+            ScrollView {
+                FileDossierView(fileID: row.recordID, loader: loader)
+                    .padding(.trailing, 8)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 640, idealWidth: 720, minHeight: 420, idealHeight: 560)
+        .accessibilityIdentifier("analysisResults.dossierSheet")
     }
 }

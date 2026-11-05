@@ -36,10 +36,6 @@ enum InspectorPanelRules {
 
     // MARK: - Section visibility (sections not listed here always show)
 
-    static func showsDossier(_ rec: VideoRecord) -> Bool {
-        rec.dossierProcessedAt != nil
-    }
-
     static func showsCorrelation(_ rec: VideoRecord) -> Bool {
         rec.pairedWith != nil || rec.pairConfidence != nil
     }

@@ -101,6 +101,12 @@ struct DossierDashboardView: View {
          snapshot.state.analysisScope.hashValue]
     }
 
+    /// Completed rows opened to their file dossier: activity id → the
+    /// file's catalog id, resolved ONCE at the click through the model's
+    /// path index (`record(forPath:)`), never in the body; nil = the file is
+    /// not in the catalog (the view says so).
+    @State private var expandedFiles: [UUID: UUID?] = [:]
+
     /// Last signature we refiltered for. `-1` sentinel forces the first
     /// pass on appear.
     @State private var lastCoverageKey: [Int] = [-1]
@@ -328,9 +334,18 @@ struct DossierDashboardView: View {
                                 // signature stability); a constant means
                                 // row equality never churns on it.
                                 now: .distantPast,
+                                isExpanded: expandedFiles[item.id] != nil,
+                                onToggle: { toggleDossier(item) },
                                 onShowInCatalog: { item in showInCatalog(path: item.path) }
                             )
                             .equatable()
+                            // The file dossier view, in place under its row
+                            // (the MFO window's expand-to-detail pattern).
+                            if let opened = expandedFiles[item.id] {
+                                FileDossierView(fileID: opened, loader: FileDossierLoader.production(model: model))
+                                    .padding(.leading, 30)
+                                    .padding(.bottom, 6)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -538,6 +553,16 @@ struct DossierDashboardView: View {
         UserDefaults.standard.set(1, forKey: "selectedTab")
         model.pendingCatalogSelection = rec.id
         MainWindowHelper.shared.openMainWindow()
+    }
+
+    /// A click on a completed row opens (or closes) its file dossier in
+    /// place, as an MFO job row opens its detail.
+    private func toggleDossier(_ item: CompletedActivity) {
+        if expandedFiles[item.id] != nil {
+            expandedFiles[item.id] = nil
+        } else {
+            expandedFiles[item.id] = .some(model.record(forPath: item.path)?.id)
+        }
     }
 
     /// Filename-based fallback. CompletedActivity only stores the

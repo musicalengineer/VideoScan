@@ -33755,6 +33755,73 @@
       ],
       "stage": "unit",
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Dossier/TechnicalReadingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TechnicalReadingTests"
+      ],
+      "tests": [
+        "aDVCaptureIsAHighConstantRate",
+        "aDVCreationTimeIsTheCaptureStamp",
+        "aProResCreationTimeIsATransferStampNotACaptureDate",
+        "deviceTagsMakeACameraDateAndNoTagAWeakOne",
+        "dv32kHzReadsAsAConsumerCamcorder",
+        "encodersAndTheCameraAreNamed",
+        "factsComeFromTheStoredRecordFields",
+        "frameRatesAndSizesNameTheirSystem",
+        "mtimeSilenceAndAnUpscaledTransfer",
+        "noVideoStreamIsSaidPlainly",
+        "sentinelAndImpossibleDatesAreRejected",
+        "storedColumnsParse"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Dossier/FileDossierTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FileDossierTests"
+      ],
+      "tests": [
+        "aCorruptStoredRowStillBuildsAndSaysWhy",
+        "aDVFileCarriesTheDVClockLineUntilTheAnalyzerExists",
+        "aRejectedEraIsNotShown",
+        "anEraAgreesOrDisagreesWithRicksYear",
+        "anUnknownSignerIsNamedAndAMalformedValueIsIgnored",
+        "burnedInDatesAreObservationsNewestFirst",
+        "eachMissingReadingSaysWhyInWords",
+        "eraNoneIsNeverAnEraAndAGiveUpSaysWhy",
+        "everyLineEqualsItsStoredRow",
+        "everythingTheOldInspectorShowedIsCarried",
+        "noProbeDataSaysSoAndKeepsTheFileDates",
+        "scaleOpeningOneDossierIn100kFilesIsInsideTheBudget",
+        "theThreeSummaries"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileDossierStoreTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FileDossierProductionTests",
+        "FileDossierStoreTests",
+        "FileDossierMediaMatrixTests",
+        "FileDossierSensorTests"
+      ],
+      "tests": [
+        "aChangeSignalReReads",
+        "aDossierWindowRowReRendersWhenItsDossierOpens",
+        "aMissingRowAndAFailedReadSaySoAndAFailureIsLoggedOnce",
+        "aNewerRequestDropsAnOlderAnswer",
+        "allGroupsStartCollapsedAndTheColoursAreGreyAndBlue",
+        "productionDoorMatchesTheLoadedRecord",
+        "technicalReadings",
+        "theThreeCallSitesGoThroughOneDoor",
+        "theViewAndTheStoreAreReadOnlyAndDoNoRecordsWork"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -36461,7 +36528,7 @@
       ],
       "expected_floor": 3324,
       "name": "unit",
-      "package_expected_floor": 742,
+      "package_expected_floor": 767,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsReportReviewTests",
         "VideoScanCoreTests.AnalysisResultsReportTests",
@@ -36497,6 +36564,7 @@
         "VideoScanCoreTests.FableReviewHelperLoopTests",
         "VideoScanCoreTests.FableReviewHelperTests",
         "VideoScanCoreTests.FileBackedCatalogSourceTests",
+        "VideoScanCoreTests.FileDossierTests",
         "VideoScanCoreTests.GedcomPullFactsTests",
         "VideoScanCoreTests.ImportComparatorScaleTests",
         "VideoScanCoreTests.ImportComparatorTests",
@@ -36546,7 +36614,8 @@
         "VideoScanCoreTests.SQLiteCatalogReaderTests",
         "VideoScanCoreTests.StateRootLockTests",
         "VideoScanCoreTests.SubprocessEnvironmentTests",
-        "VideoScanCoreTests.SubprocessPathSensorTests"
+        "VideoScanCoreTests.SubprocessPathSensorTests",
+        "VideoScanCoreTests.TechnicalReadingTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -37423,7 +37492,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 426,
+      "expected_floor": 435,
       "name": "regression",
       "package_expected_floor": 331,
       "package_selectors": [
@@ -37581,7 +37650,11 @@
         "VideoScanTests/AudioFingerprintStampDurabilityTests",
         "VideoScanTests/AudioFingerprintAttemptTests",
         "VideoScanTests/BackgroundServiceLoggingTests",
-        "VideoScanTests/HallieViewerCatalogTests"
+        "VideoScanTests/HallieViewerCatalogTests",
+        "VideoScanTests/FileDossierProductionTests",
+        "VideoScanTests/FileDossierStoreTests",
+        "VideoScanTests/FileDossierMediaMatrixTests",
+        "VideoScanTests/FileDossierSensorTests"
       ]
     },
     {

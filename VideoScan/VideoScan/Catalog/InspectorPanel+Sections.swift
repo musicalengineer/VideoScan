@@ -209,15 +209,15 @@ extension InspectorPanel {
         }
     }
 
-    // Dossier — captions, transcript, OCR text, OCR dates,
-    // inferred date. Only shown when the record has been
-    // processed by the dossier pipeline so empty rows don't
-    // clutter the inspector for un-dossiered records.
+    // Dossier — the file dossier view (Technical · Patterns & events ·
+    // Across the collection), for every file: Technical always has the
+    // stored probe facts, and a missing analyzer says why. nil loader =
+    // previews (no catalog to read).
     @ViewBuilder
     func dossierSection(_ rec: VideoRecord) -> some View {
-        if InspectorPanelRules.showsDossier(rec) {
+        if let fileDossiers {
             inspectorSection("Dossier", systemImage: "doc.text.magnifyingglass") {
-                InspectorDossierView(record: rec)
+                InspectorDossierView(record: rec, loader: fileDossiers)
             }
         }
     }

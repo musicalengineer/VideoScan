@@ -58,7 +58,6 @@ struct InspectorPanelRulesTests {
 
     @Test func conditionalSectionsAreHiddenOnAPlainRecord() {
         let r = rec()
-        #expect(!InspectorPanelRules.showsDossier(r))
         #expect(!InspectorPanelRules.showsCorrelation(r))
         #expect(!InspectorPanelRules.showsTrim(r, hasDerivatives: false))
         #expect(!InspectorPanelRules.showsMasterArchive(masterCopy: nil, promotionSource: nil))
@@ -71,9 +70,6 @@ struct InspectorPanelRulesTests {
     }
 
     @Test func eachConditionalSectionHasItsTrigger() {
-        let d = rec(); d.dossierProcessedAt = Date()
-        #expect(InspectorPanelRules.showsDossier(d))
-
         let p = rec(); p.pairedWith = rec(.audioOnly)
         #expect(InspectorPanelRules.showsCorrelation(p))
         let c = rec(); c.pairConfidence = .high

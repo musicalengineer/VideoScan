@@ -823,7 +823,8 @@ struct CatalogContent: View {
             promotionSource: promotionSourceOfSelected,
             angelEvidence: selectedAngelEvidence,
             provenanceRoles: model.provenanceRoles,
-            contentDigest: selectedRecord.flatMap(CatalogCommit.digest(of:))
+            contentDigest: selectedRecord.flatMap(CatalogCommit.digest(of:)),
+            fileDossiers: FileDossierLoader.production(model: model)
         )
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
     }

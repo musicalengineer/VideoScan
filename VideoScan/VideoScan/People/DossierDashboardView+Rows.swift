@@ -386,14 +386,20 @@ private struct ChannelIndicator: View {
 struct CompletedActivityRow: View, Equatable {
     let item: CompletedActivity
     let now: Date
+    /// File dossier view (Rick 2026-11-05): the row expands in place to the
+    /// file's dossier, as an MFO job row expands to its detail — ▸/▾ and a
+    /// click on the row (MediaFileOperationRow's pattern).
+    var isExpanded = false
+    var onToggle: () -> Void = {}
     let onShowInCatalog: (CompletedActivity) -> Void
 
     static func == (a: CompletedActivityRow, b: CompletedActivityRow) -> Bool {
-        a.item == b.item
+        a.item == b.item && a.isExpanded == b.isExpanded
     }
 
     var body: some View {
         HStack(spacing: 10) {
+            MediaFileOperationDisclosure(isExpandable: true, isExpanded: isExpanded)
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 14))
                 .foregroundColor(.green)
@@ -411,6 +417,7 @@ struct CompletedActivityRow: View, Equatable {
             ChannelIndicator(label: "Captions", state: captionsState)
         }
         .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
         .contextMenu {
             Button {
                 onShowInCatalog(item)
@@ -418,6 +425,7 @@ struct CompletedActivityRow: View, Equatable {
                 Label("Show in Catalog", systemImage: "film.stack")
             }
         }
+        .accessibilityIdentifier("dossierWindow.completedRow")
     }
 
     private var transcriptState: ChannelIndicator.State {
