@@ -519,6 +519,12 @@ actor EraCounters {
 
 public enum EraPlanner {
 
+    /// Which `files f` rows the era job plans over: a live video file with a
+    /// content digest. The Results sheet's "still to do" counts with the SAME
+    /// words (one rule, rule 4), so the two cannot drift.
+    public static let plannedFilesPredicate =
+        "f.content_digest IS NOT NULL AND f.removal_state IS NULL AND f.stream_type IN ('Video+Audio', 'Video only')"
+
     /// The frozen unit list (see the file header). Refuses a catalog whose
     /// schema is newer than this build reads.
     public static func plan(catalogURL: URL, journal: ObservationJournal, signer: String, limit: Int?, jobID: JobID,
@@ -536,8 +542,7 @@ public enum EraPlanner {
                    (SELECT CAST(strftime('%Y', coalesce(i.date_at, i.range_start), 'unixepoch') AS TEXT)
                       FROM inferred_dates i WHERE i.digest = f.content_digest)
               FROM files f
-             WHERE f.content_digest IS NOT NULL AND f.removal_state IS NULL
-               AND f.stream_type IN ('Video+Audio', 'Video only')
+             WHERE \(plannedFilesPredicate)
              ORDER BY f.content_digest, f.full_path
             """) { row in
             guard let digest = row[0], let path = row[1] else { return }

@@ -33279,6 +33279,30 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Background/AnalysisResultsReportTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AnalysisResultsReportTests"
+      ],
+      "tests": [
+        "aGiveUpRowShowsTheReasonGiveUpLineWroteAndAnEraRowShowsWordsNeverANone",
+        "aMissingTryCountFileIsNoTriesAndCreatesNothing",
+        "agreementIsWithinFiveYearsAtTheBoundaryAndHonoursWidthAndRejection",
+        "anEmptyCatalogShowsTheSeatedAnalyzerWithNothingYet",
+        "anUnknownSignerAppearsWithItsOwnCountsAndNoPlan",
+        "anUnreadableTryCountFileLeavesTheReportStandingAndTheFileUntouched",
+        "eachOutcomeIsCountedOncePerContent",
+        "eraWordsArePeoplesWordsThenTheRange",
+        "everyNumberEqualsAnIndependentCountAndEveryListItsCount",
+        "oneHundredThousandContentsBuildWithinBudget",
+        "paceCountsEachFileOnceAtItsFirstVerdict",
+        "theAgreementIsCatalogStatussConvergenceOnTheSameCatalog",
+        "theETAIsPlainAndNeverMadeUp",
+        "theReadOnlySnapshotNeverCompactsWhereTheJobWould"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AnalyzerRunsTests.swift",
       "stage": "unit",
@@ -33431,6 +33455,25 @@
         "theLayerAgreesWithTheReferenceOnBothPaths",
         "theStatusLineSitsBesideTheJournalLineAndIsAbsentAtZero",
         "theStoreCountsOnlyContentsWithBothAndPublishesToStatusAndSearch"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalysisResultsStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AnalysisResultsStoreTests",
+        "AnalysisResultsSheetSensorTests"
+      ],
+      "tests": [
+        "aFailedReadSaysSo",
+        "aStaleListIsDropped",
+        "noModelExtensionAndRevealIsTheExistingDoor",
+        "selectionAndReveal",
+        "thePanelOpensTheSheet",
+        "theProductionStoreShowsWhatTheCatalogHolds",
+        "theSheetAndTheStoreDoNoRecordsWork",
+        "theStoreHoldsNoSQLAndNeverWrites"
       ]
     },
     {
@@ -36400,10 +36443,11 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3314,
+      "expected_floor": 3322,
       "name": "unit",
-      "package_expected_floor": 725,
+      "package_expected_floor": 739,
       "package_selectors": [
+        "VideoScanCoreTests.AnalysisResultsReportTests",
         "VideoScanCoreTests.AuditMarkerJSONTests",
         "VideoScanCoreTests.BackgroundCatalogAccessTests",
         "VideoScanCoreTests.BackgroundMenuPresentationReviewTests",
@@ -36824,6 +36868,8 @@
         "VideoScanTests/MKVDossierPipelineTests",
         "VideoScanTests/MachineEraStoreLogicTests",
         "VideoScanTests/MachineEraStoreTruthTests",
+        "VideoScanTests/AnalysisResultsStoreTests",
+        "VideoScanTests/AnalysisResultsSheetSensorTests",
         "VideoScanTests/MachineNoteAuthorTests",
         "VideoScanTests/MachineNoteWriterTests",
         "VideoScanTests/MapKitLinkSensorTests",

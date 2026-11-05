@@ -20,6 +20,8 @@ enum EraFixture {
         var userYear: String?
         var embedded: Int64?
         var inferred: Int64?
+        /// The file row's own number when a content has several copies (default `n`).
+        var fileN: Int?
     }
 
     /// A catalog.sqlite at schema 14 holding `files` (one content each).
@@ -38,7 +40,7 @@ enum EraFixture {
                                            volume_case_sensitive, embedded_created_at, embedded_created_source,
                                            removal_state, removal_since, removal_reason)
                         VALUES (?, ?, '', ?, ?, ?, 'mov', ?, 100, 1, 'archiveFixity', ?, ?, 'Cataloged', 'None', 0, ?, ?, ?, ?, ?)
-                        """, arguments: [String(format: "00000000-0000-0000-0000-%012X", f.n), hex(f.n), f.path, f.path.lowercased(),
+                        """, arguments: [String(format: "00000000-0000-0000-0000-%012X", f.fileN ?? f.n), hex(f.n), f.path, f.path.lowercased(),
                                          (f.path as NSString).lastPathComponent, dir, f.stream, f.duration,
                                          f.embedded, f.embedded.map { _ in "creation_time" },
                                          f.removed ? "removedFromCatalog" : nil, f.removed ? 1 : nil, f.removed ? "test" : nil])
@@ -103,6 +105,41 @@ enum EraFixture {
                     }
                     try db.execute(sql: sql, arguments: [hex(n), "era.fused", "\(lo)-\(lo + 4)", by,
                                                          #"{"validEraWindows":\#(windowsPerEra),"windows":[]}"#])
+                }
+                return .commit
+            }
+        }
+    }
+
+    /// The Results sheet's scale seed, for contents hex(1)…hex(count), by n % 10:
+    /// 0–5 an `era.fused` (+ 2 window rows), 6–7 an `era.none`, 8 a give-up
+    /// `era.none` (evidence gaveUp), 9 nothing. `at` = `now - n * 10`.
+    static func seedEraVerdicts(_ fixture: StoreFixture, count: Int, now: Int64,
+                                by: String = "machine:qwen3-vl-8b-4bit/era-v1/window-60s@r3") throws {
+        try DatabaseQueue(path: fixture.url.path).inDatabase { db in
+            try db.inTransaction {
+                let sql = """
+                    INSERT INTO provenance_assertions (subject_kind, subject_id, field, value, state, by, at, confidence, evidence_json)
+                    VALUES ('content', ?, ?, ?, 'inferred', ?, ?, 0.5, ?)
+                    """
+                for n in 1...count {
+                    let at = now - Int64(n) * 10
+                    let lo = 1960 + n % 45
+                    switch n % 10 {
+                    case 0...5:
+                        for w in 0..<2 {
+                            try db.execute(sql: sql, arguments: [hex(n), "era.yearRange", "\(lo)-\(lo + 4)", by, at,
+                                                                 #"{"frameTimesS":[\#(w * 60)],"window":[\#(w * 60),\#(w * 60 + 60)]}"#])
+                        }
+                        try db.execute(sql: sql, arguments: [hex(n), "era.fused", "\(lo)-\(lo + 4)", by, at, #"{"validEraWindows":2,"windows":[]}"#])
+                    case 6, 7:
+                        try db.execute(sql: sql, arguments: [hex(n), "era.none", "none", by, at, #"{"reason":"no era window passed the contract"}"#])
+                    case 8:
+                        try db.execute(sql: sql, arguments: [hex(n), "era.none", "none", by, at,
+                                                             #"{"reason":"gave up after 3 tries: 8 of 8 frames would not decode","tries":3,"gaveUp":true}"#])
+                    default:
+                        break
+                    }
                 }
                 return .commit
             }

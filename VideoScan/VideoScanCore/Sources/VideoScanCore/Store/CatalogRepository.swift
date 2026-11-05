@@ -203,7 +203,8 @@ public protocol CatalogLiveReading {
 
 /// The handle a `read` body receives.
 public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading, CatalogFolderReading,
-                               CatalogDecisionReading, CatalogProvenanceRoleReading, CatalogProvenanceAssertionReading {
+                               CatalogDecisionReading, CatalogProvenanceRoleReading, CatalogProvenanceAssertionReading,
+                               CatalogAnalysisResultsReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }

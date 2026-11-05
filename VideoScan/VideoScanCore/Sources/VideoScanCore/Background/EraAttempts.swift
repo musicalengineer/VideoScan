@@ -31,6 +31,10 @@
 //
 // Memory: one entry (≈ 200 B) per file currently without a verdict.
 //
+// Readers that are not the job (the app's Content Analysis ▸ Results sheet)
+// use `snapshot(stateRoot:)`: the same replay, never a compaction, never a
+// handle — the file's bytes are not touched (Results sheet, 2026-11-04).
+//
 // C++ reading: a write-ahead log replayed into a std::map at open, behind a mutex.
 
 import Foundation
@@ -65,17 +69,25 @@ public final class EraAttemptStore: @unchecked Sendable {
     /// Replays the log (absent = no tries). Throws a Refusal naming the file when a line other than a torn tail is unreadable.
     public init(stateRoot: URL) throws {
         url = Self.url(stateRoot: stateRoot)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let replayed = try Self.replay(url) else { return }
+        entries = replayed.entries
+        if replayed.tornTail || replayed.lines > 2 * entries.count + 64 { try compact() }
+    }
+
+    /// The log replayed: the live entries, how many lines were read, whether the last line is torn. nil = no file.
+    private static func replay(_ url: URL) throws -> (entries: [String: EraAttempt], lines: Int, tornTail: Bool)? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let data: Data
-        do { data = try Data(contentsOf: url) } catch { throw refusal("cannot be read (\(error))") }
+        do { data = try Data(contentsOf: url) } catch { throw refusal(url, "cannot be read (\(error))") }
         var lines = data.split(separator: 0x0A, omittingEmptySubsequences: false)
         let tornTail = data.last != 0x0A
         if lines.last?.isEmpty == true { lines.removeLast() }
+        var entries: [String: EraAttempt] = [:]
         var count = 0
         for (i, bytes) in lines.enumerated() where !bytes.isEmpty {
             guard let line = try? JSONDecoder().decode(Line.self, from: Data(bytes)) else {
                 if tornTail, i == lines.count - 1 { continue }          // a crash mid-append: one try lost
-                throw refusal("line \(i + 1) is not a try record")
+                throw refusal(url, "line \(i + 1) is not a try record")
             }
             count += 1
             if line.clear == true {
@@ -84,10 +96,19 @@ public final class EraAttemptStore: @unchecked Sendable {
                 entries[line.k] = EraAttempt(tries: t, lastReason: line.r ?? "", lastAt: line.a ?? 0)
             }
         }
-        if tornTail || count > 2 * entries.count + 64 { try compact() }
+        return (entries, count, tornTail)
     }
 
-    private func refusal(_ why: String) -> Refusal {
+    /// READ-ONLY: the live entries as the job would replay them, for a reader
+    /// that is not the job (the Results sheet). Never compacts, never opens a
+    /// handle for writing: the file's bytes are left exactly as they were.
+    /// Absent file = no tries. Throws the same Refusal as `init` on an
+    /// unreadable line (the reader says "unavailable" in words).
+    public static func snapshot(stateRoot: URL) throws -> EraAttemptSnapshot {
+        EraAttemptSnapshot(entries: try replay(url(stateRoot: stateRoot))?.entries ?? [:])
+    }
+
+    private static func refusal(_ url: URL, _ why: String) -> Refusal {
         Refusal("era: the try counts at \(url.path) are unreadable (\(why)) — the job is refused rather than "
                 + "give files up or retry them blind; move the file aside to start the counts again")
     }
@@ -141,5 +162,24 @@ public final class EraAttemptStore: @unchecked Sendable {
             out += try encoder.encode(Line(k: k, t: e.tries, r: e.lastReason, a: e.lastAt)) + Data([0x0A])
         }
         try AtomicFilePublish.write(out, to: url)
+    }
+}
+
+/// The try counts as one reader saw them (EraAttemptStore.snapshot). A value:
+/// nothing in it can write the log. Memory: ≈ 200 B per entry.
+public struct EraAttemptSnapshot: Sendable, Equatable {
+    /// "<signer> <digest>" → the entry (EraAttemptStore's key).
+    public let entries: [String: EraAttempt]
+
+    public init(entries: [String: EraAttempt] = [:]) { self.entries = entries }
+
+    /// One signer's files with tries and no verdict yet, digest → entry.
+    public func attempts(signer: String) -> [String: EraAttempt] {
+        let prefix = signer + " "
+        var out: [String: EraAttempt] = [:]
+        for (key, value) in entries where key.hasPrefix(prefix) {
+            out[String(key.dropFirst(prefix.count))] = value
+        }
+        return out
     }
 }

@@ -55,6 +55,8 @@ struct AnalyzePanelView: View {
     @State private var live = AnalyzeLiveSample()
     @State private var expanded: Set<AnalyzeCycler> = []
     @State private var showClearRecorrelateConfirm = false
+    /// Results… (Rick 2026-11-04): what the background analyzers produced.
+    @State private var showResults = false
     /// Bumped after a schedule-menu write so the sampled schedules refresh
     /// on the same frame instead of the next tick.
     @State private var scheduleRevision = 0
@@ -99,6 +101,9 @@ struct AnalyzePanelView: View {
         .onAppear { sampleLive() }
         .onReceive(tick) { _ in sampleLive() }
         .onChange(of: scheduleRevision) { _, _ in sampleLive() }
+        .sheet(isPresented: $showResults) {
+            AnalysisResultsSheet(store: AnalysisResultsStore.production(model: model))
+        }
         .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
             Button("Clear All Pairs & Re-correlate", role: .destructive) {
                 runner.clearAndRecorrelateAll(source: "panel")
@@ -119,6 +124,9 @@ struct AnalyzePanelView: View {
                 CatalogActionBriefHeader(brief: .contentAnalysis)
             }
             Spacer()
+            Button("Results…") { showResults = true }
+                .help("What VideoScan Background's analyzers produced: eras found, none, given up, still to do (read-only)")
+                .accessibilityIdentifier("analyze.results")
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(coverage.report.activeRecords.formatted()) files in the catalog")
                     .font(.callout)
