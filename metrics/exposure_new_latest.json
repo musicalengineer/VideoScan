@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-04T12:41:11Z",
- "sha": "6f2934a8",
+ "ts": "2026-11-05T12:51:54Z",
+ "sha": "b9d49a3c",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -193,9 +193,9 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServicePresentation.helperProblem",
+   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServicePresentation.isOlder",
    "file": "VideoScan/VideoScan/App/BackgroundServiceStore.swift",
-   "name": "BackgroundServicePresentation.helperProblem",
+   "name": "BackgroundServicePresentation.isOlder",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -214,16 +214,9 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServiceStore.foregroundRunWindow",
+   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServiceStore.statusInterval",
    "file": "VideoScan/VideoScan/App/BackgroundServiceStore.swift",
-   "name": "BackgroundServiceStore.foregroundRunWindow",
-   "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/App/BackgroundServiceStore.swift::BackgroundServiceStore.recountInterval",
-   "file": "VideoScan/VideoScan/App/BackgroundServiceStore.swift",
-   "name": "BackgroundServiceStore.recountInterval",
+   "name": "BackgroundServiceStore.statusInterval",
    "kind": "let",
    "classification": "could-be-private"
   },
@@ -5730,6 +5723,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift::BackgroundMenuPresentation.holdLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift",
+   "name": "BackgroundMenuPresentation.holdLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift::BackgroundMenuPresentation.jobLine",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift",
    "name": "BackgroundMenuPresentation.jobLine",
@@ -5737,17 +5737,10 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift::BackgroundMenuPresentation.waitingHeadline",
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift::BackgroundMenuPresentation.lastFailures",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundMenuPresentation.swift",
-   "name": "BackgroundMenuPresentation.waitingHeadline",
+   "name": "BackgroundMenuPresentation.lastFailures",
    "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift::EraCounters.failFast",
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift",
-   "name": "EraCounters.failFast",
-   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -5758,10 +5751,17 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift::EraCounters.loadFailed",
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift::EraCounters.modelIsProven",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift",
-   "name": "EraCounters.loadFailed",
-   "kind": "func",
+   "name": "EraCounters.modelIsProven",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift::EraJob.NoVerdict",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift",
+   "name": "EraJob.NoVerdict",
+   "kind": "enum",
    "classification": "could-be-private"
   },
   {
@@ -5804,6 +5804,13 @@
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/EraJob.swift",
    "name": "EraRecordMapper.windowLines",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/JobSupervisor.swift::FailureStreak.lastWords",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/JobSupervisor.swift",
+   "name": "FailureStreak.lastWords",
+   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -7046,8 +7053,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 136,
+ "fixed": 135,
  "baseline_before": 2456,
- "baseline_after": 2320,
+ "baseline_after": 2321,
  "shrink_skipped": false
 }
