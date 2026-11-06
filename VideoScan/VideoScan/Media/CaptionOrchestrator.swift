@@ -167,6 +167,17 @@ final class CaptionOrchestrator: ObservableObject {
     /// unchanged, existing tests unaffected.
     var runnerFactory: () -> CaptionRunner
 
+    /// Test seam: the transcriber a per-file Analyze (AnalyzeJob →
+    /// startAnalyzing with no explicit transcriber) uses. nil in production,
+    /// where startAnalyzing resolves the Whisper worker itself; tests set it
+    /// to drive the transcript stage through the real AnalyzeJob path.
+    var transcriberFactory: (() -> AudioTranscriber)?
+
+    /// Why a file's extraction failed, in the decoder's words — recorded by
+    /// the dossier loop, taken once by that file's AnalyzeJob for its row
+    /// and OUTCOME line. Bounded (see DossierFailureNotes).
+    var fileFailureNotes = DossierFailureNotes()
+
     // MARK: - VLM runner keep-alive (perf item 3, 2026-07-14)
 
     /// The runner actor kept alive across batch settles. See the

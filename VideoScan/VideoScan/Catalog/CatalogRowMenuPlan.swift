@@ -176,6 +176,12 @@ enum CatalogRowMenuRules {
     static func transcodeBlocked(reachable: Bool, running: Bool) -> Bool {
         !reachable || running
     }
+    /// Transcode ▸ Reformat Old Codec to H.264 shows for a file whose codec
+    /// macOS dropped (or that an earlier pass could not read), never for an
+    /// archived row — it would publish a new file beside an archive master.
+    static func reformatOffered(isLikelyUnanalyzable: Bool, readOnly: Bool) -> Bool {
+        isLikelyUnanalyzable && !readOnly
+    }
     /// Clean Up Video ▸ items need a picture, an online volume and no
     /// cleanup already running for this record (CleanupScaleTests pins
     /// that the inputs stay O(1) per record).

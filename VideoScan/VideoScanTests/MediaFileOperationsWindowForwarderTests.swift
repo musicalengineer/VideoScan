@@ -374,15 +374,15 @@ struct MediaFileOperationsWindowForwardSensorTests {
         // (catalog menu) — both through ArchiveAngel.prepare since S2.
         "ArchiveAngel/Seams/AppConformances.swift": 2,
         // The row menu left CatalogContent+Table.swift (R1, GH #281): the
-        // table file must now hold NONE, and the 9 sites live here.
+        // table file must now hold NONE; the row-menu sites live here.
         "CatalogContent+Table.swift": 0,
         "CatalogRowContextMenu.swift": 0,         // dispatcher + open/remove/restore: none
-        "CatalogRowContextMenu+FileOps.swift": 1, // compare
+        "CatalogRowContextMenu+FileOps.swift": 2, // compare; Transcode ▸ Reformat Old Codec (2026-11-06)
         "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
         "CatalogRowContextMenu+Media.swift": 0,   // (Repair Damaged Audio moved behind Repair…, 2026-10-08)
         "CheckMediaSheet.swift": 1,               // Check Media (quick / full), 2026-10-07
         "MediaRepairSheet.swift": 2,              // Repair Now (the one repair door), 2026-10-08; its Balance Audio route (raw DV / several tracks), 2026-10-28
-        "CatalogRowContextMenu+Actions.swift": 5, // analyze×2, reformat×2, "Analyze Anyway" (2026-10-10)
+        "CatalogRowContextMenu+Actions.swift": 1, // Analyze (one verb, no reformat-first, 2026-11-06)
         "CatalogHelpers.swift": 0,                // (Extract Facial Frames retired 2026-10-07)
         "CleanupSheet.swift": 1,
         "ContentView.swift": 2,                   // Delete Duplicates + accepted Resume

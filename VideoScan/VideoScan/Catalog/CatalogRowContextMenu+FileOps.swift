@@ -190,6 +190,25 @@ extension CatalogContent {
                 .disabled(transcodeBlocked)
                 .accessibilityIdentifier("catalog.row.transcodePreservation")
             }
+
+            // Reformat is its own verb since Analyze stopped asking for it
+            // (DECISIONS 2026-11-06): an H.264/AAC copy beside a file whose
+            // codec macOS dropped, for playback and editing elsewhere.
+            // Analyze never needs it. Never on an archived row.
+            if CatalogRowMenuRules.reformatOffered(
+                isLikelyUnanalyzable: rec.isLikelyUnanalyzable,
+                readOnly: model.isDossierReadOnly(rec)) {
+                Divider()
+                Button("Reformat Old Codec to H.264") {
+                    _ = fileOpsCenter.startedByUser {
+                        $0.startReformat(record: rec, model: model, orchestrator: captionOrchestrator)
+                    }
+                    MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+                }
+                .disabled(transcodeBlocked)
+                .help("Make an H.264/AAC copy beside this file for apps that no longer play its codec. Analyze reads the original as is.")
+                .accessibilityIdentifier("catalog.row.reformatOldCodec")
+            }
         }
 
         // Clean Up Video — named cleanup RECIPES (v1:

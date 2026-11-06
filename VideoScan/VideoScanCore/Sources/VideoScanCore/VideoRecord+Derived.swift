@@ -81,7 +81,7 @@ extension VideoRecord {
             return codecReason
         }
         if needsReformat {
-            return "The analyzer couldn't decode this file's video stream — needs reformat to be analyzed."
+            return "The analyzer couldn't decode this file's video on an earlier pass, so batches skip it. Right-click ▸ Analyze tries it again."
         }
         return nil
     }

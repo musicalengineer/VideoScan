@@ -13,8 +13,8 @@ import os.log
 
 struct CatalogContent: View {
     @EnvironmentObject var model: VideoScanModel
-    // Used in CatalogRowContextMenu+Actions.swift's "Reformat and Analyze…"
-    // context-menu button (Rick 2026-06-14). The lint hook is per-file
+    // Used by the row menu's Analyze and Reformat items
+    // (CatalogRowContextMenu+Actions / +FileOps). The lint hook is per-file
     // so the use is invisible to it.
     // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator

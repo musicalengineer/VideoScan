@@ -1,7 +1,7 @@
 // CatalogRowContextMenu+Actions.swift
-// Handlers the Catalog row menu calls: Analyze (with the legacy-codec
-// reformat offer), Transcode, Find Matching Audio / Video — moved
-// verbatim out of CatalogContent+Table.swift (R1 refactor, GH #281).
+// Handlers the Catalog row menu calls: Analyze, Transcode, Find Matching
+// Audio / Video — moved verbatim out of CatalogContent+Table.swift (R1
+// refactor, GH #281).
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state allowed, methods share the same `self`; `private` here
 // means file-private to THIS file.)
@@ -10,161 +10,26 @@ import SwiftUI
 
 extension CatalogContent {
 
-    /// Single entry point for the Analyze / Transcribe / Captions
-    /// menu items. Inspects the record's codecs and routes:
-    ///   - Modern codec (AVFoundation-decodable) → AnalyzeJob directly.
-    ///   - Legacy codec (svq3/qdm2/cinepak/etc.) → one-shot confirm
-    ///     alert offering Reformat-then-Analyze. The reformat's
-    ///     existing auto-queue analyze hook takes over from there.
+    /// Analyze / Transcribe Audio / Generate Scene Captions on the selected
+    /// rows: one AnalyzeJob per reachable row through the one Analyze verb
+    /// (MediaFileOperationsCenter.startAnalyze), then the operations window.
     ///
-    /// Rick 2026-06-14 — collapses the prior "Reformat and Analyze"
-    /// + "Analyze This File" pair into a single verb with intent
-    /// captured in the stage set.
-    /// Multi-selection Analyze (2026-07-14). Mirrors the Tag menu's
-    /// apply-to-every-selected-row pattern:
-    ///   - reachable modern-codec records each get an AnalyzeJob (the
-    ///     jobs serialize themselves — each waits for the orchestrator
-    ///     to free up, so N selected files means N banked dossiers,
-    ///     not 1 success + N-1 "busy" failures)
-    ///   - legacy-codec records get ONE combined confirm alert instead
-    ///     of a modal alert per file
-    ///   - offline records are silently skipped (same reachability
-    ///     rule the single-file path enforces via menu disable)
+    /// No codec gate and no Reformat-first alert (DECISIONS 2026-11-06,
+    /// Rick: "a pipeline that sucks the file in, converts as needed, does
+    /// the analysis, then remembers this analysis is for this file"). The
+    /// analyzers read legacy codecs through ffmpeg in place; a file nothing
+    /// can decode fails its own row with the decoder's reason. Reformat is
+    /// its own verb (Transcode ▸ Reformat Old Codec…).
     func requestAnalyze(forAll recs: [VideoRecord], stages: Set<AnalyzeStage>) {
-        let reachable = recs.filter { VolumeReachability.isReachable(path: $0.fullPath) }
-        guard !reachable.isEmpty else { return }
-        if reachable.count == 1 {
-            // Single row — keep the richer per-file flow (its alert
-            // names the file and the derived output).
-            requestAnalyze(for: reachable[0], stages: stages)
-            return
+        let started = fileOpsCenter.startedByUser {
+            $0.startAnalyze(records: recs, model: model,
+                            orchestrator: captionOrchestrator, stages: stages)
         }
-        // An archived (read-only) row is never offered Reformat — it would
-        // publish a new file beside an archive master (QA P3-e,
-        // 2026-10-10). It is analyzed as is (the ffmpeg fallback may read it).
-        let needsReformat = reachable.filter {
-            (hasUnplayableLegacyCodec(videoCodec: $0.videoCodec, audioCodec: $0.audioCodec)
-                || $0.needsReformat) && !model.isDossierReadOnly($0)
-        }
-        let modern = reachable.filter { rec in !needsReformat.contains(where: { $0.id == rec.id }) }
-
-        fileOpsCenter.startedByUser { center in
-            for rec in modern {
-                center.startAnalyzeOne(record: rec, model: model,
-                                       orchestrator: captionOrchestrator,
-                                       stages: stages)
-            }
-        }
-        guard !needsReformat.isEmpty else {
-            if !modern.isEmpty { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
-            return
-        }
-        // One combined confirm for the legacy-codec subset.
-        let alert = NSAlert()
-        alert.messageText = "Reformat Required for \(needsReformat.count) File\(needsReformat.count == 1 ? "" : "s")"
-        alert.informativeText = """
-            \(needsReformat.count) of the selected files use old codecs the analyzer can't decode directly \
-            (macOS dropped them in 2019).
-
-            Convert them to HEVC first? New files will be created next to the originals, then analyzed.
-            """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Reformat and Analyze")
-        alert.addButton(withTitle: needsReformat.count == reachable.count ? "Cancel" : "Skip These")
-        let reformat = alert.runModal() == .alertFirstButtonReturn
-        if reformat {
-            fileOpsCenter.startedByUser { center in
-                for rec in needsReformat {
-                    center.startReformat(record: rec, model: model,
-                                         orchestrator: captionOrchestrator)
-                }
-            }
-        }
-        // Opened only AFTER the modal returns, whichever button was chosen:
-        // an open before runModal had every retry skipped by the modal
-        // guard and nothing rescheduled afterwards (codex #969).
-        if reformat || !modern.isEmpty {
-            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
-        }
+        if !started.isEmpty { MediaFileOperationsWindowOpener.openBehindMain(openWindow) }
     }
 
     func requestAnalyze(for rec: VideoRecord, stages: Set<AnalyzeStage>) {
-        if !hasUnplayableLegacyCodec(videoCodec: rec.videoCodec,
-                                     audioCodec: rec.audioCodec)
-            && !rec.needsReformat {
-            // Modern codec — analyze directly.
-            _ = fileOpsCenter.startedByUser {
-                $0.startAnalyzeOne(record: rec, model: model,
-                                   orchestrator: captionOrchestrator,
-                                   stages: stages)
-            }
-            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
-            return
-        }
-        // Legacy codec — confirm reformat first.
-        let alert = NSAlert()
-        alert.messageText = "Reformat Required"
-        let codecBits = [rec.videoCodec, rec.audioCodec]
-            .filter { !$0.isEmpty }
-            .joined(separator: " / ")
-        let derived = derivedFileURL(
-            source: URL(fileURLWithPath: rec.fullPath),
-            codec: "hevc",
-            ext: "mp4"
-        ).lastPathComponent
-        // 2026-10-10: a file flagged by the analyzer itself (it could not
-        // read the video — not a known legacy codec) can be tried again as
-        // is: batches skip it, an explicit Analyze retries it, and a
-        // successful decode clears the flag.
-        let analyzerFlagOnly = rec.needsReformat
-            && !hasUnplayableLegacyCodec(videoCodec: rec.videoCodec, audioCodec: rec.audioCodec)
-        // QA P3-e (2026-10-10): an archived (read-only) row is never offered
-        // Reformat — it would publish a new file beside an archive master.
-        let readOnly = model.isDossierReadOnly(rec)
-        let why = analyzerFlagOnly
-            ? "The analyzer couldn't read the video in \(rec.filename) on an earlier pass, so batch runs skip it."
-            : "\(rec.filename) uses the \(codecBits) codec, which the analyzer can't decode directly. macOS deprecated this codec in 2019."
-        let offer = readOnly
-            ? "This file is in the archive, so it is not reformatted. You can try to analyze it as it is."
-            : "Convert to HEVC first? A new file \"\(derived)\" will be created next to the original, then analyzed."
-        alert.informativeText = "\(why)\n\n\(offer)"
-        alert.alertStyle = .informational
-        // The buttons on offer, in order (≈ a small C++ vector of actions;
-        // the modal's response index picks one).
-        var choices: [ReformatAlertChoice] = readOnly ? [] : [.reformat]
-        if analyzerFlagOnly || readOnly { choices.append(.analyzeAnyway) }
-        choices.append(.cancel)
-        for c in choices { alert.addButton(withTitle: c.title) }
-        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        switch choices.indices.contains(index) ? choices[index] : .cancel {
-        case .reformat:
-            _ = fileOpsCenter.startedByUser {
-                $0.startReformat(record: rec, model: model,
-                                 orchestrator: captionOrchestrator)
-            }
-            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
-        case .analyzeAnyway:
-            _ = fileOpsCenter.startedByUser {
-                $0.startAnalyzeOne(record: rec, model: model,
-                                   orchestrator: captionOrchestrator,
-                                   stages: stages)
-            }
-            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
-        case .cancel:
-            break
-        }
-    }
-
-    /// The single-file Reformat alert's buttons.
-    enum ReformatAlertChoice {
-        case reformat, analyzeAnyway, cancel
-        var title: String {
-            switch self {
-            case .reformat: return "Reformat and Analyze"
-            case .analyzeAnyway: return "Analyze Anyway"
-            case .cancel: return "Cancel"
-            }
-        }
+        requestAnalyze(forAll: [rec], stages: stages)
     }
 
     /// Present the Transcode configuration sheet with a useful initial

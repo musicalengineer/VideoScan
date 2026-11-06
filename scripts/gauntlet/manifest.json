@@ -5300,6 +5300,26 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalyzeLegacyCodecTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AnalyzeLegacyCodecMatrixTests",
+        "AnalyzeUndecodableIsolationTests",
+        "AnalyzeRoutingTests",
+        "AnalyzeMenuNoReformatGateSensorTests"
+      ],
+      "tests": [
+        "analyzeHandlersHaveNoReformatGate",
+        "analyzesTheOriginalAsIs",
+        "failureNotesAreBounded",
+        "legacyAndFlaggedRowsGetAnAnalyzeJobNotAReformat",
+        "reformatIsOfferedOnItsOwnOnlyWhereItHelps",
+        "theAnalyzeVerbHasNoCodecGate",
+        "undecodableFileFailsWithTheDecodersReasonAndTheOthersAreAnalyzed"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AnalyzePanelSensorTests.swift",
@@ -38014,7 +38034,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 485,
+      "expected_floor": 492,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -38089,6 +38109,10 @@
         "VideoScanTests/AdvUndoPurgeWhileHeldTests",
         "VideoScanTests/AdvVolumeRenameUndoSQLiteTests",
         "VideoScanTests/AgeAtDeathConstraintTests",
+        "VideoScanTests/AnalyzeLegacyCodecMatrixTests",
+        "VideoScanTests/AnalyzeMenuNoReformatGateSensorTests",
+        "VideoScanTests/AnalyzeRoutingTests",
+        "VideoScanTests/AnalyzeUndecodableIsolationTests",
         "VideoScanTests/ArchiveStageArchivedLabelTests",
         "VideoScanTests/ArchiveTimelineCompletenessSensorTests",
         "VideoScanTests/AudioFingerprintAttemptTests",

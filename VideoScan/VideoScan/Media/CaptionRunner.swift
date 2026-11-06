@@ -131,7 +131,7 @@ struct DossierExtraction: Sendable, Equatable {
 /// Typed errors the captioning UI can pattern-match on for user
 /// messaging. Other failures (decode failure for a single frame)
 /// should be logged and skipped, not thrown.
-enum CaptionRunnerError: Error, CustomStringConvertible {
+enum CaptionRunnerError: LocalizedError, CustomStringConvertible {
     /// Engine not yet wired — stub implementation. Will go away once
     /// MLXVLMCaptionRunner / PythonSubprocessCaptionRunner are real.
     case notImplemented(engine: String)
@@ -141,7 +141,12 @@ enum CaptionRunnerError: Error, CustomStringConvertible {
     case modelLoadFailed(reason: String)
 
     /// Video file could not be opened (missing, corrupt, unreadable).
-    case videoUnreadable(path: String)
+    /// `reason` is the last decoder's own words when one was asked (the
+    /// ffmpeg / ffprobe stderr line), so a file nothing can decode is
+    /// reported with why (2026-11-06). (A defaulted associated value ≈ a
+    /// C++ constructor default argument: `.videoUnreadable(path: p)` still
+    /// builds one.)
+    case videoUnreadable(path: String, reason: String? = nil)
 
     /// Engine threw something unrecognized; preserves the underlying
     /// error for diagnostic logging.
@@ -153,12 +158,18 @@ enum CaptionRunnerError: Error, CustomStringConvertible {
             return "Caption engine '\(engine)' is not yet implemented."
         case .modelLoadFailed(let reason):
             return "Caption model load failed: \(reason)"
-        case .videoUnreadable(let path):
+        case .videoUnreadable(let path, let reason?):
+            return "Could not decode video \((path as NSString).lastPathComponent): \(reason)"
+        case .videoUnreadable(let path, nil):
             return "Could not read video at \(path)"
         case .underlying(let err):
             return "Captioning engine error: \(err)"
         }
     }
+
+    /// `localizedDescription` (what the dossier log lines print) says the
+    /// same as `description`, not Foundation's "error 2".
+    var errorDescription: String? { description }
 }
 
 // MARK: - Frame extraction
@@ -317,7 +328,8 @@ private func extractFramesViaFFmpeg(
     let ffprobe = ToolLocator.ffprobePath
     guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
         captionLogger.error("ffmpeg fallback unavailable (no executable at \(ffmpeg, privacy: .public))")
-        throw CaptionRunnerError.videoUnreadable(path: videoURL.path)
+        throw CaptionRunnerError.videoUnreadable(
+            path: videoURL.path, reason: "AVFoundation can't read it and ffmpeg is not installed (\(ffmpeg))")
     }
     // Duration via ffprobe — same clamp-to-range contract as the AVF path.
     // Deadline guards against the classic dead-network-volume hang.
@@ -330,7 +342,9 @@ private func extractFramesViaFFmpeg(
         deadlineSeconds: 30)
     guard let durStr = durResult.stdout?.trimmingCharacters(in: .whitespacesAndNewlines),
           let durSec = Double(durStr), durSec.isFinite, durSec > 0 else {
-        throw CaptionRunnerError.videoUnreadable(path: videoURL.path)
+        throw CaptionRunnerError.videoUnreadable(
+            path: videoURL.path,
+            reason: "ffprobe: " + (decoderReason(durResult.stderr) ?? "no duration (\(durResult.stdout ?? "no output"))"))
     }
 
     let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -340,6 +354,7 @@ private func extractFramesViaFFmpeg(
 
     var results: [(Double, FrameExtraction)] = []
     results.reserveCapacity(timestamps.count)
+    var firstFailure: String?
     for (index, ts) in timestamps.enumerated() {
         try Task.checkCancellation()
         let clamped = max(0.0, min(ts, max(0.0, durSec - 0.05)))
@@ -359,14 +374,30 @@ private func extractFramesViaFFmpeg(
             results.append((ts, .success(cg)))
         } else {
             captionLogger.warning("ffmpeg frame extract failed at \(String(format: "%.2f", clamped))s in \(videoURL.lastPathComponent, privacy: .public): \(rip.stderr, privacy: .public)")
+            if firstFailure == nil { firstFailure = decoderReason(rip.stderr) }
             results.append((ts, .failed(reason: "ffmpeg could not decode frame at \(String(format: "%.2f", clamped))s")))
         }
         try? FileManager.default.removeItem(at: framePNG)
     }
     if !timestamps.isEmpty && !results.contains(where: { $0.1.isSuccess }) {
-        throw CaptionRunnerError.videoUnreadable(path: videoURL.path)
+        throw CaptionRunnerError.videoUnreadable(
+            path: videoURL.path,
+            reason: "ffmpeg decoded 0 of \(timestamps.count) frames" + (firstFailure.map { " — \($0)" } ?? ""))
     }
     return results
+}
+
+/// The decoder's own reason from its stderr: the last non-empty line,
+/// without ffmpeg's "<path>: " prefix (the row already names the file),
+/// capped at 300 characters. nil when stderr is empty.
+func decoderReason(_ stderr: String) -> String? {
+    guard var line = stderr.split(whereSeparator: \.isNewline)
+        .map({ $0.trimmingCharacters(in: .whitespaces) })
+        .last(where: { !$0.isEmpty }) else { return nil }
+    if line.hasPrefix("/"), let colon = line.range(of: ": ") {
+        line = String(line[colon.upperBound...])
+    }
+    return String(line.prefix(300))
 }
 
 // MARK: - MLX-swift engine

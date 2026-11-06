@@ -22,10 +22,10 @@ enum CatalogRowStateIcon: Equatable {
     /// Swap arrows = "a confirmed repair replaced this original" (GH #132).
     /// Brown to stay distinct from purge-orange and set-aside-purple.
     case superseded
-    /// Red "!" — file's video / audio codec was deprecated by AVFoundation
-    /// (svq3, qdm2, cinepak, etc.) so the analyzer can't decode it.
-    /// Right-click → Reformat and Analyze to convert via ffmpeg. Rick
-    /// 2026-06-14.
+    /// Red "!" — file's video / audio codec was dropped by AVFoundation
+    /// (svq3, qdm2, cinepak, etc.), or an earlier pass could not read it.
+    /// Analyze still reads it through ffmpeg (DECISIONS 2026-11-06);
+    /// Transcode ▸ Reformat Old Codec makes a playable copy. Rick 2026-06-14.
     case unanalyzable
     /// Hammer = "being worked on with external tools." Turquoise (.mint
     /// adapts for dark mode) marks the record as triage-active. Pass A —
