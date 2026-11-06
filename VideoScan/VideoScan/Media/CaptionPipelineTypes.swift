@@ -137,6 +137,15 @@ struct CompletedOutput: Equatable, Sendable {
                         banked: banked)
     }
 
+    /// The single-prompt caption batch ("Caption Videos", `runBatch`): scenes
+    /// only, never a transcript (Codex final pass P0, 2026-11-05).
+    static func from(captions: [SceneCaption], banked: Bool) -> CompletedOutput {
+        CompletedOutput(sceneCount: captions.count,
+                        firstCaption: captions.first.map { cut($0.text) },
+                        transcriptExcerpt: nil,
+                        banked: banked)
+    }
+
     /// The first `maxChars` characters on one line, with an ellipsis when cut.
     static func cut(_ text: String) -> String {
         let oneLine = text.split(whereSeparator: \.isNewline).joined(separator: " ")

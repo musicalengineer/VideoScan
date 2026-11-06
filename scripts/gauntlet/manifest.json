@@ -9012,6 +9012,7 @@
         "framesEvenlySpacedShape",
         "idempotentSkipForAlreadyCaptioned",
         "initIsIdle",
+        "captionVideosShowsItsLaneWhileTheRunnerWorks",
         "missingFileCountsAsFailed",
         "writebackHappensPerFile"
       ]
@@ -34190,6 +34191,7 @@
       "tests": [
         "aChangedDiskSetOrARefusedDriverIsNotARate",
         "aDayFileOverTheByteCapIsRefused",
+        "aFIFODayFileIsRefusedWithoutBlocking",
         "aJournalReadFailureIsUnavailableWithTheReason",
         "aLaneNeverClaimsBanking",
         "aLaneSaysExtractedAndARowSaysBankedOnlyWhenItWas",
@@ -36925,7 +36927,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3380,
+      "expected_floor": 3381,
       "name": "unit",
       "package_expected_floor": 787,
       "package_selectors": [

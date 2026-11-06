@@ -109,22 +109,27 @@ extension CaptionOrchestrator {
             let dur = max(0.5, record.durationSeconds)
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
+            let laneID = beginCaptionLane(record, runner: runner, framesPlanned: timestamps.count)
+
             do {
+                let vlmStarted = CFAbsoluteTimeGetCurrent()
                 // GH #402: degenerate generations never reach the writeback.
                 let generated = try await runner.caption(
                     videoPath: path,
                     atTimestamps: timestamps
                 )
+                let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStarted
                 let captions = refuseDegenerate(generated, filename: filename, modelID: runner.modelID)
 
                 // Writeback IMMEDIATELY at the file boundary. If the
                 // user cancels the next file, this file's work is
                 // already saved. saveCatalogDebounced batches the
                 // actual disk write so we're not paying I/O per file.
-                _ = model.applyCaptions(captions, to: path, model: runner.modelID)
+                let banked = model.applyCaptions(captions, to: path, model: runner.modelID)
                 captioned += 1
-                liveCaptioned = captioned
+                completeCaptionLane(laneID, captions: captions, banked: banked, vlmSeconds: vlmSec)
             } catch is CancellationError {
+                endLane(laneID)
                 // Cancellation surfaced from inside the runner's
                 // frame loop. Don't count this file — just exit.
                 captionOrchLog.notice("CaptionOrchestrator: runner observed cancellation at \(filename, privacy: .public)")
@@ -134,6 +139,7 @@ extension CaptionOrchestrator {
             } catch let err as CaptionRunnerError {
                 // Typed engine failure: log + count + keep going. A
                 // bad file shouldn't kill the batch.
+                endLane(laneID)
                 failed += 1
                 liveFailed = failed
                 captionOrchLog.warning("CaptionRunnerError on \(filename, privacy: .public): \(String(describing: err), privacy: .public)")
@@ -141,6 +147,7 @@ extension CaptionOrchestrator {
                 // Unknown failure: same treatment, but log the raw
                 // type so we can diagnose if a new failure mode shows
                 // up.
+                endLane(laneID)
                 failed += 1
                 liveFailed = failed
                 captionOrchLog.warning("Unknown error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -156,6 +163,33 @@ extension CaptionOrchestrator {
         // GH #402: additive OUTCOME line (the "done" line keeps its format).
         appLog.write("Caption Videos: quality — degenerate refused · \(liveDegenerateRefused)")
         currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
+    }
+
+    // MARK: - Caption Videos lane (Codex final pass P0, 2026-11-05)
+    //
+    // The lane and finished row the dashboard and the Realtime window read,
+    // opened where inference really starts and closed where the file really
+    // ends. Bookkeeping only: what runBatch banks is unchanged.
+
+    /// Open the lane for one file entering `runner.caption(...)`.
+    func beginCaptionLane(_ record: VideoRecord, runner: CaptionRunner, framesPlanned: Int) -> UUID {
+        beginLane(path: record.fullPath, filename: record.filename, isVideoOnly: false,
+                  stage: Self.stageDisplayName(forModelID: runner.modelID),
+                  verb: "captioning frames…",
+                  recordID: record.id,
+                  framesPlanned: framesPlanned,
+                  clipSeconds: record.durationSeconds)
+    }
+
+    /// The dossier paths' one completion step: the finished row, the lane
+    /// closed, `liveCaptioned` (files done) += 1 and `liveWithCaptions` only
+    /// when ≥ 1 scene banked. Caption Videos never runs Whisper, so the row
+    /// says so (never "transcript failed").
+    func completeCaptionLane(_ laneID: UUID, captions: [SceneCaption], banked: Bool, vlmSeconds: Double) {
+        updateLane(laneID, hasCaptions: !captions.isEmpty, extractionDone: true)
+        completeDossierLane(laneID, vlmSeconds: vlmSeconds, whisperSeconds: nil,
+                            note: "not transcribed (captions only)",
+                            output: .from(captions: captions, banked: banked))
     }
 
     /// Publish a progress update with an ETA estimate. Runs on the

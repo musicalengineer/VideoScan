@@ -55,6 +55,25 @@ actor StubCaptionRunner: CaptionRunner {
     func countCalled() -> Int { captionedPaths.count }
 }
 
+/// A runner held inside `caption(...)` until the test releases it — the
+/// "inference in flight" moment the Realtime window must show as a lane.
+actor HeldCaptionRunner: CaptionRunner {
+    nonisolated let modelID: String
+    private(set) var isInside = false
+    private var released = false
+    init(modelID: String) { self.modelID = modelID }
+    func release() { released = true }
+    func caption(videoPath: String, atTimestamps timestamps: [Double]) async throws -> [SceneCaption] {
+        isInside = true
+        // Bounded hold: 10 s at most, so a broken test cannot hang the suite.
+        var ticks = 0
+        while !released, ticks < 1_000 {
+            try await Task.sleep(for: .milliseconds(10)); ticks += 1
+        }
+        return timestamps.map { SceneCaption(timestamp: $0, text: "a held caption") }
+    }
+}
+
 // MARK: - Test helpers
 
 /// Build a minimal cataloged VideoRecord for a video file. Tests don't
@@ -235,6 +254,59 @@ struct CaptionOrchestratorTests {
         #expect(r1.sceneCaptionModel == "stub-vlm-2")
         #expect(r2.sceneCaptionModel == "stub-vlm-2")
         #expect(r1.sceneCaptions.first?.text == "a person standing in a kitchen")
+
+        // Codex final pass P0 (2026-11-05): the Realtime Content Analysis
+        // window reads the same facts for "Caption Videos" as for the
+        // dossier paths — two files' captions banked, two finished rows.
+        let s = RealtimeAnalysisStore.inApp(from: orch)
+        #expect(s.captioned == 2, "two files' captions banked; the Realtime window must say 2, got \(s.captioned)")
+        #expect(s.recent.count == 2, "each banked file is a finished row, got \(s.recent.count)")
+        #expect(s.recent.allSatisfy { $0.sceneCount == 3 && $0.banked && $0.firstCaption == "a person standing in a kitchen" })
+        #expect(s.lanes.isEmpty, "nothing in flight after the batch")
+    }
+
+    // MARK: - Codex final pass P0: the caption batch shows its lane while the runner works
+
+    @Test("Caption Videos shows an active lane while the runner is mid-call, then a banked row")
+    func captionVideosShowsItsLaneWhileTheRunnerWorks() async throws {
+        let model = VideoScanModel()
+        let tmp = NSTemporaryDirectory()
+        let path = tmp + "vs-orch-held-\(UUID().uuidString).mp4"
+        FileManager.default.createFile(atPath: path, contents: Data("x".utf8))
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let r = makeCatalogRecord(fullPath: path, durationSeconds: 41)
+        model.records = [r]
+
+        let held = HeldCaptionRunner(modelID: "stub-vlm-held")
+        let orch = CaptionOrchestrator(runnerFactory: { held })
+        let batch = Task { await orch.startCaptioning(target: makeTarget(at: tmp), model: model) }
+
+        // Wait (bounded) until the runner is inside caption(...).
+        var waited = 0
+        while !(await held.isInside), waited < 500 {
+            try await Task.sleep(for: .milliseconds(10)); waited += 1
+        }
+        #expect(await held.isInside, "the runner was never called")
+
+        let mid = RealtimeAnalysisStore.inApp(from: orch)
+        #expect(mid.phase == .analyzing)
+        let lane = try #require(mid.lanes.first, "inference is running: the window must show a lane, not 'Between files'")
+        #expect(mid.lanes.count == 1)
+        #expect(lane.path == path && lane.recordID == r.id)
+        #expect(lane.framesPlanned == 3 && lane.clipSeconds == 41, "the frames the runner was asked for, the clip's probed length")
+        #expect(!lane.hasCaptions && !lane.extractionDone, "nothing returned yet")
+        #expect(mid.captioned == 0 && mid.recent.isEmpty, "nothing banked yet")
+
+        await held.release()
+        await batch.value
+
+        let end = RealtimeAnalysisStore.inApp(from: orch)
+        #expect(end.lanes.isEmpty)
+        #expect(end.captioned == 1)
+        let row = try #require(end.recent.first)
+        #expect(row.path == path && row.banked && row.sceneCount == 3 && row.vlmSeconds != nil)
+        #expect(row.whisperSeconds == nil && !row.transcriptFailed, "Caption Videos never runs Whisper: not a failure")
+        #expect(row.transcriptWords == "not transcribed (captions only)")
     }
 
     // MARK: - Always-on: missing-on-disk file is counted as failed, not crashed

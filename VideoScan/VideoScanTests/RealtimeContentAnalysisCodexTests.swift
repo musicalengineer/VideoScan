@@ -41,6 +41,15 @@ private func record(_ path: String, streamType: StreamType = .videoAndAudio, dur
     return r
 }
 
+/// One answer handed across threads (the FIFO test's reader thread → the test).
+/// `final class` + lock ≈ a C++ struct guarded by a std::mutex.
+private final class FIFOReadBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: HelperJournalTally?
+    func set(_ v: HelperJournalTally) { lock.lock(); value = v; lock.unlock() }
+    func get() -> HelperJournalTally? { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 private func scratch(_ label: String) throws -> String {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("realtime-ca-codex-\(label)-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -90,6 +99,24 @@ struct RealtimeContentAnalysisCodexTests {
         #expect(quiet.audioTranscript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true, "banked as no speech (unchanged)")
         let s = RealtimeAnalysisStore.inApp(from: orch)
         #expect(s.transcriptFailures == 0 && s.transcribed == 0)
+        // Final pass 3: the real counter, after a real completion.
+        #expect(s.noSpeech == 1, "Whisper ran to the end and banked no speech: the tile reads 1, got \(s.noSpeech)")
+
+        // A refused bank (no catalog row at this path) counts no "no speech".
+        let offCatalog = record(dir + "/off-catalog.mov")
+        orch.resetLiveCounts()
+        orch.liveTotal = 1
+        await orch.runDossierBatchSerial(runner: runner, transcriber: StubAudioTranscriber(transcriptText: ""),
+                                         candidates: [offCatalog], framesPerFile: 3, force: false, model: model,
+                                         stackID: "t", started: CFAbsoluteTimeGetCurrent())
+        #expect(orch.recentActivity.first?.output?.banked == false, "precondition: applyDossier refused it")
+        #expect(RealtimeAnalysisStore.inApp(from: orch).noSpeech == 0, "nothing banked, nothing counted")
+
+        // An empty next pass shows 0.
+        model.records = []
+        model.scanTargets = []
+        await orch.startCatalogWideDossier(model: model, transcriber: StubAudioTranscriber(transcriptText: ""))
+        #expect(RealtimeAnalysisStore.inApp(from: orch).noSpeech == 0, "an empty pass shows its own (zero) no-speech count")
     }
 
     // F3 — pipelined
@@ -106,6 +133,21 @@ struct RealtimeContentAnalysisCodexTests {
         #expect(done.note == "no speech", "\(String(describing: done.note))")
         #expect(!done.transcriptFailed)
         #expect(orch.transcriptFailures == 0)
+        // Final pass 3: the real counter, after a real completion.
+        #expect(RealtimeAnalysisStore.inApp(from: orch).noSpeech == 1, "got \(orch.liveNoSpeech)")
+
+        // A refused bank (no catalog row at this path) counts no "no speech".
+        let offCatalog = record(dir + "/off-catalog.mov")
+        await orch.runDossierBatch(runner: runner, transcriber: StubAudioTranscriber(transcriptText: ""),
+                                   candidates: [offCatalog], framesPerFile: 3, force: false, model: model)
+        #expect(orch.recentActivity.first?.output?.banked == false, "precondition: applyDossier refused it")
+        #expect(RealtimeAnalysisStore.inApp(from: orch).noSpeech == 0, "nothing banked, nothing counted")
+
+        // An empty next pass shows 0.
+        model.records = []
+        model.scanTargets = []
+        await orch.startCatalogWideDossier(model: model, transcriber: StubAudioTranscriber(transcriptText: ""))
+        #expect(RealtimeAnalysisStore.inApp(from: orch).noSpeech == 0, "an empty pass shows its own (zero) no-speech count")
     }
 
     // F3 — a thrown error is still a failure (the other side of the rule)
@@ -466,6 +508,34 @@ struct RealtimeContentAnalysisCodexRoundThreeTests {
             return first
         }
         let t = try #require(answered, "the read did not return within 5 s: it is not bounded")
+        #expect(!t.available && t.readProblem?.contains("not a regular file") == true, "\(t)")
+    }
+
+    // Final pass 2: a FIFO as the newest day file, no writer, is refused at once —
+    // open() must not block before the regular-file check. The read runs on its own
+    // thread; if it is still stuck after 3 s the test records the failure and opens
+    // the FIFO for writing so the stuck open() returns (the suite never hangs).
+    @Test(.timeLimit(.minutes(1)))
+    func aFIFODayFileIsRefusedWithoutBlocking() async throws {
+        let dir = URL(fileURLWithPath: try scratch("final-2"))
+        let fifo = dir.appendingPathComponent(ObservationJournal.fileName(for: Date()))
+        #expect(mkfifo(fifo.path, 0o644) == 0, "mkfifo errno \(errno)")
+        let box = FIFOReadBox()
+        let thread = Thread { box.set(HelperJournalReader.read(directory: dir)) }
+        thread.start()
+        var waited = 0
+        while box.get() == nil, waited < 300 {
+            try await Task.sleep(for: .milliseconds(10)); waited += 1
+        }
+        let answered = box.get()
+        if answered == nil {
+            // Unstick the blocked reader: a writer appears, then leaves.
+            let w = Darwin.open(fifo.path, O_WRONLY | O_NONBLOCK)
+            if w >= 0 { Darwin.close(w) }
+            var more = 0
+            while box.get() == nil, more < 300 { try await Task.sleep(for: .milliseconds(10)); more += 1 }
+        }
+        let t = try #require(answered, "the read blocked in open() on a FIFO with no writer")
         #expect(!t.available && t.readProblem?.contains("not a regular file") == true, "\(t)")
     }
 

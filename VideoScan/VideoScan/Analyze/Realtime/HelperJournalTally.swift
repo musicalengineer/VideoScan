@@ -172,8 +172,11 @@ enum HelperJournalReader {
     /// The file's bytes if it is a regular file under `maxBytes` — opened
     /// without following a symlink, checked with fstat, read at most
     /// `maxBytes + 1` bytes so a file that grows under us is still refused.
+    /// `O_NONBLOCK`: a FIFO (or device) at the path would otherwise block
+    /// `open()` until a writer appears, before fstat could refuse it (Codex
+    /// final pass 2); on a regular file the flag changes nothing.
     static func readBounded(_ url: URL) -> Result<Data, Refusal> {
-        let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else {
             let code = errno
             return .failure(Refusal(code == ELOOP ? "is not a regular file (a symbolic link) — not read"
