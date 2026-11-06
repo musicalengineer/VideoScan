@@ -19,7 +19,7 @@ struct AudioFingerprintBackfillDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(job.lanes) { laneRow($0) }
             if job.problems.isEmpty && job.sample.isEmpty {
-                Text(job.state.isActive ? "Nothing done yet…" : "No file needed a sound fingerprint.")
+                Text(job.state.isActive ? "Nothing done yet…" : AudioFingerprintBackfillTotals.nothingToDoWords(job.totals))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             } else {

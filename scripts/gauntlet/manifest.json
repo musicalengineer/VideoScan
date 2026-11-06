@@ -34262,6 +34262,33 @@
         "theLabelsArePlainWords",
         "theTryingTileIsGoneAndTheStoreReadsNoSecondJournalPath"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SoundPrintCoverageTruthTests.swift",
+      "stage": "regression",
+      "suites": [
+        "SoundPrintCoverageTruthTests"
+      ],
+      "tests": [
+        "scaleAgrees",
+        "theBandCountsWhatThePlannerWouldDo",
+        "theDetailSaysWhyThereIsNothingToDo",
+        "theJobsWritesRefreshTheBand",
+        "theSheetSaysWhyThereIsNothingToDo"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeSoundCoverageTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeSoundCoverageTests"
+      ],
+      "tests": [
+        "theBandIsThePlanOnTheLiveCatalog"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -37959,9 +37986,13 @@
         {
           "name": "tests/test_gauntlet_event_stream.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeSoundCoverageTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 471,
+      "expected_floor": 476,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -38125,6 +38156,7 @@
         "VideoScanTests/ScanLocationVolumeTests",
         "VideoScanTests/ScanStillBeingWrittenTests",
         "VideoScanTests/ScanTileTallyTests",
+        "VideoScanTests/SoundPrintCoverageTruthTests",
         "VideoScanTests/SwallowedTrashThenPurgeSensorTests",
         "VideoScanTests/UnreadFamilyScopeSurnameShapeTests",
         "VideoScanTests/VerifyDateSensorReviewTests",

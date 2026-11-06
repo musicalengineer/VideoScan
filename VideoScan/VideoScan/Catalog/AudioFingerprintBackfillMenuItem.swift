@@ -84,7 +84,16 @@ struct AudioFingerprintBackfillSheet: View {
     /// "3,210 files need a sound fingerprint — about 2.4 TB to read. 6,940 are already done."
     static func headline(_ plan: AudioFingerprintBackfillPlan) -> String {
         guard plan.fileCount > 0 else {
-            return "Every file already has a sound fingerprint (\(plan.alreadyStamped.formatted()) done). Nothing to do."
+            // GH #442: nothing to read is said with its reasons, never as
+            // "every file has one" when some were given up on.
+            guard plan.gaveUp > 0 || plan.noDigest > 0 else {
+                return "Every file already has a sound fingerprint (\(plan.alreadyStamped.formatted()) done). Nothing to do."
+            }
+            var parts: [String] = []
+            if plan.alreadyStamped > 0 { parts.append("\(plan.alreadyStamped.formatted()) already have a sound fingerprint") }
+            if plan.gaveUp > 0 { parts.append(AudioFingerprintBackfillTotals.gaveUpWords(plan.gaveUp)) }
+            if plan.noDigest > 0 { parts.append("\(plan.noDigest.formatted()) never hashed (scan them first)") }
+            return "Nothing to read: " + parts.joined(separator: "; ") + "."
         }
         var line = "\(plan.fileCount.formatted()) file\(plan.fileCount == 1 ? "" : "s") need a sound fingerprint — about "
             + "\(MediaBytes.display(plan.bytes)) to read."

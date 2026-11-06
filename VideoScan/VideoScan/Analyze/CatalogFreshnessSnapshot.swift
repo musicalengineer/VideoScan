@@ -12,8 +12,11 @@
 // (already O(1) per cycler) plus two small facts (CatalogFreshnessFacts).
 //
 // Three things move the snapshot:
-//   1. the coverage pass (catalog mutation; the audit / hash / sound jobs
-//      save the catalog, so their stamps land here) — report + facts;
+//   1. the coverage pass (catalog mutation) — report + facts. A save alone
+//      does NOT schedule it (`noteCatalogMutated` is not the coverage
+//      trigger): an in-place writer calls `noteCatalogChangedForDossierCounts`
+//      itself — Fingerprint Sound's stamp/try writers do since GH #442, when
+//      the band kept "9 without a sound print" after the job gave up on them;
 //   2. what is RUNNING, from the same three sources AnalyzeRunner.isRunning
 //      reads (codex cycle #80: a running OCR pass must read "running" here
 //      too, not only on the panel's tick): the MFO center's job list (the
@@ -68,7 +71,7 @@ enum CatalogFreshnessRows {
             if audit.predatesSwitch { row.phrases.uncovered = Self.notSinceTheSwitch("checked") }
         case .soundPrints:
             row.storeUnavailable = facts.soundStoreProblem
-            if report.soundGaveUp > 0 { row.note = Self.soundGaveUpWords(report.soundGaveUp) }
+            row.note = Self.soundNote(gaveUp: report.soundGaveUp, noDigest: report.soundNoDigest)
         case .integrity:
             // No stamp per row: the last Verify Catalog report stands in
             // (its BUILT tiers' results, dates and words — IntegrityReportFacts).
@@ -127,6 +130,16 @@ enum CatalogFreshnessRows {
     /// up on them — said, never hidden in the percentage.
     static func soundGaveUpWords(_ n: Int) -> String {
         "\(n.formatted()) gave up after \(AudioFingerprintAttempt.cap) tries (heard too little or would not decode) — a new engine retries them"
+    }
+
+    /// The Sound Prints row's note: the give-ups (covered) and the files
+    /// with no digest (not applicable), each said, never hidden in the
+    /// percentage. nil when both are zero.
+    static func soundNote(gaveUp: Int, noDigest: Int) -> String? {
+        var parts: [String] = []
+        if gaveUp > 0 { parts.append(soundGaveUpWords(gaveUp)) }
+        if noDigest > 0 { parts.append("\(noDigest.formatted()) never hashed — Fingerprint Sound needs a hash first") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Each kind's own words for its counts (FreshnessRow.Phrases).

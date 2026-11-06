@@ -102,8 +102,11 @@ struct CatalogFreshnessRowsTests {
         func record(_ name: String, _ outcome: AudioFingerprintStamp.Outcome?) -> VideoRecord {
             let r = VideoRecord()
             r.fullPath = "/Volumes/LaCie/\(name)"; r.sizeBytes = 10
+            // GH #442: the stamp must be CURRENT (keyed on the row's own
+            // digest) to count — the planner's rule, which the band now asks.
+            r.contentHash = "v1:\(name)"
             if let outcome {
-                r.audioFingerprint = AudioFingerprintStamp(computedAt: now, contentDigest: "sha256:x", sizeBytes: 10,
+                r.audioFingerprint = AudioFingerprintStamp(computedAt: now, contentDigest: "v1:\(name)", sizeBytes: 10,
                                                            outcome: outcome, analyzedSeconds: 1, complete: true,
                                                            landmarks: 1, bytes: 1)
             }
