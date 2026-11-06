@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-05T12:52:03Z",
- "sha": "b9d49a3c",
+ "ts": "2026-11-06T12:36:51Z",
+ "sha": "ea42182a",
  "formula_version": 1,
- "files_scored": 840,
+ "files_scored": 843,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -24,8 +24,8 @@
    "lines": 1962,
    "could_be_private": 5,
    "widened_for_split": 20,
-   "churn_7d": 3,
-   "score": 67.7
+   "churn_7d": 2,
+   "score": 59.2
   },
   {
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
@@ -50,17 +50,6 @@
    "score": 44.1
   },
   {
-   "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift",
-   "offenders": 7,
-   "worst_ccn": 29,
-   "new_or_worse": 0,
-   "lines": 2219,
-   "could_be_private": 15,
-   "widened_for_split": 0,
-   "churn_7d": 2,
-   "score": 44.0
-  },
-  {
    "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift",
    "offenders": 3,
    "worst_ccn": 17,
@@ -72,15 +61,15 @@
    "score": 38.4
   },
   {
-   "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
-   "offenders": 4,
-   "worst_ccn": 23,
+   "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift",
+   "offenders": 7,
+   "worst_ccn": 29,
    "new_or_worse": 0,
-   "lines": 2216,
-   "could_be_private": 11,
-   "widened_for_split": 4,
-   "churn_7d": 3,
-   "score": 37.1
+   "lines": 2219,
+   "could_be_private": 15,
+   "widened_for_split": 0,
+   "churn_7d": 1,
+   "score": 37.7
   },
   {
    "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift",
@@ -105,6 +94,17 @@
    "score": 34.0
   },
   {
+   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
+   "offenders": 3,
+   "worst_ccn": 31,
+   "new_or_worse": 1,
+   "lines": 2093,
+   "could_be_private": 4,
+   "widened_for_split": 1,
+   "churn_7d": 2,
+   "score": 32.1
+  },
+  {
    "file": "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift",
    "offenders": 2,
    "worst_ccn": 18,
@@ -116,6 +116,17 @@
    "score": 30.0
   },
   {
+   "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+   "offenders": 4,
+   "worst_ccn": 23,
+   "new_or_worse": 0,
+   "lines": 2216,
+   "could_be_private": 11,
+   "widened_for_split": 4,
+   "churn_7d": 1,
+   "score": 27.8
+  },
+  {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift",
    "offenders": 3,
    "worst_ccn": 21,
@@ -123,19 +134,8 @@
    "lines": 2822,
    "could_be_private": 7,
    "widened_for_split": 2,
-   "churn_7d": 2,
-   "score": 29.8
-  },
-  {
-   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
-   "offenders": 3,
-   "worst_ccn": 31,
-   "new_or_worse": 1,
-   "lines": 2092,
-   "could_be_private": 4,
-   "widened_for_split": 1,
    "churn_7d": 1,
-   "score": 27.5
+   "score": 25.6
   },
   {
    "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",

@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 370,
+ "entry_count": 369,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -277,10 +277,6 @@
   "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::CatalogView.volumeTable": {
    "ccn": 25,
    "nloc": 156
-  },
-  "VideoScan/VideoScan/Catalog/InspectorDossierView.swift::InspectorDossierView.body": {
-   "ccn": 11,
-   "nloc": 164
   },
   "VideoScan/VideoScan/Catalog/InspectorFamilyTagsView.swift::InspectorFamilyTagsView.editModeControls": {
    "ccn": 5,

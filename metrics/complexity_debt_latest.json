@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-05T12:51:17Z",
- "sha": "b9d49a3c",
+ "ts": "2026-11-06T12:36:11Z",
+ "sha": "ea42182a",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 378,
- "baseline_before": 370,
- "baseline_after": 370,
+ "offenders": 377,
+ "baseline_before": 369,
+ "baseline_after": 369,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
@@ -136,6 +136,16 @@
    "lang": "swift",
    "base_ccn": 11,
    "base_nloc": 149
+  },
+  {
+   "key": "VideoScan/VideoScan/People/DossierDashboardView.swift::DossierDashboardView.body",
+   "file": "VideoScan/VideoScan/People/DossierDashboardView.swift",
+   "function": "DossierDashboardView.body",
+   "ccn": 10,
+   "nloc": 192,
+   "lang": "swift",
+   "base_ccn": 9,
+   "base_nloc": 185
   },
   {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",

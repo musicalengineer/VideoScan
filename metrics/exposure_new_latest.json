@@ -1,8 +1,22 @@
 {
  "schemaVersion": 1,
- "ts": "2026-11-05T12:51:54Z",
- "sha": "b9d49a3c",
+ "ts": "2026-11-06T12:36:43Z",
+ "sha": "ea42182a",
  "new": [
+  {
+   "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.analyzerName",
+   "file": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift",
+   "name": "AnalysisResultsSheet.analyzerName",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift::AnalysisResultsSheet.outcomeHelp",
+   "file": "VideoScan/VideoScan/Analyze/AnalysisResultsSheet.swift",
+   "name": "AnalysisResultsSheet.outcomeHelp",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
    "file": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift",
@@ -1463,6 +1477,13 @@
    "key": "VideoScan/VideoScan/Catalog/ExcessCopiesPane.swift::CleanUpSidebarSection.onSelectExcess",
    "file": "VideoScan/VideoScan/Catalog/ExcessCopiesPane.swift",
    "name": "CleanUpSidebarSection.onSelectExcess",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/FileDossierStore.swift::FileDossierStore.slowRead",
+   "file": "VideoScan/VideoScan/Catalog/FileDossierStore.swift",
+   "name": "FileDossierStore.slowRead",
    "kind": "let",
    "classification": "could-be-private"
   },
@@ -5709,6 +5730,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/AnalysisResultsReport.swift::AnalysisResultsReport.agreements",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/AnalysisResultsReport.swift",
+   "name": "AnalysisResultsReport.agreements",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundJob.swift::EraJob.defaultModelSnapshot",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/BackgroundJob.swift",
    "name": "EraJob.defaultModelSnapshot",
@@ -5811,13 +5839,6 @@
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/JobSupervisor.swift",
    "name": "FailureStreak.lastWords",
    "kind": "var",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/MachineEraResolver.swift::MachineEraResolver.isMachine",
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Background/MachineEraResolver.swift",
-   "name": "MachineEraResolver.isMachine",
-   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -6042,6 +6063,209 @@
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Commit/CatalogPendingRecord.swift",
    "name": "CatalogPendingRecord.NotUTF8",
    "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.EraVerdict",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.EraVerdict",
+   "kind": "enum",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.EraVerdict.init",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.EraVerdict.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.Ran",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.Ran",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.Ran.init",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.Ran.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.Ran.noPicture",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.Ran.noPicture",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.Ran.ocrUnknownReason",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.Ran.ocrUnknownReason",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.Ran.streamsUnknown",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.Ran.streamsUnknown",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.burnedInLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.burnedInLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.dossierRunLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.dossierRunLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.dvClockLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.dvClockLine",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.eraLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.eraLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.eventDay",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.eventDay",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.inferredDateLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.inferredDateLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.notProbed",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.notProbed",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.ocrLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.ocrLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.patternsSection",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.patternsSection",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.patternsSummary",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.patternsSummary",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.peopleLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.peopleLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.recognizedLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.recognizedLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.rejectedEra",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.rejectedEra",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.sceneLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.sceneLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.speechLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.speechLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.streamsUnknown",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.streamsUnknown",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.technicalSection",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.technicalSection",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift::FileDossier.userDateLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/FileDossier+Build.swift",
+   "name": "FileDossier.userDateLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift::TechnicalReading.codecWords",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift",
+   "name": "TechnicalReading.codecWords",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift::TechnicalReading.containerWords",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift",
+   "name": "TechnicalReading.containerWords",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift::TechnicalReading.fieldOrderWords",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift",
+   "name": "TechnicalReading.fieldOrderWords",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift::TechnicalReading.fpsText",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Dossier/TechnicalReading.swift",
+   "name": "TechnicalReading.fpsText",
+   "kind": "func",
    "classification": "could-be-private"
   },
   {
@@ -7053,8 +7277,8 @@
    "classification": "widened-for-split"
   }
  ],
- "fixed": 135,
+ "fixed": 138,
  "baseline_before": 2456,
- "baseline_after": 2321,
+ "baseline_after": 2318,
  "shrink_skipped": false
 }
