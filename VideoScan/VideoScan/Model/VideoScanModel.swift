@@ -1173,6 +1173,9 @@ final class VideoScanModel: ObservableObject {
         // Signatures / Embedded Dates pass reads "running" on every surface
         // and stays out of "Update everything stale".
         catalogFreshness.observeEngines(of: self)
+        // GH #441: while "Update everything stale" runs, Catalog reads grey
+        // "Checking…"; the Update's last step (the catalog check) colours it.
+        catalogFreshness.observeUpdate(catalogStatusUpdateQueue)
         // The launch restore (moved out of init unchanged, 2026-10-21, so a
         // test drives the exact code init runs — codex review of slice 2).
         restoreCatalogAtLaunch()

@@ -613,7 +613,9 @@ struct CatalogFreshnessSnapshotTests {
 @MainActor
 struct CatalogStatusUpdateQueueTests {
 
-    @Test func startsOneKindAtATimeInTheOrderGiven() {
+    /// GH #441: the order is the plan's (the catalog check once, last), not
+    /// the order given — CatalogUpdateOrderTests pins the plan itself.
+    @Test func startsOneKindAtATimeInPlanOrder() {
         let model = VideoScanModel()
         let runner = AnalyzeRunner(model: model, orchestrator: nil, center: nil)
         let queue = CatalogStatusUpdateQueue()
@@ -621,14 +623,16 @@ struct CatalogStatusUpdateQueueTests {
         // Date Inference is synchronous on the main actor (never "running"
         // between frames); the integrity kinds refuse without a center.
         queue.enqueue([.dateInference, .fullHashes, .dateInference], runner: runner, source: "test")
-        #expect(queue.pending == [.dateInference, .fullHashes], "duplicates dropped, order kept")
+        #expect(queue.pending == [.fullHashes, .dateInference, .integrity], "duplicates dropped, planned, the check last")
         queue.advanceIfIdle(now: now)
-        #expect(queue.current == .dateInference && queue.pending == [.fullHashes])
+        #expect(queue.current == .fullHashes && queue.pending == [.dateInference, .integrity])
         queue.advanceIfIdle(now: now.addingTimeInterval(1))
-        #expect(queue.current == .dateInference, "inside the grace window nothing moves")
+        #expect(queue.current == .fullHashes, "inside the grace window nothing moves")
         queue.advanceIfIdle(now: now.addingTimeInterval(3))
-        #expect(queue.current == .fullHashes && queue.pending.isEmpty)
+        #expect(queue.current == .dateInference && queue.pending == [.integrity])
         queue.advanceIfIdle(now: now.addingTimeInterval(6))
+        #expect(queue.current == .integrity && queue.pending.isEmpty)
+        queue.advanceIfIdle(now: now.addingTimeInterval(9))
         #expect(queue.current == nil && !queue.isActive)
     }
 
@@ -639,7 +643,7 @@ struct CatalogStatusUpdateQueueTests {
         queue.enqueue([.dateInference, .fullHashes], runner: runner, source: "test")
         queue.advanceIfIdle(now: now)
         queue.clearPending()
-        #expect(queue.current == .dateInference && queue.pending.isEmpty)
+        #expect(queue.current == .fullHashes && queue.pending.isEmpty)
     }
 
     @Test func runnerKnowsWhichKindsAreRunning() {

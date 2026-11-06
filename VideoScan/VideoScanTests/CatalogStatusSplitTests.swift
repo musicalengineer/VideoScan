@@ -100,7 +100,7 @@ struct CatalogStatusSplitLogicTests {
                            checking: checking)
     }
 
-    @Test("LOGIC: Catalog is the worst of Database and Files — Synced / Stale / Unhealthy / Unknown, exactly; grey beats green; a running check makes Stale Unknown and leaves red and green alone")
+    @Test("LOGIC: Catalog is the worst of Database and Files — Synced / Stale / Unhealthy / Unknown, exactly; grey beats green; a running check makes Stale grey Checking… and leaves red and green alone")
     func catalogEveryState() {
         let table: [(CatalogStatusLineState, CatalogStatusLineState, Bool, CatalogStatusLineState, String)] = [
             (.green, .green, false, .green, "Synced"),
@@ -110,7 +110,8 @@ struct CatalogStatusSplitLogicTests {
             (.green, .red, false, .red, "Unhealthy"),
             (.green, .grey, false, .grey, "Unknown"),
             (.yellow, .grey, false, .yellow, "Stale"),
-            (.yellow, .green, true, .grey, "Unknown"),
+            (.yellow, .green, true, .grey, "Checking…"),     // GH #441: a check under way says so
+            (.yellow, .grey, true, .grey, "Checking…"),
             (.red, .green, true, .red, "Unhealthy"),
             (.green, .green, true, .green, "Synced"),
         ]
@@ -204,7 +205,7 @@ struct CatalogStatusSplitTruthTests {
         #expect(changed != r, "a per-file change is a publish (equality gate)")
     }
 
-    @Test("TRUTH: the snapshot publishes indicators built from exactly its facts and report; a running Validate makes a stale Catalog Unknown")
+    @Test("TRUTH: the snapshot publishes indicators built from exactly its facts and report; a running Validate makes a stale Catalog grey Checking…")
     func snapshotIndicators() {
         let snapshot = CatalogFreshnessSnapshot()
         let quiet = CatalogStatusIndicators(snapshot.state)
@@ -218,7 +219,7 @@ struct CatalogStatusSplitTruthTests {
         #expect(ind == expected)
         #expect(ind.catalog.words == "Stale" && ind.content.words == "2 left to analyze")
         snapshot.setRunning([.integrity, .filePresence])
-        #expect(CatalogStatusIndicators(snapshot.state).catalog.words == "Unknown", "Checking… — wait for it")
+        #expect(CatalogStatusIndicators(snapshot.state).catalog.words == "Checking…", "a check under way — wait for it (GH #441)")
         snapshot.setRunning([.fullHashes])
         #expect(CatalogStatusIndicators(snapshot.state).catalog.words == "Stale")
         #expect(CatalogStatusIndicators(snapshot.state).content.words == "Analyzing 1 of 3 files")
