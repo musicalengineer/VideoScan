@@ -57,6 +57,10 @@ struct RealtimeAnalysisState: Equatable, Sendable {
 
         var isTranscribing: Bool { stage.lowercased().contains("whisper") }
 
+        /// "N frames to rip" is shown only while the extractor is still on them
+        /// (re-review 5: a lane waiting on the previous file's Whisper is not ripping).
+        var showsFramesToRip: Bool { framesPlanned > 0 && !isTranscribing && !hasCaptions }
+
         /// The OUT column while the file is still in flight: nothing has
         /// reached the catalog yet, and the words say so.
         var outWords: String {
@@ -134,6 +138,21 @@ struct RealtimeAnalysisState: Equatable, Sendable {
 
         var isWorking: Bool { !lanes.isEmpty }
 
+        /// The header's second line, as rendered (tests read the words).
+        var headline: String {
+            switch phase {
+            case .idle: return "Idle — no captions or transcripts running"
+            case .finished: return "Finished — \(done) analyzed · \(skipped) skipped · \(failed) failed"   // files done, not captions (re-review 4)
+            case .stopping: return "Stopping — the file in flight banks what it has"
+            case .analyzing, .paused:
+                var parts: [String] = []
+                if total > 0 { parts.append("\(currentIndex) / \(total)") }
+                parts.append(RealtimeAnalysisState.secondsPerFileWords(secondsPerFile, over: timedCount))
+                parts.append(RealtimeAnalysisState.etaWords(etaSeconds))
+                return parts.joined(separator: " · ")
+            }
+        }
+
         /// The files of `recent` whose every stage was timed.
         var timedCount: Int { recent.compactMap(\.timedSeconds).count }
 
@@ -171,9 +190,9 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         /// The helper's own plan size for the era kind (`ServiceStatus.planned`).
         var planned: Int?
         var tally: HelperJournalTally = HelperJournalTally()
-        /// Files with tries and no verdict (attempts/era.jsonl, seated signer); nil = unreadable.
-        var triesInProgress: Int?
-        var triesProblem: String?
+        // No "tries in progress" here (Codex re-review 1/2/6, Rick's KISS): that
+        // number needs the catalog plus every journal day file; the Results
+        // sheet owns the rule and the window points at it.
         /// "Background: N journal lines waiting · M refused" (JournalApplierWords).
         var journalWords: String?
         /// The analyzer's short name ("8B").

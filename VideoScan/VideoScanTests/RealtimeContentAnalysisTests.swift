@@ -47,7 +47,6 @@ private final class Probe: @unchecked Sendable {
     var reply: Result<ServiceStatus, Refusal> = .failure(Refusal("the helper is not running"))
     var inApp = RealtimeAnalysisState.InApp()
     var tally = HelperJournalTally()
-    var trying: Result<Int, Refusal> = .success(0)
     var machine = MachineSample(cpuBusyPercent: 40, cpuProblem: nil, gpuUtilizationPercent: 94, gpuProblem: nil,
                                 memoryUsedGB: 38.2, memoryTotalGB: 96, memoryProblem: nil, diskReadMBPerSecond: 210, diskProblem: nil)
     var now = Date(timeIntervalSince1970: 1_793_925_000)
@@ -61,7 +60,6 @@ private func store(_ p: Probe, tick: Duration = .milliseconds(500), helperEvery:
         helperEnabled: { p.enabled },
         helperStatus: { p.statusCalls += 1; return p.reply },
         journal: { p.tally },
-        trying: { p.trying },
         machine: { p.machine },
         journalWords: { p.journalWords },
         note: { p.notes.append($0) },
@@ -135,20 +133,6 @@ struct RealtimeAnalysisStoreTests {
         #expect(p.notes.filter { $0 == "VideoScan Background answered" }.count == 1)
     }
 
-    @Test func theTryCountsLandAndAnUnreadableLogSaysSo() async throws {
-        let p = Probe()
-        p.trying = .success(2)
-        let s = store(p)
-        await s.refreshNow(waitForHelper: true)
-        #expect(s.state.helper.triesInProgress == 2 && s.state.helper.triesProblem == nil)
-
-        p.trying = .failure(Refusal("era: the try counts at /x/era.jsonl are unreadable (line 3 is not a try record)"))
-        p.now = p.now.addingTimeInterval(6)
-        await s.refreshNow(waitForHelper: true)
-        #expect(s.state.helper.triesInProgress == nil)
-        #expect(s.state.helper.triesProblem?.contains("line 3 is not a try record") == true)
-    }
-
     @Test func theTallyLandsInTheState() async throws {
         let p = Probe()
         p.tally.file = "2026-11-06.jsonl"
@@ -218,7 +202,6 @@ struct RealtimeContentAnalysisSensorTests {
             }
         }
         let store = try code("RealtimeAnalysisStore.swift")
-        #expect(store.contains("AnalysisResultsReport.readAttempts(stateRoot: stateRoot)"), "the try counts through the read-only snapshot")
         #expect(store.contains("EraPlanner.journalDirectory(stateRoot: stateRoot)"), "the journal folder is the helper's own")
         let tally = try code("HelperJournalTally.swift")
         #expect(tally.contains("journal.read(file: newest, from: tally.bytesRead"), "the applier's own reader, incrementally")
@@ -391,7 +374,6 @@ struct RealtimeContentAnalysisMockupTests {
             .init(id: "c", at: 1_793_925_380, kind: .eraNone, words: "no usable era"),
             .init(id: "d", at: 1_793_925_322, kind: .eraFound, words: "era found — 1980s (1984–1989)"),
         ]
-        p.trying = .success(3)
         _ = try await render("mid-run", p, samples: 40)
     }
 
@@ -409,7 +391,6 @@ struct RealtimeContentAnalysisMockupTests {
             .init(id: "b", at: 1_793_925_401, kind: .eraFound, words: "era found — early 1990s (1991–1995)"),
             .init(id: "c", at: 1_793_925_380, kind: .eraNone, words: "no usable era"),
         ]
-        p.trying = .success(3)
         _ = try await render("mid-run-dark", p, samples: 40, dark: true)
     }
 
@@ -429,7 +410,6 @@ struct RealtimeContentAnalysisMockupTests {
         p.machine.memoryTotalGB = 96
         p.tally.file = "2026-11-06.jsonl"
         p.tally.eraFound = 3; p.tally.unreadable = 2; p.tally.torn = true
-        p.trying = .failure(Refusal("era: the try counts at …/attempts/era.jsonl are unreadable (line 7 is not a try record) — the job is refused rather than give files up or retry them blind"))
         p.journalWords = "Background: 0 journal lines waiting · 2 refused"
         _ = try await render("error-unknown", p, samples: 3)
     }

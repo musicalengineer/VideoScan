@@ -12,8 +12,9 @@
 //     the kernel calls never run on the main actor);
 //   * every `helperEvery` seconds, in ONE detached task, asks the helper for
 //     its XPC status (only when enabled — asking starts it), folds its journal
-//     through HelperJournalCursor (read-only, incremental) and replays its try
-//     counts through EraAttemptStore.snapshot (read-only, never compacts).
+//     through HelperJournalCursor (read-only, incremental). No "tries in
+//     progress" (Codex re-review, Rick's KISS): that needs the catalog plus
+//     every journal day file; the Results sheet owns it.
 // Publishes are equality-gated: a tick that changed nothing sends nothing.
 //
 // Pause / Resume / Stop go through AnalyzeRunner — the one engine the Content
@@ -40,10 +41,6 @@ final class RealtimeAnalysisStore: ObservableObject {
         var helperEnabled: @MainActor () -> Bool
         var helperStatus: @Sendable () async -> Result<ServiceStatus, Refusal>
         var journal: @Sendable () async -> HelperJournalTally
-        /// Files with tries and no verdict — AnalysisResultsReport's one rule
-        /// (Codex F6); a refusal carries the words (an unreadable or over-cap
-        /// attempts file).
-        var trying: @Sendable () async -> Result<Int, Refusal>
         var machine: @Sendable () async -> MachineSample
         var journalWords: @MainActor () -> String?
         var note: @MainActor (String) -> Void
@@ -87,31 +84,14 @@ final class RealtimeAnalysisStore: ObservableObject {
     static func production(model: VideoScanModel, orchestrator: CaptionOrchestrator) -> RealtimeAnalysisStore {
         let stateRoot = URL(fileURLWithPath: model.catalogStore.fileLocation).deletingLastPathComponent()
             .appendingPathComponent("background", isDirectory: true)
-        let journal = ObservationJournal(directory: EraPlanner.journalDirectory(stateRoot: stateRoot))
-        let cursor = HelperJournalCursor(directory: journal.directory)
+        let cursor = HelperJournalCursor(directory: EraPlanner.journalDirectory(stateRoot: stateRoot))
         let reader = MachineCounterReader()
-        let repository = model.catalogCutover.committer?.repository
-        let signer = SeatedApproach.eraA2.signer
-        // "Trying" = AnalysisResultsReport.inProgress — the Results sheet's rule
-        // (a verdict in the catalog or the journal excludes the entry); read
-        // only when the try entries changed, through the session's reader.
-        let trying = TryingCounter(
-            signer: signer,
-            readAttempts: { TryingCounter.readAttempts(stateRoot: stateRoot) },
-            answered: { snapshot in
-                guard let repository else { throw Refusal("catalog.sqlite is not open in this session — there is nothing to read") }
-                let inJournal = EraPlanner.answeredInJournal(journal, signer: signer)
-                return try await repository.read {
-                    try AnalysisResultsReport.inProgress(reader: $0, signer: signer, attempts: snapshot, inJournal: inJournal).count
-                }
-            })
         let runner = AnalyzeRunner(model: model, orchestrator: orchestrator, center: nil)
         let sources = Sources(
             inApp: { [weak orchestrator] in orchestrator.map(inApp(from:)) ?? RealtimeAnalysisState.InApp() },
             helperEnabled: { BackgroundServiceRegistrar.isEnabled },
             helperStatus: { await BackgroundServiceClient().status() },
             journal: { await cursor.refresh() },
-            trying: { await trying.count() },
             machine: { await reader.sample() },
             journalWords: { [weak model] in model?.journalApplier.counts.map(JournalApplierWords.statusLine) },
             note: { [weak model] line in
@@ -272,21 +252,12 @@ final class RealtimeAnalysisStore: ObservableObject {
         let enabled = sources.helperEnabled()
         let status = sources.helperStatus
         let journal = sources.journal
-        let trying = sources.trying
         let signer = sources.seatedSigner
         let words = sources.journalWords()
         return Task.detached(priority: .utility) { [weak self] in
             let reply: Result<ServiceStatus, Refusal>? = enabled ? await status() : nil
             var h = Self.helper(from: reply, enabled: enabled, seatedSigner: signer, previous: previous)
             h.tally = await journal()
-            switch await trying() {
-            case .success(let count):
-                h.triesInProgress = count
-                h.triesProblem = nil
-            case .failure(let refusal):
-                h.triesInProgress = nil
-                h.triesProblem = refusal.words
-            }
             h.journalWords = words
             let landed = h
             await MainActor.run { [weak self] in
@@ -323,65 +294,3 @@ final class RealtimeAnalysisStore: ObservableObject {
     func stopAnalysis() { sources.stop() }
 }
 
-// MARK: - "Trying": AnalysisResultsReport's rule, read only when the tries changed
-
-/// Files with tries and no verdict, by the ONE rule the Results sheet uses
-/// (`AnalysisResultsReport.inProgress`: an entry whose content already has a
-/// verdict in the catalog or the journal is not in progress — Codex F6).
-/// The catalog + journal read runs only when the signer's try entries
-/// changed since the last count; an unchanged attempts log costs one replay.
-/// The attempts file is read through the read-only snapshot and refused
-/// past `attemptsFileCap` (Codex F9: bounded work, unavailable with a reason).
-///
-/// Memory: one snapshot (≈ 200 B per entry) and the last count.
-/// (For Rick: a memoised lookup behind a mutex — an actor.)
-actor TryingCounter {
-    static let attemptsFileCap = 32 << 20
-
-    private let signer: String
-    private let readAttempts: @Sendable () -> Result<EraAttemptSnapshot, Refusal>
-    private let answered: @Sendable (EraAttemptSnapshot) async throws -> Int
-    private var last: (entries: [String: EraAttempt], count: Int)?
-    /// Catalog + journal reads made (tests: unchanged tries read nothing).
-    private(set) var reads = 0
-
-    init(signer: String,
-         readAttempts: @escaping @Sendable () -> Result<EraAttemptSnapshot, Refusal>,
-         answered: @escaping @Sendable (EraAttemptSnapshot) async throws -> Int) {
-        self.signer = signer
-        self.readAttempts = readAttempts
-        self.answered = answered
-    }
-
-    /// The attempts snapshot, refused when the file is over the cap.
-    static func readAttempts(stateRoot: URL) -> Result<EraAttemptSnapshot, Refusal> {
-        let url = EraAttemptStore.url(stateRoot: stateRoot)
-        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
-           size.intValue > attemptsFileCap {
-            return .failure(Refusal("the try counts at \(url.path) are \(size.intValue >> 20) MB, over the window's "
-                                    + "\(attemptsFileCap >> 20) MB cap — not read"))
-        }
-        return AnalysisResultsReport.readAttempts(stateRoot: stateRoot)
-    }
-
-    func count() async -> Result<Int, Refusal> {
-        let snapshot: EraAttemptSnapshot
-        switch readAttempts() {
-        case .failure(let refusal): return .failure(refusal)
-        case .success(let s): snapshot = s
-        }
-        let entries = snapshot.attempts(signer: signer)
-        if entries.isEmpty { return .success(0) }
-        if let last, last.entries == entries { return .success(last.count) }
-        do {
-            reads += 1
-            let count = try await answered(snapshot)
-            last = (entries, count)
-            return .success(count)
-        } catch let refusal as Refusal {
-            return .failure(refusal)
-        } catch {
-            return .failure(Refusal("the verdicts could not be read (\(error))"))
-        }
-    }
-}

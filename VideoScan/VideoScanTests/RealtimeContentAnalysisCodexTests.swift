@@ -9,7 +9,8 @@
 //       failed" — serial and pipelined, lane, note and counters
 //   F4  an empty pass shows zero totals, never the previous pass's
 //   F5  a journal read failure makes the tally unavailable, with the reason
-//   F6  "trying" uses AnalysisResultsReport's one rule (a verdict excludes)
+//   F6  "trying": first wired to AnalysisResultsReport's rule, then DROPPED on
+//       the re-review (1/2/6: no single bounded source; the Results sheet owns it)
 //   F7  disk read is a per-device delta; a changed device set or a refused
 //       driver read is unavailable with a reason, never a rate
 //   F8  serial Whisper is timed; an untimed file never counts as 0 s
@@ -255,42 +256,6 @@ struct RealtimeContentAnalysisCodexRuleTests {
         #expect(o.recentActivity.first?.output?.banked == false)
     }
 
-    // F6: the one rule, and read only when the tries changed
-    @Test func tryingExcludesAFileWithAVerdictAndReadsOnlyOnChange() async throws {
-        let signer = SeatedApproach.eraA2.signer
-        final class Verdicts: @unchecked Sendable { var answered: Set<String> = ["d1"]; var snapshot = EraAttemptSnapshot() }
-        let v = Verdicts()
-        let line = #"{"tries":1,"lastReason":"r","lastAt":1}"#
-        let one = try JSONDecoder().decode(EraAttempt.self, from: Data(line.utf8))
-        v.snapshot = EraAttemptSnapshot(entries: ["\(signer) d1": one, "\(signer) d2": one, "machine:other@r1 d3": one])
-        let counter = TryingCounter(signer: signer, readAttempts: { .success(v.snapshot) },
-                                    answered: { s in s.attempts(signer: signer).keys.filter { !v.answered.contains($0) }.count })
-        #expect(try await counter.count().get() == 1, "d1 has a verdict (the crash window between journal append and attempt clear)")
-        #expect(try await counter.count().get() == 1)
-        #expect(await counter.reads == 1, "unchanged tries: no second catalog/journal read")
-        v.snapshot = EraAttemptSnapshot(entries: ["\(signer) d2": one])
-        #expect(try await counter.count().get() == 1)
-        #expect(await counter.reads == 2, "changed tries: read again")
-        v.snapshot = EraAttemptSnapshot()
-        #expect(try await counter.count().get() == 0)
-        #expect(await counter.reads == 2, "no tries: nothing to read")
-        let refused = TryingCounter(signer: signer, readAttempts: { .failure(Refusal("unreadable")) }, answered: { _ in 0 })
-        guard case .failure(let r) = await refused.count() else { Issue.record("a refused attempts log is a refusal"); return }
-        #expect(r.words == "unreadable")
-    }
-
-    // F9: an attempts file over the cap is refused with the size in the words
-    @Test func anOversizedAttemptsFileIsRefusedNotRead() throws {
-        let root = URL(fileURLWithPath: try scratch("f9a"))
-        let url = EraAttemptStore.url(stateRoot: root)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let handle = try FileHandle(forWritingTo: { FileManager.default.createFile(atPath: url.path, contents: nil); return url }())
-        try handle.truncate(atOffset: UInt64(TryingCounter.attemptsFileCap + 1))   // a sparse file: the size is the fact
-        try handle.close()
-        guard case .failure(let r) = TryingCounter.readAttempts(stateRoot: root) else { Issue.record("over the cap must refuse"); return }
-        #expect(r.words.contains("over the window's 32 MB cap") && r.words.contains("32 MB,"), "\(r.words)")
-    }
-
     // F9: a parked over-cap journal tail is not rescanned until the file changes size
     @Test func aParkedTailIsNotRescanned() async throws {
         let dir = URL(fileURLWithPath: try scratch("f9p"))
@@ -347,6 +312,98 @@ struct RealtimeContentAnalysisCodexRuleTests {
     }
 }
 
+// MARK: - Re-review (codex-review-re-review-…-2026-11-05.md): findings 3, 4, 5 and the "trying" tile
+
+@MainActor
+@Suite("Realtime Content Analysis — Codex re-review, red first")
+struct RealtimeContentAnalysisCodexRoundTwoTests {
+
+    private func line(_ i: Int) throws -> ObservationLine {
+        try ObservationLine(subjectID: String(repeating: "c", count: 63) + String(i), field: MachineEraResolver.fusedField,
+                            value: "1991-1995", by: SeatedApproach.eraA2.signer, at: Int64(i), confidence: 0.6,
+                            evidence: [:], job: "T", unit: i)
+    }
+
+    // 3: the same day file truncated or replaced is rebuilt, never kept as live
+    @Test func aTruncatedOrReplacedDayFileIsRebuilt() async throws {
+        let dir = URL(fileURLWithPath: try scratch("r3"))
+        let journal = ObservationJournal(directory: dir)
+        try journal.append([try line(1)])
+        let cursor = HelperJournalCursor(directory: dir)
+        let first = await cursor.refresh()
+        #expect(first.eraFound == 1)
+        let url = dir.appendingPathComponent(try #require(first.file))
+        try Data().write(to: url)                          // truncated in place (same inode)
+        let truncated = await cursor.refresh()
+        #expect(truncated.eraFound == 0 && truncated.lines == 0 && truncated.available, "rebuilt from the shorter file: \(truncated)")
+        var replacement = Data()
+        replacement.append(try line(2).encoded)
+        replacement.append(try line(3).encoded)
+        try replacement.write(to: url, options: .atomic)    // replaced (a new inode), longer than before
+        let replaced = await cursor.refresh()
+        #expect(replaced.eraFound == 2 && replaced.lines == 2 && replaced.available, "rebuilt from the new file: \(replaced)")
+    }
+
+    // 4: the finished header counts files done, not captions
+    @Test func theFinishedHeadlineCountsFilesDone() async throws {
+        let dir = try scratch("r4")
+        let model = VideoScanModel()
+        let audio = record(dir + "/talk.mp3")
+        model.records = [audio]
+        let runner = StubDossierRunner(modelID: "stub-vlm")
+        let orch = CaptionOrchestrator(runnerFactory: { runner })
+        orch.resetLiveCounts()
+        orch.liveTotal = 1
+        await orch.runDossierBatchSerial(runner: runner, transcriber: StubAudioTranscriber(transcriptText: "hello"),
+                                         candidates: [audio], framesPerFile: 3, force: false, model: model,
+                                         stackID: "t", started: CFAbsoluteTimeGetCurrent(), stages: [.transcript])
+        orch.currentStatus = .finished(captioned: orch.liveCaptioned, skipped: orch.liveSkipped, failed: orch.liveFailed)
+        let s = RealtimeAnalysisStore.inApp(from: orch)
+        #expect(s.done == 1 && s.captioned == 0)
+        #expect(s.headline == "Finished — 1 analyzed · 0 skipped · 0 failed", "\(s.headline)")
+    }
+
+    // 5: a lane whose extraction finished but waits on the previous file's Whisper says so
+    @Test func aLaneWaitingOnThePreviousTranscriptSaysSo() async throws {
+        let dir = try scratch("r5")
+        let model = VideoScanModel()
+        let a = record(dir + "/a.mov")                                  // audio + video: a slow Whisper holds the pipeline
+        let b = record(dir + "/b.mov", streamType: .videoOnly)          // video only: its scenes wait behind a's Whisper
+        model.records = [a, b]
+        let runner = StubDossierRunner(modelID: "stub-vlm")
+        let orch = CaptionOrchestrator(runnerFactory: { runner })
+        let transcriber = StubAudioTranscriber(transcriptText: "hello", delay: .milliseconds(1_200))
+        let batch = Task { await orch.runDossierBatch(runner: runner, transcriber: transcriber, candidates: [a, b],
+                                                      framesPerFile: 3, force: false, model: model) }
+        try await Task.sleep(for: .milliseconds(400))
+        let laneB = try #require(RealtimeAnalysisStore.inApp(from: orch).lanes.first { $0.filename == "b.mov" },
+                                 "b's lane is open while a's Whisper holds it: \(orch.activeLanes.map(\.filename))")
+        #expect(laneB.hasCaptions, "b's extraction finished")
+        #expect(laneB.verb.contains("waiting"), "the lane says it is waiting, not extracting: \(laneB.verb)")
+        #expect(!laneB.showsFramesToRip, "no 'frames to rip' once the extractor is done")
+        await batch.value
+        #expect(orch.activeLanes.isEmpty)
+    }
+}
+
+struct RealtimeContentAnalysisCodexRoundTwoSensorTests {
+    private func code(_ file: String) throws -> String { try SourceTree.appCode(named: file) }
+
+    /// Re-review 1, 2, 6 (KISS, Rick): "trying" needs a catalog read plus a full
+    /// scan of every journal day file through a path that swallows read errors —
+    /// not one bounded source. The tile is gone; the Results sheet owns that rule.
+    @Test func theTryingTileIsGoneAndTheStoreReadsNoSecondJournalPath() throws {
+        let window = try code("RealtimeContentAnalysisWindow.swift")
+        #expect(!window.contains("\"trying\""), "no 'trying' tile")
+        #expect(window.contains("Results…"), "the pane points at the sheet that owns the rule")
+        let store = try code("RealtimeAnalysisStore.swift")
+        for gone in ["AnalysisResultsReport.inProgress(", "answeredInJournal(", "readAttempts(", "EraAttemptStore", "TryingCounter"] {
+            #expect(!store.contains(gone), "no second journal/attempts reader: `\(gone)`")
+        }
+        #expect(try code("HelperJournalTally.swift").contains("systemFileNumber"), "the cursor watches the file's identity (re-review 3)")
+    }
+}
+
 // MARK: - Sensors on the window's words (F1, F6 wiring, labels)
 
 struct RealtimeContentAnalysisCodexSensorTests {
@@ -355,11 +412,6 @@ struct RealtimeContentAnalysisCodexSensorTests {
     @Test func aLaneNeverClaimsBanking() throws {
         let window = try code("RealtimeContentAnalysisWindow.swift")
         #expect(!window.contains("captions banked"), "F1: a lane's captions exist in memory until applyDossier")
-    }
-
-    @Test func tryingIsTheReportsOneRule() throws {
-        let store = try code("RealtimeAnalysisStore.swift")
-        #expect(store.contains("AnalysisResultsReport.inProgress("), "F6: one rule, the Results sheet's")
     }
 
     @Test func theLabelsArePlainWords() throws {

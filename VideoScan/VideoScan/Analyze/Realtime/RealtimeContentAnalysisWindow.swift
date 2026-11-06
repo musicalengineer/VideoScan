@@ -68,19 +68,7 @@ struct RealtimeContentAnalysisContent: View {
 
     // MARK: Header
 
-    private var phaseLine: String {
-        switch inApp.phase {
-        case .idle: return "Idle — no captions or transcripts running"
-        case .finished: return "Finished — \(inApp.captioned) analyzed · \(inApp.skipped) skipped · \(inApp.failed) failed"
-        case .stopping: return "Stopping — the file in flight banks what it has"
-        case .analyzing, .paused:
-            var parts: [String] = []
-            if inApp.total > 0 { parts.append("\(inApp.currentIndex) / \(inApp.total)") }
-            parts.append(RealtimeAnalysisState.secondsPerFileWords(inApp.secondsPerFile, over: inApp.timedCount))
-            parts.append(RealtimeAnalysisState.etaWords(inApp.etaSeconds))
-            return parts.joined(separator: " · ")
-        }
-    }
+    private var phaseLine: String { inApp.headline }
 
     private var header: some View {
         HStack(spacing: 10) {
@@ -278,7 +266,6 @@ struct RealtimeContentAnalysisContent: View {
                     helperTile("era found", tally.available ? tally.eraFound : nil, problem: tally.readProblem)
                     helperTile("no usable era", tally.available ? tally.eraNone : nil, problem: tally.readProblem)
                     helperTile("gave up", tally.available ? tally.gaveUp : nil, problem: tally.readProblem)
-                    helperTile("trying", helper.triesInProgress, problem: helper.triesProblem)
                 }
                 Text(helperJournalWords)
                     .font(.system(size: 10))
@@ -320,7 +307,8 @@ struct RealtimeContentAnalysisContent: View {
                          + (helper.tally.torn ? " · torn tail (a write in flight)" : ""))
         }
         if let words = helper.journalWords { parts.append(words) }
-        return parts.isEmpty ? "journal not read yet" : parts.joined(separator: " — ")
+        parts.append("tries in progress and still-to-do: Results… (the sheet reads the catalog and every journal file)")
+        return parts.joined(separator: " — ")
     }
 
     private func helperTile(_ label: String, _ count: Int?, problem: String? = nil) -> some View {
@@ -339,7 +327,6 @@ struct RealtimeContentAnalysisContent: View {
 
     private func helperTileHelp(_ label: String) -> String {
         switch label {
-        case "trying": return "Files with tries and no verdict yet: the attempts log minus every file whose verdict already landed in the catalog or the journal (the Results sheet's rule)"
         default: return "Counted from the helper's journal day file (read-only); era.none is never shown as an era"
         }
     }
@@ -443,7 +430,7 @@ struct RealtimeLaneRow: View {
                         .lineLimit(1)
                 }
                 HStack(spacing: 8) {
-                    if lane.framesPlanned > 0 && !lane.isTranscribing {
+                    if lane.showsFramesToRip {
                         Text("\(lane.framesPlanned) frames to rip").font(.system(size: 10)).foregroundColor(.secondary)
                     }
                     if lane.hasCaptions {

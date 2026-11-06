@@ -34171,8 +34171,7 @@
         "theHelpersFilesAreReadAndNeverWritten",
         "theKernelAndTheFilesAreReadOffTheMainActor",
         "theNewCounterIsResetWithTheOthersAndCountedAtBothBankingSites",
-        "theTallyLandsInTheState",
-        "theTryCountsLandAndAnUnreadableLogSaysSo"
+        "theTallyLandsInTheState"
       ]
     },
     {
@@ -34182,6 +34181,8 @@
       "suites": [
         "RealtimeContentAnalysisCodexTests",
         "RealtimeContentAnalysisCodexRuleTests",
+        "RealtimeContentAnalysisCodexRoundTwoTests",
+        "RealtimeContentAnalysisCodexRoundTwoSensorTests",
         "RealtimeContentAnalysisCodexSensorTests"
       ],
       "tests": [
@@ -34189,21 +34190,22 @@
         "aJournalReadFailureIsUnavailableWithTheReason",
         "aLaneNeverClaimsBanking",
         "aLaneSaysExtractedAndARowSaysBankedOnlyWhenItWas",
+        "aLaneWaitingOnThePreviousTranscriptSaysSo",
         "aParkedTailIsNotRescanned",
         "aRefusedBankCountsNoCaptionsAndNoTranscript",
         "aSuccessfulEmptyTranscriptIsNoSpeechInThePipelinedPath",
         "aSuccessfulEmptyTranscriptIsNoSpeechInTheSerialPath",
         "aThrownTranscriptionIsStillAFailure",
+        "aTruncatedOrReplacedDayFileIsRebuilt",
         "anEmptyPassShowsZeroTotals",
-        "anOversizedAttemptsFileIsRefusedNotRead",
         "anUnterminatedHugeLineIsUnavailableWithTheReason",
         "anUntimedFileNeverCountsAsZeroSeconds",
         "captionsCountsOnlyFilesWhoseCaptionsBanked",
         "serialTranscriptionIsTimed",
+        "theFinishedHeadlineCountsFilesDone",
         "theHelperPhraseIsOneHonestSentence",
         "theLabelsArePlainWords",
-        "tryingExcludesAFileWithAVerdictAndReadsOnlyOnChange",
-        "tryingIsTheReportsOneRule"
+        "theTryingTileIsGoneAndTheStoreReadsNoSecondJournalPath"
       ]
     }
   ],
@@ -37575,7 +37577,9 @@
         "VideoScanTests/RealtimeContentAnalysisMockupTests",
         "VideoScanTests/RealtimeContentAnalysisCodexTests",
         "VideoScanTests/RealtimeContentAnalysisCodexRuleTests",
-        "VideoScanTests/RealtimeContentAnalysisCodexSensorTests"
+        "VideoScanTests/RealtimeContentAnalysisCodexSensorTests",
+        "VideoScanTests/RealtimeContentAnalysisCodexRoundTwoTests",
+        "VideoScanTests/RealtimeContentAnalysisCodexRoundTwoSensorTests"
       ]
     },
     {

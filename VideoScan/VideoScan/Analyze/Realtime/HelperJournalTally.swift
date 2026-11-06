@@ -146,9 +146,16 @@ actor HelperJournalCursor {
     static let maxBytesPerRefresh = 64 << 20
     /// Refreshes that scanned bytes (tests: a parked over-cap tail scans nothing).
     private(set) var scans = 0
+    /// The day file's inode as last seen; a change means the file was replaced.
+    private var fileInode: UInt64?
 
     init(directory: URL) {
         journal = ObservationJournal(directory: directory)
+    }
+
+    /// The file's inode (`st_ino`), nil when it cannot be stat'ed.
+    private static func inode(_ url: URL) -> UInt64? {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? NSNumber)?.uint64Value
     }
 
     /// Fold in everything appended since the last call, up to `maxLines`
@@ -165,6 +172,13 @@ actor HelperJournalCursor {
             tornTailSize = nil
         }
         let size = journal.size(of: newest)
+        // The same name truncated or replaced (a new inode, or shorter than what
+        // was read) is another file: rebuild from byte 0 (Codex re-review 3).
+        let inode = Self.inode(journal.directory.appendingPathComponent(newest))
+        if inode != fileInode || size < tally.bytesRead {
+            if fileInode != nil { tally = HelperJournalTally(); tally.file = newest; tornTailSize = nil }
+            fileInode = inode
+        }
         if let parked = tornTailSize, parked == size { return tally }      // the over-cap tail has not moved
         tornTailSize = nil
         if !tally.available { tally = HelperJournalTally(); tally.file = newest }   // a cleared problem starts the counts again

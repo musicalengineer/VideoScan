@@ -474,7 +474,11 @@ extension CaptionOrchestrator {
             // were lighting up ✓).
             let hasCaptions = !extraction.scenes.isEmpty
             if plan.hasNoAudio {
-                updateLane(laneID, hasCaptions: hasCaptions)
+                // The extractor is done; the lane waits for the previous file's
+                // Whisper (the hand-off below) and says so (Codex re-review 5).
+                updateLane(laneID,
+                           verb: pendingWhisper == nil ? "banking scenes…" : "waiting for the previous file's transcript…",
+                           hasCaptions: hasCaptions)
             } else {
                 updateLane(
                     laneID,
