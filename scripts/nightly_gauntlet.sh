@@ -7,10 +7,10 @@
 # this Mac under "gauntlet" (the M4 at 14:00: a read on main around midday;
 # the M5 Ultra keeps its 02:00 nightly). scripts/nightly_guarded.sh picks it.
 #
-#   1. takes the testbed lock (~/m4run/lock, the one scripts/m4_run.sh uses),
-#      so an on-demand m4_run cannot start in the middle; if a live on-demand
-#      run holds it, the suite still runs but the gauntlet is skipped and the
-#      done line says so;
+#   1. takes the testbed lock (~/m4run/lock, the one scripts/m4_run.sh uses:
+#      a kernel flock held by scripts/testbed_lock.py), so an on-demand m4_run
+#      cannot start in the middle; if a live on-demand run holds it, the suite
+#      still runs but the gauntlet is skipped and the done line says so;
 #   2. runs scripts/nightly_local_tests.sh (pulls main, full suite, publishes
 #      its row) — unless --gauntlet-only (below);
 #   3. runs scripts/run_gauntlet.sh --away (published: no --queue-only, so the
@@ -41,6 +41,7 @@ REPO_ROOT="${VIDEOSCAN_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 mkdir -p "$LOGDIR"
 LOCK="${VIDEOSCAN_TESTBED_LOCK:-$HOME/m4run/lock}"
+LOCK_HELPER="$REPO_ROOT/scripts/testbed_lock.py"
 NOTIFY_HOST="${VIDEOSCAN_NOTIFY_HOST-ricksultra.local}"
 PAGE_URL="https://musicalengineer.github.io/VideoScan/"
 HOST="${VIDEOSCAN_HOST:-$(scutil --get LocalHostName 2>/dev/null || hostname -s)}"
@@ -51,45 +52,30 @@ MACHINE="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" machine "$HOST")"
 [ -n "$MACHINE" ] || MACHINE=m4
 G_LOG="$LOGDIR/nightly_gauntlet.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >>"$G_LOG"; }
-lock_note() { log "$*"; }
-
-# ── The testbed lock: ONE protocol, the same text as scripts/m4_run.sh (tests/test_m4_run.py pins them equal) ──
-# $LOCK is a directory holding pid + info. Codex 2026-11-05 (P1): mkdir-then-write-pid let a contender see a
-# pid-less directory, reclaim it and own the lock beside the first owner. Now:
-#   • pid and info are written to a private staging directory and PUBLISHED by rename(2) — atomic, and it
-#     fails (ENOTEMPTY) while another owner's files are there — so a visible lock always carries its pid;
-#   • a stale lock (dead pid, or no pid at all: nothing in this protocol creates one) is reclaimed by first
-#     renaming it aside — one contender wins that rename, the other retries and meets the winner's live pid;
-#   • the lock is dropped only when its pid is ours.
-# rename(2) is python's os.rename: the mv utility would nest the staging dir INSIDE an existing lock.
-# VIDEOSCAN_TESTBED_LOCK_PAUSE (tests): a path; while it exists, pause after staging and before publishing,
-# the only point where a contender can act between this run's decision and its claim.
-lock_rename() { python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null; }
-take_lock() {   # take_lock <info>: LOCK_HELD=1, or BUSY="…" and return 1
-    local stage="$LOCK.$$.staging" pid attempt
-    mkdir -p "$(dirname "$LOCK")"
-    rm -rf "$stage"; mkdir "$stage" || { BUSY="cannot stage the lock at $stage"; return 1; }
-    echo "$$" >"$stage/pid"; echo "$1" >"$stage/info"
-    if [ -n "${VIDEOSCAN_TESTBED_LOCK_PAUSE:-}" ]; then
-        : >"$VIDEOSCAN_TESTBED_LOCK_PAUSE.paused"
-        while [ -e "$VIDEOSCAN_TESTBED_LOCK_PAUSE" ]; do sleep 0.05; done
-    fi
-    for attempt in 1 2 3; do
-        if lock_rename "$stage" "$LOCK"; then LOCK_HELD=1; return 0; fi
-        pid="$(cat "$LOCK/pid" 2>/dev/null)"
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            BUSY="busy: $(cat "$LOCK/info" 2>/dev/null)"; rm -rf "$stage"; return 1
-        fi
-        if lock_rename "$LOCK" "$LOCK.stale.$$"; then
-            lock_note "reclaiming a stale lock (holder ${pid:-unknown} is gone)"
-            rm -rf "$LOCK.stale.$$"
-        fi
-    done
-    rm -rf "$stage"; BUSY="lost the lock race"; return 1
+# ── The testbed lock: ONE protocol, the same text in scripts/m4_run.sh and scripts/nightly_gauntlet.sh (tests/test_m4_run.py pins them equal) ──
+# A kernel advisory lock — scripts/testbed_lock.py holds fcntl.flock(LOCK_EX|LOCK_NB) on $LOCK/flock as a
+# child of this shell for as long as this shell lives; the kernel releases it the instant the holder dies.
+# No stale lock, no reclaim, no check-then-act window (Codex 2026-11-05 re-review: every mkdir/rename
+# protocol had one and two owners could win). $LOCK/info carries "pid info" for the busy message only;
+# the probe (`testbed_lock.py probe`) reads the same kernel truth. The helper answers one line on a FIFO:
+# HELD, or BUSY <holder's info>. $LOCK_HELPER names the helper (per script: repo checkout or <root>/bin).
+take_lock() {   # take_lock <info>: LOCK_HELD=1 and LOCK_HOLDER = the lease's pid, or BUSY="…" and return 1
+    local fifo="$LOCK.answer.$$" answer
+    mkdir -p "$LOCK" && rm -f "$fifo" && mkfifo "$fifo" || { BUSY="cannot prepare the lock at $LOCK"; return 1; }
+    python3 "$LOCK_HELPER" hold "$LOCK" "$1" >"$fifo" 2>/dev/null &
+    LOCK_HOLDER=$!
+    read -r answer <"$fifo"; rm -f "$fifo"
+    case "$answer" in
+        HELD)  LOCK_HELD=1; return 0 ;;
+        BUSY*) BUSY="busy: ${answer#BUSY }" ;;
+        *)     BUSY="lock helper failed (${answer:-no answer})" ;;
+    esac
+    wait "$LOCK_HOLDER" 2>/dev/null; LOCK_HOLDER=""
+    return 1
 }
 drop_lock() {
     [ "${LOCK_HELD:-0}" = 1 ] || return 0
-    [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
+    kill "$LOCK_HOLDER" 2>/dev/null; wait "$LOCK_HOLDER" 2>/dev/null
     LOCK_HELD=0
 }
 # ── end of the shared lock text ──

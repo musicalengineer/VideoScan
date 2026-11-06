@@ -19,6 +19,7 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = REPO / 'scripts/m4_run.sh'
 SUMMARY = REPO / 'scripts/m4_run_summary.py'
+LOCK_HELPER = REPO / 'scripts/testbed_lock.py'
 sys.path.insert(0, str(SUMMARY.parent))
 import m4_run_summary as ms  # noqa: E402
 
@@ -206,12 +207,27 @@ class HostLockTests(unittest.TestCase):
         self.root = pathlib.Path(self.home.name, 'm4run')
         self.root.mkdir()
         self.env = dict(os.environ, HOME=self.home.name)
+        self.holders = []
 
     def tearDown(self):
+        for h in self.holders:
+            h.kill(); h.wait()
         self.home.cleanup()
 
     def host(self, stamp):
         return run('__host', 'ui', 'a' * 40, stamp, '--host', 'm4', env=self.env)
+
+    def hold(self, info):
+        """A live owner through the same helper the scripts use (scripts/testbed_lock.py hold)."""
+        h = subprocess.Popen([sys.executable, str(LOCK_HELPER), 'hold', str(self.root / 'lock'), info],
+                             stdout=subprocess.PIPE, text=True)
+        self.holders.append(h)
+        self.assertEqual(h.stdout.readline().strip(), 'HELD')
+        return h
+
+    def probe(self):
+        return subprocess.run([sys.executable, str(LOCK_HELPER), 'probe', str(self.root / 'lock')],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
 
     def test_free_lock_is_taken_and_released(self):
         p = self.host('s1')
@@ -219,32 +235,48 @@ class HostLockTests(unittest.TestCase):
         log = (self.root / 'out/s1-ui/run.log').read_text()
         self.assertIn('START', log)
         self.assertIn('OUTCOME RED testbed', log)
-        self.assertFalse((self.root / 'lock').exists(), 'lock left behind')
+        self.assertEqual(self.probe(), 'FREE', 'lock left behind')
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/s1-ui'))
 
     def test_live_holder_refuses_and_latest_is_untouched(self):
-        lock = self.root / 'lock'
-        lock.mkdir()
-        (lock / 'pid').write_text(str(os.getpid()))
-        (lock / 'info').write_text('deep sha=123 since now')
+        holder = self.hold('deep sha=123 since now')
         os.symlink(self.root / 'out/live', self.root / 'latest')
         p = self.host('s2')
         self.assertEqual(p.returncode, 3)
         self.assertIn('OUTCOME REFUSED busy: deep sha=123', (self.root / 'out/s2-ui/run.log').read_text())
-        self.assertTrue((lock / 'pid').exists(), "a refused run must not drop the holder's lock")
+        self.assertIsNone(holder.poll(), "a refused run must not touch the holder")
+        self.assertEqual(self.probe(), 'BUSY deep sha=123 since now')
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/live'))
 
-    def test_dead_holder_lock_is_reclaimed(self):
-        dead = subprocess.Popen(['/usr/bin/true'])
-        dead.wait()
-        lock = self.root / 'lock'
-        lock.mkdir()
-        (lock / 'pid').write_text(str(dead.pid))
+    def test_a_dead_holders_lock_needs_no_reclaim(self):
+        # The kernel freed it with the holder; leftovers of the retired
+        # mkdir/rename protocol (a pid file) never block and are never "reclaimed".
+        dead = self.hold('deep sha=dead')
+        dead.kill(); dead.wait()
+        (self.root / 'lock' / 'pid').write_text('999999')
         p = self.host('s3')
         self.assertEqual(p.returncode, 1)
         log = (self.root / 'out/s3-ui/run.log').read_text()
-        self.assertIn('reclaiming a stale lock', log)
-        self.assertFalse(lock.exists())
+        self.assertIn('START', log)
+        self.assertNotIn('reclaim', log)
+        self.assertEqual(self.probe(), 'FREE')
+
+    def test_the_remote_probe_and_status_read_the_same_kernel_lock(self):
+        # m4_run's caller-side BUSY probe runs the helper's own source over
+        # ssh (lock_probe_snippet); here the snippet is executed locally.
+        holder = self.hold('deep sha=abc since 10:00')
+        p = run('status', '--dry-run', env=self.env)          # H_ROOT under the fake HOME
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('/m4run/lock', p.stdout)
+        snippet = p.stdout.split("+ ssh ricksm4.local <<'SH'", 1)[1].split('\n  SH', 1)[0]
+        snippet = '\n'.join(line[4:] if line.startswith('    ') else line for line in snippet.splitlines())
+        out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True,
+                             env=self.env, timeout=30).stdout
+        self.assertIn('M4: RUNNING deep sha=abc since 10:00', out)
+        holder.kill(); holder.wait()
+        out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True,
+                             env=self.env, timeout=30).stdout
+        self.assertIn('M4: idle', out)
 
     def test_the_lock_protocol_text_is_the_same_in_both_scripts(self):
         # One protocol (Codex 2026-11-05 P1): m4_run.sh and nightly_gauntlet.sh
@@ -252,10 +284,11 @@ class HostLockTests(unittest.TestCase):
         # text. Drift here is a second protocol on one lock.
         def shared(path):
             text = path.read_text()
-            start = text.index('lock_rename() {')
+            start = text.index('take_lock() {')
             end = text.index('# ── end of the shared lock text ──')
             return text[start:end]
         self.assertEqual(shared(SCRIPT), shared(REPO / 'scripts/nightly_gauntlet.sh'))
+        self.assertIn('testbed_lock.py', (REPO / 'scripts/nightly_gauntlet.sh').read_text())
 
 
 FAKE_GAUNTLET_HOLD = r'''#!/bin/sh
@@ -269,11 +302,14 @@ exit 0
 
 
 class LockRaceTests(unittest.TestCase):
-    """Codex 2026-11-05 (P1): owner A paused after `mkdir lock`, before writing
-    its pid; contender B saw no pid, reclaimed the directory and took the lock;
-    A resumed and also claimed it — two live owners of one testbed. The pause
-    hook (VIDEOSCAN_TESTBED_LOCK_PAUSE) holds A at the race point; B's deep
-    run holds the testbed; A resumes. Exactly one START, one deep run."""
+    """Codex 2026-11-05 (P1): owner A paused between deciding and claiming;
+    contender B took the lock and started work; A resumed and also claimed it
+    (first the mkdir-then-pid protocol, then the rename protocol's stale
+    reclaim) — two live owners of one testbed. The lock is now a kernel flock
+    (scripts/testbed_lock.py); the pause hooks hold A before claiming
+    (VIDEOSCAN_TESTBED_LOCK_PAUSE) or after claiming, before answering
+    (…_HELD); B's deep run holds the testbed; A resumes. Every interleaving:
+    exactly one START, one deep run; a killed holder frees the lock by itself."""
 
     def setUp(self):
         self.home = tempfile.TemporaryDirectory()
@@ -314,18 +350,29 @@ class LockRaceTests(unittest.TestCase):
         return subprocess.Popen(['/bin/bash', str(SCRIPT), '__host', 'deep', self.sha, stamp, '--host', 'm4'],
                                 env=dict(self.env, **extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def test_two_contenders_never_both_own_the_lock(self):
+    def probe(self):
+        return subprocess.run([sys.executable, str(LOCK_HELPER), 'probe', str(self.root / 'lock')],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+
+    def race(self, pause_env, stale=False):
         fake = self.work / 'fake'
         pause, hold, starts = fake / 'pause', fake / 'hold', fake / 'gauntlet_starts'
         pause.touch(); hold.touch()
-        a = self.host('ra', VIDEOSCAN_TESTBED_LOCK_PAUSE=str(pause))
+        if stale:
+            (self.root / 'lock').mkdir(exist_ok=True)
+            (self.root / 'lock' / 'pid').write_text('999999')
+            (self.root / 'lock' / 'info').write_text('999999 deep sha=dead')
+        a = self.host('ra', **{pause_env: str(pause)})
         b = None
         try:
             self.wait_for(lambda: (fake / 'pause.paused').exists(), 'A at the race point')
             b = self.host('rb')
-            self.wait_for(lambda: starts.exists() and len(starts.read_text().split()) >= 1, "B's deep run")
-            pause.unlink()                                           # A resumes against a live owner
-            self.wait_for(lambda: a.poll() is not None or len(starts.read_text().split()) >= 2, 'A to decide')
+            started = lambda: len(starts.read_text().split()) if starts.exists() else 0  # noqa: E731
+            self.wait_for(lambda: started() >= 1 or b.poll() is not None, 'B to decide')
+            before = started()
+            pause.unlink()                                           # A resumes
+            # A either leaves (refused) or starts its deep run (one more start).
+            self.wait_for(lambda: a.poll() is not None or started() > before, 'A to decide')
         finally:
             hold.unlink(missing_ok=True)
             for p in (a, b):
@@ -334,16 +381,57 @@ class LockRaceTests(unittest.TestCase):
                         p.wait(timeout=30)
                     except subprocess.TimeoutExpired:
                         p.kill(); p.wait()
-        self.assertEqual(len(starts.read_text().split()), 1, 'two live owners started two deep runs')
-        log_a = (self.root / 'out/ra-deep/run.log').read_text()
-        log_b = (self.root / 'out/rb-deep/run.log').read_text()
+        count = len(starts.read_text().split()) if starts.exists() else 0
+        return a, b, count, (self.root / 'out/ra-deep/run.log').read_text(), (self.root / 'out/rb-deep/run.log').read_text()
+
+    def test_two_contenders_never_both_own_the_lock(self):
+        a, b, count, log_a, log_b = self.race('VIDEOSCAN_TESTBED_LOCK_PAUSE')
+        self.assertEqual(count, 1, 'two live owners started two deep runs')
         self.assertIn('OUTCOME REFUSED busy: deep sha=', log_a)
         self.assertNotIn('START', log_a)
         self.assertIn('START', log_b)
         self.assertIn('OUTCOME GREEN', log_b)
         self.assertEqual((a.returncode, b.returncode), (3, 0))
-        self.assertFalse((self.root / 'lock').exists(), 'the lock must be released by its owner')
-        self.assertFalse(list(self.root.glob('lock.*')), 'no staging or stale directories left behind')
+        self.assertEqual(self.probe(), 'FREE', 'the lock must be released by its owner')
+        self.assertFalse(list(self.root.glob('lock.*')), 'no answer FIFOs left behind')
+
+    def test_a_contender_paused_over_a_stale_lock_never_reclaims_a_live_owner(self):
+        # Codex 2026-11-05 re-review (P1): A found a dead pid, paused; B
+        # reclaimed and started; A resumed and renamed B's live lock aside.
+        a, b, count, log_a, log_b = self.race('VIDEOSCAN_TESTBED_LOCK_PAUSE', stale=True)
+        self.assertEqual(count, 1, 'two live owners started two deep runs')
+        self.assertIn('OUTCOME REFUSED busy: deep sha=', log_a)
+        self.assertIn('OUTCOME GREEN', log_b)
+        self.assertEqual((a.returncode, b.returncode), (3, 0))
+        self.assertEqual(self.probe(), 'FREE')
+
+    def test_an_owner_paused_after_claiming_refuses_the_contender(self):
+        a, b, count, log_a, log_b = self.race('VIDEOSCAN_TESTBED_LOCK_PAUSE_HELD')
+        self.assertEqual(count, 1)
+        self.assertIn('OUTCOME GREEN', log_a)
+        self.assertIn('OUTCOME REFUSED busy: deep sha=', log_b)
+        self.assertEqual((a.returncode, b.returncode), (0, 3))
+        self.assertEqual(self.probe(), 'FREE')
+
+    def test_a_killed_holder_frees_the_lock_with_no_cleanup(self):
+        fake = self.work / 'fake'
+        hold, starts = fake / 'hold', fake / 'gauntlet_starts'
+        hold.touch()
+        a = self.host('ka')
+        try:
+            self.wait_for(lambda: starts.exists(), "A's deep run")
+            self.assertTrue(self.probe().startswith('BUSY deep sha='), self.probe())
+            a.kill(); a.wait()
+            self.wait_for(lambda: self.probe() == 'FREE', 'the kernel to drop the dead holder')
+        finally:
+            hold.unlink(missing_ok=True)
+        b = self.host('kb')
+        b.wait(timeout=60)
+        log_b = (self.root / 'out/kb-deep/run.log').read_text()
+        self.assertIn('START', log_b)
+        self.assertIn('OUTCOME GREEN', log_b)
+        self.assertNotIn('reclaim', log_b)
+        self.assertEqual(b.returncode, 0)
 
 
 if __name__ == '__main__':

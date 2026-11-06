@@ -877,21 +877,23 @@ extension VideoScanModel {
         // group (and the whole scan) used to hang forever. The deadline
         // escalates SIGTERM → SIGKILL → abandon inside ProcessRunner, making
         // the blocking work itself bounded.
-        let probeResult = await CombineVerifier.runFFProbe(
+        let probeResult = await CombineVerifier.runFFProbeDetailed(
             url: probeURL,
             ffprobePath: ffprobePath,
             timeoutSeconds: Double(probeTimeoutSeconds)
         )
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         // The one place ffprobe runs in the scan path: the evidence the
-        // "ffprobed" card counts (ScanTileTally), whatever the verdict below.
-        outcome.ffprobeRan = true
+        // "ffprobed" card counts (ScanTileTally) is the process runner's own
+        // `launched` — a tool path that cannot start is not an execution
+        // (Codex 2026-11-05 P0), whatever the verdict below.
+        outcome.ffprobeRan = probeResult.launched
 
         // The second stat: a row is built only from a file that did not
         // change under the probe (bug 3). Never cached — the next scan looks.
-        // ffprobe DID run on it, so it still counts as an execution.
+        // If ffprobe DID run on it, that execution still counts.
         if skipIfStillBeingWritten, let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
-            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why, ffprobeRan: true)
+            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why, ffprobeRan: probeResult.launched)
         }
 
         ScanEngine.applyProbeOrFallback(outcome: &outcome, url: url, path: path,

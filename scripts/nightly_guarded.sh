@@ -67,26 +67,37 @@ ROWS="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"
 GAUNTLET_MAC="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" gauntlet "$HOST" 2>/dev/null || echo no)"
 MACHINE="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" machine "$HOST" 2>/dev/null || true)"
 
-# Prints the words that are done for today: "suite" (a GREEN suite row from
-# this host) and "gauntlet" (a published passed/amber gauntlet row for this
-# Mac's machine label). Anything unparseable is simply not done.
+# Prints the words that are done for today: "suite" (this host's LATEST suite
+# row today is GREEN) and "gauntlet" (this Mac's LATEST published gauntlet
+# row today is passed/amber). The latest row per kind decides — an earlier
+# pass never outlives a later failure (Codex 2026-11-05 re-review, P1).
+# Anything unparseable is simply not a row.
 DONE="$(TD_ROWS="$ROWS" TODAY="$TODAY" HOST="$HOST" MACHINE="$MACHINE" python3 - <<'PY'
 import os, json
 today = os.environ.get("TODAY","")
 host = os.environ.get("HOST","")
 machine = os.environ.get("MACHINE","")
-done = set()
-for line in os.environ.get("TD_ROWS","").splitlines():
+latest = {}      # kind -> (ts, line index, row): the newest row of that kind for this Mac today
+for n, line in enumerate(os.environ.get("TD_ROWS","").splitlines()):
     line = line.strip()
     if not line: continue
     try: r = json.loads(line)
     except Exception: continue
-    if str(r.get("ts",""))[:10] != today: continue
-    if (r.get("status") == "ok" and r.get("host") == host and int(r.get("total") or 0) > 0):
-        done.add("suite")
-    if (r.get("source") == "gauntlet" and r.get("schemaVersion") == 1 and machine
-            and r.get("machine") == machine and r.get("status") in ("passed", "amber")):
-        done.add("gauntlet")
+    ts = str(r.get("ts",""))
+    if ts[:10] != today: continue
+    if r.get("source") == "gauntlet":
+        if r.get("schemaVersion") == 1 and machine and r.get("machine") == machine: kind = "gauntlet"
+        else: continue
+    elif r.get("host") == host: kind = "suite"
+    else: continue
+    if kind not in latest or (ts, n) > latest[kind][:2]:
+        latest[kind] = (ts, n, r)
+done = set()
+if "suite" in latest:
+    r = latest["suite"][2]
+    if r.get("status") == "ok" and int(r.get("total") or 0) > 0: done.add("suite")
+if "gauntlet" in latest and latest["gauntlet"][2].get("status") in ("passed", "amber"):
+    done.add("gauntlet")
 print(" ".join(sorted(done)))
 PY
 )"

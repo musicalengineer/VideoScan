@@ -27593,6 +27593,8 @@
       ],
       "tests": [
         "defaults",
+        "ffprobeThatCannotLaunchIsNotAnExecution",
+        "fileChangedUnderTheProbeCarriesTheExecution",
         "fileGoneAfterTheProbeIsSkipped",
         "fileThatGrowsUnderTheProbeIsSkipped",
         "futureDatedFileIsCatalogued",
@@ -31609,7 +31611,9 @@
         "test_gauntlet_package_adapter.py"
       ],
       "tests": [
+        "test_a_filtered_runs_selected_tests_bracket_counts_and_a_missing_list_is_red",
         "test_a_floor_above_the_declarations_fails_preflight",
+        "test_a_forged_closing_bracket_and_summary_never_inflate",
         "test_a_package_build_that_leaves_a_child_behind_is_red_not_amber",
         "test_a_printed_lookalike_result_line_is_never_counted",
         "test_a_printed_swift_testing_lookalike_is_never_counted",
@@ -31635,12 +31639,14 @@
       ],
       "tests": [
         "test_a_duplicate_ended_event_never_double_counts",
+        "test_a_forged_closing_bracket_and_summary_is_unavailable_never_a_count",
         "test_a_known_issue_beside_a_real_failure_is_a_failure",
         "test_cancelled_and_unattributed_failures_are_failures",
         "test_isolation_poisoned_streams_are_unavailable_never_a_count",
         "test_logic_pass_fail_known_skip_and_suites_not_counted",
         "test_parameterized_cases_count_once_per_function",
         "test_real_failure_is_counted_as_failed",
+        "test_real_filtered_run_with_an_xctest_class_is_counted",
         "test_real_run_counts_functions_known_issues_and_xctest_exactly",
         "test_scale_20k_functions_counted_within_budget",
         "test_version_zero_issue_without_isFailure_is_a_failure_and_a_warning_is_not",
@@ -32052,9 +32058,12 @@
         "test_m4_run.py"
       ],
       "tests": [
+        "test_a_contender_paused_over_a_stale_lock_never_reclaims_a_live_owner",
+        "test_a_dead_holders_lock_needs_no_reclaim",
+        "test_a_killed_holder_frees_the_lock_with_no_cleanup",
+        "test_an_owner_paused_after_claiming_refuses_the_contender",
         "test_cli_writes_the_table_and_exits_by_verdict",
         "test_counts_names_and_seconds",
-        "test_dead_holder_lock_is_reclaimed",
         "test_deep_on_the_ultra_stays_local_and_says_it_runs_as_m5",
         "test_free_lock_is_taken_and_released",
         "test_gauntlet_all_passed_is_green",
@@ -32069,6 +32078,7 @@
         "test_live_holder_refuses_and_latest_is_untouched",
         "test_status_dry_run_prints_the_probe",
         "test_the_lock_protocol_text_is_the_same_in_both_scripts",
+        "test_the_remote_probe_and_status_read_the_same_kernel_lock",
         "test_timeout_is_red_and_says_so",
         "test_two_contenders_never_both_own_the_lock",
         "test_ui_on_m4_ships_the_commit_and_bootstraps_a_gui_agent",
@@ -32101,11 +32111,14 @@
         "test_nightly_gauntlet.py"
       ],
       "tests": [
+        "test_a_contender_paused_before_claiming_never_reclaims_a_live_owner_over_a_stale_lock",
         "test_a_crashed_summary_is_red",
+        "test_a_dead_holders_lock_needs_no_reclaim",
         "test_a_failed_notification_changes_nothing",
+        "test_a_killed_holder_frees_the_lock_with_no_cleanup",
         "test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock",
         "test_a_plain_nightly_mac_needs_only_its_green_suite",
-        "test_a_stale_lock_is_reclaimed",
+        "test_an_owner_paused_after_claiming_refuses_the_contender",
         "test_cli",
         "test_gauntlet_is_published_never_queue_only_with_the_rota_machine",
         "test_gauntlet_only_mode_runs_no_suite_and_still_writes_the_done_line",
@@ -32120,6 +32133,7 @@
         "test_red_gauntlet_is_red_in_the_line_and_the_exit",
         "test_red_or_missing_suite_runs_the_full_testbed",
         "test_red_suite_still_runs_the_gauntlet_and_exits_red",
+        "test_the_latest_row_per_kind_decides_not_any_row",
         "test_the_lock_is_taken_during_the_run_and_released_after",
         "test_the_real_rota_runs_the_m4_testbed_at_14_and_the_ultra_nightly_at_02",
         "test_two_contenders_never_both_own_the_testbed"

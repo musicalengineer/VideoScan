@@ -102,8 +102,10 @@ class NightlyGauntletTests(unittest.TestCase):
         self.bin = t / "bin"
         for d in (self.home, self.repo / "scripts", self.fake, self.bin):
             d.mkdir(parents=True)
-        for name in ("nightly_gauntlet.sh", "nightly_rota.py", "nightly_rota.json", "m4_run_summary.py"):
+        for name in ("nightly_gauntlet.sh", "nightly_rota.py", "nightly_rota.json", "m4_run_summary.py",
+                     "testbed_lock.py"):
             shutil.copy(REPO / "scripts" / name, self.repo / "scripts" / name)
+        self.holders = []
         for path, body in ((self.repo / "scripts/nightly_local_tests.sh", FAKE_SUITE),
                            (self.repo / "scripts/run_gauntlet.sh", FAKE_GAUNTLET),
                            (self.bin / "ssh", FAKE_SSH)):
@@ -123,7 +125,22 @@ class NightlyGauntletTests(unittest.TestCase):
         self.plant()
 
     def tearDown(self):
+        for h in self.holders:
+            h.kill(); h.wait()
         self.tmp.cleanup()
+
+    # The lock's kernel truth, through the same helper the scripts use.
+    def hold(self, info, **env):
+        """A live owner of the testbed lock (scripts/testbed_lock.py hold); returns once it holds."""
+        h = subprocess.Popen([sys.executable, str(REPO / "scripts/testbed_lock.py"), "hold", str(self.lock), info],
+                             stdout=subprocess.PIPE, text=True, env=dict(os.environ, **env))
+        self.holders.append(h)
+        self.assertEqual(h.stdout.readline().strip(), "HELD")
+        return h
+
+    def probe(self):
+        return subprocess.run([sys.executable, str(REPO / "scripts/testbed_lock.py"), "probe", str(self.lock)],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
 
     def plant(self, suite_rc=0, passed=12, failed=0, total=12, g_status="AMBER", g_rc=0,
               result=None, ssh_rc=0):
@@ -150,35 +167,40 @@ class NightlyGauntletTests(unittest.TestCase):
         self.assertIn("gauntlet AMBER", line)
         self.assertIn("7 known issues", line)
         self.assertIn("M4 full testbed done", (self.fake / "ssh_args").read_text())
-        self.assertFalse(self.lock.exists())
+        self.assertEqual(self.probe(), "FREE")
         self.plant(g_status="FAILED", g_rc=1, result=result_json("failed", regression="failed"))
         rc, line = self.run_it("--gauntlet-only")
         self.assertEqual(rc, 1)
         self.assertIn("gauntlet RED", line)
 
-    def test_two_contenders_never_both_own_the_testbed(self):
-        # Codex 2026-11-05 (P1): owner A pauses after creating the lock and
-        # before its pid is visible; contender B sees no pid, reclaims, and
-        # both own the testbed. The pause hook holds A at the one point where
-        # B can act between A's decision and A's claim; B becomes a live owner
-        # (its gauntlet holds); A then resumes. Exactly one gauntlet may start.
+    def race(self, pause_env, stale=False):
+        """Owner A is paused at `pause_env`; contender B runs to a live hold (its
+        gauntlet blocks); A resumes. Returns (a, b, gauntlet start count, history lines)."""
         gauntlet = self.repo / "scripts/run_gauntlet.sh"
         gauntlet.write_text(FAKE_GAUNTLET_HOLD)
         gauntlet.chmod(0o755)
         pause, hold, starts = self.fake / "pause", self.fake / "hold", self.fake / "gauntlet_starts"
         pause.touch(); hold.touch()
+        if stale:
+            # Leftovers of a dead holder and of the retired mkdir/rename protocol: never the truth.
+            self.lock.mkdir(parents=True, exist_ok=True)
+            (self.lock / "pid").write_text("999999")
+            (self.lock / "info").write_text("999999 deep (dead long ago)")
         a = subprocess.Popen(["bash", str(self.repo / "scripts/nightly_gauntlet.sh")],
-                             env=dict(self.env, VIDEOSCAN_TESTBED_LOCK_PAUSE=str(pause)),
+                             env=dict(self.env, **{pause_env: str(pause)}),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         b = None
         try:
             wait_for(lambda: (self.fake / "pause.paused").exists(), what="A at the race point")
             b = subprocess.Popen(["bash", str(self.repo / "scripts/nightly_gauntlet.sh")], env=self.env,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            wait_for(lambda: starts.exists() and len(starts.read_text().split()) >= 1, what="B's gauntlet to start")
-            pause.unlink()                                       # A resumes against a live owner
-            # A either leaves (refused) or, with the old protocol, starts a second gauntlet.
-            wait_for(lambda: a.poll() is not None or len(starts.read_text().split()) >= 2, what="A to decide")
+            # B either becomes the live owner (its gauntlet starts) or is refused and finishes.
+            started = lambda: len(starts.read_text().split()) if starts.exists() else 0  # noqa: E731
+            wait_for(lambda: started() >= 1 or b.poll() is not None, what="B to decide")
+            before = started()
+            pause.unlink()                                       # A resumes
+            # A either leaves (refused) or starts its gauntlet (one more start).
+            wait_for(lambda: a.poll() is not None or started() > before, what="A to decide")
         finally:
             hold.unlink(missing_ok=True)
             for p in (a, b):
@@ -187,14 +209,63 @@ class NightlyGauntletTests(unittest.TestCase):
                         p.wait(timeout=30)
                     except subprocess.TimeoutExpired:
                         p.kill(); p.wait()
-        self.assertEqual(len(starts.read_text().split()), 1, "two live owners started two gauntlets")
+        count = len(starts.read_text().split()) if starts.exists() else 0
         history = (self.home / "Library/Logs/VideoScan/testbed_history.log").read_text().splitlines()
+        return a, b, count, history
+
+    def assert_one_owner(self, a, b, count, history):
+        self.assertEqual(count, 1, "two live owners started two gauntlets")
         self.assertEqual(len(history), 2)
         self.assertEqual(sum("gauntlet skipped (testbed busy: nightly testbed" in h for h in history), 1, history)
         self.assertEqual(sum("gauntlet AMBER" in h for h in history), 1, history)
         self.assertEqual((a.returncode, b.returncode), (0, 0))
-        self.assertFalse(self.lock.exists(), "the lock must be released by its owner")
-        self.assertFalse(list(self.lock.parent.glob("lock.*")), "no staging or stale directories left behind")
+        self.assertEqual(self.probe(), "FREE", "the lock must be released by its owner")
+        self.assertFalse(list(self.lock.parent.glob("lock.answer.*")), "no answer FIFOs left behind")
+
+    def test_two_contenders_never_both_own_the_testbed(self):
+        # Codex 2026-11-05 (P1): owner A paused between deciding and claiming;
+        # contender B becomes a live owner (its gauntlet holds); A resumes and
+        # must be refused. Exactly one gauntlet may start.
+        self.assert_one_owner(*self.race("VIDEOSCAN_TESTBED_LOCK_PAUSE"))
+
+    def test_a_contender_paused_before_claiming_never_reclaims_a_live_owner_over_a_stale_lock(self):
+        # Codex 2026-11-05 re-review (P1): A inspects a stale lock (dead pid),
+        # pauses; B reclaims and holds; A resumes and renamed B's live lock
+        # aside. With a kernel lock there is nothing to reclaim: A is refused.
+        self.assert_one_owner(*self.race("VIDEOSCAN_TESTBED_LOCK_PAUSE", stale=True))
+
+    def test_an_owner_paused_after_claiming_refuses_the_contender(self):
+        # The other interleaving: A holds but has not yet answered its shell;
+        # B must already see busy, and A then runs its gauntlet alone.
+        a, b, count, history = self.race("VIDEOSCAN_TESTBED_LOCK_PAUSE_HELD")
+        self.assertEqual(count, 1, history)
+        self.assertEqual((a.returncode, b.returncode), (0, 0))
+        self.assertEqual(sum("gauntlet skipped (testbed busy: nightly testbed" in h for h in history), 1, history)
+        self.assertEqual(sum("gauntlet AMBER" in h for h in history), 1, history)
+        self.assertEqual(self.probe(), "FREE")
+
+    def test_a_killed_holder_frees_the_lock_with_no_cleanup(self):
+        # The shell dies (SIGKILL: no trap runs); the kernel drops the lock with
+        # its helper; the next run acquires without reclaiming anything.
+        gauntlet = self.repo / "scripts/run_gauntlet.sh"
+        gauntlet.write_text(FAKE_GAUNTLET_HOLD)
+        gauntlet.chmod(0o755)
+        hold, starts = self.fake / "hold", self.fake / "gauntlet_starts"
+        hold.touch()
+        a = subprocess.Popen(["bash", str(self.repo / "scripts/nightly_gauntlet.sh")], env=self.env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            wait_for(lambda: starts.exists(), what="A's gauntlet to start")
+            self.assertTrue(self.probe().startswith("BUSY nightly testbed"), self.probe())
+            a.kill(); a.wait()
+            wait_for(lambda: self.probe() == "FREE", what="the kernel to drop the dead holder's lock")
+        finally:
+            hold.unlink(missing_ok=True)
+        gauntlet.write_text(FAKE_GAUNTLET)
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0)
+        self.assertIn("gauntlet AMBER", line)
+        self.assertNotIn("reclaim", (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text())
 
     def test_green_suite_amber_gauntlet_writes_the_done_line_and_notifies(self):
         rc, line = self.run_it()
@@ -247,42 +318,33 @@ class NightlyGauntletTests(unittest.TestCase):
         self.assertIn("gauntlet RED", line)
 
     def test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock(self):
-        holder = subprocess.Popen(["sleep", "30"])
-        try:
-            self.lock.mkdir(parents=True)
-            (self.lock / "pid").write_text(str(holder.pid))
-            (self.lock / "info").write_text("deep 2673211ef (m4_run)")
-            rc, line = self.run_it()
-        finally:
-            holder.kill()
-            holder.wait()
+        holder = self.hold("deep 2673211ef (m4_run)")
+        rc, line = self.run_it()
         self.assertEqual(rc, 0)
         self.assertIn("gauntlet skipped (testbed busy: deep 2673211ef (m4_run))", line)
         self.assertFalse((self.fake / "gauntlet_args").exists())
-        self.assertEqual((self.lock / "pid").read_text(), str(holder.pid))
+        self.assertIsNone(holder.poll(), "the holder is untouched")
+        self.assertEqual(self.probe(), "BUSY deep 2673211ef (m4_run)")
 
     def test_the_lock_is_taken_during_the_run_and_released_after(self):
         (self.repo / "scripts/run_gauntlet.sh").write_text(
             FAKE_GAUNTLET.replace('echo "$@"', 'cat "$HOME/m4run/lock/info" > "$FAKE/lock_seen"; echo "$@"'))
         self.run_it()
         self.assertIn("nightly testbed", (self.fake / "lock_seen").read_text())
-        self.assertFalse(self.lock.exists())
+        self.assertEqual(self.probe(), "FREE")
 
-    def test_a_stale_lock_is_reclaimed(self):
-        self.lock.mkdir(parents=True)
+    def test_a_dead_holders_lock_needs_no_reclaim(self):
+        # A holder that died (SIGKILL) left its info behind; the kernel freed the
+        # lock with it. Leftovers of the retired protocol (a pid file, an empty
+        # directory) are ignored the same way.
+        dead = self.hold("deep (about to die)")
+        dead.kill(); dead.wait()
         (self.lock / "pid").write_text("999999")
         rc, line = self.run_it()
         self.assertEqual(rc, 0)
         self.assertIn("gauntlet AMBER", line)
-        self.assertFalse(self.lock.exists())
-        self.assertIn("reclaiming a stale lock (holder 999999 is gone)",
-                      (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text())
-        # A pid-less directory (the old mkdir-first protocol's half-made lock) is junk too.
-        self.lock.mkdir(parents=True)
-        rc, line = self.run_it()
-        self.assertEqual(rc, 0)
-        self.assertIn("gauntlet AMBER", line)
-        self.assertFalse(self.lock.exists())
+        self.assertEqual(self.probe(), "FREE")
+        self.assertNotIn("reclaim", (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text())
 
     def test_a_failed_notification_changes_nothing(self):
         self.plant(ssh_rc=255)
@@ -428,6 +490,24 @@ class GuardRetryTests(unittest.TestCase):
                 self.assertEqual(rc, 0)
                 self.assertIsNotNone(ran, log)
                 self.assertEqual(ran[2:4], [str(self.repo / "scripts/nightly_gauntlet.sh"), "--gauntlet-only"])
+
+    def test_the_latest_row_per_kind_decides_not_any_row(self):
+        # Codex 2026-11-05 re-review (P1): an earlier passed gauntlet row kept
+        # "gauntlet done" after a later failed one. Ordered history, per kind.
+        passed_then_failed = [self.suite_row(), self.gauntlet_row("passed"),
+                              dict(self.gauntlet_row("failed"), ts=f"{self.today}T19:30:00Z")]
+        rc, ran, log = self.run_guard(*passed_then_failed)
+        self.assertEqual(ran[2:4], [str(self.repo / "scripts/nightly_gauntlet.sh"), "--gauntlet-only"], log)
+        (self.fake / "caffeinate_args").unlink()
+        failed_then_passed = [self.suite_row(), self.gauntlet_row("failed"),
+                              dict(self.gauntlet_row("passed"), ts=f"{self.today}T19:30:00Z")]
+        rc, ran, log = self.run_guard(*failed_then_passed)
+        self.assertIsNone(ran, log)
+        # The same rule for the suite: a green row followed by a later red one is not "done".
+        green_then_red = [self.suite_row(), dict(self.suite_row(status="failed"), ts=f"{self.today}T20:00:00Z"),
+                          self.gauntlet_row("passed")]
+        rc, ran, log = self.run_guard(*green_then_red)
+        self.assertEqual(ran[2:], [str(self.repo / "scripts/nightly_gauntlet.sh"), ""], log)
 
     def test_green_suite_and_published_gauntlet_is_a_no_op(self):
         for status in ("passed", "amber"):
