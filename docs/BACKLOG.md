@@ -68,6 +68,7 @@
 - Recover existing human organization as sourced claims: Avid bins, FCP projects, tape labels, dated photos.
 - Rare-phrase / matching-audio search for the other camera angle or an excerpt's source tape.
 - Recurring locations as context not identity; music as an activity family; birthday + spoken age → candidate year.
+- (idea, Rick 2026-11-06) **Layer 3's north star: the Rick & Donna Breen family's story, told by evidence.** Repeated analysis builds facts of the shape who · what · when · where, each with its sources (frames, transcript lines, dates, Rick's confirmations), so plain questions work: "when did Timmy graduate high school", "did he ever play guitar", "find Dad telling a story", "how many years did we film down the Cape", "what trips did we take". Not narrative prose; queryable, evidence-first, every answer shows its evidence and its confidence. Local models only (living family, rule 13). Prerequisites, in order: layer 3's §5 fixes (devices, spans, families), confirmed people on footage, events with dates, speaker identity.
 - (ruling) Event categories beyond the nine; dismiss semantics; Open = QuickTime or in-app seek.
 - (ruling) Cloud use on derived text (captions/transcripts) for later labelling, or local only.
 - Bounded retrieval experiment: rules vs SigLIP 2 vs Qwen3-VL-Embedding-2B on held-out occasions, split by occasion and lineage.
