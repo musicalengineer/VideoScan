@@ -260,6 +260,8 @@ extension CaptionOrchestrator {
         liveFailed += 1
         captionOrchLog.warning("Dossier: \(label, privacy: .public) on \(plan.filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
         appLog.write("Dossier: failed (extraction error): \(plan.filename) — \(error.localizedDescription)")
+        // The per-file Analyze job's row and OUTCOME line say why (2026-11-06).
+        fileFailureNotes.record(path: plan.path, reason: error.localizedDescription)
         if case CaptionRunnerError.videoUnreadable = error {
             flagUnreadableNeedsReformat(plan, model: model)
         }

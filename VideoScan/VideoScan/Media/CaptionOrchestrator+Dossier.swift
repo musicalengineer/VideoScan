@@ -69,7 +69,7 @@ extension CaptionOrchestrator {
             return false
         }
 
-        let resolvedTranscriber: AudioTranscriber? = transcriber ?? {
+        let resolvedTranscriber: AudioTranscriber? = transcriber ?? transcriberFactory?() ?? {
             // Test-host guard: a dev box with venv-mlx installed would
             // silently upgrade a unit test that reaches this entry
             // point (e.g. via the analyze queue) to a REAL Python
@@ -580,8 +580,8 @@ extension CaptionOrchestrator {
     /// "0 scenes in <1 s" is the signature of the AVFoundation frame
     /// extractor bailing on a codec it can't decode (svq3, qdm2, cinepak…);
     /// a real VLM run on a black video takes 5–15 s. Flag the record so the
-    /// catalog shows a red "!" and offers Reformat and Analyze (Rick
-    /// 2026-06-14). Dynamic backstop to the static codec heuristic
+    /// catalog shows a red "!" and batches skip it; an explicit Analyze
+    /// retries it (Rick 2026-06-14, 2026-11-06). Dynamic backstop to the static codec heuristic
     /// (`isLikelyUnanalyzable`). Audio-class files skip VLM by design.
     func flagUndecodableIfExtractorBailed(_ plan: DossierFilePlan, extraction: DossierExtraction, vlmSeconds: Double) {
         let record = plan.record

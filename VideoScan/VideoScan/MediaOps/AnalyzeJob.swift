@@ -260,19 +260,28 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnD
         // the final state from the record's dossierProcessedAt and
         // the orchestrator's reported counts.
         if Task.isCancelled || state == .cancelling {
+            _ = orchestrator.fileFailureNotes.take(path: record.fullPath)
             await finish(cancelled: true)
             return
         }
 
-        // Probe the record's POST-analyze state. dossierProcessedAt
-        // is set by applyDossier on success; absent on failure.
+        await settle(model: model, orchestrator: orchestrator)
+    }
+
+    /// The batch has settled: end the row from evidence. dossierProcessedAt
+    /// is set by applyDossier on success; otherwise the decoder's reason for
+    /// THIS file, when its extraction threw (taken even on success so a
+    /// stale note can't outlive the run), is the failure (2026-11-06).
+    private func settle(model: VideoScanModel, orchestrator: CaptionOrchestrator) async {
+        let decoderReason = orchestrator.fileFailureNotes.take(path: record.fullPath)
         if model.records.first(where: { $0.id == record.id })?.dossierProcessedAt != nil {
             await finish(success: successMessage)
+        } else if let decoderReason {
+            await finish(failed: "\(displayBadge) could not read this file — \(decoderReason)")
         } else {
-            // Could be: candidate-filter excluded (DRM/junk/needs reformat),
-            // VLM bailed (0 scenes in <1s), or no eligible candidates.
-            // The dashboard's batch summary line in the log has more
-            // detail; the row keeps it short.
+            // Could be: candidate-filter excluded (DRM/junk), VLM bailed
+            // (0 scenes in <1s), or no eligible candidates. The batch
+            // summary line in the log has more detail; the row keeps it short.
             await finish(failed: emptyResultMessage)
         }
     }
@@ -287,10 +296,10 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnD
         }
     }
 
-    /// "Orchestrator returned without banking anything" string. The
-    /// Reformat hint still applies in both single-stage cases.
+    /// "Orchestrator returned without banking anything" string (no decoder
+    /// reason was recorded — the batch line in the log says which gate).
     private var emptyResultMessage: String {
-        "\(displayBadge) finished but no dossier was banked — check log or run Reformat first."
+        "\(displayBadge) finished but no dossier was banked — see the log for why."
     }
 
     /// Translate orchestrator's @Published state to our row's

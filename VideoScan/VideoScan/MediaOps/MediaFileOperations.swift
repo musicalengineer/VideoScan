@@ -1646,6 +1646,25 @@ final class MediaFileOperationsCenter: ObservableObject {
         return job
     }
 
+    /// The Analyze verb for a selection (Catalog row menu, one row or many):
+    /// one AnalyzeJob per reachable record, each file analyzed AS IS. There
+    /// is no codec gate (DECISIONS 2026-11-06): frame extraction falls back
+    /// to ffmpeg when AVFoundation can't read a file and Whisper decodes
+    /// with ffmpeg, so legacy codecs (Sorenson, Cinepak, Apple Video, DV in
+    /// AVI, …) are read in place — nothing is converted or written beside
+    /// the original. A file no decoder can read fails its own job with the
+    /// decoder's reason. Offline records are left out (the menu greys
+    /// Analyze when none is reachable). Jobs queue behind each other.
+    @discardableResult
+    func startAnalyze(records: [VideoRecord],
+                      model: VideoScanModel,
+                      orchestrator: CaptionOrchestrator,
+                      stages: Set<AnalyzeStage> = AnalyzeStage.all) -> [AnalyzeJob] {
+        records
+            .filter { VolumeReachability.isReachable(path: $0.fullPath) }
+            .map { startAnalyzeOne(record: $0, model: model, orchestrator: orchestrator, stages: stages) }
+    }
+
     /// Build the ordered list of volume gates a job must hold while it
     /// reads. Deduped per volume root; sorted by root so every job
     /// acquires in the same order (≈ the classic lock-ordering rule —

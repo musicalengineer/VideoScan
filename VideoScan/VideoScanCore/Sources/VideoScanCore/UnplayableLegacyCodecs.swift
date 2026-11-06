@@ -59,8 +59,9 @@ public let unplayableLegacyAudioCodecs: Set<String> = [
     "ima4"  // QuickTime IMA4 — actually handled by AVFoundation; remove if FP
 ]
 
-/// Returns true iff the codec strings indicate a file the
-/// in-app analyzer can't decode. Pure function; takes the
+/// Returns true iff the codec strings name a codec AVFoundation
+/// can't decode (playback, previews). Analyze is not gated on it — it
+/// reads these through ffmpeg (DECISIONS 2026-11-06). Pure function; takes the
 /// ffprobe-style strings directly so it's trivially testable.
 public func hasUnplayableLegacyCodec(videoCodec: String, audioCodec: String) -> Bool {
     let v = videoCodec.lowercased().trimmingCharacters(in: .whitespaces)
@@ -76,10 +77,10 @@ public func unplayableLegacyReason(videoCodec: String, audioCodec: String) -> St
     let v = videoCodec.lowercased().trimmingCharacters(in: .whitespaces)
     let a = audioCodec.lowercased().trimmingCharacters(in: .whitespaces)
     if !v.isEmpty, unplayableLegacyVideoCodecs.contains(v) {
-        return "Video codec \"\(videoCodec)\" was deprecated by macOS in 2019 — needs reformat to be analyzed."
+        return "Video codec \"\(videoCodec)\" was dropped by macOS in 2019 — it may not play here. Analyze reads it through ffmpeg; Transcode ▸ Reformat Old Codec makes a playable copy."
     }
     if !a.isEmpty, unplayableLegacyAudioCodecs.contains(a) {
-        return "Audio codec \"\(audioCodec)\" was deprecated by macOS in 2019 — needs reformat to be analyzed."
+        return "Audio codec \"\(audioCodec)\" was dropped by macOS in 2019 — it may not play here. Analyze reads it through ffmpeg; Transcode ▸ Reformat Old Codec makes a playable copy."
     }
     return nil
 }

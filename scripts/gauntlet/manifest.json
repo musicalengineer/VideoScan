@@ -5300,6 +5300,26 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalyzeLegacyCodecTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AnalyzeLegacyCodecMatrixTests",
+        "AnalyzeUndecodableIsolationTests",
+        "AnalyzeRoutingTests",
+        "AnalyzeMenuNoReformatGateSensorTests"
+      ],
+      "tests": [
+        "analyzeHandlersHaveNoReformatGate",
+        "analyzesTheOriginalAsIs",
+        "failureNotesAreBounded",
+        "legacyAndFlaggedRowsGetAnAnalyzeJobNotAReformat",
+        "reformatIsOfferedOnItsOwnOnlyWhereItHelps",
+        "theAnalyzeVerbHasNoCodecGate",
+        "undecodableFileFailsWithTheDecodersReasonAndTheOthersAreAnalyzed"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AnalyzePanelSensorTests.swift",
@@ -37983,7 +38003,7 @@
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         }
       ],
-      "expected_floor": 480,
+      "expected_floor": 487,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -38058,6 +38078,10 @@
         "VideoScanTests/AdvUndoPurgeWhileHeldTests",
         "VideoScanTests/AdvVolumeRenameUndoSQLiteTests",
         "VideoScanTests/AgeAtDeathConstraintTests",
+        "VideoScanTests/AnalyzeLegacyCodecMatrixTests",
+        "VideoScanTests/AnalyzeMenuNoReformatGateSensorTests",
+        "VideoScanTests/AnalyzeRoutingTests",
+        "VideoScanTests/AnalyzeUndecodableIsolationTests",
         "VideoScanTests/ArchiveStageArchivedLabelTests",
         "VideoScanTests/ArchiveTimelineCompletenessSensorTests",
         "VideoScanTests/AudioFingerprintAttemptTests",
