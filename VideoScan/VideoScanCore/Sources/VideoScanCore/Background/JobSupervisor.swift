@@ -912,8 +912,14 @@ public actor JobSupervisor {
         if isScheduled(run.request.kind) {
             // The plan size shown must be re-measured now (Fable review 11/04) —
             // measured, not re-queued: the next interval or commit queues.
+            // Until that measurement lands the pre-run size is not a fact, so it
+            // is dropped (Settings says "not planned yet", never "3 files to
+            // analyze" for files already done), and the measurement starts now
+            // rather than at the next poll (30 s in production).
             measureOnly.insert(run.request.kind)
+            planned[run.request.kind.rawValue] = nil
             lastPlanAt = nil
+            if scheduleTask != nil { Task { await self.scheduleTick() } }
         }
         touch()
         push(id, force: true)

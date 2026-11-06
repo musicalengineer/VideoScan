@@ -401,6 +401,8 @@
         "olderWaitingPayloadSaysWaiting",
         "pauseSurvivesARestart",
         "planSizeIsStaleAfterTheJobFinished",
+        "postRunMeasurementStartsAtOnce",
+        "preRunSizeIsDroppedAtFinish",
         "relaunchAdoptsOnePerKind",
         "staleMeasurementIsDropped",
         "statusCarriesTheBuild",
@@ -36960,7 +36962,7 @@
       ],
       "expected_floor": 3381,
       "name": "unit",
-      "package_expected_floor": 787,
+      "package_expected_floor": 789,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",

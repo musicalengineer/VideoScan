@@ -94,9 +94,12 @@ struct JobScheduleTests {
         #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 }, "\(log.lines)")
         #expect(await BackgroundFixtures.waitUntil { await Self.jobs(s).first?.state == .finished })
         #expect(log.lines.contains { $0.contains("by schedule") }, "\(log.lines)")
-        let status = await s.status(processIdentifier: 1, startedAt: Date())
-        #expect(status.planned?[ScheduleFactory.kind.rawValue] == 3, "the helper reports its own plan size")
-        #expect(status.holds == [])
+        // The job's end drops the pre-run size until the post-run measurement
+        // lands (FableReviewHelperTests); this probe still says 3 then.
+        #expect(await BackgroundFixtures.waitUntil {
+            await s.status(processIdentifier: 1, startedAt: Date()).planned?[ScheduleFactory.kind.rawValue] == 3
+        }, "the helper reports its own plan size")
+        #expect(await s.status(processIdentifier: 1, startedAt: Date()).holds == [])
         await s.abandonForTest()
     }
 
@@ -114,7 +117,9 @@ struct JobScheduleTests {
         #expect(await Self.jobs(s).isEmpty, "an empty plan queues nothing")
         probe.size = 3
         probe.generation = 2
-        #expect(await BackgroundFixtures.waitUntil { probe.plans == 2 })
+        // >= 2: the job this plan queues ends in milliseconds and its end
+        // measures the plan once more (a third plan) at once.
+        #expect(await BackgroundFixtures.waitUntil { probe.plans >= 2 })
         #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 })
         await s.abandonForTest()
     }
@@ -287,8 +292,12 @@ struct JobScheduleTests {
         }, makeRequest: { JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule") })
         let schedule = JobSchedule(kinds: [kind], generation: { BackgroundCatalogAccess.generation(at: catalog) }, buildID: "b1",
                                    holds: ScheduleHoldStore.beside(stateRoot: root))
+        // The queued job holds at its first unit: a finished job drops the
+        // pre-run plan size (it is re-measured), and this test reads the plan.
+        let gate = UnitGate()
+        defer { gate.open() }
         let s = JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
-                              factory: ScheduleFactory(recorder: UnitRecorder()), backoff: BackgroundFixtures.fullBackoff(),
+                              factory: GatedFactory(recorder: UnitRecorder(), gate: gate), backoff: BackgroundFixtures.fullBackoff(),
                               log: InMemoryBackgroundLog(), schedule: schedule)
         let load = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
