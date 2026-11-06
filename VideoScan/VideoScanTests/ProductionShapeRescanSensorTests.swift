@@ -165,6 +165,26 @@ func sqliteTable(_ url: URL, _ sql: String) throws -> [[String]] {
     return rows
 }
 
+/// Run `statements` in one transaction on a TEMP COPY (never the live file:
+/// LiveCatalogCopy reads that through a read-only URI only). For a test that
+/// re-creates an earlier state on its copy before the app opens it.
+func sqliteExecute(_ url: URL, _ statements: [String]) throws {
+    var db: OpaquePointer?
+    defer { sqlite3_close(db) }
+    guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+        throw CutoverFailure(words: "the copy would not open")
+    }
+    sqlite3_busy_timeout(db, 10_000)
+    let sql = "BEGIN IMMEDIATE;\n" + statements.map { $0 + ";" }.joined(separator: "\n") + "\nCOMMIT;"
+    var message: UnsafeMutablePointer<CChar>?
+    guard sqlite3_exec(db, sql, nil, nil, &message) == SQLITE_OK else {
+        let words = message.map { String(cString: $0) } ?? "unknown"
+        sqlite3_free(message)
+        _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+        throw CutoverFailure(words: "exec: \(words)")
+    }
+}
+
 // MARK: - The scene: a temp folder holding the copy, the app model on it
 
 @MainActor
@@ -180,7 +200,9 @@ struct ProductionShapeScene {
     /// Copy the live catalog (+ latch + high-water witnesses at its
     /// generation) into a sandbox, re-create the pre-incident state there
     /// when needed, and launch the app's model on it.
-    static func make(_ label: String) async throws -> ProductionShapeScene {
+    /// `prepare` runs on the copy after the pre-incident restore and before
+    /// the launch (a test re-creating an earlier state; never the live file).
+    static func make(_ label: String, prepare: (URL) throws -> Void = { _ in }) async throws -> ProductionShapeScene {
         let scene = CutoverScene(sandbox: try ShowAgainSandbox.make("prodshape_\(label)"))
         let folder = scene.folder
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -189,6 +211,7 @@ struct ProductionShapeScene {
         try FileManager.default.copyItem(at: liveLatch, to: scene.latchURL)
 
         let revived = try Self.restorePreIncidentRows(scene)
+        try prepare(scene.databaseURL)
         let generation = try #require(Int(try sqliteTable(scene.databaseURL,
                                                          "SELECT generation FROM generations WHERE id = 1").first?.first ?? ""))
         try Data("\(generation)\n".utf8).write(to: folder.appendingPathComponent(CatalogHighWater.fileName))

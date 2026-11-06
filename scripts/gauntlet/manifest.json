@@ -33848,7 +33848,8 @@
         "ProductionShapeSoundStampTests"
       ],
       "tests": [
-        "archiveFixityRowsStampDurably"
+        "archiveFixityRowsStampDurably",
+        "thePlanSkipsExactlyTheStoredStamps"
       ]
     },
     {
@@ -33911,7 +33912,8 @@
         "ProductionShapeSoundAttemptsMigrationTests"
       ],
       "tests": [
-        "theLiveCatalogMigratesWithEveryRowKept"
+        "theLiveCatalogMigratesWithEveryRowKept",
+        "theRewoundCopyMigratesWithEveryRowKept"
       ]
     },
     {
