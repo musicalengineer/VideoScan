@@ -76,7 +76,7 @@ struct RealtimeContentAnalysisContent: View {
         case .analyzing, .paused:
             var parts: [String] = []
             if inApp.total > 0 { parts.append("\(inApp.currentIndex) / \(inApp.total)") }
-            parts.append(RealtimeAnalysisState.secondsPerFileWords(inApp.secondsPerFile, over: inApp.recent.count))
+            parts.append(RealtimeAnalysisState.secondsPerFileWords(inApp.secondsPerFile, over: inApp.timedCount))
             parts.append(RealtimeAnalysisState.etaWords(inApp.etaSeconds))
             return parts.joined(separator: " · ")
         }
@@ -225,8 +225,11 @@ struct RealtimeContentAnalysisContent: View {
     private var donePane: some View {
         RealtimePane {
             HStack(spacing: 8) {
-                countTile("captioned", inApp.captioned, .green, "text.below.photo")
-                countTile("transcribed", inApp.transcribed, .green, "waveform")
+                // captions = files whose captions banked (not every completion, Codex F2);
+                // "no speech" is its own grey tile; "transcript failed" counts thrown errors only (F3).
+                countTile("captions", inApp.captioned, .green, "text.below.photo")
+                countTile("transcripts", inApp.transcribed, .green, "waveform")
+                countTile("no speech", inApp.noSpeech, .secondary, "speaker.zzz")
                 countTile("transcript failed", inApp.transcriptFailures, inApp.transcriptFailures > 0 ? .orange : .secondary, "waveform.slash")
                 countTile("failed", inApp.failed, inApp.failed > 0 ? .red : .secondary, "xmark.octagon")
                 countTile("skipped", inApp.skipped, .secondary, "forward.end")
@@ -256,18 +259,6 @@ struct RealtimeContentAnalysisContent: View {
 
     private var helper: RealtimeAnalysisState.Helper { state.helper }
 
-    private var helperStatusWords: String {
-        switch helper.availability {
-        case .disabled: return "off in Settings"
-        case .silent(let why): return "not answering — \(why)"
-        case .answered:
-            guard let era = helper.era else { return "answered — no era job" }
-            let counts = era.totalUnits > 0 ? " · \(era.completedUnits.formatted()) of \(era.totalUnits.formatted()) files" : ""
-            let backoff = helper.backoffWords.map { " · pace \($0)" } ?? ""
-            return era.stateWords + counts + backoff
-        }
-    }
-
     private var helperPane: some View {
         RealtimePane {
             VStack(alignment: .leading, spacing: 8) {
@@ -275,23 +266,19 @@ struct RealtimeContentAnalysisContent: View {
                     Circle()
                         .fill(helper.era?.stateWords == "running" ? Color.blue : Color.gray)
                         .frame(width: 9, height: 9)
-                    Text(helperStatusWords)
+                    // One honest phrase (the run's own N of M; the plan only when no run is on).
+                    Text(helper.progressWords)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundColor(.secondary)
                     Spacer()
-                    if let planned = helper.planned {
-                        Text("plan \(planned.formatted())")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .help("The helper's own count of files it still plans to analyze (ServiceStatus.planned)")
-                    }
                 }
+                // The journal's counts, or "—" with the reason when the read failed (Codex F5).
+                let tally = helper.tally
                 HStack(spacing: 8) {
-                    helperTile("era found", helper.tally.eraFound)
-                    helperTile("no usable era", helper.tally.eraNone)
-                    helperTile("gave up", helper.tally.gaveUp)
+                    helperTile("era found", tally.available ? tally.eraFound : nil, problem: tally.readProblem)
+                    helperTile("no usable era", tally.available ? tally.eraNone : nil, problem: tally.readProblem)
+                    helperTile("gave up", tally.available ? tally.gaveUp : nil, problem: tally.readProblem)
                     helperTile("trying", helper.triesInProgress, problem: helper.triesProblem)
-                    helperTile("other lines", helper.tally.other)
                 }
                 Text(helperJournalWords)
                     .font(.system(size: 10))
@@ -324,12 +311,13 @@ struct RealtimeContentAnalysisContent: View {
 
     private var helperJournalWords: String {
         var parts: [String] = []
-        if let file = helper.tally.file {
+        if let problem = helper.tally.readProblem {
+            parts.append("counts unavailable — " + problem)
+        } else if let file = helper.tally.file {
             parts.append("journal \(file): \(helper.tally.lines.formatted()) lines"
+                         + (helper.tally.other > 0 ? " (\(helper.tally.other.formatted()) supporting lines: year-range windows, on-screen dates)" : "")
                          + (helper.tally.unreadable > 0 ? " · \(helper.tally.unreadable) unreadable" : "")
                          + (helper.tally.torn ? " · torn tail (a write in flight)" : ""))
-        } else if let problem = helper.tally.readProblem {
-            parts.append(problem)
         }
         if let words = helper.journalWords { parts.append(words) }
         return parts.isEmpty ? "journal not read yet" : parts.joined(separator: " — ")
@@ -351,8 +339,7 @@ struct RealtimeContentAnalysisContent: View {
 
     private func helperTileHelp(_ label: String) -> String {
         switch label {
-        case "trying": return "Files with tries and no verdict yet, from background/attempts/era.jsonl (read-only)"
-        case "other lines": return "Valid journal lines that are not an era verdict (year-range windows, OCR dates)"
+        case "trying": return "Files with tries and no verdict yet: the attempts log minus every file whose verdict already landed in the catalog or the journal (the Results sheet's rule)"
         default: return "Counted from the helper's journal day file (read-only); era.none is never shown as an era"
         }
     }
@@ -460,7 +447,8 @@ struct RealtimeLaneRow: View {
                         Text("\(lane.framesPlanned) frames to rip").font(.system(size: 10)).foregroundColor(.secondary)
                     }
                     if lane.hasCaptions {
-                        Label("captions banked", systemImage: "checkmark").font(.system(size: 10)).foregroundColor(.green)
+                        // In memory until applyDossier at the lane's end (Codex F1): never "banked" here.
+                        Label("scenes extracted", systemImage: "checkmark").font(.system(size: 10)).foregroundColor(.green)
                     }
                     Text(RealtimeAnalysisState.elapsedWords(since: lane.startedAt, now: now))
                         .font(.system(size: 10, design: .monospaced))
@@ -472,7 +460,7 @@ struct RealtimeLaneRow: View {
             Image(systemName: "arrow.right").foregroundColor(.secondary).padding(.top, 2)
 
             // OUT — nothing until the file banks (the results pane shows it then)
-            Text(lane.hasCaptions ? "captions banked; transcript pending" : "…")
+            Text(lane.outWords)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -510,10 +498,9 @@ struct RealtimeOutputRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 indicator(output.hasCaptions, "text.below.photo", output.hasCaptions ? "\(output.sceneCount) scenes" : "no captions")
-                if output.isVideoOnly {
-                    Label("no audio", systemImage: "speaker.slash").font(.system(size: 10)).foregroundColor(.secondary)
-                } else {
-                    indicator(output.hasTranscript, "waveform", output.hasTranscript ? "transcript" : (output.note ?? "no transcript"))
+                indicator(output.hasTranscript, output.isVideoOnly ? "speaker.slash" : "waveform", output.transcriptWords)
+                if let bank = output.bankWords {
+                    Label(bank, systemImage: "exclamationmark.triangle").font(.system(size: 10)).foregroundColor(.orange)
                 }
                 Spacer()
                 Text(seconds).font(.system(size: 10, design: .monospaced)).foregroundColor(.secondary)

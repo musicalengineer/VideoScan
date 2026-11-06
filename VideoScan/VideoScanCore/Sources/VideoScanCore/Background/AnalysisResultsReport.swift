@@ -207,7 +207,9 @@ public struct AnalysisResultsReport: Sendable, Equatable {
     /// The signer's try entries whose content has no verdict yet (no catalog
     /// row and no journal line by the signer). An entry left behind by a
     /// crash between "verdict appended" and "try cleared" is not in progress.
-    static func inProgress(reader: any CatalogAnalysisResultsReading, signer: String, attempts: EraAttemptSnapshot,
+    /// Public: the Realtime Content Analysis window's "trying" reads this
+    /// same rule (Codex F6, 2026-11-05) — one rule, not two.
+    public static func inProgress(reader: any CatalogAnalysisResultsReading, signer: String, attempts: EraAttemptSnapshot,
                            inJournal: Set<String>) throws -> [String: EraAttempt] {
         let tries = attempts.attempts(signer: signer)
         guard !tries.isEmpty else { return [:] }

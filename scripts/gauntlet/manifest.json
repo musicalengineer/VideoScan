@@ -34162,6 +34162,7 @@
         "idle",
         "machineInferenceIsGreyAndBlueAndEraNoneIsNeverAnEra",
         "midRun",
+        "midRunDark",
         "noModelExtensionAndNoRecordsWork",
         "pauseAndStopAreThePanelsEngine",
         "pauseResumeStopReachTheEngineOncePerClick",
@@ -34171,7 +34172,38 @@
         "theKernelAndTheFilesAreReadOffTheMainActor",
         "theNewCounterIsResetWithTheOthersAndCountedAtBothBankingSites",
         "theTallyLandsInTheState",
-        "theTryCountsAreTheSeatedSignersAndAnUnreadableLogSaysSo"
+        "theTryCountsLandAndAnUnreadableLogSaysSo"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RealtimeContentAnalysisCodexTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RealtimeContentAnalysisCodexTests",
+        "RealtimeContentAnalysisCodexRuleTests",
+        "RealtimeContentAnalysisCodexSensorTests"
+      ],
+      "tests": [
+        "aChangedDiskSetOrARefusedDriverIsNotARate",
+        "aJournalReadFailureIsUnavailableWithTheReason",
+        "aLaneNeverClaimsBanking",
+        "aLaneSaysExtractedAndARowSaysBankedOnlyWhenItWas",
+        "aParkedTailIsNotRescanned",
+        "aRefusedBankCountsNoCaptionsAndNoTranscript",
+        "aSuccessfulEmptyTranscriptIsNoSpeechInThePipelinedPath",
+        "aSuccessfulEmptyTranscriptIsNoSpeechInTheSerialPath",
+        "aThrownTranscriptionIsStillAFailure",
+        "anEmptyPassShowsZeroTotals",
+        "anOversizedAttemptsFileIsRefusedNotRead",
+        "anUnterminatedHugeLineIsUnavailableWithTheReason",
+        "anUntimedFileNeverCountsAsZeroSeconds",
+        "captionsCountsOnlyFilesWhoseCaptionsBanked",
+        "serialTranscriptionIsTimed",
+        "theHelperPhraseIsOneHonestSentence",
+        "theLabelsArePlainWords",
+        "tryingExcludesAFileWithAVerdictAndReadsOnlyOnChange",
+        "tryingIsTheReportsOneRule"
       ]
     }
   ],
@@ -36885,7 +36917,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3355,
+      "expected_floor": 3375,
       "name": "unit",
       "package_expected_floor": 787,
       "package_selectors": [
@@ -37540,7 +37572,10 @@
         "VideoScanTests/MachineCountersTests",
         "VideoScanTests/RealtimeAnalysisStoreTests",
         "VideoScanTests/RealtimeContentAnalysisSensorTests",
-        "VideoScanTests/RealtimeContentAnalysisMockupTests"
+        "VideoScanTests/RealtimeContentAnalysisMockupTests",
+        "VideoScanTests/RealtimeContentAnalysisCodexTests",
+        "VideoScanTests/RealtimeContentAnalysisCodexRuleTests",
+        "VideoScanTests/RealtimeContentAnalysisCodexSensorTests"
       ]
     },
     {

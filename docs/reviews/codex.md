@@ -6,6 +6,7 @@ How to read a row: the **last recorded verdict** is the one the newest transcrip
 
 | Area | Passes (date) | Last recorded verdict | Closure, as recorded | Transcripts |
 |---|---|---|---|---|
+| Realtime Content Analysis viewer (`feat/realtime-ca-viewer`) | 1 (11/05) | **block** — 9 findings (8 P0 unverified-fact, 1 P1 bounded reads); zero tests executed by Codex (read-only sandbox) | Closed on the branch, red-first: all 9 pinned in `VideoScanTests/RealtimeContentAnalysisCodexTests.swift`; no re-review run yet | `codex-review-realtime-content-analysis-viewer-2026-11-05.md` |
 | Checklist audit 11/03 (background, status split, count) | 8 closing passes (11/03) | fix (4 findings) → … → **merge** (0 findings) | Closed by `528d0746`, merged `f393a3ba` | `docs/archive/reviews/codex/codex-review-checklist-audit-11-03-closing-2026-11-03.md` |
 | Background step 1 — journal applier (commit door for observations) | 1 (11/01) | **fix** — 10 findings (3 P1, 7 P2) | Closed by `caafc68d`: 10 of 10 fixed red-first; no re-review run | `codex-review-background-step-1-journal-applier-2026-11-01.md` |
 | The 10/31 day (Confirmed Date filter table, timing judge, gated pause test) | 1 (10/31) | **merge** — one P2 | Closed by `33a41214`: the P2 fixed (reference-only wrapper records a hang off the reference run) | `codex-review-day-2026-10-31.md` |

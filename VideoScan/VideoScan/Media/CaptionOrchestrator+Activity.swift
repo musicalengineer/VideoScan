@@ -27,6 +27,8 @@ extension CaptionOrchestrator {
         liveTotal = 0
         transcriptFailures = 0
         liveTranscribed = 0
+        liveWithCaptions = 0
+        liveNoSpeech = 0
         // Per-reason skip split (2026-07-14 observability work: 1,097
         // failures in one nightly batch produced ~1 log line) — reset
         // alongside the aggregate they decompose.
@@ -210,7 +212,8 @@ extension CaptionOrchestrator {
         verb: String? = nil,
         hasCaptions: Bool? = nil,
         hasTranscript: Bool? = nil,
-        transcriptFailed: Bool? = nil
+        transcriptFailed: Bool? = nil,
+        noSpeech: Bool? = nil
     ) {
         guard let i = activeLanes.firstIndex(where: { $0.id == id }) else { return }
         if let stage { activeLanes[i].stageName = stage }
@@ -218,6 +221,7 @@ extension CaptionOrchestrator {
         if let hasCaptions { activeLanes[i].hasCaptions = hasCaptions }
         if let hasTranscript { activeLanes[i].hasTranscript = hasTranscript }
         if let transcriptFailed { activeLanes[i].transcriptFailed = transcriptFailed }
+        if let noSpeech { activeLanes[i].noSpeech = noSpeech }
     }
 
     /// Close a lane. No-op if it was already cleared.
@@ -245,7 +249,8 @@ extension CaptionOrchestrator {
         hasTranscript: Bool = false,
         transcriptFailed: Bool = false,
         recordID: UUID? = nil,
-        output: CompletedOutput? = nil
+        output: CompletedOutput? = nil,
+        noSpeech: Bool = false
     ) {
         let entry = CompletedActivity(
             id: UUID(), filename: filename, path: path,
@@ -256,7 +261,8 @@ extension CaptionOrchestrator {
             hasTranscript: hasTranscript,
             transcriptFailed: transcriptFailed,
             recordID: recordID,
-            output: output
+            output: output,
+            noSpeech: noSpeech
         )
         recentActivity.insert(entry, at: 0)
         if recentActivity.count > Self.recentActivityCap {
@@ -295,7 +301,8 @@ extension CaptionOrchestrator {
             hasTranscript: lane.hasTranscript,
             transcriptFailed: lane.transcriptFailed,
             recordID: lane.recordID,
-            output: output
+            output: output,
+            noSpeech: lane.noSpeech
         )
     }
 }

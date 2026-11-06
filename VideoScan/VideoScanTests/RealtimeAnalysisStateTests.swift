@@ -38,8 +38,10 @@ struct RealtimeAnalysisStateTests {
         o.liveTotal = 100
         let started = CFAbsoluteTimeGetCurrent() - 370   // 37 files in 370 s → 10 s/file → 630 s left
         o.applyProgressNow(idx: 37, total: 100, currentFile: "Holiday_1990_Part2.mov", started: started, now: CFAbsoluteTimeGetCurrent())
-        o.liveCaptioned = 29
+        o.liveCaptioned = 37
+        o.liveWithCaptions = 29
         o.liveTranscribed = 22
+        o.liveNoSpeech = 3
         o.transcriptFailures = 5
         o.liveFailed = 1
         o.liveSkipped = 7
@@ -59,7 +61,9 @@ struct RealtimeAnalysisStateTests {
         #expect(s.etaSeconds == eta, "the ETA is the orchestrator's, never a second estimate")
         let etaValue = try #require(eta)
         #expect(etaValue > 600 && etaValue < 660, "the orchestrator's linear ETA: \(etaValue)")
-        #expect(s.captioned == 29 && s.transcribed == 22 && s.transcriptFailures == 5 && s.failed == 1 && s.skipped == 7)
+        #expect(s.done == 37, "files done = liveCaptioned (the batch's own count)")
+        #expect(s.captioned == 29, "captions = files whose captions banked (liveWithCaptions), never files done — Codex F2")
+        #expect(s.noSpeech == 3 && s.transcribed == 22 && s.transcriptFailures == 5 && s.failed == 1 && s.skipped == 7)
         #expect(s.volumePrefix == "/Volumes/Tapes")
         #expect(s.isWorking, "a lane exists: the dot may pulse")
         let lane = try #require(s.lanes.first)
@@ -80,7 +84,9 @@ struct RealtimeAnalysisStateTests {
         o.currentStatus = .cancelling
         #expect(RealtimeAnalysisStore.inApp(from: o).phase == .stopping)
         o.currentStatus = .finished(captioned: 29, skipped: 7, failed: 1)
-        #expect(RealtimeAnalysisStore.inApp(from: o).phase == .finished)
+        let finished = RealtimeAnalysisStore.inApp(from: o)
+        #expect(finished.phase == .finished)
+        #expect(finished.done == 29 && finished.skipped == 7 && finished.failed == 1, "a finished pass shows its own terminal counts (Codex F4)")
     }
 
     @Test func completionCarriesTheBankedWords() throws {
@@ -89,15 +95,15 @@ struct RealtimeAnalysisStateTests {
         let laneID = o.beginLane(path: "/Volumes/Tapes/a.mov", filename: "a.mov", isVideoOnly: false,
                                  stage: "MLXVLM", verb: "extracting scenes…", recordID: recordID, framesPlanned: 3, clipSeconds: 12)
         o.updateLane(laneID, hasCaptions: true)
-        o.markTranscriptBanked(laneID)
+        o.markTranscriptBanked(laneID, banked: true)
         #expect(o.liveTranscribed == 1, "the ✓ and the batch count move together")
         let extraction = DossierExtraction(scenes: [SceneCaption(timestamp: 1, text: "family around a tree, a dog"),
                                                     SceneCaption(timestamp: 7, text: "a child opens a box")], dates: [], texts: [])
         o.completeDossierLane(laneID, vlmSeconds: 8.5, whisperSeconds: 3.25, note: nil,
-                              output: .from(extraction: extraction, transcript: "  …open that one next…\nokay  "))
+                              output: .from(extraction: extraction, transcript: "  …open that one next…\nokay  ", banked: true))
         let s = RealtimeAnalysisStore.inApp(from: o)
         #expect(s.lanes.isEmpty, "the lane closed")
-        #expect(s.captioned == o.liveCaptioned && s.captioned == 1)
+        #expect(s.done == o.liveCaptioned && s.done == 1 && s.captioned == o.liveWithCaptions && s.captioned == 1)
         let out = try #require(s.recent.first)
         #expect(s.recent.count == o.recentActivity.count && s.recent.count == 1)
         #expect(out.recordID == recordID && out.filename == "a.mov")
@@ -113,9 +119,9 @@ struct RealtimeAnalysisStateTests {
         let long = String(repeating: "x", count: 500)
         let cut = CompletedOutput.cut(long)
         #expect(cut.count == CompletedOutput.maxChars + 1 && cut.hasSuffix("…"))
-        let out = CompletedOutput.from(extraction: .empty, transcript: "   \n  ")
+        let out = CompletedOutput.from(extraction: .empty, transcript: "   \n  ", banked: true)
         #expect(out.sceneCount == 0 && out.firstCaption == nil && out.transcriptExcerpt == nil, "whitespace is no transcript")
-        #expect(CompletedOutput.from(extraction: .empty, transcript: nil).transcriptExcerpt == nil)
+        #expect(CompletedOutput.from(extraction: .empty, transcript: nil, banked: false).transcriptExcerpt == nil)
     }
 
     @Test func secondsPerFileIsTheMeanOfTheRecentFiles() {
@@ -127,8 +133,9 @@ struct RealtimeAnalysisStateTests {
                                          transcriptFailed: false, sceneCount: 1, firstCaption: nil, transcriptExcerpt: nil)
         }
         s.recent = [out(10, 5), out(3, nil), out(nil, nil)]
-        #expect(s.secondsPerFile == 9, "(15 + 3) / 2; a file the orchestrator did not time is left out")
-        #expect(RealtimeAnalysisState.secondsPerFileWords(s.secondsPerFile, over: 3) == "9.0 s/file (last 3)")
+        #expect(s.secondsPerFile == 15, "only the fully timed file counts; a file with an untimed stage is left out, never 0 s (Codex F8)")
+        #expect(s.timedCount == 1)
+        #expect(RealtimeAnalysisState.secondsPerFileWords(s.secondsPerFile, over: s.timedCount) == "15.0 s/file (last 1)")
         #expect(RealtimeAnalysisState.secondsPerFileWords(nil, over: 0) == "— s/file")
     }
 

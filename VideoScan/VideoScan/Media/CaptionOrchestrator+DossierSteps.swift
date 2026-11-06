@@ -207,9 +207,11 @@ extension CaptionOrchestrator {
     // MARK: - Banking and lane close-out
 
     /// Bank the dossier on the record, VLM result only (no transcript).
+    /// Returns applyDossier's answer: false = no row at that path, nothing banked.
+    @discardableResult
     func bankVLMOnly(_ extraction: DossierExtraction, _ plan: DossierFilePlan,
-                     model: VideoScanModel, vlmModelID: String) {
-        _ = model.applyDossier(
+                     model: VideoScanModel, vlmModelID: String) -> Bool {
+        model.applyDossier(
             extraction, to: plan.path,
             vlmModel: vlmModelID,
             transcript: nil,
@@ -219,7 +221,9 @@ extension CaptionOrchestrator {
 
     /// Snapshot the lane into the activity feed, close it, count the file.
     /// Order matters: `recordCompletion(fromLane:)` reads the lane that
-    /// `endLane` removes.
+    /// `endLane` removes. `liveCaptioned` is the batch's "files done" (its
+    /// OUTCOME line); `liveWithCaptions` moves only when ≥ 1 scene banked
+    /// (Codex F2, 2026-11-05).
     func completeDossierLane(_ laneID: UUID, vlmSeconds: Double?,
                              whisperSeconds: Double?, note: String?,
                              output: CompletedOutput? = nil) {
@@ -227,13 +231,22 @@ extension CaptionOrchestrator {
                          whisperSeconds: whisperSeconds, note: note, output: output)
         endLane(laneID)
         liveCaptioned += 1
+        if let output, output.banked, output.sceneCount > 0 { liveWithCaptions += 1 }
     }
 
-    /// A usable transcript banked for this lane: the ✓ and the batch count
-    /// move together (the Realtime window's "transcribed" tile).
-    func markTranscriptBanked(_ laneID: UUID) {
+    /// A usable transcript for this lane: the ✓ follows the transcript; the
+    /// batch count (the Realtime window's "transcribed" tile) moves only
+    /// when applyDossier banked it.
+    func markTranscriptBanked(_ laneID: UUID, banked: Bool) {
         updateLane(laneID, hasTranscript: true)
-        liveTranscribed += 1
+        if banked { liveTranscribed += 1 }
+    }
+
+    /// Whisper ran to the end and found no speech: banked as an empty
+    /// transcript, neither a transcript nor a failure (Codex F3).
+    func markNoSpeech(_ laneID: UUID, banked: Bool) {
+        updateLane(laneID, noSpeech: true)
+        if banked { liveNoSpeech += 1 }
     }
 
     /// One visible line per extraction failure — the 2026-07-14 perf

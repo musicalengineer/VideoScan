@@ -116,6 +116,7 @@ extension CaptionOrchestrator {
         appLog.write("Analyzing catalog: starting across \(reachable.count) reachable volume(s)")
 
         guard !reachable.isEmpty else {
+            resetLiveCounts()   // an empty pass shows its own zeros (Codex F4, 2026-11-05)
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
             return
         }

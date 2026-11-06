@@ -49,10 +49,19 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         var startedAt: Date
         var framesPlanned: Int
         var clipSeconds: Double
+        /// Scenes were extracted — they exist in memory until applyDossier
+        /// banks them at the lane's end (Codex F1: never "banked" here).
         var hasCaptions: Bool
         var isVideoOnly: Bool
+        var noSpeech: Bool = false
 
         var isTranscribing: Bool { stage.lowercased().contains("whisper") }
+
+        /// The OUT column while the file is still in flight: nothing has
+        /// reached the catalog yet, and the words say so.
+        var outWords: String {
+            hasCaptions ? "scenes extracted — banks after the transcript" : "…"
+        }
     }
 
     /// One file that finished — a copy of `CompletedActivity`.
@@ -72,6 +81,33 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         var sceneCount: Int
         var firstCaption: String?
         var transcriptExcerpt: String?
+        /// Whisper ran and found no speech (banked as an empty transcript).
+        var noSpeech: Bool = false
+        /// applyDossier's answer: the words reached the catalog row.
+        var banked: Bool = true
+
+        /// The transcript indicator's words: transcript · no speech · no audio · the note.
+        var transcriptWords: String {
+            if hasTranscript { return "transcript" }
+            if noSpeech { return "no speech" }
+            if isVideoOnly { return "no audio" }
+            return note ?? "no transcript"
+        }
+
+        /// Words under a row whose output never reached the catalog; nil when it did.
+        var bankWords: String? {
+            banked ? nil : "not banked — no catalog row at this path"
+        }
+
+        /// VLM + Whisper seconds when BOTH stages that ran were timed; nil
+        /// otherwise (Codex F8: an untimed stage is never 0 s). A video-only
+        /// file has no Whisper stage to time.
+        var timedSeconds: Double? {
+            guard let vlm = vlmSeconds else { return nil }
+            if isVideoOnly { return vlm }
+            guard let whisper = whisperSeconds else { return nil }
+            return vlm + whisper
+        }
     }
 
     struct InApp: Equatable, Sendable {
@@ -83,8 +119,13 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         var etaSeconds: Int?
         var lanes: [Lane] = []
         var recent: [Output] = []
+        /// Files done this pass (`liveCaptioned`, the batch's own OUTCOME count).
+        var done: Int = 0
+        /// Files whose captions (≥ 1 scene) banked (`liveWithCaptions`) — Codex F2.
         var captioned: Int = 0
         var transcribed: Int = 0
+        /// Whisper ran and found no speech (`liveNoSpeech`) — Codex F3.
+        var noSpeech: Int = 0
         var transcriptFailures: Int = 0
         var failed: Int = 0
         var skipped: Int = 0
@@ -93,13 +134,13 @@ struct RealtimeAnalysisState: Equatable, Sendable {
 
         var isWorking: Bool { !lanes.isEmpty }
 
-        /// Mean wall-clock seconds per finished file over `recent` (VLM +
-        /// Whisper as the orchestrator timed them); nil until one finished.
+        /// The files of `recent` whose every stage was timed.
+        var timedCount: Int { recent.compactMap(\.timedSeconds).count }
+
+        /// Mean wall-clock seconds per finished file over the fully timed
+        /// files of `recent`; nil until one is.
         var secondsPerFile: Double? {
-            let timed = recent.compactMap { o -> Double? in
-                guard o.vlmSeconds != nil || o.whisperSeconds != nil else { return nil }
-                return (o.vlmSeconds ?? 0) + (o.whisperSeconds ?? 0)
-            }
+            let timed = recent.compactMap(\.timedSeconds)
             guard !timed.isEmpty else { return nil }
             return timed.reduce(0, +) / Double(timed.count)
         }
@@ -137,6 +178,31 @@ struct RealtimeAnalysisState: Equatable, Sendable {
         var journalWords: String?
         /// The analyzer's short name ("8B").
         var modelShortName: String = ""
+
+        /// One honest progress phrase (Rick's demo rule: plain words, no
+        /// plumbing). The run's "N of M files" is this run's unit count; the
+        /// helper's plan size is shown only when no run is on.
+        static func progressWords(availability: HelperAvailability, era: HelperJob?, planned: Int?, backoff: String?) -> String {
+            switch availability {
+            case .disabled: return "off in Settings"
+            case .silent(let why): return "not answering — \(why)"
+            case .answered: break
+            }
+            guard let era else {
+                if let planned, planned > 0 { return "no run on now · \(planned.formatted()) files planned for the next run" }
+                return "answered — no era job"
+            }
+            var words = era.stateWords
+            if era.totalUnits > 0 {
+                words += " · \(era.completedUnits.formatted()) of \(era.totalUnits.formatted()) files in this run"
+            }
+            if let backoff, backoff != BackoffState.full.words { words += " · pace \(backoff)" }
+            return words
+        }
+
+        var progressWords: String {
+            Self.progressWords(availability: availability, era: era, planned: planned, backoff: backoffWords)
+        }
     }
 
     // MARK: The machine

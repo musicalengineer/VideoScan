@@ -24,7 +24,7 @@ private func raw(at t: Double, busy: UInt64, total: UInt64, gpu: Double? = 11, a
                        gpuUtilizationPercent: gpu.map { .value($0) } ?? .absent("no IOAccelerator in the IORegistry"),
                        memoryAvailableBytes: .value(available),
                        memoryTotalBytes: physical,
-                       diskReadBytes: .value(disk))
+                       diskRead: .value(.init(bytesReadByDevice: [1: disk])))
 }
 
 @Suite("Realtime Content Analysis — machine counters are deltas of real ticks, or a reason")
@@ -61,7 +61,7 @@ struct MachineCountersTests {
         let now = MachineRawCounters(monotonicSeconds: 1, cpu: .absent("host_processor_info failed (kern_return 5)"),
                                      gpuUtilizationPercent: .absent("no IOAccelerator in the IORegistry"),
                                      memoryAvailableBytes: .absent("host_statistics64 failed"), memoryTotalBytes: 96 << 30,
-                                     diskReadBytes: .absent("no IOBlockStorageDriver with Statistics in the IORegistry"))
+                                     diskRead: .absent("no IOBlockStorageDriver in the IORegistry"))
         let s = MachineCounterReader.fold(previous: nil, now: now)
         #expect(s.cpuBusyPercent == nil && s.cpuProblem == "host_processor_info failed (kern_return 5)")
         #expect(s.gpuUtilizationPercent == nil && s.gpuProblem == "no IOAccelerator in the IORegistry")

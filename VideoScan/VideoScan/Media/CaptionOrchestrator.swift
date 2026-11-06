@@ -557,6 +557,13 @@ final class CaptionOrchestrator: ObservableObject {
     /// `hasTranscript` flip, counted once per file). The Realtime Content
     /// Analysis window's "transcribed" tile reads it; reset with the others.
     @Published var liveTranscribed: Int = 0
+    /// Files whose captions (≥ 1 scene) banked this batch — NOT every
+    /// completion: `liveCaptioned` counts files done, including transcript-
+    /// only and empty extractions (Codex F2, 2026-11-05).
+    @Published var liveWithCaptions: Int = 0
+    /// Files whose Whisper ran to the end and found no speech, banked as an
+    /// empty transcript (Codex F3): neither transcribed nor failed.
+    @Published var liveNoSpeech: Int = 0
 
     // MARK: - Live pipeline activity state
     //

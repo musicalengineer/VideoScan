@@ -47,7 +47,7 @@ private final class Probe: @unchecked Sendable {
     var reply: Result<ServiceStatus, Refusal> = .failure(Refusal("the helper is not running"))
     var inApp = RealtimeAnalysisState.InApp()
     var tally = HelperJournalTally()
-    var attempts: Result<EraAttemptSnapshot, Refusal> = .success(EraAttemptSnapshot())
+    var trying: Result<Int, Refusal> = .success(0)
     var machine = MachineSample(cpuBusyPercent: 40, cpuProblem: nil, gpuUtilizationPercent: 94, gpuProblem: nil,
                                 memoryUsedGB: 38.2, memoryTotalGB: 96, memoryProblem: nil, diskReadMBPerSecond: 210, diskProblem: nil)
     var now = Date(timeIntervalSince1970: 1_793_925_000)
@@ -61,7 +61,7 @@ private func store(_ p: Probe, tick: Duration = .milliseconds(500), helperEvery:
         helperEnabled: { p.enabled },
         helperStatus: { p.statusCalls += 1; return p.reply },
         journal: { p.tally },
-        attempts: { p.attempts },
+        trying: { p.trying },
         machine: { p.machine },
         journalWords: { p.journalWords },
         note: { p.notes.append($0) },
@@ -135,19 +135,14 @@ struct RealtimeAnalysisStoreTests {
         #expect(p.notes.filter { $0 == "VideoScan Background answered" }.count == 1)
     }
 
-    @Test func theTryCountsAreTheSeatedSignersAndAnUnreadableLogSaysSo() async throws {
+    @Test func theTryCountsLandAndAnUnreadableLogSaysSo() async throws {
         let p = Probe()
-        let seated = SeatedApproach.eraA2.signer
-        p.attempts = .success(EraAttemptSnapshot(entries: [
-            "\(seated) d1": attempt(tries: 2, reason: "no frame"),
-            "\(seated) d2": attempt(tries: 1, reason: "timeout"),
-            "machine:other/era-v1@r1 d3": attempt(tries: 3, reason: "x"),
-        ]))
+        p.trying = .success(2)
         let s = store(p)
         await s.refreshNow(waitForHelper: true)
         #expect(s.state.helper.triesInProgress == 2 && s.state.helper.triesProblem == nil)
 
-        p.attempts = .failure(Refusal("era: the try counts at /x/era.jsonl are unreadable (line 3 is not a try record)"))
+        p.trying = .failure(Refusal("era: the try counts at /x/era.jsonl are unreadable (line 3 is not a try record)"))
         p.now = p.now.addingTimeInterval(6)
         await s.refreshNow(waitForHelper: true)
         #expect(s.state.helper.triesInProgress == nil)
@@ -275,7 +270,8 @@ struct RealtimeContentAnalysisSensorTests {
     @Test func theNewCounterIsResetWithTheOthersAndCountedAtBothBankingSites() throws {
         #expect(try code("CaptionOrchestrator+Activity.swift").contains("liveTranscribed = 0"), "resetLiveCounts")
         let dossier = try code("CaptionOrchestrator+Dossier.swift")
-        #expect(dossier.components(separatedBy: "markTranscriptBanked(laneID)").count == 3, "the pipelined and the serial path")
+        #expect(dossier.components(separatedBy: "markTranscriptOutcome(").count == 4, "the pipelined and the serial path, through one dispatcher")
+        #expect(dossier.components(separatedBy: "markTranscriptBanked(laneID, banked: banked)").count == 2, "the one site that counts")
         #expect(!dossier.contains("updateLane(laneID, hasTranscript: true)"), "no banking site bypasses the count")
         #expect(dossier.components(separatedBy: "recordID: plan.record.id").count == 3, "both lanes carry the catalog id")
     }
@@ -295,7 +291,7 @@ struct RealtimeContentAnalysisMockupTests {
         s.currentFile = "Holiday_1990_Part2.mov"
         s.etaSeconds = 617
         s.volumePrefix = "/Volumes/Tapes"
-        s.captioned = 29; s.transcribed = 22; s.transcriptFailures = 5; s.failed = 1; s.skipped = 7
+        s.done = 37; s.captioned = 29; s.transcribed = 22; s.noSpeech = 4; s.transcriptFailures = 1; s.failed = 1; s.skipped = 7
         let t = Date(timeIntervalSince1970: 1_793_925_000)
         s.lanes = [
             .init(id: UUID(), filename: "Holiday_1990_Part2.mov", path: "/Volumes/Tapes/Holiday_1990_Part2.mov", recordID: UUID(),
@@ -305,22 +301,24 @@ struct RealtimeContentAnalysisMockupTests {
                   stage: "Whisper", verb: "transcribing audio…", startedAt: t.addingTimeInterval(-19), framesPlanned: 6, clipSeconds: 128,
                   hasCaptions: true, isVideoOnly: false),
         ]
-        func out(_ name: String, _ ago: Double, caption: String?, excerpt: String?, scenes: Int, videoOnly: Bool = false) -> RealtimeAnalysisState.Output {
-            .init(id: UUID(), filename: name, path: "/Volumes/Tapes/\(name)", recordID: UUID(), syncedAt: t.addingTimeInterval(-ago),
-                  vlmSeconds: 8.4, whisperSeconds: excerpt == nil ? nil : 3.1, note: excerpt == nil && !videoOnly ? "transcript failed" : nil,
-                  isVideoOnly: videoOnly, hasCaptions: scenes > 0, hasTranscript: excerpt != nil, transcriptFailed: excerpt == nil && !videoOnly,
-                  sceneCount: scenes, firstCaption: caption, transcriptExcerpt: excerpt)
+        func out(_ name: String, _ ago: Double, caption: String?, excerpt: String?, scenes: Int, videoOnly: Bool = false,
+                 noSpeech: Bool = false) -> RealtimeAnalysisState.Output {
+            let failed = excerpt == nil && !videoOnly && !noSpeech
+            return .init(id: UUID(), filename: name, path: "/Volumes/Tapes/\(name)", recordID: UUID(), syncedAt: t.addingTimeInterval(-ago),
+                         vlmSeconds: 8.4, whisperSeconds: failed || videoOnly ? nil : 3.1, note: failed ? "transcript failed" : (noSpeech ? "no speech" : nil),
+                         isVideoOnly: videoOnly, hasCaptions: scenes > 0, hasTranscript: excerpt != nil, transcriptFailed: failed,
+                         sceneCount: scenes, firstCaption: caption, transcriptExcerpt: excerpt, noSpeech: noSpeech)
         }
         s.recent = [
             out("Birthday_Candles_1992.mov", 12, caption: "a group of people around a table with a cake and lit candles", excerpt: "okay everybody, ready? one, two, three…", scenes: 6),
-            out("Garden_Spring_1989.mov", 40, caption: "a person kneeling by flower beds in a backyard, a dog nearby", excerpt: nil, scenes: 6),
+            out("Garden_Spring_1989.mov", 40, caption: "a person kneeling by flower beds in a backyard, a dog nearby", excerpt: nil, scenes: 6, noSpeech: true),
             out("Parade_Main_Street.mov", 71, caption: "a marching band on a street lined with people", excerpt: "…here they come…", scenes: 5),
             out("Silent_Super8_Reel3.mov", 95, caption: "a child on a swing in a park", excerpt: nil, scenes: 4, videoOnly: true),
         ]
         return s
     }
 
-    private func render(_ label: String, _ p: Probe, samples: Int) async throws -> CGImage {
+    private func render(_ label: String, _ p: Probe, samples: Int, dark: Bool = false) async throws -> CGImage {
         let s = store(p)
         for i in 0..<samples {
             p.machine.cpuBusyPercent = 30 + 30 * sin(Double(i) / 4)
@@ -329,9 +327,14 @@ struct RealtimeContentAnalysisMockupTests {
             p.now = p.now.addingTimeInterval(0.5)
             await s.refreshNow(waitForHelper: true)
         }
-        let renderer = ImageRenderer(content: RealtimeContentAnalysisContent(store: s).panes.frame(width: 900, alignment: .top))
+        let renderer = ImageRenderer(content: RealtimeContentAnalysisContent(store: s).panes.frame(width: 900, alignment: .top)
+            .environment(\.colorScheme, dark ? .dark : .light))
         renderer.scale = 2
-        let image = try #require(renderer.cgImage, "\(label) rendered")
+        // Rick's app runs dark: the dynamic NSColors resolve against the drawing appearance.
+        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        var rendered: CGImage?
+        appearance?.performAsCurrentDrawingAppearance { rendered = renderer.cgImage }
+        let image = try #require(rendered, "\(label) rendered")
         #expect(image.width == 1800 && image.height > 1000, "\(label): \(image.width)×\(image.height)")
         // Ink on the page: a ScrollView renders blank through ImageRenderer (seen 11/05), so prove pixels, not just a size.
         let ink = Self.inkFraction(image)
@@ -381,15 +384,33 @@ struct RealtimeContentAnalysisMockupTests {
                                          planned: [JobKind.era.rawValue: 244]))
         p.tally.file = "2026-11-06.jsonl"
         p.tally.eraFound = 22; p.tally.eraNone = 7; p.tally.gaveUp = 2; p.tally.other = 131
+        p.tally.bytesRead = 342_146
         p.tally.latest = [
             .init(id: "a", at: 1_793_925_466, kind: .gaveUp, words: "gave up — gave up after 3 tries: 6 of 6 frames would not decode (ffmpeg: ffmpeg exited 0 and wrote no frame)"),
             .init(id: "b", at: 1_793_925_401, kind: .eraFound, words: "era found — early 1990s (1991–1995)"),
             .init(id: "c", at: 1_793_925_380, kind: .eraNone, words: "no usable era"),
             .init(id: "d", at: 1_793_925_322, kind: .eraFound, words: "era found — 1980s (1984–1989)"),
         ]
-        p.attempts = .success(EraAttemptSnapshot(entries: Dictionary(uniqueKeysWithValues: (0..<3).map {
-            ("\(SeatedApproach.eraA2.signer) d\($0)", attempt(tries: 1, reason: "r")) })))
+        p.trying = .success(3)
         _ = try await render("mid-run", p, samples: 40)
+    }
+
+    @Test func midRunDark() async throws {
+        let p = Probe()
+        p.inApp = Self.midRun()
+        p.enabled = true
+        let started = Date(timeIntervalSince1970: 1_793_920_000)
+        let era = VideoScanCore.JobProgressSnapshot(id: JobID(), kind: .era, lane: "era", title: "Machine era", subtitle: "", completedUnits: 158,
+                                                    totalUnits: 402, skippedUnits: 0, failedUnits: 0, state: .running, startedAt: started, finishedAt: nil)
+        p.reply = .success(ServiceStatus(processIdentifier: 2098, startedAt: started, backoff: .full, jobs: [era], idleSeconds: 0))
+        p.tally.file = "2026-11-06.jsonl"
+        p.tally.eraFound = 22; p.tally.eraNone = 7; p.tally.gaveUp = 2; p.tally.other = 131
+        p.tally.latest = [
+            .init(id: "b", at: 1_793_925_401, kind: .eraFound, words: "era found — early 1990s (1991–1995)"),
+            .init(id: "c", at: 1_793_925_380, kind: .eraNone, words: "no usable era"),
+        ]
+        p.trying = .success(3)
+        _ = try await render("mid-run-dark", p, samples: 40, dark: true)
     }
 
     @Test func errorAndUnknown() async throws {
@@ -408,7 +429,7 @@ struct RealtimeContentAnalysisMockupTests {
         p.machine.memoryTotalGB = 96
         p.tally.file = "2026-11-06.jsonl"
         p.tally.eraFound = 3; p.tally.unreadable = 2; p.tally.torn = true
-        p.attempts = .failure(Refusal("era: the try counts at …/attempts/era.jsonl are unreadable (line 7 is not a try record) — the job is refused rather than give files up or retry them blind"))
+        p.trying = .failure(Refusal("era: the try counts at …/attempts/era.jsonl are unreadable (line 7 is not a try record) — the job is refused rather than give files up or retry them blind"))
         p.journalWords = "Background: 0 journal lines waiting · 2 refused"
         _ = try await render("error-unknown", p, samples: 3)
     }

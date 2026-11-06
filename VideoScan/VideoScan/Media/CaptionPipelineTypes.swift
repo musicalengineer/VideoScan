@@ -105,6 +105,9 @@ struct PipelineLane: Identifiable, Equatable {
     var framesPlanned: Int = 0
     /// The clip's duration as ffprobe reported it (0 = unknown).
     var clipSeconds: Double = 0
+    /// Whisper ran to the end and found no speech (an empty transcript,
+    /// banked as such) — not a failure (Codex F3, 2026-11-05).
+    var noSpeech: Bool = false
 }
 
 /// What one completed file produced, captured from the banked extraction
@@ -116,14 +119,19 @@ struct CompletedOutput: Equatable, Sendable {
     var sceneCount: Int
     var firstCaption: String?
     var transcriptExcerpt: String?
+    /// applyDossier's own answer: the words above reached the catalog row.
+    /// False = nothing was banked (no row at that path), so nothing is
+    /// "captioned" or "transcribed" (Codex F1/F2, 2026-11-05).
+    var banked: Bool = true
 
-    static func from(extraction: DossierExtraction, transcript: String?) -> CompletedOutput {
+    static func from(extraction: DossierExtraction, transcript: String?, banked: Bool) -> CompletedOutput {
         CompletedOutput(sceneCount: extraction.scenes.count,
                         firstCaption: extraction.scenes.first.map { cut($0.text) },
                         transcriptExcerpt: transcript.flatMap { t in
                             let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
                             return trimmed.isEmpty ? nil : cut(trimmed)
-                        })
+                        },
+                        banked: banked)
     }
 
     /// The first `maxChars` characters on one line, with an ellipsis when cut.
@@ -177,4 +185,6 @@ struct CompletedActivity: Identifiable, Equatable {
     var recordID: UUID? = nil
     /// What the file produced, from the banked extraction and transcript.
     var output: CompletedOutput? = nil
+    /// Whisper ran and found no speech (banked as an empty transcript).
+    var noSpeech: Bool = false
 }

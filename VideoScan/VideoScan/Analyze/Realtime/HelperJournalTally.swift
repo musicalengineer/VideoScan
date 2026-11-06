@@ -18,9 +18,15 @@
 //   unreadable      a line the reader refused (not JSON, wrong version, an
 //                   id that does not match) — counted, never guessed at.
 //
+// Unavailable, with the reason (Codex F5/F9, 2026-11-05): a read that throws,
+// a file that grew past `maxBytesPerRefresh` since the last read, or an
+// unterminated tail longer than the journal's own line cap. The counts are
+// then zero and `available` is false — never stale numbers shown as live —
+// and an over-cap tail is not rescanned until the file changes size.
+//
 // Memory: counts, the newest `latestCap` observations (≈ 200 B each), and one
 // read buffer inside `ObservationJournal.read` (≤ 1 MB + maxLines decoded
-// lines ≈ 4 KB each). A 6 MB day file is streamed, never held.
+// lines ≈ 4 KB each). Work per refresh ≤ `maxBytesPerRefresh`.
 //
 // (For Rick: a fold over an append-only log with a persisted cursor; the
 // actor is the one place the cursor mutates.)
@@ -59,8 +65,10 @@ struct HelperJournalTally: Equatable, Sendable {
     var latest: [Observation] = []
     /// Bytes of the file folded in so far (the cursor; tests pin incremental reads).
     var bytesRead = 0
-    /// The directory or file could not be read (the words say why).
+    /// The counts are unavailable and this is why (a failed read, a file over a cap).
     var readProblem: String?
+
+    var available: Bool { readProblem == nil }
 
     // MARK: The rule
 
@@ -114,14 +122,30 @@ struct HelperJournalTally: Equatable, Sendable {
             if latest.count > Self.latestCap { latest.removeLast(latest.count - Self.latestCap) }
         }
     }
+
+    /// The tally with no counts and the reason (Codex F5: never stale numbers).
+    static func unavailable(file: String?, _ why: String) -> HelperJournalTally {
+        var t = HelperJournalTally()
+        t.file = file
+        t.readProblem = why
+        return t
+    }
 }
 
 /// Reads the newest day file incrementally; the one place the cursor moves.
 actor HelperJournalCursor {
     private let journal: ObservationJournal
     private var tally = HelperJournalTally()
+    /// The file size at which an over-cap unterminated tail was last seen;
+    /// the tail is not rescanned until the size changes (Codex F9).
+    private var tornTailSize: Int?
     /// Lines per `ObservationJournal.read` call (its own cap is the memory bound).
     static let chunkLines = 4096
+    /// A refresh never reads more than this; a file that grew more since the
+    /// last read is unavailable with the reason (Codex F9).
+    static let maxBytesPerRefresh = 64 << 20
+    /// Refreshes that scanned bytes (tests: a parked over-cap tail scans nothing).
+    private(set) var scans = 0
 
     init(directory: URL) {
         journal = ObservationJournal(directory: directory)
@@ -132,28 +156,43 @@ actor HelperJournalCursor {
     /// file replaces the tally — the counts are for one day file.
     func refresh(maxLines: Int = 200_000) -> HelperJournalTally {
         guard let newest = journal.dayFiles().last else {
-            tally = HelperJournalTally()
-            tally.readProblem = "no journal file yet in \(journal.directory.path)"
+            tally = .unavailable(file: nil, "no journal file yet in \(journal.directory.path)")
             return tally
         }
         if tally.file != newest {
             tally = HelperJournalTally()
             tally.file = newest
+            tornTailSize = nil
         }
-        tally.readProblem = nil
+        let size = journal.size(of: newest)
+        if let parked = tornTailSize, parked == size { return tally }      // the over-cap tail has not moved
+        tornTailSize = nil
+        if !tally.available { tally = HelperJournalTally(); tally.file = newest }   // a cleared problem starts the counts again
+        guard size - tally.bytesRead <= Self.maxBytesPerRefresh else {
+            tally = .unavailable(file: newest, "\(newest) grew by \((size - tally.bytesRead) >> 20) MB since the last read, "
+                                 + "over the \(Self.maxBytesPerRefresh >> 20) MB cap per refresh")
+            return tally
+        }
+        scans += 1
         var budget = maxLines
         while budget > 0 {
             let chunk: ObservationJournal.ReadResult
             do {
                 chunk = try journal.read(file: newest, from: tally.bytesRead, maxLines: min(Self.chunkLines, budget))
             } catch {
-                tally.readProblem = "\(newest) could not be read: \(error)"
+                tally = .unavailable(file: newest, "\(newest) could not be read: \(error)")
                 return tally
             }
             for line in chunk.lines { tally.add(line) }
             budget -= chunk.lines.count
             tally.bytesRead = chunk.nextOffset
             tally.torn = chunk.tornAt != nil
+            if let tornAt = chunk.tornAt, size - tornAt > ObservationJournal.maxLineBytes {
+                tornTailSize = size
+                tally = .unavailable(file: newest, "an unterminated line of \((size - tornAt) >> 10) KB at the end of \(newest) "
+                                     + "(over the \(ObservationJournal.maxLineBytes >> 10) KB line cap) — the counts wait until it ends")
+                return tally
+            }
             if chunk.atEnd || chunk.lines.isEmpty { break }
         }
         return tally

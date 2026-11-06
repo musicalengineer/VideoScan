@@ -59,7 +59,14 @@ struct MachineRawCounters: Sendable, Equatable {
     var gpuUtilizationPercent: MachineCounterRaw<Double>
     var memoryAvailableBytes: MachineCounterRaw<UInt64>
     var memoryTotalBytes: UInt64
-    var diskReadBytes: MachineCounterRaw<UInt64>
+    /// Bytes read since boot PER DISK (IORegistry entry id → bytes), so a
+    /// disk that comes or goes between two samples is seen, not summed in
+    /// (Codex F7, 2026-11-05).
+    var diskRead: MachineCounterRaw<DiskCounters>
+
+    struct DiskCounters: Sendable, Equatable {
+        var bytesReadByDevice: [UInt64: UInt64]
+    }
 }
 
 /// One finished sample: the pane's numbers, each with its problem words when absent.
@@ -127,20 +134,37 @@ actor MachineCounterReader {
             s.memoryUsedGB = Double(used) / 1_073_741_824
         }
 
-        switch now.diskReadBytes {
+        switch now.diskRead {
         case .absent(let why): s.diskProblem = why
-        case .value(let bytes):
-            if let p = previous?.diskReadBytes.value {
-                if dt > 0, bytes >= p {
-                    s.diskReadMBPerSecond = Double(bytes - p) / dt / 1_000_000
-                } else {
-                    s.diskProblem = dt > 0 ? "the byte counter went backwards (a disk came or went)" : "no time elapsed between the two samples"
-                }
-            } else {
-                s.diskProblem = MachineSample.firstSample
+        case .value(let disks):
+            guard let p = previous?.diskRead.value else { s.diskProblem = MachineSample.firstSample; break }
+            switch diskDelta(previous: p, now: disks, seconds: dt) {
+            case .value(let rate): s.diskReadMBPerSecond = rate
+            case .absent(let why): s.diskProblem = why
             }
         }
         return s
+    }
+
+    /// The per-device byte delta over `seconds` as MB/s — or why the interval
+    /// has no rate: a changed device set, a counter that went backwards, no
+    /// time elapsed (pure; MachineCountersTests pins each).
+    static func diskDelta(previous: MachineRawCounters.DiskCounters, now: MachineRawCounters.DiskCounters,
+                          seconds: Double) -> MachineCounterRaw<Double> {
+        guard seconds > 0 else { return .absent("no time elapsed between the two samples") }
+        let before = Set(previous.bytesReadByDevice.keys)
+        let after = Set(now.bytesReadByDevice.keys)
+        guard before == after else {
+            return .absent("the set of disks changed between the two samples (\(before.count) → \(after.count); a drive came or went)")
+        }
+        var delta: UInt64 = 0
+        for (device, bytes) in now.bytesReadByDevice {
+            guard let earlier = previous.bytesReadByDevice[device], bytes >= earlier else {
+                return .absent("a disk's byte counter went backwards (device \(device))")
+            }
+            delta += bytes - earlier
+        }
+        return .value(Double(delta) / seconds / 1_000_000)
     }
 
     // MARK: The host read (production)
@@ -152,7 +176,7 @@ actor MachineCounterReader {
             gpuUtilizationPercent: readGPUUtilization(),
             memoryAvailableBytes: readAvailableMemory(),
             memoryTotalBytes: ProcessInfo.processInfo.physicalMemory,
-            diskReadBytes: readDiskReadBytes())
+            diskRead: readDiskReadBytes())
     }
 
     /// Per-core load ticks summed. The info array is kernel memory and must
@@ -215,26 +239,34 @@ actor MachineCounterReader {
         return available > 0 ? .value(available) : .absent("host_statistics64 failed")
     }
 
-    /// Bytes read since boot, summed over every IOBlockStorageDriver.
-    static func readDiskReadBytes() -> MachineCounterRaw<UInt64> {
+    /// Bytes read since boot per IOBlockStorageDriver, keyed by the entry's
+    /// registry id. One driver that refuses its Statistics makes the whole
+    /// read absent (a partial sum would be a made-up rate — Codex F7).
+    static func readDiskReadBytes() -> MachineCounterRaw<MachineRawCounters.DiskCounters> {
         var iterator: io_iterator_t = 0
         let kr = IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOBlockStorageDriver"), &iterator)
         guard kr == KERN_SUCCESS else { return .absent("IOServiceGetMatchingServices(IOBlockStorageDriver) failed (kern_return \(kr))") }
         defer { IOObjectRelease(iterator) }
-        var sum: UInt64 = 0
-        var drivers = 0
+        var byDevice: [UInt64: UInt64] = [:]
+        var refused = 0
         var entry = IOIteratorNext(iterator)
         while entry != 0 {
-            if let stats = IORegistryEntryCreateCFProperty(entry, "Statistics" as CFString, kCFAllocatorDefault, 0)?
+            var id: UInt64 = 0
+            if IORegistryEntryGetRegistryEntryID(entry, &id) == KERN_SUCCESS,
+               let stats = IORegistryEntryCreateCFProperty(entry, "Statistics" as CFString, kCFAllocatorDefault, 0)?
                 .takeRetainedValue() as? [String: Any],
                let bytes = (stats["Bytes (Read)"] as? NSNumber)?.uint64Value {
-                sum &+= bytes
-                drivers += 1
+                byDevice[id] = bytes
+            } else {
+                refused += 1
             }
             IOObjectRelease(entry)
             entry = IOIteratorNext(iterator)
         }
-        guard drivers > 0 else { return .absent("no IOBlockStorageDriver with Statistics in the IORegistry") }
-        return .value(sum)
+        guard refused == 0 else {
+            return .absent("\(refused) of \(refused + byDevice.count) IOBlockStorageDriver entries refused their Statistics")
+        }
+        guard !byDevice.isEmpty else { return .absent("no IOBlockStorageDriver in the IORegistry") }
+        return .value(.init(bytesReadByDevice: byDevice))
     }
 }
