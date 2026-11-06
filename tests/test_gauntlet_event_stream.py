@@ -53,10 +53,11 @@ class EventStreamCountTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.workspace.cleanup()
 
-    def count(self, records, console='', raw=None, listed=()):
-        """`listed`: the `swift test list` lines for the filter — the independent
-        XCTest count the console tally must agree with (Module.Class/method;
-        Swift Testing entries end in "()" and are not XCTest)."""
+    def count(self, records, console='', raw=None, listed=(), filters=()):
+        """`listed`: the `swift test list` lines — the independent XCTest count
+        the console tally must agree with (Module.Class/method; Swift Testing
+        entries end in "()" and are not XCTest). `filters`: the run's --filter
+        regexes, applied to the listing (SwiftPM's list ignores them)."""
         case = tempfile.TemporaryDirectory(dir=self.workspace.name)
         self.addCleanup(case.cleanup)
         stream = Path(case.name) / 'events.jsonl'
@@ -65,7 +66,7 @@ class EventStreamCountTests(unittest.TestCase):
         log.write_text(console)
         listing = Path(case.name) / 'list.txt'
         listing.write_text(''.join(l + '\n' for l in listed))
-        done = subprocess.run([str(self.binary), '--count-package-output', str(stream), str(log), str(listing)],
+        done = subprocess.run([str(self.binary), '--count-package-output', str(stream), str(log), str(listing), *filters],
                               text=True, capture_output=True, timeout=60)
         counts = json.loads(done.stdout)
         self.assertEqual(done.returncode, 0 if counts is not None else 1, done.stderr)
@@ -202,6 +203,30 @@ class EventStreamCountTests(unittest.TestCase):
         self.assertIsNone(self.count(self.run_of(('a', None)), self.OPEN + a + self.close(1), listed=[]))  # the tally says 1, the list 0
         self.assertEqual(self.count(self.run_of(('a', None)), self.OPEN + a + self.close(1), listed=L)['passed'], 2)
 
+    def test_a_whole_package_listing_is_narrowed_by_the_runs_own_filters(self):
+        # Regression, M4 gauntlet 2026-11-06 (main d87bf9828): `swift test list`
+        # ignores --filter, so the listing is the whole package; the stage's
+        # filters are applied to it with SwiftPM's semantics (unanchored regex
+        # on Module.Class/method; a test is selected when ANY filter matches).
+        a = "Test Case '-[M.X testA]' started.\nTest Case '-[M.X testA]' passed (0.001 seconds).\n"
+        whole = ['M.X/testA', 'M.Y/testB', 'M.XLonger/testC', 'M.S/a()', 'M.T/b()']
+        run = self.run_of(('a', None))
+        self.assertEqual(self.count(run, self.OPEN + a + self.close(1), listed=whole, filters=[r'M\.X/']),
+                         dict(passed=2, failed=0, known_issues=0, skipped=0))
+        b = "Test Case '-[M.Y testB]' started.\nTest Case '-[M.Y testB]' passed (0.001 seconds).\n"
+        self.assertEqual(self.count(run, self.OPEN + a + b + self.close(2), listed=whole,
+                                    filters=[r'M\.X/', r'M\.Y/'])['passed'], 3)        # two filters: either selects
+        # Every guarantee kept. A selected test with no result: unavailable.
+        self.assertIsNone(self.count(run, self.OPEN + a + self.close(1), listed=whole, filters=[r'M\.X/', r'M\.Y/']))
+        # A result for a test no filter selects (ran, or forged with a summary to match): unavailable.
+        self.assertIsNone(self.count(run, self.OPEN + a + b + self.close(2), listed=whole, filters=[r'M\.X/']))
+        # Selected, but no XCTest phase at all: unavailable, never zero.
+        self.assertIsNone(self.count(run, "◇ Test run started.\n", listed=whole, filters=[r'M\.X/']))
+        # Nothing XCTest selected and none ran: zeros for XCTest, Swift Testing still counted.
+        self.assertEqual(self.count(run, "◇ Test run started.\n", listed=whole, filters=[r'M\.S/'])['passed'], 1)
+        # A filter that is not a valid regex selects nothing knowable: unavailable.
+        self.assertIsNone(self.count(run, self.OPEN + a + self.close(1), listed=whole, filters=['M.X/(']))
+
     def test_scale_20k_functions_counted_within_budget(self):
         records = self.run_of(*[(f't{n}', None) for n in range(20_000)])
         start = time.monotonic()
@@ -227,6 +252,8 @@ struct S {
   @Test func failsOnRequest() { #expect(ProcessInfo.processInfo.environment["FIX_FAIL"] == nil) }
 }
 final class X: XCTestCase { func testA() { XCTAssertEqual(one(), 1) } }
+final class Y: XCTestCase { func testB() { XCTAssertEqual(one(), 1) } }
+final class XLonger: XCTestCase { func testC() { XCTAssertEqual(one(), 1) } }
 '''
 
 
@@ -266,25 +293,32 @@ class RealSwiftTestCountTests(unittest.TestCase):
             # The runner's independent count: the same filter, listed, not run.
             subprocess.run(['swift', 'test', 'list', '--skip-build', '--package-path', str(self.package)] + select,
                            stdout=out, stderr=subprocess.DEVNULL, env=env, timeout=600, check=True)
-        counted = subprocess.run([str(self.binary), '--count-package-output', str(stream), str(log), str(listing)],
-                                 text=True, capture_output=True, timeout=60)
+        self.listing = listing.read_text()
+        # The runner hands the counter the run's own filters (SwiftPM's list ignores them).
+        counted = subprocess.run([str(self.binary), '--count-package-output', str(stream), str(log), str(listing)]
+                                 + ([filter] if filter else []), text=True, capture_output=True, timeout=60)
         return done.returncode, json.loads(counted.stdout)
 
     def test_real_run_counts_functions_known_issues_and_xctest_exactly(self):
         code, counts = self.swift_test('clean')
         self.assertEqual(code, 0)
-        # passes, param (3 cases = 1), noisy, failsOnRequest + XCTest testA; knows is known; skipped skips.
-        self.assertEqual(counts, dict(passed=5, failed=0, known_issues=1, skipped=1))
+        # passes, param (3 cases = 1), noisy, failsOnRequest + XCTest testA, testB, testC; knows is known; skipped skips.
+        self.assertEqual(counts, dict(passed=7, failed=0, known_issues=1, skipped=1))
 
     def test_real_failure_is_counted_as_failed(self):
         code, counts = self.swift_test('failing', fail=True)
         self.assertNotEqual(code, 0)
-        self.assertEqual(counts, dict(passed=4, failed=1, known_issues=1, skipped=1))
+        self.assertEqual(counts, dict(passed=6, failed=1, known_issues=1, skipped=1))
 
     def test_real_filtered_run_with_an_xctest_class_is_counted(self):
         # Codex 2026-11-05 re-review (P1): the gauntlet always filters, and a
         # filtered run's bracket is "Selected tests".
+        # Regression, M4 gauntlet 2026-11-06: the real `swift test list` ignores
+        # --filter and lists the whole package (Y and XLonger too); the counter
+        # narrows it with the run's filter — XLonger is ruled out by the "/".
         code, counts = self.swift_test('filtered', filter=r'FixTests\.X/')
+        self.assertIn('FixTests.Y/testB', self.listing)
+        self.assertIn('FixTests.XLonger/testC', self.listing)
         self.assertEqual(code, 0)
         self.assertEqual(counts, dict(passed=1, failed=0, known_issues=0, skipped=0))
         code, counts = self.swift_test('mixed', filter=r'FixTests\.(X/testA|S/passes)')
