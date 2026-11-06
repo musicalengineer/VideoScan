@@ -132,8 +132,11 @@ func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
 // touches it); XCTest from the console, because `swift test` writes no XCTest
 // xunit in serial mode (6.4: --xunit-output yields only -swift-testing.xml) —
 // read as the runner's serial PROTOCOL (XCTestConsoleTally) and cross-checked
-// against `swift test list` for the same filter (`xctestList`, its stdout;
-// nil = the list could not be produced). Codex 11/05: a body printing a
+// against `swift test list` (`xctestList`, its stdout; nil = the list could
+// not be produced) narrowed by the run's own `--filter` regexes (`filters`):
+// SwiftPM 6.4's `list` accepts --filter and ignores it, printing the whole
+// package (M4 gauntlet 2026-11-06 went RED on every filtered stage until the
+// filters were applied here). Codex 11/05: a body printing a
 // result line, then a whole forged bracket + summary, inflated the count; a
 // filtered run's bracket is "Selected tests". Counts that disagree are nil =
 // unavailable (a RED stage), never inflated, never silently zero. One count
@@ -142,22 +145,35 @@ func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
 // record, an event for an undeclared id.
 // Memory: the files are read whole; ~6 records per test, ~300 B each, so a
 // 1,000-test stage is ~2 MB and the 20k-test scale sensor ~40 MB.
-func countsFromPackageRun(eventStream: String, console: String, xctestList: String?) -> [String: Int]? {
+func countsFromPackageRun(eventStream: String, console: String, xctestList: String?, filters: [String]) -> [String: Int]? {
     guard var counts = SwiftTestingTally(eventStream: eventStream)?.counts,
-          let xctest = XCTestConsoleTally(console: console, selected: xctestList.map(selectedXCTests)) else { return nil }
+          let xctest = XCTestConsoleTally(console: console, selected: xctestList.flatMap { selectedXCTests($0, filters: filters) }) else { return nil }
     for (key, value) in xctest.counts { counts[key, default: 0] += value }
     return counts
 }
 
-/// The XCTest methods in `swift test list` output, as the console names them
-/// ("Module.Class method"). XCTest lists as `Module.Class/method`; Swift
-/// Testing as `Module.Suite/name()` (parentheses) — not XCTest, not counted here.
-func selectedXCTests(_ list: String) -> Set<String> {
+/// The XCTest methods in `swift test list` output that the run's `--filter`
+/// regexes select, as the console names them ("Module.Class method"). XCTest
+/// lists as `Module.Class/method`; Swift Testing as `Module.Suite/name()`
+/// (parentheses) — not XCTest, not counted here. The filter semantics are
+/// SwiftPM's for XCTest (`TestCaseSpecifier.regex`): a test is selected when
+/// ANY pattern matches anywhere in `Module.Class/method` (unanchored ICU
+/// search, as `String.range(of:options: .regularExpression)`); no filters
+/// selects all. nil = a pattern that does not compile (selection unknowable,
+/// so counts unavailable — never "nothing selected").
+func selectedXCTests(_ list: String, filters: [String]) -> Set<String>? {
     let xctest = try! NSRegularExpression(pattern: #"^([^\s/()]+)/([^\s/()]+)$"#)
+    var patterns: [NSRegularExpression] = []
+    for filter in filters {
+        guard let re = try? NSRegularExpression(pattern: filter) else { return nil }
+        patterns.append(re)
+    }
     var out = Set<String>()
     for raw in list.split(separator: "\n", omittingEmptySubsequences: true) {
         let line = raw.trimmingCharacters(in: .whitespaces)
-        guard let m = xctest.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) else { continue }
+        let whole = NSRange(line.startIndex..., in: line)
+        guard let m = xctest.firstMatch(in: line, range: whole) else { continue }
+        guard patterns.isEmpty || patterns.contains(where: { $0.firstMatch(in: line, range: whole) != nil }) else { continue }
         out.insert((line as NSString).substring(with: m.range(at: 1)) + " " + (line as NSString).substring(with: m.range(at: 2)))
     }
     return out
@@ -511,12 +527,15 @@ struct GauntletRunner {
             output["status"] = "failed"; output["reason"] = packageBuildReason ?? "package build did not run"
             return output
         }
-        let filters = selectors.flatMap { ["--filter", NSRegularExpression.escapedPattern(for: $0) + "/"] }
+        let patterns = selectors.map { NSRegularExpression.escapedPattern(for: $0) + "/" }
+        let filters = patterns.flatMap { ["--filter", $0] }
         let log = run.appendingPathComponent("\(name)-package.log")
         let events = run.appendingPathComponent("\(name)-package-events.jsonl")
         let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch,
                    "--event-stream-output-path", events.path] + filters
-        // The independent XCTest count: the same filter, listed, not run (XCTestConsoleTally).
+        // The independent XCTest count: the package listed, not run, then narrowed
+        // by `patterns` here — `swift test list` ignores --filter (kept on the
+        // command in case a later SwiftPM honours it; filtering twice is a no-op).
         let listLog = run.appendingPathComponent("\(name)-package-list.log")
         let listCmd = ["swift", "test", "list", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch] + filters
         do {
@@ -534,7 +553,7 @@ struct GauntletRunner {
             output["elapsed_s"] = execution.elapsed
             let counts = countsFromPackageRun(eventStream: (try? String(contentsOf: events, encoding: .utf8)) ?? "",
                                               console: (try? String(contentsOf: log, encoding: .utf8)) ?? "",
-                                              xctestList: listed)
+                                              xctestList: listed, filters: patterns)
             let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
             output["status"] = verdict.0
             output["reason"] = verdict.1 as Any? ?? NSNull()
@@ -732,9 +751,11 @@ struct GauntletRunner {
 func main() throws -> Int32 {
     // Test seam: count one package run's outputs, print the counts (or null).
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments.first == "--count-package-output", arguments.count == 4 {
+    // Test seam: --count-package-output <stream> <console> <list> [filter-regex…]
+    if arguments.first == "--count-package-output", arguments.count >= 4 {
         let read = { (path: String) in (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
-        let counts = countsFromPackageRun(eventStream: read(arguments[1]), console: read(arguments[2]), xctestList: read(arguments[3]))
+        let counts = countsFromPackageRun(eventStream: read(arguments[1]), console: read(arguments[2]), xctestList: read(arguments[3]),
+                                          filters: Array(arguments.dropFirst(4)))
         print(counts.map { String(data: try! json($0), encoding: .utf8)! } ?? "null")
         return counts == nil ? 1 : 0
     }

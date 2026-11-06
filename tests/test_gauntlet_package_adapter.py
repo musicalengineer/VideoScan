@@ -38,18 +38,28 @@ if tool == 'swift':
     filters = [args[i + 1] for i, a in enumerate(args) if a == '--filter']
     stage = re.match(r'VideoScanCoreTests\\\.(\w+?)PkgTests/', filters[0]).group(1).lower()
     s = config.get('package', {}).get(stage, {})
+    xclass = f'VideoScanCoreTests.{stage.title()}PkgTests'      # the stage's XCTest class, selected by its filter
     if args[1] == 'list':
-        # `swift test list --filter`: XCTest as Module.Class/method, Swift Testing with "()".
+        # `swift test list` as SwiftPM 6.4 really behaves: it accepts --filter
+        # and IGNORES it, printing the WHOLE package (M4 gauntlet 2026-11-06,
+        # regression-package-list.log: 2416 lines for a filtered stage).
+        # XCTest as Module.Class/method, Swift Testing with "()"; decoys the
+        # stage's filter must exclude (the other stage, another class, a
+        # longer name that only the filter's trailing "/" rules out).
         if s.get('list_exit'):
             sys.exit(s['list_exit'])
         if s.get('list_orphan'):
             import subprocess
             subprocess.Popen(['/bin/sleep', '20'], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for n in range(s.get('listed_xctest', s.get('xctest', 1))):
-            print(f'VideoScanCoreTests.X/test{n}')
-        for n in range(s.get('passed', 2)):
-            print(f'VideoScanCoreTests.{stage}/ok{n}()')
+        for st in ('unit', 'regression'):
+            c = config.get('package', {}).get(st, {})
+            for n in range(c.get('listed_xctest', c.get('xctest', 1))):
+                print(f'VideoScanCoreTests.{st.title()}PkgTests/test{n}')
+            for n in range(c.get('passed', 2)):
+                print(f'VideoScanCoreTests.{st}/ok{n}()')
+        print('VideoScanCoreTests.UnitPkgTestsLonger/testDecoy')
+        print('VideoScanCoreTests.Elsewhere/testOther')
         sys.exit(0)
     # Swift Testing's event stream (what the runner counts), written beside
     # the console the way the real library writes it: one JSON record a line.
@@ -84,10 +94,10 @@ if tool == 'swift':
         if not n_x:
             for line in s.get('xctest_console', []): print(line)
         for n in range(n_x):
-            print(f"Test Case '-[VideoScanCoreTests.X test{n}]' started.")
+            print(f"Test Case '-[{xclass} test{n}]' started.")
             if n == 0:
                 for line in s.get('xctest_console', []): print(line)
-            print(f"Test Case '-[VideoScanCoreTests.X test{n}]' passed (0.001 seconds).")
+            print(f"Test Case '-[{xclass} test{n}]' passed (0.001 seconds).")
         print("Test Suite 'Selected tests' passed at 2026-11-05 14:00:00.100.")
         print(f"\t Executed {n_x} test{'' if n_x == 1 else 's'}, with 0 failures (0 unexpected) in 0.001 (0.001) seconds")
         print('◇ Test run started.')
@@ -282,7 +292,7 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         # Codex 2026-11-05 (P1): the Swift Testing-shaped line was already
         # harmless (counts come from the stream); the XCTest-shaped one was
         # counted by the console regex, so one real function read as two.
-        self.assert_ghost_is_not_counted("Test Case '-[VideoScanCoreTests.X ghost]' passed (0.001 seconds).")
+        self.assert_ghost_is_not_counted("Test Case '-[VideoScanCoreTests.UnitPkgTests ghost]' passed (0.001 seconds).")
 
     def test_a_printed_swift_testing_lookalike_is_never_counted(self):
         self.assert_ghost_is_not_counted('✔ Test ghost() passed after 0.001 seconds.')
@@ -301,9 +311,9 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         # wins; the ghost never started, so it never counts. 1 XCTest + 1 Swift
         # Testing = floor 2, GREEN — and no third test.
         self.config['package'] = {'unit': {'xctest': 1, 'passed': 1, 'xctest_console': [
-            "Test Case '-[VideoScanCoreTests.X ghost]' started.",
-            "Test Case '-[VideoScanCoreTests.X ghost]' passed (0.001 seconds).",
-            "Test Case '-[VideoScanCoreTests.X test0]' failed (0.001 seconds)."]}}
+            "Test Case '-[VideoScanCoreTests.UnitPkgTests ghost]' started.",
+            "Test Case '-[VideoScanCoreTests.UnitPkgTests ghost]' passed (0.001 seconds).",
+            "Test Case '-[VideoScanCoreTests.UnitPkgTests test0]' failed (0.001 seconds)."]}}
         self.run_runner()
         unit = self.stage('unit')
         self.assertEqual(unit['package']['passed'], 2, unit)
@@ -317,9 +327,9 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         # selected XCTest list says one. Two stories → counts unavailable, RED
         # — never "2 passed", never a floor met by a print.
         self.config['package'] = {'unit': {'xctest': 1, 'passed': 1, 'xctest_console': [
-            "Test Case '-[VideoScanCoreTests.X test0]' passed (0.001 seconds).",
-            "Test Case '-[VideoScanCoreTests.X ghost]' started.",
-            "Test Case '-[VideoScanCoreTests.X ghost]' passed (0.001 seconds).",
+            "Test Case '-[VideoScanCoreTests.UnitPkgTests test0]' passed (0.001 seconds).",
+            "Test Case '-[VideoScanCoreTests.UnitPkgTests ghost]' started.",
+            "Test Case '-[VideoScanCoreTests.UnitPkgTests ghost]' passed (0.001 seconds).",
             "Test Suite 'Selected tests' passed at 2026-11-05 14:00:00.050.",
             "\t Executed 2 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds"]}}
         self.run_runner()
@@ -359,6 +369,31 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(unit['status'], 'failed', unit)
         self.assertIn('counts unavailable', unit['reason'])
         # A list that disagrees with what ran (a selected XCTest never reported) is RED too.
+        self.config['package'] = {'unit': {'xctest': 2, 'listed_xctest': 3, 'passed': 1}}
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertIn('counts unavailable', self.stage('unit')['reason'])
+
+    def test_an_unfiltered_listing_is_filtered_by_the_stages_own_selectors(self):
+        # Regression, M4 gauntlet 2026-11-06 (main d87bf9828): `swift test list`
+        # ignores --filter and printed the whole package, so the tally of the
+        # filtered run never equalled the listing and unit, regression and
+        # performance were RED "structured test counts unavailable". The
+        # runner applies the stage's own --filter regexes to the listing
+        # (SwiftPM's semantics: unanchored match on Module.Class/method, any
+        # filter selects): the other stage's class, Elsewhere and
+        # UnitPkgTestsLonger are listed but not selected.
+        self.config['package'] = {'unit': {'xctest': 2, 'passed': 1}, 'regression': {'xctest': 3, 'passed': 2}}
+        self.run_runner()
+        listing = next(self.root.glob('results*/*/unit-package-list.log')).read_text()
+        self.assertIn('VideoScanCoreTests.RegressionPkgTests/test2', listing)   # the fake is unfiltered
+        self.assertIn('VideoScanCoreTests.Elsewhere/testOther', listing)
+        unit, regression = self.stage('unit'), self.stage('regression')
+        self.assertEqual(unit['package']['status'], 'passed', unit)
+        self.assertEqual(unit['package']['passed'], 3, unit)                 # 2 XCTest + 1 Swift Testing
+        self.assertEqual(regression['package']['status'], 'passed', regression)
+        self.assertEqual(regression['package']['passed'], 5, regression)     # 3 XCTest + 2 Swift Testing
+        # Guarantee kept: a selected XCTest the run never reported is still RED.
         self.config['package'] = {'unit': {'xctest': 2, 'listed_xctest': 3, 'passed': 1}}
         self.run_runner()
         self.assertEqual(self.stage('unit')['status'], 'failed')
