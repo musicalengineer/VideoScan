@@ -2,7 +2,7 @@
 # Guard for the nightly test run: one green run per on-rota Mac per day.
 #
 # Every Mac on the rotation (scripts/nightly_rota.json: the two Mac Studios,
-# M4 and M5 Ultra, both at 02:00) runs its own nightly, because the metrics
+# the M5 Ultra at 02:00 and the M4 at 14:00) runs its own nightly, because the metrics
 # page shows one row per Studio (DECISIONS 2026-10-28). Off-rota Macs (the
 # laptops) never run, even if their launchd job still fires.
 #
@@ -75,7 +75,13 @@ if [ "$HAS_GREEN" = "yes" ]; then
     exit 0
 fi
 
-log "no green run for $TODAY yet — running nightly."
 # caffeinate keeps the Mac awake for the duration; nightly_local_tests.sh does
 # its own build/test/publish (with the push retry/backoff + pending queue).
+# A Mac listed under "gauntlet" runs the full testbed instead: the same suite,
+# then the deep gauntlet, then one done line (scripts/nightly_gauntlet.sh).
+if [ "$(python3 "$REPO_ROOT/scripts/nightly_rota.py" gauntlet "$HOST" 2>/dev/null)" = "yes" ]; then
+    log "no green run for $TODAY yet — running the full testbed (suite + gauntlet)."
+    exec caffeinate -i bash "$REPO_ROOT/scripts/nightly_gauntlet.sh"
+fi
+log "no green run for $TODAY yet — running nightly."
 exec caffeinate -i bash "$REPO_ROOT/scripts/nightly_local_tests.sh"

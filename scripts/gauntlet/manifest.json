@@ -32070,6 +32070,32 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending; run directly with unittest during phase-1 development",
+      "kind": "python",
+      "path": "tests/test_nightly_gauntlet.py",
+      "stage": "regression",
+      "suites": [
+        "test_nightly_gauntlet.py"
+      ],
+      "tests": [
+        "test_a_crashed_summary_is_red",
+        "test_a_failed_notification_changes_nothing",
+        "test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock",
+        "test_a_stale_lock_is_reclaimed",
+        "test_cli",
+        "test_gauntlet_is_published_never_queue_only_with_the_rota_machine",
+        "test_gauntlet_that_prints_nothing_is_red",
+        "test_green_suite_amber_gauntlet_writes_the_done_line_and_notifies",
+        "test_guard_branches_on_the_rota",
+        "test_off_unknown_and_broken_say_no",
+        "test_quotes_never_reach_the_applescript",
+        "test_red_gauntlet_is_red_in_the_line_and_the_exit",
+        "test_red_suite_still_runs_the_gauntlet_and_exits_red",
+        "test_the_lock_is_taken_during_the_run_and_released_after",
+        "test_the_real_rota_runs_the_m4_testbed_at_14_and_the_ultra_nightly_at_02"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_metrics_dashboard.py",
@@ -37728,6 +37754,10 @@
         },
         {
           "name": "tests/test_m4_run_deep_lane.py",
+          "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
+        },
+        {
+          "name": "tests/test_nightly_gauntlet.py",
           "reason": "Python script-test adapter pending; run directly with unittest during phase-1 development"
         },
         {

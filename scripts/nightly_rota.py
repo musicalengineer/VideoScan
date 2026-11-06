@@ -9,8 +9,9 @@ too). This is the shell scripts' way in:
   python3 scripts/nightly_rota.py slot Other     ->  "unknown"
   python3 scripts/nightly_rota.py label RicksM5  ->  "M5"
   python3 scripts/nightly_rota.py analysis RicksM4 ->  "on 4 30"       (the Swift 6 analysis lane's slot)
+  python3 scripts/nightly_rota.py gauntlet RicksM4 ->  "yes"           (the full testbed: suite + gauntlet)
 
-Exit 0 always for `slot` / `label` / `analysis` (the answer is in stdout); a
+Exit 0 always for `slot` / `label` / `analysis` / `gauntlet` (the answer is in stdout); a
 broken rota file reads as "unknown" for every host, which makes the installer
 refuse and the guard run as before — never silently drop a Mac that should run.
 """
@@ -51,12 +52,28 @@ def slot(host: str, rota_path: Path = ROTA, key: str = "on") -> str:
     return "unknown"
 
 
+def gauntlet(host: str, rota_path: Path = ROTA) -> str:
+    """"yes" when this Mac's run is the full testbed (suite + gauntlet,
+    scripts/nightly_gauntlet.sh). Anything unreadable is "no": the plain
+    nightly still runs, so a broken file never drops a Mac's tests."""
+    try:
+        rota = json.loads(rota_path.read_text())
+    except (OSError, ValueError):
+        return "no"
+    lab = label(host)
+    listed = rota.get("gauntlet") or []
+    off = rota.get("off") or {}
+    return "yes" if lab and isinstance(listed, list) and lab in listed and lab not in off else "no"
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] not in ("slot", "label", "analysis"):
+    if len(argv) != 2 or argv[0] not in ("slot", "label", "analysis", "gauntlet"):
         print(__doc__, file=sys.stderr)
         return 2
     if argv[0] == "label":
         print(label(argv[1]))
+    elif argv[0] == "gauntlet":
+        print(gauntlet(argv[1]))
     else:
         print(slot(argv[1], key="on" if argv[0] == "slot" else "analysis"))
     return 0

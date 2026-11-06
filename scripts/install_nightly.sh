@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Install the staggered, guarded nightly on whichever fleet host this is.
 #
-# THE ROTA is scripts/nightly_rota.json (GH #360, 2026-10-21):
-#   M4 → 02:00 (primary)   M5 → 03:15 (failover)
-#   M1 → OFF the rotation (travel laptop, often on battery). Run on the M1, this
-#        script REMOVES the nightly job instead of installing it.
+# THE ROTA is scripts/nightly_rota.json (GH #360; times from 2026-11-05):
+#   M5 Ultra → 02:00 (the nightly suite)
+#   M4       → 14:00 (the full testbed: the suite, then the deep gauntlet,
+#              then a done line — scripts/nightly_gauntlet.sh)
+#   Laptops  → OFF the rotation. Run on one, this script REMOVES the nightly
+#              job instead of installing it.
 #
 # All hosts run scripts/nightly_guarded.sh, which no-ops if a green run for
 # today already landed. Run once per machine (re-runnable / idempotent):
