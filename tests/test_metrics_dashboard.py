@@ -1209,3 +1209,55 @@ def test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run(tmp_path
     fixtures["sanitizer.jsonl"] = jsonl([san_row(local_day(1), "thread", status="ok", tsan=0)])
     line = run_page(tmp_path, fixtures)["sections"]["sum-san"]
     assert 'class="word grey">no lane run published' in line
+
+
+# ---------------------------------------------------------------- the producers of the page's streams
+# history.jsonl (the App source tile, the "Code size" evidence) is appended by ci.yml on every
+# push to main. On 2026-11-04 the macOS `test` job went `if: false` (no Xcode 27 on the hosted
+# runner) and took the metrics step with it: the last row is 2026-11-04T04:01Z and the tile read
+# STALE from 11/05. collect_metrics.sh needs no Xcode (coverage is null without an xcresult), so
+# the producer lives in a job that runs, on Linux.
+
+def _history_producers():
+    import yaml   # installed by python-tests.yml on purpose: a skip would drop this check silently
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    jobs = ci["jobs"]
+    found = [(name, job) for name, job in jobs.items()
+             if any("collect_metrics.sh" in str(s.get("run", "")) and "metrics/history.jsonl" in str(s.get("run", ""))
+                    for s in job.get("steps", []))]
+    return jobs, found
+
+
+def test_history_jsonl_is_produced_by_a_ci_job_that_actually_runs():
+    jobs, found = _history_producers()
+    assert len(found) == 1, f"exactly one job appends history.jsonl, found {[n for n, _ in found]}"
+    name, job = found[0]
+    assert job.get("if", True) is not False, f"the history.jsonl producer `{name}` is switched off (if: false)"
+    assert "macos" not in str(job.get("runs-on", "")).lower(), \
+        f"`{name}` needs a macOS runner; collect_metrics.sh needs none and the macOS jobs wait on Xcode 27"
+    needs = job.get("needs") or []
+    for dep in ([needs] if isinstance(needs, str) else needs):
+        assert jobs[dep].get("if", True) is not False, f"`{name}` waits on `{dep}`, which is switched off"
+    assert (job.get("permissions") or {}).get("contents") == "write", f"`{name}` must be able to push `metrics`"
+
+
+def test_collect_metrics_emits_one_json_row_without_xcode_or_gh(tmp_path):
+    """The Linux job runs the script with no xcresult; here also without gh. One parseable
+    row, counted lines, and null (never 0) for what was not measured."""
+    app = tmp_path / "VideoScan" / "VideoScan" / "Catalog"
+    app.mkdir(parents=True)
+    (app / "A.swift").write_text("let a = 1\nlet b = 2\n")
+    tests_dir = tmp_path / "VideoScan" / "VideoScanTests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "ATests.swift").write_text("@Test func x() {}\n")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "GITHUB_SHA": "0123456789abcdef", "GITHUB_REF_NAME": "main"}
+    proc = subprocess.run(["bash", str(ROOT / "scripts" / "collect_metrics.sh")], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sha"] == "01234567" and row["branch"] == "main"
+    assert row["app_swift_lines"] == 2 and row["app_source_lines"] == 2 and row["test_count"] == 1
+    assert row["coverage_overall_pct"] is None and row["coverage_logic_pct"] is None
+    assert row["swift_by_folder"]["Catalog"] == {"lines": 2, "files": 1}
