@@ -2,8 +2,9 @@ name: CI
 
 # Slim build + tests pipeline for every push to main.
 #
-# 2026-11-04: only `preflight` runs. The two macOS jobs are `if: false` until
-# the hosted runner has Xcode 27 / Swift 6.4 (reason at each job).
+# 2026-11-04: only the Linux jobs run (`preflight`; `metrics` since 11/06).
+# The two macOS jobs are `if: false` until the hosted runner has Xcode 27 /
+# Swift 6.4 (reason at each job).
 #
 # Static-analysis tooling (SwiftLint, Periphery, CodeQL, strict concurrency)
 # lives in nightly-analysis.yml. PRs no longer run CI because Rick works
@@ -72,6 +73,76 @@ jobs:
       # broken selector is discovered by the build it broke.
       - name: Selftest — Xcode selector
         run: scripts/ci_select_xcode.sh --selftest
+
+  # history.jsonl (the metrics page's App source tile and Code size evidence):
+  # one row per push to main. Its own Linux job since 2026-11-06: the step
+  # lived in `test` and went dark with it on 11/04 (`if: false`, no Xcode 27);
+  # the page read STALE from 11/05. collect_metrics.sh needs no Xcode (the
+  # coverage fields are null without an xcresult, as they were on macOS since
+  # 2026-09-26) and no other job: a red lint must not stop the size trend.
+  # Pinned by tests/test_metrics_dashboard.py.
+  metrics:
+    name: Metrics row (history.jsonl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # No continue-on-error: in its own job a failure blocks nothing else, and
+      # it must show red rather than leave the tile to go STALE unnoticed.
+      - name: Collect metrics + push to `metrics` branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          chmod +x scripts/collect_metrics.sh
+          ROW=$(scripts/collect_metrics.sh)
+          echo "Metrics row:"
+          echo "$ROW"
+          # One valid JSON object or nothing (a malformed 2026-04-22 row is still on the branch).
+          python3 -c 'import json, sys; assert isinstance(json.loads(sys.argv[1]), dict)' "$ROW"
+
+          WORK=$(mktemp -d)
+          cd "$WORK"
+
+          git clone --branch metrics --single-branch --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metrics-repo \
+            2>/dev/null || {
+              echo "metrics branch does not exist — bootstrapping"
+              git clone --depth 1 \
+                "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metrics-repo
+              cd metrics-repo
+              git checkout --orphan metrics
+              git rm -rf . 2>/dev/null || true
+              mkdir -p metrics
+              echo "# Metrics history" > README.md
+              echo "One JSON row per CI run. Consumed by the dashboard at docs/index.html on main." >> README.md
+              touch metrics/history.jsonl
+              git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
+                commit -m "Bootstrap metrics branch [skip ci]"
+              git push -u origin metrics
+              cd ..
+            }
+
+          cd metrics-repo
+          mkdir -p metrics
+          echo "$ROW" >> metrics/history.jsonl
+
+          git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
+              add metrics/history.jsonl
+          git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
+              commit -m "metrics: ${GITHUB_SHA:0:8} on ${GITHUB_REF_NAME} [skip ci]"
+
+          git push origin metrics || {
+              echo "push failed — pulling and retrying once"
+              git pull --rebase origin metrics
+              git push origin metrics
+          }
 
   # VideoScanCore's own package tests (Rick 2026-09-29: "all tests when
   # possible should be automated"). 83 test files / ~720 tests — fixity,
@@ -368,55 +439,3 @@ jobs:
           name: test-results
           path: TestResults.xcresult
           retention-days: 14
-
-      # ── Metrics ─────────────────────────────────────────────────────
-
-      - name: Collect metrics + push to `metrics` branch
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-
-          chmod +x scripts/collect_metrics.sh
-          ROW=$(scripts/collect_metrics.sh)
-          echo "Metrics row:"
-          echo "$ROW"
-
-          WORK=$(mktemp -d)
-          cd "$WORK"
-
-          git clone --branch metrics --single-branch --depth 1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metrics-repo \
-            2>/dev/null || {
-              echo "metrics branch does not exist — bootstrapping"
-              git clone --depth 1 \
-                "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metrics-repo
-              cd metrics-repo
-              git checkout --orphan metrics
-              git rm -rf . 2>/dev/null || true
-              mkdir -p metrics
-              echo "# Metrics history" > README.md
-              echo "One JSON row per CI run. Consumed by the dashboard at docs/index.html on main." >> README.md
-              touch metrics/history.jsonl
-              git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
-                commit -m "Bootstrap metrics branch [skip ci]"
-              git push -u origin metrics
-              cd ..
-            }
-
-          cd metrics-repo
-          mkdir -p metrics
-          echo "$ROW" >> metrics/history.jsonl
-
-          git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
-              add metrics/history.jsonl
-          git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
-              commit -m "metrics: ${GITHUB_SHA:0:8} on ${GITHUB_REF_NAME} [skip ci]"
-
-          git push origin metrics || {
-              echo "push failed — pulling and retrying once"
-              git pull --rebase origin metrics
-              git push origin metrics
-          }
