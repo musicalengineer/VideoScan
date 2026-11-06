@@ -785,15 +785,20 @@ async function initMetricsRefresh() {
   if (refreshPoll === null && typeof setInterval === "function") refreshPoll = setInterval(() => { void pollMetricsRefresh(); }, 10000);
 }
 
+// Streams that publish when someone runs them, not nightly: their age is shown, never "stale".
+// Codex passes run per batch of merged SHAs (docs/PROCESS.md §5); a quiet week is not a stopped producer.
+const ON_DEMAND = new Set(["Codex reviews"]);
 function evidenceText(label, row, revision) {
   if (!row) return `${label}: no published evidence yet`;
   const stamp = row.ts || row.date;
   const validTime = typeof stamp === "string" && /^\d{4}-\d{2}-\d{2}(?:T[0-9:.+-]+Z?)?$/.test(stamp) && Number.isFinite(Date.parse(stamp));
   const sha = revision || row.sha || row.commit;
   const validSha = typeof sha === "string" && /^[a-f0-9]{7,40}$/i.test(sha);
-  const old = validTime && hoursSince(stamp) > STALE_HOURS;
+  const onDemand = ON_DEMAND.has(label);
+  const old = !onDemand && validTime && hoursSince(stamp) > STALE_HOURS;
+  const when = validTime ? (onDemand ? `on demand, last ${stamp}` : stamp) : "date not recorded";
   const checkout = row.dirty === true ? " · uncommitted changes" : row.dirty === false ? " · clean checkout" : "";
-  return `${label}: ${validTime ? stamp : "date not recorded"}${old ? " · stale (>36h)" : ""} · ${validSha ? "SHA " + sha.slice(0, 12) : "revision not recorded"}${checkout}`;
+  return `${label}: ${when}${old ? " · stale (>36h)" : ""} · ${validSha ? "SHA " + sha.slice(0, 12) : "revision not recorded"}${checkout}`;
 }
 function renderEvidence(d) {
   const last = rows => rows.length ? rows[rows.length - 1] : null;

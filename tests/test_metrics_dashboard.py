@@ -937,6 +937,23 @@ def test_freshness_reports_measurement_time_and_sha_not_latest_page_load(tmp_pat
 
 
 @needs_node
+def test_codex_reviews_are_on_demand_with_their_last_date_never_stale(tmp_path):
+    """Regression 2026-11-06 ("the metrics page says stale in a few places"): Codex passes run
+    per batch of merged SHAs (PROCESS §5), not nightly, so a quiet week is not a stopped
+    producer. The evidence line says "on demand, last <date>"; nightly streams beside it
+    still say stale past 36 h."""
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    fixtures["codex_reviews.jsonl"] = jsonl([{"schemaVersion": 1, "date": local_day(5), "docs": 1, "unparsed_docs": 0,
+                                              "passes": 2, "findings": 3, "closed_passes": 1}])
+    fixtures["adversarial.jsonl"] = jsonl([{"schemaVersion": 1, "date": local_day(5), "runs": 1}])
+    text = run_page(tmp_path, fixtures)["sections"]["evidence-reviews"]
+    codex = text.split("Codex reviews: ")[1]
+    assert codex.startswith(f"on demand, last {local_day(5)}") and "stale" not in codex
+    assert "stale (>36h)" in text.split("Codex reviews: ")[0], "the nightly adversarial stream keeps the 36 h rule"
+
+
+@needs_node
 def test_passing_scoped_run_cannot_replace_full_suite_failure_or_freshness(tmp_path):
     now = datetime.now(timezone.utc)
     fixtures = full_fixtures(now)
