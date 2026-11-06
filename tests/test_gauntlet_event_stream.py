@@ -3,8 +3,9 @@
 The console is for humans: a concurrent test's stdout can split a result line
 (M4 deep run at 2c8fa9777 counted 774 of 775) or forge one. The runner counts
 Swift Testing from `swift test --event-stream-output-path` (one JSON record a
-line, written by the testing library to its own file) and XCTest from its
-serial "Test Case '…' passed" lines, matched anywhere in a line.
+line, written by the testing library to its own file) and XCTest from the
+runner's serial protocol (bracket, started/result pairs, the runner's own
+summary), since `swift test` writes no XCTest xunit in serial mode.
 
 Runner.swift's `--count-package-output <stream> <console>` seam prints the
 counts as JSON (exit 0) or `null` (exit 1: counts unavailable, a RED stage).
@@ -120,14 +121,55 @@ class EventStreamCountTests(unittest.TestCase):
         self.assertIsNone(self.count(good + [event('testEnded', 'M.S/undeclared()')]))         # unknown id
         self.assertIsNone(self.count(None, raw=''))                      # empty / never written
 
-    def test_xctest_lines_count_anywhere_in_a_line_and_add_to_swift_testing(self):
-        console = ("Test Case '-[M.X testA]' started.\n"
+    # XCTest has no structured source under `swift test` (6.4 serial mode writes
+    # no XCTest xunit), so the runner's serial protocol is read instead
+    # (Runner.swift XCTestConsoleTally; Codex 2026-11-05 P1).
+    OPEN = "Test Suite 'All tests' started at 2026-11-05 14:00:00.000.\n"
+
+    def close(self, total, skipped=0, failures=0, word='passed'):
+        skip = f'{skipped} test{"s" if skipped != 1 else ""} skipped and ' if skipped else ''
+        return (f"Test Suite 'All tests' {word} at 2026-11-05 14:00:01.000.\n"
+                f"\t Executed {total} test{'s' if total != 1 else ''}, with {skip}{failures} failure"
+                f"{'s' if failures != 1 else ''} (0 unexpected) in 0.5 (0.5) seconds\n")
+
+    def test_xctest_counts_from_the_runners_bracketed_protocol_and_adds_to_swift_testing(self):
+        console = (self.OPEN +
+                   "Test Case '-[M.X testA]' started.\n"
                    "Test Case '-[M.X testA]' passed (0.001 seconds).\n"
+                   "Test Case '-[M.X testB]' started.\n"
+                   "/x/T.swift:6: error: -[M.X testB] : XCTAssertEqual failed\n"
                    "noise without newline Test Case '-[M.X testB]' failed (0.002 seconds).\n"
-                   "Test Case '-[M.X testC]' skipped (0.000 seconds).\n"
-                   "✔ Test ghost() passed after 0.001 seconds.\n")      # Swift Testing comes from the stream only
+                   "Test Case '-[M.X testC]' started.\n"
+                   "Test Case '-[M.X testC]' skipped (0.000 seconds).\n" +
+                   self.close(3, skipped=1, failures=1, word='failed') +
+                   "◇ Test run started.\n✔ Test ghost() passed after 0.001 seconds.\n")
         self.assertEqual(self.count(self.run_of(('a', None)), console),
                          dict(passed=2, failed=1, known_issues=0, skipped=1))
+
+    def test_xctest_lookalikes_never_count_wherever_a_body_prints_them(self):
+        ghost = "Test Case '-[M.X ghost]' passed (0.001 seconds).\n"
+        inside = (self.OPEN +
+                  "Test Case '-[M.X testA]' started.\n" +
+                  "Test Case '-[M.X ghost]' started.\n" + ghost +           # a ghost pair from inside A's body
+                  "Test Case '-[M.X testA]' failed (0.001 seconds).\n" +    # A forging its own result...
+                  "Test Case '-[M.X testA]' passed (0.001 seconds).\n" +    # ...the runner speaks last
+                  self.close(1) +
+                  "◇ Test run started.\n" + ghost)                          # and from a Swift Testing body
+        self.assertEqual(self.count(self.run_of(('a', None)), inside),
+                         dict(passed=2, failed=0, known_issues=0, skipped=0))
+        before = ghost + self.OPEN + self.close(0)                           # before the bracket opens
+        self.assertEqual(self.count(self.run_of(('a', None)), before)['passed'], 1)
+        self.assertEqual(self.count(self.run_of(('a', None)), ghost)['passed'], 1)   # no XCTest phase at all
+
+    def test_xctest_protocol_the_runner_contradicts_is_unavailable_never_a_count(self):
+        a = "Test Case '-[M.X testA]' started.\nTest Case '-[M.X testA]' passed (0.001 seconds).\n"
+        self.assertIsNone(self.count(self.run_of(('a', None)), self.OPEN + a + self.close(2)))   # summary says 2, saw 1
+        self.assertIsNone(self.count(self.run_of(('a', None)), self.OPEN + a))                   # bracket never closed
+        self.assertIsNone(self.count(self.run_of(('a', None)),                                   # closed, no summary
+                                     self.OPEN + a + "Test Suite 'All tests' passed at 2026-11-05 14:00:01.000.\n"))
+        torn = self.OPEN + "Test Case '-[M.X testA]' started.\nTest Case '-[M.X te\nstA]' passed (0.001 seconds).\n"
+        self.assertIsNone(self.count(self.run_of(('a', None)), torn + self.close(1)))            # a split result line
+        self.assertEqual(self.count(self.run_of(('a', None)), self.OPEN + a + self.close(1))['passed'], 2)
 
     def test_scale_20k_functions_counted_within_budget(self):
         records = self.run_of(*[(f't{n}', None) for n in range(20_000)])

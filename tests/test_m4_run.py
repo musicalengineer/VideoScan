@@ -9,9 +9,11 @@ runs ssh, git push, launchctl or xcodebuild.
 """
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -243,6 +245,105 @@ class HostLockTests(unittest.TestCase):
         log = (self.root / 'out/s3-ui/run.log').read_text()
         self.assertIn('reclaiming a stale lock', log)
         self.assertFalse(lock.exists())
+
+    def test_the_lock_protocol_text_is_the_same_in_both_scripts(self):
+        # One protocol (Codex 2026-11-05 P1): m4_run.sh and nightly_gauntlet.sh
+        # share the testbed lock, so they carry the same take_lock/drop_lock
+        # text. Drift here is a second protocol on one lock.
+        def shared(path):
+            text = path.read_text()
+            start = text.index('lock_rename() {')
+            end = text.index('# ── end of the shared lock text ──')
+            return text[start:end]
+        self.assertEqual(shared(SCRIPT), shared(REPO / 'scripts/nightly_gauntlet.sh'))
+
+
+FAKE_GAUNTLET_HOLD = r'''#!/bin/sh
+# A deep run that announces itself, then holds the testbed until released.
+echo "$$" >> "$(pwd)/fake/gauntlet_starts"
+while [ -e "$(pwd)/fake/hold" ]; do sleep 0.05; done
+printf 'GAUNTLET PASSED sha=%s total=9s unit=PASSED results=%s/fake/result.json publish=queued\n' \
+    "$(cat fake/sha)" "$(pwd)"
+exit 0
+'''
+
+
+class LockRaceTests(unittest.TestCase):
+    """Codex 2026-11-05 (P1): owner A paused after `mkdir lock`, before writing
+    its pid; contender B saw no pid, reclaimed the directory and took the lock;
+    A resumed and also claimed it — two live owners of one testbed. The pause
+    hook (VIDEOSCAN_TESTBED_LOCK_PAUSE) holds A at the race point; B's deep
+    run holds the testbed; A resumes. Exactly one START, one deep run."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.home.name, 'm4run')
+        self.work = self.root / 'work'
+        (self.work / 'scripts').mkdir(parents=True)
+        (self.work / 'fake').mkdir()
+        (self.root / 'bin').mkdir()
+        shutil.copy(SUMMARY, self.root / 'bin' / 'm4_run_summary.py')
+        gauntlet = self.work / 'scripts' / 'run_gauntlet.sh'
+        gauntlet.write_text(FAKE_GAUNTLET_HOLD)
+        gauntlet.chmod(0o755)
+        git = ['git', '-C', str(self.work)]
+        env = dict(os.environ, HOME=self.home.name, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        subprocess.run(git + ['init', '-q'], check=True, env=env)
+        subprocess.run(git + ['add', '-A'], check=True, env=env)
+        subprocess.run(git + ['commit', '-q', '-m', 'testbed'], check=True, env=env)
+        self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=env,
+                                  capture_output=True, text=True).stdout.strip()
+        (self.work / 'fake' / 'sha').write_text(self.sha[:8])
+        (self.work / 'fake' / 'result.json').write_text(
+            '{"status": "passed", "commit": "%s", "stages": [], "inventory_errors": []}' % self.sha)
+        self.env = dict(os.environ, HOME=self.home.name)
+
+    def tearDown(self):
+        self.home.cleanup()
+
+    def wait_for(self, predicate, what, timeout=20.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f'timed out waiting for {what}')
+
+    def host(self, stamp, **extra):
+        return subprocess.Popen(['/bin/bash', str(SCRIPT), '__host', 'deep', self.sha, stamp, '--host', 'm4'],
+                                env=dict(self.env, **extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_two_contenders_never_both_own_the_lock(self):
+        fake = self.work / 'fake'
+        pause, hold, starts = fake / 'pause', fake / 'hold', fake / 'gauntlet_starts'
+        pause.touch(); hold.touch()
+        a = self.host('ra', VIDEOSCAN_TESTBED_LOCK_PAUSE=str(pause))
+        b = None
+        try:
+            self.wait_for(lambda: (fake / 'pause.paused').exists(), 'A at the race point')
+            b = self.host('rb')
+            self.wait_for(lambda: starts.exists() and len(starts.read_text().split()) >= 1, "B's deep run")
+            pause.unlink()                                           # A resumes against a live owner
+            self.wait_for(lambda: a.poll() is not None or len(starts.read_text().split()) >= 2, 'A to decide')
+        finally:
+            hold.unlink(missing_ok=True)
+            for p in (a, b):
+                if p is not None:
+                    try:
+                        p.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        p.kill(); p.wait()
+        self.assertEqual(len(starts.read_text().split()), 1, 'two live owners started two deep runs')
+        log_a = (self.root / 'out/ra-deep/run.log').read_text()
+        log_b = (self.root / 'out/rb-deep/run.log').read_text()
+        self.assertIn('OUTCOME REFUSED busy: deep sha=', log_a)
+        self.assertNotIn('START', log_a)
+        self.assertIn('START', log_b)
+        self.assertIn('OUTCOME GREEN', log_b)
+        self.assertEqual((a.returncode, b.returncode), (3, 0))
+        self.assertFalse((self.root / 'lock').exists(), 'the lock must be released by its owner')
+        self.assertFalse(list(self.root.glob('lock.*')), 'no staging or stale directories left behind')
 
 
 if __name__ == '__main__':

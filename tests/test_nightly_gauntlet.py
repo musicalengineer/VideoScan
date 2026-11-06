@@ -11,8 +11,15 @@ results here ...'". These tests pin that contract:
 - RED is never hidden: a RED gauntlet or a red suite makes the exit non-zero;
 - the testbed lock is shared with scripts/m4_run.sh: a live on-demand run
   makes the gauntlet skip (said in the line), and the lock is released after;
+  two contenders can never both own it (Codex 2026-11-05 P1: an acquisition
+  race, reproduced with a deterministic pause between staging and publishing);
 - a failed notification never changes the outcome;
-- nightly_rota.py `gauntlet` says yes only for listed, on-rota Macs.
+- nightly_rota.py `gauntlet` says yes only for listed, on-rota Macs;
+- --gauntlet-only (the guard's same-day retry) runs the gauntlet without the
+  suite and still writes the done line;
+- the guard (nightly_guarded.sh): on a gauntlet Mac a green suite row alone is
+  NOT "done today" — a published passed/amber gauntlet row is needed too, else
+  the retry runs the gauntlet only (Codex 2026-11-05 P1).
 
 Everything runs for real in a fake HOME with a fake suite, a fake
 run_gauntlet.sh and a fake ssh on PATH; the real m4_run_summary.py and
@@ -25,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -52,6 +60,25 @@ FAKE_SSH = r'''#!/bin/sh
 printf '%s\n' "$@" > "$FAKE/ssh_args"
 exit "$(cat "$FAKE/ssh_rc" 2>/dev/null || echo 0)"
 '''
+
+# A gauntlet that announces itself and then holds the testbed until released:
+# the live owner in the lock-race test.
+FAKE_GAUNTLET_HOLD = r'''#!/bin/sh
+echo "$$" >> "$FAKE/gauntlet_starts"
+while [ -e "$FAKE/hold" ]; do sleep 0.05; done
+status=$(cat "$FAKE/g_status")
+printf 'GAUNTLET %s sha=abc12345 total=9s results=%s publish=published\n' "$status" "$FAKE/result.json"
+exit "$(cat "$FAKE/g_rc")"
+'''
+
+
+def wait_for(predicate, timeout=20.0, what='condition'):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    raise AssertionError(f'timed out waiting for {what}')
 
 
 def result_json(status, regression="passed", known=0):
@@ -107,12 +134,67 @@ class NightlyGauntletTests(unittest.TestCase):
         result = result or result_json("amber", known=7)
         (self.fake / "result.json").write_text(json.dumps(result))
 
-    def run_it(self):
-        r = subprocess.run(["bash", str(self.repo / "scripts/nightly_gauntlet.sh")], env=self.env,
+    def run_it(self, *args):
+        r = subprocess.run(["bash", str(self.repo / "scripts/nightly_gauntlet.sh"), *args], env=self.env,
                            capture_output=True, text=True, timeout=60)
         latest = self.home / "Library/Logs/VideoScan/testbed_latest.txt"
         line = latest.read_text().strip() if latest.exists() else ""
         return r.returncode, line
+
+    def test_gauntlet_only_mode_runs_no_suite_and_still_writes_the_done_line(self):
+        rc, line = self.run_it("--gauntlet-only")
+        self.assertEqual(rc, 0)
+        self.assertFalse(list((self.home / "Library/Logs/VideoScan").glob("nightly_test_*.log")),
+                         "the suite must not run in --gauntlet-only mode")
+        self.assertIn("nightly suite GREEN (earlier today, not re-run)", line)
+        self.assertIn("gauntlet AMBER", line)
+        self.assertIn("7 known issues", line)
+        self.assertIn("M4 full testbed done", (self.fake / "ssh_args").read_text())
+        self.assertFalse(self.lock.exists())
+        self.plant(g_status="FAILED", g_rc=1, result=result_json("failed", regression="failed"))
+        rc, line = self.run_it("--gauntlet-only")
+        self.assertEqual(rc, 1)
+        self.assertIn("gauntlet RED", line)
+
+    def test_two_contenders_never_both_own_the_testbed(self):
+        # Codex 2026-11-05 (P1): owner A pauses after creating the lock and
+        # before its pid is visible; contender B sees no pid, reclaims, and
+        # both own the testbed. The pause hook holds A at the one point where
+        # B can act between A's decision and A's claim; B becomes a live owner
+        # (its gauntlet holds); A then resumes. Exactly one gauntlet may start.
+        gauntlet = self.repo / "scripts/run_gauntlet.sh"
+        gauntlet.write_text(FAKE_GAUNTLET_HOLD)
+        gauntlet.chmod(0o755)
+        pause, hold, starts = self.fake / "pause", self.fake / "hold", self.fake / "gauntlet_starts"
+        pause.touch(); hold.touch()
+        a = subprocess.Popen(["bash", str(self.repo / "scripts/nightly_gauntlet.sh")],
+                             env=dict(self.env, VIDEOSCAN_TESTBED_LOCK_PAUSE=str(pause)),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        b = None
+        try:
+            wait_for(lambda: (self.fake / "pause.paused").exists(), what="A at the race point")
+            b = subprocess.Popen(["bash", str(self.repo / "scripts/nightly_gauntlet.sh")], env=self.env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wait_for(lambda: starts.exists() and len(starts.read_text().split()) >= 1, what="B's gauntlet to start")
+            pause.unlink()                                       # A resumes against a live owner
+            # A either leaves (refused) or, with the old protocol, starts a second gauntlet.
+            wait_for(lambda: a.poll() is not None or len(starts.read_text().split()) >= 2, what="A to decide")
+        finally:
+            hold.unlink(missing_ok=True)
+            for p in (a, b):
+                if p is not None:
+                    try:
+                        p.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        p.kill(); p.wait()
+        self.assertEqual(len(starts.read_text().split()), 1, "two live owners started two gauntlets")
+        history = (self.home / "Library/Logs/VideoScan/testbed_history.log").read_text().splitlines()
+        self.assertEqual(len(history), 2)
+        self.assertEqual(sum("gauntlet skipped (testbed busy: nightly testbed" in h for h in history), 1, history)
+        self.assertEqual(sum("gauntlet AMBER" in h for h in history), 1, history)
+        self.assertEqual((a.returncode, b.returncode), (0, 0))
+        self.assertFalse(self.lock.exists(), "the lock must be released by its owner")
+        self.assertFalse(list(self.lock.parent.glob("lock.*")), "no staging or stale directories left behind")
 
     def test_green_suite_amber_gauntlet_writes_the_done_line_and_notifies(self):
         rc, line = self.run_it()
@@ -193,6 +275,14 @@ class NightlyGauntletTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("gauntlet AMBER", line)
         self.assertFalse(self.lock.exists())
+        self.assertIn("reclaiming a stale lock (holder 999999 is gone)",
+                      (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text())
+        # A pid-less directory (the old mkdir-first protocol's half-made lock) is junk too.
+        self.lock.mkdir(parents=True)
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0)
+        self.assertIn("gauntlet AMBER", line)
+        self.assertFalse(self.lock.exists())
 
     def test_a_failed_notification_changes_nothing(self):
         self.plant(ssh_rc=255)
@@ -242,17 +332,129 @@ class RotaGauntletTests(unittest.TestCase):
                              capture_output=True, text=True, check=True).stdout.strip()
         self.assertEqual(out, "yes")
 
+    def test_machine_is_the_runners_label_and_empty_when_unknown(self):
+        self.assertEqual(nightly_rota.machine("RicksM4"), "m4")
+        self.assertEqual(nightly_rota.machine("RicksUltra"), "m5")
+        self.assertEqual(nightly_rota.machine("RicksM1"), "m1")
+        self.assertEqual(nightly_rota.machine("Elsewhere"), "")
+        out = subprocess.run([sys.executable, str(REPO / "scripts/nightly_rota.py"), "machine", "RicksM4"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(out, "m4")
 
-class GuardPicksTheTestbedTests(unittest.TestCase):
-    """nightly_guarded.sh execs the full testbed only for a Mac on the gauntlet list."""
 
-    def test_guard_branches_on_the_rota(self):
-        text = (REPO / "scripts/nightly_guarded.sh").read_text()
-        branch = text.index('nightly_rota.py" gauntlet "$HOST"')
-        testbed = text.index('exec caffeinate -i bash "$REPO_ROOT/scripts/nightly_gauntlet.sh"')
-        plain = text.index('exec caffeinate -i bash "$REPO_ROOT/scripts/nightly_local_tests.sh"')
-        self.assertLess(branch, testbed)
-        self.assertLess(testbed, plain)
+FAKE_GIT = r'''#!/bin/sh
+# Stand-in for git: `fetch` is a no-op, `show origin/metrics:…` prints the planted rows.
+case "$1" in
+    fetch) exit 0 ;;
+    show) cat "$FAKE/rows.jsonl"; exit 0 ;;
+esac
+exit 1
+'''
+FAKE_SCUTIL = r'''#!/bin/sh
+cat "$FAKE/host"
+'''
+FAKE_CAFFEINATE = r'''#!/bin/sh
+# Stand-in for caffeinate: records what the guard would have run, runs nothing.
+printf '%s\n' "$@" > "$FAKE/caffeinate_args"
+exit 0
+'''
+
+
+class GuardRetryTests(unittest.TestCase):
+    """scripts/nightly_guarded.sh, run for real with a fake git / scutil / caffeinate.
+
+    Codex 2026-11-05 (P1): on the M4 (a "gauntlet" Mac) the suite publishes GREEN,
+    then the gauntlet fails, is skipped (testbed busy) or never publishes; a
+    same-day retry saw the suite row and exited 0. "Done today" on a gauntlet Mac
+    needs BOTH rows; suite green without the gauntlet row → gauntlet only.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = pathlib.Path(self.tmp.name)
+        self.home, self.repo, self.fake, self.bin = t / "home", t / "repo", t / "fake", t / "bin"
+        for d in (self.home, self.repo / "scripts", self.fake, self.bin):
+            d.mkdir(parents=True)
+        for name in ("nightly_guarded.sh", "nightly_rota.py", "nightly_rota.json"):
+            shutil.copy(REPO / "scripts" / name, self.repo / "scripts" / name)
+        for name, body in (("git", FAKE_GIT), ("scutil", FAKE_SCUTIL), ("caffeinate", FAKE_CAFFEINATE)):
+            (self.bin / name).write_text(body)
+            (self.bin / name).chmod(0o755)
+        self.env = dict(os.environ, HOME=str(self.home), FAKE=str(self.fake),
+                        PATH=f"{self.bin}:{os.environ['PATH']}", TOOLCHAIN_UPDATE_LOCK=str(t / "no-lock"))
+        self.today = time.strftime("%Y-%m-%d", time.gmtime())
+        self.host("RicksM4")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def host(self, name):
+        (self.fake / "host").write_text(name)
+
+    def suite_row(self, host="RicksM4", status="ok", day=None, total=13000):
+        return {"ts": f"{day or self.today}T18:10:00Z", "source": "nightly-local", "host": host,
+                "status": status, "total": total, "passed": total, "failed": 0}
+
+    def gauntlet_row(self, status="passed", machine="m4", day=None, schema=1):
+        return {"ts": f"{day or self.today}T18:40:00Z", "source": "gauntlet", "schemaVersion": schema,
+                "machine": machine, "status": status, "run_id": "x"}
+
+    def run_guard(self, *rows):
+        (self.fake / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        r = subprocess.run(["bash", str(self.repo / "scripts/nightly_guarded.sh")], env=self.env,
+                           capture_output=True, text=True, timeout=60)
+        args = self.fake / "caffeinate_args"
+        ran = args.read_text().split("\n") if args.exists() else None
+        log = (self.home / "Library/Logs/VideoScan/nightly_guard.log").read_text()
+        return r.returncode, ran, log
+
+    def test_green_suite_and_red_gauntlet_retries_the_gauntlet_only(self):
+        rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row("failed"))
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(ran, log)
+        self.assertTrue(ran[2].endswith("scripts/nightly_gauntlet.sh"), ran)
+        self.assertEqual(ran[3], "--gauntlet-only", ran)
+        self.assertIn("running the gauntlet only", log)
+
+    def test_green_suite_and_no_gauntlet_row_retries_the_gauntlet_only(self):
+        lookalikes = [self.gauntlet_row("passed", machine="m5"),                 # the Ultra's
+                      self.gauntlet_row("passed", day="2026-01-01"),               # another day
+                      self.gauntlet_row("passed", schema=2),                        # not the schema the page reads
+                      self.gauntlet_row("incomplete")]                             # never finished
+        for rows in ([self.suite_row()], [self.suite_row()] + lookalikes):
+            with self.subTest(rows=len(rows)):
+                (self.fake / "caffeinate_args").unlink(missing_ok=True)
+                rc, ran, log = self.run_guard(*rows)
+                self.assertEqual(rc, 0)
+                self.assertIsNotNone(ran, log)
+                self.assertEqual(ran[2:4], [str(self.repo / "scripts/nightly_gauntlet.sh"), "--gauntlet-only"])
+
+    def test_green_suite_and_published_gauntlet_is_a_no_op(self):
+        for status in ("passed", "amber"):
+            with self.subTest(status=status):
+                rc, ran, log = self.run_guard(self.suite_row(), self.gauntlet_row(status))
+                self.assertEqual(rc, 0)
+                self.assertIsNone(ran, "nothing may run")
+                self.assertIn("skipping (no-op)", log)
+
+    def test_red_or_missing_suite_runs_the_full_testbed(self):
+        for rows in ([], [self.suite_row(status="failed"), self.gauntlet_row("passed")],
+                     [self.suite_row(host="RicksUltra")]):                        # another host's green
+            with self.subTest(rows=rows):
+                (self.fake / "caffeinate_args").unlink(missing_ok=True)
+                rc, ran, log = self.run_guard(*rows)
+                self.assertEqual(rc, 0)
+                self.assertEqual(ran[2:], [str(self.repo / "scripts/nightly_gauntlet.sh"), ""], ran)
+                self.assertIn("running the full testbed", log)
+
+    def test_a_plain_nightly_mac_needs_only_its_green_suite(self):
+        self.host("RicksUltra")
+        rc, ran, log = self.run_guard(self.suite_row(host="RicksUltra"))
+        self.assertEqual(rc, 0)
+        self.assertIsNone(ran, log)
+        (self.fake / "caffeinate_args").unlink(missing_ok=True)
+        rc, ran, log = self.run_guard(self.suite_row(host="RicksUltra", status="failed"))
+        self.assertEqual(ran[2:], [str(self.repo / "scripts/nightly_local_tests.sh"), ""], ran)
 
 
 if __name__ == "__main__":

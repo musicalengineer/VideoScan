@@ -81,6 +81,21 @@ public struct ProbeOutcome: Sendable {
     /// like `sniffRejected`, with no `VideoRecord` counterpart.
     public var stillBeingWritten: Bool = false
 
+    /// True only when the engine actually launched ffprobe for this file —
+    /// execution evidence, set at the one `runFFProbe` call site and nowhere
+    /// else (Codex 2026-11-05 P0: the "ffprobed" card derived it from
+    /// `!wasCacheHit`, so a file that vanished before the probe counted as
+    /// ffprobed and as an ffprobe failure, and a file found still being
+    /// written AFTER ffprobe ran counted as zero executions). Independent of
+    /// the classification in `probe.streamTypeRaw`. Transient, never cached.
+    public var ffprobeRan: Bool = false
+
+    /// True when the file discovered by the walk was gone by the time the
+    /// probe reached it (the "File not found" trail the unmount-abort
+    /// accounting reads). Not a probe failure: ffprobe never opened it.
+    /// Transient drain-point signal like `sniffRejected`.
+    public var fileNotFound: Bool = false
+
     public init() {}
 }
 

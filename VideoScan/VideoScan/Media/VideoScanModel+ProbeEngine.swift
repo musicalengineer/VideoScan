@@ -792,6 +792,7 @@ extension VideoScanModel {
             o.probe.isPlayable    = "File not found"
             o.notes               = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
             o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            o.fileNotFound        = true          // gone before the probe: never "ffprobed", never an ffprobe failure
             return o
         }
 
@@ -882,11 +883,15 @@ extension VideoScanModel {
             timeoutSeconds: Double(probeTimeoutSeconds)
         )
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The one place ffprobe runs in the scan path: the evidence the
+        // "ffprobed" card counts (ScanTileTally), whatever the verdict below.
+        outcome.ffprobeRan = true
 
         // The second stat: a row is built only from a file that did not
         // change under the probe (bug 3). Never cached — the next scan looks.
+        // ffprobe DID run on it, so it still counts as an execution.
         if skipIfStillBeingWritten, let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
-            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why)
+            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why, ffprobeRan: true)
         }
 
         ScanEngine.applyProbeOrFallback(outcome: &outcome, url: url, path: path,

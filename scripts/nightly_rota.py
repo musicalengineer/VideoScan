@@ -10,8 +10,9 @@ too). This is the shell scripts' way in:
   python3 scripts/nightly_rota.py label RicksM5  ->  "M5"
   python3 scripts/nightly_rota.py analysis RicksM4 ->  "on 4 30"       (the Swift 6 analysis lane's slot)
   python3 scripts/nightly_rota.py gauntlet RicksM4 ->  "yes"           (the full testbed: suite + gauntlet)
+  python3 scripts/nightly_rota.py machine RicksM4  ->  "m4"            (the gauntlet's machine label on the page)
 
-Exit 0 always for `slot` / `label` / `analysis` / `gauntlet` (the answer is in stdout); a
+Exit 0 always for `slot` / `label` / `analysis` / `gauntlet` / `machine` (the answer is in stdout); a
 broken rota file reads as "unknown" for every host, which makes the installer
 refuse and the guard run as before — never silently drop a Mac that should run.
 """
@@ -66,14 +67,28 @@ def gauntlet(host: str, rota_path: Path = ROTA) -> str:
     return "yes" if lab and isinstance(listed, list) and lab in listed and lab not in off else "no"
 
 
+# The gauntlet runner's machine labels (scripts/run_gauntlet.sh --machine
+# m4|m5|m1; the published row's "machine" field). One table for
+# nightly_gauntlet.sh (which label to run as) and nightly_guarded.sh (which
+# rows count as this Mac's gauntlet). "" = no label: the runner's default
+# (m4) applies and the guard can match no gauntlet row.
+MACHINES = {"M4": "m4", "Ultra": "m5", "M1": "m1"}
+
+
+def machine(host: str) -> str:
+    return MACHINES.get(label(host), "")
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] not in ("slot", "label", "analysis", "gauntlet"):
+    if len(argv) != 2 or argv[0] not in ("slot", "label", "analysis", "gauntlet", "machine"):
         print(__doc__, file=sys.stderr)
         return 2
     if argv[0] == "label":
         print(label(argv[1]))
     elif argv[0] == "gauntlet":
         print(gauntlet(argv[1]))
+    elif argv[0] == "machine":
+        print(machine(argv[1]))
     else:
         print(slot(argv[1], key="on" if argv[0] == "slot" else "analysis"))
     return 0

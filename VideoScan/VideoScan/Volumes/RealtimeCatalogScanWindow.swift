@@ -339,6 +339,10 @@ struct RealtimeCatalogScanContent: View {
              ? [.init(key: ScanTileTally.stillBeingWrittenKey, label: "Still writing", color: .gray,
                       icon: "pencil.circle")]
              : [])
+          + ((dashboard.liveStreamCounts[ScanTileTally.goneKey] ?? 0) > 0
+             ? [.init(key: ScanTileTally.goneKey, label: "Gone", color: .gray,
+                      icon: "folder.badge.questionmark")]
+             : [])
     }
 
     private func streamTile(label: String, count: Int, color: Color, icon: String) -> some View {

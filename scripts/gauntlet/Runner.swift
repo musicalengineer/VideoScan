@@ -129,21 +129,85 @@ func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
 // counted 774 of 775) or forge one. Swift Testing is counted from its event
 // stream (`swift test --event-stream-output-path`: one JSON record a line,
 // written by the testing library to its own file, so test stdout never
-// touches it); XCTest, which has no stream and runs serially, from its own
-// "Test Case '-[…]' passed/failed/skipped (" lines, matched anywhere in a line.
-// One count per test function (a parameterized test is one, its cases are
-// not), the same unit the floors are declared in. nil = counts unavailable
-// (a RED stage): no runEnded, a torn record, or an event for an undeclared id.
-// Memory: the stream is read whole; ~6 records per test, ~300 B each, so a
+// touches it); XCTest from the console, because `swift test` writes no XCTest
+// xunit in serial mode (6.4: --xunit-output yields only -swift-testing.xml) —
+// read as the runner's serial PROTOCOL, not as loose lines (Codex 11/05: a
+// Swift Testing function printing "Test Case '-[M.X ghost]' passed (…)" was
+// counted, so a floor of two passed with one function run). See
+// XCTestConsoleTally. One count per test function (a parameterized test is
+// one, its cases are not), the same unit the floors are declared in. nil =
+// counts unavailable (a RED stage): no runEnded, a torn record, an event for
+// an undeclared id, or an XCTest tally the runner's own summary contradicts.
+// Memory: both files are read whole; ~6 records per test, ~300 B each, so a
 // 1,000-test stage is ~2 MB and the 20k-test scale sensor ~40 MB.
 func countsFromPackageRun(eventStream: String, console: String) -> [String: Int]? {
-    guard var counts = SwiftTestingTally(eventStream: eventStream)?.counts else { return nil }
-    let xctest = try! NSRegularExpression(pattern: #"Test Case '-\[[^\]]+\]' (passed|failed|skipped) \("#)
-    for match in xctest.matches(in: console, range: NSRange(console.startIndex..., in: console)) {
-        let word = (console as NSString).substring(with: match.range(at: 1))
-        counts[word == "passed" ? "passed" : word == "failed" ? "failed" : "skipped", default: 0] += 1
-    }
+    guard var counts = SwiftTestingTally(eventStream: eventStream)?.counts,
+          let xctest = XCTestConsoleTally(console: console) else { return nil }
+    for (key, value) in xctest.counts { counts[key, default: 0] += value }
     return counts
+}
+
+/// XCTest outcomes from the serial protocol the XCTest runner prints, which
+/// a test body cannot imitate because the runner always speaks last:
+///   • only lines between the FIRST "Test Suite 'All tests' started" and its
+///     "Test Suite 'All tests' passed|failed" are read (Swift Testing runs
+///     after that bracket, so its prints land outside);
+///   • a result line counts only for the test the runner last "started" and
+///     the LAST result for that test wins (the real line follows the body);
+///   • a "started" for a test already judged, or while another is open, is
+///     a print, not the runner, and is ignored;
+///   • the runner's final "Executed N tests, with S skipped …" after the
+///     bracket closes must agree with the tally, else nil (counts
+///     unavailable: RED, never inflated). No bracket = no XCTest ran = zeros.
+/// Residual: a body that forges its own result AND the next test's "started"
+/// can mislabel itself (never add a test: the summary cross-check), and the
+/// stage still fails on `swift test`'s exit code, which XCTest sets itself.
+/// C++ analogy: a small state machine over lines; `nil` is the poisoned state.
+struct XCTestConsoleTally {
+    private(set) var outcomes: [String: String] = [:]                 // "M.X testA" -> passed/failed/skipped
+    private(set) var executed: (total: Int, skipped: Int)?            // the runner's own summary
+    private(set) var sawBracket = false, closed = false
+
+    private static let started = try! NSRegularExpression(pattern: #"Test Case '-\[([^\]]+)\]' started\."#)
+    private static let result = try! NSRegularExpression(pattern: #"Test Case '-\[([^\]]+)\]' (passed|failed|skipped) \("#)
+    private static let opens = try! NSRegularExpression(pattern: #"Test Suite 'All tests' started at "#)
+    private static let closes = try! NSRegularExpression(pattern: #"Test Suite 'All tests' (passed|failed) at "#)
+    private static let summary = try! NSRegularExpression(pattern: #"Executed (\d+) tests?, with (?:(\d+) tests? skipped and )?\d+ failures?"#)
+
+    init?(console: String) {
+        var open: String?
+        for raw in console.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = String(raw); let whole = NSRange(line.startIndex..., in: line)
+            func group(_ re: NSRegularExpression, _ n: Int) -> String? {
+                re.firstMatch(in: line, range: whole).map { (line as NSString).substring(with: $0.range(at: n)) }
+            }
+            if !sawBracket { if Self.opens.firstMatch(in: line, range: whole) != nil { sawBracket = true }; continue }
+            if closed {
+                guard let match = Self.summary.firstMatch(in: line, range: whole) else { continue }
+                let total = Int((line as NSString).substring(with: match.range(at: 1))) ?? -1
+                let skippedRange = match.range(at: 2)
+                let skipped = skippedRange.location == NSNotFound ? 0 : Int((line as NSString).substring(with: skippedRange)) ?? 0
+                executed = (total, skipped)
+                break                                                   // the runner is done; the rest is Swift Testing
+            }
+            if Self.closes.firstMatch(in: line, range: whole) != nil { closed = true; continue }
+            if let id = group(Self.started, 1) {
+                // The runner starts the next test only after judging the open one.
+                if outcomes[id] == nil, open.map({ outcomes[$0] != nil }) ?? true { open = id }
+            } else if let id = group(Self.result, 1), id == open, let word = group(Self.result, 2) {
+                outcomes[id] = word                                     // last wins: the runner prints after the body
+            }
+        }
+        guard sawBracket else { return }                                // no XCTest phase: zeros
+        guard closed, let executed, executed.total == outcomes.count,
+              executed.skipped == outcomes.values.filter({ $0 == "skipped" }).count else { return nil }
+    }
+
+    var counts: [String: Int] {
+        ["passed": outcomes.values.filter { $0 == "passed" }.count,
+         "failed": outcomes.values.filter { $0 == "failed" }.count,
+         "skipped": outcomes.values.filter { $0 == "skipped" }.count]
+    }
 }
 
 /// Swift Testing outcomes per function id, from one event stream. Sets, so a

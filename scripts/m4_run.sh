@@ -36,7 +36,8 @@
 #   6. bootstraps a one-shot LaunchAgent in gui/<uid> that runs
 #      `<root>/bin/m4_run.sh __host …`. A LaunchAgent, not plain ssh: an ssh
 #      job has no window server (XCUITest needs it) and a locked keychain.
-# The host side takes <root>/lock (mkdir is atomic; a dead holder's lock is
+# The host side takes <root>/lock (pid + info published atomically by
+# rename(2), shared with scripts/nightly_gauntlet.sh; a dead holder's lock is
 # reclaimed), writes <root>/out/<stamp>-<lane>/ {run.log, summary.txt,
 # <plan>.log, <plan>.xcresult, <plan>.tests.tsv}, points <root>/latest at it,
 # and prints START/OUTCOME lines into run.log. `status` reads them back.
@@ -90,6 +91,7 @@ host_config() {
         *) die "unknown host '$1' (m4|ultra)" 2 ;;
     esac
     H_REPO="$HOME/dev/VideoScan"
+    LOCK="$H_ROOT/lock"      # the testbed lock, shared with scripts/nightly_gauntlet.sh (take_lock below)
 }
 
 # ── Running a command on the host (or printing it under --dry-run) ────────
@@ -308,30 +310,47 @@ with open(log, "ab") as f:
 PY
 }
 
-take_lock() {   # mkdir is atomic: exactly one run gets it
-    local lock="$H_ROOT/lock" pid
-    if ! mkdir "$lock" 2>/dev/null; then
-        pid="$(cat "$lock/pid" 2>/dev/null)"
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            echo "OUTCOME REFUSED busy: $(cat "$lock/info" 2>/dev/null)"
-            return 3
-        fi
-        echo "reclaiming a stale lock (holder ${pid:-unknown} is gone)"
-        rm -f "$lock/pid" "$lock/info"
-        rmdir "$lock" 2>/dev/null
-        mkdir "$lock" 2>/dev/null || { echo "OUTCOME REFUSED lost the lock race"; return 3; }
+lock_note() { echo "$*"; }
+# ── The testbed lock: ONE protocol, the same text as scripts/nightly_gauntlet.sh (tests/test_m4_run.py pins them equal) ──
+# $LOCK is a directory holding pid + info. Codex 2026-11-05 (P1): mkdir-then-write-pid let a contender see a
+# pid-less directory, reclaim it and own the lock beside the first owner. Now:
+#   • pid and info are written to a private staging directory and PUBLISHED by rename(2) — atomic, and it
+#     fails (ENOTEMPTY) while another owner's files are there — so a visible lock always carries its pid;
+#   • a stale lock (dead pid, or no pid at all: nothing in this protocol creates one) is reclaimed by first
+#     renaming it aside — one contender wins that rename, the other retries and meets the winner's live pid;
+#   • the lock is dropped only when its pid is ours.
+# rename(2) is python's os.rename: the mv utility would nest the staging dir INSIDE an existing lock.
+# VIDEOSCAN_TESTBED_LOCK_PAUSE (tests): a path; while it exists, pause after staging and before publishing,
+# the only point where a contender can act between this run's decision and its claim.
+lock_rename() { python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null; }
+take_lock() {   # take_lock <info>: LOCK_HELD=1, or BUSY="…" and return 1
+    local stage="$LOCK.$$.staging" pid attempt
+    mkdir -p "$(dirname "$LOCK")"
+    rm -rf "$stage"; mkdir "$stage" || { BUSY="cannot stage the lock at $stage"; return 1; }
+    echo "$$" >"$stage/pid"; echo "$1" >"$stage/info"
+    if [ -n "${VIDEOSCAN_TESTBED_LOCK_PAUSE:-}" ]; then
+        : >"$VIDEOSCAN_TESTBED_LOCK_PAUSE.paused"
+        while [ -e "$VIDEOSCAN_TESTBED_LOCK_PAUSE" ]; do sleep 0.05; done
     fi
-    echo "$$" >"$lock/pid"
-    echo "$1" >"$lock/info"
-    LOCK_HELD=1
+    for attempt in 1 2 3; do
+        if lock_rename "$stage" "$LOCK"; then LOCK_HELD=1; return 0; fi
+        pid="$(cat "$LOCK/pid" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            BUSY="busy: $(cat "$LOCK/info" 2>/dev/null)"; rm -rf "$stage"; return 1
+        fi
+        if lock_rename "$LOCK" "$LOCK.stale.$$"; then
+            lock_note "reclaiming a stale lock (holder ${pid:-unknown} is gone)"
+            rm -rf "$LOCK.stale.$$"
+        fi
+    done
+    rm -rf "$stage"; BUSY="lost the lock race"; return 1
 }
-
 drop_lock() {
     [ "${LOCK_HELD:-0}" = 1 ] || return 0
-    rm -f "$H_ROOT/lock/pid" "$H_ROOT/lock/info"
-    rmdir "$H_ROOT/lock" 2>/dev/null
+    [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
     LOCK_HELD=0
 }
+# ── end of the shared lock text ──
 
 summarize_plan() {   # summarize_plan <plan> <log> <rc> <secs>
     local plan="$1" log="$2" rc="$3" secs="$4" flag=()
@@ -413,7 +432,8 @@ host_main() {   # __host <lane> <sha> <stamp>
     exec >"$OUT/run.log" 2>&1
     export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     # Lock first: a refused run must not repoint `latest` away from the live one.
-    take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || exit 3
+    BUSY=""
+    take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || { echo "OUTCOME REFUSED $BUSY"; exit 3; }
     trap drop_lock EXIT
     ln -sfn "$OUT" "$H_ROOT/latest"
     echo "START $(date '+%F %T') host=$H_NAME lane=$lane sha=$sha${ONLY:+ only=$ONLY}"

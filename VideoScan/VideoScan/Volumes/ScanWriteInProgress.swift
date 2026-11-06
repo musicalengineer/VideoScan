@@ -124,7 +124,9 @@ enum ScanWriteInProgress {
 
     /// The outcome for a skipped file: the file's identity, the reason, and
     /// `stillBeingWritten` so the drain gate keeps it out of the catalog.
-    static func skippedOutcome(url: URL, stat: ScanFileStat, why: String) -> ProbeOutcome {
+    /// `ffprobeRan` is true from the second-stat skip (ffprobe did run; the
+    /// file changed under it) and false from the pre-probe settle check.
+    static func skippedOutcome(url: URL, stat: ScanFileStat, why: String, ffprobeRan: Bool = false) -> ProbeOutcome {
         var o = ProbeOutcome()
         o.filename = url.lastPathComponent
         o.ext = url.pathExtension.uppercased()
@@ -136,6 +138,7 @@ enum ScanWriteInProgress {
         o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         o.notes = MachineNote.line(author: .scan, text: "\(skipWords) — \(why)")
         o.stillBeingWritten = true
+        o.ffprobeRan = ffprobeRan
         return o
     }
 

@@ -91,8 +91,9 @@ struct ScanCounterInvariantTests {
             ds.recordFileDiscovered(volumeRoot: "/Volumes/Fast", generation: gen)
             #expect(ds.scanCompletedInternal <= ds.scanDiscoveredInternal)
             ds.recordProbeCompletion(volumeRoot: "/Volumes/Fast", wasCacheHit: true,
-                                     isProbeError: false,
-                                     streamTypeRaw: StreamType.videoAndAudio.rawValue,
+                                     tally: ScanTileTally.tally(streamTypeRaw: StreamType.videoAndAudio.rawValue,
+                                                                ffprobeRan: false, sniffRejected: false,
+                                                                stillBeingWritten: false, fileNotFound: false),
                                      generation: gen)
             #expect(ds.scanCompletedInternal <= ds.scanDiscoveredInternal)
         }
@@ -148,12 +149,19 @@ struct ScanCounterInvariantTests {
                 "Trailing flush must publish the final completed count — got \(ds.scanCompleted)")
         #expect(ds.scanTotal == 100)
         #expect(ds.scanCompleted <= ds.scanTotal)
-        #expect(ds.scanErrors == 100, "Missing files are probe errors — got \(ds.scanErrors)")
-        #expect(ds.scanCacheMisses == 100)
+        // TRUTH (Codex 2026-11-05 P0): a file that vanished between discovery
+        // and probe was never opened by ffprobe. It is not "ffprobed", not an
+        // "ffprobe failed" error, and never skews the cache hit rate; it is
+        // "Gone" on its own tile. (Until this fix the test pinned 100 misses
+        // and 100 errors for 100 files ffprobe never saw.)
+        #expect(ds.scanErrors == 0, "A vanished file is not an ffprobe failure — got \(ds.scanErrors)")
+        #expect(ds.scanCacheMisses == 0, "ffprobed must count executions only — got \(ds.scanCacheMisses)")
+        #expect(ds.liveStreamCounts[ScanTileTally.goneKey] == 100, "tiles: \(ds.liveStreamCounts)")
+        #expect(ds.liveStreamCounts.values.reduce(0, +) == 100)
         // Per-volume row carried the batch too.
         let row = ds.volumeProgress.first { $0.rootPath == "/Volumes/BatchVol" }
         #expect(row?.completedFiles == 100)
-        #expect(row?.errors == 100)
+        #expect(row?.errors == 0)
     }
 
     // MARK: - 4. Percent is suppressed until the denominator is final (1b)
