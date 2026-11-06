@@ -3,8 +3,9 @@
 # as a launchd agent on a fleet Mac: com.videoscan.swift6-analysis.
 #
 # WHEN it fires is the rota's business: scripts/nightly_rota.json "analysis"
-# gives each on-rota Mac its slot (M4 04:30 — after the 02:00 test nightly has
-# published, ~03:30 ET; the lane also waits for any running xcodebuild). A Mac
+# gives each on-rota Mac its slot (M4 04:30, the away window; the M4's test
+# nightly moved to 14:00 on 2026-11-05, and the lane waits for any running
+# xcodebuild anyway). A Mac
 # that is OFF the nightly rotation gets the job REMOVED, like install_nightly.sh.
 # Which sanitizer runs on which weekday is the rota's "sanitizer" map, read by
 # the lane's `--sanitizer auto`.

@@ -2,7 +2,7 @@
 # nightly_analysis_lane.sh — the nightly Swift 6 static-analysis lane (the
 # "Coverity analogue"; docs/archive/design/swift6_migration_2026_10_25.md §7, GH #376).
 #
-# Runs on the fleet in the away window after the 02:00 test nightly, never on
+# Runs on the fleet in the away window (M4 04:30; its test nightly is at 14:00), never on
 # Rick's machine while he works. It VERIFIES and REPORTS; it never commits to
 # main and never writes scripts/warnings_baseline.tsv (decision 2026-10-25: the
 # merging session lowers the baseline from a slice's clean build logs with

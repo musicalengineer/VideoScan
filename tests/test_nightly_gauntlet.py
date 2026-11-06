@@ -381,6 +381,49 @@ class NightlyGauntletTests(unittest.TestCase):
         for ch in ("$", "`", "\\", "'"):
             self.assertNotIn(ch, message.strip()[1:-1])
 
+    # Regression 2026-11-06 ("the metrics page says stale"): the page's "Last night's tests"
+    # reads summary_latest.json, which tools/publish_metrics.py rebuilt only at 04:00 and
+    # 05:30 (the coverage and adversarial-confirm jobs) — right after the old 02:00 nightly.
+    # Since the M4 moved to 14:00 (11/05) its result sat on testdriver.jsonl for ~14 h while
+    # the page showed the night without it, and the done line pointed Rick at that page.
+    def plant_publisher(self, rc=0):
+        tools = self.repo / "tools"
+        tools.mkdir(exist_ok=True)
+        (tools / "publish_metrics.py").write_text(
+            "import os, pathlib, sys\n"
+            "fake = pathlib.Path(os.environ['FAKE'])\n"
+            "seen = [n for n in ('gauntlet_args',) if (fake / n).exists()]\n"
+            "logs = list((pathlib.Path(os.environ['HOME']) / 'Library/Logs/VideoScan').glob('testbed_latest.txt'))\n"
+            "(fake / 'publish_calls').open('a').write(' '.join(sys.argv[1:] + seen + (['done-line-already'] if logs else [])) + '\\n')\n"
+            f"print('OUTCOME ok: pushed metrics/summary_latest.json')\nraise SystemExit({rc})\n")
+
+    def test_the_page_summary_is_rebuilt_after_the_testbed_and_before_the_done_line(self):
+        self.plant_publisher()
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0)
+        calls = (self.fake / "publish_calls").read_text().splitlines()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("gauntlet_args", calls[0], "the publisher must run after the gauntlet published")
+        self.assertNotIn("done-line-already", calls[0], "the page is rebuilt before Rick is told to look")
+        self.assertIn("--no-events", calls[0])
+        log = (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text()
+        self.assertIn("publish: OUTCOME ok: pushed metrics/summary_latest.json", log)
+        self.plant_publisher()
+        self.run_it("--gauntlet-only")
+        self.assertEqual(len((self.fake / "publish_calls").read_text().splitlines()), 2)
+
+    def test_a_failed_or_missing_publisher_changes_nothing(self):
+        self.plant_publisher(rc=1)
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0)
+        self.assertIn("gauntlet AMBER", line)
+        log = (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text()
+        self.assertIn("publish: exit 1", log)
+        (self.repo / "tools" / "publish_metrics.py").unlink()
+        rc, line = self.run_it()
+        self.assertEqual(rc, 0)
+        self.assertIn("gauntlet AMBER", line)
+
 
 class WatchdogLockHandoffTests(unittest.TestCase):
     """Codex 2026-11-05 re-review 3 (P1): the nightly suite's real supervisor
