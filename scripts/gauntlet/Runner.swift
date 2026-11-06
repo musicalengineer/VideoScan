@@ -129,21 +129,111 @@ func countsFromSummary(_ object: [String: Any]) -> [String: Int]? {
 // counted 774 of 775) or forge one. Swift Testing is counted from its event
 // stream (`swift test --event-stream-output-path`: one JSON record a line,
 // written by the testing library to its own file, so test stdout never
-// touches it); XCTest, which has no stream and runs serially, from its own
-// "Test Case '-[…]' passed/failed/skipped (" lines, matched anywhere in a line.
-// One count per test function (a parameterized test is one, its cases are
-// not), the same unit the floors are declared in. nil = counts unavailable
-// (a RED stage): no runEnded, a torn record, or an event for an undeclared id.
-// Memory: the stream is read whole; ~6 records per test, ~300 B each, so a
+// touches it); XCTest from the console, because `swift test` writes no XCTest
+// xunit in serial mode (6.4: --xunit-output yields only -swift-testing.xml) —
+// read as the runner's serial PROTOCOL (XCTestConsoleTally) and cross-checked
+// against `swift test list` for the same filter (`xctestList`, its stdout;
+// nil = the list could not be produced). Codex 11/05: a body printing a
+// result line, then a whole forged bracket + summary, inflated the count; a
+// filtered run's bracket is "Selected tests". Counts that disagree are nil =
+// unavailable (a RED stage), never inflated, never silently zero. One count
+// per test function (a parameterized test is one, its cases are not), the
+// same unit the floors are declared in. nil also for: no runEnded, a torn
+// record, an event for an undeclared id.
+// Memory: the files are read whole; ~6 records per test, ~300 B each, so a
 // 1,000-test stage is ~2 MB and the 20k-test scale sensor ~40 MB.
-func countsFromPackageRun(eventStream: String, console: String) -> [String: Int]? {
-    guard var counts = SwiftTestingTally(eventStream: eventStream)?.counts else { return nil }
-    let xctest = try! NSRegularExpression(pattern: #"Test Case '-\[[^\]]+\]' (passed|failed|skipped) \("#)
-    for match in xctest.matches(in: console, range: NSRange(console.startIndex..., in: console)) {
-        let word = (console as NSString).substring(with: match.range(at: 1))
-        counts[word == "passed" ? "passed" : word == "failed" ? "failed" : "skipped", default: 0] += 1
-    }
+func countsFromPackageRun(eventStream: String, console: String, xctestList: String?) -> [String: Int]? {
+    guard var counts = SwiftTestingTally(eventStream: eventStream)?.counts,
+          let xctest = XCTestConsoleTally(console: console, selected: xctestList.map(selectedXCTests)) else { return nil }
+    for (key, value) in xctest.counts { counts[key, default: 0] += value }
     return counts
+}
+
+/// The XCTest methods in `swift test list` output, as the console names them
+/// ("Module.Class method"). XCTest lists as `Module.Class/method`; Swift
+/// Testing as `Module.Suite/name()` (parentheses) — not XCTest, not counted here.
+func selectedXCTests(_ list: String) -> Set<String> {
+    let xctest = try! NSRegularExpression(pattern: #"^([^\s/()]+)/([^\s/()]+)$"#)
+    var out = Set<String>()
+    for raw in list.split(separator: "\n", omittingEmptySubsequences: true) {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard let m = xctest.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) else { continue }
+        out.insert((line as NSString).substring(with: m.range(at: 1)) + " " + (line as NSString).substring(with: m.range(at: 2)))
+    }
+    return out
+}
+
+/// XCTest outcomes from the serial protocol the XCTest runner prints, held to
+/// an independent list of what was selected (`swift test list`):
+///   • the bracket is the FIRST "Test Suite 'All|Selected tests' started" to
+///     the LAST "… passed|failed at" (a body can print a close; the runner's
+///     comes after it), and the runner's summary is the first "Executed N
+///     tests, with S skipped" after that last close;
+///   • inside it, a result line counts only for the test the runner last
+///     "started"; the LAST result for that test wins (the real line follows
+///     the body); a "started" for a test already judged, or while another is
+///     open, is a print, not the runner;
+///   • the tally must name exactly the selected XCTest methods, and the
+///     runner's summary must agree with it (total and skipped), else nil:
+///     counts unavailable, RED — never inflated;
+///   • no bracket at all is zeros only when nothing XCTest was selected;
+///     selected tests with no XCTest phase are unavailable, never silently 0.
+/// Residual: a body that forges its own result AND the next test's "started"
+/// can mislabel itself (never add a test), and the stage still fails on
+/// `swift test`'s exit code, which XCTest sets itself.
+/// C++ analogy: a small state machine over lines; `nil` is the poisoned state.
+struct XCTestConsoleTally {
+    private(set) var outcomes: [String: String] = [:]                 // "M.X testA" -> passed/failed/skipped
+    private(set) var executed: (total: Int, skipped: Int)?            // the runner's own summary
+    private(set) var sawBracket = false
+
+    private static let started = try! NSRegularExpression(pattern: #"Test Case '-\[([^\]]+)\]' started\."#)
+    private static let result = try! NSRegularExpression(pattern: #"Test Case '-\[([^\]]+)\]' (passed|failed|skipped) \("#)
+    private static let opens = try! NSRegularExpression(pattern: #"Test Suite '(All|Selected) tests' started at "#)
+    private static let closes = try! NSRegularExpression(pattern: #"Test Suite '(All|Selected) tests' (passed|failed) at "#)
+    private static let summary = try! NSRegularExpression(pattern: #"Executed (\d+) tests?, with (?:(\d+) tests? skipped and )?\d+ failures?"#)
+
+    private static func match(_ re: NSRegularExpression, _ line: String) -> NSTextCheckingResult? {
+        re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line))
+    }
+
+    /// `selected`: the XCTest methods listed for this run's filter, or nil when
+    /// the list could not be produced (no cross-check → no count).
+    init?(console: String, selected: Set<String>?) {
+        guard let selected else { return nil }
+        let lines = console.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        guard let openAt = lines.firstIndex(where: { Self.match(Self.opens, $0) != nil }) else {
+            guard selected.isEmpty else { return nil }                  // selected, but no XCTest phase ran
+            return                                                      // nothing XCTest selected: zeros
+        }
+        sawBracket = true
+        guard let closeAt = lines.lastIndex(where: { Self.match(Self.closes, $0) != nil }), closeAt > openAt else { return nil }
+        var open: String?
+        for line in lines[(openAt + 1)..<closeAt] {
+            if let m = Self.match(Self.started, line) {
+                let id = (line as NSString).substring(with: m.range(at: 1))
+                // The runner starts the next test only after judging the open one.
+                if outcomes[id] == nil, open.map({ outcomes[$0] != nil }) ?? true { open = id }
+            } else if let m = Self.match(Self.result, line) {
+                let id = (line as NSString).substring(with: m.range(at: 1))
+                if id == open { outcomes[id] = (line as NSString).substring(with: m.range(at: 2)) }   // last wins
+            }
+        }
+        guard let summaryLine = lines[(closeAt + 1)...].first(where: { Self.match(Self.summary, $0) != nil }),
+              let m = Self.match(Self.summary, summaryLine) else { return nil }
+        let total = Int((summaryLine as NSString).substring(with: m.range(at: 1))) ?? -1
+        let skippedRange = m.range(at: 2)
+        let skipped = skippedRange.location == NSNotFound ? 0 : Int((summaryLine as NSString).substring(with: skippedRange)) ?? -1
+        executed = (total, skipped)
+        guard Set(outcomes.keys) == selected, total == outcomes.count,
+              skipped == outcomes.values.filter({ $0 == "skipped" }).count else { return nil }
+    }
+
+    var counts: [String: Int] {
+        ["passed": outcomes.values.filter { $0 == "passed" }.count,
+         "failed": outcomes.values.filter { $0 == "failed" }.count,
+         "skipped": outcomes.values.filter { $0 == "skipped" }.count]
+    }
 }
 
 /// Swift Testing outcomes per function id, from one event stream. Sets, so a
@@ -426,13 +516,25 @@ struct GauntletRunner {
         let events = run.appendingPathComponent("\(name)-package-events.jsonl")
         let cmd = ["swift", "test", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch,
                    "--event-stream-output-path", events.path] + filters
+        // The independent XCTest count: the same filter, listed, not run (XCTestConsoleTally).
+        let listLog = run.appendingPathComponent("\(name)-package-list.log")
+        let listCmd = ["swift", "test", "list", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch] + filters
         do {
+            let listing = try command(listCmd, log: listLog, timeout: 600, environment: environment)
+            if listing.contaminated {
+                // Isolation already failed: launch nothing more (Codex 2026-11-05 re-review 2, P2).
+                contaminated = true
+                output["status"] = "failed"; output["reason"] = "unreaped process contamination (swift test list)"
+                return output
+            }
+            let listed: String? = listing.code == 0 ? (try? String(contentsOf: listLog, encoding: .utf8)) : nil
             let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
             if execution.contaminated { contaminated = true }
             output["exit_code"] = execution.code
             output["elapsed_s"] = execution.elapsed
             let counts = countsFromPackageRun(eventStream: (try? String(contentsOf: events, encoding: .utf8)) ?? "",
-                                              console: (try? String(contentsOf: log, encoding: .utf8)) ?? "")
+                                              console: (try? String(contentsOf: log, encoding: .utf8)) ?? "",
+                                              xctestList: listed)
             let verdict = classify(exitCode: execution.code, counts: counts, floor: floor)
             output["status"] = verdict.0
             output["reason"] = verdict.1 as Any? ?? NSNull()
@@ -630,9 +732,9 @@ struct GauntletRunner {
 func main() throws -> Int32 {
     // Test seam: count one package run's outputs, print the counts (or null).
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments.first == "--count-package-output", arguments.count == 3 {
+    if arguments.first == "--count-package-output", arguments.count == 4 {
         let read = { (path: String) in (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
-        let counts = countsFromPackageRun(eventStream: read(arguments[1]), console: read(arguments[2]))
+        let counts = countsFromPackageRun(eventStream: read(arguments[1]), console: read(arguments[2]), xctestList: read(arguments[3]))
         print(counts.map { String(data: try! json($0), encoding: .utf8)! } ?? "null")
         return counts == nil ? 1 : 0
     }

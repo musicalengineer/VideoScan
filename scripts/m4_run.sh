@@ -29,15 +29,22 @@
 #      it is the nightly window (01:30–06:00 host time; --force overrides);
 #   3. M4 only: `git push ricksm4.local:dev/VideoScan <sha>:refs/m4run/<sha>`
 #      (a new ref per commit — never a forced update, never a branch);
-#   4. checks the host's testbed worktree out at <sha> (detached; refuses a
-#      dirty one): M4 ~/m4run/work, Ultra ~/dev/VideoScan-wt/ultra-testbed;
-#   5. installs this script + m4_run_summary.py under <root>/bin on the host
-#      (so the runner does not depend on the commit under test having it);
-#   6. bootstraps a one-shot LaunchAgent in gui/<uid> that runs
-#      `<root>/bin/m4_run.sh __host …`. A LaunchAgent, not plain ssh: an ssh
-#      job has no window server (XCUITest needs it) and a locked keychain.
-# The host side takes <root>/lock (mkdir is atomic; a dead holder's lock is
-# reclaimed), writes <root>/out/<stamp>-<lane>/ {run.log, summary.txt,
+#   4. installs this script + m4_run_summary.py + testbed_lock.py under
+#      <root>/bin/<stamp>/ on the host (per run, so a live run's runner is
+#      never overwritten, and the runner does not depend on the commit under
+#      test having it);
+#   5. bootstraps a one-shot LaunchAgent (label <label>.<stamp>, per run: a
+#      live run's agent is never booted out; finished ones are) in gui/<uid>
+#      that runs `<root>/bin/<stamp>/m4_run.sh __host …`. A LaunchAgent, not
+#      plain ssh: an ssh job has no window server (XCUITest needs it) and a
+#      locked keychain.
+# The host side takes <root>/lock (a kernel flock on fd 9, scripts/testbed_lock.py,
+# shared with scripts/nightly_gauntlet.sh; held for as long as any process of the
+# run lives), THEN checks the testbed worktree out at <sha> (detached; refuses a
+# dirty one: M4 ~/m4run/work, Ultra ~/dev/VideoScan-wt/ultra-testbed) — every
+# mutation of the shared testbed happens under the lock, so a second caller is
+# refused before it can touch a live run's tree (Codex 2026-11-05) — writes
+# <root>/out/<stamp>-<lane>/ {run.log, summary.txt,
 # <plan>.log, <plan>.xcresult, <plan>.tests.tsv}, points <root>/latest at it,
 # and prints START/OUTCOME lines into run.log. `status` reads them back.
 #
@@ -90,6 +97,10 @@ host_config() {
         *) die "unknown host '$1' (m4|ultra)" 2 ;;
     esac
     H_REPO="$HOME/dev/VideoScan"
+    LOCK="$H_ROOT/lock"      # the testbed lock, shared with scripts/nightly_gauntlet.sh (take_lock below)
+    # The lock helper beside this script: scripts/ in the repo for the caller,
+    # <root>/bin on the host (installed by start_run beside m4_run.sh).
+    LOCK_HELPER="$SCRIPT_DIR/testbed_lock.py"
 }
 
 # ── Running a command on the host (or printing it under --dry-run) ────────
@@ -119,27 +130,27 @@ copy_to_host() {   # copy_to_host <local file> <host path>
     fi
 }
 
-# Lock state as one line: "FREE" or "BUSY <info>". `kill -0` only asks
-# whether the holder still exists; it sends nothing.
-lock_probe_snippet() {
-    cat <<SH
-if [ -d '$H_ROOT/lock' ]; then
-  pid=\$(cat '$H_ROOT/lock/pid' 2>/dev/null)
-  if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then echo "BUSY \$(cat '$H_ROOT/lock/info' 2>/dev/null)"; exit 0; fi
-fi
-echo FREE
-SH
+# Lock state as one line: "FREE" or "BUSY <info>" — the same kernel truth
+# take_lock uses (scripts/testbed_lock.py probe), the helper's own source
+# shipped inline so the probe never depends on what is installed on the host.
+lock_probe_snippet() {   # lock_probe_snippet [redirect, e.g. " >file"]
+    # printf + cat, not an unquoted heredoc: the helper's text must reach the
+    # host verbatim (an unquoted heredoc would expand any $word inside it).
+    printf "python3 - probe '%s' <<'PY'%s\n" "$H_ROOT/lock" "${1:-}"
+    cat "$LOCK_HELPER"
+    printf 'PY\n'
 }
 
 status_snippet() {
+    # The probe runs into a file, not inside \$( ): /bin/bash 3.2 misparses a
+    # heredoc (the helper's source) inside a command substitution.
     cat <<SH
-lock='$H_ROOT/lock'
-pid=\$(cat "\$lock/pid" 2>/dev/null)
-if [ -d "\$lock" ] && [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then
-  echo "$H_NAME: RUNNING \$(cat "\$lock/info" 2>/dev/null)"
-else
-  echo "$H_NAME: idle"
-fi
+$(lock_probe_snippet " >'$H_ROOT/.probe'")
+probe="\$(cat '$H_ROOT/.probe' 2>/dev/null)"
+case "\$probe" in
+  BUSY*) echo "$H_NAME: RUNNING \${probe#BUSY }" ;;
+  *) echo "$H_NAME: idle" ;;
+esac
 last='$H_ROOT/latest'
 if [ -e "\$last/run.log" ]; then
   echo "last run: \$(readlink "\$last")"
@@ -152,12 +163,13 @@ fi
 SH
 }
 
-plist_xml() {   # plist_xml <args…>  (ProgramArguments after /bin/bash)
+plist_xml() {   # plist_xml <label> <args…>  (ProgramArguments after /bin/bash)
+    local label="$1"; shift
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
     echo '<plist version="1.0">'
     echo '<dict>'
-    echo "  <key>Label</key><string>$H_LABEL</string>"
+    echo "  <key>Label</key><string>$label</string>"
     echo '  <key>ProgramArguments</key>'
     echo '  <array>'
     echo '    <string>/bin/bash</string>'
@@ -179,7 +191,7 @@ start_run() {
     sha="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "$REF^{commit}")" \
         || die "cannot resolve --ref '$REF' to a commit" 2
     short="${sha:0:9}"
-    stamp="$(date +%Y%m%d_%H%M%S)"
+    stamp="$(date +%Y%m%d_%H%M%S)_$$"     # unique per caller: two callers in one second never share a run
     local out="$H_ROOT/out/$stamp-$LANE"
 
     echo "m4_run: $LANE on $H_NAME at $short ($REF)${ONLY:+, only $ONLY}"
@@ -194,11 +206,23 @@ start_run() {
             die "it is ${hhmm} on $H_NAME — the nightly runs 02:00; pass --force to run anyway" 5
         fi
     else
-        echo "+ (probe $H_ROOT/lock: refuse with exit 3 if a live run holds it)"
+        echo "+ (probe $H_ROOT/lock: refuse early with exit 3 if a live run holds it; the host takes it for real)"
         echo "+ (refuse with exit 5 between 01:30 and 06:00 host time unless --force)"
         on_host "$(lock_probe_snippet)"
     fi
+    # Test hook: hold here, after the advisory probe and before anything is
+    # shipped (tests/test_m4_run.py pins that a second caller in this window
+    # can never touch a live run's tree, runner or agent).
+    if [ -n "${VIDEOSCAN_M4RUN_PAUSE_AFTER_PROBE:-}" ]; then
+        : >"$VIDEOSCAN_M4RUN_PAUSE_AFTER_PROBE.paused"
+        while [ -e "$VIDEOSCAN_M4RUN_PAUSE_AFTER_PROBE" ]; do sleep 0.05; done
+    fi
 
+    # Everything from here is ADDITIVE on the host — a new ref, a new per-run
+    # bin directory, a new per-run LaunchAgent label. Nothing a live run uses
+    # is touched: the testbed worktree is checked out by the host side under
+    # the lock (host_main), where a second caller is refused before any
+    # mutation (Codex 2026-11-05 re-review 3: the probe is advisory only).
     if [ -n "$H_SSH" ]; then
         if [ "$DRY" = 1 ]; then
             echo "+ git -C $REPO_ROOT push -q $H_SSH:dev/VideoScan $sha:refs/m4run/$sha"
@@ -208,40 +232,34 @@ start_run() {
         fi
     fi
 
-    on_host "$(cat <<SH
-set -e
-if [ -d '$H_WT' ]; then
-  if [ -n "\$(git -C '$H_WT' status --porcelain --untracked-files=no)" ]; then
-    echo "testbed worktree $H_WT has local changes:"; git -C '$H_WT' status --short --untracked-files=no; exit 4
-  fi
-  git -C '$H_WT' checkout -q --detach '$sha'
-else
-  git -C '$H_REPO' worktree add -q --detach '$H_WT' '$sha'
-fi
-mkdir -p '$H_ROOT/bin' '$H_ROOT/out'
-echo "testbed $H_WT at \$(git -C '$H_WT' rev-parse --short=9 HEAD)"
-SH
-)"
-    local rc=$?
-    [ "$rc" = 0 ] || die "could not prepare the testbed worktree on $H_NAME" 4
+    local bin="$H_ROOT/bin/$stamp" label="$H_LABEL.$stamp"
+    on_host "mkdir -p '$bin' '$H_ROOT/out'" || die "could not prepare $bin on $H_NAME" 4
+    [ "$DRY" = 1 ] && echo "+ (the host checks out $sha into $H_WT under the testbed lock, refusing a dirty tree)"
 
-    copy_to_host "$SELF" "$H_ROOT/bin/m4_run.sh" || die "could not install the runner on $H_NAME"
-    copy_to_host "$SCRIPT_DIR/m4_run_summary.py" "$H_ROOT/bin/m4_run_summary.py" \
+    copy_to_host "$SELF" "$bin/m4_run.sh" || die "could not install the runner on $H_NAME"
+    copy_to_host "$SCRIPT_DIR/m4_run_summary.py" "$bin/m4_run_summary.py" \
         || die "could not install the summarizer on $H_NAME"
+    copy_to_host "$SCRIPT_DIR/testbed_lock.py" "$bin/testbed_lock.py" \
+        || die "could not install the lock helper on $H_NAME"
 
-    local args=("$H_ROOT/bin/m4_run.sh" __host "$LANE" "$sha" "$stamp" --host "$HOST")
+    local args=("$bin/m4_run.sh" __host "$LANE" "$sha" "$stamp" --host "$HOST")
     [ -n "$ONLY" ] && args+=(--only "$ONLY")
     [ -n "$PLAN_TIMEOUT" ] && args+=(--plan-timeout "$PLAN_TIMEOUT")
     local plist
-    plist="$(plist_xml "${args[@]}")"
+    plist="$(plist_xml "$label" "${args[@]}")"
+    # A per-run label: bootstrapping never boots out a live run's agent. Agents
+    # of FINISHED runs (launchctl list shows no pid) are booted out here so
+    # they do not accumulate; a running one is never touched.
     on_host "$(cat <<SH
-cat > '$H_ROOT/$H_LABEL.plist' <<'PLIST'
+cat > '$H_ROOT/$label.plist' <<'PLIST'
 $plist
 PLIST
 uid=\$(id -u)
-launchctl bootout gui/\$uid/$H_LABEL 2>/dev/null || true
-launchctl bootstrap gui/\$uid '$H_ROOT/$H_LABEL.plist'
-echo "LaunchAgent $H_LABEL bootstrapped in gui/\$uid"
+launchctl list 2>/dev/null | awk -v p='$H_LABEL.' 'index(\$3, p) == 1 && \$1 == "-" { print \$3 }' | while read -r done_label; do
+  [ "\$done_label" = '$label' ] || launchctl bootout "gui/\$uid/\$done_label" 2>/dev/null || true
+done
+launchctl bootstrap gui/\$uid '$H_ROOT/$label.plist'
+echo "LaunchAgent $label bootstrapped in gui/\$uid"
 SH
 )" || die "could not bootstrap the LaunchAgent on $H_NAME"
 
@@ -278,9 +296,15 @@ run_bounded() {
 import os, signal, subprocess, sys
 secs, log, cwd, cmd = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
 reap = os.environ.get("M4RUN_REAP", "")
+# fd 9 is the testbed lock (take_lock): Python closes inherited fds by default,
+# so pass it on — the work must hold the lock for as long as it runs.
+try:
+    os.fstat(9); pass_fds = (9,)
+except OSError:
+    pass_fds = ()
 with open(log, "ab") as f:
     p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=f,
-                         stderr=subprocess.STDOUT, start_new_session=True)
+                         stderr=subprocess.STDOUT, start_new_session=True, pass_fds=pass_fds)
     try:
         sys.exit(p.wait(timeout=secs))
     except subprocess.TimeoutExpired:
@@ -308,36 +332,39 @@ with open(log, "ab") as f:
 PY
 }
 
-take_lock() {   # mkdir is atomic: exactly one run gets it
-    local lock="$H_ROOT/lock" pid
-    if ! mkdir "$lock" 2>/dev/null; then
-        pid="$(cat "$lock/pid" 2>/dev/null)"
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            echo "OUTCOME REFUSED busy: $(cat "$lock/info" 2>/dev/null)"
-            return 3
-        fi
-        echo "reclaiming a stale lock (holder ${pid:-unknown} is gone)"
-        rm -f "$lock/pid" "$lock/info"
-        rmdir "$lock" 2>/dev/null
-        mkdir "$lock" 2>/dev/null || { echo "OUTCOME REFUSED lost the lock race"; return 3; }
-    fi
-    echo "$$" >"$lock/pid"
-    echo "$1" >"$lock/info"
-    LOCK_HELD=1
+# ── The testbed lock: ONE protocol, the same text in scripts/m4_run.sh and scripts/nightly_gauntlet.sh (tests/test_m4_run.py pins them equal) ──
+# A kernel advisory lock on an open file description the WORK inherits: this shell opens fd 9 on $LOCK/flock,
+# scripts/testbed_lock.py flocks that fd (LOCK_EX|LOCK_NB) and exits. flock belongs to the open file description,
+# so the kernel holds it until the LAST process holding fd 9 closes it — the suite, the gauntlet in its own
+# session, any child — and releases it by itself when they are all gone (Codex 2026-11-05 re-reviews: a lease
+# tied to the shell ended before surviving work did; every mkdir/rename protocol had a check-then-act window).
+# $LOCK/info carries "pid info" for the busy message only; the probe (`testbed_lock.py probe`) reads the same
+# kernel truth from a fresh open. $LOCK_HELPER names the helper (per script: repo checkout or <root>/bin).
+take_lock() {   # take_lock <info>: LOCK_HELD=1 (fd 9 is the lock), or BUSY="…" and return 1
+    local answer
+    mkdir -p "$LOCK" || { BUSY="cannot prepare the lock at $LOCK"; return 1; }
+    exec 9>>"$LOCK/flock" || { BUSY="cannot open $LOCK/flock"; return 1; }
+    answer="$(python3 "$LOCK_HELPER" hold 9 "$LOCK" "$1" 2>/dev/null)"
+    case "$answer" in
+        HELD)  LOCK_HELD=1; return 0 ;;
+        BUSY*) BUSY="busy: ${answer#BUSY }" ;;
+        *)     BUSY="lock helper failed (${answer:-no answer})" ;;
+    esac
+    exec 9>&-
+    return 1
 }
-
-drop_lock() {
+drop_lock() {   # closes this shell's fd 9; work still holding its copy keeps the lock until it exits
     [ "${LOCK_HELD:-0}" = 1 ] || return 0
-    rm -f "$H_ROOT/lock/pid" "$H_ROOT/lock/info"
-    rmdir "$H_ROOT/lock" 2>/dev/null
+    exec 9>&-
     LOCK_HELD=0
 }
+# ── end of the shared lock text ──
 
 summarize_plan() {   # summarize_plan <plan> <log> <rc> <secs>
     local plan="$1" log="$2" rc="$3" secs="$4" flag=()
     [ "$rc" = 124 ] && flag=(--timeout)
     # `${a[@]+"${a[@]}"}`: an empty array under `set -u` on /bin/bash 3.2.
-    python3 "$H_ROOT/bin/m4_run_summary.py" "$plan" "$log" "$rc" "$secs" ${flag[@]+"${flag[@]}"} \
+    python3 "$SCRIPT_DIR/m4_run_summary.py" "$plan" "$log" "$rc" "$secs" ${flag[@]+"${flag[@]}"} \
         --tsv "$OUT/$plan.tests.tsv" >>"$OUT/summary.txt"
 }
 
@@ -392,7 +419,7 @@ host_deep() {
     local result="${line##* results=}" flag=() vrc
     result="${result%% *}"
     [ "$rc" = 124 ] && flag=(--timeout)
-    verdict_line="$(python3 "$H_ROOT/bin/m4_run_summary.py" --gauntlet "${result:-/nonexistent}" "$rc" "$secs" \
+    verdict_line="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --gauntlet "${result:-/nonexistent}" "$rc" "$secs" \
         ${flag[@]+"${flag[@]}"})"
     vrc=$?
     echo "$verdict_line" >>"$OUT/summary.txt"
@@ -413,9 +440,23 @@ host_main() {   # __host <lane> <sha> <stamp>
     exec >"$OUT/run.log" 2>&1
     export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     # Lock first: a refused run must not repoint `latest` away from the live one.
-    take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || exit 3
+    BUSY=""
+    take_lock "$lane sha=${sha:0:9} since $(date '+%F %T') out=$OUT" || { echo "OUTCOME REFUSED $BUSY"; exit 3; }
     trap drop_lock EXIT
     ln -sfn "$OUT" "$H_ROOT/latest"
+    # The testbed worktree is mutated HERE, under the lock, never by the
+    # caller: a second caller's agent is refused above before it can touch
+    # the tree a live run is testing (Codex 2026-11-05 re-review 3).
+    if [ -d "$H_WT" ]; then
+        if [ -n "$(git -C "$H_WT" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+            echo "OUTCOME REFUSED testbed worktree $H_WT has local changes:"
+            git -C "$H_WT" status --short --untracked-files=no
+            exit 4
+        fi
+        git -C "$H_WT" checkout -q --detach "$sha" || { echo "OUTCOME REFUSED cannot check out $sha in $H_WT"; exit 4; }
+    else
+        git -C "$H_REPO" worktree add -q --detach "$H_WT" "$sha" || { echo "OUTCOME REFUSED cannot add worktree $H_WT at $sha (from $H_REPO)"; exit 4; }
+    fi
     echo "START $(date '+%F %T') host=$H_NAME lane=$lane sha=$sha${ONLY:+ only=$ONLY}"
     if [ "$(git -C "$H_WT" rev-parse HEAD 2>/dev/null)" != "$sha" ]; then
         echo "OUTCOME RED testbed $H_WT is not at $sha"

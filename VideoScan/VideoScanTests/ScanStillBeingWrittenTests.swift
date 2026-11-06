@@ -233,7 +233,7 @@ struct ScanStillBeingWrittenTests {
         let path = try Self.movie(in: sb, named: "settled.mov")
         try Self.settle(path)
         let url = URL(fileURLWithPath: path)
-        sb.model.scanSecondStatForTesting = { _ in ScanFileStat(sizeBytes: 999_999_999, modifiedAt: .distantPast) }
+        sb.model.scanSecondStatForTesting = { _ in .present(ScanFileStat(sizeBytes: 999_999_999, modifiedAt: .distantPast)) }
         let scanned = await sb.model.probeFileOutcome(url: url)
         #expect(scanned.stillBeingWritten, "fixture sanity: the seam makes the scan skip")
         let rec = await sb.model.probeFile(url: url)
@@ -302,7 +302,7 @@ struct ScanStillBeingWrittenTests {
                 h.write(Data(repeating: 0x5A, count: 1_000_000))
                 h.closeFile()
             }
-            return ScanFileStat.of(path: p)
+            return ScanFileStat.read(path: p)
         }
         let outcome = await sb.model.probeFileOutcome(url: url)
         #expect(outcome.stillBeingWritten)
@@ -318,15 +318,125 @@ struct ScanStillBeingWrittenTests {
         #expect(!again.stillBeingWritten)
     }
 
+    // MARK: Truth — "ffprobed" is the process runner's execution evidence (Codex 2026-11-05 P0)
+
+    @Test("an ffprobe that cannot launch is not an execution: ffprobeRan false through probeAndRecord, zero cache misses, one error")
+    func ffprobeThatCannotLaunchIsNotAnExecution() async throws {
+        let sb = try Self.sandbox("nolaunch"); defer { sb.cleanup() }
+        let path = try Self.movie(in: sb, named: "settled.mov")
+        try Self.settle(path)
+        sb.model.ffprobePath = sb.root.appendingPathComponent("no-such-ffprobe").path
+        let ds = sb.model.dashboard
+        ds.resetForScan()
+        let gen = ds.scanGeneration
+        ds.beginVolumeWalk(volumeRoot: sb.files.path, volumeName: "files", generation: gen)
+        ds.recordFileDiscovered(volumeRoot: sb.files.path, generation: gen)
+        let outcome = await sb.model.probeAndRecord(
+            url: URL(fileURLWithPath: path), volName: "files", root: sb.files.path, rootIsNetwork: false,
+            ramMountPoint: nil, skipHashing: true, useTimeout: false, echoFilename: false, scanGeneration: gen)
+        #expect(!outcome.wasCacheHit, "fixture sanity: nothing cached for a fresh file")
+        #expect(outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue)
+        #expect(!outcome.ffprobeRan, "no subprocess started: the engine must not claim an execution")
+        ds.flushScanProgress()
+        #expect(ds.scanCacheMisses == 0, "ffprobed counts executions only — got \(ds.scanCacheMisses)")
+        #expect(ds.scanErrors == 1, "the probe did fail; the Errors card says so")
+        #expect(ds.liveStreamCounts[StreamType.ffprobeFailed.rawValue] == 1)
+    }
+
+    @Test("a settled file whose parent lost search permission is an error with its reason — never Gone, never ffprobed")
+    func inaccessibleParentIsAnErrorNeverGone() async throws {
+        // Codex 2026-11-05 re-review 2 (P0): fileExists is false for an EXISTING
+        // file under a directory without search permission; the engine said
+        // "Gone, zero errors". stat(2) says EACCES, and that is an error.
+        let sb = try Self.sandbox("eacces"); defer { sb.cleanup() }
+        let fm = FileManager.default
+        let parent = sb.files.appendingPathComponent("locked", isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let path = parent.appendingPathComponent("settled.mov").path
+        try fm.moveItem(atPath: TestMediaGenerator.generate(container: "mov", streams: .videoOnly, duration: 1.0, prefix: "test_eacces"), toPath: path)
+        try Self.settle(path)
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: parent.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path) }
+        let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
+        #expect(!outcome.fileNotFound, "present but unreadable is not Gone")
+        #expect(outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue)
+        #expect(outcome.probe.isPlayable == VideoScanModel.notAccessibleVerdict)
+        #expect(outcome.notes.contains("Permission denied"), Comment(rawValue: outcome.notes))
+        #expect(!outcome.ffprobeRan)
+        let tally = ScanTileTally.tally(streamTypeRaw: outcome.probe.streamTypeRaw, ffprobeRan: outcome.ffprobeRan,
+                                        sniffRejected: outcome.sniffRejected, stillBeingWritten: outcome.stillBeingWritten,
+                                        fileNotFound: outcome.fileNotFound)
+        #expect(tally == .init(tileKey: StreamType.ffprobeFailed.rawValue, ranFFprobe: false, isProbeError: true))
+        // And true absence is still Gone.
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+        let gone = await sb.model.probeFileOutcome(url: parent.appendingPathComponent("vanished.mov"))
+        #expect(gone.fileNotFound && gone.probe.isPlayable == "File not found")
+    }
+
+    @Test("a file that changes under a REAL ffprobe run is skipped and carries ffprobeRan true (the engine sets it, not the test)")
+    func fileChangedUnderTheProbeCarriesTheExecution() async throws {
+        let sb = try Self.sandbox("ranunder"); defer { sb.cleanup() }
+        let path = try Self.movie(in: sb, named: "growing.mov")
+        try Self.settle(path)
+        sb.model.scanSecondStatForTesting = { p in
+            if let h = FileHandle(forWritingAtPath: p) { h.seekToEndOfFile(); h.write(Data(repeating: 0x5A, count: 4096)); h.closeFile() }
+            return ScanFileStat.read(path: p)
+        }
+        let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
+        #expect(outcome.stillBeingWritten)
+        #expect(outcome.ffprobeRan, "ffprobe really ran before the second stat caught the change")
+        // And the pre-probe settle skip never ran it.
+        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
+        sb.model.scanSecondStatForTesting = nil
+        let skipped = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
+        #expect(skipped.stillBeingWritten && !skipped.ffprobeRan)
+    }
+
     @Test("a file gone after the probe is skipped, not catalogued from the stale first stat")
     func fileGoneAfterTheProbeIsSkipped() async throws {
         let sb = try Self.sandbox("gone"); defer { sb.cleanup() }
         let path = try Self.movie(in: sb, named: "gone.mov")
         try Self.settle(path)
-        sb.model.scanSecondStatForTesting = { _ in nil }
+        sb.model.scanSecondStatForTesting = { _ in .gone }
         let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
         #expect(outcome.stillBeingWritten)
         #expect(outcome.notes.contains("gone after the probe"), Comment(rawValue: outcome.notes))
+    }
+
+    @Test("a file whose parent loses search permission AFTER ffprobe ran is an error with its reason and keeps the execution — never Still writing, never Gone")
+    func inaccessibleAfterTheProbeIsAnErrorNotASkip() async throws {
+        // Codex 2026-11-05 re-review 3 (P0): the second stat turned every
+        // attributes error into nil → "gone after the probe" → Still writing,
+        // zero errors. The errno rule of the first stat applies here too.
+        let sb = try Self.sandbox("eacces2"); defer { sb.cleanup() }
+        let fm = FileManager.default
+        let parent = sb.files.appendingPathComponent("locked", isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let path = parent.appendingPathComponent("settled.mov").path
+        try fm.moveItem(atPath: TestMediaGenerator.generate(container: "mov", streams: .videoOnly, duration: 1.0, prefix: "test_eacces2"), toPath: path)
+        try Self.settle(path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path) }
+        let parentPath = parent.path
+        sb.model.scanSecondStatForTesting = { p in
+            // The writer's parent locks up between the two stats.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: parentPath)
+            return ScanFileStat.read(path: p)
+        }
+        let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
+        #expect(!outcome.stillBeingWritten, "unreadable is not a skip")
+        #expect(!outcome.fileNotFound, "unreadable is not Gone")
+        #expect(outcome.probe.isPlayable == VideoScanModel.notAccessibleVerdict, Comment(rawValue: outcome.probe.isPlayable))
+        #expect(outcome.notes.contains("Permission denied") && outcome.notes.contains("after ffprobe ran"), Comment(rawValue: outcome.notes))
+        #expect(outcome.ffprobeRan, "ffprobe did run: the execution is kept")
+        let tally = ScanTileTally.tally(streamTypeRaw: outcome.probe.streamTypeRaw, ffprobeRan: outcome.ffprobeRan,
+                                        sniffRejected: outcome.sniffRejected, stillBeingWritten: outcome.stillBeingWritten,
+                                        fileNotFound: outcome.fileNotFound)
+        #expect(tally == .init(tileKey: StreamType.ffprobeFailed.rawValue, ranFFprobe: true, isProbeError: true))
+        // The reading itself tells absence from error.
+        #expect(ScanFileStat.read(path: path) == .inaccessible(errno: EACCES))
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+        #expect(ScanFileStat.read(path: parent.appendingPathComponent("nope.mov").path) == .gone)
+        #expect(ScanFileStat.of(path: path) != nil)
     }
 
     // MARK: Sensor — the defaults

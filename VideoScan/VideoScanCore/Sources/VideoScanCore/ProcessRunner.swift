@@ -129,6 +129,12 @@ public enum ProcessRunner {
         /// nonzero exit FIRST and only then consult `timedOut`;
         /// `succeeded` already answers correctly for that race.
         public var timedOut: Bool = false
+        /// True only when `Process.run()` succeeded — the child really
+        /// started (Codex 2026-11-05 P0: a tool path that cannot launch
+        /// returns normally with exitCode -1, and the scan counted it as an
+        /// ffprobe execution). The one source of execution evidence; the
+        /// never-launched paths (cancelled first, launch threw) leave false.
+        public var launched: Bool = false
 
         public var succeeded: Bool { exitCode == 0 && stdout != nil }
     }
@@ -397,7 +403,8 @@ public enum ProcessRunner {
                     stdout: stdoutCollector.string,
                     stderr: stderrCollector.string ?? "",
                     exitCode: process.terminationStatus,
-                    timedOut: deadlineFlag.didFire
+                    timedOut: deadlineFlag.didFire,
+                    launched: true
                 )
             )
         }
@@ -582,7 +589,8 @@ public enum ProcessRunner {
                     completion.resume(Result(stdout: nil,
                                              stderr: "timed out (\(reason)); process unkillable, abandoned",
                                              exitCode: -1,
-                                             timedOut: deadlineFlag.didFire))
+                                             timedOut: deadlineFlag.didFire,
+                                             launched: true))
                 }
             }
         }

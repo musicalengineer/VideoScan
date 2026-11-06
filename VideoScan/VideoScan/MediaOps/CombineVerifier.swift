@@ -251,21 +251,23 @@ enum CombineVerifier {
     }
 
     /// `runFFProbe` plus whether THIS run was killed at its own deadline
-    /// (gated on a nonzero exit first — ProcessRunner.Result's race note).
-    /// Combine's verify uses it to say "timed out"; the scan path keeps
-    /// `runFFProbe`, whose stderr becomes catalog notes unchanged.
+    /// (gated on a nonzero exit first — ProcessRunner.Result's race note)
+    /// and whether the subprocess started at all (`launched`, the process
+    /// runner's own evidence — the scan's "ffprobed" count reads it).
+    /// Combine's verify uses it to say "timed out"; stderr becomes catalog
+    /// notes unchanged.
     static func runFFProbeDetailed(url: URL, ffprobePath: String, timeoutSeconds: Double?) async
-        -> (output: FFProbeOutput?, stderr: String, timedOut: Bool) {
+        -> (output: FFProbeOutput?, stderr: String, timedOut: Bool, launched: Bool) {
         let args = ["-v", "warning", "-probesize", "50M", "-analyzeduration", "10M",
                     "-print_format", "json", "-show_format", "-show_streams", url.path]
         let result = await ProcessRunner.runProcess(executable: ffprobePath, arguments: args,
                                                     deadlineSeconds: timeoutSeconds)
         let timedOut = result.exitCode != 0 && result.timedOut
         guard let json = result.stdout, let data = json.data(using: .utf8) else {
-            return (nil, result.stderr, timedOut)
+            return (nil, result.stderr, timedOut, result.launched)
         }
         let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
-        return (output, result.stderr, timedOut)
+        return (output, result.stderr, timedOut, result.launched)
     }
 
     // MARK: - Network Detection

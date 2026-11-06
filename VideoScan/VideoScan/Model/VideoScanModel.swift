@@ -772,7 +772,7 @@ final class VideoScanModel: ObservableObject {
 
     /// Test seam: the stat taken AFTER ffprobe (nil = `ScanFileStat.of`).
     /// A test grows the file inside this closure to prove the skip.
-    nonisolated(unsafe) var scanSecondStatForTesting: (@Sendable (String) -> ScanFileStat?)?
+    nonisolated(unsafe) var scanSecondStatForTesting: (@Sendable (String) -> ScanFileReading)?
 
     /// Test seam: the clock the settle window is measured against.
     nonisolated(unsafe) var scanClockForTesting: (@Sendable () -> Date)?

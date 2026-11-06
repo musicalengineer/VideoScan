@@ -178,7 +178,7 @@ struct RealtimeCatalogScanContent: View {
                 color: dashboard.scanErrors > 0 ? .red : .secondary,
                 value: "\(dashboard.scanErrors)",
                 label: "errors",
-                sub: dashboard.scanErrors > 0 ? "ffprobe failed" : "clean"
+                sub: dashboard.scanErrors > 0 ? "could not probe" : "clean"
             )
         }
     }
@@ -338,6 +338,10 @@ struct RealtimeCatalogScanContent: View {
         ] + ((dashboard.liveStreamCounts[ScanTileTally.stillBeingWrittenKey] ?? 0) > 0
              ? [.init(key: ScanTileTally.stillBeingWrittenKey, label: "Still writing", color: .gray,
                       icon: "pencil.circle")]
+             : [])
+          + ((dashboard.liveStreamCounts[ScanTileTally.goneKey] ?? 0) > 0
+             ? [.init(key: ScanTileTally.goneKey, label: "Gone", color: .gray,
+                      icon: "folder.badge.questionmark")]
              : [])
     }
 

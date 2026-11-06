@@ -89,6 +89,36 @@ struct ProbeTimeoutRegressionTests {
                 "stuck probe must surface as a failed/timed-out record")
         #expect(rec.fullPath == media.path)
     }
+
+    /// Codex 2026-11-05 re-review 2 (P1): the outer timeout built a fresh
+    /// outcome with ffprobeRan false, so a launched-then-killed ffprobe was
+    /// zero executions on the dashboard. Through probeAndRecord(useTimeout:
+    /// true): one execution, one error, no cache miss lost.
+    @Test func timedOutProbeStillCountsItsExecution() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fakeFFProbe = try makeStuckTool(sleepSeconds: 30, in: dir)
+        let media = dir.appendingPathComponent("stuck.mov")
+        try Data(repeating: 0x42, count: 4096).write(to: media)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-600)], ofItemAtPath: media.path)
+
+        let model = VideoScanModel()
+        model.ffprobePath = fakeFFProbe.path
+        model.probeTimeoutSeconds = 2
+        let ds = model.dashboard
+        ds.resetForScan()
+        let gen = ds.scanGeneration
+        ds.beginVolumeWalk(volumeRoot: dir.path, volumeName: "stuck", generation: gen)
+        ds.recordFileDiscovered(volumeRoot: dir.path, generation: gen)
+        let outcome = await model.probeAndRecord(
+            url: media, volName: "stuck", root: dir.path, rootIsNetwork: false, ramMountPoint: nil,
+            skipHashing: true, useTimeout: true, echoFilename: false, scanGeneration: gen)
+        #expect(outcome.probe.isPlayable == "Timed out", Comment(rawValue: outcome.probe.isPlayable))
+        #expect(outcome.ffprobeRan, "ffprobe was launched (and killed at the deadline): that is an execution")
+        ds.flushScanProgress()
+        #expect(ds.scanCacheMisses == 1, "got \(ds.scanCacheMisses)")
+        #expect(ds.scanErrors == 1)
+    }
 }
 
 /// Direct unit tests of ProcessRunner's subprocess deadline (the mechanism

@@ -38,6 +38,19 @@ if tool == 'swift':
     filters = [args[i + 1] for i, a in enumerate(args) if a == '--filter']
     stage = re.match(r'VideoScanCoreTests\\\.(\w+?)PkgTests/', filters[0]).group(1).lower()
     s = config.get('package', {}).get(stage, {})
+    if args[1] == 'list':
+        # `swift test list --filter`: XCTest as Module.Class/method, Swift Testing with "()".
+        if s.get('list_exit'):
+            sys.exit(s['list_exit'])
+        if s.get('list_orphan'):
+            import subprocess
+            subprocess.Popen(['/bin/sleep', '20'], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for n in range(s.get('listed_xctest', s.get('xctest', 1))):
+            print(f'VideoScanCoreTests.X/test{n}')
+        for n in range(s.get('passed', 2)):
+            print(f'VideoScanCoreTests.{stage}/ok{n}()')
+        sys.exit(0)
     # Swift Testing's event stream (what the runner counts), written beside
     # the console the way the real library writes it: one JSON record a line.
     events = []
@@ -60,12 +73,27 @@ if tool == 'swift':
     if '--event-stream-output-path' in args:
         with open(args[args.index('--event-stream-output-path') + 1], 'w') as f:
             f.writelines(json.dumps(e) + '\n' for e in events)
-    for line in s.get('console', []):
-        print(line)
     if not s.get('no_summary'):
-        for n in range(s.get('xctest', 1)):
+        # XCTest first, the way `swift test --filter` runs it: the runner's
+        # "Selected tests" bracket (a filtered run never says "All tests"), one
+        # started/passed pair per test (anything the test body prints lands
+        # between them), then the runner's own summary.
+        n_x = s.get('xctest', 1)
+        print("Test Suite 'Selected tests' started at 2026-11-05 14:00:00.000.")
+        print("Test Suite 'VideoScanCoreTests.xctest' started at 2026-11-05 14:00:00.001.")
+        if not n_x:
+            for line in s.get('xctest_console', []): print(line)
+        for n in range(n_x):
+            print(f"Test Case '-[VideoScanCoreTests.X test{n}]' started.")
+            if n == 0:
+                for line in s.get('xctest_console', []): print(line)
             print(f"Test Case '-[VideoScanCoreTests.X test{n}]' passed (0.001 seconds).")
-        print('\t Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.001) seconds')
+        print("Test Suite 'Selected tests' passed at 2026-11-05 14:00:00.100.")
+        print(f"\t Executed {n_x} test{'' if n_x == 1 else 's'}, with 0 failures (0 unexpected) in 0.001 (0.001) seconds")
+        print('◇ Test run started.')
+    for line in s.get('console', []):
+        print(line)                       # what a Swift Testing test body printed
+    if not s.get('no_summary'):
         zw = '​'
         for n in range(s.get('passed', 2)):
             print(f'{zw}✔ Test ok{n}() passed after 0.001 seconds.')
@@ -154,10 +182,13 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         env = os.environ.copy()
         env.update(PATH=str(self.bin_dir) + ':/usr/bin:/bin', FAKE_CONFIG=str(config),
                    FAKE_CALLS=str(self.root / 'calls.jsonl'), HOME='/private/tmp/poison-home')
+        # A fresh results root per run: a test may run the runner more than once.
+        self.runs = getattr(self, 'runs', 0) + 1
+        results = self.root / f'results{self.runs}'
         self.completed = subprocess.run([str(self.binary), '--away', '--queue-only', '--manifest', str(manifest),
-                                         '--results-root', str(self.root / 'results'), *args],
+                                         '--results-root', str(results), *args],
                                         text=True, capture_output=True, env=env, timeout=90)
-        found = list((self.root / 'results').glob('*/result.json'))
+        found = list(results.glob('*/result.json'))
         self.result = json.loads(found[0].read_text()) if found else None
         calls = self.root / 'calls.jsonl.swift'
         self.swift_calls = [json.loads(l) for l in calls.read_text().splitlines()] if calls.exists() else []
@@ -170,8 +201,14 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.run_runner()
         self.assertEqual(self.result['inventory_errors'], [], self.completed.stderr)
         builds = [c for c in self.swift_calls if c['args'][0] == 'build']
-        runs = [c for c in self.swift_calls if c['args'][0] == 'test']
+        runs = [c for c in self.swift_calls if c['args'][0] == 'test' and c['args'][1] != 'list']
+        lists = [c for c in self.swift_calls if c['args'][:2] == ['test', 'list']]
         self.assertEqual(len(builds), 1)
+        # One `swift test list --skip-build --filter …` per stage: the independent
+        # XCTest count the console tally must agree with (Codex 2026-11-05 re-review).
+        self.assertEqual(len(lists), 2)
+        self.assertIn('--skip-build', lists[0]['args'])
+        self.assertIn(r'VideoScanCoreTests\.UnitPkgTests/', lists[0]['args'])
         self.assertIn('--build-tests', builds[0]['args'])
         self.assertEqual(builds[0]['args'][builds[0]['args'].index('-c') + 1], 'release')
         # swift test enables testable imports itself; swift build -c release does not.
@@ -236,19 +273,96 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         unit = self.stage('unit')
         self.assertEqual(unit['package']['passed'], 2, unit)
         self.assertEqual(unit['package']['status'], 'passed', unit)
-        runs = [c for c in self.swift_calls if c['args'][0] == 'test']
+        runs = [c for c in self.swift_calls if c['args'][0] == 'test' and c['args'][1] != 'list']
         self.assertIn('--event-stream-output-path', runs[0]['args'])
 
     def test_a_printed_lookalike_result_line_is_never_counted(self):
         # The other direction: a test that prints a result-shaped line must not
         # stand in for a declared test that never ran (floor 2, one ran).
-        self.config['package'] = {'unit': {'xctest': 0, 'passed': 1,
-                                           'console': ['✔ Test ghost() passed after 0.001 seconds.']}}
+        # Codex 2026-11-05 (P1): the Swift Testing-shaped line was already
+        # harmless (counts come from the stream); the XCTest-shaped one was
+        # counted by the console regex, so one real function read as two.
+        self.assert_ghost_is_not_counted("Test Case '-[VideoScanCoreTests.X ghost]' passed (0.001 seconds).")
+
+    def test_a_printed_swift_testing_lookalike_is_never_counted(self):
+        self.assert_ghost_is_not_counted('✔ Test ghost() passed after 0.001 seconds.')
+
+    def assert_ghost_is_not_counted(self, ghost):
+        self.config['package'] = {'unit': {'xctest': 0, 'passed': 1, 'console': [ghost]}}
         self.run_runner()
         unit = self.stage('unit')
         self.assertEqual(unit['package']['passed'], 1, unit)
         self.assertEqual(unit['status'], 'failed')
         self.assertIn('below expected floor 2', unit['reason'])
+
+    def test_an_xctest_body_cannot_forge_a_ghost_or_its_own_result(self):
+        # Printed from INSIDE test0's body: a started/passed pair for a ghost
+        # and a "failed" for itself. The runner's real "passed" comes last and
+        # wins; the ghost never started, so it never counts. 1 XCTest + 1 Swift
+        # Testing = floor 2, GREEN — and no third test.
+        self.config['package'] = {'unit': {'xctest': 1, 'passed': 1, 'xctest_console': [
+            "Test Case '-[VideoScanCoreTests.X ghost]' started.",
+            "Test Case '-[VideoScanCoreTests.X ghost]' passed (0.001 seconds).",
+            "Test Case '-[VideoScanCoreTests.X test0]' failed (0.001 seconds)."]}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['package']['passed'], 2, unit)
+        self.assertEqual(unit['package']['failed'], 0, unit)
+        self.assertEqual(unit['status'], 'passed', unit)
+
+    def test_a_forged_closing_bracket_and_summary_never_inflate(self):
+        # Codex 2026-11-05 re-review (P1): inside the real test0, print its own
+        # pass, a ghost start/pass pair, a closing bracket and "Executed 2
+        # tests". The runner's real close and one-test summary follow; the
+        # selected XCTest list says one. Two stories → counts unavailable, RED
+        # — never "2 passed", never a floor met by a print.
+        self.config['package'] = {'unit': {'xctest': 1, 'passed': 1, 'xctest_console': [
+            "Test Case '-[VideoScanCoreTests.X test0]' passed (0.001 seconds).",
+            "Test Case '-[VideoScanCoreTests.X ghost]' started.",
+            "Test Case '-[VideoScanCoreTests.X ghost]' passed (0.001 seconds).",
+            "Test Suite 'Selected tests' passed at 2026-11-05 14:00:00.050.",
+            "\t Executed 2 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds"]}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('counts unavailable', unit['reason'])
+        self.assertNotIn('passed', unit['package'])
+
+    def test_a_contaminated_listing_launches_no_package_tests(self):
+        # Codex 2026-11-05 re-review 2 (P2): `swift test list` left a child in
+        # its process group; the runner recorded contamination and still ran
+        # `swift test` in the same environment. Isolation failed: launch nothing.
+        self.config['package'] = {'unit': {'list_orphan': True}}
+        self.run_runner()
+        calls = [c['args'][:2] for c in self.swift_calls]
+        self.assertIn(['test', 'list'], calls)
+        unit_runs = [c for c in self.swift_calls if c['args'][:2] != ['test', 'list'] and c['args'][0] == 'test'
+                     and r'VideoScanCoreTests\.UnitPkgTests/' in c['args']]
+        self.assertEqual(unit_runs, [], 'a package test ran after a contaminated listing')
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('contamination', unit['reason'])
+        self.assertEqual(self.result['status'], 'failed')
+
+    def test_a_filtered_runs_selected_tests_bracket_counts_and_a_missing_list_is_red(self):
+        # The fake always prints the filtered runner's "Selected tests" bracket
+        # (Codex 2026-11-05 re-review P1: "All tests" only read 0 XCTest).
+        self.config['package'] = {'unit': {'xctest': 2, 'passed': 1}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['package']['passed'], 3, unit)
+        self.assertEqual(unit['status'], 'passed', unit)
+        # Without the independent list there is no cross-check: unavailable, RED.
+        self.config['package'] = {'unit': {'xctest': 2, 'passed': 1, 'list_exit': 1}}
+        self.run_runner()
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('counts unavailable', unit['reason'])
+        # A list that disagrees with what ran (a selected XCTest never reported) is RED too.
+        self.config['package'] = {'unit': {'xctest': 2, 'listed_xctest': 3, 'passed': 1}}
+        self.run_runner()
+        self.assertEqual(self.stage('unit')['status'], 'failed')
+        self.assertIn('counts unavailable', self.stage('unit')['reason'])
 
     def test_package_build_failure_never_passes_and_skips_package_runs(self):
         self.config['package_build_exit'] = 3

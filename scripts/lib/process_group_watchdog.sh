@@ -144,12 +144,21 @@ def sample_group(pgid):
                 out.write("\n===== sample of pid %s failed: %s =====\n" % (pid, error))
 
 
+# fd 9 is the testbed lock (scripts/testbed_lock.py: a flock on the open file
+# description the shell opened with `exec 9>>`). Python closes inherited fds
+# by default; the work must keep its copy so the lock outlives any supervisor
+# that dies before it does (Codex 2026-11-05 re-review 3).
+try:
+    os.fstat(9); pass_fds = (9,)
+except OSError:
+    pass_fds = ()
 with open(output_path, "wb") as output:
     child = subprocess.Popen(
         command,
         stdout=output,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        pass_fds=pass_fds,
     )
     try:
         if test_immediate:

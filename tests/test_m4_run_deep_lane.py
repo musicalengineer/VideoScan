@@ -19,6 +19,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -99,7 +100,9 @@ class HostDeepLaneTests(unittest.TestCase):
         self.assertIn('deep: AMBER 7 known issues (regression 7); ui not run (phase 2) (sha=', summary)
         self.assertNotIn('OUTCOME GREEN', log)
         self.assertNotIn('OUTCOME RED', log)
-        self.assertFalse((self.root / 'lock').exists(), 'lock left behind')
+        probe = subprocess.run([sys.executable, str(REPO / 'scripts/testbed_lock.py'), 'probe', str(self.root / 'lock')],
+                               capture_output=True, text=True, timeout=20).stdout.strip()
+        self.assertEqual(probe, 'FREE', 'lock left behind')
 
     def test_green_run_is_outcome_green_and_exit_0(self):
         self.plant('PASSED', 0, result_json('passed', self.sha, ui='passed'))

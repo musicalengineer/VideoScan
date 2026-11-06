@@ -90,16 +90,19 @@ extension VideoScanModel {
             // One rule for every counter in the Realtime Catalog Scan window
             // (ScanTileTally): a sniff-rejected file is not media (ffprobe
             // never ran; QA 2026-07-02), a file still being written was
-            // skipped — neither is a failure or "ffprobed" (Rick 2026-11-05).
+            // skipped, a vanished file is gone — none is a failure, and
+            // "ffprobed" counts only files ffprobe really ran on
+            // (outcome.ffprobeRan; Rick 2026-11-05, Codex P0 2026-11-05).
             // Single batched seam (item-4 leg-2): every counter rides
             // DashboardState's ≤4 Hz / 50-event flush machinery.
             self.dashboard.recordProbeCompletion(
                 volumeRoot: root,
                 wasCacheHit: outcome.wasCacheHit,
                 tally: ScanTileTally.tally(streamTypeRaw: outcome.probe.streamTypeRaw,
-                                           wasCacheHit: outcome.wasCacheHit,
+                                           ffprobeRan: outcome.ffprobeRan,
                                            sniffRejected: outcome.sniffRejected,
-                                           stillBeingWritten: outcome.stillBeingWritten),
+                                           stillBeingWritten: outcome.stillBeingWritten,
+                                           fileNotFound: outcome.fileNotFound),
                 generation: scanGeneration
             )
         }
@@ -151,7 +154,10 @@ extension VideoScanModel {
         discoveryFinal: Bool = true
     ) -> Bool {
         if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+            // The unmount trail: absent (ENOENT) or unreadable (EACCES/EIO) alike —
+            // both are what a dead volume looks like from here.
             let notFound = outcome.probe.isPlayable == "File not found"
+                || outcome.probe.isPlayable == Self.notAccessibleVerdict
             if let line = Self.probeFailureLine(outcome: outcome, notFound: notFound, catalogGated: catalogGated) {
                 log(line)
             }

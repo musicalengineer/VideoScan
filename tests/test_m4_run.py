@@ -9,14 +9,17 @@ runs ssh, git push, launchctl or xcodebuild.
 """
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = REPO / 'scripts/m4_run.sh'
 SUMMARY = REPO / 'scripts/m4_run_summary.py'
+LOCK_HELPER = REPO / 'scripts/testbed_lock.py'
 sys.path.insert(0, str(SUMMARY.parent))
 import m4_run_summary as ms  # noqa: E402
 
@@ -173,9 +176,14 @@ class DryRunTests(unittest.TestCase):
         out = p.stdout
         self.assertIn(f'push -q ricksm4.local:dev/VideoScan {sha}:refs/m4run/{sha}', out)
         self.assertIn('+ ssh ricksm4.local', out)
-        self.assertIn(f"checkout -q --detach '{sha}'", out)
+        # The caller never checks the testbed out: the host does, under the lock.
+        self.assertNotIn('checkout -q --detach', out)
+        self.assertIn(f'the host checks out {sha} into', out)
+        self.assertNotIn(f"bootout gui/$uid/com.videoscan.m4run\n", out)
         self.assertIn('launchctl bootstrap gui/', out)
         self.assertIn('<key>LimitLoadToSessionType</key><string>Aqua</string>', out)
+        self.assertRegex(out, r'<key>Label</key><string>com\.videoscan\.m4run\.\d{8}_\d{6}_\d+</string>')
+        self.assertRegex(out, r'install .*m4_run\.sh -> ricksm4\.local:.*/m4run/bin/\d{8}_\d{6}_\d+/m4_run\.sh')
         for arg in ('__host', 'ui', sha, '--host', 'm4', '--only', 'Gauntlet07FamilyMapUITests'):
             self.assertIn(f'<string>{arg}</string>', out)
         self.assertIn('/m4run/work', out)
@@ -204,45 +212,385 @@ class HostLockTests(unittest.TestCase):
         self.root = pathlib.Path(self.home.name, 'm4run')
         self.root.mkdir()
         self.env = dict(os.environ, HOME=self.home.name)
+        self.holders = []
 
     def tearDown(self):
+        for fd in self.holders:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         self.home.cleanup()
 
     def host(self, stamp):
         return run('__host', 'ui', 'a' * 40, stamp, '--host', 'm4', env=self.env)
 
+    def hold(self, info):
+        """A live owner through the same helper the scripts use: this process opens the
+        flock file, the helper flocks that fd (`hold <fd>`); the lock lives on the fd."""
+        lock = self.root / 'lock'
+        lock.mkdir(exist_ok=True)
+        fd = os.open(str(lock / 'flock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        self.holders.append(fd)
+        out = subprocess.run([sys.executable, str(LOCK_HELPER), 'hold', str(fd), str(lock), info],
+                             capture_output=True, text=True, pass_fds=(fd,), timeout=20).stdout.strip()
+        self.assertEqual(out, 'HELD')
+        return fd
+
+    def probe(self):
+        return subprocess.run([sys.executable, str(LOCK_HELPER), 'probe', str(self.root / 'lock')],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+
     def test_free_lock_is_taken_and_released(self):
+        # No testbed repo under this HOME: the host refuses under the lock
+        # (it never touched a tree) and releases.
         p = self.host('s1')
-        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.returncode, 4)
         log = (self.root / 'out/s1-ui/run.log').read_text()
-        self.assertIn('START', log)
-        self.assertIn('OUTCOME RED testbed', log)
-        self.assertFalse((self.root / 'lock').exists(), 'lock left behind')
+        self.assertIn('OUTCOME REFUSED cannot add worktree', log)
+        self.assertNotIn('START', log)
+        self.assertEqual(self.probe(), 'FREE', 'lock left behind')
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/s1-ui'))
 
     def test_live_holder_refuses_and_latest_is_untouched(self):
-        lock = self.root / 'lock'
-        lock.mkdir()
-        (lock / 'pid').write_text(str(os.getpid()))
-        (lock / 'info').write_text('deep sha=123 since now')
+        self.hold('deep sha=123 since now')
         os.symlink(self.root / 'out/live', self.root / 'latest')
         p = self.host('s2')
         self.assertEqual(p.returncode, 3)
         self.assertIn('OUTCOME REFUSED busy: deep sha=123', (self.root / 'out/s2-ui/run.log').read_text())
-        self.assertTrue((lock / 'pid').exists(), "a refused run must not drop the holder's lock")
+        self.assertEqual(self.probe(), 'BUSY deep sha=123 since now', "a refused run must not touch the holder")
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/live'))
 
-    def test_dead_holder_lock_is_reclaimed(self):
-        dead = subprocess.Popen(['/usr/bin/true'])
-        dead.wait()
-        lock = self.root / 'lock'
-        lock.mkdir()
-        (lock / 'pid').write_text(str(dead.pid))
+    def test_a_dead_holders_lock_needs_no_reclaim(self):
+        # The kernel freed it with the holder; leftovers of the retired
+        # mkdir/rename protocol (a pid file) never block and are never "reclaimed".
+        dead = self.hold('deep sha=dead')
+        os.close(dead)                                            # the holder is gone: its fd closed with it
+        (self.root / 'lock' / 'pid').write_text('999999')
         p = self.host('s3')
-        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.returncode, 4)                        # past the lock; refused only for the missing testbed
         log = (self.root / 'out/s3-ui/run.log').read_text()
-        self.assertIn('reclaiming a stale lock', log)
-        self.assertFalse(lock.exists())
+        self.assertIn('OUTCOME REFUSED cannot add worktree', log)
+        self.assertNotIn('busy', log)
+        self.assertNotIn('reclaim', log)
+        self.assertEqual(self.probe(), 'FREE')
+
+    def test_the_remote_probe_and_status_read_the_same_kernel_lock(self):
+        # m4_run's caller-side BUSY probe runs the helper's own source over
+        # ssh (lock_probe_snippet); here the snippet is executed locally.
+        holder = self.hold('deep sha=abc since 10:00')
+        p = run('status', '--dry-run', env=self.env)          # H_ROOT under the fake HOME
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('/m4run/lock', p.stdout)
+        snippet = p.stdout.split("+ ssh ricksm4.local <<'SH'", 1)[1].split('\n  SH', 1)[0]
+        snippet = '\n'.join(line[4:] if line.startswith('    ') else line for line in snippet.splitlines())
+        out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True,
+                             env=self.env, timeout=30).stdout
+        self.assertIn('M4: RUNNING deep sha=abc since 10:00', out)
+        os.close(holder)
+        out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True,
+                             env=self.env, timeout=30).stdout
+        self.assertIn('M4: idle', out)
+
+    def test_the_lock_protocol_text_is_the_same_in_both_scripts(self):
+        # One protocol (Codex 2026-11-05 P1): m4_run.sh and nightly_gauntlet.sh
+        # share the testbed lock, so they carry the same take_lock/drop_lock
+        # text. Drift here is a second protocol on one lock.
+        def shared(path):
+            text = path.read_text()
+            start = text.index('take_lock() {')
+            end = text.index('# ── end of the shared lock text ──')
+            return text[start:end]
+        self.assertEqual(shared(SCRIPT), shared(REPO / 'scripts/nightly_gauntlet.sh'))
+        self.assertIn('testbed_lock.py', (REPO / 'scripts/nightly_gauntlet.sh').read_text())
+
+
+FAKE_GAUNTLET_HOLD = r'''#!/bin/sh
+# A deep run that announces itself, then holds the testbed until released.
+echo "$$" >> "$(pwd)/fake/gauntlet_starts"
+while [ -e "$(pwd)/fake/hold" ]; do sleep 0.05; done
+printf 'GAUNTLET PASSED sha=%s total=9s unit=PASSED results=%s/fake/result.json publish=queued\n' \
+    "$(cat fake/sha)" "$(pwd)"
+exit 0
+'''
+
+
+class LockRaceTests(unittest.TestCase):
+    """Codex 2026-11-05 (P1): owner A paused between deciding and claiming;
+    contender B took the lock and started work; A resumed and also claimed it
+    (first the mkdir-then-pid protocol, then the rename protocol's stale
+    reclaim) — two live owners of one testbed. The lock is now a kernel flock
+    (scripts/testbed_lock.py); the pause hooks hold A before claiming
+    (VIDEOSCAN_TESTBED_LOCK_PAUSE) or after claiming, before answering
+    (…_HELD); B's deep run holds the testbed; A resumes. Every interleaving:
+    exactly one START, one deep run; a killed holder frees the lock by itself."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.home.name, 'm4run')
+        self.work = self.root / 'work'
+        (self.work / 'scripts').mkdir(parents=True)
+        (self.work / 'fake').mkdir()
+        (self.root / 'bin').mkdir()
+        shutil.copy(SUMMARY, self.root / 'bin' / 'm4_run_summary.py')
+        gauntlet = self.work / 'scripts' / 'run_gauntlet.sh'
+        gauntlet.write_text(FAKE_GAUNTLET_HOLD)
+        gauntlet.chmod(0o755)
+        git = ['git', '-C', str(self.work)]
+        env = dict(os.environ, HOME=self.home.name, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        subprocess.run(git + ['init', '-q'], check=True, env=env)
+        subprocess.run(git + ['add', '-A'], check=True, env=env)
+        subprocess.run(git + ['commit', '-q', '-m', 'testbed'], check=True, env=env)
+        self.sha = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=env,
+                                  capture_output=True, text=True).stdout.strip()
+        (self.work / 'fake' / 'sha').write_text(self.sha[:8])
+        (self.work / 'fake' / 'result.json').write_text(
+            '{"status": "passed", "commit": "%s", "stages": [], "inventory_errors": []}' % self.sha)
+        self.env = dict(os.environ, HOME=self.home.name)
+
+    def tearDown(self):
+        self.home.cleanup()
+
+    def wait_for(self, predicate, what, timeout=20.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f'timed out waiting for {what}')
+
+    def host(self, stamp, **extra):
+        return subprocess.Popen(['/bin/bash', str(SCRIPT), '__host', 'deep', self.sha, stamp, '--host', 'm4'],
+                                env=dict(self.env, **extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def probe(self):
+        return subprocess.run([sys.executable, str(LOCK_HELPER), 'probe', str(self.root / 'lock')],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+
+    def race(self, pause_env, stale=False):
+        fake = self.work / 'fake'
+        pause, hold, starts = fake / 'pause', fake / 'hold', fake / 'gauntlet_starts'
+        pause.touch(); hold.touch()
+        if stale:
+            (self.root / 'lock').mkdir(exist_ok=True)
+            (self.root / 'lock' / 'pid').write_text('999999')
+            (self.root / 'lock' / 'info').write_text('999999 deep sha=dead')
+        a = self.host('ra', **{pause_env: str(pause)})
+        b = None
+        try:
+            self.wait_for(lambda: (fake / 'pause.paused').exists(), 'A at the race point')
+            b = self.host('rb')
+            started = lambda: len(starts.read_text().split()) if starts.exists() else 0  # noqa: E731
+            self.wait_for(lambda: started() >= 1 or b.poll() is not None, 'B to decide')
+            before = started()
+            pause.unlink()                                           # A resumes
+            # A either leaves (refused) or starts its deep run (one more start).
+            self.wait_for(lambda: a.poll() is not None or started() > before, 'A to decide')
+        finally:
+            hold.unlink(missing_ok=True)
+            for p in (a, b):
+                if p is not None:
+                    try:
+                        p.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        p.kill(); p.wait()
+        count = len(starts.read_text().split()) if starts.exists() else 0
+        return a, b, count, (self.root / 'out/ra-deep/run.log').read_text(), (self.root / 'out/rb-deep/run.log').read_text()
+
+    def test_two_contenders_never_both_own_the_lock(self):
+        a, b, count, log_a, log_b = self.race('VIDEOSCAN_TESTBED_LOCK_PAUSE')
+        self.assertEqual(count, 1, 'two live owners started two deep runs')
+        self.assertIn('OUTCOME REFUSED busy: deep sha=', log_a)
+        self.assertNotIn('START', log_a)
+        self.assertIn('START', log_b)
+        self.assertIn('OUTCOME GREEN', log_b)
+        self.assertEqual((a.returncode, b.returncode), (3, 0))
+        self.assertEqual(self.probe(), 'FREE', 'the lock must be released by its owner')
+        self.assertFalse(list(self.root.glob('lock.*')), 'no answer FIFOs left behind')
+
+    def test_a_contender_paused_over_a_stale_lock_never_reclaims_a_live_owner(self):
+        # Codex 2026-11-05 re-review (P1): A found a dead pid, paused; B
+        # reclaimed and started; A resumed and renamed B's live lock aside.
+        a, b, count, log_a, log_b = self.race('VIDEOSCAN_TESTBED_LOCK_PAUSE', stale=True)
+        self.assertEqual(count, 1, 'two live owners started two deep runs')
+        self.assertIn('OUTCOME REFUSED busy: deep sha=', log_a)
+        self.assertIn('OUTCOME GREEN', log_b)
+        self.assertEqual((a.returncode, b.returncode), (3, 0))
+        self.assertEqual(self.probe(), 'FREE')
+
+    def test_an_owner_paused_after_claiming_refuses_the_contender(self):
+        a, b, count, log_a, log_b = self.race('VIDEOSCAN_TESTBED_LOCK_PAUSE_HELD')
+        self.assertEqual(count, 1)
+        self.assertIn('OUTCOME GREEN', log_a)
+        self.assertIn('OUTCOME REFUSED busy: deep sha=', log_b)
+        self.assertEqual((a.returncode, b.returncode), (0, 3))
+        self.assertEqual(self.probe(), 'FREE')
+
+    def test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done(self):
+        # Codex 2026-11-05 re-review 2 (P1): the host shell dies while its deep
+        # run (run_bounded: own session) still works. The lock lives on the fd
+        # the work inherited (run_bounded passes fd 9 on), so B is refused until
+        # the work ends; then the kernel frees it and C runs, no reclaim.
+        fake = self.work / 'fake'
+        hold, starts = fake / 'hold', fake / 'gauntlet_starts'
+        hold.touch()
+        a = self.host('ka')
+        try:
+            self.wait_for(lambda: starts.exists(), "A's deep run")
+            self.assertTrue(self.probe().startswith('BUSY deep sha='), self.probe())
+            a.kill(); a.wait()
+            time.sleep(0.5)                                      # the old lease would have let go by now
+            self.assertTrue(self.probe().startswith('BUSY deep sha='),
+                            f'the lock must outlive the shell while its work runs: {self.probe()}')
+            b = self.host('kb')                                  # B, while A's work is still alive
+            b.wait(timeout=60)
+            self.assertEqual(b.returncode, 3)
+            self.assertIn('OUTCOME REFUSED busy: deep sha=', (self.root / 'out/kb-deep/run.log').read_text())
+            self.assertEqual(len(starts.read_text().split()), 1)
+        finally:
+            hold.unlink(missing_ok=True)
+        self.wait_for(lambda: self.probe() == 'FREE', 'the kernel to drop the lock when the work ends')
+        c = self.host('kc')
+        c.wait(timeout=60)
+        log_c = (self.root / 'out/kc-deep/run.log').read_text()
+        self.assertIn('START', log_c)
+        self.assertIn('OUTCOME GREEN', log_c)
+        self.assertNotIn('reclaim', log_c)
+        self.assertEqual(c.returncode, 0)
+
+
+FAKE_LAUNCHCTL = r'''#!/usr/bin/env python3
+# Stand-in for launchctl: `bootstrap gui/<uid> <plist>` starts the plist's
+# ProgramArguments detached (what launchd would do) and records it; every
+# call is appended to $M4RUN_TEST_LAUNCHCTL_LOG.
+import os, plistlib, subprocess, sys
+args = sys.argv[1:]
+with open(os.environ["M4RUN_TEST_LAUNCHCTL_LOG"], "a") as f:
+    f.write(" ".join(args) + "\n")
+if args[:1] == ["bootstrap"]:
+    with open(args[2], "rb") as f:
+        plist = plistlib.load(f)
+    subprocess.Popen(plist["ProgramArguments"], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+sys.exit(0)
+'''
+
+# The deep run inside the testbed worktree: announces itself, holds until released.
+FAKE_GAUNTLET_ENV_HOLD = r'''#!/bin/sh
+echo "$$" >> "$M4RUN_TEST_STARTS"
+while [ -e "$M4RUN_TEST_HOLD" ]; do sleep 0.05; done
+printf 'GAUNTLET PASSED sha=%s total=9s unit=PASSED results=%s publish=queued\n' \
+    "$(git rev-parse --short=8 HEAD)" "$M4RUN_TEST_RESULT"
+exit 0
+'''
+
+
+class CallerMutationTests(unittest.TestCase):
+    """Codex 2026-11-05 re-review 3 (P1): the caller probed FREE, then checked
+    the SHA out and booted the LaunchAgent out BEFORE the host took the lock —
+    a second caller could clobber a live run's worktree and agent. Now every
+    mutation of the shared testbed happens on the host under the lock, and the
+    caller's steps are additive (per-run bin dir, per-run agent label).
+
+    End to end on the "ultra" host (local, no ssh): a fake launchctl starts
+    the agent's command detached, as launchd would; a real git repo plays
+    ~/dev/VideoScan with two commits (the fake deep run blocks until released)."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        home = pathlib.Path(self.home.name)
+        self.repo = home / 'dev' / 'VideoScan'
+        (self.repo / 'scripts').mkdir(parents=True)
+        (self.repo / 'fake').mkdir()
+        for name in ('m4_run.sh', 'm4_run_summary.py', 'testbed_lock.py'):
+            shutil.copy(REPO / 'scripts' / name, self.repo / 'scripts' / name)
+        gauntlet = self.repo / 'scripts' / 'run_gauntlet.sh'
+        gauntlet.write_text(FAKE_GAUNTLET_ENV_HOLD)
+        gauntlet.chmod(0o755)
+        git = ['git', '-C', str(self.repo)]
+        env = dict(os.environ, HOME=self.home.name, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+        subprocess.run(git + ['init', '-q'], check=True, env=env)
+        subprocess.run(git + ['add', '-A'], check=True, env=env)
+        subprocess.run(git + ['commit', '-q', '-m', 'a'], check=True, env=env)
+        self.sha_a = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=env, capture_output=True, text=True).stdout.strip()
+        (self.repo / 'fake' / 'second').write_text('b\n')
+        subprocess.run(git + ['add', '-A'], check=True, env=env)
+        subprocess.run(git + ['commit', '-q', '-m', 'b'], check=True, env=env)
+        self.sha_b = subprocess.run(git + ['rev-parse', 'HEAD'], check=True, env=env, capture_output=True, text=True).stdout.strip()
+        self.bin = home / 'bin'
+        self.bin.mkdir()
+        (self.bin / 'launchctl').write_text(FAKE_LAUNCHCTL)
+        (self.bin / 'launchctl').chmod(0o755)
+        self.test = home / 'test'
+        self.test.mkdir()
+        self.root = home / 'ultrarun'
+        self.wt = home / 'dev' / 'VideoScan-wt' / 'ultra-testbed'
+        self.launchctl_log = self.test / 'launchctl.log'
+        self.launchctl_log.touch()
+        (self.test / 'result.json').write_text(
+            '{"status": "passed", "commit": "%s", "stages": [], "inventory_errors": []}' % self.sha_b)
+        self.env = dict(os.environ, HOME=self.home.name, PATH=f"{self.bin}:{os.environ['PATH']}",
+                        M4RUN_TEST_LAUNCHCTL_LOG=str(self.launchctl_log), M4RUN_TEST_HOLD=str(self.test / 'hold'),
+                        M4RUN_TEST_STARTS=str(self.test / 'starts'), M4RUN_TEST_RESULT=str(self.test / 'result.json'))
+
+    def tearDown(self):
+        (self.test / 'hold').unlink(missing_ok=True)
+        time.sleep(0.3)
+        self.home.cleanup()
+
+    def wait_for(self, predicate, what, timeout=30.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f'timed out waiting for {what}')
+
+    def caller(self, sha, **extra):
+        return subprocess.Popen(['/bin/bash', str(self.repo / 'scripts/m4_run.sh'), 'deep', '--host', 'ultra',
+                                 '--ref', sha, '--force'], env=dict(self.env, **extra),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    def head(self):
+        return subprocess.run(['git', '-C', str(self.wt), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+
+    def run_logs(self):
+        return {p.parent.name: p.read_text() for p in (self.root / 'out').glob('*-deep/run.log')} if (self.root / 'out').exists() else {}
+
+    def test_a_second_caller_never_touches_a_live_runs_tree_runner_or_agent(self):
+        starts, hold, pause = self.test / 'starts', self.test / 'hold', self.test / 'pause'
+        hold.touch(); pause.touch()
+        a = self.caller(self.sha_a, VIDEOSCAN_M4RUN_PAUSE_AFTER_PROBE=str(pause))
+        try:
+            self.wait_for(lambda: (self.test / 'pause.paused').exists(), 'A past its probe')
+            b = self.caller(self.sha_b)
+            self.assertEqual(b.wait(timeout=60), 0, b.stdout.read())
+            self.wait_for(lambda: starts.exists(), "B's deep run to start (its agent holds the lock)")
+            self.assertEqual(self.head(), self.sha_b)
+            runner_b = next((self.root / 'bin').glob('*/m4_run.sh'))
+            runner_b_bytes, runner_b_mtime = runner_b.read_bytes(), runner_b.stat().st_mtime_ns
+            log_before = self.launchctl_log.read_text()
+            self.assertEqual(log_before.count('bootstrap'), 1)
+            pause.unlink()                                             # A resumes with another SHA
+            self.assertEqual(a.wait(timeout=60), 0, "the caller only ships; the host refuses")
+            self.wait_for(lambda: any('OUTCOME REFUSED' in l for l in self.run_logs().values()), "A's agent to be refused")
+            self.assertEqual(self.head(), self.sha_b, "A clobbered B's checked-out tree")
+            self.assertEqual((runner_b.read_bytes(), runner_b.stat().st_mtime_ns), (runner_b_bytes, runner_b_mtime),
+                             "A overwrote B's installed runner")
+            log_after = self.launchctl_log.read_text()
+            self.assertNotIn('bootout', log_after, "A booted out an agent while B's was live")
+            self.assertEqual(log_after.count('bootstrap'), 2)
+            self.assertEqual(len(starts.read_text().split()), 1, 'two deep runs on one testbed')
+            refused = [l for l in self.run_logs().values() if 'OUTCOME REFUSED' in l]
+            self.assertEqual(len(refused), 1)
+            self.assertIn('busy: deep sha=' + self.sha_b[:9], refused[0])
+        finally:
+            hold.unlink(missing_ok=True)
+        self.wait_for(lambda: any('OUTCOME GREEN' in l for l in self.run_logs().values()), "B's run to finish")
+        self.assertEqual(self.head(), self.sha_b)
+        self.assertEqual([l for l in self.run_logs().values() if 'START' in l and 'OUTCOME GREEN' in l].__len__(), 1)
 
 
 if __name__ == '__main__':

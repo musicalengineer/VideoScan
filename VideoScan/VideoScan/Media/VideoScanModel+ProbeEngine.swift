@@ -35,6 +35,27 @@ import Darwin
 
 extension VideoScanModel {
 
+    /// `probe.isPlayable` for a file stat(2) refused for a reason other than
+    /// absence (EACCES, EIO, …): present but unreadable — an error, never
+    /// "Gone". The unmount-abort trail counts it like "File not found".
+    nonisolated static let notAccessibleVerdict = "Not accessible"
+
+    /// The outcome for a file stat(2) refused for a reason other than absence,
+    /// before or after ffprobe: Failed tile, Errors card, never Gone, never a
+    /// skip; `ffprobeRan` is the process runner's evidence when ffprobe did run.
+    nonisolated static func notAccessibleOutcome(url: URL, errno code: Int32, ffprobeRan: Bool, when: String) -> ProbeOutcome {
+        var o = ProbeOutcome()
+        o.filename            = url.lastPathComponent
+        o.ext                 = url.pathExtension.uppercased()
+        o.fullPath            = url.path
+        o.directory           = url.deletingLastPathComponent().path
+        o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        o.probe.isPlayable    = notAccessibleVerdict
+        o.notes               = MachineNote.line(author: .scan, text: "File could not be read: \(String(cString: strerror(code))) (errno \(code)) — \(when)")
+        o.ffprobeRan          = ffprobeRan
+        return o
+    }
+
     /// Streams `target.searchPath` and drains a probe group against it.
     /// Returns the collected records, total discovered, and total completed.
     func runTargetProbeGroup(
@@ -676,36 +697,39 @@ extension VideoScanModel {
             return (attrs?[.size] as? Int64) ?? 0
         }()
 
-        do {
-            return try await withThrowingTaskGroup(of: ProbeOutcome.self) { group in
-                group.addTask {
-                    await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath, catalogedPaths: catalogedPaths)
-                }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
-                    throw CancellationError()
-                }
-                // First to finish wins — cancel the other
-                guard let result = try await group.next() else {
-                    throw CancellationError()
-                }
-                group.cancelAll()
-                return result
+        // The race: the probe against the clock (nil = the clock won). When the
+        // clock wins the probe is cancelled (ProcessRunner SIGTERM → SIGKILL →
+        // abandon bounds it, as before) and AWAITED for its evidence: whether
+        // ffprobe was launched is counted even on a timeout (Codex 2026-11-05
+        // re-review 2, P1: the old throwing group discarded it).
+        let raced: (outcome: ProbeOutcome?, timedOut: Bool) = await withTaskGroup(of: ProbeOutcome?.self) { group in
+            group.addTask {
+                await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath, catalogedPaths: catalogedPaths)
             }
-        } catch {
-            // Timeout fired before the probe completed. Pure value carrier —
-            // the VideoRecord is built later at the main-actor drain point.
-            var o = ProbeOutcome()
-            o.filename            = url.lastPathComponent
-            o.ext                 = url.pathExtension.uppercased()
-            o.fullPath            = url.path
-            o.directory           = url.deletingLastPathComponent().path
-            o.sizeBytes           = preSize
-            o.probe.isPlayable    = "Timed out"
-            o.notes               = MachineNote.line(author: .scan, text: "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled")
-            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            return o
+            group.addTask {
+                try? await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
+                return nil
+            }
+            guard let first = await group.next() else { return (nil, true) }
+            if let outcome = first { group.cancelAll(); return (outcome, false) }
+            group.cancelAll()
+            let late = await group.next() ?? nil
+            return (late, true)
         }
+        if !raced.timedOut, let outcome = raced.outcome { return outcome }
+        // Timeout fired before the probe completed. Pure value carrier —
+        // the VideoRecord is built later at the main-actor drain point.
+        var o = ProbeOutcome()
+        o.filename            = url.lastPathComponent
+        o.ext                 = url.pathExtension.uppercased()
+        o.fullPath            = url.path
+        o.directory           = url.deletingLastPathComponent().path
+        o.sizeBytes           = preSize
+        o.probe.isPlayable    = "Timed out"
+        o.notes               = MachineNote.line(author: .scan, text: "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled")
+        o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        o.ffprobeRan          = raced.outcome?.ffprobeRan ?? false   // the process runner's evidence survives the timeout
+        return o
     }
 
     /// `@MainActor` VideoRecord shim over `probeFileWithTimeoutOutcome`.
@@ -783,23 +807,39 @@ extension VideoScanModel {
         // shared by every file on the mount — which is the wrong granularity
         // here. Using it caused per-file existence misses to overwrite the
         // cached mount bit and flicker the catalog UI (italics flicker bug).
-        guard fm.fileExists(atPath: path) else {
+        // stat(2), not `fileExists`: Foundation says false for an EXISTING
+        // file whose parent lost search permission (EACCES) or whose volume
+        // errors (EIO) — only ENOENT/ENOTDIR is absence (Codex 2026-11-05
+        // re-review 2, P0: "Gone, zero errors" for a file still there).
+        let firstStat: ScanFileStat
+        switch ScanFileStat.read(path: path) {
+        case .present(let stat):
+            firstStat = stat
+        case .gone:
             var o = ProbeOutcome()
             o.filename            = url.lastPathComponent
             o.ext                 = url.pathExtension.uppercased()
             o.fullPath            = path
             o.directory           = url.deletingLastPathComponent().path
+            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             o.probe.isPlayable    = "File not found"
             o.notes               = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
-            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            o.fileNotFound        = true          // gone before the probe: never "ffprobed", never an ffprobe failure
             return o
+        case .inaccessible(let code):
+            // Present (or unknowable) but unreadable: an error with its reason, never "Gone".
+            return Self.notAccessibleOutcome(url: url, errno: code, ffprobeRan: false, when: "ffprobe skipped")
         }
 
         // Get file attributes for cache key and record population
         let attrs = try? fm.attributesOfItem(atPath: path)
         let fileSize = (attrs?[.size] as? Int64) ?? 0
         let modDate = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
-        let before = ScanFileStat(sizeBytes: fileSize, modifiedAt: modDate)
+        // The two stats of the write-in-progress rule come from the SAME
+        // source (stat(2), nanosecond mtime): Foundation's modificationDate
+        // is coarser, and a before/after pair from different sources reads
+        // every file as "changed under the probe".
+        let before = firstStat
 
         // Still being written? (Verify Catalog bug 3, 2026-10-17.) An mtime
         // inside the settle window is judged BEFORE the cache can vouch
@@ -876,17 +916,32 @@ extension VideoScanModel {
         // group (and the whole scan) used to hang forever. The deadline
         // escalates SIGTERM → SIGKILL → abandon inside ProcessRunner, making
         // the blocking work itself bounded.
-        let probeResult = await CombineVerifier.runFFProbe(
+        let probeResult = await CombineVerifier.runFFProbeDetailed(
             url: probeURL,
             ffprobePath: ffprobePath,
             timeoutSeconds: Double(probeTimeoutSeconds)
         )
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The one place ffprobe runs in the scan path: the evidence the
+        // "ffprobed" card counts (ScanTileTally) is the process runner's own
+        // `launched` — a tool path that cannot start is not an execution
+        // (Codex 2026-11-05 P0), whatever the verdict below.
+        outcome.ffprobeRan = probeResult.launched
 
         // The second stat: a row is built only from a file that did not
         // change under the probe (bug 3). Never cached — the next scan looks.
-        if skipIfStillBeingWritten, let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
-            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why)
+        // If ffprobe DID run on it, that execution still counts. A stat that
+        // fails for a reason other than absence is an error, not a skip
+        // (Codex 2026-11-05 re-review 3, P0).
+        if skipIfStillBeingWritten {
+            switch afterProbeCheck(path: path, before: before) {
+            case .clean:
+                break
+            case .skip(let why):
+                return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why, ffprobeRan: probeResult.launched)
+            case .inaccessible(let code):
+                return Self.notAccessibleOutcome(url: url, errno: code, ffprobeRan: probeResult.launched, when: "after ffprobe ran")
+            }
         }
 
         ScanEngine.applyProbeOrFallback(outcome: &outcome, url: url, path: path,

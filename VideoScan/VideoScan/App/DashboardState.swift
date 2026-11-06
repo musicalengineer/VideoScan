@@ -175,17 +175,9 @@ final class DashboardState: ObservableObject {
     /// One probe finished. Stale generations (probes enqueued before the
     /// last resetForScan) are dropped — their discovery increments were
     /// wiped by the reset, so counting them would break the invariant.
-    func recordProbeCompletion(volumeRoot: String, wasCacheHit: Bool,
-                               isProbeError: Bool, streamTypeRaw: String,
-                               generation: UInt64) {
-        recordProbeCompletion(volumeRoot: volumeRoot, wasCacheHit: wasCacheHit,
-                              tally: ScanTileTally.Tally(tileKey: streamTypeRaw, ranFFprobe: !wasCacheHit,
-                                                         isProbeError: isProbeError),
-                              generation: generation)
-    }
-
-    /// The scanner's door: `tally` is ScanTileTally's one rule (not-media and
-    /// still-being-written files are never failures and never "ffprobed").
+    /// The scanner's one door: `tally` is ScanTileTally's rule (not-media,
+    /// still-being-written and vanished files are never failures; "ffprobed"
+    /// is the engine's execution evidence, never inferred from the cache).
     func recordProbeCompletion(volumeRoot: String, wasCacheHit: Bool,
                                tally: ScanTileTally.Tally, generation: UInt64) {
         guard generation == scanGeneration else { return }
