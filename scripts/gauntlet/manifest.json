@@ -32123,6 +32123,7 @@
         "test_a_crashed_summary_is_red",
         "test_a_dead_holders_lock_needs_no_reclaim",
         "test_a_failed_notification_changes_nothing",
+        "test_a_failed_or_missing_publisher_changes_nothing",
         "test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done",
         "test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock",
         "test_a_plain_nightly_mac_needs_only_its_green_suite",
@@ -32143,6 +32144,7 @@
         "test_red_suite_still_runs_the_gauntlet_and_exits_red",
         "test_the_latest_row_per_kind_decides_not_any_row",
         "test_the_lock_is_taken_during_the_run_and_released_after",
+        "test_the_page_summary_is_rebuilt_after_the_testbed_and_before_the_done_line",
         "test_the_real_rota_runs_the_m4_testbed_at_14_and_the_ultra_nightly_at_02",
         "test_the_watchdogs_worker_keeps_the_lock_after_its_supervisors_die",
         "test_two_contenders_never_both_own_the_testbed"
@@ -32162,12 +32164,15 @@
         "test_a_lane_row_older_than_36_hours_is_grey_never_its_old_counts",
         "test_a_red_lane_night_says_so_and_github_rows_alone_are_no_lane_run",
         "test_both_kinds_fresh_and_clean_is_green",
+        "test_codex_reviews_are_on_demand_with_their_last_date_never_stale",
+        "test_collect_metrics_emits_one_json_row_without_xcode_or_gh",
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
         "test_freshness_reports_measurement_time_and_sha_not_latest_page_load",
         "test_gedcom_line_compares_the_pulls_each_mac_replayed",
         "test_gedcom_line_never_shows_a_name_or_markup_from_the_row",
         "test_hallie_replay_revision_is_distinct_from_nightly_test_revision",
+        "test_history_jsonl_is_produced_by_a_ci_job_that_actually_runs",
         "test_local_refresh_submits_explicit_selected_scope_and_never_changes_nightly_results",
         "test_metrics_controls_work_under_nonce_csp_without_inline_event_attributes",
         "test_module_health_table_grades_sorts_and_excludes_tests",
@@ -32605,8 +32610,10 @@
         "test_publish_metrics.py"
       ],
       "tests": [
+        "test_a_deleted_transcript_never_lowers_a_published_codex_day",
         "test_a_folder_deleted_since_it_was_published_does_not_wedge_the_publish",
         "test_adversarial_rows_are_per_night_counts",
+        "test_cli_codex_dir_repeats_and_reads_every_folder",
         "test_cli_kill_switch_is_a_no_op",
         "test_cli_out_dir_writes_sanitized_files_without_git",
         "test_cli_privacy_refusal_exits_3_and_writes_nothing",
@@ -32630,6 +32637,7 @@
         "test_refuses_the_main_checkout_as_its_worktree",
         "test_rejected_push_refetches_resets_and_keeps_the_other_publishers_rows",
         "test_second_publish_with_nothing_new_commits_nothing",
+        "test_the_publisher_reads_live_and_archived_codex_transcripts",
         "test_unknown_stream_is_refused",
         "test_validator_rejects_anything_off_the_allowlist"
       ]
