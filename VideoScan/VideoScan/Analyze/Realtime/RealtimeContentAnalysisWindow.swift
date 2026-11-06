@@ -100,6 +100,19 @@ struct RealtimeContentAnalysisContent: View {
             }
             Spacer()
             HStack(spacing: 8) {
+                // "Analyze the N left" (Rick 2026-11-06): only while nothing
+                // runs; N is Catalog Status ▸ Content's count; the engines are
+                // the panel's (AnalyzeRunner). Disabled with "Nothing left".
+                if state.showsAnalyzeLeft {
+                    Button { store.analyzeTheLeft() } label: {
+                        Label(state.left.buttonTitle, systemImage: "play.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(!state.canAnalyzeLeft)
+                    .help(state.left.help)
+                    .accessibilityIdentifier("realtime.ca.analyzeLeft")
+                }
                 Button {
                     if inApp.phase == .paused { store.resume() } else { store.pause() }
                 } label: {
@@ -557,13 +570,14 @@ final class RealtimeContentAnalysisWindowController {
 
     /// The one door (the Content Analysis panel's Realtime… and an Analyze
     /// row's context menu both come here). `source` is logged once.
-    func show(model: VideoScanModel, orchestrator: CaptionOrchestrator, source: String) {
+    func show(model: VideoScanModel, orchestrator: CaptionOrchestrator,
+              center: MediaFileOperationsCenter?, source: String) {
         if let w = window, w.isVisible {
             w.makeKeyAndOrderFront(nil)
             return
         }
         close()
-        let store = RealtimeAnalysisStore.production(model: model, orchestrator: orchestrator)
+        let store = RealtimeAnalysisStore.production(model: model, orchestrator: orchestrator, center: center)
         self.store = store
         let hosting = NSHostingView(rootView: RealtimeContentAnalysisContent(store: store))
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 760),

@@ -119,15 +119,19 @@ extension CaptionOrchestrator {
     /// Why a file is skipped, if it is. Checked in this order:
     /// - already analyzed: any record with a dossier timestamp is left
     ///   alone regardless of which stack produced it (`force` overrides);
-    /// - needs reformat: an earlier run could not decode it (batches skip
-    ///   it; `force` or an explicit single-file Analyze retries);
+    /// - needs reformat: an earlier run could not decode it, or another
+    ///   copy of the same content (batches skip it; `force` or an explicit
+    ///   single-file Analyze retries);
     /// - the file is not there: its VOLUME is offline (skipped, not
     ///   failed — never purged), else it is missing on a mounted volume;
     /// - DRM, cached flag, then an AVAsset metadata probe (no decode).
     ///   Encrypted iTunes purchases would otherwise eat hours of Whisper.
     func dossierSkipReason(_ record: VideoRecord, force: Bool) async -> DossierSkip? {
         if !force, record.dossierProcessedAt != nil { return .alreadyAnalyzed }
-        if !force, !dossierRetriesNeedsReformat, record.needsReformat { return .needsReformat }
+        // The pool's rule (DossierPoolStatus, shared with the coverage
+        // counts): its own flag, or the same bytes flagged on another copy.
+        if !force, !dossierRetriesNeedsReformat,
+           DossierPoolStatus(record, unreadable: dossierUnreadable) == .awaitingReformat { return .needsReformat }
         if !FileManager.default.fileExists(atPath: record.fullPath) {
             return Self.isOnOfflineVolume(record.fullPath) ? .offline : .missingOnDisk
         }

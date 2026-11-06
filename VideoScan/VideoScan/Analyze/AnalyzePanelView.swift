@@ -127,7 +127,7 @@ struct AnalyzePanelView: View {
             // Realtime… (Rick 2026-11-05): watch captions + transcripts, the
             // machine and VideoScan Background as they work — one door.
             Button("Realtime…") {
-                RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, source: "panel")
+                RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, center: center, source: "panel")
             }
             .help("Watch content analysis as it happens: the files in the pipeline, CPU/GPU/memory/disk, what each file produced, and VideoScan Background's own numbers")
             .accessibilityIdentifier("analyze.realtime")

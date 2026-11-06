@@ -20,6 +20,14 @@
 // Pause / Resume / Stop go through AnalyzeRunner — the one engine the Content
 // Analysis panel's dossier rows use (rule 4) — never a second code path.
 //
+// "Analyze the N left" (Rick 2026-11-06): N and the steps come from the
+// coverage report Catalog Status ▸ Content reads (AnalyzeLeftPlan); each step
+// is AnalyzeRunner.runNow — the panel's own Run now. ONE START line (N, what is
+// left, the steps) and ONE OUTCOME line when every engine it started is idle
+// again (each engine writes its own START / OUTCOME as always). Stop during
+// such a run also takes this run's still-queued drives out of the dossier
+// queue, so Stop means stop.
+//
 // Logging: one line when the window opens and closes, one when the helper's
 // availability changes; never per tick.
 //
@@ -49,6 +57,15 @@ final class RealtimeAnalysisStore: ObservableObject {
         var stop: @MainActor () -> Void
         var seatedSigner: String
         var now: @Sendable () -> Date
+        /// What is left (O(analyzers + drives) from the cached report).
+        var left: @MainActor () -> AnalyzeLeftPlan = { AnalyzeLeftPlan() }
+        /// Start one step — AnalyzeRunner.runNow in production.
+        var runStep: @MainActor (AnalyzeLeftPlan.Step) -> Void = { _ in }
+        /// Whether an engine is running (AnalyzeRunner.isRunning, plus the
+        /// dossier queue's waiting drives).
+        var isRunning: @MainActor (AnalyzeCycler) -> Bool = { _ in false }
+        /// Take a drive this run queued out of the dossier queue (Stop).
+        var dequeue: @MainActor (String) -> Void = { _ in }
     }
 
     @Published private(set) var state = RealtimeAnalysisState()
@@ -81,12 +98,15 @@ final class RealtimeAnalysisStore: ObservableObject {
     /// The real thing: this session's orchestrator, VideoScan Background over
     /// XPC (when enabled), the helper's state folder beside the catalog, the
     /// host's counters, the one log sink, the dossier door.
-    static func production(model: VideoScanModel, orchestrator: CaptionOrchestrator) -> RealtimeAnalysisStore {
+    static func production(model: VideoScanModel, orchestrator: CaptionOrchestrator,
+                           center: MediaFileOperationsCenter?) -> RealtimeAnalysisStore {
         let stateRoot = URL(fileURLWithPath: model.catalogStore.fileLocation).deletingLastPathComponent()
             .appendingPathComponent("background", isDirectory: true)
         let journalDirectory = EraPlanner.journalDirectory(stateRoot: stateRoot)
         let reader = MachineCounterReader()
-        let runner = AnalyzeRunner(model: model, orchestrator: orchestrator, center: nil)
+        // The center lets a Full Hashes / Sound Prints step start its MFO job
+        // exactly as the panel does; nil only where no center exists.
+        let runner = AnalyzeRunner(model: model, orchestrator: orchestrator, center: center)
         let sources = Sources(
             inApp: { [weak orchestrator] in orchestrator.map(inApp(from:)) ?? RealtimeAnalysisState.InApp() },
             helperEnabled: { BackgroundServiceRegistrar.isEnabled },
@@ -102,7 +122,17 @@ final class RealtimeAnalysisStore: ObservableObject {
             resume: { runner.resume(.sceneCaptions) },
             stop: { runner.stop(.sceneCaptions) },
             seatedSigner: SeatedApproach.eraA2.signer,
-            now: { Date() })
+            now: { Date() },
+            left: { [weak model] in AnalyzeLeftPlan.make(model?.analyzeCoverageSnapshot.report ?? AnalyzeCoverageReport()) },
+            runStep: { step in runner.runNow(step.cycler, volume: step.volume, source: Self.source) },
+            isRunning: { [weak orchestrator] c in
+                // Between two queued drives the batch is briefly not active;
+                // a drive still waiting (and reachable) keeps the run open.
+                guard c.isDossierStage, let o = orchestrator else { return runner.isRunning(c) }
+                return runner.isRunning(c) || o.queueDispatchInFlight
+                    || o.queuedVolumePrefixes.contains { !o.parkedVolumePrefixes.contains($0) }
+            },
+            dequeue: { [weak orchestrator] prefix in orchestrator?.dequeueAnalyze(volumePrefix: prefix) })
         return RealtimeAnalysisStore(sources: sources, dossiers: FileDossierLoader.production(model: model))
     }
 
@@ -229,6 +259,7 @@ final class RealtimeAnalysisStore: ObservableObject {
         var next = state
         next.inApp = sources.inApp()
         let sampledAt = sources.now()
+        foldLeft(into: &next, now: sampledAt)
         next.machine.apply(await sources.machine(), at: sampledAt)
         if helperTask == nil, lastHelperAt.map({ sampledAt.timeIntervalSince($0) >= TimingBudget.seconds(helperEvery) }) ?? true {
             lastHelperAt = sampledAt
@@ -300,6 +331,83 @@ final class RealtimeAnalysisStore: ObservableObject {
 
     func pause() { sources.pause() }
     func resume() { sources.resume() }
-    func stopAnalysis() { sources.stop() }
+
+    func stopAnalysis() {
+        sources.stop()
+        guard let run = leftRun else { return }
+        let queued = run.steps.compactMap { $0.cycler.isDossierStage ? $0.volume : nil }
+        queued.forEach(sources.dequeue)
+        if !queued.isEmpty {
+            sources.note("\(Self.logTitle) — Stop: \(queued.count) drive(s) this run queued are taken out of the queue")
+        }
+    }
+
+    // MARK: "Analyze the N left"
+
+    static let source = "realtime window"
+    static let logTitle = "Analyze the left"
+    /// After the last start, an engine whose flag flips a beat later (the
+    /// dossier queue's hand-off) is given this long before "finished".
+    static let settleSeconds: TimeInterval = 3
+
+    /// The run this window started, until its engines are idle again.
+    private struct LeftRun {
+        var files: Int
+        var steps: [AnalyzeLeftPlan.Step]
+        var startedAt: Date
+        var lastBusyAt: Date
+    }
+    private var leftRun: LeftRun?
+
+    /// Start every step of the CURRENT plan (read now, not from the last
+    /// tick). Refused — and logged — while anything runs or nothing is left.
+    /// Returns the plan it started (empty when refused).
+    @discardableResult
+    func analyzeTheLeft() -> AnalyzeLeftPlan {
+        var next = state
+        let now = sources.now()
+        foldLeft(into: &next, now: now)
+        publish(next)
+        let plan = next.left
+        guard next.canAnalyzeLeft else {
+            sources.note("\(Self.logTitle) — not started: "
+                         + (plan.isEmpty ? "nothing left to analyze" : "an analyzer is already running"))
+            return AnalyzeLeftPlan()
+        }
+        let where_ = plan.steps.map { step in
+            step.cycler.isDossierStage
+                ? "Scene Captions / OCR / Transcribe on " + (step.volume.map { VolumeReachability.displayLabel(forPath: $0) } ?? "all reachable")
+                : step.cycler.title
+        }.joined(separator: "; ")
+        sources.note("\(Self.logTitle) — START — \(plan.files.formatted()) file(s) left (\(plan.breakdown)); "
+                     + "steps: \(where_) (\(Self.source))")
+        leftRun = LeftRun(files: plan.files, steps: plan.steps, startedAt: now, lastBusyAt: now)
+        plan.steps.forEach(sources.runStep)
+        var running = state
+        running.leftRunActive = true
+        publish(running)
+        return plan
+    }
+
+    /// The tick's part: the plan, whether its engines are busy, and the
+    /// run's end (ONE OUTCOME line) once they have all been idle a while.
+    private func foldLeft(into next: inout RealtimeAnalysisState, now: Date) {
+        let plan = sources.left()
+        next.left = plan
+        let watched = leftRun.map { Set($0.steps.map(\.cycler)) } ?? plan.cyclers
+        let busy = watched.contains { sources.isRunning($0) }
+        next.leftEnginesBusy = busy
+        if var run = leftRun {
+            if busy { run.lastBusyAt = now; leftRun = run }
+            let quiet = now.timeIntervalSince(max(run.startedAt, run.lastBusyAt))
+            if !busy, quiet >= Self.settleSeconds {
+                let titles = Set(run.steps.map { $0.cycler.isDossierStage ? "Scene Captions / OCR / Transcribe" : $0.cycler.title })
+                sources.note("\(Self.logTitle) — OUTCOME — the analyzers it started are idle (\(titles.sorted().joined(separator: ", "))); "
+                             + "\(run.files.formatted()) were left at START; each analyzer's own OUTCOME line says what it did")
+                leftRun = nil
+            }
+        }
+        next.leftRunActive = leftRun != nil
+    }
 }
 

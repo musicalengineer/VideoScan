@@ -11,7 +11,11 @@
 //                   still ran)
 //   OCR             no stamp of its own → dossierProcessedAt is the proxy;
 //                   "n with text found" rides beside it
-//   Transcribe      audioTranscriptDate / audioTranscript
+//   Transcribe      audioTranscriptDate / audioTranscript, or the dossier
+//                   pass stamp — the batch treats a stamped file as analyzed
+//                   and never transcribes it again, so a stamp with no
+//                   transcript is observed, not "left"; it is counted apart
+//                   (`secondary`: "analyzed without a transcript")
 //   Correlate       pairs + unpaired video-only / audio-only (no %)
 //   Signatures      contentHash present (contentHashAt is nil on legacy rows)
 //   Embedded Dates  embeddedCreationDate present — a file with no tag can
@@ -64,8 +68,10 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     /// gate (Cataloged / Workbench / In Triage / Archived since Rick's
     /// 2026-10-10 ruling).
     var lifecycleOK: Bool
-    /// Flagged needs-reformat and not yet analyzed — a batch skips it, so
-    /// the dossier cyclers count it "not applicable" until it is retried.
+    /// Its bytes could not be decoded and it has no dossier — its own
+    /// needs-reformat flag, or another copy of the same content's
+    /// (`DossierPoolStatus`, the batch's own skip rule). A batch skips it,
+    /// so the dossier cyclers count it "not applicable" until it is retried.
     var awaitingReformat: Bool
     var isJunk: Bool
     var drmProtected: Bool
@@ -163,9 +169,13 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     var soundNoDigestCount: Int { hasBytes && soundNoDigest ? 1 : 0 }
 
     /// Project one live record. Main actor (the record lives there).
+    /// `unreadable`: the pass's index (`project` builds it once).
     @MainActor
-    init(record r: VideoRecord) {
-        let pool = DossierPoolStatus(r)
+    init(record r: VideoRecord) { self.init(record: r, unreadable: .none) }
+
+    @MainActor
+    init(record r: VideoRecord, unreadable: UnreadableContentIndex) {
+        let pool = DossierPoolStatus(r, unreadable: unreadable)
         // GH #442: the planner's own verdict, so the band counts what the
         // job would do (rule 4: one rule for one fact). O(1) a row.
         let sound = AudioFingerprintBackfillPlanner.need(r)
@@ -310,6 +320,10 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// Files with bytes but no digest at all: Sound Prints cannot key them
     /// (not applicable, said apart — GH #442). Full Hashes counts them too.
     var soundNoDigest = 0
+    /// Connected files the dossier cyclers would analyze but whose bytes
+    /// could not be decoded (`AnalyzeCoverageInput.awaitingReformat`): not
+    /// "left" — a batch skips them — and said apart on the Content line.
+    var cannotDecode = 0
     /// Catalog ▸ Tidy Catalog…'s live counts (Rick 2026-11-01; CatalogTidy.swift).
     var tidy = CatalogTidyCounts()
     /// Catalog Status's Content indicator (Rick 2026-11-03): per FILE, over
@@ -341,6 +355,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.degenerateOCRDates == rhs.degenerateOCRDates
             && lhs.soundGaveUp == rhs.soundGaveUp
             && lhs.soundNoDigest == rhs.soundNoDigest
+            && lhs.cannotDecode == rhs.cannotDecode
             && lhs.tidy == rhs.tidy
             && lhs.contentFiles == rhs.contentFiles
             && lhs.offlineFilesByRoot == rhs.offlineFilesByRoot
@@ -377,6 +392,47 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
         if k.eligible == 0 { return "nothing eligible" }
         if k.remaining == 0 { return "current · \(k.covered.formatted()) of \(k.eligible.formatted())" }
         return "\(AnalyzeCoverageCounts.percentText(k.percent)) · \(k.remaining.formatted()) to go"
+    }
+}
+
+// MARK: - The dossier cyclers' verdict on one file
+
+/// Scene Captions, OCR and Transcribe are ONE engine (the dossier batch); this
+/// is its rule for one file, the batch's own: the pool (stage, junk, DRM,
+/// cannot decode — `DossierPoolStatus`), the Analysis Scope, never a photo,
+/// and the streams. (For Rick: a small value computed once per row, like a
+/// C++ struct of flags returned by a pure function.)
+struct AnalyzeDossierVerdict: Sendable, Equatable {
+    /// Scene Captions and OCR apply (a video stream).
+    let video: Bool
+    /// Transcribe applies (an audio stream).
+    let audio: Bool
+    /// The batch has its answer for Transcribe: a transcript, or the dossier
+    /// pass ran — the batch's own "already analyzed", it never transcribes
+    /// that file again (Rick 2026-11-06, "88 left").
+    let transcribeObserved: Bool
+    /// Transcribe applies and was observed WITHOUT a transcript (said apart).
+    let withoutTranscript: Bool
+    /// The batch would analyze it but its bytes could not be decoded
+    /// (`awaitingReformat`): not left, said apart.
+    let cannotDecode: Bool
+
+    init(_ r: AnalyzeCoverageInput, scope: AnalysisScope) {
+        let stream = StreamType(rawValue: r.streamTypeRaw) ?? .ffprobeFailed
+        let hasVideo = stream == .videoAndAudio || stream == .videoOnly
+        let hasAudio = stream == .videoAndAudio || stream == .audioOnly
+        let isPhoto: Bool = {
+            if case .photo = AnalysisScope.classify(streamTypeRaw: r.streamTypeRaw, filename: r.filename) { return true }
+            return false
+        }()
+        let eligible = scope.includes(streamTypeRaw: r.streamTypeRaw, filename: r.filename) && !isPhoto
+            && r.lifecycleOK && !r.isJunk && !r.drmProtected
+        let applies = eligible && !r.awaitingReformat
+        video = applies && hasVideo
+        audio = applies && hasAudio
+        transcribeObserved = r.hasTranscript || r.dossierStamped
+        withoutTranscript = audio && r.dossierStamped && !r.hasTranscript
+        cannotDecode = eligible && r.awaitingReformat && (hasVideo || hasAudio)
     }
 }
 
@@ -424,8 +480,10 @@ enum AnalyzeCoverageCalculator {
     static func project(_ records: [VideoRecord]) -> [AnalyzeCoverageInput] {
         var out: [AnalyzeCoverageInput] = []
         out.reserveCapacity(records.count)
+        // Every row is evidence (hidden ones too): the batch builds the same.
+        let unreadable = UnreadableContentIndex(records: records)
         for r in records where !(r.isPurged || r.isSetAside || r.isSuperseded) {
-            out.append(AnalyzeCoverageInput(record: r))
+            out.append(AnalyzeCoverageInput(record: r, unreadable: unreadable))
         }
         return out
     }
@@ -500,10 +558,6 @@ enum AnalyzeCoverageCalculator {
             let (root, reachable) = rootAndReachability(r.fullPath)
             perFile.begin()
             let stream = StreamType(rawValue: r.streamTypeRaw) ?? .ffprobeFailed
-            let classification = AnalysisScope.classify(streamTypeRaw: r.streamTypeRaw, filename: r.filename)
-            let inScope = scope.includes(streamTypeRaw: r.streamTypeRaw, filename: r.filename)
-            let hasVideo = stream == .videoAndAudio || stream == .videoOnly
-            let hasAudio = stream == .videoAndAudio || stream == .audioOnly
 
             // Integrity (Catalog Status, 2026-10-16). Presence: every live
             // row is asked, by drive; nothing per row records the answer
@@ -528,18 +582,15 @@ enum AnalyzeCoverageCalculator {
                   covered: r.footageScannedAt != nil, stamp: r.footageScannedAt,
                   secondary: r.footageScannedAt != nil)
 
-            // Dossier pool: lifecycle + not junk + not DRM + in scope + not a photo.
-            let dossierApplies = r.inDossierPool && inScope
-            let isPhoto: Bool = { if case .photo = classification { return true }; return false }()
-            tally(.sceneCaptions, root: root, reachable: reachable,
-                  applies: dossierApplies && !isPhoto && hasVideo,
+            // Scene Captions / OCR / Transcribe: one engine, one verdict.
+            let dossier = AnalyzeDossierVerdict(r, scope: scope)
+            tally(.sceneCaptions, root: root, reachable: reachable, applies: dossier.video,
                   covered: r.hasCaptions || r.dossierStamped)
-            tally(.ocr, root: root, reachable: reachable,
-                  applies: dossierApplies && !isPhoto && hasVideo,
+            tally(.ocr, root: root, reachable: reachable, applies: dossier.video,
                   covered: r.dossierStamped, secondary: r.hasOCRText)
-            tally(.transcribe, root: root, reachable: reachable,
-                  applies: dossierApplies && !isPhoto && hasAudio,
-                  covered: r.hasTranscript)
+            tally(.transcribe, root: root, reachable: reachable, applies: dossier.audio,
+                  covered: dossier.transcribeObserved, secondary: reachable && dossier.withoutTranscript)
+            if reachable && dossier.cannotDecode { report.cannotDecode += 1 }
 
             // Correlate: pairs and the unpaired A/V-only candidates.
             if r.isPaired { pairedRecords += 1 }

@@ -190,7 +190,7 @@ struct RealtimeAnalysisStoreTests {
 struct RealtimeContentAnalysisSensorTests {
 
     private let module = ["RealtimeAnalysisState.swift", "MachineCounters.swift", "HelperJournalTally.swift",
-                          "RealtimeAnalysisStore.swift", "RealtimeContentAnalysisWindow.swift"]
+                          "RealtimeAnalysisStore.swift", "RealtimeContentAnalysisWindow.swift", "AnalyzeLeftPlan.swift"]
 
     private func code(_ file: String) throws -> String { try SourceTree.appCode(named: file) }
 
@@ -235,7 +235,7 @@ struct RealtimeContentAnalysisSensorTests {
     }
 
     @Test func bothDoorsOpenTheOneWindowAndTheDossierIsTheOneLoader() throws {
-        let door = "RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, source:"
+        let door = "RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, center: center, source:"
         #expect(try code("AnalyzePanelView.swift").contains(door + " \"panel\")"), "the Content Analysis panel's Realtime…")
         #expect(try code("MediaFileOperationsWindow.swift").contains(door + " \"mfo-row\")"), "the Analyze row's context menu")
         let window = try code("RealtimeContentAnalysisWindow.swift")
@@ -248,7 +248,8 @@ struct RealtimeContentAnalysisSensorTests {
 
     @Test func pauseAndStopAreThePanelsEngine() throws {
         let store = try code("RealtimeAnalysisStore.swift")
-        #expect(store.contains("AnalyzeRunner(model: model, orchestrator: orchestrator, center: nil)"))
+        // The center rides along since 2026-11-06 ("Analyze the N left" may start a Full Hashes / Sound Prints job).
+        #expect(store.contains("AnalyzeRunner(model: model, orchestrator: orchestrator, center: center)"))
         for call in ["runner.pause(.sceneCaptions)", "runner.resume(.sceneCaptions)", "runner.stop(.sceneCaptions)"] {
             #expect(store.contains(call), "rule 4: \(call)")
         }

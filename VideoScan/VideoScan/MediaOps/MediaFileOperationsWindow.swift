@@ -314,7 +314,8 @@ struct MediaFileOperationsWindow: View {
                         MediaFileOperationRow(
                             job: item.job,
                             isExpanded: expandedJobIDs.contains(item.id),
-                            onToggleExpand: { toggleExpanded(item.id) }
+                            onToggleExpand: { toggleExpanded(item.id) },
+                            center: center
                         )
                     }
                 }
@@ -508,6 +509,9 @@ struct MediaFileOperationRow: View {
     let job: any MediaFileOperationJob
     let isExpanded: Bool
     let onToggleExpand: () -> Void
+    /// Held, not observed (a plain reference, no subscription): the Realtime
+    /// window's "Analyze the N left" may start a Full Hashes / Sound Prints job.
+    var center: MediaFileOperationsCenter?
 
     /// For "Show in Catalog" on completed Reformat rows — same
     /// pendingCatalogSelection mechanism the dashboard uses. Rick
@@ -594,7 +598,7 @@ struct MediaFileOperationRow: View {
                 // the same window the Content Analysis panel's Realtime… opens.
                 if let analyze = job as? AnalyzeJob, let orchestrator = analyze.realtimeOrchestrator {
                     Button("Realtime Content Analysis…") {
-                        RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, source: "mfo-row")
+                        RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, center: center, source: "mfo-row")
                     }
                 }
             }

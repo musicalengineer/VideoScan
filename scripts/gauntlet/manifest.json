@@ -34331,6 +34331,50 @@
       "tests": [
         "theBandIsThePlanOnTheLiveCatalog"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AnalyzeLeftTests.swift",
+      "stage": "regression",
+      "suites": [
+        "AnalyzeLeftRuleTests",
+        "AnalyzeLeftTruthTests",
+        "AnalyzeLeftPlanTests",
+        "AnalyzeLeftScaleTests",
+        "AnalyzeLeftStoreTests",
+        "AnalyzeLeftSensorTests"
+      ],
+      "tests": [
+        "analyzedWithoutTranscriptIsNotLeft",
+        "batchSkipsUnreadableContent",
+        "buttonNumberIsTheContentNumber",
+        "countEqualsBatch",
+        "hundredThousand",
+        "noDigestNoEvidence",
+        "notCountedYet",
+        "oneRule",
+        "otherRootIsCatalogWide",
+        "outcomeWhenIdle",
+        "refusals",
+        "scale",
+        "startsEachStepOnce",
+        "stepsPerAnalyzerAndDrive",
+        "stopMeansStop",
+        "theWindowCallsTheRunner",
+        "unreadableContentIsNotLeft"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeContentLeftTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeContentLeftTests"
+      ],
+      "tests": [
+        "theCountIsTheBatch"
+      ],
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -38032,9 +38076,13 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeSoundCoverageTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeContentLeftTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 492,
+      "expected_floor": 509,
       "name": "regression",
       "package_expected_floor": 325,
       "package_selectors": [
@@ -38211,7 +38259,13 @@
         "VideoScanTests/UnreadFamilyScopeSurnameShapeTests",
         "VideoScanTests/VerifyDateSensorReviewTests",
         "VideoScanTests/ViewBuilderArityCrashProbeTests",
-        "VideoScanTests/WorkbenchDiscardTrashFailureTests"
+        "VideoScanTests/WorkbenchDiscardTrashFailureTests",
+        "VideoScanTests/AnalyzeLeftRuleTests",
+        "VideoScanTests/AnalyzeLeftTruthTests",
+        "VideoScanTests/AnalyzeLeftPlanTests",
+        "VideoScanTests/AnalyzeLeftScaleTests",
+        "VideoScanTests/AnalyzeLeftStoreTests",
+        "VideoScanTests/AnalyzeLeftSensorTests"
       ]
     },
     {

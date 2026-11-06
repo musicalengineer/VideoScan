@@ -176,14 +176,17 @@ struct CatalogStatusSplitLogicTests {
 @MainActor
 struct CatalogStatusSplitTruthTests {
 
-    static func input(_ path: String, hash: Bool = true, transcript: Bool = true) -> AnalyzeCoverageInput {
-        AnalyzeCoverageInput(fullPath: path, dupStamped: true, dossierStamped: true, hasCaptions: true, hasTranscript: transcript,
-                             hasHash: true, hasFullDigest: hash, hasSoundStamp: true)
+    // `sound`, not `transcript` (2026-11-06): a dossier-stamped file without a
+    // transcript is no longer "left" — the batch never transcribes it again
+    // (AnalyzeLeftTests) — so the second analysis left is a sound print.
+    static func input(_ path: String, hash: Bool = true, sound: Bool = true) -> AnalyzeCoverageInput {
+        AnalyzeCoverageInput(fullPath: path, dupStamped: true, dossierStamped: true, hasCaptions: true, hasTranscript: true,
+                             hasHash: true, hasFullDigest: hash, hasSoundStamp: sound)
     }
 
     static func report() -> AnalyzeCoverageReport {
         let inputs = [input("/Volumes/A/done.mov"), input("/Volumes/A/nohash.mov", hash: false),
-                      input("/Volumes/A/two.mov", hash: false, transcript: false), input("/Volumes/B/away.mov", hash: false)]
+                      input("/Volumes/A/two.mov", hash: false, sound: false), input("/Volumes/B/away.mov", hash: false)]
         return AnalyzeCoverageCalculator.compute(inputs: inputs,
                                                  volumes: [AnalyzeVolumeFact(root: "/Volumes/A", isReachable: true, isRetired: false),
                                                            AnalyzeVolumeFact(root: "/Volumes/B", isReachable: false, isRetired: false)],
@@ -195,7 +198,7 @@ struct CatalogStatusSplitTruthTests {
         let r = Self.report()
         #expect(r.contentFiles.eligible == 3 && r.contentFiles.covered == 1 && r.contentFiles.offline == 1, "\(r.contentFiles)")
         let pairs = AnalyzeCoverageReport.contentAnalyzers.reduce(0) { $0 + r.counts($1).remaining }
-        #expect(pairs == 3, "2 full hashes + 1 transcript: three pairs, two files")
+        #expect(pairs == 3, "2 full hashes + 1 sound print: three pairs, two files")
         #expect(r.offlineFilesByRoot == ["/Volumes/B": 1])
         let facts = CatalogStatusSplitLogicTests.freshFacts
         #expect(CatalogStatusLinesPolicy.lines(facts: facts, report: r, now: now).contentIndicator.words == "2 left to analyze")
