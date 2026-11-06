@@ -7,8 +7,9 @@
 //
 //   Catalog   the Database and Files lines below, combined (the worst of the
 //             two): Synced (green) · Stale (yellow) · Unhealthy (red) ·
-//             Unknown (grey: not counted yet, a check running over a stale
-//             verdict, or a drive needed to decide is not connected). The
+//             Unknown (grey: not counted yet, or a drive needed to decide is
+//             not connected) · Checking… (grey: a check running over a stale
+//             verdict, or an Update running — GH #441). The
 //             sound print sidecar that can't be opened is Catalog red (the
 //             Database line): storage trouble, not analysis. Click → the
 //             Catalog Status window, which says per colour why and what to do.
@@ -124,6 +125,10 @@ struct CatalogStatusIndicator: Sendable, Equatable {
 
     static let catalogPrefix = "Catalog: "
     static let contentPrefix = "Content: "
+    /// Catalog's grey while a check is under way — Validate Catalog over a
+    /// Stale verdict, or an Update (GH #441, Rick 2026-11-06): undecided,
+    /// the verdict is coming. Grey for any other reason reads "Unknown".
+    static let checking = "Checking…"
 
     /// Catalog's four words (Rick 2026-11-03), one per colour.
     static func catalogWords(_ s: CatalogStatusLineState) -> String {
@@ -167,8 +172,15 @@ struct CatalogStatusLines: Sendable, Equatable {
     var content: CatalogStatusLine
     /// Validate Catalog (the file check or the integrity check) is running
     /// now: a Stale verdict is about to be replaced, so Catalog reads grey
-    /// "Unknown — Checking…" until it lands. Red stays red; green stays green.
+    /// "Checking…" until it lands. Red stays red; green stays green.
     var checking = false
+    /// "Update everything stale" is running (GH #441): its steps rebuild
+    /// what the check judges and its LAST step is the check, so any colour
+    /// before then is about to be replaced — Catalog reads grey "Checking…"
+    /// whatever the lines say. The lines themselves, and the transition log,
+    /// are untouched (the truth is still said; only the indicator waits),
+    /// and the window's lead repeats what the last check found.
+    var updating = false
 
     var all: [CatalogStatusLine] { [database, files, content] }
 
@@ -185,9 +197,11 @@ struct CatalogStatusLines: Sendable, Equatable {
     }
 
     /// Catalog = Database + Files, the worst of the two; a running check
-    /// turns a Stale into Unknown ("Checking…"); grey beats green (a drive
-    /// needed to decide is not connected).
+    /// turns a Stale into grey "Checking…"; a running Update turns every
+    /// colour grey "Checking…"; grey beats green (a drive needed to decide
+    /// is not connected).
     var catalogState: CatalogStatusLineState {
+        if updating { return .grey }
         let states = catalogLines.map(\.state)
         if states.contains(.red) { return .red }
         if states.contains(.yellow) { return checking ? .grey : .yellow }
@@ -195,10 +209,24 @@ struct CatalogStatusLines: Sendable, Equatable {
         return .green
     }
 
+    /// Catalog's grey means "a check is under way", not "undecided".
+    var isChecking: Bool {
+        updating || (checking && catalogState == .grey && catalogLines.contains { $0.state == .yellow })
+    }
+
+    static let updatingWhy = "Checking… Update is running; its last step is Validate Catalog, and that check's verdict "
+        + "colours Catalog when it finishes — nothing to do but wait."
+
     /// The strip's Catalog indicator and the window's lead under it.
     var catalog: CatalogStatusIndicator {
         let state = catalogState
         var why: [String] = []
+        if updating {
+            // What the last check said rides beneath, so nothing true is hidden.
+            why = [Self.updatingWhy]
+                + catalogLines.filter { $0.state != .green }.map { "Before this Update — \($0.kind.title): \($0.words)" }
+            return CatalogStatusIndicator(kind: .catalog, state: .grey, words: CatalogStatusIndicator.checking, why: why)
+        }
         switch state {
         case .red:
             why = catalogLines.filter { $0.state == .red }.map { "\($0.kind.title): \($0.words)" }
@@ -212,7 +240,8 @@ struct CatalogStatusLines: Sendable, Equatable {
         case .green, .inProgress:
             break
         }
-        return CatalogStatusIndicator(kind: .catalog, state: state, words: CatalogStatusIndicator.catalogWords(state), why: why)
+        let words = isChecking ? CatalogStatusIndicator.checking : CatalogStatusIndicator.catalogWords(state)
+        return CatalogStatusIndicator(kind: .catalog, state: state, words: words, why: why)
     }
 
     /// The strip's Content indicator: the Content line's own state and words.
@@ -222,7 +251,7 @@ struct CatalogStatusLines: Sendable, Equatable {
 
     /// Catalog ▸ "Catalog Status — Files needs attention…" / "— Green…".
     static func menuTitle(_ lines: CatalogStatusLines?) -> String {
-        guard let lines, lines.catalogLines.allSatisfy({ $0.state != .grey }) else { return "Catalog Status…" }
+        guard let lines, !lines.updating, lines.catalogLines.allSatisfy({ $0.state != .grey }) else { return "Catalog Status…" }
         guard let worst = lines.worst else { return "Catalog Status — Green…" }
         return "Catalog Status — \(worst.kind.title) needs attention…"
     }
@@ -237,14 +266,15 @@ enum CatalogStatusLinesPolicy {
     /// `backgroundDetail`: the helper's work that the Content numbers do NOT
     /// count (the era job's "Machine era: N of M" line), shown under Content.
     static func lines(facts: CatalogFreshnessFacts, report: AnalyzeCoverageReport, now: Date, working: Bool = false,
-                      checking: Bool = false, backgroundDetail: [String] = [],
+                      checking: Bool = false, updating: Bool = false, backgroundDetail: [String] = [],
                       date: (Date) -> String = Self.date) -> CatalogStatusLines {
         var content = content(report, working: working)
         content.detail = backgroundDetail + content.detail
         return CatalogStatusLines(database: database(facts.integrity, soundStoreProblem: facts.soundStoreProblem, now: now, date: date),
                                   files: files(facts, missing: report.missingCopies, offline: report.offlineFilesByRoot, now: now, date: date),
                                   content: content,
-                                  checking: checking)
+                                  checking: checking,
+                                  updating: updating)
     }
 
     /// Something is on the content work right now: an analyzer the Content

@@ -1,24 +1,62 @@
 // CatalogStatusUpdateQueue.swift
 // "Update everything stale" (Rick 2026-10-16, Catalog Status freshness
-// §2 / §2.1): the yellow kinds, in registry order (integrity rows first),
-// started ONE AT A TIME through the existing runner. Nothing new runs —
-// each kind's Run now is the same entry point the row's button uses; the
-// center's own conflict rule (one audit / one hash run / one sound run at
-// a time) still applies underneath.
+// §2 / §2.1): the yellow kinds started ONE AT A TIME through the existing
+// runner. Nothing new runs — each kind's Run now is the same entry point
+// the row's button uses; the center's own conflict rule (one audit / one
+// hash run / one sound run at a time) still applies underneath. This is the
+// chain's ONE definition (CLAUDE.md rule 4): the band's button and the
+// Catalog Status window's both call `enqueue`.
 //
-// Shape: a tiny main-actor state machine with a 1 s poll. `enqueue` keeps
-// the order it was given; the loop starts the next kind when the current
-// one is no longer running (AnalyzeRunner.isRunning — the same flags the
-// panel samples). A `graceSeconds` window after each start lets an engine
-// whose flag flips a beat later (the dossier queue) be seen as running
-// before the poll moves on. Model-owned so it outlives the panel window.
+// ORDER (GH #441, Rick 2026-11-06: "a user, looking at the catalog, sees
+// red, thinks the DB is screwed up … the order in which we do things should
+// be more natural"): `plan` runs every step that GATHERS evidence or
+// REBUILDS what the catalog check judges (full hashes, sound prints,
+// duplicate groups, likeness, captions, A/V pairs, signatures, dates) FIRST,
+// in registry order, and the catalog check (Validate Catalog: the files on
+// disk, then tiers 0–6) ONCE, LAST — added when it was not stale, so the
+// colour an Update leaves describes the catalog the Update left. On 11/06 the
+// check ran second, found 262 sampled-hash groups whose members now carried
+// different whole-file digests, turned Catalog red, and Detect Duplicates
+// fixed every one a second later; the red stood until the next check.
+// While the queue is active the Catalog indicator reads grey "Checking…"
+// (CatalogFreshnessSnapshot.observeUpdate); the last step's verdict colours it.
+//
+// Shape: a tiny main-actor state machine with a 1 s poll. The loop starts
+// the next kind when the current one is no longer running (the runner's
+// isRunning — the same flags the panel samples). A `graceSeconds` window
+// after each start lets an engine whose flag flips a beat later (the dossier
+// queue) be seen as running before the poll moves on. Model-owned so it
+// outlives the panel window. Memory: two arrays of at most 13 enum values.
+//
+// LOGGING (rule 5): ONE START line naming the steps in order, ONE OUTCOME
+// line when the queue drains (what ran, whether the check ran last), both
+// through the runner's sink (console + catalog.log + videoscan.log); each
+// step writes its own START / OUTCOME as it always did.
 //
 // (For Rick: `Task { while … { try? await Task.sleep } }` ≈ a worker
 // thread with a sleep loop, except it runs on the main actor between
-// sleeps, so the state needs no mutex.)
+// sleeps, so the state needs no mutex. `any CatalogUpdateStepRunning` ≈ a
+// pointer to an abstract base class — the app hands the real AnalyzeRunner,
+// a test hands a scripted one.)
 
 import Combine
 import Foundation
+
+/// What the queue needs from whoever runs a step: start it, say whether it
+/// is still running, and write a line to the one log sink.
+@MainActor
+protocol CatalogUpdateStepRunning {
+    func runNow(_ cycler: AnalyzeCycler, volume: String?, source: String)
+    func isRunning(_ cycler: AnalyzeCycler) -> Bool
+    func note(_ line: String)
+}
+
+extension AnalyzeRunner: CatalogUpdateStepRunning {
+    func note(_ line: String) {
+        model.log(line)
+        appLog.write(line)
+    }
+}
 
 @MainActor
 final class CatalogStatusUpdateQueue: ObservableObject {
@@ -31,29 +69,74 @@ final class CatalogStatusUpdateQueue: ObservableObject {
     var graceSeconds: TimeInterval = 2
     var pollMilliseconds = 1_000
 
-    private var runner: AnalyzeRunner?
+    private var runner: (any CatalogUpdateStepRunning)?
     private var startedAt = Date.distantPast
     private var loop: Task<Void, Never>?
+    /// The steps started in this run, in order (the OUTCOME line).
+    private var started: [AnalyzeCycler] = []
+    /// True when Stop cleared steps that had not started.
+    private var cleared = false
+
+    static let source = "update everything stale"
+    static let logPrefix = "Catalog status: update everything stale"
 
     init() {}
 
     var isActive: Bool { current != nil || !pending.isEmpty }
 
-    /// Queue `kinds` (duplicates and already-queued kinds dropped) and
-    /// start the loop if idle. The runner is kept for the loop's starts.
-    func enqueue(_ kinds: [AnalyzeCycler], runner: AnalyzeRunner, source: String) {
+    // MARK: The order (pure)
+
+    /// The catalog check (Validate Catalog: files on disk, then tiers 0–6).
+    static let finalCheck = AnalyzeCycler.integrity
+
+    /// Every kind but the check in registry order (the three evidence
+    /// gatherers lead the registry), then the check.
+    static let order: [AnalyzeCycler] = AnalyzeCycler.allCases.filter { $0 != finalCheck } + [finalCheck]
+
+    /// The steps an Update runs for `kinds`: duplicates dropped, every step
+    /// that feeds or rebuilds what the check judges first, and the check
+    /// ONCE, LAST — added when `kinds` did not name it. Nothing asked →
+    /// nothing run.
+    static func plan(_ kinds: [AnalyzeCycler]) -> [AnalyzeCycler] {
+        guard !kinds.isEmpty else { return [] }
+        let asked = Set(kinds).union([finalCheck])
+        return order.filter(asked.contains)
+    }
+
+    // MARK: Enqueue / clear
+
+    /// Queue `kinds` in `plan` order (a kind already queued is not queued
+    /// twice) and start the loop if idle. A kind in flight is not queued
+    /// again — except the check: steps added while it runs change what it
+    /// would judge, so it runs once more after them.
+    func enqueue(_ kinds: [AnalyzeCycler], runner: any CatalogUpdateStepRunning, source: String) {
         self.runner = runner
-        for k in kinds where !pending.contains(k) && current != k { pending.append(k) }
-        guard !pending.isEmpty else { return }
-        runner.model.log("Catalog status: update everything stale — \(pending.map(\.title).joined(separator: ", ")) (\(source))")
+        let wasActive = isActive
+        let before = pending
+        pending = Self.plan(pending + kinds.filter { $0 != current })
+        guard !pending.isEmpty, pending != before else { return }
+        if !wasActive {
+            started = []
+            cleared = false
+            runner.note("\(Self.logPrefix) — START — \(pending.count) step(s), in order: \(Self.titles(pending)); "
+                        + "the catalog check runs once, last (\(source))")
+        } else {
+            runner.note("\(Self.logPrefix) — added (\(source)); still to run, in order: \(Self.titles(pending))")
+        }
         if loop == nil { loop = Task { [weak self] in await self?.run() } }
     }
 
     /// Drop what has not started; the kind in flight keeps running (its
-    /// own row has Pause / Stop).
+    /// own row has Pause / Stop). If the check was still waiting, the
+    /// OUTCOME line says it did not run.
     func clearPending() {
+        guard !pending.isEmpty else { return }
         pending.removeAll()
+        cleared = true
+        if current == nil { finish() }
     }
+
+    // MARK: The loop
 
     private func run() async {
         defer { loop = nil }
@@ -73,10 +156,28 @@ final class CatalogStatusUpdateQueue: ObservableObject {
             guard !inGrace, !runner.isRunning(c) else { return }
             current = nil
         }
-        guard !pending.isEmpty else { return }
+        guard !pending.isEmpty else {
+            if !started.isEmpty || cleared { finish() }
+            return
+        }
         let next = pending.removeFirst()
         current = next
         startedAt = now
-        runner.runNow(next, source: "update everything stale")
+        started.append(next)
+        runner.runNow(next, volume: nil, source: Self.source)
+    }
+
+    /// The one OUTCOME line; resets the run's bookkeeping.
+    private func finish() {
+        defer { started = []; cleared = false }
+        guard let runner, !started.isEmpty || cleared else { return }
+        let checked = started.last == Self.finalCheck
+        let tail = checked ? "the catalog check ran last — its verdict is Catalog's colour"
+                           : "the catalog check did not run\(cleared ? " (the steps left were cleared)" : "")"
+        runner.note("\(Self.logPrefix) — OUTCOME — started \(started.count) step(s): \(Self.titles(started)); \(tail)")
+    }
+
+    private static func titles(_ kinds: [AnalyzeCycler]) -> String {
+        kinds.map(\.title).joined(separator: ", ")
     }
 }

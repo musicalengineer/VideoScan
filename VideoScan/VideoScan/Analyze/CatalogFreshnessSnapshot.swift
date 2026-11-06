@@ -262,6 +262,10 @@ final class CatalogFreshnessSnapshot: ObservableObject {
     private var centerSubscription: AnyCancellable?
     private var engineSubscription: AnyCancellable?
     private var dossierSubscription: AnyCancellable?
+    private var updateSubscription: AnyCancellable?
+    /// "Update everything stale" is running (GH #441): Catalog reads grey
+    /// "Checking…" until its last step — the catalog check — has finished.
+    private var updating = false
     private var clock: AnyCancellable?
     private var announced = false
     /// The background journal's counts (JournalApplier, after each pass);
@@ -415,6 +419,22 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         s.statusIsActive && !(s.paused && s.activeLanes.isEmpty)
     }
 
+    /// Follow the Update queue (GH #441): active = a step in flight or
+    /// waiting. Published values arrive on change only.
+    func observeUpdate(_ queue: CatalogStatusUpdateQueue) {
+        updateSubscription = Publishers.CombineLatest(queue.$current, queue.$pending)
+            .map { current, pending in current != nil || !pending.isEmpty }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] active in self?.setUpdating(active) }
+    }
+
+    func setUpdating(_ active: Bool) {
+        guard active != updating else { return }
+        updating = active
+        rejudge()
+    }
+
     private func mergeRunning() {
         setRunning(jobRunning.union(engineRunning).union(dossierRunning))
     }
@@ -471,6 +491,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
                                                    working: CatalogStatusLinesPolicy.contentIsWorking(running: running,
                                                                                                       backgroundActive: backgroundServiceActive),
                                                    checking: CatalogStatusLinesPolicy.catalogIsChecking(running: running),
+                                                   updating: updating,
                                                    backgroundDetail: backgroundEraLine.map { [$0] } ?? [])
         guard new != state else { return }
         publishCount += 1
