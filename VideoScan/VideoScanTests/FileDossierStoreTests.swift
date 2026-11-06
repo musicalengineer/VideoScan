@@ -347,6 +347,9 @@ struct FileDossierSensorTests {
         // 3. The Results sheet.
         #expect(try code("AnalysisResultsStore.swift").contains("dossiers: FileDossierLoader.production(model: model)"))
         #expect(try code("AnalysisResultsSheet.swift").contains("FileDossierView(fileID: row.recordID, loader: loader).equatable()"))
+        // 5. The Realtime Content Analysis window (2026-11-05): a finished file opens in place; the door is taken once, in the store.
+        #expect(try code("RealtimeAnalysisStore.swift").contains("dossiers: FileDossierLoader.production(model: model)"))
+        #expect(try code("RealtimeContentAnalysisWindow.swift").contains("FileDossierView(fileID: output.recordID, loader: loader)"))
 
         // Nobody else builds the view, a loader, or reads a dossier.
         var views: [String] = [], loaders: [String] = [], reads: [String] = []
@@ -357,7 +360,8 @@ struct FileDossierSensorTests {
             if text.range(of: #"FileDossierLoader\(\s*load:"#, options: .regularExpression) != nil { loaders.append(name) }
             if text.contains("FileDossier.read(") { reads.append(name) }
         }
-        #expect(Set(views) == ["InspectorDossierView.swift", "DossierDashboardView.swift", "AnalysisResultsSheet.swift", "AnalyzeJob.swift"], "\(views)")
+        #expect(Set(views) == ["InspectorDossierView.swift", "DossierDashboardView.swift", "AnalysisResultsSheet.swift", "AnalyzeJob.swift",
+                               "RealtimeContentAnalysisWindow.swift"], "\(views)")
         #expect(loaders == ["FileDossierStore.swift"], "one door: \(loaders)")
         #expect(reads == ["FileDossierStore.swift"], "one read: \(reads)")
     }

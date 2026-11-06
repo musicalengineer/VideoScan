@@ -97,6 +97,10 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnD
 
     var title: String { record.filename }
     var subtitle: String { subtitleText }
+
+    /// The orchestrator this job runs on, for the row's "Realtime Content
+    /// Analysis…" (the window watches the same engine the job drives).
+    var realtimeOrchestrator: CaptionOrchestrator? { orchestrator }
     var fraction: Double { fractionValue }
     var isIndeterminate: Bool { isIndeterminateValue }
 

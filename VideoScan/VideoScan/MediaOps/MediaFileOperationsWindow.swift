@@ -590,6 +590,13 @@ struct MediaFileOperationRow: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(copySummaryText, forType: .string)
                 }
+                // An Analyze row watches its engine live (Rick 2026-11-05):
+                // the same window the Content Analysis panel's Realtime… opens.
+                if let analyze = job as? AnalyzeJob, let orchestrator = analyze.realtimeOrchestrator {
+                    Button("Realtime Content Analysis…") {
+                        RealtimeContentAnalysisWindowController.shared.show(model: model, orchestrator: orchestrator, source: "mfo-row")
+                    }
+                }
             }
 
             // A finished Verify's diagnostics stay on the collapsed row: one

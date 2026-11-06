@@ -553,6 +553,11 @@ final class CaptionOrchestrator: ObservableObject {
     /// other live counts at the top of each batch.
     @Published var transcriptFailures: Int = 0
 
+    /// Files whose transcript banked as usable this batch (the lane's
+    /// `hasTranscript` flip, counted once per file). The Realtime Content
+    /// Analysis window's "transcribed" tile reads it; reset with the others.
+    @Published var liveTranscribed: Int = 0
+
     // MARK: - Live pipeline activity state
     //
     // Drives the dashboard's "Now Analyzing" / "Recently Completed"

@@ -33879,6 +33879,7 @@
     {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieViewerCatalogTests.swift",
+      "stage": "regression",
       "suites": [
         "HallieViewerCatalogTests"
       ],
@@ -33888,24 +33889,25 @@
         "viewerIgnoresAPoisonedTopLevelFile",
         "viewerReadsTheSyncedCopyNotItsOwnTopLevelFile",
         "viewerWithNothingSyncedRefusesInWords"
-      ],
-      "stage": "regression"
+      ]
     },
     {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HeadlessCatalogRuleSensorTests.swift",
+      "stage": "unit",
       "suites": [
         "HeadlessCatalogRuleSensorTests"
       ],
       "tests": [
         "noHeadlessPathBypassesTheRule",
         "theHeadlessEntriesUseTheRule"
-      ],
-      "stage": "unit"
+      ]
     },
     {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_hallie_replay_reason.py",
+      "stage": "unit",
       "suites": [
         "test_hallie_replay_reason.py"
       ],
@@ -33914,9 +33916,7 @@
         "test_each_known_refusal_has_its_code_and_unknown_is_no_turns",
         "test_the_1104_log_is_catalog_schema_not_current",
         "test_the_replay_script_puts_the_reason_in_each_lane_row"
-      ],
-      "stage": "unit",
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit"
+      ]
     },
     {
       "kind": "package",
@@ -34092,6 +34092,86 @@
         "test_the_guard_refuses_an_output_root_outside_scratch",
         "test_the_output_root_is_the_repos_scratch",
         "test_unknown_event_word_reads_as_unknown_and_keeps_the_raw"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RealtimeAnalysisStateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RealtimeAnalysisStateTests"
+      ],
+      "tests": [
+        "completionCarriesTheBankedWords",
+        "inAppMirrorsTheOrchestrator",
+        "secondsPerFileIsTheMeanOfTheRecentFiles",
+        "theHelperPaneFromOneAnswer",
+        "theMachinePaneFoldsSamplesAndBoundsItsHistory",
+        "theOutputWordsAreBoundedAndNeverEmpty",
+        "theWords"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HelperJournalTallyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HelperJournalTallyTests"
+      ],
+      "tests": [
+        "aNewerDayFileReplacesTheTally",
+        "aPoisonedFileIsCountedNotGuessed",
+        "aRefreshReadsOnlyWhatWasAppended",
+        "noJournalSaysSo",
+        "scaleHundredThousandLines",
+        "theCountsAndTheWordsAreTheJournalsOwn",
+        "theRuleOnEachShape"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MachineCountersTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MachineCountersTests"
+      ],
+      "tests": [
+        "aCounterThatWentBackwardsOrStoodStillIsAProblemNotANumber",
+        "anAbsentCounterCarriesItsWords",
+        "cpuAndDiskAreTheDeltas",
+        "gpuIsClampedToPercent",
+        "theFirstSampleHasNoRate",
+        "theHostReadIsAValueOrAReason",
+        "theReaderKeepsOnlyThePreviousSample",
+        "theWordsBesideATile"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RealtimeContentAnalysisTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RealtimeAnalysisStoreTests",
+        "RealtimeContentAnalysisSensorTests",
+        "RealtimeContentAnalysisMockupTests"
+      ],
+      "tests": [
+        "aTickCopiesTheSourcesAndPublishesOnlyOnChange",
+        "bothDoorsOpenTheOneWindowAndTheDossierIsTheOneLoader",
+        "errorAndUnknown",
+        "idle",
+        "machineInferenceIsGreyAndBlueAndEraNoneIsNeverAnEra",
+        "midRun",
+        "noModelExtensionAndNoRecordsWork",
+        "pauseAndStopAreThePanelsEngine",
+        "pauseResumeStopReachTheEngineOncePerClick",
+        "startTicksAndStopEndsTheLoop",
+        "theHelperIsAskedOnItsCadenceAndItsWordsAreLoggedOnce",
+        "theHelpersFilesAreReadAndNeverWritten",
+        "theKernelAndTheFilesAreReadOffTheMainActor",
+        "theNewCounterIsResetWithTheOthersAndCountedAtBothBankingSites",
+        "theTallyLandsInTheState",
+        "theTryCountsAreTheSeatedSignersAndAnUnreadableLogSaysSo"
       ]
     }
   ],
@@ -36805,7 +36885,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 3317,
+      "expected_floor": 3355,
       "name": "unit",
       "package_expected_floor": 787,
       "package_selectors": [
@@ -37454,7 +37534,13 @@
         "VideoScanTests/CatalogStatusTransitionLogTests",
         "VideoScanTests/CatalogDatabaseInfoUnknownLogTests",
         "VideoScanTests/BackgroundRegistrationGateReviewTests",
-        "VideoScanTests/HeadlessCatalogRuleSensorTests"
+        "VideoScanTests/HeadlessCatalogRuleSensorTests",
+        "VideoScanTests/RealtimeAnalysisStateTests",
+        "VideoScanTests/HelperJournalTallyTests",
+        "VideoScanTests/MachineCountersTests",
+        "VideoScanTests/RealtimeAnalysisStoreTests",
+        "VideoScanTests/RealtimeContentAnalysisSensorTests",
+        "VideoScanTests/RealtimeContentAnalysisMockupTests"
       ]
     },
     {

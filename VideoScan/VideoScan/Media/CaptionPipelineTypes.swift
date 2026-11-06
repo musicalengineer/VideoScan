@@ -93,6 +93,45 @@ struct PipelineLane: Identifiable, Equatable {
     /// could become a spinner later) and from "no audio at all"
     /// (gray dash via `isVideoOnly`).
     var transcriptFailed: Bool
+
+    // Realtime Content Analysis (2026-11-05). Additive, defaulted so every
+    // existing memberwise caller still compiles. Each is a fact the plan
+    // already held when the lane opened: the catalog row's id (the dossier
+    // door's key), how many frames the extractor was asked to rip
+    // (`plan.timestamps.count`), and the clip's probed length.
+    /// `files.id` (VideoRecord.id) of the row in this lane; nil = unknown.
+    var recordID: UUID? = nil
+    /// Frames the extractor was asked to rip (0 = an audio-class file or unknown).
+    var framesPlanned: Int = 0
+    /// The clip's duration as ffprobe reported it (0 = unknown).
+    var clipSeconds: Double = 0
+}
+
+/// What one completed file produced, captured from the banked extraction
+/// and transcript at lane close (Realtime Content Analysis, 2026-11-05).
+/// Bounded: one caption and one excerpt, each cut to `maxWords` characters,
+/// so eight of these are at most a few KB.
+struct CompletedOutput: Equatable, Sendable {
+    static let maxChars = 160
+    var sceneCount: Int
+    var firstCaption: String?
+    var transcriptExcerpt: String?
+
+    static func from(extraction: DossierExtraction, transcript: String?) -> CompletedOutput {
+        CompletedOutput(sceneCount: extraction.scenes.count,
+                        firstCaption: extraction.scenes.first.map { cut($0.text) },
+                        transcriptExcerpt: transcript.flatMap { t in
+                            let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                            return trimmed.isEmpty ? nil : cut(trimmed)
+                        })
+    }
+
+    /// The first `maxChars` characters on one line, with an ellipsis when cut.
+    static func cut(_ text: String) -> String {
+        let oneLine = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        guard oneLine.count > maxChars else { return oneLine }
+        return String(oneLine.prefix(maxChars)).trimmingCharacters(in: .whitespaces) + "…"
+    }
 }
 
 /// A file that finished the full pipeline and was synced to the catalog.
@@ -132,4 +171,10 @@ struct CompletedActivity: Identifiable, Equatable {
     let hasCaptions: Bool
     let hasTranscript: Bool
     let transcriptFailed: Bool
+
+    // Realtime Content Analysis (2026-11-05), additive and defaulted.
+    /// `files.id` of the completed row (the dossier door's key); nil = unknown.
+    var recordID: UUID? = nil
+    /// What the file produced, from the banked extraction and transcript.
+    var output: CompletedOutput? = nil
 }

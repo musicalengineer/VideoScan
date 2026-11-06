@@ -41,6 +41,12 @@ struct DossierFilePlan {
     let hasNoVideo: Bool
     /// Archived row: analysis may write only the dossier channels.
     let readOnly: Bool
+
+    /// Frames the extractor will be asked to rip for `stages`: none for an
+    /// audio-class file or a transcript-only run (the Realtime lane shows it).
+    func framesToRip(stages: Set<AnalyzeStage>) -> Int {
+        stages.contains(.captions) && !hasNoVideo ? timestamps.count : 0
+    }
 }
 
 /// What a per-file step tells its batch loop to do next.
@@ -215,11 +221,19 @@ extension CaptionOrchestrator {
     /// Order matters: `recordCompletion(fromLane:)` reads the lane that
     /// `endLane` removes.
     func completeDossierLane(_ laneID: UUID, vlmSeconds: Double?,
-                             whisperSeconds: Double?, note: String?) {
+                             whisperSeconds: Double?, note: String?,
+                             output: CompletedOutput? = nil) {
         recordCompletion(fromLane: laneID, vlmSeconds: vlmSeconds,
-                         whisperSeconds: whisperSeconds, note: note)
+                         whisperSeconds: whisperSeconds, note: note, output: output)
         endLane(laneID)
         liveCaptioned += 1
+    }
+
+    /// A usable transcript banked for this lane: the ✓ and the batch count
+    /// move together (the Realtime window's "transcribed" tile).
+    func markTranscriptBanked(_ laneID: UUID) {
+        updateLane(laneID, hasTranscript: true)
+        liveTranscribed += 1
     }
 
     /// One visible line per extraction failure — the 2026-07-14 perf

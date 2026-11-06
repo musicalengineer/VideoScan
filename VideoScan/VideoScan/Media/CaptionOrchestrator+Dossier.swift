@@ -458,7 +458,10 @@ extension CaptionOrchestrator {
             filename: plan.filename,
             isVideoOnly: plan.hasNoAudio,
             stage: plan.hasNoVideo ? whisperStage : Self.stageDisplayName(forModelID: vlmModelID),
-            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…",
+            recordID: plan.record.id,
+            framesPlanned: plan.framesToRip(stages: AnalyzeStage.all),
+            clipSeconds: plan.record.durationSeconds
         )
 
         do {
@@ -492,7 +495,8 @@ extension CaptionOrchestrator {
             if let reason = vlmOnlyReason(laneID: laneID, plan: plan) {
                 bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
                 completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
-                                    note: reason.note(hasNoAudio: plan.hasNoAudio))
+                                    note: reason.note(hasNoAudio: plan.hasNoAudio),
+                                    output: .from(extraction: extraction, transcript: nil))
                 // Cancelled while waiting on the previous Whisper: stop
                 // the batch (no progress tick). Skip / video-only: next.
                 if reason == .cancelledWhileWaiting { return .stop }
@@ -615,7 +619,8 @@ extension CaptionOrchestrator {
             let userSkipped = userSkippedLaneIDs.contains(laneID)
             updateLane(laneID, transcriptFailed: !userSkipped)
             completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
-                                note: userSkipped ? "user skipped" : "transcript failed")
+                                note: userSkipped ? "user skipped" : "transcript failed",
+                                output: .from(extraction: extraction, transcript: nil))
             return
         } catch AudioTranscriberError.deadlineExceeded(let secs) {
             // Auto-kill past the deadline. Captions are still valid; the
@@ -623,7 +628,8 @@ extension CaptionOrchestrator {
             captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
             bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
             updateLane(laneID, transcriptFailed: true)
-            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil, note: "whisper timed out")
+            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil, note: "whisper timed out",
+                                output: .from(extraction: extraction, transcript: nil))
             transcriptFailures += 1
             return
         } catch {
@@ -644,13 +650,14 @@ extension CaptionOrchestrator {
         // is "transcript failed", not a checkmark.
         let usable = Self.isUsableTranscript(transcript)
         if usable {
-            updateLane(laneID, hasTranscript: true)
+            markTranscriptBanked(laneID)
         } else {
             updateLane(laneID, transcriptFailed: true)
         }
         completeDossierLane(laneID, vlmSeconds: vlmSec,
                             whisperSeconds: usable ? whisperSec : nil,
-                            note: usable ? nil : "transcript failed")
+                            note: usable ? nil : "transcript failed",
+                            output: .from(extraction: extraction, transcript: transcript))
         publishProgress(idx: plan.index + 1, total: total, currentFile: filename, started: started)
     }
 
@@ -731,7 +738,10 @@ extension CaptionOrchestrator {
             filename: plan.filename,
             isVideoOnly: plan.hasNoAudio,
             stage: laneStage,
-            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…",
+            recordID: plan.record.id,
+            framesPlanned: plan.framesToRip(stages: stages),
+            clipSeconds: plan.record.durationSeconds
         )
 
         do {
@@ -767,7 +777,7 @@ extension CaptionOrchestrator {
             )
             let usable = Self.isUsableTranscript(outcome.transcript)
             if usable {
-                updateLane(laneID, hasTranscript: true)
+                markTranscriptBanked(laneID)
             } else if outcome.failed || outcome.timedOut {
                 updateLane(laneID, transcriptFailed: true)
             }
@@ -777,7 +787,9 @@ extension CaptionOrchestrator {
                                 note: Self.serialDossierNote(
                                     usableTranscript: usable, userSkipped: userSkipped,
                                     hasNoAudio: plan.hasNoAudio, timedOut: outcome.timedOut,
-                                    failed: outcome.failed, hasTranscriber: transcriber != nil))
+                                    failed: outcome.failed, hasTranscriber: transcriber != nil),
+                                // CompletedOutput's own rule drops an empty transcript (isUsableTranscript's twin).
+                                output: .from(extraction: extraction, transcript: outcome.transcript))
             return .next
         } catch is CancellationError {
             captionOrchLog.notice("Dossier: cancelled at \(plan.filename, privacy: .public)")
