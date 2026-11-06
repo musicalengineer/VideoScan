@@ -177,6 +177,58 @@ def test_codex_rows_count_contract_lines_and_flag_pre_contract_docs(sources):
     assert len(rows) == 2                                                      # undated doc skipped
 
 
+# Regression (2026-11-06, "the code metrics page says stale"): from 11/04 a closed pass's
+# transcript moves to docs/archive/reviews/codex/ (codex_review.py still writes new ones to
+# docs/reviews/codex/, which is now empty). The publisher read only the live folder, so the
+# 11/05 passes never reached codex_reviews.jsonl and the "Codex reviews" evidence read
+# "2026-11-03 · stale (>36h)".
+def test_the_publisher_reads_live_and_archived_codex_transcripts(tmp_path):
+    assert pm.REPO / "docs" / "reviews" / "codex" in pm.CODEX_DIRS
+    assert pm.REPO / "docs" / "archive" / "reviews" / "codex" in pm.CODEX_DIRS
+    live, archive = tmp_path / "live", tmp_path / "archive"
+    live.mkdir()
+    archive.mkdir()
+    (archive / "codex-review-a-2026-11-05.md").write_text(CONTRACT_DOC)
+    (live / "codex-review-b-2026-11-06.md").write_text(CONTRACT_DOC)
+    (archive / "codex-review-b-2026-11-06.md").write_text(CONTRACT_DOC)   # mid-move copy: one doc
+    rows = {r["date"]: r for r in pm.codex_rows([live, archive])}
+    assert rows["2026-11-05"]["passes"] == 2 and rows["2026-11-05"]["docs"] == 1
+    assert rows["2026-11-06"]["docs"] == 1
+    assert pm.codex_rows([tmp_path / "nope", tmp_path / "nope2"]) is None
+    assert pm.codex_rows([live]) == pm.codex_rows(live)                   # a single folder still works
+
+
+def test_cli_codex_dir_repeats_and_reads_every_folder(tmp_path, capsys):
+    live, archive = tmp_path / "live", tmp_path / "archive"
+    live.mkdir()
+    archive.mkdir()
+    (archive / "codex-review-a-2026-11-05.md").write_text(CONTRACT_DOC)
+    (live / "codex-review-b-2026-11-06.md").write_text(CONTRACT_DOC)
+    none = str(tmp_path / "none")
+    assert pm.main(["--dry-run", "--no-summary", "--no-events", "--coverage-dir", none, "--adversarial-dir", none,
+                    "--sanitizer-dir", none, "--analysis-dir", none,
+                    "--codex-dir", str(live), "--codex-dir", str(archive)]) == 0
+    out = capsys.readouterr().out
+    assert '"date":"2026-11-05"' in out and '"date":"2026-11-06"' in out
+
+
+@pytest.mark.parametrize("fresh_change, wins", [
+    ({"docs": 8, "passes": 14, "findings": 60}, False),   # a transcript deleted since: the day stands
+    ({"closed_passes": 1}, True),                          # same docs, a Closure added: newer evidence
+    ({"docs": 10, "passes": 17}, True),                    # another pass that day
+])
+def test_a_deleted_transcript_never_lowers_a_published_codex_day(tmp_path, fresh_change, wins):
+    """docs/README.md: fold a closed pass into codex.md, then delete the transcript. A day
+    measured with 9 docs stays as measured when one is gone; a re-read with as many docs
+    or more replaces it."""
+    published = {"schemaVersion": 1, "date": "2026-11-05", "docs": 9, "unparsed_docs": 0,
+                 "passes": 16, "findings": 71, "closed_passes": 0}
+    (tmp_path / "codex_reviews.jsonl").write_text(json.dumps(published) + "\n")
+    fresh = dict(published, **fresh_change)
+    text = pm.sanitized_files({"codex_reviews.jsonl": [fresh]}, tmp_path, None)["codex_reviews.jsonl"]
+    assert json.loads(text) == (fresh if wins else published)
+
+
 # ---------------------------------------------------------------- privacy gate
 
 def test_no_free_text_leaks_from_any_source(sources):

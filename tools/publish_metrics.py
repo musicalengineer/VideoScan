@@ -10,7 +10,9 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
     metrics/adversarial.jsonl     one row per night: files, findings by severity,
                                   confirmed-red, kept / declined, precision, cost
     metrics/codex_reviews.jsonl   one row per day: codex passes, findings, closed
-                                  passes (parsed from docs/reviews/codex headers)
+                                  passes (parsed from the transcript headers in
+                                  docs/reviews/codex and docs/archive/reviews/codex;
+                                  a day never drops below what was published)
     metrics/summary_latest.json   ONE object for the page's summary-first view
                                   (GH #310): app version, GitHub counts (open
                                   bugs, open "High Priority" issues, sprint
@@ -110,6 +112,10 @@ ADV_DIR = LOGS / "adversarial-review"
 SANITIZER_DIR = LOGS / "sanitizer"
 ANALYSIS_DIR = LOGS / "swift6-analysis"
 CODEX_DIR = REPO / "docs" / "reviews" / "codex"
+# Where Codex transcripts live: tools/codex_review.py writes a new pass to the live
+# folder; a closed pass moves to the archive (since 2026-11-04). Both are read, or the
+# page's "Codex reviews" evidence goes stale while reviews keep happening (2026-11-06).
+CODEX_DIRS = (CODEX_DIR, REPO / "docs" / "archive" / "reviews" / "codex")
 DEFAULT_WT = Path.home() / "Library/Caches/VideoScan/metrics-publish-wt"
 APP_SOURCES = REPO / "VideoScan" / "VideoScan"
 
@@ -779,18 +785,25 @@ _CLOSED_RE = re.compile(r"^##\s+Clos(?:ed|ure)\b", re.MULTILINE)
 _DOC_DATE_RE = re.compile(r"(\d{4})[-_](\d{2})[-_](\d{2})")
 
 
-def codex_rows(codex_dir: Path) -> Optional[List[dict]]:
-    """Per-day codex review counts from docs/reviews/codex/*.md.
+def codex_rows(codex_dirs) -> Optional[List[dict]]:
+    """Per-day codex review counts from the transcripts in `codex_dirs` (one folder or
+    several: CODEX_DIRS, the live and the archive folder). A file name in more than one
+    folder (a transcript caught mid-move) counts once. None when no folder exists.
 
     A pass = one `Credits spent: … | Finding count: N` contract line (the first line
     codex_review.py makes codex print). Closed passes = `## Closed` / `## Closure`
     sections, capped at the doc's pass count. Docs written before the contract
     existed have no parseable header: they count as `unparsed_docs`, never as zero
     findings."""
-    if not codex_dir.is_dir():
+    dirs = [d for d in ([codex_dirs] if isinstance(codex_dirs, Path) else codex_dirs) if d.is_dir()]
+    if not dirs:
         return None
+    by_name: Dict[str, Path] = {}
+    for d in dirs:
+        for path in d.glob("*.md"):
+            by_name.setdefault(path.name, path)
     days: Dict[str, dict] = {}
-    for path in sorted(codex_dir.glob("*.md")):
+    for path in (by_name[name] for name in sorted(by_name)):
         m = _DOC_DATE_RE.search(path.name)
         if not m:
             continue
@@ -916,7 +929,7 @@ def static_analysis_rows(runs: Path) -> Optional[List[dict]]:
 
 
 def build_streams(cov_dir: Path = COVERAGE_DIR, adv_dir: Path = ADV_DIR,
-                  codex_dir: Path = CODEX_DIR, san_dir: Optional[Path] = None,
+                  codex_dir=CODEX_DIRS, san_dir: Optional[Path] = None,
                   analysis_dir: Optional[Path] = None) -> Dict[str, Optional[List[dict]]]:
     """name -> fresh rows, or None when that source is not on this machine
     (or, for the sanitizer runs and the analysis lane, when no folder is given;
@@ -1280,19 +1293,31 @@ def _day_key(row: dict) -> Optional[str]:
 # Streams with more than one row per day: the key a fresh row replaces by.
 ROW_KEYS: Dict[str, Callable[[dict], Optional[str]]] = {"sanitizer.jsonl": _sanitizer_key}
 
+# Streams whose published row outranks a fresh one that saw less evidence:
+# (published, fresh) -> True keeps the published row. Codex transcripts are
+# deleted once folded into docs/reviews/codex.md (docs/README.md), so a re-read
+# of a day can find fewer docs than were measured; the review still happened.
+KEEP_PUBLISHED: Dict[str, Callable[[dict, dict], bool]] = {
+    "codex_reviews.jsonl": lambda old, new: _int(new.get("docs")) < _int(old.get("docs")),
+}
+
 
 def merge_rows(existing: List[dict], fresh: List[dict],
-               key: Callable[[dict], Optional[str]] = _day_key) -> List[dict]:
+               key: Callable[[dict], Optional[str]] = _day_key,
+               keep_published: Optional[Callable[[dict, dict], bool]] = None) -> List[dict]:
     """Union keyed by day (or `key`); a fresh row replaces the published row for
-    its key. Keys only on the branch (e.g. a coverage JSON since deleted locally)
-    are kept."""
+    its key unless `keep_published(published, fresh)` says otherwise. Keys only on
+    the branch (e.g. a coverage JSON since deleted locally) are kept."""
     by_date = {}
     for row in existing:
         k = key(row)
         if k is not None:
             by_date[k] = row
     for row in fresh:
-        by_date[key(row)] = row      # a key-less fresh row fails the gate right after
+        k = key(row)                 # a key-less fresh row fails the gate right after
+        if keep_published is not None and k in by_date and keep_published(by_date[k], row):
+            continue
+        by_date[k] = row
     return [by_date[d] for d in sorted(by_date, key=str)]
 
 
@@ -1361,7 +1386,7 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
             merged.sort(key=lambda r: str(r.get("ts", "")))
             out[name] = render(merged)
             continue
-        merged = merge_rows(existing, rows, ROW_KEYS.get(name, _day_key))
+        merged = merge_rows(existing, rows, ROW_KEYS.get(name, _day_key), KEEP_PUBLISHED.get(name))
         # A folder named by a row ALREADY on the branch passed this gate when it
         # was published; a source folder deleted since (FamilyMusic, 10/19) must
         # not wedge every later publish. New names still have to exist today.
@@ -1478,7 +1503,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--worktree", default=str(DEFAULT_WT))
     ap.add_argument("--coverage-dir", default=str(COVERAGE_DIR))
     ap.add_argument("--adversarial-dir", default=str(ADV_DIR))
-    ap.add_argument("--codex-dir", default=str(CODEX_DIR))
+    ap.add_argument("--codex-dir", action="append",
+                    help="a Codex transcript folder; repeat for several (default: the live and the archive folder)")
     ap.add_argument("--sanitizer-dir", default=str(SANITIZER_DIR),
                     help="weekly_sanitizer.py's log folder (runs.jsonl) for metrics/sanitizer.jsonl")
     ap.add_argument("--analysis-dir", default=str(ANALYSIS_DIR),
@@ -1504,7 +1530,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("OUTCOME skipped: VIDEOSCAN_PUBLISH_METRICS=0")
         return 0
     fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
-                          Path(a.codex_dir).expanduser(), Path(a.sanitizer_dir).expanduser(),
+                          [Path(d).expanduser() for d in a.codex_dir] if a.codex_dir else CODEX_DIRS,
+                          Path(a.sanitizer_dir).expanduser(),
                           Path(a.analysis_dir).expanduser())
     fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
