@@ -103,6 +103,23 @@ struct AudioFingerprintBackfillPlan: Sendable, Equatable {
     var alreadyStamped: Int { alreadyFingerprinted + noSoundStamped + partialStamped }
 }
 
+/// What Fingerprint Sound would do with one record: the planner's verdict
+/// (`AudioFingerprintBackfillPlanner.need`), shared with the Catalog Status
+/// band (GH #442). (For Rick: an enum with payloads is a C++
+/// `std::variant` whose alternatives carry the evidence that decided them.)
+enum AudioFingerprintNeed: Equatable, Sendable {
+    /// Removed, superseded, no path or zero bytes: not the job's.
+    case inactive
+    /// No digest at all: nothing to key the sidecar on (hash it first).
+    case noDigest
+    /// A current stamp describes the row: done until its bytes change.
+    case stamped(AudioFingerprintStamp)
+    /// Tried `AudioFingerprintAttempt.cap` times by this engine: skipped.
+    case gaveUp(AudioFingerprintAttempt)
+    /// The job would read it.
+    case needed(digests: [String])
+}
+
 /// Builds the plan in one pass. Main actor because it reads live records.
 @MainActor
 enum AudioFingerprintBackfillPlanner {
@@ -110,32 +127,30 @@ enum AudioFingerprintBackfillPlanner {
     static func plan(records: [VideoRecord], isArchived: (VideoRecord) -> Bool) -> AudioFingerprintBackfillPlan {
         var plan = AudioFingerprintBackfillPlan()
         var byRoot: [String: AudioFingerprintBackfillLane] = [:]
-        for r in records where isActive(r) {
-            let digests = digests(of: r)
-            guard !digests.isEmpty else { plan.noDigest += 1; continue }
-            if let stamp = r.audioFingerprint,
-               stamp.describes(sizeBytes: r.sizeBytes, digests: digests, headerHasAudio: !r.audioCodec.isEmpty) {
+        for r in records {
+            switch need(r) {
+            case .inactive:
+                continue
+            case .noDigest:
+                plan.noDigest += 1
+            case .stamped(let stamp):
                 switch (stamp.outcome, stamp.complete) {
                 case (.noAudio, _): plan.noSoundStamped += 1
                 case (.fingerprinted, false): plan.partialStamped += 1
                 case (.fingerprinted, true): plan.alreadyFingerprinted += 1
                 }
-                continue
-            }
-            // GH #416 part 2: tried `cap` times by THIS engine, no print —
-            // skipped (an older engine's tries count 0, so a new one retries).
-            if let attempt = gaveUp(r, digests: digests) {
+            case .gaveUp(let attempt):
                 switch attempt.outcome {
                 case .heardTooLittle: plan.gaveUpHeardTooLittle += 1
                 case .failed: plan.gaveUpFailed += 1
                 }
-                continue
+            case .needed(let digests):
+                let root = MediaVolumeGatePolicy.volumeRoot(forPath: r.fullPath)
+                byRoot[root, default: AudioFingerprintBackfillLane(root: root)].items.append(
+                    AudioFingerprintBackfillItem(id: r.id, path: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes,
+                                                 durationSeconds: r.durationSeconds, isVideoOnly: r.streamType == .videoOnly,
+                                                 audioCodec: r.audioCodec, isArchived: isArchived(r), digests: digests))
             }
-            let root = MediaVolumeGatePolicy.volumeRoot(forPath: r.fullPath)
-            byRoot[root, default: AudioFingerprintBackfillLane(root: root)].items.append(
-                AudioFingerprintBackfillItem(id: r.id, path: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes,
-                                             durationSeconds: r.durationSeconds, isVideoOnly: r.streamType == .videoOnly,
-                                             audioCodec: r.audioCodec, isArchived: isArchived(r), digests: digests))
         }
         plan.lanes = byRoot.values
             .map { lane in
@@ -147,15 +162,39 @@ enum AudioFingerprintBackfillPlanner {
         return plan
     }
 
-    /// The record's note when the plan gives up on it: no current stamp
-    /// (`describes`) and `cap` tries by this engine on its preferred full
-    /// digest. ONE rule for the plan and the coverage count (Codex #217 F3).
-    static func gaveUp(_ r: VideoRecord, digests: [String]? = nil) -> AudioFingerprintAttempt? {
-        guard let attempt = r.audioFingerprintAttempt else { return nil }
-        let digests = digests ?? self.digests(of: r)
+    /// THE rule for one record (GH #442): what Fingerprint Sound would do
+    /// with it. The plan above and the Catalog Status band's Sound Prints
+    /// count (`AnalyzeCoverageInput.init(record:)`) both ask THIS, so the
+    /// band's "N without a sound print" is the number of files the job
+    /// would read. In order:
+    ///   - not active (removed, superseded, no path, zero bytes) -> inactive;
+    ///   - no digest at all -> noDigest (no sidecar key; counted, not planned);
+    ///   - a stamp that `describes` the row (same size, keyed on its
+    ///     PREFERRED digest, an engine this build trusts) -> stamped. A stamp
+    ///     that does not (another size, a sampled "v1:" key beside a full
+    ///     SHA-256, an untrusted engine) is stale and does not count;
+    ///   - `AudioFingerprintAttempt.cap` tries by THIS engine on the
+    ///     preferred full digest -> gaveUp (an older engine's tries count 0);
+    ///   - otherwise -> needed.
+    /// O(1) per row (two fixity reads). `known` = the caller's
+    /// `digests(of:)` when it already has it.
+    static func need(_ r: VideoRecord, digests known: [String]? = nil) -> AudioFingerprintNeed {
+        guard isActive(r) else { return .inactive }
+        let digests = known ?? self.digests(of: r)
+        guard !digests.isEmpty else { return .noDigest }
         if let stamp = r.audioFingerprint,
-           stamp.describes(sizeBytes: r.sizeBytes, digests: digests, headerHasAudio: !r.audioCodec.isEmpty) { return nil }
-        return attempt.gaveUp(digests: digests) ? attempt : nil
+           stamp.describes(sizeBytes: r.sizeBytes, digests: digests, headerHasAudio: !r.audioCodec.isEmpty) {
+            return .stamped(stamp)
+        }
+        if let attempt = r.audioFingerprintAttempt, attempt.gaveUp(digests: digests) { return .gaveUp(attempt) }
+        return .needed(digests: digests)
+    }
+
+    /// The record's note when the plan gives up on it: `need`'s gaveUp
+    /// case (Codex #217 F3: one rule for the plan and the coverage count).
+    static func gaveUp(_ r: VideoRecord, digests: [String]? = nil) -> AudioFingerprintAttempt? {
+        if case .gaveUp(let attempt) = need(r, digests: digests) { return attempt }
+        return nil
     }
 
     /// Not removed, not superseded, pointing at a file with a size.
@@ -350,6 +389,19 @@ struct AudioFingerprintBackfillTotals: Sendable, Equatable {
         parts.append("\(MediaBytes.display(Int64(rate)))/s")
         parts.append(FullHashBackfillTotals.timeLeft(Double(max(0, plannedBytes - doneBytes)) / rate))
         return parts.joined(separator: " · ")
+    }
+
+    /// A finished run that read nothing says WHY (GH #442: "No file needed
+    /// a sound fingerprint" beside a band that still counted files):
+    /// "Nothing to read — 10,176 already done · 1,136 skipped after 3 tries
+    /// (heard too little / failed) — a new engine retries them".
+    nonisolated static func nothingToDoWords(_ t: AudioFingerprintBackfillTotals) -> String {
+        var parts: [String] = []
+        if t.alreadyStamped > 0 { parts.append("\(t.alreadyStamped.formatted()) already done") }
+        if t.gaveUp > 0 { parts.append(gaveUpWords(t.gaveUp)) }
+        if t.noDigest > 0 { parts.append("\(t.noDigest.formatted()) never hashed (scan them first)") }
+        guard !parts.isEmpty else { return "No file needed a sound fingerprint." }
+        return "Nothing to read — " + parts.joined(separator: " · ")
     }
 
     /// "12 skipped after 3 tries (heard too little / failed) — a new engine retries them"

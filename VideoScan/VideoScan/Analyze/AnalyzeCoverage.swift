@@ -83,12 +83,17 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     /// A stored whole-file SHA-256 covering exactly the catalog's size.
     var hasFullDigest: Bool
     var fullDigestAt: Date?
-    /// Fingerprint Sound's stamp (fingerprinted or "no sound").
+    /// Fingerprint Sound's CURRENT stamp (fingerprinted or "no sound"):
+    /// the planner's `need` said `.stamped` (GH #442 — a stale stamp is
+    /// not one; the job reads that file again).
     var hasSoundStamp: Bool
     var soundStampAt: Date?
-    /// No stamp, but tried `AudioFingerprintAttempt.cap` times by this
-    /// engine without a print — the plan skips it (GH #416 part 2).
+    /// No current stamp, but tried `AudioFingerprintAttempt.cap` times by
+    /// this engine without a print — the plan skips it (GH #416 part 2).
     var soundGaveUp: Bool
+    /// No digest at all: the job cannot key it, so it is not "left to do"
+    /// for Sound Prints (the planner's `.noDigest`; GH #442). +1 byte a row.
+    var soundNoDigest: Bool
     /// GH #402: this row's stored OCR date captions the verdict calls
     /// degenerate (`!!!!…`, written before the caption path refused them).
     /// Read-only count for the Catalog Status information line. One Int a
@@ -103,7 +108,8 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
          hasTranscript: Bool = false, isPaired: Bool = false, hasHash: Bool = false,
          hasEmbeddedDate: Bool = false, hasInferredDate: Bool = false, hasUserDate: Bool = false,
          hasFullDigest: Bool = false, fullDigestAt: Date? = nil,
-         hasSoundStamp: Bool = false, soundStampAt: Date? = nil, soundGaveUp: Bool = false, degenerateOCRDates: Int = 0) {
+         hasSoundStamp: Bool = false, soundStampAt: Date? = nil, soundGaveUp: Bool = false, soundNoDigest: Bool = false,
+         degenerateOCRDates: Int = 0) {
         self.fullPath = fullPath
         self.degenerateOCRDates = degenerateOCRDates
         self.filename = filename.isEmpty ? (fullPath as NSString).lastPathComponent : filename
@@ -130,6 +136,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
         self.hasSoundStamp = hasSoundStamp
         self.soundStampAt = soundStampAt
         self.soundGaveUp = soundGaveUp
+        self.soundNoDigest = soundNoDigest
     }
 
     /// The dossier pool's gate, minus the Analysis Scope (applied by the
@@ -145,13 +152,24 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     /// (GH #416 part 2 — observed, never "left to analyze").
     var soundObserved: Bool { hasSoundStamp || soundGaveUp }
 
+    /// Sound Prints is meant for this file: bytes at a path and a digest
+    /// to key the print on — exactly the rows the planner can plan.
+    var soundApplies: Bool { hasBytes && !soundNoDigest }
+
     /// 1 when this file counts in "N gave up after 3 tries", else 0.
     var soundGaveUpCount: Int { hasBytes && soundGaveUp ? 1 : 0 }
+
+    /// 1 when this file has bytes but no digest (the note's "never hashed").
+    var soundNoDigestCount: Int { hasBytes && soundNoDigest ? 1 : 0 }
 
     /// Project one live record. Main actor (the record lives there).
     @MainActor
     init(record r: VideoRecord) {
         let pool = DossierPoolStatus(r)
+        // GH #442: the planner's own verdict, so the band counts what the
+        // job would do (rule 4: one rule for one fact). O(1) a row.
+        let sound = AudioFingerprintBackfillPlanner.need(r)
+        let soundStamp: AudioFingerprintStamp? = { if case .stamped(let s) = sound { return s }; return nil }()
         self.init(fullPath: r.fullPath,
                   filename: r.filename,
                   streamTypeRaw: r.streamTypeRaw,
@@ -174,10 +192,10 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   hasUserDate: !(r.userDate ?? "").isEmpty,
                   hasFullDigest: VideoScanModel.storedFullDigest(r) != nil,
                   fullDigestAt: VideoScanModel.storedFullDigest(r) == nil ? nil : r.contentFixity?.computedAt,
-                  hasSoundStamp: r.audioFingerprint != nil,
-                  soundStampAt: r.audioFingerprint?.computedAt,
-                  // The plan's own rule (one O(1) check a row).
-                  soundGaveUp: AudioFingerprintBackfillPlanner.gaveUp(r) != nil,
+                  hasSoundStamp: soundStamp != nil,
+                  soundStampAt: soundStamp?.computedAt,
+                  soundGaveUp: { if case .gaveUp = sound { return true }; return false }(),
+                  soundNoDigest: sound == .noDigest,
                   // O(this row's OCR dates); rows without any skip the verdict.
                   degenerateOCRDates: r.ocrDateCandidates.count - r.usableOCRDates.count)
     }
@@ -289,6 +307,9 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// Files Sound Prints gave up on after `AudioFingerprintAttempt.cap`
     /// tries by this engine (counted as covered — observed — and said apart).
     var soundGaveUp = 0
+    /// Files with bytes but no digest at all: Sound Prints cannot key them
+    /// (not applicable, said apart — GH #442). Full Hashes counts them too.
+    var soundNoDigest = 0
     /// Catalog ▸ Tidy Catalog…'s live counts (Rick 2026-11-01; CatalogTidy.swift).
     var tidy = CatalogTidyCounts()
     /// Catalog Status's Content indicator (Rick 2026-11-03): per FILE, over
@@ -319,6 +340,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
             && lhs.missingCopies == rhs.missingCopies
             && lhs.degenerateOCRDates == rhs.degenerateOCRDates
             && lhs.soundGaveUp == rhs.soundGaveUp
+            && lhs.soundNoDigest == rhs.soundNoDigest
             && lhs.tidy == rhs.tidy
             && lhs.contentFiles == rhs.contentFiles
             && lhs.offlineFilesByRoot == rhs.offlineFilesByRoot
@@ -491,9 +513,10 @@ enum AnalyzeCoverageCalculator {
             tally(.integrity, root: root, reachable: reachable, applies: true, covered: false)
             tally(.fullHashes, root: root, reachable: reachable, applies: r.hasBytes,
                   covered: r.hasFullDigest, stamp: r.fullDigestAt)
-            tally(.soundPrints, root: root, reachable: reachable, applies: r.hasBytes,
+            tally(.soundPrints, root: root, reachable: reachable, applies: r.soundApplies,
                   covered: r.soundObserved, stamp: r.soundStampAt)
             report.soundGaveUp += r.soundGaveUpCount
+            report.soundNoDigest += r.soundNoDigestCount
 
             // Duplicates: every active record is a candidate.
             tally(.duplicates, root: root, reachable: reachable, applies: true, covered: r.dupStamped)

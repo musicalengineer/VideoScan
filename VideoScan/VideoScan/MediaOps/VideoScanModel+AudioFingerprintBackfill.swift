@@ -56,9 +56,21 @@ extension VideoScanModel {
     /// a note never writes one (CatalogRecordDiff), so nothing is saved.
     func clearAudioFingerprintAttempts(forDigests digests: Set<String>) {
         guard !digests.isEmpty else { return }
+        var cleared = false
         for r in records where r.audioFingerprintAttempt.map({ digests.contains($0.contentDigest) }) == true {
             r.audioFingerprintAttempt = nil
+            cleared = true
         }
+        if cleared { noteAudioFingerprintChanged() }
+    }
+
+    /// Every stamp / try write below is IN PLACE (the records array does
+    /// not change, so its didSet cannot see it): tell the debounced
+    /// catalog-change pass, or the Catalog Status band keeps counting files
+    /// the job already answered (GH #442). Debounced 250 ms — a burst of
+    /// writes is one coverage pass.
+    private func noteAudioFingerprintChanged() {
+        noteCatalogChangedForDossierCounts()
     }
 
     /// The backfill's write: compare-and-set on the planned record.
@@ -68,6 +80,7 @@ extension VideoScanModel {
         rec.audioFingerprint = stamp
         // A print (or "no sound") ends the content's tries (GH #416 part 2).
         rec.audioFingerprintAttempt = nil
+        noteAudioFingerprintChanged()
         return .written
     }
 
@@ -84,6 +97,7 @@ extension VideoScanModel {
         else { return nil }
         let prior = rec.audioFingerprintAttempt
         rec.audioFingerprintAttempt = next
+        noteAudioFingerprintChanged()
         return (next, prior)
     }
 
@@ -94,6 +108,7 @@ extension VideoScanModel {
                                        prior: AudioFingerprintAttempt?) -> Bool {
         guard let rec = record(forID: item.id), rec.audioFingerprintAttempt == written else { return false }
         rec.audioFingerprintAttempt = prior
+        noteAudioFingerprintChanged()
         return true
     }
 
@@ -105,6 +120,7 @@ extension VideoScanModel {
         guard let rec = record(forID: item.id), rec.audioFingerprint == written else { return false }
         rec.audioFingerprint = nil
         if rec.audioFingerprintAttempt == nil { rec.audioFingerprintAttempt = priorAttempt }
+        noteAudioFingerprintChanged()
         return true
     }
 
