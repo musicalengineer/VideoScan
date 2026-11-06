@@ -154,7 +154,10 @@ extension VideoScanModel {
         discoveryFinal: Bool = true
     ) -> Bool {
         if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+            // The unmount trail: absent (ENOENT) or unreadable (EACCES/EIO) alike —
+            // both are what a dead volume looks like from here.
             let notFound = outcome.probe.isPlayable == "File not found"
+                || outcome.probe.isPlayable == Self.notAccessibleVerdict
             if let line = Self.probeFailureLine(outcome: outcome, notFound: notFound, catalogGated: catalogGated) {
                 log(line)
             }

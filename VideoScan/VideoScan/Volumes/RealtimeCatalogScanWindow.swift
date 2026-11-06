@@ -178,7 +178,7 @@ struct RealtimeCatalogScanContent: View {
                 color: dashboard.scanErrors > 0 ? .red : .secondary,
                 value: "\(dashboard.scanErrors)",
                 label: "errors",
-                sub: dashboard.scanErrors > 0 ? "ffprobe failed" : "clean"
+                sub: dashboard.scanErrors > 0 ? "could not probe" : "clean"
             )
         }
     }

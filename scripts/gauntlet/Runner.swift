@@ -521,8 +521,13 @@ struct GauntletRunner {
         let listCmd = ["swift", "test", "list", "--skip-build", "-c", "release", "--package-path", packagePath.path, "--scratch-path", packageScratch] + filters
         do {
             let listing = try command(listCmd, log: listLog, timeout: 600, environment: environment)
-            if listing.contaminated { contaminated = true }
-            let listed: String? = listing.code == 0 && !listing.contaminated ? (try? String(contentsOf: listLog, encoding: .utf8)) : nil
+            if listing.contaminated {
+                // Isolation already failed: launch nothing more (Codex 2026-11-05 re-review 2, P2).
+                contaminated = true
+                output["status"] = "failed"; output["reason"] = "unreaped process contamination (swift test list)"
+                return output
+            }
+            let listed: String? = listing.code == 0 ? (try? String(contentsOf: listLog, encoding: .utf8)) : nil
             let execution = try command(cmd, log: log, timeout: timeout, environment: environment)
             if execution.contaminated { contaminated = true }
             output["exit_code"] = execution.code

@@ -42,6 +42,10 @@ if tool == 'swift':
         # `swift test list --filter`: XCTest as Module.Class/method, Swift Testing with "()".
         if s.get('list_exit'):
             sys.exit(s['list_exit'])
+        if s.get('list_orphan'):
+            import subprocess
+            subprocess.Popen(['/bin/sleep', '20'], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for n in range(s.get('listed_xctest', s.get('xctest', 1))):
             print(f'VideoScanCoreTests.X/test{n}')
         for n in range(s.get('passed', 2)):
@@ -323,6 +327,22 @@ class GauntletPackageAdapterTests(unittest.TestCase):
         self.assertEqual(unit['status'], 'failed', unit)
         self.assertIn('counts unavailable', unit['reason'])
         self.assertNotIn('passed', unit['package'])
+
+    def test_a_contaminated_listing_launches_no_package_tests(self):
+        # Codex 2026-11-05 re-review 2 (P2): `swift test list` left a child in
+        # its process group; the runner recorded contamination and still ran
+        # `swift test` in the same environment. Isolation failed: launch nothing.
+        self.config['package'] = {'unit': {'list_orphan': True}}
+        self.run_runner()
+        calls = [c['args'][:2] for c in self.swift_calls]
+        self.assertIn(['test', 'list'], calls)
+        unit_runs = [c for c in self.swift_calls if c['args'][:2] != ['test', 'list'] and c['args'][0] == 'test'
+                     and r'VideoScanCoreTests\.UnitPkgTests/' in c['args']]
+        self.assertEqual(unit_runs, [], 'a package test ran after a contaminated listing')
+        unit = self.stage('unit')
+        self.assertEqual(unit['status'], 'failed', unit)
+        self.assertIn('contamination', unit['reason'])
+        self.assertEqual(self.result['status'], 'failed')
 
     def test_a_filtered_runs_selected_tests_bracket_counts_and_a_missing_list_is_red(self):
         # The fake always prints the filtered runner's "Selected tests" bracket

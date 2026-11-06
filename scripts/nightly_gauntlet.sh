@@ -53,29 +53,29 @@ MACHINE="$(python3 "$REPO_ROOT/scripts/nightly_rota.py" machine "$HOST")"
 G_LOG="$LOGDIR/nightly_gauntlet.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >>"$G_LOG"; }
 # ── The testbed lock: ONE protocol, the same text in scripts/m4_run.sh and scripts/nightly_gauntlet.sh (tests/test_m4_run.py pins them equal) ──
-# A kernel advisory lock — scripts/testbed_lock.py holds fcntl.flock(LOCK_EX|LOCK_NB) on $LOCK/flock as a
-# child of this shell for as long as this shell lives; the kernel releases it the instant the holder dies.
-# No stale lock, no reclaim, no check-then-act window (Codex 2026-11-05 re-review: every mkdir/rename
-# protocol had one and two owners could win). $LOCK/info carries "pid info" for the busy message only;
-# the probe (`testbed_lock.py probe`) reads the same kernel truth. The helper answers one line on a FIFO:
-# HELD, or BUSY <holder's info>. $LOCK_HELPER names the helper (per script: repo checkout or <root>/bin).
-take_lock() {   # take_lock <info>: LOCK_HELD=1 and LOCK_HOLDER = the lease's pid, or BUSY="…" and return 1
-    local fifo="$LOCK.answer.$$" answer
-    mkdir -p "$LOCK" && rm -f "$fifo" && mkfifo "$fifo" || { BUSY="cannot prepare the lock at $LOCK"; return 1; }
-    python3 "$LOCK_HELPER" hold "$LOCK" "$1" >"$fifo" 2>/dev/null &
-    LOCK_HOLDER=$!
-    read -r answer <"$fifo"; rm -f "$fifo"
+# A kernel advisory lock on an open file description the WORK inherits: this shell opens fd 9 on $LOCK/flock,
+# scripts/testbed_lock.py flocks that fd (LOCK_EX|LOCK_NB) and exits. flock belongs to the open file description,
+# so the kernel holds it until the LAST process holding fd 9 closes it — the suite, the gauntlet in its own
+# session, any child — and releases it by itself when they are all gone (Codex 2026-11-05 re-reviews: a lease
+# tied to the shell ended before surviving work did; every mkdir/rename protocol had a check-then-act window).
+# $LOCK/info carries "pid info" for the busy message only; the probe (`testbed_lock.py probe`) reads the same
+# kernel truth from a fresh open. $LOCK_HELPER names the helper (per script: repo checkout or <root>/bin).
+take_lock() {   # take_lock <info>: LOCK_HELD=1 (fd 9 is the lock), or BUSY="…" and return 1
+    local answer
+    mkdir -p "$LOCK" || { BUSY="cannot prepare the lock at $LOCK"; return 1; }
+    exec 9>>"$LOCK/flock" || { BUSY="cannot open $LOCK/flock"; return 1; }
+    answer="$(python3 "$LOCK_HELPER" hold 9 "$LOCK" "$1" 2>/dev/null)"
     case "$answer" in
         HELD)  LOCK_HELD=1; return 0 ;;
         BUSY*) BUSY="busy: ${answer#BUSY }" ;;
         *)     BUSY="lock helper failed (${answer:-no answer})" ;;
     esac
-    wait "$LOCK_HOLDER" 2>/dev/null; LOCK_HOLDER=""
+    exec 9>&-
     return 1
 }
-drop_lock() {
+drop_lock() {   # closes this shell's fd 9; work still holding its copy keeps the lock until it exits
     [ "${LOCK_HELD:-0}" = 1 ] || return 0
-    kill "$LOCK_HOLDER" 2>/dev/null; wait "$LOCK_HOLDER" 2>/dev/null
+    exec 9>&-
     LOCK_HELD=0
 }
 # ── end of the shared lock text ──

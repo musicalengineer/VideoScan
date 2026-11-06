@@ -25273,7 +25273,8 @@
       "tests": [
         "fastChildIsUntouchedByDeadline",
         "sigtermIgnoringChildIsKilledAtDeadline",
-        "stuckFFProbeIsBoundedByProbeTimeout"
+        "stuckFFProbeIsBoundedByProbeTimeout",
+        "timedOutProbeStillCountsItsExecution"
       ]
     },
     {
@@ -27599,6 +27600,7 @@
         "fileThatGrowsUnderTheProbeIsSkipped",
         "futureDatedFileIsCatalogued",
         "futureMtimeIsNotBeingWritten",
+        "inaccessibleParentIsAnErrorNeverGone",
         "justWrittenFileIsLeftOut",
         "reprobeIgnoresTheScanSecondStat",
         "reprobeIsTyped",
@@ -31611,6 +31613,7 @@
         "test_gauntlet_package_adapter.py"
       ],
       "tests": [
+        "test_a_contaminated_listing_launches_no_package_tests",
         "test_a_filtered_runs_selected_tests_bracket_counts_and_a_missing_list_is_red",
         "test_a_floor_above_the_declarations_fails_preflight",
         "test_a_forged_closing_bracket_and_summary_never_inflate",
@@ -32060,7 +32063,7 @@
       "tests": [
         "test_a_contender_paused_over_a_stale_lock_never_reclaims_a_live_owner",
         "test_a_dead_holders_lock_needs_no_reclaim",
-        "test_a_killed_holder_frees_the_lock_with_no_cleanup",
+        "test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done",
         "test_an_owner_paused_after_claiming_refuses_the_contender",
         "test_cli_writes_the_table_and_exits_by_verdict",
         "test_counts_names_and_seconds",
@@ -32115,7 +32118,7 @@
         "test_a_crashed_summary_is_red",
         "test_a_dead_holders_lock_needs_no_reclaim",
         "test_a_failed_notification_changes_nothing",
-        "test_a_killed_holder_frees_the_lock_with_no_cleanup",
+        "test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done",
         "test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock",
         "test_a_plain_nightly_mac_needs_only_its_green_suite",
         "test_an_owner_paused_after_claiming_refuses_the_contender",

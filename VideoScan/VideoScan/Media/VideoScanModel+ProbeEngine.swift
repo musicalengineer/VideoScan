@@ -35,6 +35,11 @@ import Darwin
 
 extension VideoScanModel {
 
+    /// `probe.isPlayable` for a file stat(2) refused for a reason other than
+    /// absence (EACCES, EIO, …): present but unreadable — an error, never
+    /// "Gone". The unmount-abort trail counts it like "File not found".
+    nonisolated static let notAccessibleVerdict = "Not accessible"
+
     /// Streams `target.searchPath` and drains a probe group against it.
     /// Returns the collected records, total discovered, and total completed.
     func runTargetProbeGroup(
@@ -676,36 +681,39 @@ extension VideoScanModel {
             return (attrs?[.size] as? Int64) ?? 0
         }()
 
-        do {
-            return try await withThrowingTaskGroup(of: ProbeOutcome.self) { group in
-                group.addTask {
-                    await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath, catalogedPaths: catalogedPaths)
-                }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
-                    throw CancellationError()
-                }
-                // First to finish wins — cancel the other
-                guard let result = try await group.next() else {
-                    throw CancellationError()
-                }
-                group.cancelAll()
-                return result
+        // The race: the probe against the clock (nil = the clock won). When the
+        // clock wins the probe is cancelled (ProcessRunner SIGTERM → SIGKILL →
+        // abandon bounds it, as before) and AWAITED for its evidence: whether
+        // ffprobe was launched is counted even on a timeout (Codex 2026-11-05
+        // re-review 2, P1: the old throwing group discarded it).
+        let raced: (outcome: ProbeOutcome?, timedOut: Bool) = await withTaskGroup(of: ProbeOutcome?.self) { group in
+            group.addTask {
+                await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath, catalogedPaths: catalogedPaths)
             }
-        } catch {
-            // Timeout fired before the probe completed. Pure value carrier —
-            // the VideoRecord is built later at the main-actor drain point.
-            var o = ProbeOutcome()
-            o.filename            = url.lastPathComponent
-            o.ext                 = url.pathExtension.uppercased()
-            o.fullPath            = url.path
-            o.directory           = url.deletingLastPathComponent().path
-            o.sizeBytes           = preSize
-            o.probe.isPlayable    = "Timed out"
-            o.notes               = MachineNote.line(author: .scan, text: "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled")
-            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            return o
+            group.addTask {
+                try? await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
+                return nil
+            }
+            guard let first = await group.next() else { return (nil, true) }
+            if let outcome = first { group.cancelAll(); return (outcome, false) }
+            group.cancelAll()
+            let late = await group.next() ?? nil
+            return (late, true)
         }
+        if !raced.timedOut, let outcome = raced.outcome { return outcome }
+        // Timeout fired before the probe completed. Pure value carrier —
+        // the VideoRecord is built later at the main-actor drain point.
+        var o = ProbeOutcome()
+        o.filename            = url.lastPathComponent
+        o.ext                 = url.pathExtension.uppercased()
+        o.fullPath            = url.path
+        o.directory           = url.deletingLastPathComponent().path
+        o.sizeBytes           = preSize
+        o.probe.isPlayable    = "Timed out"
+        o.notes               = MachineNote.line(author: .scan, text: "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled")
+        o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        o.ffprobeRan          = raced.outcome?.ffprobeRan ?? false   // the process runner's evidence survives the timeout
+        return o
     }
 
     /// `@MainActor` VideoRecord shim over `probeFileWithTimeoutOutcome`.
@@ -783,16 +791,28 @@ extension VideoScanModel {
         // shared by every file on the mount — which is the wrong granularity
         // here. Using it caused per-file existence misses to overwrite the
         // cached mount bit and flicker the catalog UI (italics flicker bug).
-        guard fm.fileExists(atPath: path) else {
+        // stat(2), not `fileExists`: Foundation says false for an EXISTING
+        // file whose parent lost search permission (EACCES) or whose volume
+        // errors (EIO) — only ENOENT/ENOTDIR is absence (Codex 2026-11-05
+        // re-review 2, P0: "Gone, zero errors" for a file still there).
+        var sb = stat()
+        guard stat(path, &sb) == 0 else {
+            let code = errno
             var o = ProbeOutcome()
             o.filename            = url.lastPathComponent
             o.ext                 = url.pathExtension.uppercased()
             o.fullPath            = path
             o.directory           = url.deletingLastPathComponent().path
-            o.probe.isPlayable    = "File not found"
-            o.notes               = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
             o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            o.fileNotFound        = true          // gone before the probe: never "ffprobed", never an ffprobe failure
+            if code == ENOENT || code == ENOTDIR {
+                o.probe.isPlayable = "File not found"
+                o.notes            = MachineNote.line(author: .scan, text: "File was discovered during scan but is no longer accessible")
+                o.fileNotFound     = true          // gone before the probe: never "ffprobed", never an ffprobe failure
+            } else {
+                // Present (or unknowable) but unreadable: an error with its reason, never "Gone".
+                o.probe.isPlayable = Self.notAccessibleVerdict
+                o.notes            = MachineNote.line(author: .scan, text: "File could not be read: \(String(cString: strerror(code))) (errno \(code)) — ffprobe skipped")
+            }
             return o
         }
 

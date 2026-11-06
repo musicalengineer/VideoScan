@@ -210,20 +210,27 @@ class HostLockTests(unittest.TestCase):
         self.holders = []
 
     def tearDown(self):
-        for h in self.holders:
-            h.kill(); h.wait()
+        for fd in self.holders:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         self.home.cleanup()
 
     def host(self, stamp):
         return run('__host', 'ui', 'a' * 40, stamp, '--host', 'm4', env=self.env)
 
     def hold(self, info):
-        """A live owner through the same helper the scripts use (scripts/testbed_lock.py hold)."""
-        h = subprocess.Popen([sys.executable, str(LOCK_HELPER), 'hold', str(self.root / 'lock'), info],
-                             stdout=subprocess.PIPE, text=True)
-        self.holders.append(h)
-        self.assertEqual(h.stdout.readline().strip(), 'HELD')
-        return h
+        """A live owner through the same helper the scripts use: this process opens the
+        flock file, the helper flocks that fd (`hold <fd>`); the lock lives on the fd."""
+        lock = self.root / 'lock'
+        lock.mkdir(exist_ok=True)
+        fd = os.open(str(lock / 'flock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        self.holders.append(fd)
+        out = subprocess.run([sys.executable, str(LOCK_HELPER), 'hold', str(fd), str(lock), info],
+                             capture_output=True, text=True, pass_fds=(fd,), timeout=20).stdout.strip()
+        self.assertEqual(out, 'HELD')
+        return fd
 
     def probe(self):
         return subprocess.run([sys.executable, str(LOCK_HELPER), 'probe', str(self.root / 'lock')],
@@ -239,20 +246,19 @@ class HostLockTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/s1-ui'))
 
     def test_live_holder_refuses_and_latest_is_untouched(self):
-        holder = self.hold('deep sha=123 since now')
+        self.hold('deep sha=123 since now')
         os.symlink(self.root / 'out/live', self.root / 'latest')
         p = self.host('s2')
         self.assertEqual(p.returncode, 3)
         self.assertIn('OUTCOME REFUSED busy: deep sha=123', (self.root / 'out/s2-ui/run.log').read_text())
-        self.assertIsNone(holder.poll(), "a refused run must not touch the holder")
-        self.assertEqual(self.probe(), 'BUSY deep sha=123 since now')
+        self.assertEqual(self.probe(), 'BUSY deep sha=123 since now', "a refused run must not touch the holder")
         self.assertEqual(os.readlink(self.root / 'latest'), str(self.root / 'out/live'))
 
     def test_a_dead_holders_lock_needs_no_reclaim(self):
         # The kernel freed it with the holder; leftovers of the retired
         # mkdir/rename protocol (a pid file) never block and are never "reclaimed".
         dead = self.hold('deep sha=dead')
-        dead.kill(); dead.wait()
+        os.close(dead)                                            # the holder is gone: its fd closed with it
         (self.root / 'lock' / 'pid').write_text('999999')
         p = self.host('s3')
         self.assertEqual(p.returncode, 1)
@@ -273,7 +279,7 @@ class HostLockTests(unittest.TestCase):
         out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True,
                              env=self.env, timeout=30).stdout
         self.assertIn('M4: RUNNING deep sha=abc since 10:00', out)
-        holder.kill(); holder.wait()
+        os.close(holder)
         out = subprocess.run(['/bin/bash', '-s'], input=snippet, capture_output=True, text=True,
                              env=self.env, timeout=30).stdout
         self.assertIn('M4: idle', out)
@@ -413,7 +419,11 @@ class LockRaceTests(unittest.TestCase):
         self.assertEqual((a.returncode, b.returncode), (0, 3))
         self.assertEqual(self.probe(), 'FREE')
 
-    def test_a_killed_holder_frees_the_lock_with_no_cleanup(self):
+    def test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done(self):
+        # Codex 2026-11-05 re-review 2 (P1): the host shell dies while its deep
+        # run (run_bounded: own session) still works. The lock lives on the fd
+        # the work inherited (run_bounded passes fd 9 on), so B is refused until
+        # the work ends; then the kernel frees it and C runs, no reclaim.
         fake = self.work / 'fake'
         hold, starts = fake / 'hold', fake / 'gauntlet_starts'
         hold.touch()
@@ -422,16 +432,24 @@ class LockRaceTests(unittest.TestCase):
             self.wait_for(lambda: starts.exists(), "A's deep run")
             self.assertTrue(self.probe().startswith('BUSY deep sha='), self.probe())
             a.kill(); a.wait()
-            self.wait_for(lambda: self.probe() == 'FREE', 'the kernel to drop the dead holder')
+            time.sleep(0.5)                                      # the old lease would have let go by now
+            self.assertTrue(self.probe().startswith('BUSY deep sha='),
+                            f'the lock must outlive the shell while its work runs: {self.probe()}')
+            b = self.host('kb')                                  # B, while A's work is still alive
+            b.wait(timeout=60)
+            self.assertEqual(b.returncode, 3)
+            self.assertIn('OUTCOME REFUSED busy: deep sha=', (self.root / 'out/kb-deep/run.log').read_text())
+            self.assertEqual(len(starts.read_text().split()), 1)
         finally:
             hold.unlink(missing_ok=True)
-        b = self.host('kb')
-        b.wait(timeout=60)
-        log_b = (self.root / 'out/kb-deep/run.log').read_text()
-        self.assertIn('START', log_b)
-        self.assertIn('OUTCOME GREEN', log_b)
-        self.assertNotIn('reclaim', log_b)
-        self.assertEqual(b.returncode, 0)
+        self.wait_for(lambda: self.probe() == 'FREE', 'the kernel to drop the lock when the work ends')
+        c = self.host('kc')
+        c.wait(timeout=60)
+        log_c = (self.root / 'out/kc-deep/run.log').read_text()
+        self.assertIn('START', log_c)
+        self.assertIn('OUTCOME GREEN', log_c)
+        self.assertNotIn('reclaim', log_c)
+        self.assertEqual(c.returncode, 0)
 
 
 if __name__ == '__main__':

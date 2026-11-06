@@ -343,6 +343,36 @@ struct ScanStillBeingWrittenTests {
         #expect(ds.liveStreamCounts[StreamType.ffprobeFailed.rawValue] == 1)
     }
 
+    @Test("a settled file whose parent lost search permission is an error with its reason — never Gone, never ffprobed")
+    func inaccessibleParentIsAnErrorNeverGone() async throws {
+        // Codex 2026-11-05 re-review 2 (P0): fileExists is false for an EXISTING
+        // file under a directory without search permission; the engine said
+        // "Gone, zero errors". stat(2) says EACCES, and that is an error.
+        let sb = try Self.sandbox("eacces"); defer { sb.cleanup() }
+        let fm = FileManager.default
+        let parent = sb.files.appendingPathComponent("locked", isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let path = parent.appendingPathComponent("settled.mov").path
+        try fm.moveItem(atPath: TestMediaGenerator.generate(container: "mov", streams: .videoOnly, duration: 1.0, prefix: "test_eacces"), toPath: path)
+        try Self.settle(path)
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: parent.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path) }
+        let outcome = await sb.model.probeFileOutcome(url: URL(fileURLWithPath: path))
+        #expect(!outcome.fileNotFound, "present but unreadable is not Gone")
+        #expect(outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue)
+        #expect(outcome.probe.isPlayable == VideoScanModel.notAccessibleVerdict)
+        #expect(outcome.notes.contains("Permission denied"), Comment(rawValue: outcome.notes))
+        #expect(!outcome.ffprobeRan)
+        let tally = ScanTileTally.tally(streamTypeRaw: outcome.probe.streamTypeRaw, ffprobeRan: outcome.ffprobeRan,
+                                        sniffRejected: outcome.sniffRejected, stillBeingWritten: outcome.stillBeingWritten,
+                                        fileNotFound: outcome.fileNotFound)
+        #expect(tally == .init(tileKey: StreamType.ffprobeFailed.rawValue, ranFFprobe: false, isProbeError: true))
+        // And true absence is still Gone.
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+        let gone = await sb.model.probeFileOutcome(url: parent.appendingPathComponent("vanished.mov"))
+        #expect(gone.fileNotFound && gone.probe.isPlayable == "File not found")
+    }
+
     @Test("a file that changes under a REAL ffprobe run is skipped and carries ffprobeRan true (the engine sets it, not the test)")
     func fileChangedUnderTheProbeCarriesTheExecution() async throws {
         let sb = try Self.sandbox("ranunder"); defer { sb.cleanup() }

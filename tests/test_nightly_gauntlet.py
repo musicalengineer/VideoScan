@@ -125,18 +125,25 @@ class NightlyGauntletTests(unittest.TestCase):
         self.plant()
 
     def tearDown(self):
-        for h in self.holders:
-            h.kill(); h.wait()
+        for fd in self.holders:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         self.tmp.cleanup()
 
     # The lock's kernel truth, through the same helper the scripts use.
-    def hold(self, info, **env):
-        """A live owner of the testbed lock (scripts/testbed_lock.py hold); returns once it holds."""
-        h = subprocess.Popen([sys.executable, str(REPO / "scripts/testbed_lock.py"), "hold", str(self.lock), info],
-                             stdout=subprocess.PIPE, text=True, env=dict(os.environ, **env))
-        self.holders.append(h)
-        self.assertEqual(h.stdout.readline().strip(), "HELD")
-        return h
+    def hold(self, info):
+        """A live owner of the testbed lock: this process opens the flock file and the
+        helper flocks that fd (scripts/testbed_lock.py hold <fd>); the lock lives on the
+        returned fd until it is closed — exactly the shell's `exec 9>>` protocol."""
+        self.lock.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.lock / "flock"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        self.holders.append(fd)
+        out = subprocess.run([sys.executable, str(REPO / "scripts/testbed_lock.py"), "hold", str(fd), str(self.lock), info],
+                             capture_output=True, text=True, pass_fds=(fd,), timeout=20).stdout.strip()
+        self.assertEqual(out, "HELD")
+        return fd
 
     def probe(self):
         return subprocess.run([sys.executable, str(REPO / "scripts/testbed_lock.py"), "probe", str(self.lock)],
@@ -244,9 +251,12 @@ class NightlyGauntletTests(unittest.TestCase):
         self.assertEqual(sum("gauntlet AMBER" in h for h in history), 1, history)
         self.assertEqual(self.probe(), "FREE")
 
-    def test_a_killed_holder_frees_the_lock_with_no_cleanup(self):
-        # The shell dies (SIGKILL: no trap runs); the kernel drops the lock with
-        # its helper; the next run acquires without reclaiming anything.
+    def test_a_killed_shells_live_work_keeps_the_lock_and_frees_it_when_done(self):
+        # Codex 2026-11-05 re-review 2 (P1): the shell dies (SIGKILL: no trap
+        # runs) while its gauntlet — in its own session — is still running. The
+        # lock lives on the open file description the work inherited, so B is
+        # busy until that work ends; then the kernel frees it with no cleanup
+        # and C acquires without reclaiming anything.
         gauntlet = self.repo / "scripts/run_gauntlet.sh"
         gauntlet.write_text(FAKE_GAUNTLET_HOLD)
         gauntlet.chmod(0o755)
@@ -258,11 +268,18 @@ class NightlyGauntletTests(unittest.TestCase):
             wait_for(lambda: starts.exists(), what="A's gauntlet to start")
             self.assertTrue(self.probe().startswith("BUSY nightly testbed"), self.probe())
             a.kill(); a.wait()
-            wait_for(lambda: self.probe() == "FREE", what="the kernel to drop the dead holder's lock")
+            time.sleep(0.5)                                       # the old lease would have let go by now
+            self.assertTrue(self.probe().startswith("BUSY nightly testbed"),
+                            f"the lock must outlive the shell while its work runs: {self.probe()}")
+            rc, line = self.run_it()                              # B, while A's gauntlet is still alive
+            self.assertEqual(rc, 0)
+            self.assertIn("gauntlet skipped (testbed busy: nightly testbed", line)
+            self.assertEqual(len(starts.read_text().split()), 1, "B must not start a second gauntlet")
         finally:
             hold.unlink(missing_ok=True)
+        wait_for(lambda: self.probe() == "FREE", what="the kernel to drop the lock when the work ends")
         gauntlet.write_text(FAKE_GAUNTLET)
-        rc, line = self.run_it()
+        rc, line = self.run_it()                                  # C
         self.assertEqual(rc, 0)
         self.assertIn("gauntlet AMBER", line)
         self.assertNotIn("reclaim", (self.home / "Library/Logs/VideoScan/nightly_gauntlet.log").read_text())
@@ -318,13 +335,12 @@ class NightlyGauntletTests(unittest.TestCase):
         self.assertIn("gauntlet RED", line)
 
     def test_a_live_on_demand_run_skips_the_gauntlet_and_keeps_its_lock(self):
-        holder = self.hold("deep 2673211ef (m4_run)")
+        self.hold("deep 2673211ef (m4_run)")
         rc, line = self.run_it()
         self.assertEqual(rc, 0)
         self.assertIn("gauntlet skipped (testbed busy: deep 2673211ef (m4_run))", line)
         self.assertFalse((self.fake / "gauntlet_args").exists())
-        self.assertIsNone(holder.poll(), "the holder is untouched")
-        self.assertEqual(self.probe(), "BUSY deep 2673211ef (m4_run)")
+        self.assertEqual(self.probe(), "BUSY deep 2673211ef (m4_run)", "the holder is untouched")
 
     def test_the_lock_is_taken_during_the_run_and_released_after(self):
         (self.repo / "scripts/run_gauntlet.sh").write_text(
@@ -338,7 +354,7 @@ class NightlyGauntletTests(unittest.TestCase):
         # lock with it. Leftovers of the retired protocol (a pid file, an empty
         # directory) are ignored the same way.
         dead = self.hold("deep (about to die)")
-        dead.kill(); dead.wait()
+        os.close(dead)                                            # the holder is gone: its fd closed with it
         (self.lock / "pid").write_text("999999")
         rc, line = self.run_it()
         self.assertEqual(rc, 0)
