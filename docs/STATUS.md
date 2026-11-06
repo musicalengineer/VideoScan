@@ -1,47 +1,67 @@
 # Status — rewritten, never appended
 
-*Updated 2026-11-04 (Wednesday evening). Rick corrects this file; agents read it at session start.*
+*Updated 2026-11-06 (Friday ~17:15). Rick corrects this file; agents read it at session start.*
 
 ## Read first (five minutes)
-0. **Evening 11/04 — the era job's endless loop is fixed (branch `fix/era-unrippable-retry-loop`).**
-   - **What Rick saw:** the helper at full speed with nothing to show for it. `background.log` 18:37–18:50 told the story. Run 1 found an era for 0 of 523 files, said "no usable era" for 121, and left 402 as "retried next run". The schedule then re-planned the same 402 within seconds, and it would have done so forever. Those 402 never rip a frame: Avid MXF essences (audio-only, raw video), QuickTime reference movies, `.m4p`.
-   - **The cause:** a file with no verdict was retried every run with no limit. Timeouts and worker deaths had no memory across runs either. No test asked whether the service ever finishes; one test even locked in the unlimited retry.
-   - **The fix:** a file with no verdict gets 3 tries (`EraAttemptStore`, `background/attempts/era.jsonl`, append-only). The third try writes one `era.none` line, "gave up after 3 tries: <why>", and the planner skips the file from then on. When frames won't rip, the reason carries ffmpeg's own words (`bench.py` `ReasonedRipper`). Every try and every give-up writes one line to `background.log`.
-   - **"The file, or the Mac?"** (`EraCanary`): a try counts against a file only when the Mac is shown to work. ffmpeg must rip a synthetic clip at START, and again before any "no frame would decode" try; if it can't, the job is refused, so a broken `brew upgrade` can't give up good files. Before a timeout, death or unanswered try is counted, the model must answer that clip. If it doesn't, nothing is counted and the job holds.
-   - **Tests:** 17 new.
-     - `EraJobConvergenceTests` (13). The real schedule must settle a mixed catalog (plan 0, idle, ≤ 3 analyses per file); before the fix it never settled. The real-media matrix runs mp4, mov, mkv, mxf and avi/dv through bench.py's real ripper with a fake model.
-     - `EraJobRetryReviewTests` (4), from the reviewer: broken ffmpeg, a timeout-only plan, the OUTCOME words, and scale.
-     - Plus 3 Python tests on the rip reason.
-     - Every red was seen before its fix.
-   - **Lanes on the final tree:** background Core suites 212 / 0 · bench.py Python 185 / 0 · sensor lane GREEN 679 · Debug build OK · gauntlet inventory 0 errors. The new suites sit in the gauntlet regression stage (floor +17).
-   - **Not covered:** a worker killed by the OS for memory (SIGKILL / jetsam) still counts as a try if the model then answers the synthetic clip. The worker doesn't record the exit signal yet. Open item below.
-1. **11/04 day:** the helper owns its schedule (DECISIONS 11/04). There's no keyboard backoff on the Ultra: the worker runs at utility QoS. Pause/Resume is in the menu bar, and a pause survives a restart.
-2. **11/03:** team signing (#415 test pending), the Release-only gate, the menu bar item, the Catalog/Content split, sound attempts v15 (#416 closed), and the checklist audit (merged `f393a3ba`).
+0. **How work moves now (PROCESS §2 item 1, Rick 2026-11-06).** Rick works on and spot-tests `main` only. A feature merges
+   to `main` WITHOUT waiting to be asked once its checklist, its own tests, the touched suites and the sensor lane are
+   green — as ONE `--no-ff` merge commit (undo: `git revert -m 1 <merge>`) — then its branch, worktree and DerivedData
+   are deleted. Data-risk code (CLAUDE.md rule 10) still gets its Codex pass first. Run testbed scripts from an
+   up-to-date worktree of `main`, never from Rick's checkout (it lags; on 11/06 an old `m4_run.sh` ran from it).
+1. **The testbed schedule (DECISIONS 2026-11-05).** M5 Ultra 02:00 nightly suite; M4 14:00 the FULL testbed (suite, then
+   the deep gauntlet, both published, then a "done" line in `~/Library/Logs/VideoScan/testbed_latest.txt` on the M4 and
+   an `osascript` notification to the Ultra — the notification does not show; Rick to check Notifications settings).
+   M4 04:30 Swift 6 analysis lane installed 11/06. Both runs test `main` from GitHub, never a checkout.
+2. **11/06's first 14:00 run was RED, all causes fixed and merged the same day:** the gauntlet's new `swift test list`
+   cross-check compared an unfiltered listing with filtered runs (`9fd8afb6d`; M4 re-run AMBER 16:58); a red test
+   pinning a helper-status race sat on `main` since 11/04 (`d67a5686c`); two production-shape tests encoded a one-time
+   catalog state (`a27aab8d7`); the gauntlet inventory went invalid after the metrics merges (`0f3421c6c`). Metrics page
+   stale cards fixed (`48f73c291` CI history stream, `7a7355737` Codex count reads the archive, `44b8daffe` summary
+   rebuilt after the 14:00 run). Expect AMBER tonight and tomorrow (7 known issues, 880 unadapted suites, ui not run).
+3. **Merged 11/05–11/06 for Rick's spot test (Release):** Realtime Content Analysis viewer (`ae1d2c653`; Content
+   Analysis ▸ Realtime…, or right-click an Analyze row in MFO), the Realtime Catalog Scan tiles (Not media / Gone / Not
+   accessible / Failed = Errors; `a5674d9dd`), the file dossier view, the Results sheet, the Whisper red/green smoke.
+   Reports and mockups: `~/dev/VideoScan/.scratch/kept-2026-11-06/`.
+4. **Catalog went red for ~3 min at 17:02 (#441):** Update runs the catalog check BEFORE Detect Duplicates, so 262
+   sampled-hash groups whose members now have different full hashes (revealed by #434's re-hashing) turned the chip
+   Unhealthy until the next check; Detect Duplicates had already fixed them a second later. Fix: verify last.
 
-## Spot tests for Rick (Release, to install the new helper)
-- **Rebuild Release, then Resume the era job in the menu bar** (you paused it at dinner). With the current catalog the first run plans the 402, and every file that won't rip logs "no verdict, try 1 of 3". After the third run they are "GAVE UP after 3 tries", and the plan is 0. Check `~/Library/Logs/VideoScan/background.log`.
-  - Each run takes about 11 minutes. The schedule re-plans when the catalog generation changes, or every 10 minutes.
-- **Spot-check one give-up:** the inspector shows no Machine era line for it (era.none is never an era). Its reason is in the log line.
-- **#415 at the same time:** the rebuild should keep the helper running with no re-tick.
+## Next (in order)
+1. **#441** Update's verify runs last (red test: an Update that leaves a clean catalog never goes red).
+2. **#434** rescans throw away known whole-file hashes and re-hash unchanged files (TB per rescan). Catalog writer →
+   rule 8 writer tests + production-shape test on a `.backup` + Codex pass before merge.
+3. **C → B module lift using Rick's Anthropic Console API credits** (Rick 2026-11-06; ~$197 left; key in Keychain
+   item `anthropic-api-key`, no dedicated key wanted). A module with any function over CCN 30 is capped at C
+   (docs/index.html GRADE.capAtC); 15 functions hold 8 modules at C (list: `ci/baselines/complexity_debt.json`, ccn > 30;
+   check each module's other sub-grades before promising B). Build `scripts/claude_api_session.sh`: reads the key from
+   the Keychain, sets `ANTHROPIC_API_KEY`, opens a `claude` session on a brief (billed to the Console, usable when the
+   plan's Fable/Claude run out Wed/Thu). One function per merge: characterization tests first, split to ≤ 25, same tests
+   green. Non-data-risk first: InspectorPanel.formatAllMetadata, CatalogContent.previewPlayer, FindTagCLI.run,
+   TreeIdentityDeriver.deriveWithResolvedPointerPins, GedcomFamilyGraph.applyingFactOverlay, BirthplaceUnitResolver
+   Scan.apply. Data-risk later with safety-critical + Codex: ArchiveAngel ×5, ArchiveVolumeProtection.make,
+   DeleteDuplicatesJob.finishRun, runRelocate, POIStorage.migrateToUUIDFoldersIfNeeded.
+4. **`tools/claude_review.py`**: a fresh-context reviewer on the same API key, twin of `tools/codex_review.py` (same brief
+   and output contract), code and diffs only (rule 13), per-review cost cap and running total, reuses
+   `scripts/hallie_e1/costs.py` prices. Batch API for overnight reviews.
+5. Issues from 11/06: #435 (cancelled probe shows Failed; vanished extensionless file audited wrong), #436 (gauntlet
+   Python adapter — four script regressions stay blocked), #439 (nightly calls expectation failures "crashed"),
+   #440 (M4: `scriptedSessionsMatchTheirRecordedSnapshots` failed).
+6. Carried: the worker records its exit signal (jetsam must not count as a try); `CaptionRunnerError` on Avid MXF;
+   #418; #413, #412, #408.
 
 ## Waiting on Rick
-- **Checklist proposal:** under TESTED, add "**Does it settle?** For any retry, schedule or loop: what bounds it, and is there a test that it finishes?" This needs your OK, since it's a PROCESS change.
-- **#415**, see above.
-- **M4 Ollama:** set `OLLAMA_HOST` so the Ultra can use it over TB5 (needs its Ollama restarted).
-- **The catalog lane is RED by its own rule on 7 `withKnownIssue` tests** (#356, #358, #338/#357 family). For the gauntlet this is ruled (DECISIONS 2026-11-05: such a run is AMBER); does the same rule apply to `run_catalog_tests.sh`?
-- Carried over: #327's two rulings; #332; the older defaults list (git `bb39167a:docs/STATUS.md`).
+- **Realtime viewer questions:** (1) should Stop confirm first? (2) helper counts: today, last 24 h, or since start?
+- **"Gone" tile wording/icon** (Realtime Catalog Scan).
+- **Notifications:** allow Script Editor notifications on the Ultra, or pick another route for the 14:00 done line.
+- Carried: the "Does it settle?" checklist line; #415; M4 `OLLAMA_HOST`; whether `run_catalog_tests.sh` follows the
+  AMBER rule; #327's two rulings; #332.
 
-## Next
-1. The worker records its exit signal, so a memory kill (jetsam) is never counted as a try against a file (from the 11/04 review).
-2. The `CaptionRunnerError error 2` lines on Avid MXF at 17:57 in `videoscan.log`: the dossier engine likely has the same class of problem. Check whether it loops too.
-3. Content Analysis results sheet (BACKLOG 11/04).
-4. #418: the two P2s from schema B.
-5. Helper throughput, and jobs on the M4 over TB5 (BACKLOG 11/03).
-6. #413 (P1), #412, #408.
-
-## In flight / cleanup
-- `fix/era-unrippable-retry-loop`: delete it and its worktree (`~/dev/VideoScan-wt/era-retry`, DerivedData `~/dev/VideoScan-wt/.dd-era-retry`, scratch build `~/dev/VideoScan-wt/.build-core-era-retry`) after Rick's spot test (PROCESS §3).
-- Open: #384 · #389 · #377 · #379 · #380 · #381 · #338 · #339 · #337 (VideoScanModel split).
+## Ideas parked (BACKLOG)
+- Layer 3's north star (Rick 2026-11-06): the Rick & Donna Breen family's story told by evidence, answerable by plain
+  questions; prerequisites are people on footage, events with dates, speaker identity.
+- Living family in the Family Tree view (sons, siblings) from a local-only store, behind a "show children/siblings"
+  chevron — needs a schema addition and Rick's approval.
 
 ## Dates
-- 2026-11-05: cloud session credits expire. Mid-November: grade A in every module. 2026-12 soft / 2027-01 target: Public view link for family (Charter §5).
+- Mid-November: grade B or better in every module (the C → B lift above). 2026-12 soft / 2027-01 target: Public view
+  link for family (Charter §5).
