@@ -321,6 +321,9 @@ extension CaptionOrchestrator {
         // from the post-Analysis-Scope work list, like the START line.
         dossierAdmission = selection.tally(admittedFrom: candidates)
         dossierRetriesNeedsReformat = retryNeedsReformat
+        // O(records), once per batch, no disk I/O — the same index the
+        // coverage pass builds, so "left to analyze" is what this batch does.
+        dossierUnreadable = retryNeedsReformat ? .none : UnreadableContentIndex(records: model.records)
         // The index resolves "from <uuid>" provenance through the model's
         // O(1) id index; it is dropped at settle, releasing the capture.
         dossierCarryOver = carryOver
@@ -332,6 +335,7 @@ extension CaptionOrchestrator {
     func disarmDossierBatchContext() {
         dossierCarryOver = nil
         dossierRetriesNeedsReformat = false
+        dossierUnreadable = .none
         dossierAdmission = nil
     }
 

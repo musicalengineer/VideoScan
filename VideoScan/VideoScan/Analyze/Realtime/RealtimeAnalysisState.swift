@@ -298,6 +298,26 @@ struct RealtimeAnalysisState: Equatable, Sendable {
     /// When the window opened (the header's "watching since").
     var openedAt: Date?
 
+    // MARK: "Analyze the N left" (Rick 2026-11-06)
+
+    /// What is left, from the coverage report Catalog Status ▸ Content reads.
+    var left = AnalyzeLeftPlan()
+    /// An engine the plan would start is running now (a pass from elsewhere).
+    var leftEnginesBusy = false
+    /// A run this window started has not finished yet.
+    var leftRunActive = false
+
+    /// Nothing is running here or in the plan's engines.
+    var isIdleForLeft: Bool {
+        !(inApp.phase == .analyzing || inApp.phase == .paused || inApp.phase == .stopping)
+            && !leftEnginesBusy && !leftRunActive
+    }
+
+    /// The button shows only when nothing runs (Pause / Stop own that time);
+    /// it is enabled only when something is left.
+    var showsAnalyzeLeft: Bool { isIdleForLeft }
+    var canAnalyzeLeft: Bool { isIdleForLeft && !left.isEmpty }
+
     // MARK: Words (pure; the view and the tests read them)
 
     static func etaWords(_ seconds: Int?) -> String {

@@ -502,6 +502,18 @@ enum CatalogStatusLinesPolicy {
         "\(n.formatted()) counts files on connected drives with at least one counted analysis left"
     }
 
+    /// Files Analyze skips because their bytes could not be decoded.
+    static func cannotDecodeWords(_ n: Int) -> String {
+        "\(n.formatted()) file\(n == 1 ? "" : "s") could not be decoded (this copy or another copy of the same content needs reformat) — "
+            + "not counted as left; right-click a file ▸ Analyze to try one again"
+    }
+
+    /// Files the dossier pass analyzed without a transcript.
+    static func noTranscriptWords(_ n: Int) -> String {
+        "\(n.formatted()) file\(n == 1 ? " was" : "s were") analyzed without a transcript — not counted as left: "
+            + "Analyze never runs an analyzed file again, so nothing would transcribe it today"
+    }
+
     static func content(_ report: AnalyzeCoverageReport, working: Bool = false) -> CatalogStatusLine {
         func line(_ s: CatalogStatusLineState, _ w: String, _ d: [String] = []) -> CatalogStatusLine {
             CatalogStatusLine(kind: .content, state: s, words: w, detail: d)
@@ -518,6 +530,11 @@ enum CatalogStatusLinesPolicy {
         var detail: [String] = []
         if !left.isEmpty { detail.append("Not yet analyzed: " + left.joined(separator: " · ")) }
         if offline > 0 { detail.append("\(offline.formatted()) file\(offline == 1 ? " on drives not connected is" : "s on drives not connected are") not counted") }
+        // Observed, not left (Rick 2026-11-06, "88 left"): Analyze skips these,
+        // so they are said apart with the reason, never counted as left.
+        if report.cannotDecode > 0 { detail.append(Self.cannotDecodeWords(report.cannotDecode)) }
+        let noTranscript = report.counts(.transcribe).secondary
+        if noTranscript > 0 { detail.append(Self.noTranscriptWords(noTranscript)) }
         detail.append(notCounted)
         if left.isEmpty { return line(.green, "Up to date", detail) }
         let files = report.contentFiles

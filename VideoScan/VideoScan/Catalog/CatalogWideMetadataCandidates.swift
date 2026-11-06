@@ -56,20 +56,61 @@ extension LifecycleStage {
 enum DossierPoolStatus: Equatable, Sendable {
     /// In the pool and due (or done).
     case admitted
-    /// In the pool by stage, but flagged needs-reformat with no dossier
-    /// yet: batches skip it until an explicit retry.
+    /// In the pool by stage, but its bytes could not be decoded and it has
+    /// no dossier yet — its own row is flagged needs-reformat, or another
+    /// copy of the SAME content (whole-file SHA-256) is: batches skip it
+    /// until an explicit retry.
     case awaitingReformat
     /// Trashed / Deleted — never analyzed.
     case retired
 
-    nonisolated init(_ r: VideoRecord) {
+    /// `unreadable`: the catalog's undecodable contents (build it once per
+    /// pass with `UnreadableContentIndex(records:)`). Required, so the
+    /// coverage counts and the batch skip can never read different rules.
+    nonisolated init(_ r: VideoRecord, unreadable: UnreadableContentIndex) {
         if !LifecycleStage.dossierStages.contains(r.lifecycleStage) {
             self = .retired
-        } else if r.needsReformat && r.dossierProcessedAt == nil {
+        } else if r.dossierProcessedAt == nil && (r.needsReformat || unreadable.contains(r)) {
             self = .awaitingReformat
         } else {
             self = .admitted
         }
+    }
+}
+
+/// Contents the dossier extractor could not decode: the whole-file SHA-256
+/// of every row flagged needs-reformat that still has no dossier. An
+/// Archived row is read-only to analysis, so a decode failure there is never
+/// flagged on it (CaptionOrchestrator.flagUnreadableNeedsReformat) — but the
+/// same bytes flagged on a live copy are the same evidence: the batch would
+/// fail on them again. Without this, 68 archived Avid MXF copies were tried
+/// and failed on every pass and Content read "left to analyze" forever
+/// (Rick 2026-11-06, "88 left"). A row with no stored full digest is never
+/// matched (identity is the full hash, never a guess from name or size).
+///
+/// Memory: one 71-byte digest string per flagged row (a few hundred at
+/// most) — under 100 KB even at 100k rows if every row were flagged.
+/// (For Rick: a `std::unordered_set<std::string>` built once per pass.)
+struct UnreadableContentIndex: Sendable, Equatable {
+    let digests: Set<String>
+
+    nonisolated static let none = UnreadableContentIndex(digests: [])
+
+    nonisolated init(digests: Set<String>) { self.digests = digests }
+
+    /// One O(records) pass. Any row counts as evidence, hidden or not: the
+    /// flag describes the bytes, not the row's place in the catalog.
+    nonisolated init(records: [VideoRecord]) {
+        var out = Set<String>()
+        for r in records where r.needsReformat && r.dossierProcessedAt == nil {
+            if let d = VideoScanModel.storedFullDigest(r) { out.insert(d) }
+        }
+        digests = out
+    }
+
+    nonisolated func contains(_ r: VideoRecord) -> Bool {
+        guard !digests.isEmpty, let d = VideoScanModel.storedFullDigest(r) else { return false }
+        return digests.contains(d)
     }
 }
 

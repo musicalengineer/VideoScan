@@ -525,6 +525,12 @@ final class CaptionOrchestrator: ObservableObject {
     /// such files. Set and cleared by `startAnalyzing`.
     var dossierRetriesNeedsReformat = false
 
+    /// Contents a batch must not retry: another copy of the same bytes is
+    /// flagged needs-reformat (DossierPoolStatus — the rule the coverage
+    /// counts read too). Built once per batch by `armDossierBatchContext`;
+    /// `.none` between batches and in tests that drive the loops directly.
+    var dossierUnreadable = UnreadableContentIndex.none
+
     /// The admission tally of the running batch (candidates dropped), for
     /// the OUTCOME coverage line. nil for batches started by tests.
     var dossierAdmission: DossierCandidateSelection?

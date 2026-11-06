@@ -98,7 +98,10 @@ struct CatalogCoverage: Equatable {
     /// `scope` defaults to the app default (audio-only set aside) so
     /// existing call sites / tests keep their meaning; the dashboard
     /// passes the orchestrator's live scope.
-    init(records: [VideoRecord], scope: AnalysisScope = AnalysisScope()) {
+    /// `unreadable`: built from the WHOLE catalog (a per-volume subset would
+    /// miss a flagged copy on another drive), the same index the batch reads.
+    init(records: [VideoRecord], scope: AnalysisScope = AnalysisScope(),
+         unreadable: UnreadableContentIndex = .none) {
         var t = 0, d = 0, e = 0, s = 0, o = 0, x = 0, sd = 0, drm = 0
         var retired = 0, reformat = 0, junk = 0, oos = 0, photo = 0
         for r in records {
@@ -131,7 +134,7 @@ struct CatalogCoverage: Equatable {
             // a record with dossierProcessedAt set but stage=archived
             // would push dossiered > eligible and break the
             // "Analyze Complete" check. Rick 2026-06-13.
-            let pool = DossierPoolStatus(r)
+            let pool = DossierPoolStatus(r, unreadable: unreadable)
             if pool == .retired { retired += 1 }
             if pool == .awaitingReformat { reformat += 1 }
             if r.drmProtected { drm += 1 }
@@ -343,11 +346,15 @@ func pfRefreshVolumeCoverage(
                                    // counts happen to come out equal —
                                    // otherwise every later tick re-runs
                                    // the O(records) refilter.
+    // Built lazily, once per refilter: O(records), only when a volume refilters.
+    var unreadable: UnreadableContentIndex?
     for prefix in volumePrefixes {
         let cov: CatalogCoverage
         if catalogChanged || newCoverage[prefix] == nil {
             let subset = records.filter { $0.fullPath.hasPrefix(prefix) }
-            let fresh = CatalogCoverage(records: subset, scope: scope)
+            let index = unreadable ?? UnreadableContentIndex(records: records)
+            unreadable = index
+            let fresh = CatalogCoverage(records: subset, scope: scope, unreadable: index)
             if newCoverage[prefix] != fresh {
                 newCoverage[prefix] = fresh
                 changed = true
