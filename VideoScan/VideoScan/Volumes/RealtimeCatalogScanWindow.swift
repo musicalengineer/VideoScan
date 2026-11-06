@@ -164,7 +164,7 @@ struct RealtimeCatalogScanContent: View {
                 color: .blue,
                 value: "\(dashboard.scanCacheMisses)",
                 label: "ffprobed",
-                sub: "fresh"
+                sub: "fresh (media only)"
             )
             statTile(
                 icon: "speedometer",
@@ -333,8 +333,12 @@ struct RealtimeCatalogScanContent: View {
             .init(key: StreamType.videoOnly.rawValue, label: "V only", color: .orange, icon: "video.fill"),
             .init(key: StreamType.audioOnly.rawValue, label: "A only", color: .yellow, icon: "waveform"),
             .init(key: StreamType.noStreams.rawValue, label: "None", color: .gray, icon: "questionmark.square"),
+            .init(key: ScanTileTally.notMediaKey, label: "Not media", color: .gray, icon: "doc.questionmark"),
             .init(key: StreamType.ffprobeFailed.rawValue, label: "Failed", color: .red, icon: "xmark.octagon")
-        ]
+        ] + ((dashboard.liveStreamCounts[ScanTileTally.stillBeingWrittenKey] ?? 0) > 0
+             ? [.init(key: ScanTileTally.stillBeingWrittenKey, label: "Still writing", color: .gray,
+                      icon: "pencil.circle")]
+             : [])
     }
 
     private func streamTile(label: String, count: Int, color: Color, icon: String) -> some View {

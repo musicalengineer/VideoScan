@@ -87,25 +87,19 @@ extension VideoScanModel {
             )
         }
         await MainActor.run {
-            // Sniff-rejected outcomes are junk CLASSIFICATION, not probe
-            // errors (QA 2026-07-02): ffprobe never ran, nothing failed —
-            // the file simply isn't media. They carry the ffprobeFailed
-            // streamType for the junk gate, but must not inflate the
-            // dashboard's error counts (a .dat-blob volume would otherwise
-            // report thousands of "errors" on a perfectly healthy scan).
-            // ffprobe-failed outcomes that PASSED the sniff still count.
-            let isProbeError = outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue
-                && !outcome.sniffRejected && !outcome.stillBeingWritten
-            // Single batched seam (item-4 leg-2): scanCompleted, cache
-            // hit/miss, error, stream-type, and per-volume row updates all
-            // ride DashboardState's ≤4 Hz / 50-event flush machinery —
-            // the direct @Published writes that used to live here were the
-            // remaining per-file publish storm.
+            // One rule for every counter in the Realtime Catalog Scan window
+            // (ScanTileTally): a sniff-rejected file is not media (ffprobe
+            // never ran; QA 2026-07-02), a file still being written was
+            // skipped — neither is a failure or "ffprobed" (Rick 2026-11-05).
+            // Single batched seam (item-4 leg-2): every counter rides
+            // DashboardState's ≤4 Hz / 50-event flush machinery.
             self.dashboard.recordProbeCompletion(
                 volumeRoot: root,
                 wasCacheHit: outcome.wasCacheHit,
-                isProbeError: isProbeError,
-                streamTypeRaw: outcome.probe.streamTypeRaw,
+                tally: ScanTileTally.tally(streamTypeRaw: outcome.probe.streamTypeRaw,
+                                           wasCacheHit: outcome.wasCacheHit,
+                                           sniffRejected: outcome.sniffRejected,
+                                           stillBeingWritten: outcome.stillBeingWritten),
                 generation: scanGeneration
             )
         }

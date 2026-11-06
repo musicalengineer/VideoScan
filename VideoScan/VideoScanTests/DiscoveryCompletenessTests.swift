@@ -331,6 +331,22 @@ struct DiscoveryCompletenessPipelineTests {
                 "the t1-v stub passes the sniff ('wide' atom) but must be junk-gated after ffprobe fails — and the audit must say so")
         #expect(audit.directoryEnumerationErrors == 0 && audit.discoveryComplete)
 
+        // Realtime Catalog Scan truth (Rick 2026-11-05: a red "Failed 11,927"
+        // beside "Errors 4" — 11,923 were sniff-rejected non-media). The
+        // window's tiles must say what the audit (the log's "Not cataloged:
+        // N no media signature" line) says: not-media is its own grey tile,
+        // Failed equals the Errors card, ffprobed counts only files ffprobe
+        // actually ran on, and the tiles add up to the files completed.
+        let ds = model.dashboard
+        ds.flushScanProgress()
+        #expect(ds.liveStreamCounts[ScanTileTally.notMediaKey] == audit.sniffRejected,
+                "the zero blob is not media, never a failure (tiles \(ds.liveStreamCounts))")
+        #expect((ds.liveStreamCounts[StreamType.ffprobeFailed.rawValue] ?? 0) == ds.scanErrors,
+                "the Failed tile must equal the Errors card")
+        #expect(ds.scanErrors == 1, "only the t1-v stub really failed ffprobe")
+        #expect(ds.scanCacheMisses == 3, "ffprobe ran on t2-v, t1-v and holiday.videofile — never on the blob")
+        #expect(ds.liveStreamCounts.values.reduce(0, +) == ds.scanCompleted)
+
         // Sidecar: machine-readable, decodes back to the same audit.
         let sidecars = try fm.contentsOfDirectory(atPath: auditDir.path)
             .filter { $0.hasPrefix("scan-audit-") && $0.hasSuffix(".json") }

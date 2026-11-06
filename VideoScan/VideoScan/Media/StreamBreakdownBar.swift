@@ -9,6 +9,8 @@ struct StreamBreakdownBar: View {
         (StreamType.videoOnly.rawValue, "V-only", .orange),
         (StreamType.audioOnly.rawValue, "A-only", .yellow),
         (StreamType.noStreams.rawValue, "None", .gray),
+        (ScanTileTally.notMediaKey, "Not media", .gray.opacity(0.5)),
+        (ScanTileTally.stillBeingWrittenKey, "Still writing", .gray.opacity(0.3)),
         (StreamType.ffprobeFailed.rawValue, "Failed", .red)
     ]
 

@@ -178,6 +178,16 @@ final class DashboardState: ObservableObject {
     func recordProbeCompletion(volumeRoot: String, wasCacheHit: Bool,
                                isProbeError: Bool, streamTypeRaw: String,
                                generation: UInt64) {
+        recordProbeCompletion(volumeRoot: volumeRoot, wasCacheHit: wasCacheHit,
+                              tally: ScanTileTally.Tally(tileKey: streamTypeRaw, ranFFprobe: !wasCacheHit,
+                                                         isProbeError: isProbeError),
+                              generation: generation)
+    }
+
+    /// The scanner's door: `tally` is ScanTileTally's one rule (not-media and
+    /// still-being-written files are never failures and never "ffprobed").
+    func recordProbeCompletion(volumeRoot: String, wasCacheHit: Bool,
+                               tally: ScanTileTally.Tally, generation: UInt64) {
         guard generation == scanGeneration else { return }
         scanCompletedInternal += 1
         if scanCompletedInternal > scanDiscoveredInternal {
@@ -191,14 +201,14 @@ final class DashboardState: ObservableObject {
         if wasCacheHit {
             pendingCacheHits += 1
             pendingCacheHitsByVolume[volumeRoot, default: 0] += 1
-        } else {
+        } else if tally.ranFFprobe {
             pendingCacheMisses += 1
         }
-        if isProbeError {
+        if tally.isProbeError {
             pendingErrors += 1
             pendingErrorsByVolume[volumeRoot, default: 0] += 1
         }
-        pendingStreamCounts[streamTypeRaw, default: 0] += 1
+        pendingStreamCounts[tally.tileKey, default: 0] += 1
         noteScanProgressEvent()
     }
 
