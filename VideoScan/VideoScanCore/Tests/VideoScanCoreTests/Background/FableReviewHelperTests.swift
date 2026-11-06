@@ -70,26 +70,102 @@ struct FableReviewHelperTests {
         await s.status(processIdentifier: 1, startedAt: Date()).jobs
     }
 
-    // Pins JobSupervisor.swift:889-915 (`finish`) — a scheduled kind's job ends
-    // and neither `planned[kind]` nor `lastPlanAt` is touched, so for up to
-    // `planInterval` (10 min in production) `status.planned` repeats the plan
-    // size from BEFORE the job ran. BackgroundServiceStore.swift:321 prints it
-    // as "Content analysis: N files to analyze (the helper's plan)".
+    /// A schedule whose plan reads what the job has done, as EraPlanner reads
+    /// the journal: 3 units minus those completed. `calls` counts measurements;
+    /// `holdSecond`, when given, blocks the second measurement (the post-run
+    /// one) until signalled, so a test can look at status inside that window.
+    static func shrinkingSchedule(root: URL, recorder: UnitRecorder, calls: ScheduleProbe,
+                                  holdSecond: DispatchSemaphore? = nil, poll: Duration) -> JobSchedule {
+        let kind = JobSchedule.Kind(kind: ScheduleFactory.kind,
+                                    planSize: {
+                                        _ = calls.planned()
+                                        if calls.plans == 2 { holdSecond?.wait() }
+                                        return max(0, 3 - recorder.completedUnits.count)
+                                    },
+                                    makeRequest: { JobRequest(kind: ScheduleFactory.kind, requestedBy: "schedule") })
+        var s = JobSchedule(kinds: [kind], generation: { 1 }, buildID: "b1", holds: ScheduleHoldStore.beside(stateRoot: root))
+        s.planInterval = .seconds(3600)
+        s.pollInterval = poll
+        return s
+    }
+
+    static func shrinkingSupervisor(_ schedule: JobSchedule, recorder: UnitRecorder) -> JobSupervisor {
+        JobSupervisor(queue: InMemoryJobQueueStore(), checkpoints: InMemoryCheckpointStore(),
+                      factory: ScheduleFactory(recorder: recorder), backoff: BackgroundFixtures.fullBackoff(),
+                      log: InMemoryBackgroundLog(), configuration: BackgroundFixtures.fastConfiguration(),
+                      schedule: schedule)
+    }
+
+    static func plannedSize(_ s: JobSupervisor) async -> Int? {
+        await s.status(processIdentifier: 1, startedAt: Date()).planned?[ScheduleFactory.kind.rawValue]
+    }
+
+    // Pins `finish` (JobSupervisor.swift) — a scheduled kind's job ends and the
+    // plan must be re-measured, or for up to `planInterval` (10 min in
+    // production) `status.planned` repeats the plan size from BEFORE the job
+    // ran; BackgroundServiceStore prints it as "Content analysis: N files to
+    // analyze (the helper's plan)". Until 2026-11-06 this test changed the
+    // probe AFTER observing `.finished`, racing the post-run measurement (one
+    // 20 ms poll tick): red whenever the supervisor's tick beat the test's
+    // 10 ms waitUntil poll (the 16-core M4 under the parallel suite), green
+    // otherwise (the Ultra). The plan now shrinks as units complete, as the
+    // real planner's does, so the outcome no longer depends on who wakes first.
     @Test("TRUTH: after the job finished its whole plan, status still reports the pre-run plan size")
     func planSizeIsStaleAfterTheJobFinished() async throws {
         let root = try BackgroundFixtures.scratch("fable-stale-plan")
-        let probe = ScheduleProbe()                       // plan size 3
         let recorder = UnitRecorder()
-        let s = JobScheduleTests.supervisor(probe, root: root, recorder: recorder)   // planInterval 1 h
+        let calls = ScheduleProbe()
+        let s = Self.shrinkingSupervisor(Self.shrinkingSchedule(root: root, recorder: recorder, calls: calls,
+                                                                poll: .milliseconds(20)), recorder: recorder)
         await s.start()
         #expect(await BackgroundFixtures.waitUntil { recorder.completedUnits.count == 3 })
         #expect(await BackgroundFixtures.waitUntil { await Self.jobs(s).first?.state == .finished })
-        probe.size = 0                                    // a fresh plan would now say: nothing left
-        try await Task.sleep(for: .milliseconds(250))     // a dozen poll ticks
-        let planned = await s.status(processIdentifier: 1, startedAt: Date()).planned?[ScheduleFactory.kind.rawValue]
-        #expect(planned == nil || planned == 0,
+        let measured = await BackgroundFixtures.waitUntil {
+            let size = await Self.plannedSize(s)
+            return calls.plans >= 2 && size == 0
+        }
+        let planned = await Self.plannedSize(s)
+        #expect(measured,
                 "finish() never invalidates the plan: Settings says '3 files to analyze (the helper's plan)' for up to planInterval after they were all done (got \(String(describing: planned)))")
+        try await Task.sleep(for: .milliseconds(100))     // five poll ticks: nothing re-queues
         #expect(await Self.jobs(s).count == 1, "re-measured, not re-queued: no job runs back to back")
+        await s.abandonForTest()
+    }
+
+    // Pins `finish` — between the job's end and the post-run measurement
+    // landing (a poll interval plus a ~1 s catalog plan in production) the
+    // pre-run size is not a fact and must not be shown.
+    @Test("TRUTH: while the post-run plan is being measured, status shows no plan size rather than the pre-run one")
+    func preRunSizeIsDroppedAtFinish() async throws {
+        let root = try BackgroundFixtures.scratch("fable-plan-window")
+        let recorder = UnitRecorder()
+        let calls = ScheduleProbe()
+        let gate = DispatchSemaphore(value: 0)
+        let s = Self.shrinkingSupervisor(Self.shrinkingSchedule(root: root, recorder: recorder, calls: calls, holdSecond: gate,
+                                                                poll: .milliseconds(20)), recorder: recorder)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { calls.plans == 2 }, "the post-run measurement started")
+        let during = await Self.plannedSize(s)
+        gate.signal()
+        #expect(during == nil, "status said \(String(describing: during)) files to analyze while the post-run plan was still being measured")
+        #expect(await BackgroundFixtures.waitUntil { (await Self.plannedSize(s)) == 0 })
+        await s.abandonForTest()
+    }
+
+    // Pins `finish` — the post-run measurement starts when the job ends, not
+    // at the next poll (30 s in production; one hour here).
+    @Test("LIFECYCLE: the post-run plan is measured when the job ends, not at the next poll")
+    func postRunMeasurementStartsAtOnce() async throws {
+        let root = try BackgroundFixtures.scratch("fable-plan-kick")
+        let recorder = UnitRecorder()
+        let calls = ScheduleProbe()
+        let s = Self.shrinkingSupervisor(Self.shrinkingSchedule(root: root, recorder: recorder, calls: calls,
+                                                                poll: .seconds(3600)), recorder: recorder)
+        await s.start()
+        #expect(await BackgroundFixtures.waitUntil { await Self.jobs(s).first?.state == .finished })
+        let measured = await BackgroundFixtures.waitUntil(.seconds(2)) { (await Self.plannedSize(s)) == 0 }
+        let planned = await Self.plannedSize(s)
+        #expect(measured, "two seconds after the job ended the plan still says \(String(describing: planned)) (\(calls.plans) measurement(s))")
         await s.abandonForTest()
     }
 
