@@ -15,6 +15,8 @@
 #      its row) — unless --gauntlet-only (below);
 #   3. runs scripts/run_gauntlet.sh --away (published: no --queue-only, so the
 #      row lands on the page's Speed & safety section);
+#   3b. runs tools/publish_metrics.py --no-events, so the page's summary
+#      (Last night's tests) shows this run before the done line points at it;
 #   4. writes the done line to ~/Library/Logs/VideoScan/testbed_latest.txt,
 #      appends it to testbed_history.log, and posts it as a notification on
 #      Rick's Mac (VIDEOSCAN_NOTIFY_HOST, default ricksultra.local; best
@@ -141,6 +143,22 @@ else
     G_TEXT="gauntlet skipped (testbed ${BUSY:-busy: unknown})"
 fi
 drop_lock
+
+# ── 2b. rebuild the page's summary ──────────────────────────────────
+# "Last night's tests" reads summary_latest.json, which the 04:00 / 05:30 jobs
+# rebuild — right after the old 02:00 nightly, ~14 h after this 14:00 run. So
+# the testbed rebuilds it itself, BEFORE the done line sends Rick to the page
+# (2026-11-06). --no-events: the events prototype is the morning jobs' (up to
+# 15 min). Best effort: a failed or missing publisher is logged, never the exit.
+PUBLISHER="$REPO_ROOT/tools/publish_metrics.py"
+if [ -f "$PUBLISHER" ]; then
+    P_OUT="$(python3 "$PUBLISHER" --no-events 2>&1)"
+    p_rc=$?
+    if [ "$p_rc" = 0 ]; then log "publish: $(printf '%s\n' "$P_OUT" | tail -1)"
+    else log "publish: exit $p_rc — $(printf '%s\n' "$P_OUT" | tail -1) (the 04:00 job retries)"; fi
+else
+    log "publish: skipped ($PUBLISHER not found)"
+fi
 
 # ── 3. the done line ────────────────────────────────────────────────
 SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"

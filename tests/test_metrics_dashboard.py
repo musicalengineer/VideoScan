@@ -483,8 +483,9 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "0 failed — broken" not in head
     # The M4 row has no Core lane fields (older row): it says nothing about Core rather than inventing zeros.
     assert "Core 0 passed" not in head
-    # The 2 AM run is named by its own date, not as "the night of" the morning after.
-    assert "2 AM run of" in head
+    # The runs are named by their own date, not as "the night of" the morning after; since
+    # 2026-11-05 the M4 runs at 14:00, so the tile no longer says "2 AM run" for both Macs.
+    assert "nightly runs of" in head and "2 AM run of" not in head
     # RED 2026-10-31 (Rick): one ladder per Mac, one rung per lane of the 2 AM run, each rung coloured by
     # its own lane's verdict (app and Core by the 0 / under-10 / 10-plus rule; Hallie by its pass fraction
     # and status; grey where the lane did not run or the row predates it). The gauntlet is not a rung:

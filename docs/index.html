@@ -1066,7 +1066,7 @@ function renderHead(d) {
       : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
     const ladders = `<div class="ladders">${N.hosts.map(h => ladderSVG(h, cellOf(lastNight, h))).join("")}</div>`;
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>2 AM run of ${day(lastNight.date)}${stale(lastNight.date)}`, testState, ladders));
+      `<div class="hosts">${hosts}</div>nightly runs of ${day(lastNight.date)}${stale(lastNight.date)}`, testState, ladders));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
