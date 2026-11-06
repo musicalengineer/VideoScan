@@ -136,6 +136,8 @@ extension CaptionOrchestrator {
 
         guard !candidates.isEmpty else {
             captionOrchLog.info("Per-volume dossier: nothing to do under \(volumePrefix, privacy: .public)")
+            // An empty pass is its own pass: the live counters say 0 too (Codex F4, 2026-11-05).
+            resetLiveCounts()
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
             return true
         }
@@ -276,6 +278,7 @@ extension CaptionOrchestrator {
         appLog.write("Dossier: admitted \(admitted.archived) Archived + \(admitted.inTriage) In Triage file(s) (read-only analysis; archived rows get text only); \(admitted.offline) on offline volume(s) skipped, not failed; \(admitted.notEligibleByStage) not eligible (stage: Trashed / Deleted)")
 
         guard !candidates.isEmpty else {
+            resetLiveCounts()   // an empty pass shows its own zeros (Codex F4)
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
             return
         }
@@ -458,7 +461,10 @@ extension CaptionOrchestrator {
             filename: plan.filename,
             isVideoOnly: plan.hasNoAudio,
             stage: plan.hasNoVideo ? whisperStage : Self.stageDisplayName(forModelID: vlmModelID),
-            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…",
+            recordID: plan.record.id,
+            framesPlanned: plan.framesToRip(stages: AnalyzeStage.all),
+            clipSeconds: plan.record.durationSeconds
         )
 
         do {
@@ -468,13 +474,17 @@ extension CaptionOrchestrator {
             // were lighting up ✓).
             let hasCaptions = !extraction.scenes.isEmpty
             if plan.hasNoAudio {
-                updateLane(laneID, hasCaptions: hasCaptions)
+                // The extractor is done; the lane waits for the previous file's
+                // Whisper (the hand-off below) and says so (Codex re-review 5).
+                updateLane(laneID,
+                           verb: pendingWhisper == nil ? "banking scenes…" : "waiting for the previous file's transcript…",
+                           hasCaptions: hasCaptions, extractionDone: true)
             } else {
                 updateLane(
                     laneID,
                     stage: whisperStage,
                     verb: pendingWhisper == nil ? "transcribing audio…" : "waiting for prior transcript…",
-                    hasCaptions: hasCaptions
+                    hasCaptions: hasCaptions, extractionDone: true
                 )
             }
             appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs (%d scene(s))", plan.filename, vlmSec, extraction.scenes.count))
@@ -490,9 +500,10 @@ extension CaptionOrchestrator {
             }
 
             if let reason = vlmOnlyReason(laneID: laneID, plan: plan) {
-                bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
+                let banked = bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
                 completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
-                                    note: reason.note(hasNoAudio: plan.hasNoAudio))
+                                    note: reason.note(hasNoAudio: plan.hasNoAudio),
+                                    output: .from(extraction: extraction, transcript: nil, banked: banked))
                 // Cancelled while waiting on the previous Whisper: stop
                 // the batch (no progress tick). Skip / video-only: next.
                 if reason == .cancelledWhileWaiting { return .stop }
@@ -611,19 +622,21 @@ extension CaptionOrchestrator {
         } catch is CancellationError {
             // Cancelled mid-transcription: the scenes still bank. The note
             // says who pulled the cord: the user's Skip, or a batch cancel.
-            bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
+            let banked = bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
             let userSkipped = userSkippedLaneIDs.contains(laneID)
             updateLane(laneID, transcriptFailed: !userSkipped)
             completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
-                                note: userSkipped ? "user skipped" : "transcript failed")
+                                note: userSkipped ? "user skipped" : "transcript failed",
+                                output: .from(extraction: extraction, transcript: nil, banked: banked))
             return
         } catch AudioTranscriberError.deadlineExceeded(let secs) {
             // Auto-kill past the deadline. Captions are still valid; the
             // distinct note lets chronically stuck files be triaged.
             captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
-            bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
+            let banked = bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
             updateLane(laneID, transcriptFailed: true)
-            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil, note: "whisper timed out")
+            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil, note: "whisper timed out",
+                                output: .from(extraction: extraction, transcript: nil, banked: banked))
             transcriptFailures += 1
             return
         } catch {
@@ -632,7 +645,7 @@ extension CaptionOrchestrator {
             transcriptFailures += 1
         }
 
-        _ = model.applyDossier(
+        let banked = model.applyDossier(
             extraction, to: plan.path,
             vlmModel: vlmModelID,
             transcript: transcript,
@@ -640,17 +653,15 @@ extension CaptionOrchestrator {
         )
         let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
         appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
-        // ✓ follows banked truth: an empty / whitespace-only transcript
-        // is "transcript failed", not a checkmark.
-        let usable = Self.isUsableTranscript(transcript)
-        if usable {
-            updateLane(laneID, hasTranscript: true)
-        } else {
-            updateLane(laneID, transcriptFailed: true)
-        }
+        // ✓ follows banked truth. Three outcomes (Codex F3, 2026-11-05):
+        // words → transcribed; Whisper answered with nothing → "no speech"
+        // (banked as an empty transcript, not a failure); it threw → failed.
+        let outcome = TranscriptOutcome(transcript: transcript, threw: transcript == nil)
+        markTranscriptOutcome(outcome, laneID: laneID, banked: banked, threw: transcript == nil)
         completeDossierLane(laneID, vlmSeconds: vlmSec,
-                            whisperSeconds: usable ? whisperSec : nil,
-                            note: usable ? nil : "transcript failed")
+                            whisperSeconds: outcome.seconds(whisperSec),
+                            note: outcome.note,
+                            output: .from(extraction: extraction, transcript: transcript, banked: banked))
         publishProgress(idx: plan.index + 1, total: total, currentFile: filename, started: started)
     }
 
@@ -731,7 +742,10 @@ extension CaptionOrchestrator {
             filename: plan.filename,
             isVideoOnly: plan.hasNoAudio,
             stage: laneStage,
-            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…",
+            recordID: plan.record.id,
+            framesPlanned: plan.framesToRip(stages: stages),
+            clipSeconds: plan.record.durationSeconds
         )
 
         do {
@@ -752,32 +766,29 @@ extension CaptionOrchestrator {
             let whisper = stages.contains(.transcript) && !plan.hasNoAudio && !userSkipped ? transcriber : nil
             if let whisper {
                 updateLane(laneID, stage: Self.stageDisplayName(forModelID: whisper.modelID),
-                           verb: "transcribing audio…", hasCaptions: hasCaptions)
+                           verb: "transcribing audio…", hasCaptions: hasCaptions, extractionDone: true)
             } else {
-                updateLane(laneID, hasCaptions: hasCaptions)
+                updateLane(laneID, hasCaptions: hasCaptions, extractionDone: true)
             }
 
+            // Whisper is timed here too (Codex F8, 2026-11-05): nil when it did not run.
             let outcome = try await serialTranscribe(plan, with: whisper)
 
-            _ = model.applyDossier(
+            let banked = model.applyDossier(
                 extraction, to: plan.path,
                 vlmModel: runner.modelID,
                 transcript: outcome.transcript,
                 whisperModel: outcome.transcript != nil ? transcriber?.modelID : nil
             )
-            let usable = Self.isUsableTranscript(outcome.transcript)
-            if usable {
-                updateLane(laneID, hasTranscript: true)
-            } else if outcome.failed || outcome.timedOut {
-                updateLane(laneID, transcriptFailed: true)
-            }
-            // The serial path awaits Whisper inline and doesn't time it
-            // separately: whisperSeconds stays nil (historical behaviour).
-            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
+            let transcriptOutcome = TranscriptOutcome(transcript: outcome.transcript, threw: outcome.threw)
+            markTranscriptOutcome(transcriptOutcome, laneID: laneID, banked: banked, threw: outcome.threw)
+            completeDossierLane(laneID, vlmSeconds: vlmSec,
+                                whisperSeconds: transcriptOutcome.seconds(outcome.seconds),
                                 note: Self.serialDossierNote(
-                                    usableTranscript: usable, userSkipped: userSkipped,
+                                    outcome: transcriptOutcome, userSkipped: userSkipped,
                                     hasNoAudio: plan.hasNoAudio, timedOut: outcome.timedOut,
-                                    failed: outcome.failed, hasTranscriber: transcriber != nil))
+                                    failed: outcome.failed, attempted: whisper != nil, hasTranscriber: transcriber != nil),
+                                output: .from(extraction: extraction, transcript: outcome.transcript, banked: banked))
             return .next
         } catch is CancellationError {
             captionOrchLog.notice("Dossier: cancelled at \(plan.filename, privacy: .public)")
@@ -794,6 +805,10 @@ extension CaptionOrchestrator {
         var transcript: String?
         var failed = false
         var timedOut = false
+        /// Wall-clock seconds Whisper took; nil when it did not run (Codex F8).
+        var seconds: Double?
+
+        var threw: Bool { failed || timedOut }
     }
 
     /// Transcribe inline (nil `whisper` = this file gets no transcript).
@@ -803,6 +818,7 @@ extension CaptionOrchestrator {
         var outcome = SerialTranscriptOutcome()
         guard let whisper else { return outcome }
         let deadline = max(60.0, 2.0 * plan.record.durationSeconds)
+        let started = CFAbsoluteTimeGetCurrent()
         do {
             outcome.transcript = try await whisper.transcribe(videoPath: plan.path, deadlineSeconds: deadline)
         } catch is CancellationError {
@@ -816,7 +832,47 @@ extension CaptionOrchestrator {
             outcome.failed = true
             transcriptFailures += 1
         }
+        outcome.seconds = CFAbsoluteTimeGetCurrent() - started
         return outcome
+    }
+
+    /// What Whisper's answer was, for the lane, the note and the counters
+    /// (Codex F3, 2026-11-05: an empty answer is "no speech", never a failure).
+    enum TranscriptOutcome: Equatable {
+        case transcribed, noSpeech, failed
+
+        /// `threw` = Whisper threw or timed out (the transcript is nil then);
+        /// a nil transcript without a throw means Whisper did not run.
+        init(transcript: String?, threw: Bool) {
+            // The same rule as isUsableTranscript (main-actor): words after trimming.
+            let trimmed = transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmed, !trimmed.isEmpty { self = .transcribed }
+            else if trimmed != nil, !threw { self = .noSpeech }
+            else { self = .failed }
+        }
+
+        /// The pipelined path's note (Whisper always runs there).
+        var note: String? {
+            switch self {
+            case .transcribed: return nil
+            case .noSpeech: return "no speech"
+            case .failed: return "transcript failed"
+            }
+        }
+
+        /// Whisper's measured seconds for the feed: a failed run is not timed.
+        func seconds(_ measured: Double?) -> Double? { self == .failed ? nil : measured }
+    }
+
+    /// Mark the lane for Whisper's answer and move the batch counts (both
+    /// paths). `threw` = Whisper threw or timed out; a `.failed` without a
+    /// throw means Whisper did not run, which is no mark at all.
+    func markTranscriptOutcome(_ outcome: TranscriptOutcome, laneID: UUID, banked: Bool, threw: Bool) {
+        switch outcome {
+        case .transcribed: markTranscriptBanked(laneID, banked: banked)
+        case .noSpeech: markNoSpeech(laneID, banked: banked)
+        case .failed: if threw { updateLane(laneID, transcriptFailed: true) }
+        }
     }
 
     /// The activity-feed note for a serial-path file:
@@ -824,18 +880,22 @@ extension CaptionOrchestrator {
     ///   "user skipped"      → the user right-clicked Skip on the lane
     ///   "no audio"          → the file has no audio stream by design
     ///   "whisper timed out" → the subprocess exceeded its deadline
-    ///   "transcript failed" → Whisper threw, or returned only whitespace
+    ///   "transcript failed" → Whisper threw
+    ///   "no speech"         → Whisper ran to the end and found nothing
+    ///   "not transcribed"   → a captions-only run: Whisper was not asked
     ///   "no transcriber"    → no transcriber wired
     static func serialDossierNote(
-        usableTranscript: Bool, userSkipped: Bool, hasNoAudio: Bool,
-        timedOut: Bool, failed: Bool, hasTranscriber: Bool
+        outcome: TranscriptOutcome, userSkipped: Bool, hasNoAudio: Bool,
+        timedOut: Bool, failed: Bool, attempted: Bool, hasTranscriber: Bool
     ) -> String? {
-        if usableTranscript { return nil }
+        if outcome == .transcribed { return nil }
         if userSkipped { return "user skipped" }
         if hasNoAudio { return "no audio" }
         if timedOut { return "whisper timed out" }
         if failed { return "transcript failed" }
-        return hasTranscriber ? "transcript failed" : "no transcriber"
+        if outcome == .noSpeech { return "no speech" }
+        if !hasTranscriber { return "no transcriber" }
+        return attempted ? "transcript failed" : "not transcribed (captions only)"
     }
 
     /// Batch-settle hook for the persistent Whisper worker (perf item

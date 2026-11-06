@@ -26,6 +26,9 @@ extension CaptionOrchestrator {
         liveCurrentIndex = 0
         liveTotal = 0
         transcriptFailures = 0
+        liveTranscribed = 0
+        liveWithCaptions = 0
+        liveNoSpeech = 0
         // Per-reason skip split (2026-07-14 observability work: 1,097
         // failures in one nightly batch produced ~1 log line) — reset
         // alongside the aggregate they decompose.
@@ -173,7 +176,10 @@ extension CaptionOrchestrator {
         filename: String,
         isVideoOnly: Bool,
         stage: String,
-        verb: String
+        verb: String,
+        recordID: UUID? = nil,
+        framesPlanned: Int = 0,
+        clipSeconds: Double = 0
     ) -> UUID {
         let lane = PipelineLane(
             id: UUID(),
@@ -185,7 +191,10 @@ extension CaptionOrchestrator {
             isVideoOnly: isVideoOnly,
             hasCaptions: false,
             hasTranscript: false,
-            transcriptFailed: false
+            transcriptFailed: false,
+            recordID: recordID,
+            framesPlanned: framesPlanned,
+            clipSeconds: clipSeconds
         )
         activeLanes.removeAll { $0.path == path }
         activeLanes.append(lane)
@@ -203,7 +212,9 @@ extension CaptionOrchestrator {
         verb: String? = nil,
         hasCaptions: Bool? = nil,
         hasTranscript: Bool? = nil,
-        transcriptFailed: Bool? = nil
+        transcriptFailed: Bool? = nil,
+        noSpeech: Bool? = nil,
+        extractionDone: Bool? = nil
     ) {
         guard let i = activeLanes.firstIndex(where: { $0.id == id }) else { return }
         if let stage { activeLanes[i].stageName = stage }
@@ -211,6 +222,8 @@ extension CaptionOrchestrator {
         if let hasCaptions { activeLanes[i].hasCaptions = hasCaptions }
         if let hasTranscript { activeLanes[i].hasTranscript = hasTranscript }
         if let transcriptFailed { activeLanes[i].transcriptFailed = transcriptFailed }
+        if let noSpeech { activeLanes[i].noSpeech = noSpeech }
+        if let extractionDone { activeLanes[i].extractionDone = extractionDone }
     }
 
     /// Close a lane. No-op if it was already cleared.
@@ -236,7 +249,10 @@ extension CaptionOrchestrator {
         isVideoOnly: Bool = false,
         hasCaptions: Bool = false,
         hasTranscript: Bool = false,
-        transcriptFailed: Bool = false
+        transcriptFailed: Bool = false,
+        recordID: UUID? = nil,
+        output: CompletedOutput? = nil,
+        noSpeech: Bool = false
     ) {
         let entry = CompletedActivity(
             id: UUID(), filename: filename, path: path,
@@ -245,7 +261,10 @@ extension CaptionOrchestrator {
             isVideoOnly: isVideoOnly,
             hasCaptions: hasCaptions,
             hasTranscript: hasTranscript,
-            transcriptFailed: transcriptFailed
+            transcriptFailed: transcriptFailed,
+            recordID: recordID,
+            output: output,
+            noSpeech: noSpeech
         )
         recentActivity.insert(entry, at: 0)
         if recentActivity.count > Self.recentActivityCap {
@@ -261,7 +280,8 @@ extension CaptionOrchestrator {
         fromLane laneID: UUID,
         vlmSeconds: Double?,
         whisperSeconds: Double?,
-        note: String?
+        note: String?,
+        output: CompletedOutput? = nil
     ) {
         guard let lane = activeLanes.first(where: { $0.id == laneID }) else {
             // Defensive: lane already ended. Record without indicators
@@ -269,7 +289,7 @@ extension CaptionOrchestrator {
             // Show in Catalog won't have a target.
             recordCompletion(filename: "?", path: "",
                              vlmSeconds: vlmSeconds,
-                             whisperSeconds: whisperSeconds, note: note)
+                             whisperSeconds: whisperSeconds, note: note, output: output)
             return
         }
         recordCompletion(
@@ -281,7 +301,10 @@ extension CaptionOrchestrator {
             isVideoOnly: lane.isVideoOnly,
             hasCaptions: lane.hasCaptions,
             hasTranscript: lane.hasTranscript,
-            transcriptFailed: lane.transcriptFailed
+            transcriptFailed: lane.transcriptFailed,
+            recordID: lane.recordID,
+            output: output,
+            noSpeech: lane.noSpeech
         )
     }
 }
